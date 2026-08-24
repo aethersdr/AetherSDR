@@ -243,6 +243,40 @@ QString fileVersionString(const QString& exePath)
     if (size == 0) return {};
     std::vector<char> buf(size);
     if (!GetFileVersionInfoW(w.c_str(), 0, size, buf.data())) return {};
+
+    // The authored StringFileInfo strings first — the version the user sees,
+    // same semantics as the macOS backend's CFBundleShortVersionString.
+    // ProductVersion before FileVersion because that is where build metadata
+    // lives (WSJT-X: "3.0.1 c04dd8"). The numeric VS_FIXEDFILEINFO quad is
+    // only a fallback for exes with no string table; its 4-part shape is
+    // masked by the log sanitizer's IPv4 rule, authored strings are not.
+    struct LangCodePage { WORD lang; WORD codePage; };
+    LangCodePage* translations = nullptr;
+    UINT tLen = 0;
+    if (VerQueryValueW(buf.data(), L"\\VarFileInfo\\Translation",
+                       reinterpret_cast<LPVOID*>(&translations), &tLen)
+        && translations && tLen >= sizeof(LangCodePage)) {
+        const UINT count = tLen / sizeof(LangCodePage);
+        for (const auto* key : {L"ProductVersion", L"FileVersion"}) {
+            for (UINT i = 0; i < count; ++i) {
+                const QString subKey =
+                    QStringLiteral("\\StringFileInfo\\%1%2\\%3")
+                        .arg(translations[i].lang, 4, 16, QLatin1Char('0'))
+                        .arg(translations[i].codePage, 4, 16, QLatin1Char('0'))
+                        .arg(QString::fromWCharArray(key));
+                wchar_t* value = nullptr;
+                UINT vLen = 0;
+                if (VerQueryValueW(buf.data(), subKey.toStdWString().c_str(),
+                                   reinterpret_cast<LPVOID*>(&value), &vLen)
+                    && value && vLen > 0) {
+                    const QString s = QString::fromWCharArray(value).trimmed();
+                    if (!s.isEmpty())
+                        return s;
+                }
+            }
+        }
+    }
+
     VS_FIXEDFILEINFO* ffi = nullptr;
     UINT len = 0;
     if (!VerQueryValueW(buf.data(), L"\\", reinterpret_cast<LPVOID*>(&ffi), &len)
