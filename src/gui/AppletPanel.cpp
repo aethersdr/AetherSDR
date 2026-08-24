@@ -152,6 +152,21 @@ MeterSettings::Snapshot loadVuMeterSettings()
     return settings;
 }
 
+// Breathing room under the last docked tile, so the stack never comes to rest
+// with a control flush against the viewport's bottom edge.
+//
+// Whether the stack overflows at all is arithmetic over whichever tiles the
+// operator has open — not a property of any one tile — so this belongs to the
+// scroll area rather than to the tile that happens to be last. It buys nothing
+// when the content is shorter than the viewport: the trailing addStretch(1)
+// below already owns that slack, and this margin simply sits under it.
+//
+// It pads the BOTTOM OF THE SCROLL RANGE, which is the only place a fix can
+// live. A tile clipped at scroll position 0 is not clipped, it is scrolled;
+// nothing added here can change what a viewport shows before it has been
+// scrolled, and a margin large enough to try would just be a blank band.
+constexpr int kStackBottomMargin = 8;
+
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
@@ -470,7 +485,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     };
     auto* container = new FlexContainer;
     m_stack = new QVBoxLayout(container);
-    m_stack->setContentsMargins(0, 0, 0, 0);
+    m_stack->setContentsMargins(0, 0, 0, kStackBottomMargin);
     m_stack->setSpacing(0);
     // Stretch factor 1 (not the default 0) so all surplus vertical space is
     // routed to this trailing spacer.  With a factor-0 spacer, Qt distributes
