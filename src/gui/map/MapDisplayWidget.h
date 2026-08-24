@@ -45,10 +45,12 @@ public:
     ProjectionMode projectionMode() const { return m_projectionMode; }
     void setProjectionMode(ProjectionMode mode);
     bool globeAvailable() const;
+    QString globeUnavailableReason() const { return m_globeUnavailableReason; }
 
 signals:
     void markerClicked(const MapDisplayWidget::Marker& marker);
     void projectionModeChanged(ProjectionMode mode);
+    void globeAvailabilityChanged(bool available, const QString& reason);
 
 public slots:
     void resetToHome();
@@ -59,6 +61,7 @@ private:
     void ensureGlobeView();
     void synchronizeFlatView();
     void synchronizeGlobeView();
+    void handleGlobeUnavailable(const QString& reason);
 
     QStackedLayout* m_stack{nullptr};
     MapView* m_flatView{nullptr};
@@ -76,6 +79,8 @@ private:
     bool m_terminatorVisible{false};
     bool m_flatViewDirty{false};
     bool m_globeViewDirty{false};
+    bool m_globeAvailable{true};
+    QString m_globeUnavailableReason;
 };
 
 } // namespace AetherSDR

@@ -17,6 +17,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QOpenGLContext>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLTexture>
 #include <QPainter>
@@ -25,6 +26,7 @@
 #include <QPinchGesture>
 #include <QResizeEvent>
 #include <QSet>
+#include <QShowEvent>
 #include <QToolButton>
 #include <QVariantAnimation>
 #include <QWheelEvent>
@@ -127,7 +129,6 @@ GlobeMapView::GlobeMapView(QWidget* parent)
     setMouseTracking(true);
     grabGesture(Qt::PinchGesture);
 
-    m_rotation = QQuaternion();
     m_atlasUploadTimer.setSingleShot(true);
     m_atlasUploadTimer.setInterval(50);
     connect(&m_atlasUploadTimer, &QTimer::timeout, this, [this] {
@@ -185,9 +186,26 @@ GlobeMapView::GlobeMapView(QWidget* parent)
 
 GlobeMapView::~GlobeMapView()
 {
-    if (!isValid()) {
+    cancelTileRequests();
+    cleanupOpenGlResources();
+}
+
+void GlobeMapView::cleanupOpenGlResources()
+{
+    if (m_cleaningOpenGlResources) {
         return;
     }
+    m_cleaningOpenGlResources = true;
+    QOpenGLContext* glContext = context();
+    if (glContext == nullptr || !glContext->isValid()) {
+        m_cleaningOpenGlResources = false;
+        return;
+    }
+    // The QOpenGLWidget base destroys its context after this derived
+    // destructor has run. Disconnect now so that late context teardown cannot
+    // re-enter a GlobeMapView whose members have already been destroyed.
+    disconnect(glContext, &QOpenGLContext::aboutToBeDestroyed,
+               this, &GlobeMapView::cleanupOpenGlResources);
     makeCurrent();
     for (const std::shared_ptr<DetailTile>& tile :
          std::as_const(m_detailTiles)) {
@@ -201,11 +219,21 @@ GlobeMapView::~GlobeMapView()
     if (m_indexBuffer.isCreated()) {
         m_indexBuffer.destroy();
     }
+    // QOpenGLShaderProgram owns a GL program object and must be destroyed
+    // before doneCurrent(), just like the textures and buffers above.
+    m_program.reset();
+    m_indexCount = 0;
+    m_overlayMatricesValid = false;
     doneCurrent();
+    m_cleaningOpenGlResources = false;
 }
 
 void GlobeMapView::initializeGL()
 {
+    m_glInitializationAttempted = true;
+    connect(context(), &QOpenGLContext::aboutToBeDestroyed,
+            this, &GlobeMapView::cleanupOpenGlResources,
+            Qt::DirectConnection);
     initializeOpenGLFunctions();
     glEnable(GL_DEPTH_TEST);
 
@@ -247,6 +275,9 @@ void GlobeMapView::initializeGL()
         qWarning("PSK Reporter globe shader setup failed: %s",
                  qPrintable(m_program->log()));
         m_program.reset();
+        reportRendererUnavailable(
+            tr("The globe renderer is unavailable because OpenGL shaders "
+               "could not be initialized."));
         return;
     }
     buildSphereMesh();
@@ -335,7 +366,7 @@ void GlobeMapView::paintGL()
     view.lookAt({ 0.0F, 0.0F, m_cameraDistance }, { 0.0F, 0.0F, 0.0F },
                 { 0.0F, 1.0F, 0.0F });
     QMatrix4x4 model;
-    model.rotate(m_rotation);
+    model.rotate(m_navigation.rotation());
     const QMatrix4x4 viewProjection = projection * view;
     const QMatrix4x4 matrix = viewProjection * model;
     m_overlayModel = model;
@@ -714,6 +745,7 @@ void GlobeMapView::requestNextTiles()
         request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
                              QNetworkRequest::PreferCache);
         QNetworkReply* reply = manager->get(request);
+        m_tileReplies.insert(reply);
         ++m_activeTileRequests;
         connect(reply, &QNetworkReply::downloadProgress, reply,
                 [reply](qint64 received, qint64) {
@@ -721,9 +753,14 @@ void GlobeMapView::requestNextTiles()
                         reply->abort();
                     }
                 });
+        connect(reply, &QObject::destroyed, this, [this, reply] {
+            m_tileReplies.remove(reply);
+        });
         connect(reply, &QNetworkReply::finished, this,
                 [this, reply, tile] {
-                    --m_activeTileRequests;
+                    m_tileReplies.remove(reply);
+                    m_activeTileRequests = std::max(
+                        0, m_activeTileRequests - 1);
                     QByteArray bytes;
                     if (reply->error() == QNetworkReply::NoError
                         && reply->bytesAvailable() <= kMaximumTileBytes) {
@@ -764,6 +801,30 @@ void GlobeMapView::requestNextTiles()
                     requestNextTiles();
                 });
     }
+}
+
+void GlobeMapView::cancelTileRequests()
+{
+    m_pendingTiles.clear();
+    const QSet<QNetworkReply*> replies = m_tileReplies;
+    m_tileReplies.clear();
+    m_activeTileRequests = 0;
+    for (QNetworkReply* reply : replies) {
+        disconnect(reply, nullptr, this, nullptr);
+        reply->abort();
+        reply->deleteLater();
+    }
+}
+
+void GlobeMapView::reportRendererUnavailable(const QString& reason)
+{
+    if (m_rendererUnavailableReported) {
+        return;
+    }
+    m_rendererUnavailableReported = true;
+    QTimer::singleShot(0, this, [this, reason] {
+        emit rendererUnavailable(reason);
+    });
 }
 
 void GlobeMapView::scheduleAtlasUpload()
@@ -1032,14 +1093,10 @@ void GlobeMapView::setLegend(
 void GlobeMapView::resetToHome()
 {
     if (m_hasHome) {
-        m_centerLatitude = m_homeLat;
-        m_centerLongitude = m_homeLon;
+        m_navigation.reset(m_homeLat, m_homeLon);
     } else {
-        m_centerLatitude = 0.0;
-        m_centerLongitude = 0.0;
+        m_navigation.reset(0.0, 0.0);
     }
-    m_rollDegrees = 0.0F;
-    rebuildRotation();
     m_cameraDistance = kDefaultCameraDistance;
     m_detailSelectionDirty = true;
     update();
@@ -1103,35 +1160,14 @@ void GlobeMapView::mousePressEvent(QMouseEvent* event)
 void GlobeMapView::applyDragDelta(const QPointF& delta)
 {
     const float degreesPerPixel = 0.28F;
-    m_centerLongitude = SolarTerminator::normalizeDegrees(
-        m_centerLongitude - delta.x() * degreesPerPixel);
-    m_centerLatitude = std::clamp(
-        m_centerLatitude + delta.y() * degreesPerPixel, -89.5, 89.5);
-    rebuildRotation();
+    m_navigation.applyDragDelta(delta, degreesPerPixel);
     m_detailSelectionDirty = true;
 }
 
 void GlobeMapView::applyRollDelta(float degrees)
 {
-    m_rollDegrees = std::remainder(m_rollDegrees + degrees, 360.0F);
-    rebuildRotation();
+    m_navigation.applyRollDelta(degrees);
     m_detailSelectionDirty = true;
-}
-
-void GlobeMapView::rebuildRotation()
-{
-    // Keep the three user controls independent. Longitude is applied first,
-    // latitude second, and explicit roll last around the camera-facing axis.
-    // Rebuilding from these values avoids the unintended roll produced by
-    // repeatedly multiplying non-commuting yaw/pitch quaternions.
-    const QQuaternion longitude = QQuaternion::fromAxisAndAngle(
-        { 0.0F, 1.0F, 0.0F }, static_cast<float>(-m_centerLongitude));
-    const QQuaternion latitude = QQuaternion::fromAxisAndAngle(
-        { 1.0F, 0.0F, 0.0F }, static_cast<float>(m_centerLatitude));
-    const QQuaternion roll = QQuaternion::fromAxisAndAngle(
-        { 0.0F, 0.0F, 1.0F }, m_rollDegrees);
-    m_rotation = roll * latitude * longitude;
-    m_rotation.normalize();
 }
 
 void GlobeMapView::mouseMoveEvent(QMouseEvent* event)
@@ -1393,6 +1429,18 @@ void GlobeMapView::resizeEvent(QResizeEvent* event)
 {
     QOpenGLWidget::resizeEvent(event);
     layoutOverlays();
+}
+
+void GlobeMapView::showEvent(QShowEvent* event)
+{
+    QOpenGLWidget::showEvent(event);
+    QTimer::singleShot(250, this, [this] {
+        if (isVisible() && !m_glInitializationAttempted && !isValid()) {
+            reportRendererUnavailable(
+                tr("The globe renderer is unavailable because an OpenGL "
+                   "context could not be created."));
+        }
+    });
 }
 
 void GlobeMapView::layoutOverlays()

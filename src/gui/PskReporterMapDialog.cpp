@@ -508,6 +508,18 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_mapView = new MapDisplayWidget(bodyWidget());
     m_mapView->setObjectName(QStringLiteral("pskReporterMap"));
     m_mapView->setAccessibleName(tr("PSK Reporter map"));
+    connect(m_mapView, &MapDisplayWidget::globeAvailabilityChanged,
+            this, [this](bool available, const QString& reason) {
+                if (available) {
+                    return;
+                }
+                const QSignalBlocker blocker(m_globeCheck);
+                m_globeCheck->setChecked(false);
+                m_globeCheck->setEnabled(false);
+                m_globeCheck->setToolTip(reason);
+                m_globeCheck->setAccessibleDescription(reason);
+                writePskSetting("showGlobe", false);
+            });
     m_mapView->setProjectionMode(m_globeCheck->isChecked()
         ? MapDisplayWidget::ProjectionMode::Globe
         : MapDisplayWidget::ProjectionMode::Flat);

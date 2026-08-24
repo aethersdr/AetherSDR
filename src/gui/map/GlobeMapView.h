@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MapView.h"
+#include "GlobeNavigation.h"
 
 #include <QHash>
 #include <QImage>
@@ -10,6 +11,7 @@
 #include <QOpenGLWidget>
 #include <QPointF>
 #include <QQuaternion>
+#include <QSet>
 #include <QTimer>
 #include <QVector>
 
@@ -17,10 +19,12 @@
 
 class QLabel;
 class QNativeGestureEvent;
+class QNetworkReply;
 class QOpenGLShaderProgram;
 class QOpenGLTexture;
 class QPainter;
 class QPinchGesture;
+class QShowEvent;
 class QToolButton;
 class QVariantAnimation;
 
@@ -55,6 +59,7 @@ public:
 
 signals:
     void markerClicked(const GlobeMapView::Marker& marker);
+    void rendererUnavailable(const QString& reason);
 
 public slots:
     void resetToHome();
@@ -73,6 +78,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     bool event(QEvent* event) override;
 
 private:
@@ -109,6 +115,9 @@ private:
     void buildSphereMesh();
     void requestAtlasTiles();
     void requestNextTiles();
+    void cancelTileRequests();
+    void cleanupOpenGlResources();
+    void reportRendererUnavailable(const QString& reason);
     void scheduleAtlasUpload();
     void uploadAtlas();
     int detailZoomLevel() const;
@@ -134,7 +143,6 @@ private:
     void updateHover(const QPointF& position);
     void showHoverCard(int markerIndex, const QPointF& position);
     void animateZoomTo(float distance);
-    void rebuildRotation();
     void applyDragDelta(const QPointF& delta);
     void applyRollDelta(float degrees);
     void beginTransientInteraction();
@@ -151,6 +159,7 @@ private:
 
     QImage m_atlas;
     QVector<TileRequest> m_pendingTiles;
+    QSet<QNetworkReply*> m_tileReplies;
     QHash<QString, std::shared_ptr<DetailTile>> m_detailTiles;
     QVector<QString> m_visibleDetailKeys;
     int m_activeTileRequests{0};
@@ -160,6 +169,9 @@ private:
     QTimer m_interactionSettleTimer;
     bool m_atlasDirty{false};
     bool m_detailSelectionDirty{true};
+    bool m_glInitializationAttempted{false};
+    bool m_rendererUnavailableReported{false};
+    bool m_cleaningOpenGlResources{false};
 
     QVector<Marker> m_markers;
     QVector<ProjectedMarker> m_projectedMarkers;
@@ -174,10 +186,7 @@ private:
     bool m_hasHome{false};
     bool m_homeMarkerShown{false};
 
-    QQuaternion m_rotation;
-    double m_centerLatitude{0.0};
-    double m_centerLongitude{0.0};
-    float m_rollDegrees{0.0F};
+    GlobeNavigation m_navigation;
     float m_cameraDistance{3.8F};
     QPointF m_lastPointerPosition;
     bool m_dragging{false};

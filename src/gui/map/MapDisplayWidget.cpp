@@ -140,6 +140,8 @@ void MapDisplayWidget::ensureGlobeView()
     m_stack->addWidget(m_globeView);
     connect(m_globeView, &GlobeMapView::markerClicked,
             this, &MapDisplayWidget::markerClicked);
+    connect(m_globeView, &GlobeMapView::rendererUnavailable,
+            this, &MapDisplayWidget::handleGlobeUnavailable);
     m_globeView->setHomeSpanDegrees(m_homeSpanDegrees);
     if (m_hasHome) {
         m_globeView->setHomePosition(m_homeLat, m_homeLon, m_homeLabel,
@@ -193,6 +195,9 @@ void MapDisplayWidget::synchronizeGlobeView()
 
 void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
 {
+    if (mode == ProjectionMode::Globe && !m_globeAvailable) {
+        return;
+    }
     if (m_projectionMode == mode) {
         return;
     }
@@ -210,7 +215,20 @@ void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
 
 bool MapDisplayWidget::globeAvailable() const
 {
-    return true;
+    return m_globeAvailable;
+}
+
+void MapDisplayWidget::handleGlobeUnavailable(const QString& reason)
+{
+    if (!m_globeAvailable) {
+        return;
+    }
+    m_globeAvailable = false;
+    m_globeUnavailableReason = reason;
+    if (m_projectionMode == ProjectionMode::Globe) {
+        setProjectionMode(ProjectionMode::Flat);
+    }
+    emit globeAvailabilityChanged(false, reason);
 }
 
 void MapDisplayWidget::resetToHome()
