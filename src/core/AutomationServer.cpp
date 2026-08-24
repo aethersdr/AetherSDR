@@ -4443,13 +4443,11 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             QTimer::singleShot(0, qApp, [cbg, win, show]() {
                 if (!cbg) return;
                 if (!show) {
-                    // Drop the name with the popup: a hidden container that
-                    // still answered to aetherComboPopup would hand a later
-                    // grab_widget residue geometry as if it were the open
-                    // list (doGrab has no visibility check). (#5080)
-                    if (QWidget* v = cbg->view())
-                        if (QWidget* c = v->window())
-                            c->setObjectName(QString());
+                    // The name is dropped by ComboPopupNameReset on the
+                    // container's Hide (installed when the popup was named),
+                    // so no explicit clear here — and deliberately no
+                    // cbg->view() either: view() lazily CREATES the container
+                    // for a combo whose popup never existed. (#5080)
                     cbg->hidePopup();
                     return;
                 }
@@ -4462,6 +4460,14 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                     // Name it only if it actually opened: the name must be
                     // true of an OPEN list and nothing else (#5080).
                     if (QWidget* c = v->window(); c && c->isVisible()) {
+                        // Exactly one holder: a second showPopup while
+                        // another combo's list is still up would otherwise
+                        // leave two widgets answering to the name, and
+                        // resolution would return whichever it finds first.
+                        for (QWidget* old : QApplication::allWidgets())
+                            if (old != c && old->objectName()
+                                                == QLatin1String("aetherComboPopup"))
+                                old->setObjectName(QString());
                         c->setObjectName(QStringLiteral("aetherComboPopup"));
                         // The popup also closes on its own (item pick, Esc,
                         // click-away, focus loss). Clear the name on that hide

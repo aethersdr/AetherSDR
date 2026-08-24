@@ -646,6 +646,22 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
    "selectedRow":0,"selectedRowText":"✓"}
 ```
 
+**`showPopup` → grab → `hidePopup`** is the intended sequence for reading an
+open drop-down (#5080). `showPopup` defers to a clean main-loop turn (reply is
+`ok` + `deferred`), then names the open container `aetherComboPopup`; grab or
+dump it under that name, then close. The name is held by exactly one open
+popup at a time and only while it is open; an empty combo is refused up front
+(`showPopup` would be a no-op and nothing would ever open).
+
+```json
+→ {"cmd":"invoke","target":"computeDeviceCombo","action":"showPopup"}
+← {"ok":true,"target":"computeDeviceCombo","class":"QComboBox","action":"showPopup","deferred":true}
+→ {"cmd":"grab","target":"aetherComboPopup"}
+← {"ok":true,"class":"QComboBoxPrivateContainer","path":"…/grab.png", …}
+→ {"cmd":"invoke","target":"computeDeviceCombo","action":"hidePopup"}
+← {"ok":true,"target":"computeDeviceCombo","class":"QComboBox","action":"hidePopup","deferred":true}
+```
+
 <a name="tx-safety"></a>
 > **🚨 TX safety.** `invoke` **refuses any control that keys the transmitter**,
 > returning `{"ok":false,"error":"blocked: …"}` and never calling the widget. A

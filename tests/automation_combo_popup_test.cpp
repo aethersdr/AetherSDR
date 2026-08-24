@@ -69,6 +69,9 @@ int main(int argc, char** argv)
     QComboBox combo; combo.setObjectName(QStringLiteral("modeCombo"));
     combo.addItems({QStringLiteral("USB"), QStringLiteral("CW"), QStringLiteral("AM")});
     layout->addWidget(&combo);
+    QComboBox combo2; combo2.setObjectName(QStringLiteral("bandCombo"));
+    combo2.addItems({QStringLiteral("20m"), QStringLiteral("40m")});
+    layout->addWidget(&combo2);
     window.show(); waitUntil([&window]() { return window.isVisible(); });
 
     AutomationServer server; server.setAuthToken(QStringLiteral("test-token"));
@@ -111,6 +114,21 @@ int main(int argc, char** argv)
     combo.hidePopup();   // item pick / Esc / click-away all end here
     expect("name is cleared on a self-close too",
            waitUntil([&combo]() { QWidget* p = popupOf(&combo); return p && p->objectName().isEmpty(); }));
+
+    // Exactly one holder: opening a second combo's popup while the first is
+    // still up must strip the name from the first container, whether or not
+    // the platform auto-closes it (#5080 review).
+    invoke(&client, QStringLiteral("modeCombo"), QStringLiteral("showPopup"));
+    expect("first popup holds the name",
+           waitUntil([&combo]() { QWidget* p = popupOf(&combo); return p && p->objectName() == QLatin1String("aetherComboPopup"); }));
+    invoke(&client, QStringLiteral("bandCombo"), QStringLiteral("showPopup"));
+    expect("the name moves to the second popup",
+           waitUntil([&combo2]() { QWidget* p = popupOf(&combo2); return p && p->objectName() == QLatin1String("aetherComboPopup"); }));
+    expect("the first container no longer answers to it",
+           waitUntil([&combo]() { QWidget* p = popupOf(&combo); return p && p->objectName().isEmpty(); }));
+    invoke(&client, QStringLiteral("bandCombo"), QStringLiteral("hidePopup"));
+    expect("second popup's name clears on hide",
+           waitUntil([&combo2]() { QWidget* p = popupOf(&combo2); return p && p->objectName().isEmpty(); }));
 
     std::printf("%s\n", gFailures == 0 ? "ALL PASS" : "FAILURES");
     return gFailures == 0 ? 0 : 1;
