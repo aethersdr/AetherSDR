@@ -1622,10 +1622,11 @@ void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
         m_rxApplet->setRadioFilterWidths(widthsHz);
 }
 
-void AppletPanel::setMicLevelMeterAvailable(bool available)
+void AppletPanel::setMicLevelMeterState(MicMeterSessionState session,
+                                        bool available)
 {
     if (m_phoneCwApplet)
-        m_phoneCwApplet->setMicLevelMeterAvailable(available);
+        m_phoneCwApplet->setMicLevelMeterState(session, available);
 }
 
 void AppletPanel::setSelectableMicInputs(bool selectable)

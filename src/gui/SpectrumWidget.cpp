@@ -1,4 +1,6 @@
 #include "SpectrumWidget.h"
+
+#include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
@@ -187,7 +189,7 @@ VfoWidget::FlagDir singleVfoFlagDirectionForOverlay(
     int markerX,
     int spectrumWidth)
 {
-    if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+    if (drawsRttyToneCues(overlay.mode)) {
         return VfoWidget::ForceRight;
     }
 
@@ -325,7 +327,7 @@ void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& ove
                                 QMap<int, VfoWidget::FlagDir>& dirMap)
 {
     for (const SpectrumWidget::SliceOverlay& overlay : overlays) {
-        if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+        if (drawsRttyToneCues(overlay.mode)) {
             dirMap[overlay.sliceId] = VfoWidget::ForceRight;
         }
     }
@@ -2386,7 +2388,7 @@ bool SpectrumWidget::vfoFlagOnLeftForSlice(
         if (VfoWidget* widget = m_vfoWidgets.value(overlay.sliceId, nullptr)) {
             const double markerMhz = overlay.sliceId == sliceId ? freqMhz : overlay.freqMhz;
             int x = mhzToX(markerMhz);
-            if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+            if (drawsRttyToneCues(overlay.mode)) {
                 const double hiMhz = markerMhz + overlay.filterHighHz / 1.0e6;
                 x = mhzToX(hiMhz) + 4;
             }
@@ -14375,7 +14377,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             };
             // Match drawSliceMarkers / the CPU 3D fallback: the passband band
             // and marker cue(s) are placed independently (an off-screen passband
-            // must not drop an on-screen cue, and vice versa); RTTY/DIGL draws a
+            // must not drop an on-screen cue, and vice versa); RTTY draws a
             // mark+space pair rather than a carrier cue; markerWidth == 0 draws
             // the passband with no cue at all.
             const auto appendShadow = [&](const SliceOverlay& so) {
@@ -14401,13 +14403,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 struct ShadowCue { float center; QColor color; };
                 std::array<ShadowCue, 2> cues;
                 int cueCount = 0;
-                const bool rtty = so.mode == QStringLiteral("RTTY")
-                    || so.mode == QStringLiteral("DIGL");
-                if (rtty) {
-                    double markMhz = so.freqMhz;
-                    if (so.mode == QStringLiteral("DIGL")) {
-                        markMhz -= so.rttyMark / 1.0e6;
-                    }
+                // RTTY keeps its exclusive mark/space pair — the RF frequency
+                // IS the mark, so a carrier cue would be coincident with it and
+                // would spend a third descriptor against kDssMeshShadowSlices
+                // for no visible gain. DIGL now falls through to the carrier
+                // cue instead of being treated as RTTY (#5097).
+                if (drawsRttyToneCues(so.mode)) {
+                    // RTTY: RF_frequency IS the mark (radio applies IF shift).
+                    const double markMhz = so.freqMhz;
                     const double spaceMhz = markMhz - so.rttyShift / 1.0e6;
                     cues[cueCount++] = {unitForShadowMhz(markMhz),
                         AetherSDR::ThemeManager::instance().color(
@@ -15248,8 +15251,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
     for (const SliceOverlay& so : m_sliceOverlays) {
         if (VfoWidget* flag = m_vfoWidgets.value(so.sliceId, nullptr)) {
             int x = mhzToX(so.freqMhz);
-            if (so.mode == QStringLiteral("RTTY")
-                || so.mode == QStringLiteral("DIGL")) {
+            if (drawsRttyToneCues(so.mode)) {
                 const double hiMhz =
                     so.freqMhz + so.filterHighHz / 1.0e6;
                 x = mhzToX(hiMhz) + 4;
@@ -16922,13 +16924,12 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
             }
         };
 
-        const bool rtty = so.mode == QStringLiteral("RTTY")
-            || so.mode == QStringLiteral("DIGL");
-        if (rtty) {
-            double markMhz = so.freqMhz;
-            if (so.mode == QStringLiteral("DIGL")) {
-                markMhz -= so.rttyMark / 1.0e6;
-            }
+        // RTTY keeps its exclusive mark/space pair: the RF frequency IS the
+        // mark, so a carrier cue would land at the identical x. DIGL now falls
+        // through to the carrier cue instead of being treated as RTTY (#5097).
+        if (drawsRttyToneCues(so.mode)) {
+            // RTTY: RF_frequency IS the mark (radio applies the IF shift).
+            const double markMhz = so.freqMhz;
             const double spaceMhz = markMhz - so.rttyShift / 1.0e6;
             appendLine(
                 markMhz,
@@ -17099,20 +17100,19 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.drawLine(fX2, specRect.top(), fX2, specRect.bottom());
         }
 
-        // ── RTTY/DIGL: mark/space lines replace the VFO center line ────
-        const bool isRttyMode = (so.mode == "RTTY" || so.mode == "DIGL");
-
-        if (isRttyMode) {
-            double markMhz, spaceMhz;
-            if (so.mode == "RTTY") {
-                // In RTTY mode, RF_frequency IS the mark (radio applies IF shift).
-                markMhz  = so.freqMhz;
-                spaceMhz = so.freqMhz - so.rttyShift / 1.0e6;
-            } else {
-                // In DIGL mode, RF_frequency is the carrier (no IF shift).
-                markMhz  = so.freqMhz - so.rttyMark / 1.0e6;
-                spaceMhz = markMhz - so.rttyShift / 1.0e6;
-            }
+        // ── RTTY: mark/space lines replace the VFO center line ───────────
+        // For RTTY the RF frequency IS the mark (the radio applies the IF
+        // shift), so the mark cue already marks the tuned frequency — a
+        // separate carrier line would sit at the identical x. RTTY rendering
+        // is therefore left exactly as it was.
+        //
+        // DIGL used to be routed here too, which cost it the carrier marker
+        // and gave it two meaningless FSK cues; it now falls through to the
+        // standard centre line below. See drawsRttyToneCues() (#5097).
+        if (drawsRttyToneCues(so.mode)) {
+            // In RTTY mode, RF_frequency IS the mark (radio applies IF shift).
+            const double markMhz  = so.freqMhz;
+            const double spaceMhz = so.freqMhz - so.rttyShift / 1.0e6;
             const int markX  = mhzToX(markMhz);
             const int spaceX = mhzToX(spaceMhz);
 

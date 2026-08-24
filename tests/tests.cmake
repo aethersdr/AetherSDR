@@ -707,6 +707,13 @@ target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 
+add_executable(slice_tone_cues_test
+    tests/slice_tone_cues_test.cpp
+)
+target_include_directories(slice_tone_cues_test PRIVATE src)
+target_link_libraries(slice_tone_cues_test PRIVATE Qt6::Core)
+add_test(NAME slice_tone_cues_test COMMAND slice_tone_cues_test)
+
 add_executable(mac_cursor_compat_test
     tests/mac_cursor_compat_test.cpp
 )
@@ -2705,6 +2712,52 @@ add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(meter_applet_capability_test
+    tests/meter_applet_capability_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(meter_applet_capability_test PRIVATE src)
+target_link_libraries(meter_applet_capability_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+if(UNIX)
+    target_link_libraries(meter_applet_capability_test PRIVATE pthread)
+endif()
+set_target_properties(meter_applet_capability_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_applet_capability_test COMMAND meter_applet_capability_test)
+set_tests_properties(meter_applet_capability_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(meter_applet_voltage_state_test
+    tests/meter_applet_voltage_state_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(meter_applet_voltage_state_test PRIVATE src)
+target_link_libraries(meter_applet_voltage_state_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+if(UNIX)
+    target_link_libraries(meter_applet_voltage_state_test PRIVATE pthread)
+endif()
+set_target_properties(meter_applet_voltage_state_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_applet_voltage_state_test COMMAND meter_applet_voltage_state_test)
+set_tests_properties(meter_applet_voltage_state_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). SimBackend was once
 # wire-free, but Path B (RFC #4288) had it own a RadioConnection + PanadapterStream,
 # so it no longer links against a hand-picked subset of sources: those pull in
@@ -2791,6 +2844,16 @@ target_link_libraries(automation_double_click_test PRIVATE
 set_target_properties(automation_double_click_test PROPERTIES AUTOMOC ON)
 add_test(NAME automation_double_click_test COMMAND automation_double_click_test)
 set_tests_properties(automation_double_click_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(automation_fm_repeater_verbs_test tests/automation_fm_repeater_verbs_test.cpp)
+target_include_directories(automation_fm_repeater_verbs_test PRIVATE src)
+target_link_libraries(automation_fm_repeater_verbs_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_fm_repeater_verbs_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_fm_repeater_verbs_test COMMAND automation_fm_repeater_verbs_test)
+set_tests_properties(automation_fm_repeater_verbs_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
@@ -3730,6 +3793,24 @@ add_test(NAME phone_tx_filter_numeric_entry_test
 set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_applet_dexp_visibility_test
+    tests/phone_applet_dexp_visibility_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_applet_dexp_visibility_test PRIVATE src)
+target_compile_definitions(phone_applet_dexp_visibility_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(phone_applet_dexp_visibility_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_applet_dexp_visibility_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_applet_dexp_visibility_test
+         COMMAND phone_applet_dexp_visibility_test)
+set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
@@ -3743,6 +3824,21 @@ set_target_properties(phone_cw_mic_gain_authority_test PROPERTIES AUTOMOC ON)
 add_test(NAME phone_cw_mic_gain_authority_test
          COMMAND phone_cw_mic_gain_authority_test)
 set_tests_properties(phone_cw_mic_gain_authority_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(phone_cw_level_meter_state_test
+    tests/phone_cw_level_meter_state_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_level_meter_state_test PRIVATE src)
+target_link_libraries(phone_cw_level_meter_state_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets
+)
+set_target_properties(phone_cw_level_meter_state_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_level_meter_state_test
+         COMMAND phone_cw_level_meter_state_test)
+set_tests_properties(phone_cw_level_meter_state_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(container_manager_test
@@ -3848,6 +3944,8 @@ set(AETHER_SETTINGS_CONSUMERS
     cwx_panel_test
     meter_model_test
     health_applet_test
+    meter_applet_capability_test
+    meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
     transmit_model_apd_test

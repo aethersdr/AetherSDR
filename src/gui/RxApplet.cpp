@@ -1,4 +1,5 @@
 #include "RxApplet.h"
+#include "core/CtcssTones.h"
 
 #include "gui/FilterStepMath.h"
 #include "FilterPassbandWidget.h"
@@ -281,29 +282,13 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
 
 // ── Standard CTCSS tone table (EIA/TIA-603) ──────────────────────────────────
 
-struct CTCSSTone {
-    int code;
-    const char* designation;
-    double frequency;
-};
-
-static constexpr CTCSSTone CTCSS_TONES[] = {
-    { 1, "XZ", 67.0},  { 0, "", 69.3},    { 2, "XA", 71.9},  { 3, "WA", 74.4},
-    { 4, "XB", 77.0},
-    { 5, "WB", 79.7},  { 6, "YZ", 82.5},  { 7, "YA", 85.4},  { 8, "YB", 88.5},
-    { 9, "ZZ", 91.5},  {10, "ZA", 94.8},  {11, "ZB", 97.4},  {12, "1Z",100.0},
-    {13, "1A",103.5},  {14, "1B",107.2},  {15, "2Z",110.9},  {16, "2A",114.8},
-    {17, "2B",118.8},  {18, "3Z",123.0},  {19, "3A",127.3},  {20, "3B",131.8},
-    {21, "4Z",136.5},  {22, "4A",141.3},  {23, "4B",146.2},  {24, "5Z",151.4},
-    {25, "5A",156.7},  { 0, "",159.8},    {26, "5B",162.2},  { 0, "",165.5},
-    {27, "6Z",167.9},  { 0, "",171.3},    {28, "6A",173.8},  { 0, "",177.3},
-    {29, "6B",179.9},  { 0, "",183.5},    {30, "7Z",186.2},  { 0, "",189.9},
-    {31, "7A",192.8},  { 0, "",196.6},    { 0, "",199.5},    {32, "M1",203.5},
-    {33, "8Z",206.5},  {34, "M2",210.7},  {35, "M3",218.1},  {36, "M4",225.7},
-    {37, "9Z",229.1},  {38, "M5",233.6},  {39, "M6",241.8},  {40, "M7",250.3},
-    {41, "0Z",254.1},
-};
-static constexpr int CTCSS_COUNT = sizeof(CTCSS_TONES) / sizeof(CTCSS_TONES[0]);
+// The tone table moved to core/CtcssTones.h so the automation bridge's
+// `slice tone` verb validates against the same set this dropdown offers
+// (#5102). Aliased rather than renamed at every use site.
+using CTCSSTone = AetherSDR::CtcssTone;
+static constexpr auto& CTCSS_TONES = AetherSDR::kCtcssTones;
+static constexpr int CTCSS_COUNT =
+    static_cast<int>(AetherSDR::kCtcssToneCount);
 
 // Small checkable button used throughout the applet.
 static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
@@ -3080,13 +3065,8 @@ void RxApplet::applyOffsetDir(const QString& dir)
     m_slice->setRepeaterOffsetDir(dir);
 
     // Compute and apply tx_offset_freq
-    const double offset = m_slice->fmRepeaterOffsetFreq();
-    if (dir == "up")
-        m_slice->setTxOffsetFreq(offset);
-    else if (dir == "down")
-        m_slice->setTxOffsetFreq(-offset);
-    else
-        m_slice->setTxOffsetFreq(0.0);
+    m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
+        dir, m_slice->fmRepeaterOffsetFreq()));
 
     // Clear REV when direction changes
     if (!usesTransmitFrequencyCheck()) {

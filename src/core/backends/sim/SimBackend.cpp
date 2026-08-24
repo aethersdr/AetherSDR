@@ -265,6 +265,7 @@ RadioCapabilities SimBackend::capabilities() const
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
+    caps.hasDownwardExpander = false;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
@@ -293,6 +294,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
+    caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};

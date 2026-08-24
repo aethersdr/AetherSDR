@@ -308,6 +308,20 @@ struct RadioCapabilities {
     // genuinely having a PA. It already means something other than this.
     bool hasSupplyVoltageTelemetry = false;
 
+    // The radio reports PA temperature as live telemetry. False means the
+    // Radio Vitals applet omits the temperature gauge and its unit selector
+    // instead of presenting an instrument that can never receive a sample.
+    // This is independent of supply voltage: a backend may support either,
+    // both, or neither telemetry source.
+    bool hasPaTemperatureTelemetry = false;
+
+    // The radio reports main-fan speed as live telemetry. False means the
+    // Radio Vitals applet omits the fan gauge instead of presenting an
+    // instrument that can never receive a sample. This is independent of PA
+    // temperature and supply voltage: each telemetry source is declared on
+    // its own evidence.
+    bool hasMainFanTelemetry = false;
+
     // The radio exposes SELECTABLE HARDWARE microphone inputs — the Phone
     // applet's MIC / BAL / LINE / ACC choices, which are FlexRadio's front and
     // rear connectors.
@@ -324,6 +338,13 @@ struct RadioCapabilities {
     // hear network audio produces a transmission with no modulation, which
     // looks like a hardware fault.
     bool hasSelectableMicInputs = false;
+
+    // Whether the radio implements the downward-expander control surfaced as
+    // DEXP in the Phone applet. This is deliberately narrower than
+    // hasRadioSideDsp: receive-side DSP does not imply a TX compander command.
+    // False hides the complete row rather than leaving an optimistic control
+    // with no authoritative command path.
+    bool hasDownwardExpander = false;
 
     // Transmit audio reaches this backend through IRadioBackend::submitTxAudio
     // rather than through a Flex DAX/VITA-49 stream.

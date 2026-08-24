@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "core/CtcssTones.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
@@ -2317,17 +2318,16 @@ void VfoWidget::buildTabContent()
             AetherSDR::applyComboStyle(m_fmToneModeCmb);
             toneRow->addWidget(m_fmToneModeCmb, 1);
 
-            // Tone value — simplified list of common CTCSS tones
+            // Tone value — from core/CtcssTones.h, the same table the RX
+            // applet's dropdown and the automation bridge's `slice tone`
+            // validation use. This list used to be a third hand-typed copy of
+            // the same 41 doubles; the values agreed, which is exactly how a
+            // copy survives long enough to stop agreeing.
             m_fmToneValueCmb = new GuardedComboBox;
             m_fmToneValueCmb->setAccessibleName("FM tone frequency");
-            const double tones[] = {67.0,69.3,71.9,74.4,77.0,79.7,82.5,85.4,88.5,91.5,94.8,
-                97.4,100.0,103.5,107.2,110.9,114.8,118.8,123.0,127.3,131.8,
-                136.5,141.3,146.2,151.4,156.7,159.8,162.2,165.5,167.9,171.3,
-                173.8,177.3,179.9,183.5,186.2,189.9,192.8,196.6,199.5,203.5,
-                206.5,210.7,218.1,225.7,229.1,233.6,241.8,250.3,254.1};
-            for (double f : tones)
-                m_fmToneValueCmb->addItem(QString::number(f, 'f', 1),
-                                           QString::number(f, 'f', 1));
+            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones)
+                m_fmToneValueCmb->addItem(QString::number(t.frequency, 'f', 1),
+                                           QString::number(t.frequency, 'f', 1));
             AetherSDR::applyComboStyle(m_fmToneValueCmb);
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
@@ -2369,10 +2369,8 @@ void VfoWidget::buildTabContent()
                 if (m_fmOffsetSpin->signalsBlocked()) return;
                 if (!m_slice) return;
                 m_slice->setFmRepeaterOffsetFreq(val);
-                const QString& dir = m_slice->repeaterOffsetDir();
-                if (dir == "up") m_slice->setTxOffsetFreq(val);
-                else if (dir == "down") m_slice->setTxOffsetFreq(-val);
-                else m_slice->setTxOffsetFreq(0);
+                m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
+                    m_slice->repeaterOffsetDir(), val));
             });
 
             // Direction: − | Simplex | + | REV
@@ -2382,10 +2380,8 @@ void VfoWidget::buildTabContent()
             auto applyDir = [this](const QString& dir) {
                 if (!m_slice) return;
                 m_slice->setRepeaterOffsetDir(dir);
-                double offset = m_slice->fmRepeaterOffsetFreq();
-                if (dir == "up") m_slice->setTxOffsetFreq(offset);
-                else if (dir == "down") m_slice->setTxOffsetFreq(-offset);
-                else m_slice->setTxOffsetFreq(0);
+                m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
+                    dir, m_slice->fmRepeaterOffsetFreq()));
                 m_fmOffsetDown->setChecked(dir == "down");
                 m_fmSimplexBtn->setChecked(dir == "simplex");
                 m_fmOffsetUp->setChecked(dir == "up");

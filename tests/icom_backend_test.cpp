@@ -2174,10 +2174,10 @@ int main(int argc, char** argv)
     };
 
     // A user-visible Network Radio Name is only a handshake hint. The 0x19
-    // reply is authoritative and can move the session from a calibrated
-    // profile to an uncalibrated one. Meter definitions must be replaced by
-    // stable identity, not compacted into new indices, or OVF takes the old Vd
-    // slot and the status bar reads an overflow flag as supply voltage.
+    // reply is authoritative and can replace the hinted model's meter set —
+    // here IC-705 Vd+Id becomes IC-9700 Vd-only. Definitions must be replaced
+    // by stable identity, not compacted into new indices, or OVF takes a former
+    // meter slot and the status bar reads an overflow flag as telemetry.
     {
         CivCase c(0xA2, "IC-705");
         QMap<int, MeterDef> activeMeters;
@@ -2202,24 +2202,30 @@ int main(int argc, char** argv)
         const int vdIndex = static_cast<int>(MeterId::Vd);
         const int idIndex = static_cast<int>(MeterId::Id);
         const int overflowIndex = static_cast<int>(MeterId::Overflow);
-        check(removedMeters.contains(vdIndex) && removedMeters.contains(idIndex),
-              "identity correction: withdrawn Vd and Id definitions are removed explicitly");
-        check(!activeMeters.contains(vdIndex) && !activeMeters.contains(idIndex),
-              "identity correction: uncalibrated Vd and Id do not remain cached");
+        check(!removedMeters.contains(vdIndex) && removedMeters.contains(idIndex),
+              "identity correction: IC-9700 retains Vd and withdraws unsupported Id");
+        check(activeMeters.contains(vdIndex) && !activeMeters.contains(idIndex),
+              "identity correction: IC-9700 publishes voltage without claiming current");
         check(activeMeters.contains(overflowIndex)
                   && activeMeters.value(overflowIndex).name == QStringLiteral("OVF"),
               "identity correction: OVF retains its stable meter identity");
-        check(activeMeters.size() == 6,
-              "identity correction: only calibrated-independent meters remain");
+        check(activeMeters.size() == 7,
+              "identity correction: calibrated-independent meters plus Vd remain");
 
         c.radio.clearCivLog();
-        check(waitFor([&] { return !c.radio.civCommands().empty(); }, 1500),
-              "identity correction: scheduler continues after profile correction");
+        check(waitFor([&] {
+                  return std::ranges::any_of(
+                      c.radio.civCommands(), [](const CivFrame& frame) {
+                          return frame.cmd == cmd::kMeter && frame.hasSub
+                              && frame.sub == meter::kVd;
+                      });
+              }, 2500),
+              "identity correction: IC-9700 schedules its supported Vd poll");
         check(std::ranges::none_of(c.radio.civCommands(), [](const CivFrame& frame) {
                   return frame.cmd == cmd::kMeter && frame.hasSub
-                      && (frame.sub == meter::kVd || frame.sub == meter::kId);
+                      && frame.sub == meter::kId;
               }),
-              "identity correction: uncalibrated Vd and Id are no longer polled");
+              "identity correction: IC-9700 does not poll unsupported Id");
 
         c.backend.disconnectRadio();
     }

@@ -131,8 +131,14 @@ struct MeterSpec {
 enum class MeterCalibration : std::uint8_t {
     Uncalibrated,
     Ic705,
+    Ic9700Voltage,
     Ic7300Mk2,
 };
+
+[[nodiscard]] std::span<const CurvePoint>
+powerCurveForCalibration(MeterCalibration calibration);
+[[nodiscard]] bool hasVoltageCalibration(MeterCalibration calibration) noexcept;
+[[nodiscard]] bool hasCurrentCalibration(MeterCalibration calibration) noexcept;
 
 // Convert a raw reading to the spec's unit. `s9Dbm` selects the S-meter
 // reference and is ignored by every other meter.
