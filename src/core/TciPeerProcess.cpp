@@ -6,6 +6,7 @@
 
 #if defined(Q_OS_LINUX)
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
@@ -115,6 +116,51 @@ QString rawLinkTarget(const QString& linkPath)
     return QString::fromLocal8Bit(buf, static_cast<int>(n));
 }
 
+// Linux binaries embed no version.  For a distro-installed client, the dpkg
+// database — read as plain files, never executing a package tool — maps the
+// exe path to its owning package and that package's version, which carries
+// the packaging build (e.g. "2.6.1+repack-2build1").  Each
+// /var/lib/dpkg/info/<pkg>[:<arch>].list file lists one package's installed
+// paths; /var/lib/dpkg/status holds the "Package:"/"Version:" stanzas.
+// Home-built binaries appear in no .list and stay version-less.  rpm's
+// database is not plain text (sqlite blobs), so non-dpkg distros remain a
+// follow-up.  Runs on the resolver's worker thread, like the /proc sweep.
+QString dpkgVersionForExecutable(const QString& exePath)
+{
+    if (exePath.isEmpty()) return {};
+    const QByteArray needle = exePath.toUtf8() + '\n';
+    QString pkg;
+    QDirIterator it(QStringLiteral("/var/lib/dpkg/info"),
+                    {QStringLiteral("*.list")}, QDir::Files);
+    while (it.hasNext()) {
+        QFile f(it.next());
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        const QByteArray all = f.readAll();
+        if (!all.startsWith(needle) && !all.contains(QByteArray("\n") + needle))
+            continue;
+        pkg = QFileInfo(f.fileName()).fileName();
+        pkg.chop(5);                                    // ".list"
+        const int arch = pkg.indexOf(QLatin1Char(':'));
+        if (arch > 0) pkg.truncate(arch);               // "wsjtx:amd64" -> "wsjtx"
+        break;
+    }
+    if (pkg.isEmpty()) return {};
+
+    QFile status(QStringLiteral("/var/lib/dpkg/status"));
+    if (!status.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
+    const QString wantPkg = QStringLiteral("Package: ") + pkg;
+    bool inStanza = false;
+    QTextStream in(&status);
+    while (!in.atEnd()) {
+        const QString line = in.readLine();
+        if (line.isEmpty()) { inStanza = false; continue; }
+        if (line == wantPkg) { inStanza = true; continue; }
+        if (inStanza && line.startsWith(QStringLiteral("Version: ")))
+            return line.mid(9).trimmed();
+    }
+    return {};
+}
+
 TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
 {
     TciPeerProcessInfo info;
@@ -142,6 +188,7 @@ TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
             info.exePath = QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(pid));
             if (info.name.isEmpty() && !info.exePath.isEmpty())
                 info.name = QFileInfo(info.exePath).fileName();
+            info.version = dpkgVersionForExecutable(info.exePath);
             info.resolved = !info.name.isEmpty() || !info.exePath.isEmpty();
             return info;
         }
