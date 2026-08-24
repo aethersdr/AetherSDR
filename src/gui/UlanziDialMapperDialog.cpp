@@ -783,8 +783,10 @@ void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
     if (m_manager && m_manager->isConnected()) return;
     showAttentionStatus(
         tr("%1 detected — this variant can't be driven over HID. "
-           "Use the bundled Ulanzi Studio plugin instead (see "
-           "plugins/ulanzi-aethersdr in the AetherSDR install/repo).")
+           "Use the Ulanzi Studio TCI plugin instead: enable TCI in "
+           "Settings, then see plugins/ulanzi-aethersdr/README.md in the "
+           "AetherSDR source tree for installation (not yet bundled with "
+           "the installer).")
             .arg(deviceName));
 }
 #endif  // Q_OS_WIN && HAVE_HIDAPI

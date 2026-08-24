@@ -59,7 +59,7 @@ struct KnownVariant {
     const wchar_t* displayName;
 };
 constexpr KnownVariant kUnsupportedVariants[] = {
-    {0xFFF1, 0x0000, L"Ulanzi D100H (KEHWIN \"Dial_Lite\", BLE)"},
+    {0xFFF1, 0x0082, L"Ulanzi D100H (KEHWIN \"Dial_Lite\", BLE)"},
     {0x2207, 0x0019, L"Ulanzi D200 (Zkswe \"ulanzi\", USB)"},
 };
 
