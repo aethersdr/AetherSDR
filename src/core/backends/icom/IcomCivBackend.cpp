@@ -1554,7 +1554,8 @@ void IcomCivBackend::publishPhoneModulationLevel()
         TransmitDelta t;
         t.micLevel = m_networkModLevelPercent;
         emit transmitChanged(t);
-    } else if (activeInput >= 0 && m_micGainReported) {
+    } else if (activeInput >= 0 && activeInput != mod->networkOnlyValue
+               && m_micGainReported) {
         // Preserve the established physical-input behavior whenever LAN is not
         // selected.  In particular, a connect-time source read must not leave
         // a stale LAN value displayed after the operator changes the radio.
@@ -3658,6 +3659,12 @@ void IcomCivBackend::setMicGain(int gainPercent)
         mod && mod->phoneLevelFollowsNetworkInput) {
         const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;
         if (activeInput == mod->networkOnlyValue) {
+            // The LAN register is radio-persisted state.  Until its readback
+            // arrives, the shared slider does not describe it and must not
+            // turn a construction/physical-mic mirror into a LAN write.
+            if (m_networkModLevelPercent < 0) {
+                return;
+            }
             m_networkModLevelPercent = std::clamp(gainPercent, 0, 100);
             sendUserCommand(cmdWriteSettingLevel(
                 m_session ? m_session->civAddress() : m_model->civAddress,
@@ -4642,7 +4649,25 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     if (id == QLatin1String("squelch"))  { setSliceSquelch(slice, m_squelchPercent > 0, m_squelchPercent); return true; }
     if (id == QLatin1String("agc"))      { setSliceAgc(slice, m_agcMode, 0); return true; }
     if (id == QLatin1String("tx.power")) { setTxPower(m_txPowerPercent); return true; }
-    if (id == QLatin1String("mic.gain")) { setMicGain(m_micGainPercent); return true; }
+    if (id == QLatin1String("mic.gain")) {
+        const auto mod = modulationProfileFor(*m_model);
+        const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;
+        if (mod && mod->phoneLevelFollowsNetworkInput
+            && activeInput == mod->networkOnlyValue) {
+            if (m_networkModLevelPercent < 0) {
+                return false;
+            }
+            setMicGain(m_networkModLevelPercent);
+            // The shared seam verb is logically mic.gain even though this
+            // model routes it to SET 0114.  The generic cmd/sub registry sees
+            // the physical 14 0B row or the SET row, so retain the logical
+            // alias explicitly for the scrub verdict.
+            m_controlsScheduled.insert(id);
+            return true;
+        }
+        setMicGain(m_micGainPercent);
+        return true;
+    }
     if (id == QLatin1String("mod.input.dataoff")) {
         // Re-assert the CURRENT selection, which is the whole scrub contract:
         // the question is whether the intent reaches the wire, not whether the

@@ -301,6 +301,9 @@ constexpr std::array<FeatureEvidence, 10> kIc9700Evidence{{
      "live IC-9700 475-point scope trace, 2026-08-05"},
     {IcomFeature::VfoMode, EvidenceKind::LiveHardware,
      "live IC-9700 26 00 reply, 2026-08-14"},
+    {IcomFeature::ModulationInput, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-9700 CI-V Reference Guide 2019, SET 0112-0116 (printed p.7); "
+     "live IC-9700 LAN MOD read/write proof"},
     {IcomFeature::FmRepeaterBasic, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; PR #5149 live trace"},
     {IcomFeature::FmRepeaterExtended, EvidenceKind::OfficialGuideAndLiveHardware,

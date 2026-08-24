@@ -235,6 +235,9 @@ int main(int argc, char** argv)
               && ic9700Mod->phoneLevelFollowsNetworkInput,
           "IC-9700 uses its documented SET 0112-0116 modulation map and routes "
           "the Phone level through LAN only while LAN is selected");
+    check(icom::profileFor(*icom::modelForCivAddress(0xA2))
+              .supports(icom::IcomFeature::ModulationInput),
+          "IC-9700 modulation input diagnostics carry model-owned guide evidence");
     check(ic705Mod && !ic705Mod->phoneLevelFollowsNetworkInput
               && mk2Mod && !mk2Mod->phoneLevelFollowsNetworkInput,
           "IC-705 and IC-7300MK2 retain their established physical-mic Phone "

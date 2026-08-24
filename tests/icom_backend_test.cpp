@@ -222,6 +222,13 @@ static bool writesPhysicalMicGain(const CivFrame& f)
         && f.sub == level::kMicGain && !f.data.empty();
 }
 
+static bool writesSettingLevel(const CivFrame& f, int item)
+{
+    return f.cmd == cmd::kSetting && f.hasSub && f.sub == settingSub::kMenu
+        && f.data.size() == 4
+        && decodeBcdByte(f.data[0]) * 100 + decodeBcdByte(f.data[1]) == item;
+}
+
 // ---------------------------------------------------------------------------
 // CI-V trace capture
 //
@@ -2642,6 +2649,69 @@ int main(int argc, char** argv)
               "app shutdown: discarded commands are consumed as cancellations");
     }
 
+    // A dropped LAN-level reply must leave the shared Phone value unknown. A
+    // later physical-mic poll is not a substitute for that radio-owned SET
+    // leaf, and neither a UI intent nor a scrub may overwrite the unknown LAN
+    // register from the physical mirror.
+    {
+        CivCase c(0xA2, "IC-9700");
+        c.radio.setSetting(115, 0x05); // DATA OFF MOD = LAN
+        c.radio.setSetting(116, 0x05); // DATA MOD = LAN
+        c.radio.clearSettingLevel(114); // simulate a lost/unsupported readback
+        std::optional<int> phoneLevel;
+        QObject::connect(&c.backend, &IRadioBackend::transmitChanged, &c.backend,
+                         [&phoneLevel](const TransmitDelta& delta) {
+                             if (delta.micLevel) {
+                                 phoneLevel = *delta.micLevel;
+                             }
+                         });
+        c.backend.connectRadio(c.request());
+        check(waitFor([&] { return c.backend.isConnected(); }),
+              "unknown LAN level: the IC-9700 session comes up");
+        check(waitFor([&] {
+                  return std::ranges::any_of(c.radio.civCommands(),
+                                             writesPhysicalMicGain)
+                      || std::ranges::any_of(c.radio.civCommands(),
+                                             [](const CivFrame& frame) {
+                                                 return frame.cmd == cmd::kLevel
+                                                     && frame.hasSub
+                                                     && frame.sub == level::kMicGain;
+                                             });
+              }),
+              "unknown LAN level: the physical microphone poll completes");
+        QCoreApplication::processEvents();
+        check(!phoneLevel.has_value(),
+              "unknown LAN level: physical MIC telemetry cannot repaint the "
+              "LAN-backed Phone control");
+
+        const int lanWritesBefore = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return writesSettingLevel(frame, 114);
+            }));
+        c.backend.setMicGain(20);
+        QCoreApplication::processEvents();
+        const int lanWritesAfter = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return writesSettingLevel(frame, 114);
+            }));
+        check(lanWritesAfter == lanWritesBefore,
+              "unknown LAN level: operator movement cannot overwrite an "
+              "unread persistent LAN MOD register");
+
+        const QVariantMap scrub = c.backend.controlScrub(QStringLiteral("mic.gain"));
+        QString micStatus;
+        for (const QVariant& row : scrub.value(QStringLiteral("rows")).toList()) {
+            const QVariantMap fields = row.toMap();
+            if (fields.value(QStringLiteral("id")).toString()
+                == QLatin1String("mic.gain")) {
+                micStatus = fields.value(QStringLiteral("status")).toString();
+            }
+        }
+        check(micStatus == QLatin1String("NOT-TESTED"),
+              "unknown LAN level: scrub declines rather than inventing a "
+              "current LAN value");
+    }
+
     // ---- AUTO: the bug, and the fix ---------------------------------------
     //
     // An IC-9700 lives on 0xA2. Before this change, an operator who left the
@@ -2688,6 +2758,27 @@ int main(int argc, char** argv)
         check(waitFor([&] { return phoneLevel == 10; }),
               "auto: the IC-9700 Phone level adopts radio-owned LAN MOD, not "
               "the unrelated physical MIC gain");
+
+        const int lanLevelBeforeScrub = c.radio.settingLevel(114);
+        const int micWritesBeforeScrub = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), writesPhysicalMicGain));
+        const QVariantMap scrub = c.backend.controlScrub(QStringLiteral("mic.gain"));
+        QString micStatus;
+        for (const QVariant& row : scrub.value(QStringLiteral("rows")).toList()) {
+            const QVariantMap fields = row.toMap();
+            if (fields.value(QStringLiteral("id")).toString()
+                == QLatin1String("mic.gain")) {
+                micStatus = fields.value(QStringLiteral("status")).toString();
+            }
+        }
+        check(micStatus == QLatin1String("LINKED"),
+              "auto: mic.gain scrub follows the active LAN register");
+        check(c.radio.settingLevel(114) == lanLevelBeforeScrub,
+              "auto: mic.gain scrub reasserts the radio-owned LAN value");
+        check(static_cast<int>(std::ranges::count_if(
+                  c.radio.civCommands(), writesPhysicalMicGain))
+                  == micWritesBeforeScrub,
+              "auto: LAN-backed scrub never writes physical MIC gain 14 0B");
 
         const int physicalMicWritesBefore = static_cast<int>(std::ranges::count_if(
             c.radio.civCommands(), writesPhysicalMicGain));

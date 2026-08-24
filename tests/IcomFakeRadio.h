@@ -221,6 +221,7 @@ public:
     {
         m_settingLevels[item] = std::clamp(value, 0, 255);
     }
+    void clearSettingLevel(int item) { m_settingLevels.erase(item); }
     [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
     {
         return m_renewalSequences;

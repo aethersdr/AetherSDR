@@ -183,7 +183,10 @@ constexpr std::array kSpecs = {
     ControlSpec{"mic.gain", 0x14, 0x0B, true, "Mic gain",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
-                "setMicGain", "phoneMicSlider", true, ""},
+                "setMicGain", "phoneMicSlider", true,
+                "MODEL-CONDITIONAL: normally physical MIC gain 14 0B; on the "
+                "IC-9700 while LAN is the active MOD input, the same normalized "
+                "Phone control reads and writes model-owned SET 0114."},
     ControlSpec{"cw.speed", 0x14, 0x0C, true, "Keyer speed",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "wpm", 6, 48,
