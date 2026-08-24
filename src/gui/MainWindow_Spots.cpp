@@ -33,6 +33,7 @@
 #include "models/SpotModel.h"
 
 #include <QDateTime>
+#include <QMessageBox>
 #include <QSet>
 #ifdef HAVE_MQTT
 #include <QJsonDocument>
@@ -58,6 +59,7 @@ void MainWindow::wireSpotSubsystem()
     m_wsjtxClient = new WsjtxClient;
     m_spotCollectorClient = new SpotCollectorClient;
     m_potaClient = new PotaClient;
+    m_eibiClient = new EibiClient;
     m_n1mmSpotClient = new N1MMSpotClient;
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
@@ -135,10 +137,16 @@ void MainWindow::wireSpotSubsystem()
                               << "radio has no radio-side CW keyer";
             return;
         }
+        const QString rejection = m_radioModel.cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcMqtt) << "cw/transmit ignored:" << rejection;
+            return;
+        }
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
-        const bool changeWpm = (wpm >= 5 && wpm <= 100);
+        const bool changeWpm = (wpm >= m_radioModel.cwTextMinWpm()
+                                && wpm <= m_radioModel.cwTextMaxWpm());
         const bool changeHz  = (hz >= 100 && hz <= 6000);
         if (!m_cwxTransmitting) {
             m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;
@@ -234,11 +242,64 @@ void MainWindow::wireSpotSubsystem()
     m_wsjtxClient->moveToThread(m_spotThread);
     m_spotCollectorClient->moveToThread(m_spotThread);
     m_potaClient->moveToThread(m_spotThread);
+    m_eibiClient->moveToThread(m_spotThread);
     m_n1mmSpotClient->moveToThread(m_spotThread);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient->moveToThread(m_spotThread);
 #endif
     m_spotThread->start();
+
+    // ── EiBi Shortwave Schedules ─────────────────────────────────────────────
+    connect(m_eibiClient, &EibiClient::spotsUpdated,
+            this, [this](const QVector<DxSpot>& spots) {
+        QSet<QString> currentKeys;
+        currentKeys.reserve(spots.size());
+
+        for (const auto& spot : spots) {
+            if (spot.dxCall.trimmed().isEmpty() || spot.freqMhz <= 0.0)
+                continue;
+
+            const QString key = spot.dxCall + QLatin1Char(':') + QString::number(spot.freqMhz, 'f', 4);
+            currentKeys.insert(key);
+
+            int spotId = m_eibiSpotKeyToId.value(key, -1);
+            if (spotId == -1) {
+                spotId = m_nextPassiveSpotId--;
+                m_eibiSpotKeyToId[key] = spotId;
+            }
+
+            QMap<QString, QString> kvs;
+            kvs["callsign"] = QString(spot.dxCall).replace(' ', QChar(0x7f));
+            kvs["rx_freq"] = QString::number(spot.freqMhz, 'f', 6);
+            kvs["tx_freq"] = QString::number(spot.freqMhz, 'f', 6);
+            kvs["source"] = QStringLiteral("EiBi");
+            kvs["spotter_callsign"] = spot.spotterCall;
+            kvs["lifetime_seconds"] = QString::number(spot.lifetimeSec);
+            kvs["timestamp"] = QString::number(QDateTime::currentSecsSinceEpoch());
+            if (!spot.comment.isEmpty())
+                kvs["comment"] = QString(spot.comment).replace(' ', QChar(0x7f));
+            const QString eibiColor = AppSettings::instance().value("EiBiSpotColor", "#8aa8c0").toString();
+            kvs["color"] = eibiColor;
+
+            m_radioModel.spotModel().applySpotStatus(spotId, kvs);
+        }
+
+        // Remove spots that are no longer active
+        auto it = m_eibiSpotKeyToId.begin();
+        while (it != m_eibiSpotKeyToId.end()) {
+            if (!currentKeys.contains(it.key())) {
+                m_radioModel.spotModel().removeSpot(it.value());
+                it = m_eibiSpotKeyToId.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    });
+
+    connect(m_eibiClient, &EibiClient::fetchFailed,
+            this, [this](const QString& err) {
+        statusBar()->showMessage(QStringLiteral("EiBi schedule download failed: %1").arg(err), 5000);
+    });
 
     // Construct each client's sockets/timers on the SpotClients thread (#1929).
     // On Windows, QTcpSocket / QUdpSocket / QWebSocket bind their internal
@@ -255,12 +316,15 @@ void MainWindow::wireSpotSubsystem()
                               Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_potaClient, &PotaClient::initialize,
                               Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_eibiClient, &EibiClient::initialize,
+                              Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_n1mmSpotClient, &N1MMSpotClient::initialize,
                               Qt::QueuedConnection);
 #ifdef HAVE_WEBSOCKETS
     QMetaObject::invokeMethod(m_freedvClient, &FreeDvClient::initialize,
                               Qt::QueuedConnection);
 #endif
+
 
     // ── HF Propagation Forecast ────────────────────────────────────────────
     m_propForecast = new PropForecastClient(this);

@@ -41,16 +41,16 @@ namespace AetherSDR {
     return best;
 }
 
-// Step one preset up (direction > 0) or down, clamped to the list.
+// Step `steps` presets up (steps > 0) or down (steps < 0), clamped to the list.
 //
-// Returns -1 when there is nothing to do: an empty list, no direction, or
+// Returns -1 when there is nothing to do: an empty list, zero steps, or
 // already at the end while sitting exactly on a preset. A caller that treats
 // -1 as an index is the bug this function exists to prevent, so it is the only
 // sentinel and it is never a valid position.
 [[nodiscard]] inline int steppedFilterWidthIndex(const QVector<int>& widths,
-                                                 int currentWidth, int direction)
+                                                 int currentWidth, int steps)
 {
-    if (widths.isEmpty() || direction == 0)
+    if (widths.isEmpty() || steps == 0)
         return -1;
     const int idx = nearestFilterWidthIndex(widths, currentWidth);
     if (idx < 0)
@@ -58,7 +58,7 @@ namespace AetherSDR {
     // Clamped against the SAME list the search walked. Bounding by a different
     // array is how a widen request came back narrower, and — where that other
     // array was empty — how std::clamp was called with lo > hi.
-    const int next = std::clamp(idx + (direction > 0 ? 1 : -1), 0,
+    const int next = std::clamp(idx + steps, 0,
                                 static_cast<int>(widths.size()) - 1);
     const bool exactlyOnAPreset = (widths[idx] == currentWidth);
     if (next == idx && exactlyOnAPreset)

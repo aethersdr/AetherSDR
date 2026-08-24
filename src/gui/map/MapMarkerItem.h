@@ -14,7 +14,8 @@ class MapMarkerItem : public QGVDrawItem {
     Q_OBJECT
 
 public:
-    explicit MapMarkerItem(const MapView::Marker& marker);
+    explicit MapMarkerItem(const MapView::Marker& marker,
+                           int relativeWorldOffset = 0);
 
     void setMarker(const MapView::Marker& marker);
     const MapView::Marker& marker() const { return m_marker; }
@@ -25,14 +26,19 @@ public:
 
 private:
     void onProjection(QGVMap* geoMap) override;
+    void onCamera(const QGVCameraState& oldState,
+                  const QGVCameraState& newState) override;
     QPainterPath projShape() const override;
     QPointF projAnchor() const override;
     void projPaint(QPainter* painter) override;
     QString projTooltip(const QPointF& projPos) const override;
 
     QRectF labelRect() const;
+    void moveToNearestWorld(const QGVCameraState& camera);
 
     MapView::Marker m_marker;
+    int m_relativeWorldOffset{0};
+    QPointF m_baseProjPos;
     QPointF m_projPos;
     double m_pulsePhase{-1.0};
 };

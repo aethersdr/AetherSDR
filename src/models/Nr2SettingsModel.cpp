@@ -16,7 +16,6 @@ namespace {
 
 Q_LOGGING_CATEGORY(lcNr2Settings, "aether.nr2.settings")
 
-constexpr int kConfigVersion = 1;
 const QString kRootKey = QStringLiteral("NR2");
 
 const QString kLegacyEnabled = QStringLiteral("ClientNr2Enabled");
@@ -27,7 +26,9 @@ const QString kLegacyGainMax = QStringLiteral("NR2GainMax");
 const QString kLegacyGainFloor = QStringLiteral("NR2GainFloor");
 const QString kLegacyGainSmooth = QStringLiteral("NR2GainSmooth");
 const QString kLegacyQspp = QStringLiteral("NR2Qspp");
-const QString kLegacyGeometry = QStringLiteral("NR2UseOriginalGeometry");
+// Keep the retired flat key in migration cleanup so an old profile cannot
+// silently retain a comparison mode that no longer has a user-facing control.
+const QString kRetiredGeometry = QStringLiteral("NR2UseOriginalGeometry");
 
 const std::array<QString, 9> kLegacyKeys = {
     kLegacyEnabled,
@@ -38,7 +39,7 @@ const std::array<QString, 9> kLegacyKeys = {
     kLegacyGainFloor,
     kLegacyGainSmooth,
     kLegacyQspp,
-    kLegacyGeometry,
+    kRetiredGeometry,
 };
 
 bool settingIsTrue(const QVariant& value)
@@ -60,16 +61,12 @@ QJsonObject toJson(const Nr2SettingsModel::Config& config)
         {QStringLiteral("gainFloor"), config.gainFloor},
         {QStringLiteral("gainSmooth"), config.gainSmooth},
         {QStringLiteral("qspp"), config.qspp},
-        {QStringLiteral("legacyGeometryAndGainMapping"),
-         config.legacyGeometryAndGainMapping},
     };
 }
 
 Nr2SettingsModel::Config fromJson(const QJsonObject& object)
 {
     Nr2SettingsModel::Config config = Nr2SettingsModel::defaults();
-    config.version = object.value(QStringLiteral("version"))
-                         .toInt(kConfigVersion);
     config.enabled = object.value(QStringLiteral("enabled"))
                          .toBool(config.enabled);
     config.gainMethod = object.value(QStringLiteral("gainMethod"))
@@ -86,9 +83,6 @@ Nr2SettingsModel::Config fromJson(const QJsonObject& object)
         object.value(QStringLiteral("gainSmooth")).toDouble(config.gainSmooth));
     config.qspp = static_cast<float>(
         object.value(QStringLiteral("qspp")).toDouble(config.qspp));
-    config.legacyGeometryAndGainMapping =
-        object.value(QStringLiteral("legacyGeometryAndGainMapping"))
-            .toBool(config.legacyGeometryAndGainMapping);
     return config;
 }
 
@@ -189,8 +183,6 @@ void Nr2SettingsModel::load()
     migrated.gainFloor = settings.value(kLegacyGainFloor, 0.0f).toFloat();
     migrated.gainSmooth = settings.value(kLegacyGainSmooth, 0.85f).toFloat();
     migrated.qspp = settings.value(kLegacyQspp, 0.20f).toFloat();
-    migrated.legacyGeometryAndGainMapping = settingIsTrue(
-        settings.value(kLegacyGeometry, QStringLiteral("False")));
     migrated = normalized(migrated);
 
     settings.setValue(
@@ -283,13 +275,6 @@ void Nr2SettingsModel::setQspp(float value)
 {
     Config next = config();
     next.qspp = value;
-    setConfig(next);
-}
-
-void Nr2SettingsModel::setLegacyGeometryAndGainMapping(bool enabled)
-{
-    Config next = config();
-    next.legacyGeometryAndGainMapping = enabled;
     setConfig(next);
 }
 

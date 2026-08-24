@@ -3,12 +3,14 @@
 #include <QWidget>
 #include <QTimer>
 #include <QColor>
+#include <QPointer>
 #include <QVector>
 
 #include <QGeoView/QGVGlobal.h>
 
 class QGVMap;
 class QGVLayer;
+class QAbstractAnimation;
 class QLabel;
 class QToolButton;
 class QVariantAnimation;
@@ -16,7 +18,9 @@ class QVariantAnimation;
 namespace AetherSDR {
 
 class MapMarkerItem;
-class MapPathItem;
+class MapMarkerBatchItem;
+class MapPathBatchItem;
+class MapTerminatorItem;
 
 // Reusable OpenStreetMap slippy-map widget (#mapping-engine).
 //
@@ -40,6 +44,13 @@ public:
         QString tooltip;     // hover detail
         QColor  color{Qt::red};
         bool    isHome{false};  // drawn as a distinct station marker
+        bool    isMonitor{false}; // larger active-receiver marker
+        bool    pathEnabled{true};
+        bool    hasPathOrigin{false};
+        double  pathFromLat{0.0};
+        double  pathFromLon{0.0};
+        QString pathGroup;       // non-empty groups related hover paths
+        bool    hoverShowsPathGroup{false};
         QString clickInfo;      // rich text shown on click (empty = none)
     };
 
@@ -62,6 +73,9 @@ public:
     // Great-circle paths from home to every marker.
     void setPathsVisible(bool visible);
     bool pathsVisible() const { return m_pathsVisible; }
+
+    void setDayNightTerminatorVisible(bool visible);
+    bool dayNightTerminatorVisible() const;
 
     // Color/label legend chip, lower-left. Empty list hides it.
     void setLegend(const QVector<QPair<QString, QColor>>& entries);
@@ -94,22 +108,41 @@ private:
     static void ensureTileNetworkManager();
 
     void pan(double dxFraction, double dyFraction);
+    void animateZoom(double factor);
     QToolButton* makeOverlayButton(const QString& text, const QString& tip);
     void layoutOverlayButtons();
     void rebuildPaths();
+    void updateHoverPath(int markerIndex);
+    void clearHoverPath();
     void clampMinZoomToViewport();
+    // How many world copies either side of the base one the markers and paths
+    // must be replicated into for the widest viewport this widget can reach.
+    // The world repeats horizontally, but each item can only be in one place,
+    // so a copy per visible world is what keeps spots on screen after the
+    // camera crosses the antimeridian.
+    int requiredWorldCopyRange() const;
+    // Re-create every marker and path at the current copy range. Only called
+    // when requiredWorldCopyRange() actually changes, which needs a resize.
+    void rebuildWorldCopies();
+    void rebuildHomeMarkers();
+    Marker homeMarkerData() const;
     // Instant hover tooltip driven by mouse-move (QGeoView's built-in
     // tooltip waits for the OS hover delay, which is too slow here).
     void showHoverTooltip(const QPointF& projPos);
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
-    MapMarkerItem* m_homeMarker{nullptr};
-    MapMarkerItem* m_hoverMarker{nullptr};
+    QGVLayer* m_terminatorLayer{nullptr};
+    MapTerminatorItem* m_terminatorItem{nullptr};
+    QTimer* m_terminatorTimer{nullptr};
+    QVector<MapMarkerItem*> m_homeMarkers;
+    int m_hoverMarkerIndex{-1};
     QLabel* m_hoverCard{nullptr};
-    QVector<MapMarkerItem*> m_markers;
+    MapMarkerBatchItem* m_markerBatch{nullptr};
     QVector<Marker> m_markerData;
-    QVector<MapPathItem*> m_paths;
+    MapPathBatchItem* m_pathBatch{nullptr};
+    MapPathBatchItem* m_hoverPathBatch{nullptr};
+    int m_hoverPathMarkerIndex{-1};
     bool m_pathsVisible{true};
     QLabel* m_legend{nullptr};
 
@@ -117,13 +150,16 @@ private:
     double m_homeLon{0.0};
     QString m_homeLabel;
     bool   m_hasHome{false};
+    bool   m_homeMarkerShown{false};
     bool   m_firstShow{true};
+    int    m_worldCopyRange{1};
     double m_homeSpanDeg{30.0};
 
     // Zoom / recenter overlay buttons (upper-right).
     QToolButton* m_zoomInBtn{nullptr};
     QToolButton* m_zoomOutBtn{nullptr};
     QToolButton* m_homeBtn{nullptr};
+    QPointer<QAbstractAnimation> m_zoomAnimation;
 
     // Sonar pulse on the home marker: a short ring animation fired every
     // few seconds. The animation only runs for its ~1s duration, so the

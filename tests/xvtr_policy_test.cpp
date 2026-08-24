@@ -3,6 +3,8 @@
 
 #include "models/XvtrPolicy.h"
 
+#include <QtGlobal>
+
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -63,6 +65,49 @@ void expectUnsupportedBand(const char* label, const QString& bandName,
                result.unsupportedReason.contains(expectedReasonFragment),
            QStringLiteral("key=%1 reason=%2")
                .arg(result.key, result.unsupportedReason)
+               .toStdString());
+}
+
+void expectBandTuneAdmitted(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                            const QString& expectedKey)
+{
+    report(label,
+           a.supported && a.bandStackKey == expectedKey && a.reason.isEmpty(),
+           QStringLiteral("supported=%1 key=%2 reason=%3")
+               .arg(a.supported)
+               .arg(a.bandStackKey, a.reason)
+               .toStdString());
+}
+
+void expectBandTuneRefused(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                           const QString& expectedReasonFragment)
+{
+    report(label,
+           !a.supported && a.bandStackKey.isEmpty()
+               && a.reason.contains(expectedReasonFragment),
+           QStringLiteral("supported=%1 key=%2 reason=%3")
+               .arg(a.supported)
+               .arg(a.bandStackKey, a.reason)
+               .toStdString());
+}
+
+// Refused BY RANGE, which is a different answer from "no band-stack mapping"
+// and has to stay distinguishable: it is the flag the GUI switches on to word
+// the refusal, and the range it carries goes into that sentence. Asserting the
+// typed fields rather than the log prose is deliberate — the prose is free to
+// be reworded, the contract is not.
+void expectRefusedByRange(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                          double expectedMinMhz, double expectedMaxMhz)
+{
+    report(label,
+           !a.supported && a.bandStackKey.isEmpty() && a.outsideTuningRange
+               && qFuzzyCompare(a.rangeMinMhz, expectedMinMhz)
+               && qFuzzyCompare(a.rangeMaxMhz, expectedMaxMhz),
+           QStringLiteral("supported=%1 byRange=%2 min=%3 max=%4")
+               .arg(a.supported)
+               .arg(a.outsideTuningRange)
+               .arg(a.rangeMinMhz)
+               .arg(a.rangeMaxMhz)
                .toStdString());
 }
 
@@ -173,6 +218,70 @@ void testNetTunePrecheckBandSupport()
 
     // Plain HF control.
     expectBandKey("net tune 40m HF is always native", "40m", {}, "40");
+}
+
+// #5041: the tune gate reads the connected backend's declared tuning range, not
+// FlexLib's native-band table, so an IC-705 reaches 2 m and 70 cm natively.
+void testBandTuneAdmissibilityFollowsBackendNotBandTable()
+{
+    // IC-705 row: 30 kHz – 470 MHz, no Flex command plane.
+    constexpr double kIc705MinHz = 30'000.0;
+    constexpr double kIc705MaxHz = 470'000'000.0;
+
+    expectBandTuneAdmitted("Icom 70cm typed tune needs no XVTR",
+                           XvtrPolicy::evaluateBandTune(false, "440", 442.075,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("Icom 2m typed tune needs no XVTR",
+                           XvtrPolicy::evaluateBandTune(false, "2m", 144.200,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("Icom HF typed tune still admitted",
+                           XvtrPolicy::evaluateBandTune(false, "20m", 14.074,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+
+    // Outside the declared range the refusal stays honest — and says range, not
+    // XVTR, because a transverter would not help this backend. BOTH edges: the
+    // upper one is what 70 cm would have hit on an HF-only Icom, the lower one
+    // is the 30 kHz floor, and a comparison written with one `if` too few
+    // passes the first while admitting everything below the second.
+    expectRefusedByRange("Icom above declared range is refused by range",
+                         XvtrPolicy::evaluateBandTune(false, "900", 902.100,
+                                                      kIc705MinHz, kIc705MaxHz, {}),
+                         0.030, 470.000);
+    expectRefusedByRange("Icom below declared range is refused by range too",
+                         XvtrPolicy::evaluateBandTune(false, "2200m", 0.010,
+                                                      kIc705MinHz, kIc705MaxHz, {}),
+                         0.030, 470.000);
+    // And the boundaries themselves are INSIDE — an inclusive range, or the
+    // radio loses its own first and last tunable hertz.
+    expectBandTuneAdmitted("the low edge itself is admitted",
+                           XvtrPolicy::evaluateBandTune(false, "2200m", 0.030,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("and so is the high edge",
+                           XvtrPolicy::evaluateBandTune(false, "900", 470.000,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+
+    // A backend that declares no range keeps the previous permissive behaviour.
+    expectBandTuneAdmitted("backend with no declared range is not gated",
+                           XvtrPolicy::evaluateBandTune(false, "440", 442.075, 0.0, 0.0, {}),
+                           QString());
+
+    // Flex is untouched: same band, same frequency, still needs the XVTR.
+    expectBandTuneRefused("Flex 70cm without XVTR still requires one",
+                          XvtrPolicy::evaluateBandTune(true, "440", 442.075,
+                                                       0.0, 0.0, {}),
+                          "requires a configured XVTR");
+    expectBandTuneAdmitted("Flex 70cm with covering XVTR resolves its stack key",
+                           XvtrPolicy::evaluateBandTune(true, "440", 442.075, 0.0, 0.0,
+                                                        {xvtr(4, 7, "440", 432.0, 28.0)}),
+                           QStringLiteral("X4"));
+    expectBandTuneAdmitted("Flex HF resolves the native band-stack key",
+                           XvtrPolicy::evaluateBandTune(true, "40m", 7.150, 0.0, 0.0, {}),
+                           QStringLiteral("40"));
 }
 
 void testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan()
@@ -313,6 +422,7 @@ int main()
     testBandStackKeysRefuseGuesses();
     testBandStackKeysUseNativeVhfOnlyWhenCapable();
     testNetTunePrecheckBandSupport();
+    testBandTuneAdmissibilityFollowsBackendNotBandTable();
     testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
     testXvtrWaterfallMapsIfToRfBands();
     testXvtrWaterfallGuardrails();

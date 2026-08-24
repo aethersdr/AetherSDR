@@ -45,6 +45,23 @@ int main(int argc, char** argv)
 
     bool ok = true;
 
+    // A backend's MOX delta is the radio's live PTT answer, not this client's
+    // transmit intent. RadioModel publishes it on radioTransmittingChanged;
+    // TransmitModel must retain the observation without opening local mic,
+    // DAX, recorder or serial-PTT consumers through moxChanged.
+    QList<bool> radioTxEdges;
+    QList<bool> localMoxEdges;
+    QObject::connect(&tx, &TransmitModel::transmittingChanged,
+                     [&radioTxEdges](bool on) { radioTxEdges.append(on); });
+    QObject::connect(&tx, &TransmitModel::moxChanged,
+                     [&localMoxEdges](bool on) { localMoxEdges.append(on); });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(tx.isMox() && !tx.isTransmitting(),
+                 "radio-reported MOX is retained without claiming local TX intent");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(radioTxEdges.isEmpty() && localMoxEdges.isEmpty(),
+                 "radio-reported MOX emits no local transmit-ownership edges");
+
     // ---- forced mic selection is ADOPTED, never commanded --------------------
     //
     // On a radio whose input a client cannot choose (an Icom picks its own from
@@ -83,6 +100,25 @@ int main(int argc, char** argv)
     // Leave the recorder clean: the assertions below compare `commands`
     // EXACTLY, so anything left here fails a test that has nothing to do with
     // mic selection.
+    commands.clear();
+
+    // CW controls must adopt operator intent even when no radio-side status
+    // echo exists (HL2/software keyer). Otherwise the shortcut toggles the
+    // same stale value forever and the local iambic keyer never sees swap.
+    int cwPhoneEdges = 0;
+    QObject::connect(&tx, &TransmitModel::phoneStateChanged,
+                     [&cwPhoneEdges] { ++cwPhoneEdges; });
+    tx.setCwSwapPaddles(true);
+    ok &= expect(tx.cwSwapPaddles()
+                 && commands == QStringList({"cw swap 1"})
+                 && cwPhoneEdges == 1,
+                 "CW paddle swap is adopted locally and still commands Flex");
+    commands.clear();
+    tx.setCwlEnabled(true);
+    ok &= expect(tx.cwlEnabled()
+                 && commands == QStringList({"cw cwl_enabled 1"})
+                 && cwPhoneEdges == 2,
+                 "CWL selection is adopted locally and still commands Flex");
     commands.clear();
 
     tx.startTwoToneTune();

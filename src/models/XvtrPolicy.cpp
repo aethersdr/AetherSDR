@@ -94,6 +94,61 @@ BandStackKeyResult resolveBandStackKey(const QString& bandName,
     };
 }
 
+BandTuneAdmissibility evaluateBandTune(bool usesFlexCommandPlane,
+                                       const QString& bandName,
+                                       double targetMhz,
+                                       double tuningMinHz,
+                                       double tuningMaxHz,
+                                       const QVector<Transverter>& xvtrs,
+                                       ModelCapabilities caps)
+{
+    if (!usesFlexCommandPlane) {
+        // No band stack to preselect, so the only honest question is whether
+        // the receiver reaches the frequency at all — the same question the
+        // band buttons already ask, and now through this same function (#5041).
+        const double hz = targetMhz * 1.0e6;
+        const double minMhz = tuningMinHz / 1.0e6;
+        const double maxMhz = tuningMaxHz / 1.0e6;
+        if (tuningMaxHz > tuningMinHz && (hz < tuningMinHz || hz > tuningMaxHz)) {
+            BandTuneAdmissibility refused;
+            // The LOG form: the numbers that decided it, in the units the
+            // caller passed. The operator's sentence is composed once, in
+            // bandTuneRefusalText(), from the typed fields below.
+            refused.reason =
+                QString("band %1 at %2 MHz is outside the backend's declared "
+                        "tuning range %3-%4 MHz")
+                    .arg(bandName)
+                    .arg(targetMhz, 0, 'f', 6)
+                    .arg(minMhz, 0, 'f', 3)
+                    .arg(maxMhz, 0, 'f', 3);
+            refused.outsideTuningRange = true;
+            refused.rangeMinMhz = minMhz;
+            refused.rangeMaxMhz = maxMhz;
+            return refused;
+        }
+        BandTuneAdmissibility admitted;
+        admitted.supported = true;
+        return admitted;
+    }
+
+    const auto stackKeyResult = resolveBandStackKey(bandName, xvtrs, caps);
+    if (stackKeyResult.isSupported()) {
+        BandTuneAdmissibility admitted;
+        admitted.supported = true;
+        admitted.bandStackKey = stackKeyResult.key;
+        return admitted;
+    }
+
+    BandTuneAdmissibility refused;
+    refused.reason = stackKeyResult.unsupportedReason;
+    if (targetMhz > 54.0 && xvtrs.isEmpty()) {
+        refused.reason =
+            QString("Band %1 requires a configured XVTR before Aether can tune it.")
+                .arg(bandName);
+    }
+    return refused;
+}
+
 bool isWaterfallTileOutsidePan(double lowMhz, double highMhz, double panCenterMhz)
 {
     const double bw = tileBandwidth(lowMhz, highMhz);

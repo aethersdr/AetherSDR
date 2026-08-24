@@ -465,6 +465,13 @@ static void testHostModulatedTxAudio()
     if (monitor.isEmpty())
         return;
 
+    // TCI audio must arrive marked client-leveled: the sender owns its level
+    // (WSJT-X's Pwr slider is a digital attenuator on this very stream), so
+    // the HL2 modulator bypasses its ALC for it (#4796). The mic chain emits
+    // this flag false; feedDaxTxAudio is the external-client path.
+    check(monitor.first().size() >= 2 && monitor.first().at(1).toBool(),
+          "host modulation: TCI audio is marked client-leveled at the tap");
+
     // MainWindow routes that tap to RadioModel::submitTxAudio(), whose HL2
     // implementation requires int16 interleaved stereo at 24 kHz and averages
     // L/R. Stereo must survive, or the averaging halves every sample.

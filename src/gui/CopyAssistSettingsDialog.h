@@ -76,6 +76,15 @@ public:
     void setSpeakerThreshold(int percent);
     int speakerThreshold() const;
 
+    // Boundary-word recovery / segment overlap (RFC #4821): milliseconds of
+    // trailing audio carried across a forced segment cut so a word split at the
+    // boundary isn't lost. 0 = off (the default). Opt-in.
+    void setBoundaryOverlapMs(int ms);
+    int boundaryOverlapMs() const;
+    // Context-carry (RFC #4818) has no control here — it lives on the panel
+    // header (CopyAssistPanel::contextCarryButton) so it can be toggled without
+    // opening this dialog.
+
 signals:
     void tierChanged(const QString& tierId);
     void gpuChanged(int index);
@@ -87,6 +96,7 @@ signals:
     void labelSpeakersToggled(bool on);
     void browseSpeakerModelRequested();
     void speakerThresholdChanged(int percent);
+    void boundaryOverlapChanged(int ms);
 
 private:
     QComboBox* m_tier = nullptr;
@@ -105,6 +115,8 @@ private:
     QPushButton* m_spkBrowse = nullptr;
     QSlider* m_spkThreshold = nullptr;
     QLabel* m_spkThresholdValue = nullptr;
+    QSlider* m_overlap = nullptr;
+    QLabel* m_overlapValue = nullptr;
 };
 
 } // namespace AetherSDR

@@ -128,7 +128,7 @@ public:
     // is hit — Quindar must always be locally audible whenever it's
     // overlaying the TX stream.  Writes to the stereo float32 output
     // buffer using independent local-rate phase state (separate from
-    // process(), which runs at the radio's 24 kHz TX rate).  When the
+    // process(), which runs in the fixed 48 kHz TX DSP domain).  When the
     // atomic phase is Idle or Live, leaves the buffer as zeros.  Never
     // mutates the atomic phase — the TX-path process() is the source
     // of truth for transitions; this path just mirrors them.

@@ -48,14 +48,21 @@ namespace AetherSDR::hl2 {
 // SCOPE, because "mic" undersells it: this multiplier is applied to everything
 // entering Hl2TxDsp::processAudioBlock, and on a host-modulating backend that
 // includes digital-mode and WSPR-beacon audio arriving through submitTxAudio,
-// not only voice. Above the ALC's hold threshold that is very nearly a no-op —
-// the ALC normalizes each block's peak to alcTargetPeak and hands the gain
-// straight back. At 0 it is not: the block is silent, silence sits below the
-// hold threshold so the ALC declines to lift it, and the beacon goes out muted
-// along with the microphone. That is the honest reading of a slider at the
-// bottom of its travel on a host modulator — there is one modulator and it is
-// off — but it is worth knowing before parking the control at 0 between voice
-// sessions.
+// not only voice. For MIC-path audio, above the ALC's hold threshold it is
+// very nearly a no-op — the ALC normalizes each block's peak to alcTargetPeak
+// and hands the gain straight back. For CLIENT-LEVELED audio (TCI/DAX) the ALC
+// may only reduce, never lift (#4796), so below its target there is no handing
+// back: this slider is a straight proportional attenuator on that path, and
+// TX gain 5 (-18 dB) is a real -18 dB on the air. It stops being straight only
+// where it has to — drive a full-scale client through the top of this slider's
+// +20 dB and the ALC limits, rather than letting the modulator's hard clamp
+// flat-top it, so the last stretch of travel buys reduced headroom rather than
+// more power. At 0 neither path transmits: the mic path because silence
+// sits below the hold threshold so the ALC declines to lift it, the
+// client-leveled path as a plain 0.0x multiply. That is the honest reading of
+// a slider at the bottom of its travel on a host modulator — there is one
+// modulator and it is off — but it is worth knowing before parking the control
+// at 0 between voice sessions.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
 {
     if (level <= 0)

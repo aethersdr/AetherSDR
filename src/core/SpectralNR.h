@@ -218,19 +218,28 @@ private:
     double m_mOfD{0.0};                 // minimum-statistics bias interpolation M(D)
     double m_mOfV{0.0};                 // minimum-statistics bias interpolation M(V)
     double m_noiseSlopeMax[4]{};         // guarded upward noise-floor slopes
-    int m_recentSpeechFrames{0};         // arms the post-speech noise release bridge
-    int m_recentSpeechFramesMax{1};
-    int m_releaseCandidateFrames{0};
-    int m_releaseCandidateFramesMin{1};
-    int m_releaseNoiseFrames{0};
-    int m_releaseNoiseFramesMax{1};
-    int m_releaseNpeMethod{-1};
-    bool m_releaseNoiseRefreshed{false};
-    double m_releaseNoiseDecay{0.0};
-    double m_releaseBaselineAlpha{0.0};
-    bool m_releaseBaselineInitialized{false};
-    std::vector<double> m_releaseBaselinePsd;
-    std::vector<double> m_releaseNoisePsd;
+
+    // Receiver AGC can move every bin of post-demodulated audio together.
+    // These fixed-size histories identify that common-mode power scale before
+    // the estimators update, then preserve the pre-change residual target.
+    // They are deliberately independent of speech-stop timing.
+    std::vector<double> m_commonReferencePsd;
+    std::vector<double> m_residualReferencePsd;
+    std::vector<double> m_residualReferenceGainRatio;
+    std::vector<std::uint8_t> m_residualReferenceValid;
+    std::vector<std::uint8_t> m_commonNoiseLike;
+    double m_commonReferenceAlpha{0.0};
+    double m_commonScaleAlpha{0.0};
+    double m_residualReferenceAlpha{0.0};
+    double m_commonLevelReferencePower{0.0};
+    double m_commonScaleLog{0.0};
+    double m_commonAppliedScale{1.0};
+    double m_commonReturnScale{1.0};
+    double m_commonDetectedScale{1.0};
+    bool m_commonReferenceInitialized{false};
+    bool m_commonLevelReferenceInitialized{false};
+    bool m_commonReferenceReacquiring{false};
+    bool m_commonSilenceRecoveryContext{false};
     // Speech-presence MMSE estimator (WDSP LambdaDs / NPE method 1)
     std::vector<double> m_mmseNoisePsd;
     std::vector<double> m_mmsePbar;
@@ -241,12 +250,17 @@ private:
     std::vector<double> m_nstatPower;
     std::vector<double> m_nstatPowerMin;
     std::vector<double> m_nstatSpeechProbability;
+    std::vector<double> m_nstatTonalProbability;
+    std::vector<std::uint8_t> m_nstatTonalIndicator;
+    std::vector<std::uint8_t> m_commonWantedProtected;
     std::vector<double> m_nstatNoisePsd;
     double m_nstatEta{0.7};
     double m_nstatGamma{0.998};
     double m_nstatBeta{0.8};
     double m_nstatAlphaD{0.85};
     double m_nstatAlphaP{0.2};
+    double m_nstatTonalAlpha{0.0};
+    double m_nstatTonalReleaseAlpha{0.0};
     int m_nstatLowFrequencyBin{0};
     int m_nstatMidFrequencyBin{0};
 
@@ -297,8 +311,12 @@ private:
     void estimateNoiseOsms();   // method 0: Optimal Smoothing Minimum Statistics
     void estimateNoiseMmse();   // method 1: MMSE noise estimator
     void estimateNoiseNstat();  // method 2: Non-stationary noise estimator
-    void updateSpeechReleaseState();
-    void applySpeechReleaseEstimate();
+    void detectCommonModeScale();
+    bool isCommonWantedLike(int bin) const;
+    void applyCommonModeNoiseEstimate();
+    void scalePowerHistory(double ratio,
+                           const std::vector<std::uint8_t>* binMask = nullptr);
+    void updateResidualReference(double gainMax, bool afterCap);
 
     // Spectral gain computation (dispatches on m_gainMethod)
     void computeGain();

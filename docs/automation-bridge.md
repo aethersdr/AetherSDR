@@ -27,7 +27,7 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`/`transmit`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
 | Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
@@ -145,9 +145,9 @@ connection — `connect` / `disconnect`; audio — `capture_audio`; and
 
 The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
-`contextMenu`, `rightClick`, `hitTest`, `clickAt` — `invoke`/`grab`
-cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `txwaterfall` — gated by
+`contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
+`doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
+`atu`, `cwx`, `testtone`, `txwaterfall`, `transmit` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
@@ -166,11 +166,16 @@ that should have changed → `grab_widget` for a visual check.
 **Access token.** Enabling the bridge in Radio Setup → Network mints a
 random token (stored in your OS secret store via QtKeychain — macOS
 Keychain / Windows Credential Manager / libsecret-KWallet, never in the
-settings store — RFC #4603 bans credentials from it outright). Copy it
-into your assistant's MCP config as the
-`AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
-verb except `ping` without a matching token. Headless/CI can supply the
-token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
+settings store — RFC #4603 bans credentials from it outright). Make it
+available as `AETHER_MCP_TOKEN` only in the shell session that launches
+your assistant, using a secret-safe input method that does not record the
+value in shell history. `tools/aether_mcp.py` inherits it from the parent
+process environment automatically, so no file needs to carry it. **Do not**
+put the literal token in a shell profile or add an `env` block to `.mcp.json`
+(or any other MCP config file) — those put a live credential on disk instead
+of keeping it in your OS keychain and risk it landing in a commit. The bridge
+rejects every verb except `ping` without a matching token. Headless/CI can
+supply the token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
 
 ### Secure fresh-build handoff
 
@@ -317,6 +322,8 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`clickAt [<target>] <x> <y>`](#clickat) | Click at a global (or target-local) point — fallback when name matching is ambiguous (TX-guarded). |
+| | [`doubleClick <target> [x y]`](#doubleclick) | Double-click a widget (its centre by default) — the only way to raise `mouseDoubleClickEvent`. |
+| | [`doubleClickAt [<target>] <x> <y>`](#doubleclickat) | Double-click at a global (or target-local) point (TX-guarded, same guards as `clickAt`). |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
@@ -332,11 +339,13 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get renderstats`](#get-renderstats) | Combined 2D/3D pan, waterfall, DSS, scheduler, and WAVE profiling snapshot. |
+| | [`get eqstats`](#get-eqstats) | Client EQ analyzer paint/cache counters. |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
 | | [`get clients`](#get-clients) | Radio client roster, GUI IDs + foreign-pan-write forensics (#3977/#4166). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get clock`](#get-clock) | AetherClock time-signal decode state (lock, station, decoded UTC, offset, quality). |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
+| | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2). |
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
@@ -345,7 +354,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`targettune <mhz>`](#targettune) | Absolute tune through the commanded-target and band-stack path. |
 | | [`memory activate <index> [panId]`](#memory) | Recall a radio memory through the normal UI policy. |
-| | [`slice <action>`](#slice) | add/remove/select/tx/mode/filter/agc/diversity/centerlock/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | Per-slice actions — mode, filter, AGC, DSP, FM tone/offset, antennas, links, fixtures. The authoritative set is the [`slice` action table](#slice); it is pinned to the code by `tools/gen_bridge_docs.py --check`. |
 | **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
@@ -364,6 +373,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
 | | [`atu bypass\|start`](#atu) | ATU bypass (no TX) / tune cycle (keys TX). |
 | | [`testtone on [hz] [db] \| off`](#testtone) | Client TX test tone into the mic path. |
+| | [`transmit rfpower\|tunepower <0..100>`](#transmit) | Set RF / tune drive (clamped by `AETHER_AUTOMATION_TX_MAX_POWER`). |
 
 > **Two request forms, always interchangeable.** Bare line (`get slice active mode`)
 > or JSON (`{"cmd":"get","model":"slice","selector":"active","property":"mode"}`).
@@ -661,6 +671,13 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
+>
+> `AETHER_AUTOMATION_TX_MAX_POWER=N` is a **0–100 control-percentage ceiling**
+> for RF Power and Tune Power. It is not a physical-watt limit: radios map the
+> setpoint differently, two-tone can use Tune Power rather than RF Power, and an
+> ATU cycle can have its own drive policy. Hardware-in-the-loop tests need a
+> separate authorized watt ceiling and a fresh calibrated forward-power
+> watchdog. See [`docs/automation/TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -682,18 +699,21 @@ connects).
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `gps` | — | GPS status, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time, frequency error, and oscillator-reference state |
-| `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
+| `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), txSlice, …) |
+| `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the DSP: `{receivers:[{ddc,panId,on,level,threshold,requestedOn,requestedLevel,hasChain}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. `on`/`level` here are what the WDSP stage actually has; `requestedOn`/`requestedLevel` are what the backend was asked for, reported alongside so the two can be COMPARED. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
 | `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
 | `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
+| `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
 | `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
+| `display` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter **Display panel** settings — see [`get display`](#get-display) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
@@ -718,7 +738,14 @@ The TX input endpoint also exposes in-memory capture-health evidence for TCI
 handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 `source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
 `full_buffer_during_tci_observations`, `idle_during_tci_transitions`,
-`post_tci_local_tx_while_saturated`, and `last_mic_read_age_ms`.
+`post_tci_local_tx_while_saturated`, `capture_backlog_discards`,
+`capture_backlog_discarded_bytes`, and `last_mic_read_age_ms`.
+Capture is drained during TCI suppression on every platform — bounded blocks on
+Linux/Windows pull mode, a push-buffer clear on macOS — so a growing
+`buffer_bytes_available` value or a new saturation event now indicates that the
+backend has stopped making forward progress. A non-zero
+`capture_backlog_discards` means pull-mode capture had to skip stale audio to
+return to realtime; during a healthy soak it stays at zero.
 `saturation_observed` is set when the capture buffer reaches its reported
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a
@@ -810,10 +837,10 @@ generic; the bridge does not embed or preserve an old registration name.
 ### `get renderstats`
 
 Combined rendering-analysis snapshot for before/after automation. It returns
-every `panstats` entry, every WAVE/strip `wavestats` entry, the shared pan
-scheduler, and non-overlapping headline totals. The totals cover measured
+every `panstats` entry, every WAVE/strip `wavestats` entry, every Client EQ
+`eqstats` entry, the shared pan scheduler, and non-overlapping headline totals. The totals cover measured
 GUI-thread FFT ingest, native/Kiwi waterfall ingest, GPU frame preparation,
-software fallback painting, and WAVE painting. DSS timings are reported
+software fallback painting, WAVE painting, and Client EQ painting. DSS timings are reported
 separately because they are a subset of FFT/waterfall ingest.
 
 ```json
@@ -822,20 +849,52 @@ separately because they are a subset of FFT/waterfall ingest.
    "totals":{"panCount":1,"visiblePanCount":1,"waveScopeCount":1,
      "fftFramesPerSec":24.9,"gpuFramesPerSec":25.1,
      "fftIngestMsPerSec":4.2,"nativeWaterfallUpdateMsPerSec":3.8,
-     "gpuFrameMsPerSec":2.7,"wavePaintMsPerSec":0.0,
+     "gpuFrameMsPerSec":2.7,"wavePaintMsPerSec":0.0,"eqPaintMsPerSec":1.1,
      "measuredMainThreadMsPerSec":10.7,
      "hiddenWaterfallUpdatesPerSec":0.0,
      "hiddenDssHistoryRowsPerSec":0.0,
      "waterfallAllocatedBytes":583680,
      "dssAllocatedBytes":37847040},
-   "pans":[...],"scopes":[...],"renderScheduler":{...}}
+   "pans":[...],"scopes":[...],"eqCurves":[...],"renderScheduler":{...}}
 ```
 
 Use `get renderstats reset`, wait for a fixed observation interval, then read
 `get renderstats reset` again. This gives disjoint samples across pan, waterfall,
 3DSS, scheduler, and WAVE counters with one command. `measuredMainThreadMsPerSec`
 is instrumented GUI-thread work, not whole-process CPU percentage; use it for
-causal comparisons while keeping the radio/display configuration fixed.
+causal comparisons while keeping the radio/display configuration fixed. As of
+v26.8.1, the total includes Client EQ paint time; captures from older builds do
+not include that component and are not directly comparable.
+
+### `get eqstats`
+
+Per-Client-EQ-canvas paint and cache counters. The bridge finds widgets by
+`inherits("AetherSDR::ClientEqCurveWidget")`, so it includes both the base widget and the
+interactive `ClientEqEditorCanvas` subclass used by the strip/editor. The
+active strip canvas has a stable selector: `stripRxEqCanvas` or
+`stripTxEqCanvas`. Those path-specific selectors name the same widget at
+different times: before a path is selected it is `stripEqCanvas`, and switching
+between RX and TX replaces its object name rather than creating another canvas.
+
+```json
+→ {"cmd":"get","model":"eqstats","selector":"stripTxEqCanvas","property":"reset"}
+← {"ok":true,"model":"eqstats","curves":[{
+   "name":"stripTxEqCanvas","visible":true,"widthPx":1920,"heightPx":1080,
+   "dpr":2.0,"fftUpdatesPerSec":25.0,"paintsPerSec":25.0,
+   "paintMsPerSec":1.1,"backgroundCacheRebuildCount":1,
+   "responseCacheRebuildCount":1,"backgroundCacheHits":624,
+   "responseCacheHits":624,"cacheEligible":true,
+   "cacheLayerByteLimit":33554432,
+   "cacheTotalByteLimit":67108864,"cacheRetainedBytes":66355200}]}
+```
+
+`get eqstats [selector] [reset]` returns then clears the selected interval
+when `reset` is supplied. FFT-only paints should increase the hit counters
+without increasing either rebuild count. Each retained layer is capped at
+33,554,432 bytes (67,108,864 bytes across both layers); ordinary physical 4K
+(3840×2160) layers remain eligible.
+Above that size, the widget paints directly and releases any prior layer once,
+instead of reallocating cache storage every paint.
 
 ### `get panstats`
 Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
@@ -923,42 +982,103 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+### `get display`
+Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
+/ WATERFALL / BACKGROUND / APPEARANCE / 3D VIEW groups own, as one flat object
+per pan. Where `get tracedebug` is diagnostic internals, this is the operator's
+own preferences, so a display change is assertable field-by-field instead of by
+comparing screenshots.
+
+```json
+→ {"cmd":"get","model":"display","selector":"1"}
+← {"ok":true,"model":"display","pans":[{
+   "panIndex":1,"objectName":"",
+   "fftAverage":0,"fftFps":25,"fftWeightedAvg":false,
+   "fftHeatMap":true,"showGrid":true,
+   "fftLineWidth":2.0,"fftLineColor":"#00e5ff",
+   "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
+   "noiseFloorEnable":false,"noiseFloorPosition":75,
+   "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,
+   "wfBlackLevel":15,"wfAutoBlack":true,"wfAutoBlackOffset":50,
+   "wfAutoBlackRadioSide":false,"effectiveWfAutoBlackRadioSide":false,
+   "wfColorGain":50,"wfLineDuration":100,
+   "backgroundImage":":/bg-default.jpg","backgroundOpacity":80,
+   "backgroundFillColor":"#0a0a14",
+   "freqGridSpacing":0,"freqScaleFontPt":8,"wfColorScheme":0,
+   "spectrumRenderMode":0,"dssFloorDepth":6,"dssGain":70,"dssRowSpan":100,
+   "kiwiWaterfallActive":false}]}
+```
+
+`selector` filters by pan index (`get display 0`) or objectName; omit it for
+every pan. A trailing **property** narrows each entry to `panIndex`,
+`objectName`, and that one field — `get display "" wfColorScheme` is the
+one-line way to diff a palette across pans.
+
+Field notes:
+
+- `wfAutoBlackRadioSide` is the operator's stored **intent**;
+  `effectiveWfAutoBlackRadioSide` is that intent masked by whether this radio
+  computes a black level at all (#4606). They differ legitimately — assert the
+  intent when checking what a preference action copied, the effective value when
+  checking what renders.
+- `backgroundImage` is `""` when the background is off entirely (the "Off"
+  button), `:/bg-default.jpg` for the bundled logo, otherwise a file path.
+- `dssFloorDepth` and `noiseFloorPosition` are stored per display source;
+  `kiwiWaterfallActive` says which one these resolved from, so a Flex-vs-Kiwi
+  mismatch reads as a labelled difference rather than a mystery failure.
+- `fftAverage`, `fftFps`, `fftWeightedAvg` and `wfLineDuration` are
+  radio-authoritative: the values here are what the widget last saw from radio
+  status, and they settle a turn or two after a command.
+
+**Proving "Clone to all Pans"** (Display panel → SYSTEM, above Reset to
+Defaults) — change something on pan 0, clone, and diff:
+
+```json
+→ {"cmd":"invoke","target":"pan 0/displayColorSchemeCombo","action":"select","value":"2"}
+→ {"cmd":"invoke","target":"pan 0/displayCloneToAllPansBtn","action":"click"}
+→ {"cmd":"get","model":"display"}
+← {"ok":true,"model":"display","pans":[
+   {"panIndex":0,"wfColorScheme":2, …},
+   {"panIndex":1,"wfColorScheme":2, …}]}
+```
+
+The radio-authoritative fields settle asynchronously, so re-poll rather than
+asserting them in the same write as the click.
+
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
-the widget size, devicePixelRatio, pinned color-buffer extents, full-frame
-overlay/background textures, the waterfall image/texture pair, and (on macOS)
-native-leaf/ancestor isolation — so automation can assert the fractional-scale
-alignment and upload-size invariants exercised by pop-out reparenting (#4091,
-#4319) together with the bounded native-view hierarchy from #4339.
+Per-panadapter `QRhiWidget` **surface geometry, color-buffer sizing mode, and
+native-widget topology** — the widget size, devicePixelRatio, whether Qt owns
+the color-buffer size, full-frame overlay/background textures, the waterfall
+image/texture pair, and (on macOS) native-leaf/ancestor isolation. Automation
+can assert automatic sizing under a fractional `QT_SCALE_FACTOR`, the separate
+full-frame texture upload invariants from #4319, and the bounded native-view
+hierarchy from #4339 in the same snapshot.
 
 ```json
 → {"cmd":"get","model":"rhi"}
 ← {"ok":true,"model":"rhi","pans":[{
    "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
    "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
-   "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
-   "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true,
+   "rendererFailed":false,"rendererFailureReason":"",
+   "colorBufferAutoSized":true,"colorBufferW":-1,"colorBufferH":-1,
    "overlayTextureW":936,"overlayTextureH":388,
    "backgroundTextureW":936,"backgroundTextureH":388,
    "waterfallTextureW":936,"waterfallTextureH":194,
    "waterfallImageW":936,"waterfallImageH":194,
    "waterfallTextureMatchesImage":true,
-   "fullFrameTexturesEvenAligned":true,
-   "fullFrameTexturesMatchColorBuffer":true}]}
+   "fullFrameTexturesEvenAligned":true}]}
 ```
 
 | field | meaning |
 |---|---|
 | `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
-| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
-| `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
-| `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
-| `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too. GPU builds only — omitted alongside the buffer fields when `gpu` is `false` |
+| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); this is the expected value |
+| `colorBufferW` / `colorBufferH` | the unset sentinel `-1,-1` when auto-sized; any positive extent means a fixed buffer is active |
 | `overlayTextureW/H` / `backgroundTextureW/H` | full-frame RGBA texture extents, or `-1,-1` before GPU initialization |
 | `waterfallTextureW/H` / `waterfallImageW/H` | live GPU waterfall texture and retained CPU waterfall image extents |
 | `waterfallTextureMatchesImage` | the CPU waterfall image fits within its GPU texture (texture ≥ image in both dimensions), so the upload is safe; holds across pop-out initialization even when the texture is floored larger than a small retained image (#4319) |
-| `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 invariant) |
-| `fullFrameTexturesMatchColorBuffer` | both full-frame textures exactly match the pinned color buffer |
+| `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 upload-safety invariant), independent of the auto-sized QRhi color buffer |
 | `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
 | `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
 | `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
@@ -966,6 +1086,15 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
 each entry reports `gpu:false` and omits the buffer fields. The three native
 topology fields are emitted only on macOS; other platforms omit them.
+
+For an automation-only QRhi failure check, launch with both
+`AETHER_AUTOMATION=1` and `AETHER_AUTOMATION_FORCE_RHI_FAILURE=1`. The latter
+keeps the platform's production QRhi API, presents only a blank clear pass, and
+exercises AetherSDR's failure-reporting path; it has no effect unless automation
+is enabled. Assert the per-pan `rendererFailed` state and the
+`rhi.render-failed` panadapter message, then capture the composite pan surface
+to confirm the warning card remains visible over the blank renderer. Production
+QRhi failures enter the same reporting path through `QRhiWidget::renderFailed()`.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -1078,6 +1207,58 @@ scope actually consumed, in milliseconds per wall-clock second.
 - Hidden scopes keep counting appends (the data feed stays live) but never
   paint — `paintsPerSec` 0 with a nonzero `appendsPerSec` is the expected
   hidden-widget signature, not a bug.
+
+### `get hostnb`
+The host-side impulse noise blanker, answered by the **backend** rather than by
+the slice model. Only meaningful on a radio that declares
+`hasHostNoiseBlanker` — today the HL2, whose blanker is WDSP's ANB running on
+this host, ahead of the demodulator, because the radio ships raw IQ and has no
+firmware DSP to switch on.
+
+```json
+→ {"cmd":"get","model":"hostnb"}
+← {"ok":true,"model":"hostnb","hostnb":{"receivers":[
+   {"ddc":0,"panId":"0x40000000","on":true,"level":80,"threshold":7.579,
+    "requestedOn":true,"requestedLevel":80,"hasChain":true}]}}
+```
+
+- **Why it is not `get slice nb`.** That field comes from `SliceModel`, which
+  is set the moment the operator clicks NB — it is true whether or not the
+  intent survived the seam. A backend that ignored `setSliceNoiseBlanker`
+  entirely would still report `nb: true` there and look correct.
+- **`on`/`level` are read from the DSP, not from the request.** They are the
+  state the WDSP stage actually holds, read across the thread boundary from
+  `Hl2RxDsp`. `requestedOn`/`requestedLevel` are what the backend was asked
+  for. Reporting both is the point: the request is stored synchronously while
+  the stage is configured through a queued call, so **a mismatch between the
+  pairs is exactly the "the control moves and nothing happens" failure this
+  verb exists to catch.** A readback that echoed the request would certify its
+  own input.
+- Because the seam is asynchronous, the pairs can differ for a few
+  milliseconds right after a toggle. A driver asserts on them settling, not on
+  the first read — `wait_for` rather than a bare `get`.
+- `hasChain` is false for a receiver between rebuilds (a sample-rate change,
+  a reconnect). There is nothing applied then, so `on` reads false rather than
+  flattering the request.
+- `threshold` is what WDSP got, computed from the **applied** level: the 0..100
+  level runs the opposite way from WDSP's trigger (a multiple of the running
+  average magnitude, so **smaller is more aggressive**). Level 0 → 100,
+  level 50 → 20, level 100 → 4.
+- `on`/`level` are **per receiver**, not radio-wide — unlike the notches. Two
+  panadapters on different bands can legitimately want different settings.
+- Errors on a radio that does not declare the capability, rather than returning
+  an empty success that a test could pass against.
+
+**Proving the blanker end to end:**
+
+```
+slice dsp nb on 80          # drive the control the operator drives
+get hostnb                  # DSP agrees: on=true, level=80, threshold≈7.6,
+                            #   and requestedOn/requestedLevel match it
+get slice active nb         # model agrees too
+slice dsp nb off
+get hostnb                  # on=false everywhere
+```
 
 ### `tune`
 Set a slice's frequency in MHz — the most fundamental control the
@@ -1220,6 +1401,9 @@ re-poll `get slices`.
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
+| `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
+| `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
 | `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `link` | `<sliceIdA> <sliceIdB> <on\|off>` | engage or dissolve one cross-panadapter Slice Link pair through the same MainWindow handler as the context menu; multiple independent pairs are supported, but each owned non-diversity slice may belong to only one pair — assert each pair via the reciprocal `linkedTo` snapshot fields |
@@ -1227,6 +1411,46 @@ re-poll `get slices`.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+### `notch`
+
+Manual notch filters — a Flex TNF, or the WDSP null that stands in for one on a
+radio with no DSP of its own (HL2). All actions are RX/config; none keys the
+transmitter.
+
+Driven through `TnfModel`'s operator setters, so the intent reaches
+`IRadioBackend`'s notch verbs and not just the model. Notch **ids are assigned
+by the backend** — a Flex mints them in the radio, a host-DSP backend in this
+process — so `add` cannot tell you the id it created. Re-poll `notch list`.
+
+```json
+→ {"cmd":"notch","action":"list"}
+← {"ok":true,"notch":"list","enabled":true,"maxNotchFilters":1024,
+   "minWidthHz":50,"hasDepth":false,"notches":[]}
+
+→ {"cmd":"notch","action":"add","value":"7.041"}
+← {"ok":true,"notch":"add","freqMhz":7.041,"notches":[{"id":1,"freqMhz":7.041,"widthHz":100,…}]}
+
+→ {"cmd":"notch","action":"set","value":"1 width=200"}
+← {"ok":true,"notch":"set","id":1,"notches":[{"id":1,"freqMhz":7.041,"widthHz":200,…}]}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `list` | — | every notch the model holds, plus the radio's declared `maxNotchFilters`, `minWidthHz` and `hasDepth`. **Report the capabilities alongside the list deliberately:** an empty list on a radio that cannot notch is indistinguishable from a notch that was placed and silently dropped, and only `maxNotchFilters` tells the two apart |
+| `add` | `<freqMhz> [widthHz]` | place a notch at an absolute RF frequency. The width comes from the model's create default, and a Flex assigns its own regardless — so a width passed here is validated and echoed as `requestedWidthHz`, NOT honoured. The width in `notches` is the one the notch actually got; use `set … width=` to resize. Async on Flex (the radio assigns the id) — re-poll `list` |
+| `set` | `<id> [freq=<mhz>] [width=<hz>] [depth=<1-3>]` | move, resize, or re-depth an existing notch. Each key is applied as its own delta, in the order given — the seam accepts a combined centre+width delta but no caller builds one yet, so a two-key call costs two filter-mask rebuilds. `depth` is Flex-only — a WDSP notch is a full null, and `hasDepth` in `list` says which you have |
+| `remove` | `<id>` | remove a notch. Removal is optimistic in the model, so `list` reflects it immediately |
+| `enable` | `0` / `1` | the global notch bypass (`tnf_enabled` on a Flex). Individual notches keep their own state underneath |
+
+**Proving a notch actually works, not just that it was accepted.** `list` shows
+model state, which is populated optimistically — it will happily report a notch
+that never reached the DSP. To prove the null exists, park a notch on a real
+carrier and measure through the audio path: `capture_audio` with the notch
+disabled, then enabled, and compare. On a host-DSP backend also check the
+**width** you read back against `minWidthHz`: WDSP widens a too-narrow notch
+without reporting it, so a notch can be real, audible, and four times wider than
+the one drawn on screen.
 
 ### `gps`
 
@@ -1569,6 +1793,50 @@ Recipe — close a **specific** side-panel tile (not just the first `containerCl
 read the target tile's `containerClose` rect from `dumpTree`, compute its centre in
 global coordinates, and `clickAt` that point.
 
+### `doubleClick`
+Double-click a **named** widget. Two `clickAt` calls are not a substitute: Qt does
+not promote a pair of synthetic press/release sequences into a double-click, so a
+widget that overrides `mouseDoubleClickEvent` — the VFO DIG offset inline editor,
+the TX filter cut readouts — never hears one. The delivered sequence is Qt's own
+(`Press` → `Release` → `DblClick` → `Release`; the window system sends the
+`DblClick` *instead of* the second press).
+
+`x y` are **local** to `<target>` and optional — omitted, the widget's rect centre
+is used, which is the point a person would hit. Guards, TX refusals and deferred
+delivery are inherited wholesale from [`clickAt`](#clickat), which does the actual
+delivery.
+
+```json
+→ {"cmd":"doubleClick","target":"txFilterHighCut"}          // centre of the widget
+← {"ok":true,"clicked":{"class":"ScrollableLabel",…},"deferred":true}
+
+→ {"cmd":"doubleClick","target":"txFilterHighCut","x":10,"y":12}   // target-local point
+← {"ok":true,"clicked":{"class":"ScrollableLabel",…},"deferred":true}
+```
+
+Aliases: `doubleclick`, `dblClick`.
+
+### `doubleClickAt`
+The double-click twin of [`clickAt`](#clickat), with the same two forms and the
+same overload rule (a numeric first token means the global form):
+
+- **`doubleClickAt <x> <y>`** — `x y` are **global** screen coordinates.
+- **`doubleClickAt <target> <x> <y>`** — `x y` are **local** to `<target>`.
+
+```json
+→ {"cmd":"doubleClickAt","x":1420,"y":210}                        // global point
+→ {"cmd":"doubleClickAt","target":"AppletPanel","x":12,"y":34}    // target-local point
+→ {"cmd":"doubleClickAt","target":"AppletPanel","value":"12 34"}  // equivalent
+```
+
+As with `clickAt`, the JSON `x`/`y` fields must both be present and JSON-numeric;
+a missing or string-typed coordinate is rejected rather than coerced to 0. An
+explicit `value` wins over `x`/`y`. The same normalization applies to every alias
+spelling (`doubleclickat`, `dblClickAt`) and to `doubleClick`'s optional
+coordinates, so `bridge_command` reaches all three request forms identically.
+
+Aliases: `doubleclickat`, `dblClickAt`.
+
 ### `menu`
 Enumerate or pop a **menu-bar** menu. On macOS the native menu bar reparents its
 menus to top-level `QMenu`s, so `dumpTree` finds them but `menuBar()->actions()`
@@ -1883,24 +2151,57 @@ so `connect show` is safe when the dialog is already open. `connect local first`
 captures the first currently discovered local radio's serial before scheduling
 the request, so the response and deferred connect target stay consistent.
 `connect local serial <serial>` selects by discovery serial. `connect ip
-<host-or-ip> [flex|hl2]` uses the manual **Connect by IP** probe path; if the
+<host-or-ip> [flex|hl2|icom]` uses the manual **Connect by IP** probe path; if the
 probe finds a radio, the panel emits its normal `connectRequested` signal and
 `MainWindow` performs the standard Multi-Flex/client-slot checks before
 `RadioModel` connects.
 
 The optional radio type selects which wire protocol to probe, matching the
 dialog's **Radio type** dropdown: `flex` opens the TCP/4992 command plane, `hl2`
-sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024. The two are
-disjoint — a Hermes-Lite 2 never answers the Flex probe and vice versa — so an
-address is only reached with the right type. Omit it and the dialog's current
-selection is used, which keeps every existing `connect ip <addr>` script
-working; the response echoes `"family"` as the requested type or `"dialog"`.
+sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024, and `icom`
+uses the CI-V backend. They are disjoint — a Hermes-Lite 2 never answers the
+Flex probe and vice versa — so an address is only reached with the right type.
 A directed HL2 probe is the only way to reach a Hermes-Lite 2 that discovery
 broadcasts cannot see (VPN, routed subnet), and it is bounded at ~600 ms.
 
-`connect wait <timeout_ms>` holds that request's response until
-`RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
-unattended "request then assert" flow.
+**Omit the type and discovery decides.** If the address appears in `connect
+list`, that entry's `family` is used, so `connect ip <addr>` reaches an HL2
+without the caller having to know it is one. Only an address nothing has
+advertised falls back to the connect dialog's current selection — which is what
+every pre-existing `connect ip <addr>` script relied on, and still does for
+routed/off-subnet radios. The response carries both `"family"` (the type
+actually used, or `"dialog"` when it was left to the selector) and
+`"familySource"`: `"argument"`, `"discovery"` or `"dialog"`. Read
+`familySource`, not `family` — `"family":"flex"` alone cannot tell a resolved
+answer from a default.
+
+**An explicit type always wins, including against discovery** — it is you saying you know
+what is at that address, which is the whole point of being able to pass it. When the two
+disagree the reply carries `"discoveryFamily"` (present whenever discovery had an opinion
+at all), so a caller that wants strictness compares it against `"family"` and decides for
+itself, while a caller working around a wrong discovery entry still gets through. The
+mismatch is also logged.
+
+`connect wait <timeout_ms>` holds that request's response until the radio
+connects, the connect fails, or the timeout expires — the preferred unattended
+"request then assert" flow.
+
+A reply that is not `connected` carries `"phase"`: `"connecting"` means an
+attempt is still in flight and waiting again is the right move, `"idle"` means
+nothing is pending and another wait will time out identically. **This matters on
+the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+a wait can legitimately expire on a connect that then succeeds. A connect that
+fails outright returns immediately with the backend's own message instead of
+running out the clock.
+
+Because every connect verb answers `{"ok":true,"deferred":true}` before its real
+work runs, a failure afterwards used to be visible only in the log. The wait
+reply now also carries `"lastError"` and `"lastErrorAgeMs"` — the last deferred
+connect/disconnect failure and how long ago it happened. It is **scoped to the current
+attempt**: a connect that lands retires it, and so does scheduling a fresh one, so its
+presence means this attempt has a failure behind it rather than "something went wrong at
+some point since the process started". A failed `disconnect` is recorded there too, but
+never completes an in-flight `connect wait` — its message belongs to the disconnect.
 
 ### `streams`
 Radio-side display-stream inventory + leak detector (#3856). `get pans` can never
@@ -1978,6 +2279,50 @@ the default Layer-A inventory and `radio`/`inventory` reads remain available;
 `reset`, `resync`, and `refresh` are blocked. `reset` changes the local orphan
 tally, while `resync`/`refresh` send the `sub pan all` subscription command to
 the radio.
+
+### `devices`
+External-device diagnostics and bounded lifecycle control. `devices list`
+reports the available diagnostic names; `devices ulanzi` probes the exact
+macOS HID match used by the Ulanzi backend and joins that inventory with the
+backend's access and system-event suppression state. The inventory is limited
+to devices selected by the production VID/PID dictionary.
+
+```json
+→ {"cmd":"devices","action":"ulanzi"}
+← {"ok":true,"diagnostic":"ulanzi","platform":"macos","supported":true,
+   "enabled":true,
+   "productionMatch":{"vendorId":65521,"productId":130},
+   "matchedCount":1,
+   "matchedDevices":[{"product":"Ulanzi Dial","vendorId":65521,
+                      "productId":130,"primaryUsagePage":1,
+                      "primaryUsage":6}],
+   "inventoryAvailable":true,"accessMode":"shared",
+   "exclusiveOpenStatus":"notPrivileged","sharedOpenStatus":"success",
+   "systemEventsSuppressed":true,"suppressionStatus":"active",
+   "previousMappingPreserved":true,"eventSystemClientRetained":true,
+   "connected":true,"deviceName":"Ulanzi Dial"}
+```
+
+`matchedCount` is the number of devices currently inside the production match
+dictionary; `matchedDevices` exposes the selected devices' identity and primary
+usage for audit. `inventoryAvailable` describes the temporary read-only
+inventory query, while `exclusiveOpen*`, `sharedOpen*`, and `accessMode`
+describe the real backend's access attempts. If macOS rejects an exclusive
+claim for the Bluetooth keyboard-class dial, the backend opens only the exact
+matched device in shared mode and applies a device-scoped system key mapping.
+`systemEventsSuppressed` and `suppressionStatus` report that state;
+`previousMappingPreserved` and `eventSystemClientRetained` are the restoration
+ownership guards.
+
+`devices ulanzi-stop` restores the prior mapping and closes the backend;
+`devices ulanzi-start` starts it again. These lifecycle actions are blocked in
+Observe only mode. A successful stop reports `restorationStatus:"success"`,
+`systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
+
+The read-only diagnostic is available in **Observe only** mode; none of these
+actions keys the transmitter. On non-macOS platforms it returns
+`supported:false` because those backends do not use the affected IOKit claim
+path.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
@@ -2355,6 +2700,83 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### RN2 deterministic stereo probe
+
+`audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
+surface for RN2. It creates a deterministic three-second stereo float32 signal
+inside `AudioEngine`; it neither connects to a radio nor changes RX routing,
+playback, TX permission, or TX state. It may take up to 120 seconds through the
+automation bridge because it deliberately runs a selected filter and a fresh,
+aligned reference filter.
+
+The two temporary filters use `probeDryMix=1.0`, reported in the response. That
+keeps the proof independent of a user's RN2 strength and of whether RNNoise
+classifies the synthetic tones as speech: RNNoise still executes its frame,
+resampler, accumulator, channel-mode, and FIFO paths, while this probe measures
+those transport contracts rather than denoising quality. Production RX/TX RN2
+settings and DSP behavior are untouched.
+
+The legacy no-option form remains unchanged, including its 24 kHz / 960-frame
+RX-compatible defaults. `probeNr2Stereo` is the older SpectralNR/`NR2` alias;
+it is not an RN2 spelling and still takes no RN2 options.
+
+```text
+# Legacy RX-compatible run with an irregular cyclic partition sequence.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 blocks=73,211,17,604,91
+
+# Native 48 kHz, stereo-preserving RN2.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=PreserveRxStereo blocks=73,211,17,604,91
+
+# Native 48 kHz, intentional mono/downmix path duplicated to L/R.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=ProcessedMono blocks=73,211,17,604,91
+```
+
+The same request is available through JSON; the CLI driver preserves all
+key/value tokens in `value`:
+
+```json
+→ {"cmd":"audioCapture","action":"probeDspStereo",
+   "value":"RN2 rate=Native48k output=ProcessedMono blocks=480,960"}
+```
+
+Only `probeDspStereo RN2` accepts case-insensitive `rate`, `output`, and
+`blocks` tokens. `rate` is `Legacy24k` (default) or `Native48k`; `output` is
+`PreserveRxStereo` (default) or `ProcessedMono`; `blocks` is a bounded,
+positive comma-separated cyclic list of input-frame counts (default `960`).
+Unknown, repeated, non-positive, oversized, or excessive-count options fail
+before running a filter. These options are rejected for `all` and every
+non-RN2 mode. The legacy comma form `RN2,strict` remains valid.
+
+Every RN2 response retains the established `frames`, `discardFrames`, RMS
+`input`/`output`, `ratioError`, level-ratio, `audible`, and `preserved` fields.
+It additionally reports canonical `rateDomain`, `sampleRate`, `outputMode`,
+and `blockPartitions`; input/output frame and byte totals; `inputCoverage`,
+`outputCoverage`, per-block `blockOutput`, and `outputSizeExact`; and the
+selected/reference `firstAudibleFrame` and millisecond positions. No fixed
+latency limit is asserted: those positions are evidence for the caller to
+inspect. `startupLatencyDeltaFrames`/`Ms` and `startupLatencyEquivalent` make
+partition-dependent leading silence explicit. `sequenceComparisonFrames`,
+`sequenceMaxError`, `sequenceEquivalent`, and `sequenceOrder` compare a
+substantial first-audible-aligned deterministic window against the fresh
+reference run. `fifoOrderPreserved` means that aligned payload stayed in
+reference order; `fifoSequenceEquivalent` is stricter and is true only when
+both that payload and its startup position match the reference.
+`firstOutputSizeMismatchBlock` and `sequenceFirstMismatchFrame`/`Channel` are
+`-1` on a clean run and identify the first failing location otherwise.
+
+For `PreserveRxStereo`, `ratioPreserved` is the explicit ratio-preservation
+result (and `preserved` keeps its historical meaning). For `ProcessedMono`,
+`leftRightMaxDelta` and `duplicated` prove that the intentional mono result was
+copied to both output channels; `ok` requires audibility, exact output sizing,
+duplication, and sequence equivalence. In preserve mode, `ok` also requires
+the legacy stereo-ratio check.
+
+This probe cannot expose RN2's internal one-time resampler divergence warning
+latch: it is not surfaced by the public filter API, and two matched resamplers
+cannot be induced to diverge through public inputs without invasive fault
+injection. The output-size and aligned-reference evidence above therefore
+proves the public contract, not that hidden warning-latch path.
+
 ### `floors`
 Per-pan **measured FFT noise floor** and the **display floor** (dBm), read off the
 live spectrum without a screenshot — the numeric way to assert post-TX floor
@@ -2455,9 +2877,29 @@ or a regression test. Read-only: it keys nothing and sets nothing.
       "label":"Mic slider (0-100, 50 = unity)","value":80},
      {"key":"micGainAppliedLinear",
       "label":"Mic gain at the modulator (linear)","value":3.98},
+     {"key":"rfPowerPercent","label":"Drive requested (0-100)","value":60},
+     {"key":"txDriveRegister","label":"Drive written (raw 0-255)","value":153},
+     {"key":"txDriveGated","label":"Drive held at 0 by the TX gate","value":false},
      {"key":"forwardPowerPeakW",
-      "label":"Forward (W, approx — peak estimate)","value":4.56}]}
+      "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
+
+**Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
+meter's display hold: a single key-edge ADC sample decays over seconds, so a
+script that asserts on it reads a transient from the start of the over as
+though it were the power now. It is reset at each key edge, which is right for
+a needle and wrong for a test.
+
+On the HL2, `rfPowerPercent` / `txDriveRegister` / `txDriveGated` are the
+requested-versus-applied pair for transmit drive. `txDriveRegister` is the raw
+value last written to the radio and is **absent until the first write** — a `0`
+there means the radio was commanded to zero drive, not that nothing has
+happened yet. `txDriveGated` is true when the transmit gate
+(`AETHER_AUTOMATION_ALLOW_TX` unset, or a TX-blocked session) forced the
+register to 0 while the requested percent stayed where the operator left it;
+without it that divergence is invisible. Note the gateware decodes only the
+drive byte's top nibble, so the raw scale moves in steps of 16 — a percent
+alone does not tell you which of the 16 drives the radio actually got.
 
 **This is deliberately not assembled from the models, and that is the whole
 point.** `get` already reports those, and a model reports what the operator
@@ -2654,6 +3096,183 @@ non-`-120` `rmsDbfs` means audio is arriving, and `rejectBadFcs` climbing while
 `framesAccepted` does not means the decoder is finding structure and losing it
 to bit errors.
 
+### `civ`
+
+Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
+observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
+key or retune the radio.
+
+**`civ session`** reports the media lease independently of UDP link liveness:
+
+```json
+→ {"cmd":"civ","action":"session"}
+← {"ok":true,"civ":"session","result":{
+   "authenticated":true,"connected":true,"streamGranted":true,
+   "lastRenewalResult":"accepted","lastRenewalResponse":"0x00000000",
+   "lastRenewalSequence":42,"nextInnerSequence":43,
+   "tokenRequestId":"0x8f31",
+   "lastAcceptedAgeMs":8123,"pendingRenewals":0,
+   "acceptedRenewals":14,"reissuedTokens":1,"rejectedRenewals":0,
+   "ignoredAuthReplies":0,"ignoredControlPackets":1,
+   "initialMaintenanceMs":30000,"initialMaintenancePending":false,
+   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000}}
+```
+
+Use this first when the panadapter, CI-V controls, and audio stop together while
+the outer UDP packet counters still move. A healthy result has a recent accepted
+token, response `0x00000000`, and no growing pending/rejected count. The health
+verb shows the same essentials under **RS-BA1 session**.
+
+The token-request ID is freshly randomized for each login. On an immediate
+reconnect the radio can answer the initial token request with `0xffffffff` and
+a token that must be used to request the streams; wfview follows the same path.
+`lastRenewalResult:"reissued"` distinguishes that valid reconnect exchange
+from the same nonzero response rejecting an established lease renewal.
+
+The first maintenance renewal is sent at 30 seconds because a live immediate
+reconnect grant stopped its media streams around 45 seconds even though the
+ordinary 60-second renewal was later accepted. After that one early renewal,
+the session returns to the wfview/kappanhang 60-second cadence.
+
+**`civ scheduler`** reports the shared command-plane scheduler rather than one
+producer in isolation:
+
+```json
+→ {"cmd":"civ","action":"scheduler"}
+← {"ok":true,"civ":"scheduler","result":{
+   "idle":false,"slotMs":25,"readTimeoutMs":350,
+   "queueDepth":3,"readInFlight":true,"inFlightKey":"meter.s",
+   "queued":812,"dispatched":799,"coalesced":96,
+   "replies":796,"staleReplies":1,"timeouts":2,
+   "pendingPttIntent":false}}
+```
+
+While a PTT request is awaiting confirmation the reply also carries
+`"pttIntent"` (the requested state) and `"pttIntentRemainingMs"` (how much of
+the bounded window is left). Suppression applies only while `pttIntent` is
+`true`: a radio reporting TX after an unkey request is always published, never
+held back. See the Icom CI-V backend design doc for why the two directions are
+not symmetric.
+
+Use it when controls feel delayed or meters stop. A bounded queue with replies
+advancing is healthy. A growing queue plus timeouts identifies CI-V command-
+plane loss even if RS-BA1 link counters and the panadapter still move.
+`staleReplies` is expected to remain near zero; it proves an old poll was
+discarded after a newer operator intent instead of rolling the UI backward.
+A few per session are normal — one per operator write that overtook a poll
+already on the wire. It climbing *with* `timeouts`, or tracking the rate the
+operator moves controls, means replies are routinely arriving after their
+transaction expired: read it alongside `queueDepth` and treat the pair, not
+`staleReplies` alone, as the congestion signal. Poll this read-only verb until
+`idle:true` when a test needs deterministic write/readback convergence.
+
+**`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
+omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects
+command bytes through the active Icom session and is reserved for controlled
+hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
+should only be enabled briefly when these structured diagnostics are
+insufficient.
+
+### `controls`
+
+The CI-V control and meter registry, joined against what is actually wired.
+**Icom only** — other families answer "no control registry".
+
+This exists because a half-wired control is indistinguishable from a working one
+by inspection. The RF-gain slider drove the *preamp* for weeks; three filter
+buttons reached one filter in AM and one in CW; the ADC-overflow meter was
+polled, answered, and silently dropped every reply. Each was found by an operator
+noticing a wrong number, one control at a time. This verb answers for all of them
+at once.
+
+**`controls map`** — every CI-V message the backend names, with its wire address,
+raw and seam ranges, the seam verb it maps to, the UI control that drives it, and
+what it has actually done this session. Read-only; works with no radio attached.
+For Icom, `supported`, `profileFeature`, `profileEvidence`, and `profileSource`
+describe the effective active-model row; an unsupported row is declaration
+inventory, not a claim that the radio accepts it. Core controls and scope on a
+scope-capable discovered model can be reachable with `profileEvidence: "none"`:
+the former is the backend's model-neutral CI-V floor and the latter matches the
+identity geometry already used by scope startup. Evidence remains independent
+so neither is presented as guide- or live-attested.
+
+```json
+→ {"cmd":"controls","args":"map"}
+← {"ok":true,"controls":"map","result":[
+   {"id":"_diagnostics","framesObserved":591,"controlsSeen":26,"controlsSent":2},
+   {"id":"rf.gain","civ":"14 02","plane":"pan","encoding":"level255",
+    "wiring":"both","rawRange":"0..255","neutralRange":"0..100 %",
+    "seamVerb":"setPanRfGain","uiTarget":"panRfGainSlider","readAtConnect":true,
+    "sentThisSession":true,"seenThisSession":true,"gap":"",
+    "note":"PERCENT, not dB — the register has no published decibel mapping."},
+   {"id":"af.gain","civ":"14 01","wiring":"decode-only","seamVerb":"",
+    "uiTarget":"sliceAudioGainSlider",
+    "gap":"readable but not settable — no seam verb reaches this register"}]}
+```
+
+`wiring` is the declared state — `both`, `send-only`, `decode-only` or
+`declared-only` (a constant with no call sites at all). `gap` names the problem
+in words when there is one, so a caller can sort by it. `sentThisSession` and
+`seenThisSession` are *observed*, not declared: a row claiming `both` that has
+never been seen after a full connect is the interesting case. The
+`_diagnostics` row separates "the radio is silent" from "the registry matches
+nothing" — without it an all-false `seen` column is ambiguous.
+
+**`controls meters`** — the 0x15 meter registry with each meter's scale, poll
+interval, and **how long ago it last produced a reading**.
+
+```json
+→ {"cmd":"controls","args":"meters"}
+← {"ok":true,"result":[
+   {"id":"SLC:LEVEL","civ":"15 02","unit":"dBm","range":"-140..-10",
+    "pollMs":100,"when":"rx-only","visible":true,"ageMs":142,"status":"LIVE"},
+   {"id":"RAD:OVF","civ":"15 07","unit":"Percent","range":"0..1",
+    "pollMs":500,"when":"rx-only","visible":true,"ageMs":-1,
+    "status":"NEVER FED — defined and no reading has ever arrived"}]}
+```
+
+Age is the point. A meter that is defined and never fed renders as a real
+instrument reading a quiet band, which is worse than a missing one; a definition
+alone proves nothing. `IDLE` distinguishes a transmit-only meter that is
+correctly quiet while receiving from one that is broken.
+
+**`controls scrub [id|plane]`** — the linkage check. Drives every settable
+control through its seam verb **at its current value**, then verifies that the
+exact frame reached either the wire or the CI-V scheduler. Nothing on the radio
+moves. Because dispatch is asynchronous, finish a scrub by polling
+`civ scheduler` until `idle:true`; no increase in `timeouts` proves every
+admitted command completed its dispatch/readback transaction.
+
+```json
+→ {"cmd":"controls","args":"scrub"}
+← {"ok":true,"result":{"checked":25,"linked":17,"broken":0,"notTested":8,
+   "rows":[{"id":"rf.gain","civ":"14 02","seamVerb":"setPanRfGain",
+            "reachedWire":false,"reachedScheduler":true,"status":"LINKED",
+            "verdict":"the seam verb admitted this exact command to the CI-V
+                       scheduler; wait for `civ scheduler` idle with no new
+                       timeout to prove dispatch and readback"},
+           {"id":"rit.offset","civ":"21 00","status":"NOT-TESTED",
+            "verdict":"no safe way to re-assert this without changing the
+                       operator's setting — not a fault, not a pass"}]}}
+```
+
+Three outcomes, not two. `NOT-TESTED` is a real state — a control the scrub
+could not drive without changing the operator's setting — and collapsing it into
+either pass or fail would misreport it.
+
+`reachedWire` and `reachedScheduler` are deliberately separate. An idle
+scheduler with unchanged timeout count promotes the latter from accepted work
+to completed wire/readback proof without making the synchronous scrub block the
+application event loop.
+
+The scrub clears the enable-dedupe sentinels first: NR, NB and both notches
+suppress an enable that matches what was last sent, which is correct in normal
+use and would otherwise swallow exactly the frame being tested. It re-sends the
+same value, so the radio still does not move.
+
+**PTT, the antenna tuner and power-off are never scrubbed.** Two of them transmit
+and the third powers the radio off over a link that cannot power it back on.
+
 ### `link`
 
 Connected-mode AX.25: the terminal (calling side) and the Personal Mailbox
@@ -2788,12 +3407,37 @@ nothing attached there is nothing to be honest about.
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).
 
+On Icom, this path uses **Tune Power**, not RF Power. Stage and verify Tune
+Power before `twotone`; neither its percentage nor
+`AETHER_AUTOMATION_TX_MAX_POWER` is a watt guarantee. Use the measured-watt and
+antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
+
 ```json
 → {"cmd":"txtest","action":"twotone"}   # gated
 ← {"ok":true,"txtest":"twotone"}
 
 → {"cmd":"txtest","action":"off"}        # always allowed (alias stop)
 ← {"ok":true,"txtest":"off"}
+```
+
+### `transmit`
+Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
+TX-gated like `key`, and the gate is reported **before** the value is validated so
+it cannot be probed with nonsense.
+
+The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
+ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
+accessible name, so a verb reaching `TransmitModel` directly would otherwise inherit
+no bound at all — on the surface most likely to be feeding a transverter or an
+amplifier. When a request is clamped the reply says so rather than quietly honouring
+a different number than was asked for.
+
+```json
+→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
+
+→ {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
+← {"ok":true,"transmit":"rfpower","rfPower":30,"tunePower":10,"requested":90,"clampedTo":30}
 ```
 
 ### `atu`
@@ -2914,6 +3558,25 @@ actually paint? is the layout right?), because a live spectrum is
 non-deterministic noise and won't golden-match until replay mode (Phase 2)
 lands.
 
+### Workspace pan-layout proof
+
+`workspace pan-layout <id>` drives the same production path as selecting a
+panadapter layout in the UI. It persists `PanadapterLayout`, creates or removes
+pans to reach the layout's count, and reflows Workspace Canvas pan rectangles
+when canvas mode is enabled. Valid IDs are `1`, `2v`, `2h`, `2h1`, `12h`,
+`3v`, `2x2`, `4v`, `3h2`, `2x3`, `4h3`, and `2x4`.
+
+Pan creation and removal settle asynchronously. The initial reply includes
+`targetPanCount`, active-main `panCount`, global `globalPanCount`, and
+`settling`. Poll `workspace status` until the active main surface has the
+target pan count before asserting its live rectangles. Floating pans and pans
+on extra surfaces are outside that count and remain untouched. To prove the
+rectangles persisted, disable and re-enable canvas mode (or restart with the
+same isolated settings profile) and assert the replayed geometry. This action
+returns an error before mutation when the target cannot fit within the radio's
+receiver capacity. It never enables transmit and remains available without
+`AETHER_AUTOMATION_ALLOW_TX`.
+
 ---
 
 ## Gotchas
@@ -2973,7 +3636,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 61 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 69 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2987,45 +3650,53 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
-| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event |
+| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event (positive steps = scroll up); drives wheel VFO tuning |
 | `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
 | `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
 | `contextMenu` | — | contextMenu <target> [x y] — Qt context-menu path |
 | `rightClick` | — | rightClick <target> [x y] — mousePressEvent menu path |
 | `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
+| `doubleClick` | `doubleclick`, `dblClick` | doubleClick <target> [x y] — double-click a widget (centre by default) |
+| `doubleClickAt` | `doubleclickat`, `dblClickAt` | doubleClickAt <x> <y> \| doubleClickAt <target> <x> <y> — coordinate double-click |
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
-| `get` | — | get <model> [selector] [property] — live model snapshot |
+| `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters (add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; remove <id>; enable <0\|1>) |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
+| `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
-| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — |
+| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain> [value] |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
-| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
+| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
+| `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler> — CI-V inject, frame trace, RS-BA1 lease health, or command-scheduler health (Icom; send is TX-gated) |
+| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |

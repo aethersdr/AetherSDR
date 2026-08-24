@@ -39,6 +39,21 @@ public:
 
     // Release the loaded model. Called before destruction; idempotent.
     virtual void unload() = 0;
+
+    // Opt-in: when true, condition each decode on the text the backend
+    // itself produced on its last confident segment, for continuity across
+    // segment boundaries. The whisper backend does this by passing the carried
+    // text as an explicit decode prompt (not by reusing whisper's own internal
+    // prompt state), so the confidence gate and resetContext() fully control what
+    // conditions the next decode. Default is off (independent decodes) — the
+    // historical behavior. No-op for backends that don't support it.
+    virtual void setContextCarryEnabled(bool) {}
+
+    // Drop any carried context so the next decode starts clean.
+    // The engine calls this on a long silence gap and on an explicit Clear, so a
+    // noisy/garbled prior can't keep conditioning later utterances. No-op for
+    // backends that don't carry context.
+    virtual void resetContext() {}
 };
 
 } // namespace AetherSDR

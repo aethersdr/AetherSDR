@@ -16,6 +16,7 @@
 #include "MainWindow.h"
 
 #include "MainWindowHelpers.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "AppletPanel.h"
 #include "BandStackPanel.h"
 #include "CwxPanel.h"
@@ -36,6 +37,7 @@
 #include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "models/SliceModel.h"
+#include "workspace/WorkspaceController.h"
 
 #include <QAbstractSlider>
 #include <QJsonObject>
@@ -634,7 +636,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
         bool show = !m_panStack->bandStackPanel()->isVisible();
-        m_panStack->setBandStackVisible(show);
+        setBandStackPanelVisible(show);
         updateBandStackIndicator();
         return true;
     }
@@ -666,7 +668,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (!m_radioModel.isConnected()) return true;
         int maxPans = m_radioModel.maxPanadapters();
         // Determine current layout from actual pan count, not saved setting
-        int activePanCount = m_panStack ? m_panStack->count() : 1;
+        const bool canvasEnabled = m_workspaceController
+            && m_workspaceController->isEnabled();
+        int activePanCount = canvasEnabled
+            ? m_workspaceController->activeMainPanIdsForLayout().size()
+            : (m_panStack ? m_panStack->count() : 1);
         QString currentLayout = "1";
         if (activePanCount >= 2)
             currentLayout = AppSettings::instance()
@@ -675,9 +681,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
             const QString layoutId = dlg.selectedLayout();
             const int requestedPanCount = panCountForLayoutId(layoutId);
-            const int currentSliceCount = static_cast<int>(m_radioModel.slices().size());
-            if (requestedPanCount > activePanCount
-                    && currentSliceCount >= m_radioModel.maxSlices()) {
+            const int additionalPans = qMax(0, requestedPanCount - activePanCount);
+            const int globalPanCount = m_panStack ? m_panStack->count() : 0;
+            if (globalPanCount + additionalPans > m_radioModel.maxPanadapters()) {
                 showPanadapterSliceCapacityMessage();
                 return true;
             }
@@ -968,7 +974,7 @@ void MainWindow::registerShortcutActions()
                 QString panId = s->panId();
                 if (panId.isEmpty())
                     panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-                bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+                bool isCw = isCwMode(s->mode());
                 double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
                 m_splitActive = true;
                 m_splitRxSliceId = s->sliceId();
@@ -1057,9 +1063,10 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("tnf_toggle", "TNF Global Toggle", "DSP",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
+            // Through the model rather than a raw command string, so the
+            // shortcut reaches a host-DSP notch as well as a Flex TNF.
             const bool wasOn = m_radioModel.tnfModel().globalEnabled();
-            m_radioModel.sendCommand(
-                QString("radio set tnf_enabled=%1").arg(wasOn ? 0 : 1));
+            m_radioModel.tnfModel().requestGlobalTnfEnabled(!wasOn);
         });
     m_shortcutManager.registerAction("nr_cycle", "NR Cycle (Off/NR/NR2/NR4/DFNR)", "DSP",
         QKeySequence(), [this]() {
@@ -1217,13 +1224,22 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/false); });
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/true); });
-    static constexpr double kPanZoomFactor = 1.5;
+    // Keyboard step uses kPanZoomFactor per press; rotary dials use a finer
+    // per-detent factor (kRotaryPanZoomFactor in MainWindowHelpers.h).
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
         QKeySequence(Qt::Key_Equal), [this]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
     m_shortcutManager.registerAction("pan_zoom_out", "Panadapter Zoom Out", "Display",
         QKeySequence(Qt::Key_Minus), [this]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
+    // No key sequence: Ctrl+M lives as an application QShortcut in
+    // MainWindow.cpp (it must work with the menu bar hidden, which is
+    // minimal mode's whole situation).  Registering the ACTION makes the
+    // toggle reachable for MIDI bindings and the bridge's `shortcut`
+    // verb — until now nothing could drive minimal mode programmatically,
+    // which is also why the canvas-vs-minimal handoff went untested.
+    m_shortcutManager.registerAction("minimal_mode", "Minimal Mode Toggle", "Display",
+        QKeySequence(), [this]() { toggleMinimalModeFromAction(); });
 
     // ── RIT/XIT ─────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("rit_toggle", "RIT Toggle", "RIT/XIT",

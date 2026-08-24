@@ -6,15 +6,18 @@
 #include "asr/AsrEngine.h"
 #include "asr/IAsrBackend.h"
 #include "asr/SpeakerEmbedder.h"
+#include "asr/WhisperAsrBackend.h"
 #include "gui/CopyAssistController.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QSignalSpy>
 #include <QThread>
 #include <QTimer>
 #include <QVector>
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -69,6 +72,50 @@ AsrBackendFactory factory(bool loadOk)
     return [loadOk] { return std::unique_ptr<IAsrBackend>(new FakeBackend(loadOk)); };
 }
 
+// A scripted line equal to this reports a decode FAILURE instead of text — the
+// error out-param path, which is distinct from an empty decode (RFC #4821).
+const QString kScriptedFailure = QStringLiteral("!fail");
+
+// Returns a scripted phrase per successive transcribe() call (the last phrase
+// repeats once the script runs out). Lets the segment-overlap de-dup test drive
+// deterministic boundary words across consecutive segments (RFC #4821).
+class ScriptedBackend : public IAsrBackend {
+public:
+    explicit ScriptedBackend(std::vector<QString> lines) : m_lines(std::move(lines)) {}
+    bool load(const QString&, QString*) override
+    {
+        m_loaded = true;
+        return true;
+    }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString* error) override
+    {
+        if (pcm.empty() || m_lines.empty()) {
+            return {};
+        }
+        const QString text = m_next < m_lines.size() ? m_lines[m_next] : m_lines.back();
+        ++m_next;
+        if (text == kScriptedFailure) {
+            if (error != nullptr) {
+                *error = QStringLiteral("scripted decode failure");
+            }
+            return {};
+        }
+        return AsrTranscript{text, 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+
+private:
+    std::vector<QString> m_lines;
+    std::size_t m_next = 0;
+    bool m_loaded = false;
+};
+
+AsrBackendFactory scriptedFactory(std::vector<QString> lines)
+{
+    return [lines] { return std::unique_ptr<IAsrBackend>(new ScriptedBackend(lines)); };
+}
+
 // Backend whose transcribe() blocks for a fixed delay — stands in for a real
 // whisper decode or remote HTTP round-trip, so tests can build an actual
 // backlog of queued (not-yet-dequeued) processAudio() calls and verify
@@ -101,6 +148,55 @@ private:
 AsrBackendFactory slowFactory(int delayMs)
 {
     return [delayMs] { return std::unique_ptr<IAsrBackend>(new SlowBackend(delayMs)); };
+}
+
+// Records the context-carry control calls so the engine's wiring can be checked
+// from the test thread. Counters are atomic (the backend lives on the worker).
+class ContextFake : public IAsrBackend {
+public:
+    bool load(const QString&, QString*) override { m_loaded = true; return true; }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        if (pcm.empty()) {
+            return {};
+        }
+        return AsrTranscript{QStringLiteral("OVER"), 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+    void setContextCarryEnabled(bool on) override { carryEnabled.store(on); }
+    void resetContext() override { resets.fetch_add(1); }
+
+    std::atomic<bool> carryEnabled{false};
+    std::atomic<int> resets{0};
+
+private:
+    bool m_loaded = false;
+};
+
+// Factory that also publishes the constructed backend pointer so the test can
+// read its counters. The engine owns the instance; the sink is a non-owning view
+// valid until the engine is destroyed.
+AsrBackendFactory contextFactory(std::atomic<ContextFake*>* sink)
+{
+    return [sink] {
+        auto* b = new ContextFake();
+        sink->store(b, std::memory_order_release);
+        return std::unique_ptr<IAsrBackend>(b);
+    };
+}
+
+// Spin the event loop until pred() holds or the timeout elapses.
+template <typename Pred>
+bool waitUntil(Pred pred, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!pred() && t.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(5);
+    }
+    return pred();
 }
 
 // Deterministic stand-in for building the ~24 MB ECAPA session: the sleep is
@@ -143,6 +239,25 @@ QVector<float> silence(int ms)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    // ---- Context-carry confidence gate (RFC #4818) ------------------------
+    // The gate is the whole recovery story: it decides whether a decode's text
+    // seeds the next decode's prompt. Pinned here as a pure function so the three
+    // cases can't regress silently (an inverted comparison or a 0.0 threshold).
+    {
+        expect(asrShouldCarryContext(QStringLiteral("CQ DE K5PTB"), 0.90f),
+               "gate: confident non-empty text carries");
+        expect(!asrShouldCarryContext(QStringLiteral("garbled"), 0.40f),
+               "gate: sub-threshold confidence does not carry (prev prompt stays)");
+        expect(!asrShouldCarryContext(QString(), 0.99f),
+               "gate: empty text never carries, regardless of confidence");
+        // Boundary: kContextCarryMinConfidence itself carries; just under does not.
+        expect(asrShouldCarryContext(QStringLiteral("x"), kContextCarryMinConfidence),
+               "gate: confidence exactly at the floor carries");
+        expect(!asrShouldCarryContext(QStringLiteral("x"),
+                                      kContextCarryMinConfidence - 0.01f),
+               "gate: just below the floor does not carry");
+    }
 
     // ---- Engine replacement discards only per-engine speaker state --------
     {
@@ -210,6 +325,202 @@ int main(int argc, char** argv)
         QSignalSpy idle(&engine, &AsrEngine::finalText);
         idle.wait(400); // give the worker a chance; expect nothing
         expect(textSpy.count() == before, "disabled engine emits no finalText");
+    }
+
+    // ---- Segment overlap: boundary-word de-dup (RFC #4821) -----------------
+    // A small decode-buffer cap force-closes continuous speech into consecutive
+    // segments; with overlap on, each continuation re-transcribes the previous
+    // segment's tail word, which the worker must strip. The scripted backend
+    // makes that duplicated boundary word deterministic (…charlie | charlie…).
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            QStringLiteral("charlie delta echo"),
+            QStringLiteral("echo foxtrot golf"),
+            QStringLiteral("golf hotel india"),
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap dedup: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300); // small cap → continuous speech force-closes
+        engine.setOverlapMs(100);      // carry 100 ms across the cut
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);   // continuous → repeated cap closes
+        engine.pushAudio(silence(400), kSrcRate);  // hangover closes the tail
+        expect(textSpy.wait(5000), "overlap dedup: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain the remaining queued segment transcriptions
+        }
+        expect(textSpy.count() >= 2, "overlap dedup: continuous speech split into >=2 segments");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap dedup: first segment is emitted whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("delta echo"),
+                   "overlap dedup: continuation drops the duplicated boundary word");
+        }
+    }
+
+    // ---- Segment overlap: an empty continuation clears the de-dup tail --------
+    // If a continuation decodes empty (marginal SNR), the tail it would have been
+    // compared against is gone; the NEXT continuation must de-dup against *that*
+    // (now empty) reference, not the segment before it — otherwise a leading word
+    // that coincidentally matches the older tail is wrongly stripped. Here the
+    // 2nd decode is empty and the 3rd begins with "charlie", which also ends the
+    // 1st: it must survive, not be de-dup'd away.
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            QString(),                              // empty decode (skipped, clears tail)
+            QStringLiteral("charlie hotel india"),  // leading "charlie" must NOT be stripped
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap empty-continuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap empty-continuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap empty-continuation: >=2 non-empty emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap empty-continuation: first segment whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
+                   "overlap empty-continuation: word after an empty decode is not stripped");
+        }
+    }
+
+    // ---- Segment overlap: a FAILED continuation clears the de-dup tail ------
+    // The error out-param path, not the empty-text one: a backend that reports a
+    // decode failure also leaves no tail, so the reference must be dropped for
+    // exactly the same reason. Without the clear, the 3rd segment would de-dup
+    // against the 1st — two segments back — and lose a genuine leading word.
+    // Mutation check: delete the m_prevSegmentText.clear() on the error path and
+    // this case emits "hotel india" instead.
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            kScriptedFailure,                       // decode error (clears the tail)
+            QStringLiteral("charlie hotel india"),  // leading "charlie" must NOT be stripped
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap failed-continuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy errSpy(&engine, &AsrEngine::error);
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap failed-continuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(errSpy.count() >= 1, "overlap failed-continuation: the decode failure is reported");
+        expect(textSpy.count() >= 2, "overlap failed-continuation: >=2 non-empty emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap failed-continuation: first segment whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
+                   "overlap failed-continuation: word after a failed decode is not stripped");
+        }
+    }
+
+    // ---- Segment overlap: a punctuation-only token is not a boundary match ---
+    // normWord() strips edge punctuation, so a token that is ALL punctuation
+    // normalizes to "". Two such tokens must not compare equal — "" == "" is not
+    // a repeated word, and treating it as one silently eats the continuation's
+    // real first token. Mutation check: drop the isEmpty() guards from the
+    // comparison and this case emits "delta echo".
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo ..."),
+            QStringLiteral("... delta echo"), // the "..." must survive, not match
+            QStringLiteral("echo foxtrot golf"),
+            QStringLiteral("golf hotel india"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap punctuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap punctuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap punctuation: >=2 emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("... delta echo"),
+                   "overlap punctuation: a punctuation-only token is not a boundary match");
+        }
+    }
+
+    // ---- Segment overlap: the strip is bounded by the carried window ---------
+    // The de-dup must not strip the longest match it can find — only about as
+    // many words as the carried audio could actually hold (overlapWordBudget).
+    // Here the boundary is a genuine triple repeat ("one one one" | "one one one
+    // two") but only 100 ms was carried, so exactly ONE word may go; the other
+    // two are real speech the operator said. Mutation check: remove
+    // overlapWordBudget from the cap (or pass a live/large overlapMs instead of
+    // the value captured at close time) and this case emits "two".
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("bravo one one one"),
+            QStringLiteral("one one one two"), // only the first "one" is overlap
+            QStringLiteral("two three four"),
+            QStringLiteral("four five six"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap budget: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100); // 100 ms -> a one-word budget
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap budget: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap budget: >=2 emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("one one two"),
+                   "overlap budget: the strip is bounded by the carried window, "
+                   "not the longest match");
+        }
     }
 
     // ---- Destructor returns promptly with a queued backlog ----------------
@@ -380,6 +691,40 @@ int main(int argc, char** argv)
         // may complete — the rest of the backlog must be dropped.
         expect(textSpy.count() <= 1,
                "disabling drops the backlog instead of transcribing all of it");
+    }
+
+    // ---- Context-carry control reaches the backend (RFC #4818) ------------
+    // The engine must marshal setContextCarryEnabled() to the backend, flush its
+    // context on a long idle-silence gap, and flush again on clearContext()
+    // (the Copy Assist Clear button). Verified via a fake that counts the calls.
+    {
+        std::atomic<ContextFake*> sink{nullptr};
+        AsrEngine engine(contextFactory(&sink));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "context test: engine ready");
+        expect(waitUntil([&] { return sink.load() != nullptr; }, 2000),
+               "fake backend was constructed on the worker");
+        ContextFake* backend = sink.load();
+
+        engine.setEnabled(true);
+        engine.setContextCarryEnabled(true);
+        expect(waitUntil([&] { return backend->carryEnabled.load(); }, 2000),
+               "setContextCarryEnabled reaches the backend");
+
+        // A real pause (idle silence past longGapMs = 2500) flushes the context.
+        const int resetsBeforeGap = backend->resets.load();
+        engine.pushAudio(tone(400), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);   // hangover closes the utterance
+        engine.pushAudio(silence(3000), kSrcRate);  // > 2500 ms idle -> long gap
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeGap; }, 5000),
+               "a long silence gap flushes the carried context");
+
+        // The Clear button flushes it too.
+        const int resetsBeforeClear = backend->resets.load();
+        engine.clearContext();
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeClear; }, 5000),
+               "clearContext() flushes the carried context");
     }
 
     // ---- Load failure surfaces loadFailed(), not ready() ------------------

@@ -92,6 +92,13 @@ private:
     bool m_postTuneCapture{false};  // true during post-tune settling window
     float m_tuneSwr{1.0f};   // last non-1.00 SWR seen while tuning
     QTimer* m_postTuneTimer{nullptr};
+
+    // setPowerScale() no-ops when neither input moved (#4845) — it's called
+    // on every RadioModel::infoChanged, most of which carry no scale-relevant
+    // change, and gauge->setRange() forces a repaint.
+    int  m_lastMaxWatts{-1};
+    bool m_lastHasAmplifier{false};
+    bool m_havePowerScale{false};
 };
 
 } // namespace AetherSDR

@@ -1,5 +1,6 @@
 // Capability-gated UI surfaces: hasProfiles, hasDaxStreams, hasExtendedDsp,
-// hasSupplyVoltageTelemetry, and the three status-bar toggles
+// hasSupplyVoltageTelemetry, hasMainFanTelemetry,
+// hasTransmitFrequencyCheck, and the three status-bar toggles
 // (hasRadioSideCwKeyer / hasVoiceKeyer / hasFullDuplex).
 //
 // The rule these guard (RadioCapabilities.h header comment, aetherd RFC §1) is
@@ -29,6 +30,10 @@
 //                 renders the 0.0f initialiser as a two-decimal measurement.
 //                 Asserted on the CAPABILITY, so this stays true of any future
 //                 family that reports no supply rail.
+//   main fan      hasMainFanTelemetry gates the Radio Vitals Main Fan gauge.
+//                 Unsupported radios omit the instrument rather than showing
+//                 an empty scale, while disconnect restores the permissive
+//                 surface for the next session.
 //   radio DSP     hasRadioSideDsp gates the radio's own NR/NB/ANF/NRL/ANFL/
 //                 ANFT, the APD row and the WNB row. It must NOT gate the
 //                 host-side equivalents — the AetherDSP modules and the
@@ -98,11 +103,19 @@
 // with the automation bridge.
 
 #include "models/RadioModel.h"
+#include "IcomFakeRadio.h"
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "models/ModelCapabilities.h"
 #include "gui/DvkAvailabilityGate.h"
+#include "gui/VoiceModeGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomCredentials.h"
+#include "core/backends/icom/IcomSettings.h"
 
 #include "TestEventLoop.h"
 
@@ -206,7 +219,9 @@ static RadioInfo simInfo()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("radio-capability-gating-test"));
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
 
     // ---- Flex declares every gated capability ----------------------------
     //
@@ -219,6 +234,11 @@ int main(int argc, char** argv)
         const RadioCapabilities caps = model.backendCapabilities();
         check(caps.hasProfiles,
               "Flex declares hasProfiles (global/TX/mic profiles are SmartSDR)");
+        check(caps.receiveOnlyModes.isEmpty(),
+              "Flex declares no receive-only modes (it transmits in everything "
+              "it demodulates), so the mode key guard is inert on it");
+        check(caps.txPowerBands.isEmpty(),
+              "Flex explicitly leaves per-band TX power limits empty");
         check(caps.hasDaxStreams,
               "Flex declares hasDaxStreams (DAX audio + DAX IQ)");
         check(caps.hasRadioSideDsp,
@@ -234,6 +254,10 @@ int main(int argc, char** argv)
         // readout that ships and works today.
         check(caps.hasSupplyVoltageTelemetry,
               "Flex declares hasSupplyVoltageTelemetry (the \"+13.8A\" meter)");
+        check(caps.hasPaTemperatureTelemetry,
+              "Flex declares hasPaTemperatureTelemetry (the PATEMP meter)");
+        check(caps.hasMainFanTelemetry,
+              "Flex declares hasMainFanTelemetry (the MAINFAN meter)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -242,6 +266,8 @@ int main(int argc, char** argv)
               "hasRadioSideDsp and hasExtendedDsp are independent");
         check(caps.hasRadioSideWaterfallAutoBlack,
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
+        check(!caps.hasTransmitFrequencyCheck,
+              "Flex declares hasTransmitFrequencyCheck=false (REV is local state)");
         // The three status-bar toggles. Same regression shape as the supply-rail
         // field above and worse in kind: these are shipping SmartSDR features
         // whose only implementation is a command-plane verb, so a field added
@@ -250,6 +276,8 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideCwKeyer (the `cwx` text buffer)");
         check(caps.hasVoiceKeyer,
               "Flex declares hasVoiceKeyer (the `dvk` recorder)");
+        check(caps.hasDownwardExpander,
+              "Flex preserves its authoritative DEXP compander surface");
         check(caps.hasFullDuplex,
               "Flex declares hasFullDuplex (radio set full_duplex_enabled=)");
         // Three flags, not one ride on hasRadioSideDsp. All three are true on a
@@ -334,6 +362,11 @@ int main(int argc, char** argv)
         const RadioCapabilities caps = model.backendCapabilities();
         check(!caps.hasProfiles,
               "HL2 declares hasProfiles=false (no on-radio configuration store)");
+        check(caps.receiveOnlyModes.isEmpty(),
+              "HL2 declares no receive-only modes — it modulates on this host, "
+              "so there is no mode it hears and cannot send");
+        check(caps.txPowerBands.isEmpty(),
+              "HL2 explicitly leaves per-band TX power limits empty");
         check(!caps.hasDaxStreams,
               "HL2 declares hasDaxStreams=false (one raw IQ feed, no stream plane)");
         check(!caps.hasExtendedDsp,
@@ -342,6 +375,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideDsp=false (host runs every noise module)");
         check(!caps.hasRadioSideWaterfallAutoBlack,
               "HL2 declares hasRadioSideWaterfallAutoBlack=false (no display engine)");
+        check(!caps.hasTransmitFrequencyCheck,
+              "HL2 declares hasTransmitFrequencyCheck=false");
         check(!caps.hasWaveforms,
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
@@ -353,6 +388,10 @@ int main(int argc, char** argv)
         // not the stack.
         check(!caps.hasSupplyVoltageTelemetry,
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
+        check(caps.hasPaTemperatureTelemetry,
+              "HL2 declares hasPaTemperatureTelemetry (host-decoded PATEMP)");
+        check(!caps.hasMainFanTelemetry,
+              "HL2 declares hasMainFanTelemetry=false");
         // The three status-bar toggles. The HL2 has no CW text buffer, no voice
         // recorder and no full-duplex setting, so all three labels go away
         // entirely rather than sitting permanently dim.
@@ -360,6 +399,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideCwKeyer=false (no text buffer)");
         check(!caps.hasVoiceKeyer,
               "HL2 declares hasVoiceKeyer=false (no on-radio recorder)");
+        check(!caps.hasDownwardExpander,
+              "HL2 declares hasDownwardExpander=false (no command path)");
         check(!caps.hasFullDuplex,
               "HL2 declares hasFullDuplex=false (exclusive T/R changeover)");
         // The keyer F1-F12 shortcuts, evaluated as updateKeyerAvailability()
@@ -397,6 +438,115 @@ int main(int argc, char** argv)
               "HL2 declares Memories (the #4590 bank's channels are client-"
               "owned; the bank engages on persistsMemories and keeps its own "
               "shared document — RFC #4603 PR 6)");
+
+        // CW-down is a transmit start even though the carrier and PTT envelope
+        // are separate below the seam. Pin both public element entry points:
+        // a receive-only pan must stop them before Hl2Backend sees the edge,
+        // while release remains unconditional. The final uninhibited edge is
+        // the control proving this fixture really can cross the backend seam.
+        QString fixtureError;
+        check(model.automationApplySliceFixture(0, QString(), &fixtureError),
+              "CW inhibit fixture creates a slice");
+        SliceModel* cwSlice = model.slice(0);
+        check(cwSlice != nullptr, "CW inhibit fixture resolves its slice");
+        if (cwSlice) {
+            SliceDelta txOn;
+            txOn.txSlice = true;
+            txOn.panId = QStringLiteral("0");
+            cwSlice->applyChanges(txOn);
+            const QString panId = cwSlice->panId();
+            check(model.txSlice() == cwSlice,
+                  "CW inhibit fixture assigns the transmit slice");
+            check(!panId.isEmpty(), "CW inhibit fixture has a pan identity");
+            model.setPanTransmitInhibited(
+                panId, true, QStringLiteral("receive-only CW regression"));
+            check(model.panTransmitInhibited(panId),
+                  "CW inhibit fixture marks its pan receive-only");
+            QSignalSpy keyEdgeSpy(&model, &RadioModel::cwKeyDownChanged);
+            QSignalSpy forwardedSpy(&model,
+                                    &RadioModel::backendCwKeyingForwarded);
+
+            model.sendCwKey(true);
+            check(forwardedSpy.count() == 0,
+                  "inhibited straight-key down never crosses the backend seam");
+            model.sendCwKey(false);  // release must always be accepted
+            check(forwardedSpy.count() == 1
+                      && !forwardedSpy.last().value(0).toBool(),
+                  "straight-key release crosses the seam despite the inhibit");
+
+            model.sendCwKeyEdge(true);
+            check(forwardedSpy.count() == 1,
+                  "inhibited iambic down never crosses the backend seam");
+            model.sendCwKeyEdge(false);  // release must always be accepted
+            check(forwardedSpy.count() == 2
+                      && !forwardedSpy.last().value(0).toBool(),
+                  "iambic release crosses the seam despite the inhibit");
+            check(keyEdgeSpy.count() == 0,
+                  "refused CW downs do not publish false key-active state");
+
+            model.setPanTransmitInhibited(panId, false);
+            check(!model.panTransmitInhibited(panId),
+                  "CW inhibit fixture can clear the receive-only state");
+            model.sendCwKeyEdge(true);
+            check(forwardedSpy.count() == 3
+                      && forwardedSpy.last().value(0).toBool(),
+                  "the same uninhibited down crosses the backend seam");
+            check(keyEdgeSpy.count() == 1,
+                  "an accepted down publishes one key-active edge");
+            model.sendCwKeyEdge(false);
+        }
+    }
+
+    // ---- Icom drives the model's actual per-band power consumer -----------
+    {
+        using AetherSDR::icom::test::FakeIc705;
+
+        FakeIc705 radio;
+        radio.setCivAddress(0xA2);
+        radio.setDeviceName("IC-9700");
+        IcomSettings::reset();
+        IcomSettings::setUsername(QStringLiteral("beer"));
+        IcomSettings::setPorts(radio.controlPort(), radio.serialPort(), radio.audioPort());
+        IcomSettings::setCivAddressAuto();
+        IcomCredentials::setSessionPassword(QStringLiteral("beerbeer"));
+
+        RadioInfo info;
+        info.family = QStringLiteral("icom");
+        info.model = QStringLiteral("IC-9700");
+        info.serial = QStringLiteral("capability-gating-ic9700");
+        info.address = QHostAddress::LocalHost;
+        info.port = radio.controlPort();
+        model.connectToRadio(info);
+        check(AetherTest::waitFor([&] { return model.isConnected(); }),
+              "IC-9700 model-level fixture connects through the real backend seam");
+
+        const RadioCapabilities caps = model.backendCapabilities();
+        check(caps.txPowerBands.size() == 3,
+              "Icom declares the three IC-9700 per-band TX power limits");
+        check(caps.hasTransmitFrequencyCheck,
+              "Icom declares the profiled IC-9700 momentary XFC command");
+        check(caps.hasSupplyVoltageTelemetry,
+              "Icom declares the profiled IC-9700 supply-voltage telemetry");
+        check(!caps.hasMainFanTelemetry,
+              "Icom declares no Main Fan telemetry family-wide");
+
+        const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
+                                          const char* description) {
+            radio.frontPanelFrequency(hz);
+            check(AetherTest::waitFor([&] {
+                      return model.transmitModel().maxPowerLevel() == watts;
+                  }), description);
+        };
+        expectPowerLimit(146'000'000ULL, 100,
+                         "RadioModel applies the IC-9700 2 m 100 W ceiling");
+        expectPowerLimit(432'000'000ULL, 75,
+                         "RadioModel applies the IC-9700 70 cm 75 W ceiling");
+        expectPowerLimit(1'296'000'000ULL, 10,
+                         "RadioModel applies the IC-9700 23 cm 10 W ceiling");
+
+        model.disconnectFromRadio();
+        IcomCredentials::setSessionPassword(QString{});
+        IcomSettings::reset();
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -434,20 +584,30 @@ int main(int argc, char** argv)
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(!caps.hasProfiles,   "Sim declares hasProfiles=false");
+        check(caps.txPowerBands.isEmpty(),
+              "Sim explicitly leaves per-band TX power limits empty");
         check(!caps.hasDaxStreams, "Sim declares hasDaxStreams=false");
         check(!caps.hasExtendedDsp, "Sim declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
         check(!caps.hasRadioSideWaterfallAutoBlack,
               "Sim declares hasRadioSideWaterfallAutoBlack=false");
+        check(!caps.hasTransmitFrequencyCheck,
+              "Sim declares hasTransmitFrequencyCheck=false");
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
+        check(!caps.hasPaTemperatureTelemetry,
+              "Sim declares hasPaTemperatureTelemetry=false");
+        check(!caps.hasMainFanTelemetry,
+              "Sim declares hasMainFanTelemetry=false");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
+        check(!caps.hasDownwardExpander,
+              "Sim declares hasDownwardExpander=false");
         check(!caps.hasFullDuplex, "Sim declares hasFullDuplex=false");
         // The two keyer ACCESSORS, on the one backend in this file that really
         // connects — so this is the only place the permissive rule inside them
@@ -610,6 +770,15 @@ int main(int argc, char** argv)
               "TX-intent ownership check runs disconnected, on the sim backend");
         check(!model.backendCapabilities().canTransmit,
               "TX-intent ownership check runs against an RX-only backend");
+        QSignalSpy cwForwardedSpy(&model,
+                                  &RadioModel::backendCwKeyingForwarded);
+        model.sendCwKey(true);
+        check(cwForwardedSpy.count() == 0,
+              "CW down never crosses the seam of a receive-only backend");
+        model.sendCwKey(false);
+        check(cwForwardedSpy.count() == 1
+                  && !cwForwardedSpy.last().value(0).toBool(),
+              "CW release still crosses a receive-only backend seam");
         QSignalSpy spy(&model.transmitModel(), &TransmitModel::tuneCommandIssued);
         const bool invoked = QMetaObject::invokeMethod(
             &model.transmitModel(), "tuneCommandIssued", Qt::DirectConnection,
@@ -702,6 +871,276 @@ int main(int argc, char** argv)
               "AU-510 is an extended-DSP platform (the check has teeth)");
         check(!capabilitiesFor(QStringLiteral("FLEX-6700")).hasExtendedDsp(),
               "FLEX-6700 is not (the check has teeth)");
+    }
+
+    // ---- hasLmsNoiseFilters / hasManualNotch: the two newest gates ---------
+    //
+    // Both exist because hasRadioSideDsp was two claims wearing one name — "the
+    // radio runs its own receive DSP" and "the radio runs FLEXRADIO'S PARTICULAR
+    // SET of it". An Icom is the first and not the second, so that one flag lit
+    // up NRL/ANFL/ANFT buttons reaching no register on the radio at all.
+    //
+    // THE TWO FIELDS TAKE OPPOSITE DISCONNECTED DEFAULTS, and that asymmetry is
+    // the thing worth pinning. hasLmsNoiseFilters is PERMISSIVE — the buttons
+    // ship today and must not vanish from an empty window. hasManualNotch is
+    // NOT — MN is a NEW button, and a permissive default would put it on every
+    // Flex on screen before any backend had claimed it. An inverted default is
+    // exactly what a later refactor "tidies" in the wrong direction, and the
+    // failure is silent: a control that appears, wired to nothing.
+    {
+        // The struct's own default, which is what a backend that forgets the
+        // field gets. False for both — absent unless declared.
+        const RadioCapabilities fresh;
+        check(!fresh.hasManualNotch,
+              "RadioCapabilities defaults hasManualNotch to false (absent unless declared)");
+        check(!fresh.hasLmsNoiseFilters,
+              "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
+        check(!fresh.hasPaTemperatureTelemetry,
+              "RadioCapabilities defaults PA temperature telemetry to absent");
+        check(!fresh.hasMainFanTelemetry,
+              "RadioCapabilities defaults Main Fan telemetry to absent");
+
+        // Read from each backend's DECLARATION rather than restating it, so a
+        // copy-paste that flips either one reds this suite.
+        FlexBackend flex;
+        hl2::Hl2Backend hl2;
+        SimBackend sim;
+        AetherSDR::icom::IcomCivBackend icom;
+        const RadioCapabilities flexCaps = flex.capabilities();
+        const RadioCapabilities hl2Caps = hl2.capabilities();
+        const RadioCapabilities simCaps = sim.capabilities();
+        const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(!fresh.hasTxFilterControls,
+              "RadioCapabilities defaults TX cutoff controls to absent");
+        check(flexCaps.hasTxFilterControls,
+              "Flex explicitly retains its continuous TX cutoff controls");
+        check(hl2Caps.hasTxFilterControls,
+              "HL2 explicitly retains its host-modulated TX cutoff controls");
+        check(!simCaps.hasTxFilterControls,
+              "Sim explicitly omits TX cutoff controls because it is RX-only");
+        check(!icomCaps.hasTxFilterControls,
+              "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: the TX cutoff editor remains permissive");
+
+        check(flexCaps.hasLmsNoiseFilters,
+              "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");
+        check(!icomCaps.hasLmsNoiseFilters,
+              "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
+
+        check(!flexCaps.hasManualNotch,
+              "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
+        check(icomCaps.hasManualNotch,
+              "Icom declares hasManualNotch (16 48 enable, 14 0D position, 16 57 width)");
+        check(!icomCaps.hasPaTemperatureTelemetry,
+              "Icom declares no PA-temperature telemetry without a model profile");
+
+        // The gates themselves, through the SAME expression the UI applies, so
+        // these assert behaviour rather than paraphrase it.
+        //
+        // Disconnected: the LMS row stays (permissive, it ships), the MN button
+        // does not (not permissive, it is new).
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: a permissive gate shows (hasLmsNoiseFilters rule)");
+        RadioModel disconnected;
+        check(disconnected.hasLmsNoiseFilters(),
+              "disconnected: hasLmsNoiseFilters() is permissive — the shipping row stays");
+        check(!disconnected.hasManualNotch(),
+              "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
+              "empty window");
+    }
+
+    // ---- ASR (Copy Assist) indicator: gated on the ACTIVE slice (#4825) ----
+    //
+    // The two status-bar keyers and the ASR indicator ask the SAME mode question
+    // (isVoiceMode) of DIFFERENT slices, and that difference is the whole fix.
+    // CWX and DVK key the TX slice, so an absent TX slice must close them. Copy
+    // Assist decodes received audio and is already bound to the ACTIVE slice, so
+    // an absent TX slice must NOT close it — it did, which is #4825: an operator
+    // who turns TX off (antenna disconnected, bench work) or listens receive-only
+    // lost the feature outright.
+    //
+    // WHAT THE MODE CHECKS BELOW DO NOT PIN, stated plainly because they read
+    // like they cover the fix and they do not: every isVoiceMode() check here
+    // would pass, green, against the bug — the PRE-FIX code used the same mode
+    // list. They pin the mode list, which is worth pinning now that two
+    // indicators share it. The slice SOURCE, the actual subject of #4825, is
+    // still out of reach: MainWindow is not linkable from this target (it links
+    // aethercore, not the GUI), so nothing here can ask
+    // updateKeyerAvailability() which slice it read. That half rests on the
+    // hardware verification (a FLEX-6500 with TX off, and a two-slice TX=CW /
+    // active=USB pair).
+    //
+    // The teardown decision IS pinned, in the second block below.
+    // shouldAutoHideCopyAssist() was moved into VoiceModeGate.h for exactly the
+    // reason this comment used to give for not pinning it, so the clause that
+    // keeps a band recall from stopping a running transcription has a test that
+    // fails when it is removed.
+    {
+        // TX off: no slice carries isTxSlice(), so txSlice() is null and
+        // updateKeyerAvailability() reads an empty TX mode.
+        const QString txModeWithTxOff;                          // txSlice() == nullptr
+        const QString activeModeUsb = QStringLiteral("USB");
+
+        check(!isVoiceMode(txModeWithTxOff),
+              "TX off: the TX-slice mode test is false — CWX/DVK close, which is "
+              "right, there is nothing to key");
+        check(dvkIndicatorBlocker(isVoiceMode(txModeWithTxOff),
+                                  /*licenseSeen=*/false, /*licenseEnabled=*/false)
+                  == DvkIndicatorBlocker::TxModeNotVoice,
+              "TX off: the DVK gate names the mode as its blocker");
+        check(isVoiceMode(activeModeUsb),
+              "TX off while listening on USB: the ACTIVE slice's mode is still a "
+              "voice mode, so the ASR indicator stays available (#4825)");
+
+        // The row may now disagree with itself, and that is the intended
+        // outcome, not a regression: the indicators answer about two slices.
+        check(isVoiceMode(activeModeUsb) != isVoiceMode(txModeWithTxOff),
+              "the ASR and DVK indicators can disagree — they read different "
+              "slices, so a consistent-looking row is not the invariant");
+
+        // Mode gate itself is UNCHANGED: voice only. ASR in CW or DIGx would
+        // have nothing intelligible to transcribe.
+        check(!isVoiceMode(QStringLiteral("CW")),
+              "active slice in CW: ASR indicator stays dimmed (nothing to transcribe)");
+        check(!isVoiceMode(QStringLiteral("CWL")),
+              "active slice in CWL: ASR indicator stays dimmed");
+        check(isCwMode(QStringLiteral("CW")) && isCwMode(QStringLiteral("CWU"))
+                  && isCwMode(QStringLiteral("CWL")),
+              "CW decoder gate accepts legacy CW plus explicit CWU/CWL names");
+        check(!isVoiceMode(QStringLiteral("DIGU")) && !isVoiceMode(QStringLiteral("DIGL")),
+              "active slice in DIGU/DIGL: ASR indicator stays dimmed");
+        check(!isVoiceMode(QStringLiteral("RTTY")),
+              "active slice in RTTY: ASR indicator stays dimmed");
+        check(!isVoiceMode(QStringLiteral("FDVU")),
+              "active slice in FreeDV: ASR indicator stays dimmed (RADAE-encoded, "
+              "not acoustic speech)");
+
+        // The whole voice family, so a later edit cannot quietly drop one.
+        for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
+                                    QStringLiteral("AM"),  QStringLiteral("SAM"),
+                                    QStringLiteral("FM"),  QStringLiteral("NFM"),
+                                    QStringLiteral("DFM")}) {
+            check(isVoiceMode(mode),
+                  "voice family member is a voice mode for both indicators");
+        }
+
+        // No active slice at all: an empty mode is not a voice mode, so the
+        // indicator dims. Whether that also CLOSES an open panel is a separate
+        // decision, pinned in the next block.
+        check(!isVoiceMode(QString()),
+              "no active slice: empty mode is not a voice mode — ASR dims");
+    }
+
+    // ---- Copy Assist auto-hide: what may tear down a RUNNING transcription ----
+    //
+    // Hiding the panel calls setAsrEnabled(false) — the audio tap is dropped and
+    // Enable is unticked — and updateKeyerAvailability() only ever hides, never
+    // shows. So a hide the operator did not ask for cannot be undone by any
+    // later refresh, which is why every clause of this predicate exists to say
+    // NO. Two of them were regressions caught in review on this PR, and this
+    // block is what stops them coming back.
+    {
+        const QString usb = QStringLiteral("USB");
+        const QString cw  = QStringLiteral("CW");
+
+        // The one case that SHOULD tear down: the operator selected a live
+        // slice that carries nothing transcribable, with no rebuild in flight.
+        check(shouldAutoHideCopyAssist(/*panelVisible=*/true,
+                                       /*haveActiveSlice=*/true, cw,
+                                       /*bandRecallInFlight=*/false),
+              "operator selects a live CW slice: an open panel closes — this is "
+              "the auto-hide's whole purpose (#4825)");
+
+        // Nothing open, nothing to tear down.
+        check(!shouldAutoHideCopyAssist(false, true, cw, false),
+              "panel already closed: nothing to hide");
+
+        // A voice slice never closes it, recall or not.
+        check(!shouldAutoHideCopyAssist(true, true, usb, false),
+              "live USB slice: the panel stays open");
+
+        // #4158 / single-slice band recall, and disconnect: the slice is ABSENT.
+        // band_persistence drops the slice and re-creates it under the same id a
+        // moment later; on a single-slice setup that empties slices() and lands
+        // here. Closing would stop transcription on every band change and never
+        // restore it.
+        check(!shouldAutoHideCopyAssist(true, /*haveActiveSlice=*/false,
+                                        QString(), false),
+              "no active slice (single-slice band recall, or disconnect): the "
+              "panel is left alone — an absent slice is not a mode change");
+
+        // #4158 again, one slice further along, and the regression this PR's
+        // review caught second: with a SECOND slice on the pan, onSliceRemoved()
+        // re-selects it (slices.first()) instead of taking the empty-slices
+        // branch, so the gate is handed a live CW slice mid-rebuild and
+        // haveActiveSlice no longer protects anything. Only the recall window
+        // tells this apart from the operator clicking that CW slice themselves.
+        check(!shouldAutoHideCopyAssist(true, /*haveActiveSlice=*/true, cw,
+                                        /*bandRecallInFlight=*/true),
+              "band recall in flight with a surviving CW slice: the panel is "
+              "left alone — Copy Assist survives a band change on a multi-slice "
+              "pan too (#4932 review)");
+
+        // The guard is scoped to the recall window, not a blanket suppression:
+        // once it expires, selecting that same CW slice closes the panel again.
+        check(shouldAutoHideCopyAssist(true, true, cw, false)
+                  != shouldAutoHideCopyAssist(true, true, cw, true),
+              "the band-recall window is the ONLY thing separating those two "
+              "cases — remove it and a band change stops transcription");
+    }
+
+    // ---- receiveOnlyModes: the second key-on guard -------------------------
+    //
+    // A radio that transmits, just not in the mode it is in right now — WFM on
+    // an IC-705, which covers 76-108 MHz broadcast and whose transmitter does
+    // not follow (#5040). canTransmit cannot express that: it would disable the
+    // whole transmit surface on a radio that keys perfectly well one mode away.
+    //
+    // The DECISION is pinned here, away from the Icom plumbing that produces
+    // the list, because it is what every key path asks:
+    // RadioModel::refuseKeyInReceiveOnlyMode() is the only thing that can roll
+    // back TransmitModel's optimistic MOX/TUNE state, and it makes that decision
+    // through this function (#5106 review).
+    {
+        RadioCapabilities rxOnlyWfm;
+        rxOnlyWfm.canTransmit = true;          // the radio DOES transmit...
+        rxOnlyWfm.receiveOnlyModes = {QStringLiteral("WFM")};   // ...just not here
+
+        check(modeIsReceiveOnly(rxOnlyWfm, QStringLiteral("WFM")),
+              "a listed mode refuses the key");
+        check(!modeIsReceiveOnly(rxOnlyWfm, QStringLiteral("USB")),
+              "and an unlisted one does not — the radio still transmits");
+        // The CW spelling an Icom actually reports. A guard that matched on a
+        // prefix, or on the older neutral "CW", would refuse the key in the mode
+        // operators spend the most time transmitting in.
+        check(!modeIsReceiveOnly(rxOnlyWfm, QStringLiteral("CWU"))
+                  && !modeIsReceiveOnly(rxOnlyWfm, QStringLiteral("CWL"))
+                  && !modeIsReceiveOnly(rxOnlyWfm, QStringLiteral("CW")),
+              "CW keys normally in every spelling — this guard is exact-match, "
+              "not a family of modes");
+        // The automation bridge upper-cases what it is handed; nothing promises
+        // the neutral vocabulary arrives that way at every other seam.
+        check(modeIsReceiveOnly(rxOnlyWfm, QStringLiteral("wfm")),
+              "the match is case-insensitive");
+        // Asked before a slice exists — the guard must stay OPEN. Refusing on
+        // an empty mode would deny keying on any path that runs before the TX
+        // slice is known.
+        check(!modeIsReceiveOnly(rxOnlyWfm, QString()),
+              "no slice, no claim: an empty mode is not a receive-only mode");
+
+        // And the default every shipping backend but Icom reports: inert.
+        RadioCapabilities plain;
+        plain.canTransmit = true;
+        check(!modeIsReceiveOnly(plain, QStringLiteral("WFM")),
+              "an empty list refuses nothing — adding this field changed no "
+              "existing radio's keying");
+
+        RadioModel sim;
+        sim.connectToRadio(simInfo());
+        check(sim.backendCapabilities().receiveOnlyModes.isEmpty(),
+              "the simulator declares no receive-only modes either");
     }
 
     if (g_failures == 0)

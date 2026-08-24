@@ -12,7 +12,7 @@ layout(std140, binding = 0) uniform Uniforms {
     float padding3;
     float scrollSampleOffsetUnit;
     float texelHeightUnit;
-    float padding6;
+    float waterfallRows;
     float padding7;
 };
 
@@ -28,12 +28,12 @@ void main()
     // rowOffset advances as soon as a row arrives. The residual one-row sample
     // offset starts at the prior ring position and closes to zero over the row
     // interval, preserving the previous frame at the handoff.
-    float physicalY = fract(
-        v_uv.y + rowOffset + scrollSampleOffsetUnit);
     float unit = max(texelHeightUnit, 0.000001);
-    float texel = physicalY / unit - 0.5;
-    float base = floor(texel);
-    float f = fract(texel);
+    float rows = max(waterfallRows, 1.0);
+    float logicalTexel =
+        (v_uv.y + scrollSampleOffsetUnit) / unit - 0.5;
+    float base = floor(logicalTexel);
+    float f = fract(logicalTexel);
     float f2 = f * f;
     float f3 = f2 * f;
 
@@ -44,10 +44,14 @@ void main()
     float w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
     float w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
     float w3 = f3 / 6.0;
-    float y0 = fract((base - 0.5) * unit);
-    float y1 = fract((base + 0.5) * unit);
-    float y2 = fract((base + 1.5) * unit);
-    float y3 = fract((base + 2.5) * unit);
+    float y0 = fract(rowOffset
+        + (clamp(base - 1.0, 0.0, rows - 1.0) + 0.5) * unit);
+    float y1 = fract(rowOffset
+        + (clamp(base,       0.0, rows - 1.0) + 0.5) * unit);
+    float y2 = fract(rowOffset
+        + (clamp(base + 1.0, 0.0, rows - 1.0) + 0.5) * unit);
+    float y3 = fract(rowOffset
+        + (clamp(base + 2.0, 0.0, rows - 1.0) + 0.5) * unit);
     fragColor =
           texture(tex, vec2(v_uv.x, y0)) * w0
         + texture(tex, vec2(v_uv.x, y1)) * w1

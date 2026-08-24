@@ -23,7 +23,7 @@ AetherSDR currently supports these control paths:
 - **Built-in keyboard shortcuts** for tuning, audio, transmit, and other common actions.
 - **Custom keyboard bindings** through the shortcut editor.
 - **FlexControl USB tuning knob** through the serial-control path.
-- **MIDI controllers** with learn mode, profiles, and relative-encoder support.
+- **MIDI controllers** with learn mode, manual mapping entry, profiles you can import and export, and relative-encoder support.
 - **USB HID encoder devices** including:
   - Icom RC-28
   - Griffin PowerMate
@@ -392,8 +392,12 @@ The MIDI dialog lets you:
 - Refresh the port list
 - Turn on **Auto-connect on startup**
 - Use **Learn** mode to bind a control by moving it
+- Use **Manual…** to type in a binding yourself
+- Edit any existing binding with the **✎** button on its row
 - Save named profiles
 - Load saved profiles
+- Use **Import…** to bring in a profile file, including a mapping supplied by your controller's vendor
+- Use **Export…** to write the current bindings out as a file you can keep or share
 - Clear all bindings if you want to start over
 
 ### What kinds of parameters you can control
@@ -438,6 +442,38 @@ For sliders, leave **Relative** off and use normal absolute mode.
 
 Use **Invert** if the control moves the opposite way from what feels natural.
 
+### Entering a binding manually
+
+Learn is the easiest path, but sometimes typing the binding in directly is better:
+
+- Some controllers send **more than one MIDI message for a single press**. Learn
+  captures whichever message arrives first, which may not be the one you want.
+- You may want to set up bindings from the controller's manual **before the
+  device is connected**.
+- A binding Learn captured may simply need a small correction.
+
+To add a binding by hand, select the parameter as usual and click **Manual…**
+instead of Learn. Enter the channel, the message type (**Note On**,
+**Control Change**, or **Pitch Bend**), and the note or CC number from your
+controller's documentation, then click **OK**. The binding behaves exactly like
+a learned one and is saved immediately.
+
+To correct an existing binding, click the **✎** button on its row. The same form
+opens with the current values filled in — change what you need and click **OK**.
+
+A few details worth knowing:
+
+- **Channel "Any"** matches the message on every MIDI channel. Learn always binds
+  the specific channel it heard, so "Any" is available only through manual entry.
+- If the source you enter is **already bound to another parameter**, AetherSDR
+  asks before replacing it. Two bindings on the same source cannot both respond,
+  so the dialog never lets one silently disable the other.
+- For key and button targets there is no separate Note Off entry: a **Note On**
+  binding automatically follows the release too.
+- **Pitch Bend** messages carry no number, so that field is disabled.
+- The **Relative** checkbox is only meaningful for Control Change bindings, and
+  it is pre-checked for you when you bind the `VFO Tune Knob` to a CC.
+
 ### CW and PTT from MIDI
 
 MIDI can do more than knobs and sliders. It can also be used for:
@@ -458,6 +494,37 @@ Profiles are useful when you want one controller for different jobs. For example
 - A CW profile
 
 Save the profile after you finish a layout so you can return to it quickly later.
+
+### Importing and exporting profiles
+
+Profiles are ordinary files, so a finished mapping can move between machines —
+or come ready-made from the people who built your controller.
+
+**Import…** reads a profile file and stores it under the file's name. Two kinds
+of file are accepted, and AetherSDR works out which one it is by looking inside:
+
+- An **AetherSDR profile** written by **Export…** on this or another machine.
+- A **SmartSDR ".map" file**, the mapping format the SmartSDR iOS and Mac apps
+  use. Controller vendors publish these for their own devices, so a supported
+  controller can be set up by importing the vendor's file instead of binding
+  every control by hand.
+
+Importing never overwrites a profile you already have: a name that is already
+taken gets a numbered suffix. Importing also does not change your current
+bindings — the imported profile is stored and selected in the list, and you
+click **Load** to actually apply it.
+
+A vendor file usually describes more controls than AetherSDR has parameters
+for. Nothing is dropped quietly: the summary after an import tells you how many
+bindings came in, and lists by name every control that was skipped — controls
+with no AetherSDR equivalent, rows with values out of range, and duplicates
+where two controls asked for the same parameter. Expand the details to see the
+individual names.
+
+**Export…** writes your current bindings to a file you choose. That file
+imports back into AetherSDR unchanged, which makes it a convenient backup
+before you rework a layout, and an easy way to hand a working setup to someone
+running the same controller.
 
 ## Stream Deck integration
 

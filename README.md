@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.8.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.8.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -27,15 +27,16 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **KiwiSDR public-receiver browser** — find and connect to public KiwiSDR receivers worldwide through an API-policy-aware directory (diversity receive with receive-only TX inhibit)
 - **Aetherial Audio Channel Strip** — a unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and a per-side scope
 - **Six client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), DFNR (DeepFilterNet3), BNR (NVIDIA GPU AI — the Maxine denoiser in-process on a local NVIDIA RTX/GeForce GPU, Linux + Windows; see [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)), and MNR (macOS)
-- **DAX virtual audio + IQ** — 4 RX + 1 TX channels and raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
+- **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent — 8 on a FLEX-6700, 4 on 6500/6600/8600, 2 on 6300/6400) + 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, and an **APRS client** (station map, GPS beacon, messaging) with a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
-- **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with auto-mode switch
+- **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave broadcast schedule, and the KiwiSDR DX Community database, with auto-mode switch and per-feed spot colouring
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key & iambic paddles with full QSK, optional Quindar tones
 - **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding; CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, and an optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — it would force a macOS 15.5 floor on hardware that mostly cannot reach it (see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md))
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
+- **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several canvas windows if you want them; named workspaces recall which applets are open as well as where they sit, and can be bound to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **Built-in demo mode** — a synthetic backend that generates its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---
@@ -66,10 +67,28 @@ Works with any FlexRadio transceiver, including:
 - ML-, CL-, and RT-series devices
 
 Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
-power amplifier and TGXL (Tuner Genius XL) antenna tuner.
+power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
+radio seam entirely — ACOM S-series and SPE Expert (1.3K-FA / 1.5K-FA / 2K-FA)
+amplifiers over serial or ser2net TCP, and VK3AMP (600 W / 1000 W / 2000 W)
+amplifiers over TCP control with UDP telemetry.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
+
+**Other radio families** ride the vendor-neutral `IRadioBackend` seam. Neither
+is a supported family yet, and FlexRadio remains the supported target:
+
+- **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB voice,
+  CW/RTTY decoding, AX.25 packet, band switching with hardware filters, manual
+  notch filters, a host-side impulse noise blanker, host frequency calibration
+  and per-radio state restore (including AGC mode and threshold).
+- **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
+  on the IC-705 (receive, scope, transmit, FT8) and completed against a live
+  IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
+  The connect path asks the radio for its own CI-V address rather than assuming
+  one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
+  — an unrecognised model gets no scope and no transmit rather than optimistic
+  defaults.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -83,7 +102,7 @@ MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
 - Icom RC-28 USB remote encoder
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
-- MIDI controllers with learn mode, profiles, and relative-encoder support
+- MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
 - Elgato Stream Deck devices through the bundled macOS/Windows Stream Deck plugin
 - Stream Deck devices on Linux through the bundled StreamController plugin
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
@@ -279,20 +298,32 @@ That is the escape hatch if a GPU or driver renders the spectrum incorrectly —
 
 ### Wayland and XWayland
 
-On a Wayland session AetherSDR asks Qt for `wayland;xcb` — native Wayland when
-the platform plugin is available, XWayland otherwise. Native Wayland avoids the
-GLX `BadAccess` crash that XWayland can produce when opening child dialogs on
-some compositors, and renders correctly under fractional scaling instead of
-being bitmap-scaled by the compositor.
+On a Wayland session AetherSDR chooses the Qt platform based on whether a
+display is attached:
 
-If a compositor misbehaves under native Wayland, force XWayland:
+- **A display is connected** → `wayland;xcb` (native Wayland when the platform
+  plugin is available, XWayland otherwise). Native Wayland avoids the GLX
+  `BadAccess` crash that XWayland can produce when opening child dialogs on some
+  compositors, and renders correctly under fractional scaling instead of being
+  bitmap-scaled by the compositor.
+- **Headless** — no connected display, e.g. a remote Raspberry Pi reached over
+  VNC — → `xcb;wayland`. With no DRM scanout, native-Wayland hardware GL cannot
+  allocate a window surface and the spectrum renders black under an
+  `EGL_BAD_MATCH` error storm; XWayland allocates its buffers through the X
+  server and works. AetherSDR detects this from the DRM connector status and
+  flips the order automatically; the chosen platform is recorded at startup in
+  the log (`Platform: Wayland session, display presence …`).
+
+Setting `QT_QPA_PLATFORM` yourself always wins — override in either direction:
 
 ```bash
-QT_QPA_PLATFORM=xcb ./AetherSDR-*.AppImage
+QT_QPA_PLATFORM=xcb ./AetherSDR-*.AppImage            # force XWayland
+QT_QPA_PLATFORM='wayland;xcb' ./AetherSDR-*.AppImage  # force native Wayland
 ```
 
-Setting `QT_QPA_PLATFORM` yourself always wins — AetherSDR only supplies a
-default when the variable is unset.
+The second form is the way back to native Wayland on a headless session whose
+XWayland mishandles child dialogs (the GLX `BadAccess` above) — the automatic
+choice there is `xcb;wayland`, so you would otherwise be on XWayland.
 
 On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04 LTS at 6.4.2), install a newer Qt manually:
 
@@ -325,15 +356,24 @@ sudo cmake --install build
 Currently in flight:
 
 - **aetherd** — a vendor-neutral `IRadioBackend` seam so radio-family logic
-  lives behind a stable interface. Three backends ride it today (Flex, HL2,
-  and the demo simulator); the remaining step is the versioned protocol that
-  splits a headless engine from thin UI clients.
+  lives behind a stable interface. Four backends ride it today (Flex, HL2,
+  networked Icom, and the demo simulator); the remaining step is the versioned
+  protocol that splits a headless engine from thin UI clients.
 - **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam, now
   running four independent receivers, the SSB voice chain, CW/RTTY decoding,
-  AX.25 packet, band switching with hardware filters, memory channels and
+  AX.25 packet, band switching with hardware filters, memory channels, manual
+  notch filters, a host-side noise blanker, host frequency calibration and
   per-radio operating-state restore. Not yet a supported radio family:
   remaining work is wider mode coverage, panadapter parity with the Flex path,
   and hardening the raw-IQ DSP chain.
+- **Networked Icom** — an **early** CI-V/RS-BA1 backend on the same seam,
+  brought up on the IC-705 and IC-7300, now with a scheduled command plane and a
+  completed IC-7300MK2 control surface. Remaining work is transmit confirmation
+  beyond the 705, per-model SET-menu mapping, and audio gain/VOX/break-in.
+- **Workspace canvas** — an **experimental** alternative shell where pans and
+  applets are freely placed items across one or more canvas windows. Off by
+  default; remaining work is live cross-window drag and field time against the
+  Classic shell.
 - **AppSettings nested-JSON refactor** — the storage layer moved to SQLite with
   per-radio versioned feature documents; the remaining work is migrating the
   legacy flat keys.
@@ -366,7 +406,9 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
   [nigelfenton/Aether-gate](https://github.com/nigelfenton/Aether-gate).)*
 
 AetherSDR integrates radios that earn deep native support directly in-engine; the
-gate covers the long tail of legacy/CAT radios and dongles.
+gate covers the long tail of legacy/CAT radios and dongles. Networked Icoms now
+have an in-engine CI-V backend, so for those the gate is the fallback for models
+the native backend does not yet cover.
 
 ---
 

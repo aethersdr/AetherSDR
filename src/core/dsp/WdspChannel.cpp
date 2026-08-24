@@ -3,6 +3,7 @@
 #include <aether_wdsp.h>
 #include <fftw3.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -50,6 +51,23 @@ std::string wisdomPath()
 {
     namespace fs = std::filesystem;
     fs::path dir;
+    // Explicit override, consulted before anything else. This exists so a TEST
+    // process can be pointed at a build-local cache and be structurally unable
+    // to reach the operator's real one — see tests/TestWdspWisdomIsolation.cpp,
+    // which sets it before main() so it holds for a test binary run DIRECTLY,
+    // not only for one launched through ctest.
+    //
+    // Redirecting beats suppressing the export: the tests keep a persistent
+    // cache of their own, so repeat runs import instead of re-measuring, and
+    // there is no "did we remember to disable writing" question left to get
+    // wrong. Never set by the app.
+    if (const char* override = std::getenv("AETHER_WDSP_WISDOM_DIR");
+        override != nullptr && *override != '\0') {
+        dir = override;
+        std::error_code overrideEc;
+        fs::create_directories(dir, overrideEc);   // best-effort
+        return (dir / "wdsp-fftw-wisdom").string();
+    }
 #ifdef _WIN32
     if (const char* la = std::getenv("LOCALAPPDATA")) dir = la;
 #else
@@ -66,10 +84,67 @@ std::string wisdomPath()
     return (dir / "wdsp-fftw-wisdom").string();
 }
 
+// Test/CI escape hatch: bound how long FFTW may spend measuring each plan.
+//
+// WDSP builds every FFT with FFTW_PATIENT, which is right for a radio session
+// and ruinous for a test suite: the first OpenChannel in a cold process spends
+// 20 s (macOS, arm64) to 190 s (CI, x86_64) measuring plans, and a CI container
+// starts cold on every single run. That cost is not the tests' own work and it
+// buys them nothing -- a correctness test cares that the FFT is right, never
+// that it is optimal.
+//
+// AETHER_WDSP_FFTW_TIMELIMIT=<seconds> caps the planner via FFTW's own
+// documented global setting, so no vendored WDSP source has to be patched to
+// reach the flag it hardcodes. Measured on this machine, 15 representative
+// PATIENT plans: 4.79 s unbounded, 0.02 s at 0.001. The bound is approximate
+// and applies PER PLAN, not to the process -- FFTW cannot interrupt a single
+// measurement -- so the total still scales with the number of plans. Do not
+// read a 0.001 limit as "planning takes 1 ms".
+//
+// UNSET IS THE SHIPPING PATH. A radio session never sets this and gets the
+// full PATIENT plans it always had.
+//
+// A bounded process also NEVER WRITES THE WISDOM CACHE (see open()). Plans
+// measured under a time limit are worse than the ones a real session wants,
+// and the cache is shared with the app -- exporting them would hand the
+// operator's radio the test suite's rushed plans. That is the whole reason
+// this is one knob and not two: it is not possible to bound the planner and
+// forget to isolate the cache.
+double plannerTimeLimitSeconds()
+{
+    static const double limit = [] {
+        const char* raw = std::getenv("AETHER_WDSP_FFTW_TIMELIMIT");
+        if (raw == nullptr || *raw == '\0')
+            return -1.0;
+        char* end = nullptr;
+        const double parsed = std::strtod(raw, &end);
+        // A malformed value is ignored rather than treated as 0: silently
+        // rushing every plan because someone typed "yes" would be a very
+        // quiet way to ship bad plans.
+        if (end == raw || !std::isfinite(parsed) || parsed < 0.0)
+            return -1.0;
+        return parsed;
+    }();
+    return limit;
+}
+
+// True when this process is running with a bounded planner, i.e. its measured
+// plans are not good enough to publish to the shared cache.
+bool plannerIsBounded()
+{
+    return plannerTimeLimitSeconds() >= 0.0;
+}
+
 void loadWisdomOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] { fftw_import_wisdom_from_filename(wisdomPath().c_str()); });
+    std::call_once(flag, [] {
+        // Before the first plan, so it governs every one of them. FFTW's
+        // default is FFTW_NO_TIMELIMIT and we only ever move off it here.
+        if (plannerIsBounded())
+            fftw_set_timelimit(plannerTimeLimitSeconds());
+        fftw_import_wisdom_from_filename(wisdomPath().c_str());
+    });
 }
 
 // Write the wisdom cache NOW. Called at the end of open(), under g_setupMutex,
@@ -275,9 +350,57 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
 
     const uint64_t allocationsBefore = wdspPortAllocationSequence();
     int wdspError = 0;
+
+    // ── Noise blanker, ahead of the channel ───────────────────────────────
+    //
+    // Inside the allocation-guarded window deliberately: xanb() allocates
+    // nothing today, and if a future WDSP snapshot changes that, this reports
+    // AllocationViolation rather than letting a malloc land on the real-time
+    // path unnoticed.
+    const float* channelI = inputI.data();
+    const float* channelQ = inputQ.data();
+    if (m_nbActive.load(std::memory_order_relaxed)) {
+        if (m_nbHold.load(std::memory_order_relaxed)) {
+            // Transmitting. Skip the stage entirely — see setNoiseBlankerHold.
+        } else {
+            // DELIBERATELY NOT FLUSHED on the way out of a hold, and this is
+            // the whole point of holding rather than muting. The stage was
+            // SKIPPED while held, not fed, so its running average still holds
+            // the pre-transmit signal level and it is already armed for the
+            // first receive sample.
+            //
+            // Flushing here would reset that average to full scale, and at
+            // backtau = 0.05 s nothing could exceed threshold * average for
+            // ~200 ms — an unarmed blanker at the start of every receive
+            // period, which is exactly the failure aether_wdsp.h's ARMING
+            // DELAY note warns about and exactly the window this hold exists
+            // to protect. Measured: with a flush here the blanked/unblanked
+            // impulse peak ratio was 1.000 for the first 200 ms after each
+            // transmit — bit-identical to the blanker being switched off —
+            // against 0.43 once settled. Without it, 0.52 immediately.
+            //
+            // What the delay line carries across the hold is trans_count +
+            // adv_count samples: 8 at tau/advtime = 0.0001 s, or 0.17 ms of
+            // pre-transmit audio. That is not worth de-arming the stage for.
+            const std::size_t n = inputI.size();
+            for (std::size_t k = 0; k < n; ++k) {
+                m_nbInterleaved[2 * k] = static_cast<double>(inputI[k]);
+                m_nbInterleaved[2 * k + 1] = static_cast<double>(inputQ[k]);
+            }
+            // In place: ANB reads and writes the same buffer.
+            xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            for (std::size_t k = 0; k < n; ++k) {
+                m_nbI[k] = static_cast<float>(m_nbInterleaved[2 * k]);
+                m_nbQ[k] = static_cast<float>(m_nbInterleaved[2 * k + 1]);
+            }
+            channelI = m_nbI.data();
+            channelQ = m_nbQ.data();
+        }
+    }
+
     fexchange2(m_channelId,
-               const_cast<float*>(inputI.data()),
-               const_cast<float*>(inputQ.data()),
+               const_cast<float*>(channelI),
+               const_cast<float*>(channelQ),
                outputLeft.data(), outputRight.data(), &wdspError);
     const uint64_t allocationsAfter = wdspPortAllocationSequence();
     m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
@@ -385,10 +508,155 @@ bool WdspChannel::setShift(double shiftHz) noexcept
         // Running the stage at 0 Hz costs a pointless rotate per sample, so
         // switch it off when there is no offset to apply.
         SetRXAShiftRun(m_channelId, shiftHz != 0.0 ? 1 : 0);
+        m_shiftHz = shiftHz;
+        // The notch database tracks the shift separately and WDSP never links
+        // the two itself. Both reference clients set them together (Thetis
+        // radio.cs RXOsc sets SetRXAShiftFreq and RXANBPSetShiftFrequency on
+        // the same line); setting only the first leaves every notch offset by
+        // the shift, which stays invisible until someone tunes off centre.
+        applyNotchShift();
     }
-    m_shiftHz = shiftHz;
     endControlOperation();
     return true;
+}
+
+void WdspChannel::applyNotchShift() noexcept
+{
+    // Caller holds g_setupMutex.
+    //
+    // The SAME value the shift stage got, not a negation of it. Thetis sets
+    // both on one line from one variable (radio.cs RXOsc) for the same reason:
+    // the notch database is not a second opinion about the shift, it is the
+    // copy the filter-mask rebuild reads.
+    RXANBPSetShiftFrequency(m_channelId, m_shiftHz);
+}
+
+bool WdspChannel::addNotch(int index, double centerHz, double widthHz,
+                           bool active) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0.0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPAddNotch(m_channelId, index, centerHz, widthHz,
+                                active ? 1 : 0);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::editNotch(int index, double centerHz, double widthHz,
+                            bool active) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0.0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPEditNotch(m_channelId, index, centerHz, widthHz,
+                                 active ? 1 : 0);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::removeNotch(int index) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPDeleteNotch(m_channelId, index);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::setNotchesEnabled(bool on) noexcept
+{
+    if (m_config.direction != Direction::Receive || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXANBPSetNotchesRun(m_channelId, on ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setNotchTuneFrequency(double tuneHz) noexcept
+{
+    if (m_config.direction != Direction::Receive || !std::isfinite(tuneHz)
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXANBPSetTuneFrequency(m_channelId, tuneHz);
+    }
+    endControlOperation();
+    return true;
+}
+
+int WdspChannel::notchCount() const noexcept
+{
+    if (m_config.direction != Direction::Receive)
+        return 0;
+    // RXANBPGetNumNotches takes the channel's own csDSP, so it is safe against
+    // the DSP thread — but not against close() on another thread, which frees
+    // the NOTCHDB under g_setupMutex. Every other accessor on this class either
+    // goes through beginControlOperation() or takes that lock; these two are
+    // read-only and cheap, so the lock is all they need to match the contract.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return 0;
+    int count = 0;
+    RXANBPGetNumNotches(m_channelId, &count);
+    return count;
+}
+
+bool WdspChannel::notchAt(int index, double* centerHz, double* widthHz,
+                          bool* active) const noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0)
+        return false;
+    // See notchCount() — same interlock, same reason.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return false;
+    double center = 0.0;
+    double width = 0.0;
+    int isActive = 0;
+    if (RXANBPGetNotch(m_channelId, index, &center, &width, &isActive) != 0)
+        return false;
+    if (centerHz != nullptr) *centerHz = center;
+    if (widthHz != nullptr) *widthHz = width;
+    if (active != nullptr) *active = isActive != 0;
+    return true;
+}
+
+double WdspChannel::minimumNotchWidthHz() const noexcept
+{
+    // WDSP's own min_notch_width() (nbp.c) for the window type RXA.c creates the
+    // stage with (wintype 0). Mirrored here rather than exposed from WDSP
+    // because the value is needed to *offer* widths, before any notch exists.
+    if (m_config.direction != Direction::Receive || m_config.filterTaps <= 0
+        || m_config.dspSampleRate <= 0) {
+        return 0.0;
+    }
+    return 1600.0 / (static_cast<double>(m_config.filterTaps) / 256.0)
+           * (static_cast<double>(m_config.dspSampleRate) / 48000.0);
 }
 
 double WdspChannel::meter(Meter which) const noexcept
@@ -419,11 +687,6 @@ uint64_t WdspChannel::allocationSequenceForTest() noexcept
 uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 {
     return wdspPortOutstandingAllocations();
-}
-
-std::string WdspChannel::wisdomCachePathForTest()
-{
-    return wisdomPath();
 }
 
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
@@ -465,6 +728,89 @@ int WdspChannel::wdspMode(Mode mode) noexcept
     return static_cast<int>(mode);
 }
 
+double WdspChannel::noiseBlankerThresholdForLevel(int level) noexcept
+{
+    const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
+    // Geometric from 100 down to 4 — see the header. 0.04 is 4/100, so the
+    // exponent form makes the endpoints readable: 100 * 0.04^0 = 100 and
+    // 100 * 0.04^1 = 4, with the midpoint at 100 * 0.2 = 20.
+    return 100.0 * std::pow(0.04, clamped / 100.0);
+}
+
+void WdspChannel::openNoiseBlanker() noexcept
+{
+    if (m_nbOpen || m_config.direction != Direction::Receive) {
+        return;
+    }
+    // Staging buffers first: processIq() may run the moment the channel starts,
+    // and it must never be the thing that sizes them.
+    m_nbInterleaved.assign(2 * m_config.inputBlockSize, 0.0);
+    m_nbI.assign(m_config.inputBlockSize, 0.0f);
+    m_nbQ.assign(m_config.inputBlockSize, 0.0f);
+
+    // Created whether or not the operator has it switched on, so that enabling
+    // it later is a run-flag store rather than an allocation on a live channel.
+    // Times are pihpsdr's (receiver.c create_anbEXT); only the threshold is
+    // ours to move, because only the threshold has a control above the seam.
+    create_anbEXT(m_channelId,
+                  m_config.noiseBlankerEnabled ? 1 : 0,
+                  static_cast<int>(m_config.inputBlockSize),
+                  static_cast<double>(m_config.inputSampleRate),
+                  0.0001,   // tau       — signal<->zero transition time
+                  0.0001,   // hangtime  — hold at zero after the impulse
+                  0.0001,   // advtime   — blank this far ahead of it
+                  0.05,     // backtau   — averaging time for the trigger level
+                  noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
+    m_nbOpen = true;
+    m_nbActive.store(m_config.noiseBlankerEnabled, std::memory_order_relaxed);
+}
+
+void WdspChannel::closeNoiseBlanker() noexcept
+{
+    if (!m_nbOpen) {
+        return;
+    }
+    m_nbActive.store(false, std::memory_order_relaxed);
+    destroy_anbEXT(m_channelId);
+    m_nbOpen = false;
+}
+
+bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive) {
+        return false;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    m_config.noiseBlankerEnabled = on;
+    m_config.noiseBlankerLevel = std::clamp(level, 0, 100);
+    if (m_nbOpen) {
+        SetEXTANBThreshold(m_channelId,
+                           noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
+        if (on) {
+            // Flush BEFORE running. Whatever the delay line holds is a fragment
+            // of the last enabled period, and on the HL2 that can be a
+            // transmit-era gap; playing it out is an audible tick at the exact
+            // moment the operator asked for less noise.
+            flush_anbEXT(m_channelId);
+        }
+        SetEXTANBRun(m_channelId, on ? 1 : 0);
+    }
+    m_nbActive.store(on && m_nbOpen, std::memory_order_relaxed);
+    endControlOperation();
+    return true;
+}
+
+void WdspChannel::setNoiseBlankerHold(bool hold) noexcept
+{
+    // No beginControlOperation(): this is called from the same thread that
+    // drives processIq() on a transmit edge, and taking the control handshake
+    // there would deadlock against a callback in flight. Both stores are
+    // atomic and the flush they schedule happens inside processIq() itself.
+    m_nbHold.store(hold, std::memory_order_relaxed);
+}
+
 void WdspChannel::open() noexcept
 {
     const std::scoped_lock setupLock(g_setupMutex);
@@ -502,8 +848,16 @@ void WdspChannel::open() noexcept
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.
-    exportWisdomNow();
-    armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    // Bounded planner => rushed plans => do not publish them. See
+    // plannerTimeLimitSeconds(): this cache is shared with the running app, so
+    // a test run that exported would degrade the operator's next connect.
+    if (!plannerIsBounded()) {
+        exportWisdomNow();
+        armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    }
+    // Before the channel starts, so the first block through processIq() finds
+    // its staging buffers sized and the stage already created.
+    openNoiseBlanker();
     // Fully configured -- now run. dmode 0: nothing to flush on the way up.
     SetChannelState(m_channelId, 1, 0);
     m_open = true;
@@ -521,6 +875,10 @@ void WdspChannel::close() noexcept
     // entirely, which is both a click on the way out and a race.
     SetChannelState(m_channelId, 0, 1);
     CloseChannel(m_channelId);
+    // After the channel has stopped and drained: while it is still running a
+    // callback can be inside processIq(), and destroying the stage under one
+    // frees the delay line out from under xanb().
+    closeNoiseBlanker();
     m_open = false;
 }
 

@@ -39,6 +39,77 @@ void BandPlanManager::loadPlans()
         saved = m_plans.first().name;
 
     setActivePlan(saved);
+    loadKiwiDxSpots();
+}
+
+void BandPlanManager::loadKiwiDxSpots()
+{
+    m_kiwiDxSpots.clear();
+
+    QFile f(":/dist.dx_community.json");
+    if (!f.open(QIODevice::ReadOnly)) {
+        return;
+    }
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError) {
+        return;
+    }
+
+    QJsonObject root = doc.object();
+    QJsonArray dxArray = root.value("dx").toArray();
+    for (const auto& itemVal : dxArray) {
+        if (!itemVal.isArray()) continue;
+        QJsonArray entry = itemVal.toArray();
+        if (entry.size() < 4) continue;
+
+        KiwiDxSpot spot;
+        const double freqKhz = entry.at(0).toDouble();
+        if (freqKhz <= 0.0) continue;
+        spot.freqMhz = freqKhz / 1000.0;
+        spot.mode = entry.at(1).toString();
+        spot.name = entry.at(2).toString();
+        spot.notes = entry.at(3).toString();
+
+        if (entry.size() >= 5 && entry.at(4).isObject()) {
+            QJsonObject opts = entry.at(4).toObject();
+            if (opts.contains("lo")) spot.loOffsetHz = opts.value("lo").toInt();
+            if (opts.contains("hi")) spot.hiOffsetHz = opts.value("hi").toInt();
+            if (opts.contains("b0")) spot.timeBegin = opts.value("b0").toInt();
+            if (opts.contains("e0")) spot.timeEnd = opts.value("e0").toInt();
+            if (opts.contains("d0")) spot.dowMask = opts.value("d0").toInt();
+            if (opts.contains("p"))  spot.extParam = opts.value("p").toString();
+        }
+
+        m_kiwiDxSpots.append(spot);
+    }
+
+    emit kiwiDxSpotsChanged();
+}
+
+QString BandPlanManager::normalizeSpotMode(const QString& rawMode)
+{
+    const QString mode = rawMode.trimmed().toUpper();
+    if (mode == QStringLiteral("CWN") || mode == QStringLiteral("CW")) {
+        return QStringLiteral("CW");
+    }
+    if (mode == QStringLiteral("AMN") || mode == QStringLiteral("AM") || mode == QStringLiteral("DRM")) {
+        return QStringLiteral("AM");
+    }
+    if (mode == QStringLiteral("SAM") || mode == QStringLiteral("SAL") || mode == QStringLiteral("SAU")) {
+        return QStringLiteral("SAM");
+    }
+    if (mode == QStringLiteral("NBFM") || mode == QStringLiteral("FM")) {
+        return QStringLiteral("FM");
+    }
+    if (mode == QStringLiteral("NFM") || mode == QStringLiteral("DFM")
+        || mode == QStringLiteral("USB") || mode == QStringLiteral("LSB")
+        || mode == QStringLiteral("RTTY") || mode == QStringLiteral("DIGU")
+        || mode == QStringLiteral("DIGL") || mode == QStringLiteral("FDV")) {
+        return mode;
+    }
+    return QString();
 }
 
 void BandPlanManager::setActivePlan(const QString& name)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBlackMode.h"
+#include "RfGainPresentation.h"
 
 #include <limits>
 #include <algorithm>
@@ -31,6 +32,7 @@ class QVariantAnimation;
 class QSoundEffect;
 
 #ifdef AETHER_GPU_SPECTRUM
+#include "SpectrumRhiFailureState.h"
 #include <QRhiWidget>
 #include <rhi/qrhi.h>
 #define SPECTRUM_BASE_CLASS QRhiWidget
@@ -173,9 +175,8 @@ public:
     // counters after the read so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
     Q_INVOKABLE QVariantMap renderSchedulerStatsSnapshot(bool reset);
-    // QRhiWidget surface geometry for `get rhi`: widget size, devicePixelRatio,
-    // and (on GPU builds) the pinned fixedColorBufferSize so automation can
-    // assert it stays even-aligned under a fractional QT_SCALE_FACTOR (#4091).
+    // QRhiWidget diagnostics for `get rhi`: widget size, devicePixelRatio,
+    // color-buffer sizing mode, and native-widget topology where applicable.
     Q_INVOKABLE QVariantMap automationRhiSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssReset(bool kiwiStream);
@@ -188,6 +189,11 @@ public:
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
     Q_INVOKABLE QVariantMap traceDebugSnapshot();
+    // Every value the Display panel owns, as one flat map keyed by the panel's
+    // own control names. Exists so "Clone to all Pans" (and any future
+    // display-preference change) is provable field-by-field over the automation
+    // bridge instead of by comparing screenshots. See `get display`.
+    Q_INVOKABLE QVariantMap automationDisplaySettingsSnapshot() const;
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
@@ -316,6 +322,15 @@ public:
         return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
     }
     bool noiseFloorAutoAdjustEnabled() const { return m_noiseFloorEnable; }
+    // False when the connected backend decodes its scope at a FIXED scale it
+    // does not accept range commands for (Icom CI-V). The auto-floor loop is
+    // built on the radio echoing a requested range back; with no echo it reads
+    // the unchanged floor as "not there yet" and steps the reference level
+    // again, forever. Kept separate from m_noiseFloorEnable, which is the
+    // OPERATOR's toggle — clobbering that would fight the overlay menu and
+    // persist to the next radio. See RadioCapabilities::radioOwnsDbmScale.
+    void setRadioOwnsDbmScale(bool on) { m_radioOwnsDbmScale = on; }
+    bool radioOwnsDbmScale() const { return m_radioOwnsDbmScale; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -381,6 +396,21 @@ public:
         }
         markOverlayDirty();
     }
+    void setRfGainPresentation(const QString& suffix, int neutralValue) {
+        const QString normalized = normalizedRfGainUnitSuffix(suffix);
+        if (m_rfGainUnitSuffix != normalized
+            || m_rfGainNeutralValue != neutralValue) {
+            m_rfGainUnitSuffix = normalized;
+            m_rfGainNeutralValue = neutralValue;
+            markOverlayDirty();
+        }
+    }
+    void setPreampIndicator(const QString& text) {
+        if (m_preampIndicator != text) {
+            m_preampIndicator = text;
+            markOverlayDirty();
+        }
+    }
     void setWideActive(bool on) {
         if (m_wideActive != on) {
             m_wideActive = on;
@@ -416,6 +446,8 @@ public:
     void setBandPlanFontSize(int pt) { m_bandPlanFontSize = pt; update(); }
     void setBandPlanShowSpots(bool on) { m_bandPlanShowSpots = on; update(); }
     bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
+    void setKiwiDxSpotsEnabled(bool on) { m_showKiwiDxSpots = on; markOverlayDirty(); update(); }
+    bool showKiwiDxSpots() const { return m_showKiwiDxSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; markOverlayDirty(); }
@@ -644,6 +676,17 @@ public:
     };
     void setTnfMarkers(const QVector<TnfMarker>& markers);
     void setTnfGlobalEnabled(bool on);
+    // What the connected radio can do with notches, from RadioCapabilities.
+    //
+    // maxNotches 0 removes the add-notch entries entirely — the control used to
+    // be offered on every backend while only a Flex did anything with it.
+    // hasDepth gates the depth and permanence submenus, which are radio-owned
+    // attributes a host-DSP null does not have. The width bounds clamp both the
+    // preset list and the vertical drag-resize, because a host-DSP notch has a
+    // real minimum width that WDSP enforces SILENTLY: ask for less and the
+    // overlay draws a narrower notch than the operator is hearing.
+    void setNotchCapabilities(int maxNotches, bool hasDepth,
+                              int minWidthHz, int maxWidthHz);
 
     struct SpotMarker {
         int    index;
@@ -734,8 +777,13 @@ signals:
 
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);
+    // Emitted when the user clicks an off-screen slice indicator. MainWindow
+    // owns the resulting activation and canonical pan recenter request.
+    void offScreenSliceCenterRequested(int sliceId);
     // Emitted when the user requests an absolute jump in the panadapter area.
     void frequencyClicked(double mhz);
+    // Emitted when user clicks on a KiwiSDR DX Community spot marker.
+    void kiwiSpotClicked(double freqMhz, const QString& mode, int loOffsetHz, int hiOffsetHz);
     // Emitted when the user makes an incremental tuning gesture such as
     // wheel tuning or VFO drag.
     void incrementalTuneRequested(double mhz);
@@ -815,10 +863,6 @@ protected:
     void initialize(QRhiCommandBuffer* cb) override;
     void render(QRhiCommandBuffer* cb) override;
     void releaseResources() override;
-    // Keep the RHI color buffer at an even-aligned device-pixel size so a
-    // fractional QT_SCALE_FACTOR (UiScalePercent ≠ 100) never hands the GPU
-    // driver odd texture extents on resize (#4091).
-    void updateFixedColorBufferSize();
     QSize fullFrameTextureSize() const;
 #else
     void paintEvent(QPaintEvent* event) override;
@@ -936,6 +980,7 @@ private:
     void setWaterfallLive(bool live);
     void startWaterfallScrollAnimation(float distanceRows = 1.0f);
     void stopWaterfallScrollAnimation();
+    void resetWfBlankerState();
     float waterfallScrollProgressRows() const;
     float waterfallPresentationMsPerRow() const;
     float waterfallTimeScaleMsPerRow() const;
@@ -1347,6 +1392,9 @@ private:
 
     // Noise floor auto-adjust
     bool  m_noiseFloorEnable{false};
+    // Defaults true so every existing backend is unaffected; only a backend
+    // that opts out (RadioCapabilities::radioOwnsDbmScale=false) disarms.
+    bool  m_radioOwnsDbmScale{true};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_flexNoiseFloorPosition{75};
     int   m_kiwiNoiseFloorPosition{75};
@@ -1703,11 +1751,15 @@ private:
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};
+    bool m_offScreenSliceCenterPressPending{false};
 
     // On-screen indicators (WNB, RF Gain)
     bool m_wnbActive{false};
     bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
+    QString m_rfGainUnitSuffix{QStringLiteral("dB")};
+    int m_rfGainNeutralValue = 0;
+    QString m_preampIndicator;
     bool m_wideActive{false};
 
     // HF propagation forecast overlay
@@ -1777,8 +1829,11 @@ private:
     int   m_wfBlankerRingIdx{0};
     int   m_wfBlankerRingCount{0};
     QVector<quint8> m_wfLastGoodLevels;
+    QVector<quint8> m_wfLastGoodSupplementalLevels;
+    WaterfallBlankerFrameBundle m_wfLastGoodFrames;
     int  m_bandPlanFontSize{6};  // 0 = off
     bool m_bandPlanShowSpots{true};
+    bool m_showKiwiDxSpots{false};
     BandPlanManager* m_bandPlanMgr{nullptr};
     bool m_singleClickTune{false};
     QPoint m_clickPressPos;        // for single-click-to-tune drag threshold
@@ -1842,6 +1897,13 @@ private:
 
     // ── TNF markers ────────────────────────────────────────────────────
     QVector<TnfMarker> m_tnfMarkers;
+    // Permissive defaults: a disconnected session keeps the notch controls it
+    // has always had rather than having them appear on connect. A connected
+    // backend narrows them — see setNotchCapabilities.
+    int  m_maxNotchFilters{1000};
+    bool m_notchHasDepth{true};
+    int  m_notchMinWidthHz{10};
+    int  m_notchMaxWidthHz{12000};
     bool m_tnfGlobalEnabled{true};
     QVector<SpotMarker> m_spotMarkers;
     QVector<SwrSweepPoint> m_swrSweepPoints;
@@ -1904,6 +1966,8 @@ private:
 
 #ifdef AETHER_GPU_SPECTRUM
     bool m_rhiInitialized{false};
+    bool m_rhiFailureForcedForAutomation{false};
+    SpectrumRhiFailureState m_rhiFailure;
 
     // Waterfall GPU resources
     QRhiGraphicsPipeline* m_wfPipeline{nullptr};
@@ -2032,6 +2096,8 @@ private:
 
     bool initWaterfallPipeline();
     void releaseWaterfallFramePipelineResources();
+    void reportRhiFailure(const QString& reason);
+    void clearRhiFailure();
     void initOverlayPipeline();
     void initSpectrumPipeline();
     void renderGpuFrame(QRhiCommandBuffer* cb, const QSize& logicalSize,

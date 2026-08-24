@@ -20,6 +20,7 @@
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
@@ -282,6 +283,16 @@ void MainWindow::showFlexControlDialog()
                 m_flexControlDialog->setPhysicalReady(false);
 #endif
         });
+#ifdef HAVE_SERIALPORT
+        connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
+                this, [this] {
+            // Same deep-link pattern as Settings → USB Cables… (#4940), but
+            // scrolled onto the FlexControl Tuning Knob group itself rather
+            // than just landing on top of the page (PR #5157 review).
+            if (RadioSetupDialog* dlg = openRadioSetupPage())
+                dlg->revealFlexControlSettings();
+        });
+#endif
         connect(m_flexControlDialog, &FlexControlDialog::physicalDisconnectRequested,
                 this, [this] {
 #ifdef HAVE_SERIALPORT
@@ -495,7 +506,7 @@ void MainWindow::handleFlexControlButton(int button, int action)
             QString panId = s->panId();
             if (panId.isEmpty())
                 panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-            const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+            const bool isCw = isCwMode(s->mode());
             const double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
             m_splitActive = true;
             m_splitRxSliceId = s->sliceId();
@@ -510,9 +521,10 @@ void MainWindow::handleFlexControlButton(int button, int action)
         // `cwx send` into a backend with no such verb is the "silently does
         // nothing" report, not a working control. The action stays assignable —
         // the binding is operator-scoped and outlives any one radio.
-        if (!m_radioModel.hasRadioSideCwKeyer()) {
+        if (!m_radioModel.hasRadioSideCwKeyer()
+            || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
-                          << "ignored: radio has no radio-side CW keyer";
+                          << "ignored: radio has no stored text-keyer macros";
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);
@@ -1013,7 +1025,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
                 QString panId = s->panId().isEmpty()
                     ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
                     : s->panId();
-                const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+                const bool isCw = isCwMode(s->mode());
                 m_splitActive    = true;
                 m_splitRxSliceId = s->sliceId();
                 m_radioModel.sendCommand(
@@ -1340,7 +1352,7 @@ int MainWindow::injectMidiVfoCcForAutomation(int value)
 
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 {
-    if (steps == 0)
+    if (steps == 0 || !UlanziDialMappings::isKnownWheelAction(actionId))
         return;
 
     if (actionId == "WheelFrequency") {
@@ -1476,7 +1488,9 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             rx->stepFilterWidth(steps);
         }
     } else if (actionId == "PanadapterZoom") {
-        const double baseFactor = steps > 0 ? 0.8 : 1.25;
+        // Rotary dial uses a finer per-detent factor (kRotaryPanZoomFactor vs
+        // keyboard kPanZoomFactor in MainWindowHelpers.h) for smooth spins.
+        const double baseFactor = steps > 0 ? (1.0 / kRotaryPanZoomFactor) : kRotaryPanZoomFactor;
         const double factor = std::pow(baseFactor, std::abs(steps));
         zoomActivePanadapter(factor);
     } else if (actionId == "WheelRfGain") {
@@ -2069,8 +2083,11 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
+    // Through the model, not sendCommand: the raw string only ever reached a
+    // Flex, so this MIDI binding silently did nothing on any other radio.
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.sendCommand(QString("radio set tnf_enabled=%1").arg(v > 0.5f ? 1 : 0)); });
+        [this](float v) { m_radioModel.tnfModel().requestGlobalTnfEnabled(v > 0.5f); },
+        [this]() -> float { return m_radioModel.tnfModel().globalEnabled() ? 1 : 0; });
 
     // Helper — reuse keyboard-shortcut handlers so MIDI bindings don't
     // duplicate any logic.  Each MIDI Trigger/Toggle that mirrors a
@@ -2327,9 +2344,9 @@ void MainWindow::wireExternalControllers()
         m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
         m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);
         // When the local iambic keyer is running, feed it the raw paddle
-        // state — it forwards to the radio AND drives the sidetone gate
-        // directly.  Otherwise pass straight through to the radio (radio's
-        // RF iambic is still authoritative for the on-air signal).
+        // state — it emits timed element edges AND drives the sidetone gate
+        // directly. Otherwise the paddle acts as a straight key. The backend
+        // decides whether those edges use a radio-side keyer or host IQ.
         if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
             m_iambicKeyer->setPaddleState(dit, dah);
         } else {

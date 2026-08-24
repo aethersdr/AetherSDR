@@ -9,7 +9,7 @@ namespace AetherSDR::hl2 {
 
 // The HL2 panadapter path: accumulate raw IQ (normalized [-1, 1)) into fixed
 // FFT frames and produce a DC-centered magnitude spectrum in dBFS. Ported from
-// the live-validated prototypes/hl2/spectrum.py — Hanning-windowed, per-frame DC
+// the live-validated tools/hl2/spectrum.py — Hanning-windowed, per-frame DC
 // removal (the direct-sampling ADC offset sits on I), coherent-gain normalized,
 // fftshifted so DC lands at the centre bin.
 //

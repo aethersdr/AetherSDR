@@ -77,9 +77,14 @@ public:
     void cycleStepDown();
 
     // Step the active slice's RX passband through the per-mode filter preset
-    // list. direction = +1 widens, -1 narrows. Routes through applyFilterPreset
-    // so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get mode-correct edge geometry.
-    void stepFilterWidth(int direction);
+    // list by index offset: +steps moves forward, -steps backward, scaled by
+    // magnitude and clamped at the ends. The shipped preset tables are all
+    // ascending, so + widens and - narrows (what filter_widen/filter_narrow
+    // rely on); a hand-edited FilterPresets_<mode> row is not guaranteed to be
+    // sorted, so the stepping is defined on index order, not on width. Routes
+    // through applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
+    // mode-correct edge geometry.
+    void stepFilterWidth(int steps);
 
     // Connect to transmit model for QSK (break_in) indicator.
     void setTransmitModel(class TransmitModel* txModel);
@@ -264,6 +269,7 @@ private:
     QPushButton*    m_simplexBtn{nullptr};
     QPushButton*    m_offsetUp{nullptr};
     QPushButton*    m_revBtn{nullptr};
+    bool            m_xfcHeldByThisControl{false};
 
     // Containers for show/hide on mode change
     QWidget*     m_agcContainer{nullptr};
@@ -310,6 +316,9 @@ private:
     int agcThresholdMinimum() const;
     int agcThresholdMaximum() const;
     void syncAgcSliderFromSlice();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void releaseTransmitFrequencyCheck();
 
 
     // RIT

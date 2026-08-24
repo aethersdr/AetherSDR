@@ -9,6 +9,8 @@
 
 #include "MainWindow.h"
 
+#include "workspace/WorkspaceController.h"
+
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistController.h"
 #include "CopyAssistPanel.h"
@@ -110,16 +112,7 @@ void MainWindow::buildMenuBar()
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
     radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
     connect(radioSetup, &QAction::triggered, this, [this] {
-        // Snapshot compression setting before dialog opens — used by the
-        // finished handler to detect a change and recreate the RX audio stream.
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
+        openRadioSetupPage();
     });
 
     auto* chooseRadio = settingsMenu->addAction("Connect to Radio...");
@@ -132,6 +125,22 @@ void MainWindow::buildMenuBar()
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
+
+#ifdef HAVE_SERIALPORT
+    // Primary discoverability entry for #4940 — a Settings-menu shortcut
+    // straight to the FlexControl Tuning Knob group, for the user who
+    // browses Settings looking for it rather than opening AetherControl...
+    // first. Guarded the same as the Serial & Controllers page itself
+    // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
+    // (MainWindow_Controllers.cpp) that offers the same deep-link from
+    // inside the controller window.
+    auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    flexControlKnobAction->setMenuRole(QAction::NoRole);
+    connect(flexControlKnobAction, &QAction::triggered, this, [this] {
+        if (RadioSetupDialog* dlg = openRadioSetupPage())
+            dlg->revealFlexControlSettings();
+    });
+#endif
 
     auto* networkAction = settingsMenu->addAction("Network...");
     connect(networkAction, &QAction::triggered, this, [this] {
@@ -310,16 +319,7 @@ void MainWindow::buildMenuBar()
     });
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
     connect(usbCablesAction, &QAction::triggered, this, [this] {
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
-        if (m_radioSetupDialog)
-            m_radioSetupDialog->selectTab(QStringLiteral("USB Cables"));
+        openRadioSetupPage(QStringLiteral("USB Cables"));
     });
 #ifdef HAVE_MIDI
     auto* midiAction = settingsMenu->addAction("MIDI Mapping...");
@@ -365,11 +365,20 @@ void MainWindow::buildMenuBar()
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;
         showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
-                              m_spotCollectorClient, m_potaClient, m_n1mmSpotClient,
+                              m_spotCollectorClient, m_potaClient, m_eibiClient, m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                               m_freedvClient,
 #endif
                               &m_radioModel, &m_dxccProvider);
+#ifdef HAVE_WEBSOCKETS
+        // Every open, not just the first: this dialog is a persistent
+        // singleton, so without this the field would only ever show
+        // whatever FreeDvMyMessage was at first construction, silently
+        // reverting anything sent from the FreeDV Reporter panel since
+        // (#4231 review).
+        if (m_spotHubDialog)
+            m_spotHubDialog->reloadFreedvMessage();
+#endif
         if (!wasFresh || !m_spotHubDialog) return;
         auto* dlg = m_spotHubDialog.data();
         dlg->setTotalSpots(m_radioModel.spotModel().spots().size());
@@ -396,6 +405,7 @@ void MainWindow::buildMenuBar()
                 sw->setSpotBgColor(bgColor);
                 sw->setSpotBgOpacity(bgOpacity);
                 sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
+                sw->setKiwiDxSpotsEnabled(s.value("ShowKiwiDxSpots", "False").toString() == "True");
                 sw->setSHistorySnapToStep(
                     s.value("SHistorySnapToStep", "False").toString() == "True");
             }
@@ -403,7 +413,12 @@ void MainWindow::buildMenuBar()
             // Memories feed toggle, apply immediately without mutating the cache.
             m_radioModel.spotModel().refresh();
         };
-        connect(dlg, &DxClusterDialog::settingsChanged, this, refreshSpots);
+        connect(dlg, &DxClusterDialog::settingsChanged, this, [this, refreshSpots] {
+            refreshSpots();
+            if (m_eibiClient) {
+                QMetaObject::invokeMethod(m_eibiClient, &EibiClient::updateActiveSpots, Qt::QueuedConnection);
+            }
+        });
         // Signal/QRM History Markers live exclusively on the SpotHub
         // Display tab (no View-menu duplicate, by design — a single UI
         // surface with no risk of state drift).
@@ -456,6 +471,18 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::potaStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); }); });
+        connect(dlg, &DxClusterDialog::eibiStartRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(true); });
+        });
+        connect(dlg, &DxClusterDialog::eibiStopRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(false); });
+        });
+        connect(dlg, &DxClusterDialog::eibiUpdateNowRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, &EibiClient::forceUpdate, Qt::QueuedConnection);
+        });
         connect(dlg, &DxClusterDialog::n1mmStartRequested,
                 this, [this](quint16 port) {
             QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(port); });
@@ -790,12 +817,50 @@ void MainWindow::buildMenuBar()
 
     auto* viewMenu = menuBar()->addMenu("&View");
 
+    // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
+    // state persists inside the workspace document itself (Principle V), not
+    // in a settings key: wireWorkspaceCanvas() re-applies it at startup and
+    // enabledChanged keeps the action honest if enabling fails.
+    //
+    // Two postures since the edit-mode field request: Enabled turns the
+    // canvas shell on, Edit Layout arms placement (select/drag/resize/
+    // drops/nudges/dots).  Enabled-but-locked is the OPERATING posture —
+    // interacting with an applet just uses it.  Edit state is session-
+    // transient by design; wireWorkspaceCanvas() syncs both directions.
+    QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas");
+    m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
+    m_workspaceCanvasAction->setCheckable(true);
+    connect(m_workspaceCanvasAction, &QAction::toggled, this,
+            [this](bool on) { toggleWorkspaceCanvas(on); });
+    m_workspaceEditAction = wsMenu->addAction("Edit &Layout");
+    m_workspaceEditAction->setCheckable(true);
+    m_workspaceEditAction->setEnabled(false);   // armed by enabledChanged
+
+    // The workspace switcher (phase 6): rebuilt on every open so the list,
+    // check states and bindings are never stale.
+    wsMenu->addSeparator();
+    QMenu* switcher = wsMenu->addMenu("&Workspaces");
+    connect(switcher, &QMenu::aboutToShow, this,
+            [this, switcher] { rebuildWorkspaceSwitcherMenu(switcher); });
+
+    // Additional canvas windows (phase 7): rebuilt on every open, same
+    // staleness rule as the switcher.
+    QMenu* canvasWindows = wsMenu->addMenu("Canvas Wi&ndows");
+    connect(canvasWindows, &QMenu::aboutToShow, this,
+            [this, canvasWindows] { rebuildCanvasWindowsMenu(canvasWindows); });
+
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
     // a window-scoped QShortcut so the keystroke survives the View-menu
     // entries being removed.
     auto* popOutShortcut = new QShortcut(QKeySequence("Ctrl+Shift+S"), this);
     connect(popOutShortcut, &QShortcut::activated, this, [this]() {
+        // Not in canvas mode (review m1): the panel is hidden there and its
+        // shell controls are gone — the shortcut popping an invisible panel
+        // out (and persisting the float) bypassed both.
+        if (m_workspaceController && m_workspaceController->isEnabled()) {
+            return;
+        }
         toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
     });
 

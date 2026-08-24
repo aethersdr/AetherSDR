@@ -533,6 +533,13 @@ void HealthApplet::setMeterModel(MeterModel* model)
 
 void HealthApplet::setPowerScale(int maxWatts, bool hasAmplifier)
 {
+    if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
+        return;
+    }
+    m_havePowerScale = true;
+    m_lastMaxWatts = maxWatts;
+    m_lastHasAmplifier = hasAmplifier;
+
     if (hasAmplifier) {
         m_powerFullScale = 2000.0f;
     } else if (maxWatts > 100) {

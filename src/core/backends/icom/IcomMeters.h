@@ -61,6 +61,7 @@ struct CurvePoint {
 // The IC-705's published curves. Each is documented at its definition with the
 // source it came from.
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc705();   // raw -> watts
+[[nodiscard]] std::span<const CurvePoint> powerCurveIc7300Mk2(); // raw -> watts
 [[nodiscard]] std::span<const CurvePoint> swrCurve();          // raw -> SWR
 [[nodiscard]] std::span<const CurvePoint> compCurve();         // raw -> dB
 [[nodiscard]] std::span<const CurvePoint> vdCurve();           // raw -> volts
@@ -127,9 +128,22 @@ struct MeterSpec {
 [[nodiscard]] const MeterSpec* meterSpecFor(MeterId id);
 [[nodiscard]] const MeterSpec* meterSpecForSub(std::uint8_t sub);
 
+enum class MeterCalibration : std::uint8_t {
+    Uncalibrated,
+    Ic705,
+    Ic9700Voltage,
+    Ic7300Mk2,
+};
+
+[[nodiscard]] std::span<const CurvePoint>
+powerCurveForCalibration(MeterCalibration calibration);
+[[nodiscard]] bool hasVoltageCalibration(MeterCalibration calibration) noexcept;
+[[nodiscard]] bool hasCurrentCalibration(MeterCalibration calibration) noexcept;
+
 // Convert a raw reading to the spec's unit. `s9Dbm` selects the S-meter
 // reference and is ignored by every other meter.
-[[nodiscard]] double meterValue(MeterId id, int raw, double s9Dbm);
+[[nodiscard]] double meterValue(MeterId id, int raw, double s9Dbm,
+                                MeterCalibration calibration = MeterCalibration::Ic705);
 
 // ---------------------------------------------------------------------------
 // The poll scheduler
@@ -168,6 +182,13 @@ public:
     // A reply arrived. Clears the in-flight mark and starts the next interval.
     void markAnswered(MeterId id, std::int64_t nowMs);
 
+    // WHEN a reply last arrived, or 0 if one never has. The poller already knows
+    // this — markAnswered is called on every reading — and it is the one fact
+    // that separates a meter that works from one that is merely defined. A
+    // defined-but-never-fed meter renders as a real instrument reading a quiet
+    // band, which is worse than a missing one.
+    [[nodiscard]] std::int64_t lastReadingAtMs(MeterId id) const;
+
     // A user-initiated command just went out. Metering stays quiet for a short
     // guard so the command is not stuck behind a queue of polls.
     void noteUserCommand(std::int64_t nowMs) noexcept { m_quietUntilMs = nowMs + kUserGuardMs; }
@@ -186,6 +207,7 @@ private:
         bool inFlight = false;
         std::int64_t nextDueMs = 0;
         std::int64_t sentAtMs = 0;
+        std::int64_t answeredAtMs = 0;
     };
     [[nodiscard]] State& stateFor(MeterId id);
     [[nodiscard]] const State& stateFor(MeterId id) const;

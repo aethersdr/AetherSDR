@@ -181,7 +181,7 @@ struct AetherClockEngine::Impl {
     }
 
     void releaseHold() {
-        if (releaseCh && heldChannel >= 1 && heldChannel <= 4)
+        if (releaseCh && heldChannel >= 1 && heldChannel <= 8)
             releaseCh(heldChannel);
         heldChannel = 0;
     }

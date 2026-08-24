@@ -41,6 +41,7 @@ Usage:
     python tools/automation_probe.py panmessage add 0 kiwi 0 "Waiting|Queued"
     python tools/automation_probe.py audioCapture start 3000 raw,post,final
     python tools/automation_probe.py audioCapture probeDspStereo all [strict]  # may take up to 120s
+    python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=ProcessedMono blocks=480,960
     python tools/automation_probe.py audioCapture read /tmp/aether-audio.json
 """
 
@@ -443,6 +444,7 @@ def main():
                "  automation_probe.py audioCapture start 3000 raw,post,final\n"
                "  automation_probe.py audioCapture probeNr2Stereo\n"
                "  automation_probe.py audioCapture probeDspStereo all [strict]  # up to 120s\n"
+               "  automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=ProcessedMono blocks=480,960  # up to 120s\n"
                "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"

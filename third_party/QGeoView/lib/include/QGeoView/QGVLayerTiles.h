@@ -21,6 +21,7 @@
 #include "QGVLayer.h"
 
 #include <QElapsedTimer>
+#include <QTimer>
 
 class QGV_LIB_DECL QGVLayerTiles : public QGVLayer
 {
@@ -35,6 +36,7 @@ public:
     void setVisibleZoomLayersBelowCurrent(size_t value);
     void setVisibleZoomLayersAboveCurrent(size_t value);
     void setCameraUpdatesDuringAnimation(bool value);
+    void setHorizontalWrapEnabled(bool enabled);
 
 protected:
     void onProjection(QGVMap* geoMap) override;
@@ -51,6 +53,9 @@ protected:
 
 private:
     void processCamera();
+    // AetherSDR patch: cross-zoom positional test used to cull off-screen
+    // fallback tiles once horizontal wrap makes tile x unbounded.
+    bool overlapsActiveRect(const QGV::GeoTilePos& tilePos) const;
     void removeAllAbove(const QGV::GeoTilePos& tilePos);
     void removeWhenCovered(const QGV::GeoTilePos& tilePos);
     void removeForPerfomance(const QGV::GeoTilePos& tilePos);
@@ -66,6 +71,8 @@ private:
     QMap<int, QMap<QGV::GeoTilePos, QGVDrawItem*>> mIndex;
 
     QElapsedTimer mLastAnimation;
+    QTimer mCameraUpdateTimer;
+    bool mHorizontalWrapEnabled = false;
 
     struct
     {

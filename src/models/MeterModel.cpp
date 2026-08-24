@@ -22,15 +22,11 @@ namespace {
 // exactly, while any genuine reading (0 dBm is already 30 dB below a 1 W
 // carrier) stays on the smoothed path.
 constexpr float kNoCarrierWatts = 0.0011f;
-// Minimum instantaneous forward power for an SWR ratio to mean anything.
+// MeterModel::kMinForwardWattsForSwr — the SWR power floor — now lives in the
+// header, because `radiocert`'s keyed-RF precondition has to reason about the
+// same number: the finding it suppresses is "TX:SWR never fed", and SWR is fed
+// exactly when forward power clears this floor.
 //
-// A radio with no carrier reports 0 dBm on FWDPWR, which is 10^(0/10)/1000 =
-// 0.001 W — small but not zero. SWR is computed from forward and reflected
-// power, so below this there is no power behind the ratio and it saturates:
-// an HL2 published 255.99 and held it. The threshold sits a hair above that
-// floor, and 0 dBm is already 30 dB below a 1 W carrier, so nothing real
-// lives underneath it. (#4533)
-constexpr float kMinForwardWattsForSwr = 0.0011f;
 // NOTE: kNoCarrierWatts (#4540) and kMinForwardWattsForSwr (#4533) share the
 // same numeric floor but answer different questions -- "is a carrier present"
 // versus "is there power behind this ratio" -- and are kept separate so a
@@ -166,6 +162,8 @@ void MeterModel::defineMeter(const MeterDef& def)
     }
     else if (def.source != "AMP" && def.name == "PATEMP")
         m_paTempIdx = def.index;
+    else if (def.source == "RAD" && def.name == "PACURRENT")
+        m_paCurrentIdx = def.index;
     else if (def.name == "+13.8A")
         m_supplyIdx = def.index;
     // Amplifier meters (source "AMP")
@@ -260,7 +258,14 @@ void MeterModel::removeMeter(int index)
     if (index == activeScMic)   m_hasScMicValue = false;
     if (index == activeScFilt1) m_hasScFilt1Value = false;
     if (index == activeScFilt2) m_hasScFilt2Value = false;
-    if (index == m_paTempIdx)    m_paTempIdx = -1;
+    if (index == m_paTempIdx) {
+        m_paTempIdx = -1;
+        m_hasPaTempValue = false;
+    }
+    if (index == m_paCurrentIdx) {
+        m_paCurrentIdx = -1;
+        m_hasPaCurrentValue = false;
+    }
     if (index == m_supplyIdx) {
         m_supplyIdx = -1;
         m_hasSupplyVoltsValue = false;   // the sample cannot outlive its meter
@@ -355,6 +360,9 @@ void MeterModel::clear()
     m_swAlcIdx = -1;
     m_swAlcUnit.clear();
     m_paTempIdx = -1;
+    m_paCurrentIdx = -1;
+    m_hasPaTempValue = false;
+    m_hasPaCurrentValue = false;
     m_scMicIdxByTxSource.clear();
     m_scMicIdxBySlice.clear();
     m_scFilt1IdxByTxSource.clear();
@@ -392,6 +400,7 @@ void MeterModel::clear()
     m_hwAlc = 0.0f;
     m_swAlc = 0.0f;
     m_paTemp = 0.0f;
+    m_paCurrent = 0.0f;
     m_supplyVolts = 0.0f;
     m_ampFwdPwr = 0.0f;
     m_ampSwr = 1.0f;
@@ -803,7 +812,12 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             txFilterLevelsChangedFlag = true;
         } else if (idx == m_paTempIdx) {
             m_paTemp = v;
+            m_hasPaTempValue = true;
             hwChanged = true;
+        } else if (idx == m_paCurrentIdx) {
+            m_paCurrent = v;
+            m_hasPaCurrentValue = true;
+            emit paCurrentChanged(m_paCurrent);
         } else if (idx == m_supplyIdx) {
             m_supplyVolts = v;  // "+13.8A" = supply voltage at point A (before fuse)
             m_hasSupplyVoltsValue = true;   // a SAMPLE, not just a definition

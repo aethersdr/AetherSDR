@@ -67,6 +67,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool phoneChanged = false;
     bool filterCutoffChanged = false;
     bool cwPitchChanged_ = false;
+    bool cwSpeedChanged_ = false;
 
     // ── Core transmit ──
     // rf_power / tune_power emit inline (like max_power_level below): the
@@ -75,6 +76,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
+    // Backend MOX is observed radio state, not this client's transmit intent.
+    // RadioModel publishes it on radioTransmittingChanged for presentation
+    // consumers.  Routing it through setTransmitting() would emit moxChanged
+    // and could open this client's mic/DAX/serial-PTT paths when hardware PTT
+    // or another network client keys the radio.
     changed |= assign(d.mox, m_mox);
     changed |= assign(d.transmitFreq, m_transmitFreq);
 
@@ -114,7 +120,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
+    if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
@@ -149,6 +155,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
+    if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
     // ── ATU (own emit; model owns the enum parse) ──
     {
@@ -274,6 +281,7 @@ void TransmitModel::setRfPower(int power)
         emit stateChanged();
     }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
+    emit rfPowerCommandIssued(power);
 }
 
 void TransmitModel::setTunePower(int power)
@@ -389,11 +397,13 @@ void TransmitModel::setTransmitting(bool tx)
 void TransmitModel::atuStart()
 {
     emit commandReady("atu start");
+    emit atuCommandIssued(true);
 }
 
 void TransmitModel::atuBypass()
 {
     emit commandReady("atu bypass");
+    emit atuCommandIssued(false);
 }
 
 void TransmitModel::setAtuMemories(bool on)
@@ -540,6 +550,7 @@ void TransmitModel::setSbMonitor(bool on)
         emit micStateChanged();
     }
     emit commandReady(QString("transmit set mon=%1").arg(on ? 1 : 0));
+    emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
 }
 
 void TransmitModel::setMonGainSb(int gain)
@@ -548,6 +559,7 @@ void TransmitModel::setMonGainSb(int gain)
     m_monGainSb = gain;
     emit micStateChanged();
     emit commandReady(QString("transmit set mon_gain_sb=%1").arg(gain));
+    emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
 }
 
 void TransmitModel::loadMicProfile(const QString& name)
@@ -562,6 +574,7 @@ void TransmitModel::setVoxEnable(bool on)
     m_voxEnable = on;  // optimistic update — radio may not echo
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_enable=%1").arg(on ? 1 : 0));
+    emit voxCommandIssued(on, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setVoxLevel(int level)
@@ -570,6 +583,7 @@ void TransmitModel::setVoxLevel(int level)
     m_voxLevel = level;
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_level=%1").arg(level));
+    emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setVoxDelay(int delay)
@@ -578,6 +592,7 @@ void TransmitModel::setVoxDelay(int delay)
     m_voxDelay = delay;
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_delay=%1").arg(delay));
+    emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setMicBoost(bool on)
@@ -642,18 +657,18 @@ void TransmitModel::setDexpLevel(int level)
 // command (Principle II).
 void TransmitModel::setTxFilterLow(int hz)
 {
-    setTxFilter(qBound(0, hz, 10000), m_txFilterHigh);
+    setTxFilter(qBound(kTxFilterMinHz, hz, kTxFilterMaxHz), m_txFilterHigh);
 }
 
 void TransmitModel::setTxFilterHigh(int hz)
 {
-    setTxFilter(m_txFilterLow, qBound(0, hz, 10000));
+    setTxFilter(m_txFilterLow, qBound(kTxFilterMinHz, hz, kTxFilterMaxHz));
 }
 
 void TransmitModel::setTxFilter(int lowHz, int highHz)
 {
-    lowHz = qBound(0, lowHz, 9950);
-    highHz = qBound(lowHz + 50, highHz, 10000);
+    lowHz  = qBound(kTxFilterMinHz, lowHz, kTxFilterMaxHz - kTxFilterMinWidthHz);
+    highHz = qBound(lowHz + kTxFilterMinWidthHz, highHz, kTxFilterMaxHz);
     if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
         m_txFilterLow = lowHz;
         m_txFilterHigh = highHz;
@@ -673,7 +688,9 @@ void TransmitModel::setCwSpeed(int wpm)
     if (m_cwSpeed != wpm) {
         m_cwSpeed = wpm;
         emit phoneStateChanged();
+        emit cwSpeedChanged(m_cwSpeed);
     }
+    emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));
 }
 
@@ -685,6 +702,7 @@ void TransmitModel::setCwPitch(int hz)
         emit phoneStateChanged();
         emit cwPitchChanged(hz);
     }
+    emit cwPitchCommandIssued(hz);
     emit commandReady(QString("cw pitch %1").arg(hz));
 }
 
@@ -694,6 +712,7 @@ void TransmitModel::setCwBreakIn(bool on)
         m_cwBreakIn = on;
         emit phoneStateChanged();
     }
+    emit cwBreakInCommandIssued(on);
     emit commandReady(QString("cw break_in %1").arg(on ? 1 : 0));
 }
 
@@ -740,11 +759,19 @@ void TransmitModel::setCwIambicMode(int mode)
 
 void TransmitModel::setCwSwapPaddles(bool on)
 {
+    if (m_cwSwapPaddles != on) {
+        m_cwSwapPaddles = on;
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw swap %1").arg(on ? 1 : 0));
 }
 
 void TransmitModel::setCwlEnabled(bool on)
 {
+    if (m_cwlEnabled != on) {
+        m_cwlEnabled = on;
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw cwl_enabled %1").arg(on ? 1 : 0));
 }
 

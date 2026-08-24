@@ -57,7 +57,7 @@ void IambicKeyer::stop()
     m_cv.notify_all();
     if (m_thread.joinable())
         m_thread.join();
-    if (m_lastEmittedKeyDown) emitKeyDown(false);
+    if (m_lastEmittedKeyDown) emitKeyDown(false, std::chrono::steady_clock::now());
     if (m_lastEmittedDit || m_lastEmittedDah) emitPaddleEvent(false, false);
 }
 
@@ -101,10 +101,13 @@ void IambicKeyer::reset() noexcept
     m_cv.notify_all();
 }
 
-int IambicKeyer::unitMs() const noexcept
+std::chrono::nanoseconds IambicKeyer::unitNs() const noexcept
 {
     const int wpm = std::clamp(m_wpm.load(std::memory_order_relaxed), kMinWpm, kMaxWpm);
-    return 1200 / wpm;
+    // Nanosecond unit math: integer 1200/wpm ms truncates (52 ms vs
+    // 52.17 ms at 23 WPM — a permanent 0.3% speed error); dividing in
+    // ns leaves sub-ppm error at any legal WPM (#4809).
+    return std::chrono::nanoseconds(1'200'000'000LL / wpm);
 }
 
 IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
@@ -118,11 +121,11 @@ IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
     return justSent == Element::Dit ? Element::Dah : Element::Dit;
 }
 
-void IambicKeyer::emitKeyDown(bool down)
+void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
 {
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
-    if (m_onKeyDownChange) m_onKeyDownChange(down);
+    if (m_onKeyDownChange) m_onKeyDownChange(down, when);
 }
 
 void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
@@ -165,37 +168,84 @@ void IambicKeyer::workerLoop()
         bool wantDit = dit, wantDah = dah;
         firstInSqueeze = true;
 
+        // Mode B memory latch — one definition for the three sites that
+        // must agree (element-start snapshot + the two in-wait live
+        // checks).  Caller holds m_mu.
+        const auto latchOppositeLocked = [this](Element cur) {
+            if (cur == Element::Dit && m_dahPressed) m_dahMemory = true;
+            if (cur == Element::Dah && m_ditPressed) m_ditMemory = true;
+        };
+
+        // Element edges advance on an absolute grid anchored here, when
+        // the active phase begins — the CwxLocalKeyer pattern from #3644.
+        // Each deadline is grid + duration and the grid advances by the
+        // nominal duration, so thread wake latency and callback cost eat
+        // into the following wait instead of stretching every element.
+        // The old per-element `now() + duration` anchoring made element
+        // length `nominal + wake latency + callback cost` with a fresh,
+        // strictly positive error term each element (#4809: measured
+        // +4 ms mean on the reporter's machine, one-sided).
+        auto grid = std::chrono::steady_clock::now();
+
         while (!m_stopRequested.load(std::memory_order_acquire)
-               && (wantDit || wantDah || m_ditMemory || m_dahMemory)) {
+               && (wantDit || wantDah
+                   || m_ditMemory.load() || m_dahMemory.load())) {
 
             // Pick next element.
             Element next;
             if (firstInSqueeze) {
                 next = wantDit ? Element::Dit : Element::Dah;
                 firstInSqueeze = false;
-            } else if (m_ditMemory || m_dahMemory) {
+            } else if (m_ditMemory.load() || m_dahMemory.load()) {
                 // Memory bits force the opposite element.
-                next = m_ditMemory ? Element::Dit : Element::Dah;
-                {
-                    std::lock_guard<std::mutex> lk(m_mu);
-                    m_ditMemory = false;
-                    m_dahMemory = false;
-                }
+                next = m_ditMemory.load() ? Element::Dit : Element::Dah;
+                m_ditMemory.store(false);
+                m_dahMemory.store(false);
             } else {
                 next = nextElementChoice(wantDit, wantDah, lastSent);
             }
             lastSent = next;
 
-            const int unit = unitMs();
-            const int onDuration = (next == Element::Dit) ? unit : unit * kDitsPerDah;
-            const int offDuration = unit;
+            const std::chrono::nanoseconds unit = unitNs();
+            const std::chrono::nanoseconds onDuration =
+                (next == Element::Dit) ? unit : unit * kDitsPerDah;
+            const std::chrono::nanoseconds offDuration = unit;
             const Mode currentMode =
                 static_cast<Mode>(m_mode.load(std::memory_order_relaxed));
 
+            // Mode B: latch the opposite paddle's state at the moment the
+            // element begins.  The live checks in the on/gap wait loops below
+            // only observe paddle state when the condition variable wakes, and
+            // setPaddleState() stores the new values before notifying — so a
+            // simultaneous dual release (routine when the serial poll collapses
+            // both edges into one ~10 ms tick, #4032) wakes the loop with the
+            // held state already gone and the memory never latches, silently
+            // degrading Mode B to Mode A.  Snapshotting up front closes that
+            // race; the live checks stay, they still catch a genuine
+            // mid-element opposite-paddle tap that a start snapshot would miss.
+            if (currentMode == Mode::IambicB) {
+                std::lock_guard<std::mutex> lk(m_mu);
+                latchOppositeLocked(next);
+            }
+
             // ── Element on ─────────────────────────────────────────────
-            emitKeyDown(true);
-            const auto onDeadline =
-                std::chrono::steady_clock::now() + std::chrono::milliseconds(onDuration);
+            // Deadline armed BEFORE the key-down callback, so the
+            // callback's cost (sidetone gate flip, per-edge trace log,
+            // queued radio post) cannot push the edge out.
+            // Catch-up limiter: a stall longer than one element leaves every
+            // following deadline already past, so both wait loops fall
+            // straight through and the worker emits zero-length elements —
+            // and zero-length `cw key` edges on air — until the grid catches
+            // up.  Re-anchor instead.  Ordinary wake latency is orders of
+            // magnitude inside one element, so the self-correcting property
+            // this whole change exists for is untouched; only a stall that
+            // already lost an element stops trying to win the time back.
+            const auto markNow = std::chrono::steady_clock::now();
+            if (grid + onDuration < markNow) grid = markNow;
+            const auto onDeadline = grid + onDuration;
+            // `grid` is this edge's scheduled instant — the callback runs at
+            // wake time but carries the exact deadline (#4890 wake scatter).
+            emitKeyDown(true, grid);
             {
                 std::unique_lock<std::mutex> lk(m_mu);
                 while (std::chrono::steady_clock::now() < onDeadline
@@ -203,29 +253,30 @@ void IambicKeyer::workerLoop()
                     m_cv.wait_until(lk, onDeadline);
                     // Mode B: latch memory when opposite paddle is held
                     // mid-element.
-                    if (currentMode == Mode::IambicB) {
-                        if (next == Element::Dit && m_dahPressed) m_dahMemory = true;
-                        if (next == Element::Dah && m_ditPressed) m_ditMemory = true;
-                    }
+                    if (currentMode == Mode::IambicB)
+                        latchOppositeLocked(next);
                 }
             }
-            emitKeyDown(false);
-            if (m_stopRequested.load(std::memory_order_acquire)) break;
+            grid = onDeadline;
 
             // ── Inter-element gap ──────────────────────────────────────
-            const auto offDeadline =
-                std::chrono::steady_clock::now() + std::chrono::milliseconds(offDuration);
+            // Same limiter for the gap: without it the element that absorbed
+            // the stall is followed by a zero-length space.
+            const auto gapNow = std::chrono::steady_clock::now();
+            if (grid + offDuration < gapNow) grid = gapNow;
+            const auto offDeadline = grid + offDuration;
+            emitKeyDown(false, grid);
+            if (m_stopRequested.load(std::memory_order_acquire)) break;
             {
                 std::unique_lock<std::mutex> lk(m_mu);
                 while (std::chrono::steady_clock::now() < offDeadline
                        && !m_stopRequested.load(std::memory_order_acquire)) {
                     m_cv.wait_until(lk, offDeadline);
-                    if (currentMode == Mode::IambicB) {
-                        if (next == Element::Dit && m_dahPressed) m_dahMemory = true;
-                        if (next == Element::Dah && m_ditPressed) m_ditMemory = true;
-                    }
+                    if (currentMode == Mode::IambicB)
+                        latchOppositeLocked(next);
                 }
             }
+            grid = offDeadline;
 
             // Re-read paddle state for the next iteration's decision.
             // Always forward to the radio so it sees release events.
@@ -240,7 +291,9 @@ void IambicKeyer::workerLoop()
         // Active phase ended; loop back to idle wait.
     }
 
-    emitKeyDown(false);
+    // Shutdown safety release — no grid exists here, so the wall clock is
+    // the honest scheduled time.
+    emitKeyDown(false, std::chrono::steady_clock::now());
     emitPaddleEvent(false, false);
 }
 

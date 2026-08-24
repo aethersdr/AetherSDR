@@ -1,10 +1,12 @@
 #include "PanadapterStack.h"
 #include "BandStackPanel.h"
+#include "FloatingRestorePolicy.h"
 #include "PanFloatingWindow.h"
 #include "PanadapterApplet.h"
 #include "PanadapterRenderScheduler.h"
 #include "SpectrumWidget.h"
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 
 #include <QHBoxLayout>
 #include <QLayout>
@@ -86,6 +88,98 @@ PanadapterStack::PanadapterStack(QWidget* parent)
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
     hbox->addWidget(m_splitter, 1);
+
+    // Crash-loop guard (#4617). Evaluated here, at construction, and nowhere
+    // else: this is the last point at which the marker on disk can only have
+    // been written by a *previous* process. Deferring the check to
+    // restoreFloatingState() would race a pop-out performed during this
+    // session's own settle window and throw away a layout that never crashed.
+    auto& settings = AppSettings::instance();
+    const QString savedIds = settings.value(kFloatingPanIdsKey, "").toString();
+    const bool restorePending =
+        settings.value(kFloatingRestorePendingKey, kSettingsFalse).toBool();
+    const FloatingRestoreAction action =
+        evaluateFloatingRestore(!savedIds.isEmpty(), restorePending);
+    if (action == FloatingRestoreAction::DropSavedIds) {
+        qCWarning(lcGui)
+            << "PanadapterStack: the previous session did not survive floating"
+            << savedIds
+            << "— starting docked and forgetting the saved float state (#4617)";
+        m_floatingRestoreAbandonedCount =
+            static_cast<int>(savedIds.split(',', Qt::SkipEmptyParts).size());
+        // Tell the operator at launch, not only if they get as far as a
+        // successful connect — the #4617 case is precisely the one where
+        // connecting is the act the user has learnt to fear. A zero-timer is
+        // late enough that MainWindow::wirePanLifecycle() has connected to us
+        // (the event loop has not started yet at construction) and early
+        // enough that the notice describes *this* launch.
+        QTimer::singleShot(0, this,
+                           &PanadapterStack::announceAbandonedFloatingRestore);
+    }
+
+    // The writes come from the policy header too, so that dropping the
+    // marker-clearing write — which would leave the guard armed forever and
+    // cost the layout on every launch — fails floating_restore_policy_test
+    // rather than passing it.
+    const FloatingRestoreWrites writes = floatingRestoreWrites(action);
+    if (writes.clearSavedIds) {
+        settings.setValue(kFloatingPanIdsKey, QString());
+    }
+    if (writes.clearMarker) {
+        settings.setValue(kFloatingRestorePendingKey, kSettingsFalse);
+    }
+    if (writes.clearSavedIds || writes.clearMarker) {
+        settings.save();
+    }
+}
+
+void PanadapterStack::announceAbandonedFloatingRestore()
+{
+    if (m_floatingRestoreAbandonedCount <= 0) return;
+    emit floatingRestoreAbandoned(m_floatingRestoreAbandonedCount);
+}
+
+void PanadapterStack::armFloatingRestoreMarker()
+{
+    // Persisted here rather than left to the caller's save(): on the replay
+    // path the pan ID is *already* on disk, so the marker has to reach disk
+    // before the float work begins or a crash inside it is indistinguishable
+    // from a clean session. One extra transaction per pop-out buys that
+    // ordering, and it keeps the argument local to this function.
+    auto& settings = AppSettings::instance();
+    settings.setValue(kFloatingRestorePendingKey, kSettingsTrue);
+    settings.save();
+
+    if (!m_floatingRestoreSettleTimer) {
+        m_floatingRestoreSettleTimer = new QTimer(this);
+        m_floatingRestoreSettleTimer->setSingleShot(true);
+        m_floatingRestoreSettleTimer->setInterval(kFloatingRestoreSettleMs);
+        connect(m_floatingRestoreSettleTimer, &QTimer::timeout,
+                this, &PanadapterStack::clearFloatingRestoreMarker);
+    }
+    // Restart rather than start: a restore that replays several pans settles
+    // once, after the last of them has held up.
+    m_floatingRestoreSettleTimer->start();
+}
+
+void PanadapterStack::clearFloatingRestoreMarker()
+{
+    auto& settings = AppSettings::instance();
+    if (!settings.value(kFloatingRestorePendingKey, kSettingsFalse).toBool()) {
+        return;
+    }
+    settings.setValue(kFloatingRestorePendingKey, kSettingsFalse);
+    settings.save();
+}
+
+void PanadapterStack::reclaimBandStackPanel()
+{
+    if (!m_bandStackPanel) {
+        return;
+    }
+    if (auto* hbox = qobject_cast<QHBoxLayout*>(layout())) {
+        hbox->insertWidget(0, m_bandStackPanel);
+    }
 }
 
 void PanadapterStack::setBandStackVisible(bool visible)
@@ -136,6 +230,9 @@ PanadapterApplet* PanadapterStack::addPanadapter(const QString& panId)
     if (multi)
         equalizeSizes();
 
+    if (!m_inApplyLayout)
+        emit panAdded(panId);
+
     return applet;
 }
 
@@ -153,6 +250,11 @@ void PanadapterStack::removePanadapter(const QString& panId)
 
     auto* applet = m_pans.take(panId);
     if (!applet) return;
+    m_lentToCanvas.remove(panId);
+
+    // Unregistered but not yet destroyed: a canvas hosting this applet
+    // releases its entry here instead of waiting for the destroyed-watch.
+    emit panRemoved(panId);
 
     delete applet;
 
@@ -174,10 +276,13 @@ void PanadapterStack::rekey(const QString& oldId, const QString& newId)
 {
     if (auto* applet = m_pans.take(oldId)) {
         m_pans[newId] = applet;
+        if (m_lentToCanvas.remove(oldId))
+            m_lentToCanvas.insert(newId);
         m_seenPanIds.remove(oldId);
         m_seenPanIds.insert(newId);
         if (m_activePanId == oldId)
             m_activePanId = newId;
+        emit panRekeyed(oldId, newId);
     }
 }
 
@@ -305,6 +410,23 @@ QVariantMap PanadapterStack::automationRearrange(const QString& layoutId)
 
 void PanadapterStack::rearrangeLayout(const QString& layoutId)
 {
+    // Nothing to arrange while every non-floating applet is on loan to the
+    // canvas — and bail BEFORE the float-docking loop below, which used to
+    // run first: the layout dialog in canvas mode un-popped the operator's
+    // floats and then no-opped (review m4).  The canvas owns arrangement in
+    // that posture; this method arranges the stack's own splitter only.
+    {
+        bool anyOurs = false;
+        for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+            if (!m_lentToCanvas.contains(it.key())) {
+                anyOurs = true;
+                break;
+            }
+        }
+        if (!anyOurs) {
+            return;
+        }
+    }
     // Dock any floating pans first.  m_pans always contains every applet
     // including those currently in a PanFloatingWindow (floatPanadapter
     // never removes from m_pans), so the reparent loop below would yank
@@ -349,8 +471,17 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
         saveFloatingState();
     }
 
-    // Collect applets in order
-    QList<PanadapterApplet*> applets = m_pans.values();
+    // Collect applets in order — loaned ones are the canvas's to place, not
+    // this method's (see m_lentToCanvas; the connect-time layout restore
+    // lands here with canvas mode on, and must not reclaim a thing).  A
+    // float docked by the loop above re-lends itself DURING that loop: the
+    // panDocked emission is direct, the controller detaches on the spot,
+    // and the collection below correctly skips it.
+    QList<PanadapterApplet*> applets;
+    for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+        if (!m_lentToCanvas.contains(it.key()))
+            applets.append(it.value());
+    }
     if (applets.isEmpty()) return;
 
     // Build the new splitter first, then move applets straight into it below.
@@ -524,8 +655,12 @@ void PanadapterStack::removeAll()
     }
     m_floatingWindows.clear();
 
+    const QList<QString> ids = m_pans.keys();
+    for (const QString& id : ids)
+        emit panRemoved(id);
     qDeleteAll(m_pans);
     m_pans.clear();
+    m_lentToCanvas.clear();
     m_activePanId.clear();
 
     // Delete the old splitter and create a fresh one
@@ -540,7 +675,10 @@ void PanadapterStack::rebuildDockedSplitter()
 {
     QList<PanadapterApplet*> docked;
     for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
-        if (!m_floatingWindows.contains(it.key())) {
+        // A loaned applet is the CANVAS's to place — reparenting it here is
+        // the silent theft behind the 8600 field report (see m_lentToCanvas).
+        if (!m_floatingWindows.contains(it.key())
+            && !m_lentToCanvas.contains(it.key())) {
             docked.append(it.value());
         }
     }
@@ -641,6 +779,11 @@ void PanadapterStack::rebuildDockedSplitter()
 
 void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& panIds)
 {
+    // Announce every applet this call creates exactly once, at the end —
+    // some branches go through addPanadapter(), some create inline.
+    const QList<QString> preExisting = m_pans.keys();
+    m_inApplyLayout = true;
+
     // Build structure based on layout ID.
     // Each layout adds applets to the correct splitter position.
     // panIds must have at least as many entries as the layout requires.
@@ -778,14 +921,114 @@ void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& pa
         addPanadapter(panIds[2]);
         addPanadapter(panIds[3]);
     }
+
+    m_inApplyLayout = false;
+    for (auto it = m_pans.constBegin(); it != m_pans.constEnd(); ++it) {
+        if (!preExisting.contains(it.key()))
+            emit panAdded(it.key());
+    }
 }
 
 // ── Float / Dock ──────────────────────────────────────────────────────────
+
+QVariantMap PanadapterStack::automationFloatDock(const QString& action,
+                                                 const QString& panId)
+{
+    if (!m_pans.contains(panId)) {
+        return QVariantMap{
+            {QStringLiteral("error"),
+             QStringLiteral("unknown pan id: ") + panId},
+        };
+    }
+
+    const bool wantFloat = action == QLatin1String("float");
+    const bool already   = isFloating(panId) == wantFloat;
+    if (!already) {
+        // The real production paths — this is the whole point: the reparent
+        // and GPU re-init the crash lineage lives in, driven headlessly.
+        if (wantFloat) floatPanadapter(panId);
+        else           dockPanadapter(panId);
+    }
+
+    return QVariantMap{
+        {QStringLiteral("action"), action},
+        {QStringLiteral("panId"), panId},
+        {QStringLiteral("floating"), isFloating(panId)},
+        {QStringLiteral("alreadyThere"), already},
+        {QStringLiteral("floatingCount"), int(m_floatingWindows.size())},
+        {QStringLiteral("dockedCount"), int(m_pans.size() - m_floatingWindows.size())},
+    };
+}
+
+PanadapterApplet* PanadapterStack::detachForCanvas(const QString& panId)
+{
+    if (m_floatingWindows.contains(panId))
+        return nullptr;
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    if (applet) {
+        applet->setOnCanvas(true);
+        m_lentToCanvas.insert(panId);
+    }
+    return applet;
+}
+
+void PanadapterStack::preparePanForTopLevelMove(const QString& panId)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
+    if (!sw) return;
+    sw->hide();
+    sw->prepareForTopLevelChange();
+    sw->resetGpuResources();
+}
+
+void PanadapterStack::finishPanTopLevelMove(const QString& panId)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
+    if (!sw) return;
+    // Deferred like floatPanadapter(): the graphics API binds to the new
+    // native surface before the first render, never during the turn that
+    // moved it.
+    QTimer::singleShot(0, this, [this, sw]() {
+        refreshAfterReparent(sw);
+        sw->show();
+    });
+}
+
+void PanadapterStack::returnFromCanvas(const QString& panId,
+                                       PanadapterApplet* applet)
+{
+    if (!applet || m_pans.value(panId, nullptr) != applet)
+        return;
+    m_lentToCanvas.remove(panId);
+    applet->setOnCanvas(false);
+    m_splitter->addWidget(applet);
+    m_splitter->setStretchFactor(m_splitter->indexOf(applet), 1);
+    applet->show();
+    const bool multi = m_pans.size() > 1;
+    for (auto* a : m_pans)
+        a->setMultiPanMode(multi);
+}
 
 void PanadapterStack::floatPanadapter(const QString& panId)
 {
     PanadapterApplet* applet = m_pans.value(panId, nullptr);
     if (!applet || m_floatingWindows.contains(panId)) return;
+
+    // Everything below — the GPU teardown, the reparent into a new top-level
+    // window, the rebuildDockedSplitter() that resizes every remaining sibling
+    // QRhiWidget, fw->show(), and the deferred reset/first frame — is the code
+    // that has taken the process down on marginal D3D11 drivers (#4319/#4091).
+    // Arm *and persist* the marker before any of it: on the replay path the
+    // pan ID is already on disk (restoreFloatingState() read it from there), so
+    // a marker committed after this work would leave a crash here looking
+    // exactly like a clean session, and the next launch would replay straight
+    // back into it — the #4617 boot loop. Arming before saveFloatingState()
+    // also means the marker can never reach disk *later* than the ID it
+    // protects; the cost is that a crash in between drops the previously saved
+    // IDs too, which is the single-use price this guard already accepts.
+    armFloatingRestoreMarker();
 
     // Hide the SpectrumWidget and release GPU resources *before* reparenting.
     // On macOS, QRhiWidget with WA_NativeWindow has a native NSView; orphaning
@@ -807,6 +1050,8 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     // and lifetime.
     auto* fw = new PanFloatingWindow(window());
     fw->adoptApplet(applet);
+    m_lentToCanvas.remove(panId); // the float window owns it now
+    applet->setOnCanvas(false);   // floating now; canvas releases its entry
     applet->spectrumWidget()->setFloating(true);
 
     m_floatingWindows[panId] = fw;
@@ -929,6 +1174,10 @@ void PanadapterStack::prepareShutdown()
 
     setShuttingDown(true);
     saveFloatingState();
+    // Reaching an orderly shutdown proves the floats held up, even if the
+    // settle timer has not fired yet. Without this, quitting inside the settle
+    // window would cost the user their pop-out on the next launch (#4617).
+    clearFloatingRestoreMarker();
 
     // Explicitly delete floating windows rather than calling close().
     // close() without WA_DeleteOnClose only hides the window, leaving it alive
@@ -975,7 +1224,7 @@ void PanadapterStack::saveFloatingState() const
 {
     QStringList ids;
     const QString saved =
-        AppSettings::instance().value("FloatingPanIds", "").toString();
+        AppSettings::instance().value(kFloatingPanIdsKey, "").toString();
     for (const QString& id : saved.split(',', Qt::SkipEmptyParts)) {
         if (!m_seenPanIds.contains(id) && !ids.contains(id)) {
             ids << id;
@@ -986,15 +1235,26 @@ void PanadapterStack::saveFloatingState() const
             ids << id;
         }
     }
-    AppSettings::instance().setValue("FloatingPanIds", ids.join(','));
+    AppSettings::instance().setValue(kFloatingPanIdsKey, ids.join(','));
     AppSettings::instance().save();
 }
 
 void PanadapterStack::restoreFloatingState()
 {
+    // The constructor already dropped the saved IDs if the previous session
+    // died floating them, and already announced it on a zero-timer at launch.
+    // Say it once more here: the launch notice competes with the connect
+    // sequence's own status messages, and this is the moment the pop-out
+    // visibly fails to come back. Consumed after this, so a later reconnect
+    // does not resurrect a stale explanation.
+    announceAbandonedFloatingRestore();
+    m_floatingRestoreAbandonedCount = 0;
+
     const QString saved =
-        AppSettings::instance().value("FloatingPanIds", "").toString();
+        AppSettings::instance().value(kFloatingPanIdsKey, "").toString();
     if (saved.isEmpty()) return;
+    // Each floatPanadapter() re-arms the crash-loop marker, so the replay is
+    // covered by the same guard as an interactive pop-out.
     for (const QString& id : saved.split(',', Qt::SkipEmptyParts)) {
         if (m_pans.contains(id) && !m_floatingWindows.contains(id)) {
             floatPanadapter(id);

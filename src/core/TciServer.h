@@ -117,8 +117,6 @@ public:
     void rearmDaxForProfileLoad();
 
 public slots:
-    // RX audio from main audio pipeline (float32 stereo, 24 kHz)
-    void onRxAudioReady(const QByteArray& pcm);
     // RX audio from DAX pipeline (float32 stereo, 24 kHz)
     void onDaxAudioReady(int channel, const QByteArray& pcm);
     // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
@@ -350,7 +348,7 @@ private:
     bool              m_txUseRadioRoute{true};
     float             m_txGain{1.0f};
     OverflowMode      m_overflowMode{OverflowMode::Clip};
-    float             m_rxChannelGain[4]{1.0f, 1.0f, 1.0f, 1.0f};
+    float             m_rxChannelGain[8]{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     qint64            m_txAudioBlocks{0};
     qint64            m_txInputFrames{0};
     qint64            m_txOutputFrames{0};

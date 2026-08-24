@@ -1,5 +1,6 @@
 #include "TitleBar.h"
 #include "FramelessMessageBox.h"
+#include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
 #include "core/AppSettings.h"
@@ -110,7 +111,7 @@ TitleBar::TitleBar(QWidget* parent)
     : QWidget(parent)
 {
     AetherSDR::theme::setContainer(this, QStringLiteral("titlebar"));
-    setFixedHeight(32);
+    setFixedHeight(kHeight);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "TitleBar { background: {{color.background.0}}; border-bottom: 1px solid {{color.background.1}}; }");
 
     m_hbox = new QHBoxLayout(this);
@@ -194,6 +195,21 @@ TitleBar::TitleBar(QWidget* parent)
     m_appNameLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_appNameLabel);
     m_hbox->addWidget(m_appNameLabel);
+
+    m_experimentalRadioLabel = new QLabel(QStringLiteral("EXPERIMENTAL"));
+    m_experimentalRadioLabel->setObjectName(QStringLiteral("experimentalRadioBadge"));
+    m_experimentalRadioLabel->setFixedHeight(20);
+    m_experimentalRadioLabel->setAlignment(Qt::AlignCenter);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_experimentalRadioLabel,
+        "QLabel { color: {{color.accent.warning}}; border: 1px solid "
+        "{{color.accent.warning}}; border-radius: 3px; background: transparent; "
+        "font-size: 9px; font-weight: bold; padding: 0px 5px; }");
+    m_experimentalRadioLabel->setAccessibleName(
+        QStringLiteral("Experimental radio support"));
+    markDragHandle(m_experimentalRadioLabel);
+    m_experimentalRadioLabel->hide();
+    m_hbox->addWidget(m_experimentalRadioLabel);
 
     m_mfBtn = new QPushButton("multiFLEX");
     m_mfBtn->setFlat(true);
@@ -285,6 +301,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     // PC Audio toggle
     m_pcBtn = new QPushButton("PC Audio");
+    m_pcBtn->setObjectName(QStringLiteral("pcAudioBtn"));
     m_pcBtn->setCheckable(true);
     m_pcBtn->setFixedHeight(22);
     m_pcBtn->setFixedWidth(70);
@@ -292,7 +309,8 @@ TitleBar::TitleBar(QWidget* parent)
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
     m_pcBtn->setAccessibleName("PC Audio");
-    m_pcBtn->setAccessibleDescription("Toggle PC audio receive playback");
+    m_pcBtn->setAccessibleDescription(
+        "Toggle PC receive playback and PC microphone voice transmit");
     updatePcAudioToolTip();
 
     auto updatePcStyle = [this]() {
@@ -571,13 +589,21 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
             return true;
         }
 #elif !defined(Q_OS_MAC)
-        if (auto* h = w->windowHandle())
-            if (h->startSystemMove()) {
-                m_windowMoveActive = true;
-                m_windowMoveUsesSystem = true;
-                ev->accept();
-                return true;
-            }
+        // startSystemMove() reports success on xcb but the WM-driven drag it
+        // hands off to is unreliable there (QTBUG-69716) — under Mutter/
+        // XWayland (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland
+        // desktop) the press is swallowed and the window just never follows
+        // the pointer (#4827). Skip straight to the manual-move path below,
+        // same rule Qt's own QSizeGrip::usePlatformSizeGrip() applies.
+        if (!FramelessMoveHelper::systemMoveResizeUnreliable(w)) {
+            if (auto* h = w->windowHandle())
+                if (h->startSystemMove()) {
+                    m_windowMoveActive = true;
+                    m_windowMoveUsesSystem = true;
+                    ev->accept();
+                    return true;
+                }
+        }
 #endif
     }
 
@@ -646,6 +672,17 @@ void TitleBar::handleTitleDoubleClick(QMouseEvent* ev)
         else                  w->showMaximized();
         ev->accept();
     }
+}
+
+void TitleBar::setAppletPanelControlsVisible(bool visible)
+{
+    if (m_dockLeftLbl)  m_dockLeftLbl->setVisible(visible);
+    if (m_dockRightLbl) m_dockRightLbl->setVisible(visible);
+    if (m_popOutLbl)    m_popOutLbl->setVisible(visible);
+    // The trio is BRACKETED by separators; with the icons gone the two
+    // dividers sit adjacent and one dangles (8600 field report).  The
+    // trailing one belongs to the cluster and hides with it.
+    if (m_dockSep)      m_dockSep->setVisible(visible);
 }
 
 bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
@@ -813,10 +850,13 @@ void TitleBar::setPcAudioLocked(bool locked)
     if (locked)
         setPcAudioEnabled(true);      // locked ON, never locked off
     m_pcBtn->setEnabled(!locked);
-    m_pcBtn->setToolTip(
-        locked ? tr("PC audio is required: this radio's audio is produced and "
-                    "captured on this computer, so it cannot be turned off.")
-               : QString());
+    if (locked) {
+        m_pcBtn->setToolTip(
+            tr("PC audio is required: this radio's audio is produced and "
+               "captured on this computer, so it cannot be turned off."));
+    } else {
+        updatePcAudioToolTip();
+    }
 }
 
 void TitleBar::setPcAudioEnabled(bool on)
@@ -909,6 +949,27 @@ void TitleBar::setOtherClientTx(bool transmitting, const QString& station)
     } else {
         m_otherTxLabel->setVisible(false);
     }
+}
+
+void TitleBar::setExperimentalRadioFamily(const QString& familyName)
+{
+    if (!m_experimentalRadioLabel) {
+        return;
+    }
+
+    const QString trimmed = familyName.trimmed();
+    const bool experimental = !trimmed.isEmpty();
+    m_experimentalRadioLabel->setToolTip(
+        experimental
+            ? QStringLiteral("%1 radio support is experimental").arg(trimmed)
+            : QString());
+    m_experimentalRadioLabel->setAccessibleDescription(
+        experimental
+            ? QStringLiteral("Connected to %1; some controls, meters, and features may be "
+                             "incomplete")
+                  .arg(trimmed)
+            : QString());
+    m_experimentalRadioLabel->setVisible(experimental);
 }
 
 QString TitleBar::formatTxElapsed(qint64 ms) const

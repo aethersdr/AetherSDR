@@ -111,19 +111,28 @@ static void cleanupStaleModules()
     }
 }
 
-bool PipeWireAudioBridge::open()
+bool PipeWireAudioBridge::open(int activeChannels)
 {
     if (m_open) return true;
 
     cleanupStaleModules();
 
-    // Create 4 RX sources (radio → apps).  When libpipewire-0.3 is available
-    // at build time, prefer native pw_stream sources — those let us set
-    // PW_KEY_NODE_LATENCY directly and avoid the kernel FIFO entirely, which
-    // is the path to <100 ms WSJT-X DT.  Fall back per-channel to the legacy
-    // module-pipe-source FIFO if the native open fails (e.g. PipeWire not
-    // running, only PulseAudio).
-    for (int i = 0; i < NUM_CHANNELS; ++i) {
+    // Open only as many RX sources as the radio has slices (the device list
+    // follows the radio — product decision, #4854). open() is reached from
+    // MainWindow::startDax(), which runs on a 3 s post-connect timer, so
+    // RadioModel::maxSlices() is already known and passed in here. A 2-slice
+    // 6300 therefore exposes 2 DAX devices, a 6700 eight. NUM_CHANNELS stays
+    // the compile-time array bound; only this open loop is bounded. Growing/
+    // shrinking the opened set on a later slice-count change is a follow-up
+    // (see issue #4935).
+    m_activeChannels = std::clamp(activeChannels, 1, NUM_CHANNELS);
+
+    // When libpipewire-0.3 is available at build time, prefer native pw_stream
+    // sources — those let us set PW_KEY_NODE_LATENCY directly and avoid the
+    // kernel FIFO entirely, which is the path to <100 ms WSJT-X DT.  Fall back
+    // per-channel to the legacy module-pipe-source FIFO if the native open
+    // fails (e.g. PipeWire not running, only PulseAudio).
+    for (int i = 0; i < m_activeChannels; ++i) {
 #ifdef HAVE_PIPEWIRE_NATIVE
         auto native = std::make_unique<PipeWireNativeRxSource>(i + 1);
         if (native->open()) {
@@ -155,7 +164,7 @@ bool PipeWireAudioBridge::open()
     m_txReadTimer->start();
 
     m_open.store(true, std::memory_order_release);
-    qCInfo(lcDax) << "PipeWireAudioBridge: opened — 4 RX sources + 1 TX sink";
+    qCInfo(lcDax) << "PipeWireAudioBridge: opened —" << m_activeChannels << "RX sources + 1 TX sink";
     return true;
 }
 

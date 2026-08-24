@@ -101,6 +101,7 @@ public:
     // compression bar) the mapping is inverted at paint time — min means FULL —
     // so the painted width there is 1.0f - filledFraction(). Assert
     // accordingly; the fraction itself is always value-normalised.
+    float value() const { return m_value; }
     float filledFraction() const { return m_smooth.value(); }
 
     void setValue(float v) {

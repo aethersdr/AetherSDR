@@ -1,6 +1,6 @@
 // AetherSDR DAX — Core Audio HAL Audio Server Plug-In
 //
-// Creates 4 virtual audio output devices ("AetherSDR DAX 1" through "AetherSDR DAX 4")
+// Creates 8 virtual audio output devices ("AetherSDR DAX 1" through "AetherSDR DAX 8")
 // for receiving DAX audio from the radio, plus 1 virtual input device ("AetherSDR TX")
 // for sending TX audio to the radio.
 //
@@ -230,8 +230,18 @@ public:
         // Called by HAL after driver is fully initialized and host is available.
         // Safe to add devices here — PropertiesChanged notifications will work.
 
-        // 4 DAX RX input devices (radio → apps receive audio)
-        for (int ch = 1; ch <= 4; ++ch) {
+        // 8 DAX RX input devices (radio → apps receive audio)
+        // Eight unconditionally, and genuinely so: coreaudiod loads this HAL
+        // plugin at login, radio-blind — no AetherSDR session, no radio, and
+        // thus no slices=N capacity is knowable here (unlike the in-process
+        // PipeWire/Virtual bridges, which open() from startDax() once
+        // maxSlices() is known and so now follow the radio). So this plugin
+        // always publishes 8 CoreAudio devices; the extras stay silent. The
+        // operator-facing count is bounded app-side in
+        // DaxApplet::setMaxDaxChannels(). Because the app now publishes only
+        // maxSlices() shm segments, a HAL plugin left at a stale device count
+        // can front silent channels — tracked as a follow-up to #4854.
+        for (int ch = 1; ch <= 8; ++ch) {
             char name[64];
             snprintf(name, sizeof(name), "AetherSDR DAX %d", ch);
 

@@ -68,6 +68,29 @@ struct FrequencyFrame {
     }
 };
 
+// A native waterfall tile supplies two independently calibrated rows: the
+// viewport row and the full-tile supplemental row. A blanked row must keep
+// their capture frames paired with the matching pixels.
+struct WaterfallBlankerFrameBundle {
+    FrequencyFrame primaryFrame;
+    FrequencyFrame supplementalFrame;
+
+    bool isValid() const
+    {
+        return primaryFrame.isValid() && supplementalFrame.isValid();
+    }
+};
+
+inline WaterfallBlankerFrameBundle waterfallBlankerFrameBundleForOutput(
+    bool useCachedBundle,
+    const WaterfallBlankerFrameBundle& cachedBundle,
+    const WaterfallBlankerFrameBundle& incomingBundle)
+{
+    return useCachedBundle && cachedBundle.isValid()
+        ? cachedBundle
+        : incomingBundle;
+}
+
 struct FrequencyPreviewTransform {
     double scale{1.0};
     double offset{0.0};
@@ -358,6 +381,20 @@ inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
     const int origin = ((writeRowOrigin % height) + height) % height;
     const int age = ((ageRows % height) + height) % height;
     return (origin + age) % height;
+}
+
+// Mirror of texturedquad.frag and texturedquad_rowframes.frag: both cubic
+// shaders clamp source ages in logical history before mapping them into the
+// physical ring. Wrapping an out-of-range tap directly would blend the newest
+// and oldest rows across the visible history boundary.
+inline int waterfallCubicPhysicalRowForSourceAge(int writeRowOrigin,
+                                                 int sourceAge, int height)
+{
+    if (height <= 0) {
+        return -1;
+    }
+    return waterfallVisibleRowForAge(
+        writeRowOrigin, std::clamp(sourceAge, 0, height - 1), height);
 }
 
 struct WaterfallRowFrameReadiness {

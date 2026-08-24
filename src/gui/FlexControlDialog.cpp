@@ -1059,6 +1059,22 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     });
     headerLayout->addWidget(m_physicalButton, 0, Qt::AlignVCenter);
 
+#ifdef HAVE_SERIALPORT
+    // Deep-link to the FlexControl Tuning Knob group on the Serial &
+    // Controllers Radio Setup page (#4940). Guarded the same as that page
+    // itself (RadioSetupDialog.cpp) — without HAVE_SERIALPORT the page
+    // doesn't exist, so the button would navigate nowhere.
+    m_settingsButton = new QPushButton(QStringLiteral("Settings…"), header);
+    m_settingsButton->setObjectName(QStringLiteral("OptionButton"));
+    m_settingsButton->setCursor(Qt::PointingHandCursor);
+    m_settingsButton->setToolTip(
+        QStringLiteral("Open the FlexControl Tuning Knob configuration page."));
+    connect(m_settingsButton, &QPushButton::clicked, this, [this] {
+        emit configureRequested();
+    });
+    headerLayout->addWidget(m_settingsButton, 0, Qt::AlignVCenter);
+#endif
+
     m_compactButton = new QPushButton(QStringLiteral("Compact"), header);
     m_compactButton->setObjectName(QStringLiteral("OptionButton"));
     m_compactButton->setCheckable(true);

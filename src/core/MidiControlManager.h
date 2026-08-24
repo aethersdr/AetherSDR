@@ -77,6 +77,12 @@ public:
     const QVector<MidiParam>& params() const { return m_params; }
     const MidiParam* findParam(const QString& id) const;
 
+    // The VFO tune knob gets special handling in two places that must agree:
+    // Learn forces relative=true on its CC captures here, and the manual
+    // entry form mirrors that default (MidiMappingDialog).  One definition
+    // so the two can't drift.
+    static bool isVfoTuneKnob(const QString& paramId);
+
     // Binding management
     void addBinding(const MidiBinding& binding);
     void removeBinding(const QString& paramId);
