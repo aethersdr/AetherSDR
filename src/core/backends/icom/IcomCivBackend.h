@@ -246,6 +246,7 @@ private:
     // we have just stopped standing behind.)
     void publishModeList();
     void publishMeterDefs();
+    void clearDerivedForwardPower();
     // The receive-only mode gate. True when the radio will not transmit in the
     // mode it is currently in, in which case the caller must NOT key. Warns and
     // puts the transmit indicator back where the radio is. See the definition.

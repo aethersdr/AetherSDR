@@ -146,7 +146,7 @@ void testCapabilityPowerScaleHonoursBandCeiling()
                && powerGauge->property("gaugeRedStart").toFloat() == 100.0f);
 
     RadioCapabilities caps;
-    caps.forwardPowerScaleFollowsBandRating = true;
+    caps.txPowerBands.append(TxPowerBand{430'000'000.0, 450'000'000.0, 75.0});
     emit radio.capabilitiesChanged(true, caps);
     applet.setPowerScale(75, false);
     report("75 W capability sets 90 W face",
@@ -174,8 +174,8 @@ void testCapabilityPowerScaleHonoursBandCeiling()
 void testForwardPowerResponseCapabilityIsConsumed()
 {
     report("default capability preserves established power smoothing",
-           RadioCapabilities{}.forwardPowerRequiresSmoothing
-               && !RadioCapabilities{}.forwardPowerScaleFollowsBandRating);
+           !RadioCapabilities{}.forwardPowerRequiresSmoothing
+               && RadioCapabilities{}.txPowerBands.isEmpty());
 
     RadioModel radio;
     TxApplet applet;

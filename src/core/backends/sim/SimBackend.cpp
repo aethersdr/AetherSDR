@@ -248,6 +248,8 @@ RadioCapabilities SimBackend::capabilities() const
     // (Principle VI). TX stays off in the skeleton.
     caps.canTransmit = false;
     caps.txPowerMaxWatts = 0.0;
+    // Explicitly absent: the RX-only simulator publishes no forward power.
+    caps.forwardPowerRequiresSmoothing = false;
     // Moot on a backend that cannot key at all — canTransmit=false refuses every
     // mode already. Empty, not "all of them", because this field means "the
     // exceptions", and a simulator has none.

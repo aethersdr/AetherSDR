@@ -236,8 +236,6 @@ RadioCapabilities IcomCivBackend::capabilities() const
     }
     c.forwardPowerRequiresSmoothing = profile.meters.powerConversion
         != MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;
-    c.forwardPowerScaleFollowsBandRating = profile.meters.powerConversion
-        == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;
 
     // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
     // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
@@ -2483,13 +2481,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (!keyed && m_session) {
                 m_session->flushTxAudio();
             }
-            if (!m_keyed && m_model
-                && profileFor(*m_model).meters.powerConversion
-                    == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
-                // CI-V stops Po polling at this edge. Clear only the derived
-                // IC-9700 forward-power estimate; do not alter the established
-                // idle behavior of native-watt Icom radios or other TX meters.
-                emit meterUpdate(QStringLiteral("TX:FWDPWR"), 0.0);
+            if (!m_keyed) {
+                clearDerivedForwardPower();
             }
             TransmitDelta t;
             t.mox = m_keyed;
@@ -3972,6 +3965,9 @@ void IcomCivBackend::setKeying(bool key)
     // "are we transmitting".
     if (m_keyed != key) {
         m_keyed = key;
+        if (!m_keyed) {
+            clearDerivedForwardPower();
+        }
         TransmitDelta t;
         t.mox = key;
         emit transmitChanged(t);
@@ -3983,6 +3979,21 @@ void IcomCivBackend::setKeying(bool key)
     if (restoreTunePower >= 0) {
         setTxPower(restoreTunePower);
     }
+}
+
+void IcomCivBackend::clearDerivedForwardPower()
+{
+    if (!m_model
+        || profileFor(*m_model).meters.powerConversion
+            != MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
+        return;
+    }
+
+    // CI-V stops Po polling at the unkey edge. Clear only the derived IC-9700
+    // estimate; native-watt Icom radios and every other TX meter keep their
+    // established idle behavior. Both operator-requested and radio-originated
+    // unkeys call this helper, so the model cannot retain the last keyed value.
+    emit meterUpdate(QStringLiteral("TX:FWDPWR"), 0.0);
 }
 
 void IcomCivBackend::setTune(bool on, int tunePowerPercent)
@@ -5134,9 +5145,12 @@ void IcomCivBackend::publishMeterDefs()
         d.unit = QString::fromUtf8(s.unit.data(), static_cast<int>(s.unit.size()));
         d.low = s.low;
         d.high = s.high;
-        // The Po meter's high depends on the model profile's curve. IC-9700's
-        // curve is relative but is converted below the seam to derived watts;
-        // its highest RF-deck rating is 100 W, matching the curve's high.
+        // MeterDef is the model-wide identity published at connect, not the
+        // active-deck diagnostic. IC-9700's relative curve is converted below
+        // the seam to derived watts and its highest deck is 100 W, so the
+        // stable definition deliberately remains 100 W. meterMap() reports the
+        // current 100/75/10 W deck rating without forcing definition churn on
+        // every band transition.
         if (s.id == MeterId::Power) {
             const std::span<const CurvePoint> curve = powerCurveFor(*m_model);
             if (curve.empty()) {

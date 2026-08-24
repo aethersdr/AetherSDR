@@ -694,7 +694,7 @@ void TxApplet::setRadioModel(RadioModel* radio)
     m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
         || radio->backendCapabilities().forwardPowerRequiresSmoothing;
     m_forwardPowerScaleFollowsBandRating = radio && radio->isConnected()
-        && radio->backendCapabilities().forwardPowerScaleFollowsBandRating;
+        && !radio->backendCapabilities().txPowerBands.isEmpty();
     if (radio) {
         m_capabilitiesConnection = connect(
             radio, &RadioModel::capabilitiesChanged, this,
@@ -702,7 +702,7 @@ void TxApplet::setRadioModel(RadioModel* radio)
                 m_forwardPowerRequiresSmoothing = !connected
                     || caps.forwardPowerRequiresSmoothing;
                 const bool followsBandRating = connected
-                    && caps.forwardPowerScaleFollowsBandRating;
+                    && !caps.txPowerBands.isEmpty();
                 if (followsBandRating != m_forwardPowerScaleFollowsBandRating) {
                     m_forwardPowerScaleFollowsBandRating = followsBandRating;
                     if (m_havePowerScale) {
@@ -834,7 +834,7 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
                || maxWatts <= 0 || maxWatts == 100) {
         // Preserve the established 100 W barefoot face exactly. In particular,
         // this is the ordinary FlexRadio path. A lower-power face is an
-        // explicit backend capability, not something inferred from one number.
+        // explicit per-band capability, not something inferred from one number.
         gauge->setRange(0.0f, 120.0f, 100.0f,
             {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
         gaugeFullScaleW = 120.0f;

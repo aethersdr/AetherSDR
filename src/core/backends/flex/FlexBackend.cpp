@@ -163,6 +163,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // in later. Sample rates and TX power range are refined as their touchpoints
     // convert (they are not part of this skeleton).
     caps.canTransmit = true;
+    // Flex meter samples retain the established client-side PEP response.
+    caps.forwardPowerRequiresSmoothing = true;
     // A Flex transmits in every mode it demodulates, so there is nothing for the
     // receive-only mode guard to refuse. Stated rather than defaulted, per the
     // "adding a field" rule in RadioCapabilities.h.

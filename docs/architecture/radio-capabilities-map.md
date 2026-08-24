@@ -51,6 +51,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `txFilterLowEdgesHz` / `txFilterHighEdgesHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `PhoneApplet::setTxFilterEdges` | The discrete TX passband edges a radio can actually reach, ascending. **Empty = continuous or unknown**. Icom publishes per-model tables only where the model's own CI-V guide defines the WIDE/MID/NAR/SSB-D settings; the Phone applet steps through those values and rejects an exact typed value outside the list |
 | `canReboot` | ✅ | ❌ | — (❌) | `RadioSetupDialog` | Enables the Reboot button |
 | `hasTuner` | ✅ | ❌ | ❌ | `TransmitModel::setHasTuner` → `TxApplet` | ATU / MEM dimming |
+| `forwardPowerRequiresSmoothing` | ✅ | ✅ | ❌ | `TxApplet::updateMeters` | Applies the established client-side PEP response only when the backend's forward-power samples require it. Icom: ✅ for native-watt profiles; ❌ for the IC-9700's already-indicated relative Po samples. The default is ❌ and every backend declares the choice explicitly |
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |

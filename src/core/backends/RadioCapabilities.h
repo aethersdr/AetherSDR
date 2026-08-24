@@ -151,12 +151,7 @@ struct RadioCapabilities {
     // ballistics. True preserves the established Flex presentation. A backend
     // whose telemetry already carries a stable indicated value can disable the
     // second response layer so consumers reflect each authoritative sample.
-    bool forwardPowerRequiresSmoothing = true;
-
-    // Whether a sub-100 W active-band rating should reshape the desktop
-    // forward-power face. False preserves the established barefoot face for
-    // Flex and every backend that has not explicitly adopted band-rated UI.
-    bool forwardPowerScaleFollowsBandRating = false;
+    bool forwardPowerRequiresSmoothing = false;
 
     [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
     {

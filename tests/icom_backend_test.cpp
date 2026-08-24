@@ -502,8 +502,8 @@ static void testIc9700DerivedForwardPowerAcrossBands()
           "IC-9700 publishes derived forward power as Watts above the Icom seam");
     check(!backend.capabilities().forwardPowerRequiresSmoothing,
           "IC-9700 disables duplicate client-side forward-power ballistics");
-    check(backend.capabilities().forwardPowerScaleFollowsBandRating,
-          "IC-9700 explicitly enables its band-rated power face");
+    check(!backend.capabilities().txPowerBands.isEmpty(),
+          "IC-9700 declares the per-band ratings consumed by its power face");
 
     CivFrame po;
     po.to = kControllerAddress;
@@ -558,8 +558,8 @@ static void testIc9700DerivedForwardPowerAcrossBands()
               "IC-705 keeps its native 5 W raw-143 calibration");
         check(backend.capabilities().forwardPowerRequiresSmoothing,
               "IC-705 retains established client-side power ballistics");
-        check(!backend.capabilities().forwardPowerScaleFollowsBandRating,
-              "IC-705 does not inherit the IC-9700 band-rated power face");
+        check(backend.capabilities().txPowerBands.isEmpty(),
+              "IC-705 does not inherit the IC-9700 per-band power ratings");
     }
 
     const IcomModel* ic7300mk2 = modelForCivAddress(0xB6);
@@ -576,12 +576,24 @@ static void testIc9700DerivedForwardPowerAcrossBands()
               "IC-7300MK2 keeps its native 50 W raw-143 calibration");
         check(backend.capabilities().forwardPowerRequiresSmoothing,
               "IC-7300MK2 retains established client-side power ballistics");
-        check(!backend.capabilities().forwardPowerScaleFollowsBandRating,
-              "IC-7300MK2 does not inherit the IC-9700 band-rated power face");
+        check(backend.capabilities().txPowerBands.isEmpty(),
+              "IC-7300MK2 does not inherit the IC-9700 per-band power ratings");
     }
 
     IcomCivBackendTestAccess::selectModelAndFrequency(
         backend, *ic9700, 430'000'000ULL);
+
+    const int beforeClientUnkey = updateSpy.count();
+    backend.setKeying(false);
+    bool clientUnkeyReset = false;
+    for (int i = beforeClientUnkey; i < updateSpy.count(); ++i) {
+        const QList<QVariant> args = updateSpy.at(i);
+        clientUnkeyReset |= args.at(0).toString() == QStringLiteral("TX:FWDPWR")
+            && args.at(1).toDouble() == 0.0;
+    }
+    check(clientUnkeyReset,
+          "client-requested Icom unkey immediately clears derived forward power");
+
     CivFrame ptt;
     ptt.to = kControllerAddress;
     ptt.from = 0xA2;
