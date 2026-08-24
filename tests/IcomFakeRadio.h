@@ -212,6 +212,15 @@ public:
         return it == m_settings.end() ? -1 : static_cast<int>(it->second);
     }
     void setSetting(int item, std::uint8_t value) { m_settings[item] = value; }
+    [[nodiscard]] int settingLevel(int item) const
+    {
+        const auto it = m_settingLevels.find(item);
+        return it == m_settingLevels.end() ? -1 : it->second;
+    }
+    void setSettingLevel(int item, int value)
+    {
+        m_settingLevels[item] = std::clamp(value, 0, 255);
+    }
     [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
     {
         return m_renewalSequences;
@@ -784,15 +793,32 @@ private:
             const int item = decodeBcdByte(frame->data[0]) * 100
                 + decodeBcdByte(frame->data[1]);
             if (frame->data.size() == 2) {
+                if (const auto levelIt = m_settingLevels.find(item);
+                    levelIt != m_settingLevels.end()) {
+                    const auto bcd = encodeLevel(levelIt->second);
+                    pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kSetting,
+                             0x05, frame->data[0], frame->data[1],
+                             bcd[0], bcd[1], kCivEom});
+                    return;
+                }
                 auto it = m_settings.find(item);
                 if (it == m_settings.end())
                     return;   // no such leaf on this model — silence, not an error
-                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kSetting,
                          0x05, frame->data[0], frame->data[1], it->second, kCivEom});
                 return;
             }
+            if (frame->data.size() == 4) {
+                const auto raw = decodeLevel(std::span(frame->data).subspan(2));
+                if (raw) {
+                    m_settingLevels[item] = *raw;
+                    pushCiv({0xFE, 0xFE, kControllerAddress, m_addr,
+                             kCivOk, kCivEom});
+                }
+                return;
+            }
             m_settings[item] = frame->data[2];
-            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
         if (frame->cmd == cmd::kTuneOffset && frame->hasSub && frame->data.empty()) {
@@ -1003,6 +1029,7 @@ public:
         {116, 0x80},   // USB MOD level
         {117, 0x80},   // WLAN MOD level
     };
+    std::map<int, int> m_settingLevels;
     // USB-D on FIL2 — NOT the client's construction default (USB, FIL1), so a
     // test asserting DIGU is asserting the client actually read 26 rather than
     // kept its own guess.

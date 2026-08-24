@@ -559,6 +559,7 @@ private:
     std::optional<int> m_dataOffModRestore;
     QString m_lastModInputWarning;
     void checkModInput();
+    void publishPhoneModulationLevel();
 
     std::int64_t m_scopeCentreHz = 0;
     std::int64_t m_scopeSpanHz = 0;

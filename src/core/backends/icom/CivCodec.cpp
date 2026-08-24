@@ -1065,6 +1065,15 @@ std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item, std::uint8_
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
 }
 
+std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int value)
+{
+    const auto itemBcd = settingItemBcd(item);
+    const auto levelBcd = encodeLevel(std::clamp(value, 0, 255));
+    const std::array<std::uint8_t, 4> body{
+        itemBcd[0], itemBcd[1], levelBcd[0], levelBcd[1]};
+    return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
 std::vector<std::uint8_t> cmdTuneOffsetHz(std::uint8_t to, int hz)
 {
     // +/- 9.99 kHz, and the radio takes a MAGNITUDE plus a separate sign byte.

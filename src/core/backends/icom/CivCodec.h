@@ -344,6 +344,10 @@ inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET
 [[nodiscard]] std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item);
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item,
                                                         std::uint8_t value);
+// SET-menu levels use the same two-byte 0000..0255 BCD payload as command 14,
+// unlike the one-byte enums written by cmdWriteSetting().
+[[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
+                                                             int value);
 
 // Command 0x21 — RIT and dTX (which is what Icom calls XIT).
 namespace tuneOffset {

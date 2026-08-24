@@ -489,6 +489,13 @@ static void testCommands()
     check(bytesAre(cmdWriteSetting(0xB6, 84, 0x00),
                    {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x00, 0xFD}),
           "IC-7300MK2 PC Audio off restores MIC without touching DATA MOD 0085");
+    check(bytesAre(cmdReadSetting(0xA2, 114),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14, 0xFD}),
+          "IC-9700 LAN MOD level read is SET 0114");
+    check(bytesAre(cmdWriteSettingLevel(0xA2, 114, 26),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14,
+                    0x00, 0x26, 0xFD}),
+          "IC-9700 LAN MOD 10% writes the documented two-byte 0026 level");
 }
 
 // DATA mode — command 26.

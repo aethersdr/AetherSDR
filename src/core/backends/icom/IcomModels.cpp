@@ -196,6 +196,18 @@ constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
     {0x03, "WLAN",    ModSourceNetwork},
 }};
 
+// IC-9700 CI-V Reference Guide 2019, SET > Connectors > MOD Input,
+// 1A 05 0115/0116.  The numeric vocabulary is model-owned: it happens to
+// match neither the shorter IC-705 table nor every future networked Icom.
+constexpr std::array<ModulationInputChoice, 6> kIc9700ModInputs{{
+    {0x00, "MIC",     ModSourceMic},
+    {0x01, "ACC",     ModSourceAccessory},
+    {0x02, "MIC+ACC", ModSourceMic | ModSourceAccessory},
+    {0x03, "USB",     ModSourceUsb},
+    {0x04, "MIC+USB", ModSourceMic | ModSourceUsb},
+    {0x05, "LAN",     ModSourceNetwork},
+}};
+
 constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
     {0x00, "MIC",     ModSourceMic},
     {0x01, "USB",     ModSourceUsb},
@@ -582,6 +594,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .guideRevision = "IC-9700 CI-V Reference Guide 2019",
         .features = kIc9700Evidence,
         .bands = kIc9700Bands,
+        // Official guide, printed p.7: ACC/USB/LAN levels are 0112/0113/0114;
+        // DATA OFF MOD and DATA MOD are 0115/0116, with LAN encoded as 05.
+        .modulation = ModulationProfile{113, 112, 114, 115, 116, 0x05, 0x00,
+                                        kIc9700ModInputs, true},
         .fmRepeater = FmRepeaterProfile{FmRepeaterDialect::Extended,
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},

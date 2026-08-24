@@ -120,6 +120,11 @@ struct ModulationProfile {
     // 0x00 must not silently inherit this one's.
     std::uint8_t micValue = 0;
     std::span<const ModulationInputChoice> choices;
+    // Some network radios expose the level of the selected LAN modulation
+    // path separately from 14 0B (the physical microphone gain).  When true,
+    // the shared Phone level control follows that radio-owned LAN register
+    // while LAN is the active modulation source.
+    bool phoneLevelFollowsNetworkInput = false;
 };
 
 // The two PRs that motivated RFC #4984 expose different UI depths over a

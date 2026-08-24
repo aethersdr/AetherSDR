@@ -1542,6 +1542,28 @@ void IcomCivBackend::checkModInput()
     }
 }
 
+void IcomCivBackend::publishPhoneModulationLevel()
+{
+    const auto mod = modulationProfileFor(*m_model);
+    if (!mod || !mod->phoneLevelFollowsNetworkInput) {
+        return;
+    }
+
+    const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;
+    if (activeInput == mod->networkOnlyValue && m_networkModLevelPercent >= 0) {
+        TransmitDelta t;
+        t.micLevel = m_networkModLevelPercent;
+        emit transmitChanged(t);
+    } else if (activeInput >= 0 && m_micGainReported) {
+        // Preserve the established physical-input behavior whenever LAN is not
+        // selected.  In particular, a connect-time source read must not leave
+        // a stale LAN value displayed after the operator changes the radio.
+        TransmitDelta t;
+        t.micLevel = m_micGainPercent;
+        emit transmitChanged(t);
+    }
+}
+
 void IcomCivBackend::applyScopeStartup()
 {
     if (!m_session || !m_model->hasScope || m_scopeStarted)
@@ -1940,8 +1962,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         case level::kMicGain: {
             m_micGainPercent = pct;
             m_micGainReported = true;
-            TransmitDelta t; t.micLevel = pct;
-            emit transmitChanged(t);
+            const auto mod = modulationProfileFor(*m_model);
+            if (mod && mod->phoneLevelFollowsNetworkInput) {
+                // IC-9700 LAN audio has its own radio-owned level register.
+                // Keep this physical-MIC report cached for a later source
+                // change, but do not let its periodic poll overwrite the
+                // active LAN value in the shared Phone control.
+                publishPhoneModulationLevel();
+            } else {
+                TransmitDelta t;
+                t.micLevel = pct;
+                emit transmitChanged(t);
+            }
             return;
         }
         case level::kCompLevel: {
@@ -2332,6 +2364,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 return;
             }
         }
+        publishPhoneModulationLevel();
         checkModInput();
         return;
     }
@@ -3621,6 +3654,18 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
 
 void IcomCivBackend::setMicGain(int gainPercent)
 {
+    if (const auto mod = modulationProfileFor(*m_model);
+        mod && mod->phoneLevelFollowsNetworkInput) {
+        const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;
+        if (activeInput == mod->networkOnlyValue) {
+            m_networkModLevelPercent = std::clamp(gainPercent, 0, 100);
+            sendUserCommand(cmdWriteSettingLevel(
+                m_session ? m_session->civAddress() : m_model->civAddress,
+                mod->networkLevelItem,
+                percentToLevelRaw(m_networkModLevelPercent)));
+            return;
+        }
+    }
     m_micGainPercent = gainPercent;
     m_micGainReported = true;
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,

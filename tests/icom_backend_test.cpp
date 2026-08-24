@@ -55,6 +55,11 @@ struct IcomCivBackendTestAccess {
         backend.onCivFrame(frame, generation);
     }
 
+    static std::uint64_t generation(const IcomCivBackend& backend)
+    {
+        return backend.m_sessionGeneration;
+    }
+
     static void expectPttConfirmation(IcomCivBackend& backend, bool keyed)
     {
         backend.m_keyed = !keyed;
@@ -2637,6 +2642,18 @@ int main(int argc, char** argv)
     // result read as "this backend has no panadapter yet".
     {
         CivCase c(0xA2, "IC-9700");
+        c.radio.setSetting(115, 0x05);      // DATA OFF MOD = LAN
+        c.radio.setSetting(116, 0x05);      // DATA MOD = LAN
+        c.radio.setSettingLevel(112, 128);  // ACC MOD
+        c.radio.setSettingLevel(113, 128);  // USB MOD
+        c.radio.setSettingLevel(114, 26);   // LAN MOD = ~10%
+        std::optional<int> phoneLevel;
+        QObject::connect(&c.backend, &IRadioBackend::transmitChanged, &c.backend,
+                         [&phoneLevel](const TransmitDelta& delta) {
+                             if (delta.micLevel) {
+                                 phoneLevel = *delta.micLevel;
+                             }
+                         });
         c.backend.connectRadio(c.request());
         check(waitFor([&] { return c.backend.isConnected(); }),
               "auto: the session comes up on an IC-9700");
@@ -2656,6 +2673,77 @@ int main(int argc, char** argv)
                   && caps.txPowerMaxWattsAt(432'000'000.0) == 75.0
                   && caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
               "auto: IC-9700 capabilities carry all three PA ceilings");
+        check(waitFor([&] { return phoneLevel == 10; }),
+              "auto: the IC-9700 Phone level adopts radio-owned LAN MOD, not "
+              "the unrelated physical MIC gain");
+
+        const int physicalMicWritesBefore = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return frame.cmd == cmd::kLevel && frame.hasSub
+                    && frame.sub == level::kMicGain;
+            }));
+        c.backend.setMicGain(20);
+        check(waitFor([&] { return c.radio.settingLevel(114) == 51; }),
+              "auto: moving the Phone level while LAN is active writes SET "
+              "0114 using the normalized 0..100 to 0000..0255 mapping");
+        check(waitFor([&] { return phoneLevel == 20; }),
+              "auto: the confirmed LAN MOD readback reaches the Phone level");
+
+        CivFrame physicalMicReply;
+        physicalMicReply.to = kControllerAddress;
+        physicalMicReply.from = 0xA2;
+        physicalMicReply.cmd = cmd::kLevel;
+        physicalMicReply.hasSub = true;
+        physicalMicReply.sub = level::kMicGain;
+        physicalMicReply.data = {0x00, 0x26}; // physical MIC = 10%
+        IcomCivBackendTestAccess::deliver(
+            c.backend, physicalMicReply,
+            IcomCivBackendTestAccess::generation(c.backend));
+        QCoreApplication::processEvents();
+        check(phoneLevel == 20,
+              "auto: a delayed physical-MIC poll cannot overwrite the active "
+              "IC-9700 LAN modulation level");
+
+        const int physicalMicWritesAfter = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return frame.cmd == cmd::kLevel && frame.hasSub
+                    && frame.sub == level::kMicGain;
+            }));
+        check(physicalMicWritesAfter == physicalMicWritesBefore,
+              "auto: the LAN-level request never writes physical MIC gain 14 0B");
+
+        // The fake starts in USB-D, so DATA MOD (0116) is the active source.
+        // A front-panel move to MIC must immediately restore the cached
+        // physical level and return the shared setter to command 14 0B.
+        CivFrame micSourceReply;
+        micSourceReply.to = kControllerAddress;
+        micSourceReply.from = 0xA2;
+        micSourceReply.cmd = cmd::kSetting;
+        micSourceReply.hasSub = true;
+        micSourceReply.sub = settingSub::kMenu;
+        micSourceReply.data = {0x01, 0x16, 0x00}; // DATA MOD = MIC
+        IcomCivBackendTestAccess::deliver(
+            c.backend, micSourceReply,
+            IcomCivBackendTestAccess::generation(c.backend));
+        QCoreApplication::processEvents();
+        check(phoneLevel == 10,
+              "auto: selecting MIC restores the radio's cached physical-mic "
+              "level in the shared Phone control");
+
+        const int lanLevelBeforeMicWrite = c.radio.settingLevel(114);
+        c.backend.setMicGain(30);
+        check(waitFor([&] {
+                  return static_cast<int>(std::ranges::count_if(
+                             c.radio.civCommands(), [](const CivFrame& frame) {
+                                 return frame.cmd == cmd::kLevel && frame.hasSub
+                                     && frame.sub == level::kMicGain;
+                             }))
+                      == physicalMicWritesAfter + 1;
+              }),
+              "auto: moving the Phone level while MIC is active writes the "
+              "physical microphone register 14 0B");
+        check(c.radio.settingLevel(114) == lanLevelBeforeMicWrite,
+              "auto: the physical-mic request leaves LAN MOD unchanged");
 
         // cmd::kSetFreq (0x05), NOT cmd::kSetFreqTrx (0x00). 0x00 is the
         // TRANSCEIVE frame a radio sends the controller when its own VFO
