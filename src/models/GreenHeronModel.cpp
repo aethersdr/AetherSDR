@@ -6,6 +6,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -26,6 +27,13 @@ GreenHeronModel::GreenHeronModel(QObject* parent)
     m_connectTimer->setSingleShot(true);
     m_connectTimer->setInterval(kConnectTimeoutMs);
     connect(m_connectTimer, &QTimer::timeout, this, &GreenHeronModel::onConnectTimeout);
+
+    m_rotorSilenceTimer = new QTimer(this);
+    m_rotorSilenceTimer->setInterval(kRotorPollMs);
+    connect(m_rotorSilenceTimer, &QTimer::timeout,
+            this, &GreenHeronModel::onRotorSilenceTick);
+
+    m_clock.start();
 }
 
 GreenHeronModel::~GreenHeronModel()
@@ -62,6 +70,11 @@ void GreenHeronModel::disconnectFromHost()
     // leaving a stale panel the operator might still act on.
     m_switches.clear();
     m_announced.clear();
+    m_rotors.clear();
+    m_rotorOrder.clear();
+    m_liveRotors.clear();
+    m_announcedDevices.clear();
+    m_rotorSilenceTimer->stop();
     m_pending.clear();
     m_connected = false;
     m_stale = false;
@@ -81,6 +94,15 @@ void GreenHeronModel::openSocket()
     // retained panel may be acted on, until the device speaks on THIS socket.
     m_awaitingReplay = true;
 
+    // Rotator state belongs to a socket, and only to a socket. The switch
+    // roster is retained here and flagged stale on purpose; a heading is not,
+    // because the operator would be looking at a number from the connection
+    // before last with nothing on the wire to contradict it. See the header.
+    m_rotors.clear();
+    m_rotorOrder.clear();
+    m_liveRotors.clear();
+    m_announcedDevices.clear();
+
     m_socket = new QTcpSocket(this);
     connect(m_socket, &QTcpSocket::connected, this, &GreenHeronModel::onSocketConnected);
     connect(m_socket, &QTcpSocket::disconnected, this, &GreenHeronModel::onSocketDisconnected);
@@ -97,6 +119,7 @@ void GreenHeronModel::teardownSocket()
 {
     m_keepAliveTimer->stop();
     m_connectTimer->stop();
+    m_rotorSilenceTimer->stop();
     if (m_socket == nullptr) {
         return;
     }
@@ -296,11 +319,60 @@ void GreenHeronModel::applyRecord(const Record& record)
         state.locks = record.locks;
         break;
     }
+    case RecordType::DeviceAdd: {
+        // ADD is a generic device announcement, not a rotator one — the field
+        // is whatever the operator named the device. It is corroboration for a
+        // rotator POINT has already established, never the thing that creates
+        // one: a device that announces itself and never reports a heading is
+        // not something this tile can drive.
+        if (record.deviceName.isEmpty()) {
+            return;
+        }
+        // Recorded in a list of its own rather than written onto the rotor,
+        // because on real hardware THIS ARRIVES FIRST: the announcement lands
+        // within ~100 ms of connect and the first POINT about a second later,
+        // so there is no rotor here yet to annotate. POINT reads this list.
+        if (!m_announcedDevices.contains(record.deviceName)) {
+            m_announcedDevices.append(record.deviceName);
+        }
+        break;
+    }
+    case RecordType::Point: {
+        // POINT is what proves a named device is a rotator with a heading, so
+        // this is where the table gains entries.
+        //
+        // Deliberately NOT noteAuthoritativeState(). That gate is about the
+        // switch panel's retained roster, and a heading says nothing about
+        // where the relays are; tripping it here would let a rotator's first
+        // POINT enable a pre-drop antenna grid.
+        if (record.deviceName.isEmpty()) {
+            return;
+        }
+        GreenHeronRotorState& rotor = m_rotors[record.deviceName];
+        rotor.name        = record.deviceName;
+        rotor.heading     = record.heading;
+        rotor.status      = record.pointStatus;
+        rotor.announced   = rotor.announced
+                            || m_announcedDevices.contains(record.deviceName);
+        rotor.lastPointMs = m_clock.elapsed();
+        if (!m_rotorOrder.contains(record.deviceName)) {
+            m_rotorOrder.append(record.deviceName);
+        }
+        if (!m_liveRotors.contains(record.deviceName)) {
+            m_liveRotors.append(record.deviceName);
+        }
+        // Nothing arrives when a rotator goes quiet, so the only way to notice
+        // is to look. Started on the first POINT rather than on connect, so a
+        // server with no rotator never runs it at all.
+        if (!m_rotorSilenceTimer->isActive()) {
+            m_rotorSilenceTimer->start();
+        }
+        break;
+    }
     case RecordType::Unknown:
-        // The three verbs handled here are not provably the whole vocabulary —
-        // the captures behind them cover one installation with one kind of
-        // switch attached. Log and carry on rather than treating it as an
-        // error.
+        // The verbs handled here are not provably the whole vocabulary — the
+        // captures behind them cover two installations. Log and carry on
+        // rather than treating it as an error.
         qCDebug(lcDevices) << "GreenHeron: unhandled record" << record.verb;
         break;
     }
@@ -356,6 +428,92 @@ QMap<QString, QString> GreenHeronModel::locksBySwitch(const QString& name) const
         held.insert(port, holder);
     }
     return held;
+}
+
+// ── Rotators ────────────────────────────────────────────────────────────────
+
+void GreenHeronModel::onRotorSilenceTick()
+{
+    QStringList live;
+    for (const QString& name : std::as_const(m_rotorOrder)) {
+        if (isRotorLive(name)) {
+            live.append(name);
+        }
+    }
+    if (live == m_liveRotors) {
+        return;
+    }
+
+    for (const QString& name : std::as_const(m_liveRotors)) {
+        if (!live.contains(name)) {
+            qCDebug(lcDevices) << "GreenHeron: rotator" << name
+                               << "silent for" << kRotorSilentAfterMs
+                               << "ms - treating it as gone";
+        }
+    }
+    m_liveRotors = live;
+    if (live.isEmpty()) {
+        m_rotorSilenceTimer->stop();
+    }
+    emit panelChanged();
+}
+
+QStringList GreenHeronModel::rotorNames() const
+{
+    QStringList names;
+    names.reserve(m_rotorOrder.size());
+    for (const QString& name : m_rotorOrder) {
+        if (isRotorLive(name)) {
+            names.append(name);
+        }
+    }
+    return names;
+}
+
+GreenHeronRotorState GreenHeronModel::rotorState(const QString& name) const
+{
+    return m_rotors.value(name);
+}
+
+bool GreenHeronModel::isRotorLive(const QString& name) const
+{
+    const auto it = m_rotors.constFind(name);
+    if (it == m_rotors.constEnd()) {
+        return false;
+    }
+    return (m_clock.elapsed() - it->lastPointMs) < kRotorSilentAfterMs;
+}
+
+bool GreenHeronModel::turnTo(const QString& rotorName, double degrees)
+{
+    if (m_socket == nullptr || !m_connected) {
+        setLastError(tr("Not connected"));
+        return false;
+    }
+    // Liveness, not the switch replay gate: m_rotors is emptied for every
+    // socket we open, so a live rotator is by construction one that has
+    // reported on THIS connection. That is the same guarantee isReady() gives
+    // the antenna grid, established by the record that matters here.
+    if (!isRotorLive(rotorName)) {
+        setLastError(tr("\"%1\" is not reporting a heading").arg(rotorName));
+        return false;
+    }
+
+    const QByteArray wire = encodeTurn(rotorName, degrees);
+    if (wire.isEmpty()) {
+        qCWarning(lcDevices) << "GreenHeron: refusing to send un-encodable turn"
+                             << rotorName << degrees;
+        setLastError(tr("Cannot turn to %1°: outside the 0–360° the device is "
+                        "known to accept").arg(degrees, 0, 'f', kHeadingDecimals));
+        return false;
+    }
+
+    qCDebug(lcDevices) << "GreenHeron: turn" << rotorName << "->" << degrees;
+    m_socket->write(wire);
+    // No local write-back, on purpose. A commanded 64.3 settled at a mean
+    // 62.9 and dithered over several degrees; the reported heading arrives in
+    // the next POINT and is the only one this model will ever hold.
+    return true;
 }
 
 bool GreenHeronModel::selectPort(const QString& switchName, const QString& portName)

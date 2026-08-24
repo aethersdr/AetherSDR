@@ -15,7 +15,11 @@
 #include <QByteArray>
 #include <QStringList>
 
+#include <QLocale>
+
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <string>
 
@@ -56,6 +60,14 @@ const QByteArray kAdd195 =
     + QByteArrayLiteral("\x1f" "Vertical-NoFilters\x1d" "0\x1d" "0\x1d" "false")
     + QByteArrayLiteral("\x1f" "Dummy Load\x1d" "0\x1d" "0\x1d" "false")
     + QByteArrayLiteral("\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n");
+
+// The rotator's three records, verbatim. ADD arrives once on connect, POINT
+// every ~0.97 s, and the TURN below is the exact 16 bytes the vendor client
+// put on the wire for a commanded 89.0 — bare CR and all.
+const QByteArray kDeviceAdd = QByteArrayLiteral("ADD\x1f" "Rotor\r\n");
+const QByteArray kPoint     = QByteArrayLiteral("POINT\x1f" "Rotor\x1f" "50.4\x1f" "0\x1f" "0\r\n");
+const QByteArray kTurn89    = QByteArrayLiteral(
+    "\x54\x55\x52\x4e\x1f\x52\x6f\x74\x6f\x72\x1f\x38\x39\x2e\x30\x0d");
 
 QStringList portNames(const Record& record)
 {
@@ -341,6 +353,135 @@ void testEncodeRefusesFramingBytes()
 
 // ── Display ordering ────────────────────────────────────────────────────────
 
+void testParseDeviceAddAndPoint()
+{
+    const Record add = parse(kDeviceAdd.chopped(2));
+    report("ADD parses as a generic device announcement",
+           add.type == RecordType::DeviceAdd
+               && add.deviceName == QLatin1String("Rotor"),
+           add.deviceName.toStdString());
+
+    const Record point = parse(kPoint.chopped(2));
+    report("POINT carries the reported heading",
+           point.type == RecordType::Point
+               && point.deviceName == QLatin1String("Rotor")
+               && std::abs(point.heading - 50.4) < 1e-9,
+           std::to_string(point.heading));
+    // Fields 3 and 4 are carried and nothing branches on them. Field 3 held
+    // "0" through three separate confirmed rotations, which rules OUT "in
+    // motion"; it read "5" once at power-down. Carried, never interpreted.
+    report("POINT fields 3 and 4 are carried verbatim",
+           point.pointStatus == QLatin1String("0")
+               && point.unknownD == QLatin1String("0"),
+           (point.pointStatus + QLatin1Char('/') + point.unknownD).toStdString());
+
+    // The one seen at power-down, so the parser is pinned against the only
+    // non-"0" value ever observed rather than only the common case.
+    const Record powerDown =
+        parse(QByteArrayLiteral("POINT\x1f" "Rotor\x1f" "55.1\x1f" "5\x1f" "0"));
+    report("a status of 5 parses and is not treated as an error",
+           powerDown.type == RecordType::Point
+               && powerDown.pointStatus == QLatin1String("5"),
+           powerDown.pointStatus.toStdString());
+}
+
+void testPointWithAnUnparseableHeadingIsNotAPosition()
+{
+    // Inventing a position for an antenna is worse than admitting the field
+    // model is wrong for this record, so it surfaces as Unknown.
+    const Record bad =
+        parse(QByteArrayLiteral("POINT\x1f" "Rotor\x1f" "north\x1f" "0\x1f" "0"));
+    report("a POINT whose heading will not parse is Unknown, not a heading",
+           bad.type == RecordType::Unknown && bad.heading == 0.0,
+           bad.verb.toStdString());
+    report("the unparseable POINT still carries its fields",
+           bad.fields.value(1) == QLatin1String("north"),
+           bad.fields.join(QLatin1Char(',')).toStdString());
+}
+
+void testEncodeTurnMatchesTheWire()
+{
+    const QByteArray turn = encodeTurn(QStringLiteral("Rotor"), 89.0);
+    report("TURN is byte-identical to the captured command", turn == kTurn89,
+           turn.toHex(' ').toStdString());
+    report("TURN is 16 bytes", turn.size() == 16, std::to_string(turn.size()));
+    // The asymmetry that would be invisible in a string comparison of the
+    // printable part: SET_SWITCH ends CRLF, TURN ends with a bare CR.
+    report("TURN ends with a bare CR, not CRLF",
+           turn.endsWith('\r') && !turn.endsWith(QByteArrayLiteral("\r\n")),
+           turn.right(2).toHex(' ').toStdString());
+    report("TURN sends one decimal place",
+           encodeTurn(QStringLiteral("Rotor"), 64.0)
+               == QByteArrayLiteral("TURN\x1f" "Rotor\x1f" "64.0\r"),
+           encodeTurn(QStringLiteral("Rotor"), 64.0).toStdString());
+}
+
+void testEncodeTurnIsLocaleIndependent()
+{
+    // A comma-decimal locale is the failure this guards: QLocale-based
+    // formatting would put "64,3" on a wire that only ever carries "64.3",
+    // and it would do it only on the machines of operators who are not using
+    // an English locale — which is exactly the bug that never reproduces.
+    const QLocale saved = QLocale();
+    QLocale::setDefault(QLocale(QLocale::German, QLocale::Germany));
+    const QByteArray turn = encodeTurn(QStringLiteral("Rotor"), 64.3);
+    QLocale::setDefault(saved);
+
+    report("TURN uses a dot under a comma-decimal locale",
+           turn == QByteArrayLiteral("TURN\x1f" "Rotor\x1f" "64.3\r"),
+           turn.toStdString());
+}
+
+void testEncodeTurnRefusesWhatCannotBeRecalled()
+{
+    // There is no stop verb, so a rejected command is strictly better than a
+    // rotation that cannot be recalled.
+    report("TURN refuses a heading past 360",
+           encodeTurn(QStringLiteral("Rotor"), 400.0).isEmpty());
+    report("TURN refuses a negative heading",
+           encodeTurn(QStringLiteral("Rotor"), -1.0).isEmpty());
+    report("TURN refuses NaN",
+           encodeTurn(QStringLiteral("Rotor"),
+                      std::numeric_limits<double>::quiet_NaN()).isEmpty());
+    report("TURN refuses infinity",
+           encodeTurn(QStringLiteral("Rotor"),
+                      std::numeric_limits<double>::infinity()).isEmpty());
+    report("TURN accepts the endpoints",
+           !encodeTurn(QStringLiteral("Rotor"), 0.0).isEmpty()
+               && !encodeTurn(QStringLiteral("Rotor"), 360.0).isEmpty());
+
+    // The name comes from the device's own ADD/POINT, which makes it
+    // untrusted input we would otherwise echo back as extra framing.
+    report("TURN refuses a rotor name carrying a unit separator",
+           encodeTurn(QStringLiteral("Rot\x1for"), 90.0).isEmpty());
+    report("TURN refuses a rotor name carrying a CR",
+           encodeTurn(QStringLiteral("Rotor\r"), 90.0).isEmpty());
+    report("TURN refuses an empty rotor name",
+           encodeTurn(QString(), 90.0).isEmpty());
+}
+
+void testHeadingDeltaWraps()
+{
+    // 350 and 10 are 20 degrees apart. Getting this wrong shows the operator
+    // a 340-degree error beside a rotator that is very nearly on target.
+    report("delta wraps the short way across north",
+           std::abs(headingDelta(350.0, 10.0) - 20.0) < 1e-9,
+           std::to_string(headingDelta(350.0, 10.0)));
+    report("delta is symmetric",
+           std::abs(headingDelta(10.0, 350.0) - 20.0) < 1e-9,
+           std::to_string(headingDelta(10.0, 350.0)));
+    report("delta caps at 180",
+           std::abs(headingDelta(0.0, 180.0) - 180.0) < 1e-9,
+           std::to_string(headingDelta(0.0, 180.0)));
+    report("delta of a heading with itself is zero",
+           std::abs(headingDelta(64.3, 64.3)) < 1e-9);
+    // The measured case the readout renders: reported 62.9 against a
+    // commanded 64.3.
+    report("the measured 62.9 vs 64.3 case reads 1.4",
+           std::abs(headingDelta(62.9, 64.3) - 1.4) < 1e-9,
+           std::to_string(headingDelta(62.9, 64.3)));
+}
+
 void testDisplayOrdering()
 {
     QStringList names = {"AS-84F-10", "Tornado", "AS-84F-2", "AS-84F-1"};
@@ -366,6 +507,12 @@ int main()
     testBoundaryCaps();
     testEncodeSelectMatchesTheWire();
     testEncodeRefusesFramingBytes();
+    testParseDeviceAddAndPoint();
+    testPointWithAnUnparseableHeadingIsNotAPosition();
+    testEncodeTurnMatchesTheWire();
+    testEncodeTurnIsLocaleIndependent();
+    testEncodeTurnRefusesWhatCannotBeRecalled();
+    testHeadingDeltaWraps();
     testDisplayOrdering();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);

@@ -1,5 +1,7 @@
 #include "core/GreenHeronProtocol.h"
 
+#include <cmath>
+
 namespace AetherSDR {
 namespace GreenHeron {
 
@@ -8,6 +10,14 @@ namespace {
 const QByteArray& recordTerminator()
 {
     static const QByteArray kTerminator = QByteArrayLiteral("\r\n");
+    return kTerminator;
+}
+
+// TURN's terminator, which is a bare CR and not the CRLF above. See
+// kTurnVerb — this is a captured asymmetry, not an oversight.
+const QByteArray& turnTerminator()
+{
+    static const QByteArray kTerminator = QByteArrayLiteral("\r");
     return kTerminator;
 }
 
@@ -146,7 +156,34 @@ Record parse(const QByteArray& record)
         return out;
     }
 
+    if (out.verb == QLatin1String("ADD") && restCount >= 1) {
+        out.type       = RecordType::DeviceAdd;
+        out.deviceName = decode(parts.at(1));
+        for (int i = 2; i < parts.size(); ++i) {
+            out.fields.append(decode(parts.at(i)));
+        }
+        return out;
+    }
+
+    if (out.verb == QLatin1String("POINT") && restCount >= 2) {
+        // A heading that will not parse as a number means the field model is
+        // wrong for this record, so surface it as Unknown rather than
+        // inventing a position for an antenna. toDouble() is the C-locale
+        // parse, which is what the wire carries.
+        bool ok = false;
+        const double heading = decode(parts.at(2)).toDouble(&ok);
+        if (ok) {
+            out.type        = RecordType::Point;
+            out.deviceName  = decode(parts.at(1));
+            out.heading     = heading;
+            out.pointStatus = parts.size() > 3 ? decode(parts.at(3)) : QString{};
+            out.unknownD    = parts.size() > 4 ? decode(parts.at(4)) : QString{};
+            return out;
+        }
+    }
+
     out.type = RecordType::Unknown;
+    out.fields.clear();
     for (int i = 1; i < parts.size(); ++i) {
         out.fields.append(decode(parts.at(i)));
     }
@@ -170,6 +207,47 @@ QByteArray encodeSelect(const QString& switchName, const QString& portName)
     wire += portName.toUtf8();
     wire += recordTerminator();
     return wire;
+}
+
+QByteArray encodeTurn(const QString& rotorName, double degrees)
+{
+    if (rotorName.isEmpty() || containsFramingByte(rotorName)) {
+        return {};
+    }
+    // Validated here rather than trusted, because there is no stop verb: a
+    // command that starts a wrong rotation cannot be recalled except by
+    // walking to the controller and cutting its power.
+    if (!std::isfinite(degrees)
+        || degrees < kMinHeadingDegrees
+        || degrees > kMaxHeadingDegrees) {
+        return {};
+    }
+
+    QByteArray wire;
+    wire += QByteArray(kTurnVerb);
+    wire += kUnitSeparator;
+    wire += rotorName.toUtf8();
+    wire += kUnitSeparator;
+    // QString::number is locale-independent; QLocale::toString() is not, and
+    // a comma-decimal locale would emit "89,0" here.
+    wire += QString::number(degrees, 'f', kHeadingDecimals).toUtf8();
+    wire += turnTerminator();
+    return wire;
+}
+
+double headingDelta(double lhs, double rhs)
+{
+    if (!std::isfinite(lhs) || !std::isfinite(rhs)) {
+        return 0.0;
+    }
+    // std::fmod keeps the sign of the dividend, so a negative difference has
+    // to be brought back into [0, 360) before the fold — otherwise 350 vs 10
+    // comes out 340.
+    double diff = std::fmod(lhs - rhs, 360.0);
+    if (diff < 0.0) {
+        diff += 360.0;
+    }
+    return diff > 180.0 ? 360.0 - diff : diff;
 }
 
 bool displayOrderLessThan(const QString& lhs, const QString& rhs)

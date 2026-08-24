@@ -2580,7 +2580,10 @@ add_executable(green_heron_applet_test
 )
 target_include_directories(green_heron_applet_test PRIVATE src tests)
 target_link_libraries(green_heron_applet_test PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+    # Qt6::Test for QTest::keyClicks — the heading field has a validator, and
+    # setText() walks straight past it, so the only way to test what a human
+    # can actually type is to type it.
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test
 )
 set_target_properties(green_heron_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME green_heron_applet_test COMMAND green_heron_applet_test)

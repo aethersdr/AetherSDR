@@ -241,7 +241,7 @@
  },
  "core/GreenHeronProtocol.h": {
   "tag": "peripheral(greenheron)",
-  "note": "Pure framing/parsing/encoding for the Green Heron Everyware antenna-switch wire protocol \u2014 no sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
+  "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol \u2014 the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
   "split": "",
   "confidence": "high"
  },
@@ -799,7 +799,7 @@
  },
  "models/GreenHeronModel.h": {
   "tag": "peripheral(greenheron)",
-  "note": "Green Heron \"Everyware\" antenna-switch client \u2014 a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
+  "note": "Green Heron \"Everyware\" client \u2014 antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
   "split": "",
   "confidence": "high"
  },

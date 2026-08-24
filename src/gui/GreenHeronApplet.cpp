@@ -7,6 +7,7 @@
 
 #include <QAccessible>
 #include <QComboBox>
+#include <QDoubleValidator>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -15,6 +16,8 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <iterator>
 
 namespace AetherSDR {
 
@@ -250,10 +253,118 @@ void GreenHeronApplet::buildUI()
 
     // ── The chosen switch's antenna ports ───────────────────────────────────
     m_portHost = new QWidget;
+    m_portHost->setObjectName(QStringLiteral("greenHeronPorts"));
     m_portLayout = new QVBoxLayout(m_portHost);
     m_portLayout->setContentsMargins(0, 0, 0, 0);
     m_portLayout->setSpacing(2);
     outer->addWidget(m_portHost);
+
+    // ── Rotator ─────────────────────────────────────────────────────────────
+    //
+    // Below the antennas because that is the order the operator works in, and
+    // hidden as a whole until the device reports a heading: a server whose
+    // rotator controller is off announces nothing at all, so an empty rotator
+    // row would be a permanent fixture on most installations.
+    {
+        m_rotorSection = new QWidget;
+        m_rotorSection->setObjectName(QStringLiteral("greenHeronRotorSection"));
+        auto* section = new QVBoxLayout(m_rotorSection);
+        section->setContentsMargins(0, 2, 0, 0);
+        section->setSpacing(2);
+
+        auto* headerRow = new QHBoxLayout;
+        headerRow->setSpacing(4);
+
+        auto* rotorLabel = new QLabel(tr("Rotor"));
+        ThemeManager::instance().applyStyleSheet(rotorLabel, kLabelStyle);
+        headerRow->addWidget(rotorLabel);
+
+        // One rotator is the normal case, and a combo offering a single choice
+        // is furniture. It appears only when the device reports more than one.
+        m_rotorCombo = new QComboBox;
+        m_rotorCombo->setObjectName(QStringLiteral("greenHeronRotor"));
+        m_rotorCombo->setAccessibleName(tr("Rotator"));
+        m_rotorCombo->setAccessibleDescription(
+            tr("Which of the server's rotators this tile drives."));
+        m_rotorCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_rotorCombo->setMinimumWidth(0);
+        ThemeManager::instance().applyStyleSheet(
+            m_rotorCombo,
+            QStringLiteral("QComboBox { %1 }").arg(kFieldStyle)
+                + "QComboBox::drop-down { border: none; }"
+                  "QComboBox QAbstractItemView { background: {{color.background.1}}; "
+                  "color: {{color.text.primary}}; "
+                  "selection-background-color: {{color.background.2}}; }");
+        m_rotorCombo->hide();
+        connect(m_rotorCombo, &QComboBox::currentTextChanged, this,
+                [this](const QString& name) {
+                    if (name.isEmpty()) {
+                        return;
+                    }
+                    m_wantedRotor = name;
+                    syncRotorFromModel();
+                });
+        headerRow->addWidget(m_rotorCombo, 1);
+
+        m_rotorReadout = new QLabel;
+        m_rotorReadout->setObjectName(QStringLiteral("greenHeronRotorReadout"));
+        m_rotorReadout->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        ThemeManager::instance().applyStyleSheet(
+            m_rotorReadout, statusStyle(QStringLiteral("color.text.primary")));
+        headerRow->addWidget(m_rotorReadout, 1);
+
+        section->addLayout(headerRow);
+
+        auto* turnRow = new QHBoxLayout;
+        turnRow->setSpacing(4);
+
+        m_headingEdit = new QLineEdit;
+        m_headingEdit->setObjectName(QStringLiteral("greenHeronHeading"));
+        m_headingEdit->setAccessibleName(tr("Heading to turn to"));
+        m_headingEdit->setAccessibleDescription(
+            tr("Degrees, 0 to 360. Typing here only proposes a heading; the "
+               "Turn button sends it. There is no stop command for this "
+               "rotator, so a turn cannot be cancelled once it starts."));
+        m_headingEdit->setPlaceholderText(tr("degrees"));
+        m_headingEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_headingEdit->setMinimumWidth(0);
+        // The C locale, matching the wire and the readout, so a dot is never
+        // the thing that gets rejected on a field whose only legal output is a
+        // wire heading.
+        //
+        // It does NOT make the field dot-only, and that was measured rather
+        // than assumed: QDoubleValidator answers Intermediate — not Invalid —
+        // for a foreign decimal mark, so QLineEdit accepts the keystroke under
+        // either locale and "64,3" lands in the field intact. sendTurn()
+        // normalises it. Both halves are load-bearing; neither is redundant.
+        auto* validator = new QDoubleValidator(GreenHeron::kMinHeadingDegrees,
+                                               GreenHeron::kMaxHeadingDegrees,
+                                               GreenHeron::kHeadingDecimals,
+                                               m_headingEdit);
+        validator->setLocale(QLocale::c());
+        m_headingEdit->setValidator(validator);
+        ThemeManager::instance().applyStyleSheet(
+            m_headingEdit, QStringLiteral("QLineEdit { %1 }").arg(kFieldStyle));
+        connect(m_headingEdit, &QLineEdit::returnPressed,
+                this, &GreenHeronApplet::sendTurn);
+        turnRow->addWidget(m_headingEdit, 1);
+
+        m_turnBtn = new QPushButton(tr("Turn"));
+        m_turnBtn->setObjectName(QStringLiteral("greenHeronTurn"));
+        m_turnBtn->setAccessibleName(tr("Turn the rotator"));
+        m_turnBtn->setAccessibleDescription(
+            tr("Send the typed heading to the rotator. This starts a rotation "
+               "that cannot be stopped from here."));
+        m_turnBtn->setFixedWidth(72);
+        ThemeManager::instance().applyStyleSheet(m_turnBtn, kConnectButtonStyle);
+        connect(m_turnBtn, &QPushButton::clicked, this, &GreenHeronApplet::sendTurn);
+        turnRow->addWidget(m_turnBtn);
+
+        section->addLayout(turnRow);
+
+        m_rotorSection->hide();
+        outer->addWidget(m_rotorSection);
+    }
 
     m_noteLabel = new QLabel;
     m_noteLabel->setObjectName(QStringLiteral("greenHeronNote"));
@@ -267,6 +378,30 @@ void GreenHeronApplet::buildUI()
 QString GreenHeronApplet::selectedSwitch() const
 {
     return effectiveSwitch();
+}
+
+QString GreenHeronApplet::selectedRotor() const
+{
+    return effectiveRotor();
+}
+
+QString GreenHeronApplet::effectiveRotor() const
+{
+    // Only rotators that are actually reporting: a name the device has stopped
+    // naming is a controller that is off, and holding onto it would put a Turn
+    // button in front of an antenna nobody is driving.
+    const QStringList live = m_model->rotorNames();
+    if (m_wantedRotor.isEmpty()) {
+        // Nothing chosen — one rotator is the normal case and there is no
+        // choice to lose.
+        return live.isEmpty() ? QString{} : live.first();
+    }
+    // A CHOICE THE OPERATOR MADE IS NEVER SILENTLY REPOINTED, exactly as
+    // effectiveSwitch() above refuses to. Falling back to live.first() here
+    // would mean: operator picks Rotor-B, types a heading, B's controller goes
+    // off, and Turn aims Rotor-A instead — with no stop verb to recall it.
+    // Showing nothing is the honest answer; the row returns when B does.
+    return live.contains(m_wantedRotor) ? m_wantedRotor : QString{};
 }
 
 QString GreenHeronApplet::effectiveSwitch() const
@@ -397,6 +532,7 @@ void GreenHeronApplet::syncFromModel()
 {
     refreshSwitchChoices();
     updateStatus();
+    syncRotorFromModel();
 
     // effectiveSwitch(), not m_wantedSwitch: the buttons built here send to the
     // relays, so they must name the same switch the combo is showing.
@@ -458,6 +594,150 @@ void GreenHeronApplet::syncFromModel()
             announce(button, QAccessible::DescriptionChanged);
         }
     }
+}
+
+// ── Rotator ─────────────────────────────────────────────────────────────────
+
+void GreenHeronApplet::refreshRotorChoices()
+{
+    const QStringList live = m_model->rotorNames();
+
+    QStringList current;
+    current.reserve(m_rotorCombo->count());
+    for (int i = 0; i < m_rotorCombo->count(); ++i) {
+        current.append(m_rotorCombo->itemText(i));
+    }
+    if (current != live) {
+        const QSignalBlocker blocker(m_rotorCombo);
+        m_rotorCombo->clear();
+        m_rotorCombo->addItems(live);
+        const int index = live.indexOf(m_wantedRotor);
+        m_rotorCombo->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    // A chooser offering one choice is furniture; the device reports one
+    // rotator on every installation seen so far.
+    m_rotorCombo->setVisible(live.size() > 1);
+}
+
+void GreenHeronApplet::syncRotorFromModel()
+{
+    refreshRotorChoices();
+
+    // A commanded heading describes one rotator on one power cycle. Left to
+    // rot, it would come back an hour later beside a live reading as an
+    // "asked" this session never sent — the same phantom kRotorSilentAfterMs
+    // exists to kill, one layer up.
+    const QStringList live = m_model->rotorNames();
+    for (auto it = m_commanded.begin(); it != m_commanded.end();) {
+        it = live.contains(it.key()) ? std::next(it) : m_commanded.erase(it);
+    }
+
+    const QString name = effectiveRotor();
+    const bool present = !name.isEmpty();
+
+    // The whole section, not just the button. There is no "rotator offline"
+    // state to render: the device reports absence and a powered-off controller
+    // identically, by saying nothing, so anything drawn here would be a claim
+    // the wire does not support.
+    m_rotorSection->setVisible(present);
+    if (!present) {
+        if (!m_lastRotorAnnouncement.isEmpty()) {
+            m_lastRotorAnnouncement.clear();
+            // The rotator going away is worth saying; announced on the readout
+            // because that is the widget carrying the description, and it says
+            // so before the row is gone from the tree.
+            m_rotorReadout->setAccessibleDescription(
+                tr("The rotator has stopped reporting a heading"));
+            announce(m_rotorReadout, QAccessible::DescriptionChanged);
+        }
+        return;
+    }
+
+    const GreenHeronRotorState rotor = m_model->rotorState(name);
+    const QString reported =
+        QStringLiteral("%1°").arg(rotor.heading, 0, 'f', GreenHeron::kHeadingDecimals);
+
+    QString readout = reported;
+    QString description = tr("%1 reports %2").arg(name, reported);
+    const auto asked = m_commanded.constFind(name);
+    if (asked != m_commanded.constEnd()) {
+        const QString askedText =
+            QStringLiteral("%1°").arg(*asked, 0, 'f', GreenHeron::kHeadingDecimals);
+        const QString deltaText =
+            QStringLiteral("%1°").arg(GreenHeron::headingDelta(rotor.heading, *asked),
+                                      0, 'f', GreenHeron::kHeadingDecimals);
+        // Reported, commanded and the gap — never conflated, and never
+        // resolved into a verdict. The rotator settles about two degrees short
+        // along whichever way it turned and dithers over a wider band than
+        // that at rest, so "arrived" is not a statement this data can support.
+        readout = tr("%1 · asked %2 · Δ%3").arg(reported, askedText, deltaText);
+        description = tr("%1 reports %2; %3 was asked for, a difference of %4")
+                          .arg(name, reported, askedText, deltaText);
+    }
+
+    m_rotorReadout->setText(readout);
+    m_rotorReadout->setAccessibleName(tr("Rotator heading"));
+    m_rotorReadout->setAccessibleDescription(description);
+    m_rotorReadout->setToolTip(description);
+
+    // The heading is live and dithers at rest, so it is deliberately NOT
+    // announced on every POINT — that is roughly once a second, and it would
+    // make the tile unusable with a screen reader. Only the rotator appearing
+    // is announced here; a command going out is announced by the note.
+    if (m_lastRotorAnnouncement != name) {
+        m_lastRotorAnnouncement = name;
+        announce(m_rotorReadout, QAccessible::DescriptionChanged);
+    }
+
+    // Live and connected is the whole gate. isReady() is the ANTENNA panel's
+    // gate — it waits on SWITCHADD, which has nothing to say about a rotator —
+    // and the model's own liveness check is the stronger statement anyway: it
+    // means a POINT arrived on this very socket.
+    m_headingEdit->setEnabled(true);
+    m_turnBtn->setEnabled(true);
+}
+
+void GreenHeronApplet::sendTurn()
+{
+    const QString name = effectiveRotor();
+    if (name.isEmpty()) {
+        note(tr("No rotator is reporting a heading"));
+        return;
+    }
+
+    const QString text = m_headingEdit->text().trimmed();
+    if (text.isEmpty()) {
+        note(tr("Type a heading in degrees first"));
+        return;
+    }
+    // The validator lets a comma through (see buildUI — Intermediate, not
+    // Invalid), so an operator on a comma-decimal system types "64,3" and it
+    // reaches here verbatim. Normalising is what stops that becoming either a
+    // refused turn that looks like a broken button or, worse, a 643 read as a
+    // group separator.
+    bool ok = false;
+    QString normalised = text;
+    normalised.replace(QLatin1Char(','), QLatin1Char('.'));
+    const double degrees = normalised.toDouble(&ok);
+    if (!ok) {
+        note(tr("\"%1\" is not a heading").arg(text));
+        return;
+    }
+
+    if (!m_model->turnTo(name, degrees)) {
+        // turnTo() has already set the reason through errorOccurred.
+        return;
+    }
+
+    // Recorded ONLY to render "asked X · ΔY" beside the reported heading. The
+    // readout keeps showing what the device reports; nothing here writes a
+    // commanded value into the position display.
+    m_commanded.insert(name, degrees);
+    showNote(tr("Sent %1 → %2°")
+                 .arg(name,
+                      QString::number(degrees, 'f', GreenHeron::kHeadingDecimals)),
+             QStringLiteral("color.accent.success"));
+    syncRotorFromModel();
 }
 
 void GreenHeronApplet::updateStatus()
