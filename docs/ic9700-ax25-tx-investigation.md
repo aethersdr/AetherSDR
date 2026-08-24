@@ -1,9 +1,11 @@
 # IC-9700 AX.25 Transmit over RS-BA1 — Signal Paths and Investigation Record
 
-**Status:** Investigation record — two confirmed defects fixed/in-flight, one
-radio-side anomaly still open, deciding experiment specified
+**Status:** Investigation record — timing defect fixed and re-tested (does
+NOT resolve the fault); one radio-side anomaly open and now the sole leading
+candidate; deciding experiment specified, not yet run
 **Author:** Nigel Fenton (G0JKN) with Claude, PTT-timing diagnosis by @jensenpat
-**Date:** 2026-08-22 (consolidates bench work from 2026-08-12 onward)
+**Date:** 2026-08-22, updated 2026-08-24 (consolidates bench work from
+2026-08-12 onward)
 **Scope:** Why AX.25 transmitted through AetherSDR to an IC-9700 over RS-BA1
 LAN audio keys the radio, sounds like packet on a receiver, and decodes as
 nothing — with every signal path involved described end to end, every
@@ -167,26 +169,33 @@ code at every step above.
 | 08-22 | @jensenpat: PTT timing truncates preamble (Icom VHF) | confirmed in code (§2.2), every step | a real defect; the fix belongs at the keying/audio synchronization |
 | 08-22 | Off-air burst structural analysis (08-12 captures) | bursts full-length (0.60–0.67 s ×3 retries), modulation present start to end | **front-truncation is NOT what these captures show** — PTT timing does not explain this fault instance |
 | 08-22 | Spectral comparison, same analysis on control (bench artifacts: `ax25bench-wire.wav` / `ax25bench-post.wav` 08-20 controls; `ax25-connect-burst.wav` 08-12 off-air; 64k-FFT band-peak method, reproducible from the WAVs) | client wire tap (08-20): peaks 1176 / 2224 Hz — mark/space where they belong. Off-air (08-12): 1175 / **1775** Hz — mark in place, space displaced ~425 Hz | corruption is SPECTRAL, not temporal; consistent with radio-side audio-path anomaly; level-invariant, audible, undecodable |
+| 08-24 | Live re-test with @jensenpat's PTT/CI-V timing fix in place (radio-confirmed keying now awaited, §2.2) | **decode still fails — no improvement over pre-fix behavior** | **the timing fix is EXCLUDED as the cause of this fault instance.** Confirms the 08-22 spectral finding rather than merely being under-explained by it; deviation-pinning / RS-BA1 audio-path anomaly is the sole remaining leading candidate |
 
-**Era caveat on the last row:** the off-air captures (08-12) and the client
-tap controls (08-20) are eight days and several Icom fixes apart. "The seam
-displaced the tone" and "the client transmitted a wrong tone on 08-12 and has
-since been fixed" cannot be separated from these files.
+**Era caveat on the 08-22 spectral row:** the off-air captures (08-12) and the
+client tap controls (08-20) are eight days and several Icom fixes apart. "The
+seam displaced the tone" and "the client transmitted a wrong tone on 08-12
+and has since been fixed" cannot be separated from these files. The 08-24
+row is a live re-test on current code and does not carry this caveat.
 
 ## 5. Findings
 
-1. **PTT/audio synchronization defect — confirmed, distinct, real.**
+1. **PTT/audio synchronization defect — confirmed, distinct, real, and now
+   EXCLUDED as the cause of this fault instance.**
    Optimistic keyed-state opens the audio gate before the radio keys; PTT-ON
    is paced while only PTT-OFF bypasses; the radio-confirmed keying signal
    exists and is unawaited; `kTxLeadMs` is a guess. Diagnosis @jensenpat,
-   fix in progress by him. Predicts first-frame loss with later frames
-   decodable — which is exactly why it **under-explains** this fault's 0/N.
+   fix landed; predicts first-frame loss with later frames decodable. Live
+   re-test 08-24 with the fix in place: **decode still fails**, so this
+   defect — real as it is — is not what blocks decode here. The fix is
+   presumably still worth keeping for the synchronization gap it closes on
+   its own terms.
 2. **TxPacketizer silent overflow — confirmed, fixed as diagnosis.** #5162
    adds counters; the drop rule is unchanged. On the recorded bench keyings
    the counter did not advance, so production drops are not established as a
    cause here.
-3. **Deviation pinning / spectral displacement — open, radio-side, and the
-   leading candidate for THIS fault.** Level-invariance, full-length corrupt
+3. **Deviation pinning / spectral displacement — open, radio-side, and now
+   the SOLE leading candidate for THIS fault** (Finding 1's exclusion
+   removes timing as an alternative). Level-invariance, full-length corrupt
    bursts, and a displaced space tone all point past the UDP datagrams into
    the RS-BA1 audio path. AetherSDR's last observable point (the wire tap)
    is clean in CONTENT — with the honest limit that the tap's frame-count
@@ -198,16 +207,25 @@ since been fixed" cannot be separated from these files.
 
 ## 6. The deciding experiment
 
-One keying on the bench, after @jensenpat's timing fix lands, captured at
-three points **simultaneously**:
+**Precondition met 2026-08-24:** @jensenpat's timing fix has landed and been
+re-tested live (§4, 08-24 row) — decode still fails with it in place, so the
+timing variable is now settled rather than open. The experiment below no
+longer needs to distinguish "timing fix helps" from "timing fix doesn't
+help"; it is now purely about localizing the remaining fault to the client
+or the radio.
+
+One keying on the bench, captured at three points **simultaneously**:
 
 1. post-resample tap (client, last point AE controls),
 2. wire tap (datagram payload),
 3. RTL-SDR IQ off-air (independent, no receiver audio path).
 
 Same day, same build, same burst. If (1)(2) decode and show 1200/2200 while
-(3) shows a displaced tone or fails to decode: the fault is radio-side in the
-RS-BA1 audio path, and #5011 gets retitled to say exactly that. If all three
-decode: the timing fix was the whole story for this path too, and #5011
-closes. Either way the taps (#5058) are the instrument, re-scoped from
-"find the audio fault" to "prove where the boundary is".
+(3) shows a displaced tone or fails to decode: the fault is confirmed
+radio-side in the RS-BA1 audio path, and #5011 gets retitled to say exactly
+that. If (1) or (2) also fails to decode: the fault is client-side after
+all, upstream of where prior taps looked — a new hypothesis the 08-24 result
+does not rule out on its own, since no simultaneous client-side tap
+accompanied the 08-24 re-test. Either way the taps (#5058) are the
+instrument, re-scoped from "find the audio fault" to "prove where the
+boundary is". **Still not run as of 2026-08-24.**
