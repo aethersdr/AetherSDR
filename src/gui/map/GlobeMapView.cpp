@@ -103,6 +103,12 @@ GlobeMapView::GlobeMapView(QWidget* parent)
 {
     setObjectName(QStringLiteral("pskReporterGlobe"));
     setAccessibleName(tr("PSK Reporter globe"));
+    setAccessibleDescription(tr(
+        "Drag to rotate, Shift-drag or use left and right brackets to tilt "
+        "the axis, pinch to zoom, and use Home to reset"));
+    setToolTip(tr(
+        "Drag to rotate · Shift-drag to tilt axis · Pinch to zoom · "
+        "Two-finger twist to tilt axis · Home to reset"));
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     grabGesture(Qt::PinchGesture);
@@ -796,7 +802,11 @@ void GlobeMapView::mouseMoveEvent(QMouseEvent* event)
         const QPointF delta = event->position() - m_lastPointerPosition;
         if (QLineF(QPointF(), delta).length() >= 1.0) {
             m_hasMovedDuringDrag = true;
-            applyDragDelta(delta);
+            if (event->modifiers().testFlag(Qt::ShiftModifier)) {
+                applyRollDelta(static_cast<float>(-delta.x()) * 0.28F);
+            } else {
+                applyDragDelta(delta);
+            }
             m_lastPointerPosition = event->position();
             m_hoverMarker = -1;
             m_hoverCard->hide();
@@ -874,7 +884,9 @@ bool GlobeMapView::event(QEvent* event)
             const float degrees = static_cast<float>(gesture->value());
             if (!qFuzzyIsNull(degrees)) {
                 beginTransientInteraction();
-                applyRollDelta(degrees);
+                // Native positive rotation is reported in the opposite
+                // direction from the globe's camera-facing Z axis.
+                applyRollDelta(-degrees);
                 update();
             }
             return true;
@@ -887,7 +899,7 @@ bool GlobeMapView::event(QEvent* event)
             if (pinch->changeFlags().testFlag(
                     QPinchGesture::RotationAngleChanged)) {
                 applyRollDelta(static_cast<float>(
-                    pinch->rotationAngle() - pinch->lastRotationAngle()));
+                    pinch->lastRotationAngle() - pinch->rotationAngle()));
             }
             if (scale > 0.0) {
                 beginTransientInteraction();
@@ -928,6 +940,12 @@ void GlobeMapView::keyPressEvent(QKeyEvent* event)
     case Qt::Key_Home:
         resetToHome();
         return;
+    case Qt::Key_BracketLeft:
+        applyRollDelta(5.0F);
+        break;
+    case Qt::Key_BracketRight:
+        applyRollDelta(-5.0F);
+        break;
     default:
         QOpenGLWidget::keyPressEvent(event);
         return;
