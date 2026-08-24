@@ -1743,6 +1743,9 @@ sets nothing and keys nothing.
   design question.
 - `lines` counts lines as the pane shows them: a trailing newline ends the last line rather than
   starting another.
+- `length` is UTF-16 code units (`QString::size()`), not Unicode code points: a driver comparing it
+  to Python's `len(resp["text"])` will disagree on any document containing astral characters
+  (emoji in a chat or cluster pane is the realistic case).
 - A non-text target answers `not a text view: <target> (<class>)`.
 - The view is read through its `plainText` property (Qt's `QTextEdit`/`QPlainTextEdit` both export it),
   so `QTextBrowser` and read-only views are covered; `QLineEdit` has no such property and keeps its

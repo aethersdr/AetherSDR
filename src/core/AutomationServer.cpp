@@ -239,13 +239,12 @@ QJsonObject describeAction(const QAction* action, const QMenu* owner)
 // Text views (QTextEdit / QPlainTextEdit) serialize a bounded prefix wherever
 // `value` is reported — dump_tree and invoke's newValue echo alike (#5078).
 constexpr int kTextViewValueCap = 2048;
-bool textViewValueTruncated(const QWidget* w)
-{
-    const QVariant plain = w->property("plainText");
-    return plain.isValid() && plain.toString().size() > kTextViewValueCap;
-}
 
-QString widgetValue(const QWidget* w)
+// `truncated` (optional) reports whether the text-view cap cut the value —
+// set in the same pass that builds the string, so the document is
+// materialized once, not re-read for the flag (a 5k-line log would
+// otherwise be built twice per dump_tree node).
+QString widgetValue(const QWidget* w, bool* truncated = nullptr)
 {
     if (auto* s = qobject_cast<const QAbstractSlider*>(w))
         return QString::number(s->value());
@@ -289,6 +288,8 @@ QString widgetValue(const QWidget* w)
             int cut = kTextViewValueCap;
             if (doc.at(cut - 1).isHighSurrogate())
                 --cut;
+            if (truncated)
+                *truncated = true;
             return doc.left(cut) + QStringLiteral("…<truncated>");
         }
     }
@@ -405,12 +406,13 @@ QJsonObject describeWidget(const QWidget* w)
         o[QStringLiteral("windowState")] = QLatin1String(ws);
     }
 
-    const QString val = widgetValue(w);
+    bool valTruncated = false;
+    const QString val = widgetValue(w, &valTruncated);
     if (!val.isNull()) {
         o[QStringLiteral("value")] = val;
         // Machine-readable truncation signal: the "…<truncated>" marker is
         // in-band and a transcript could contain it itself. (#5078)
-        if (textViewValueTruncated(w))
+        if (valTruncated)
             o[QStringLiteral("valueTruncated")] = true;
     }
 

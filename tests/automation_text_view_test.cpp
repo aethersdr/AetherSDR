@@ -135,6 +135,23 @@ int main(int argc, char** argv)
            !notText.value(QStringLiteral("ok")).toBool()
                && notText.value(QStringLiteral("error")).toString().startsWith(QStringLiteral("not a text view")));
 
+    // The getText alias resolves to the same verb.
+    const QJsonObject viaAlias = request(&client,
+        QJsonObject{{QStringLiteral("cmd"), QStringLiteral("getText")},
+                    {QStringLiteral("target"), QStringLiteral("logPane")}});
+    expect("getText alias answers like text", viaAlias.value(QStringLiteral("ok")).toBool()
+               && viaAlias.value(QStringLiteral("lines")).toInt() == 2);
+
+    // The observe-only rail: `text` is a pure read and must stay serviced in
+    // read-only mode — this is the assertion that pins the isReadOnlyRequest
+    // kSafe entry (deleting "text" from that list fails here).
+    server.setReadOnly(true);
+    const QJsonObject readOnlyText = text(&client, QStringLiteral("logPane"));
+    expect("text is serviced in observe-only mode (kSafe)",
+           readOnlyText.value(QStringLiteral("ok")).toBool()
+               && readOnlyText.value(QStringLiteral("lines")).toInt() == 2);
+    server.setReadOnly(false);
+
     std::printf("%s\n", gFailures == 0 ? "ALL PASS" : "FAILURES");
     return gFailures == 0 ? 0 : 1;
 }
