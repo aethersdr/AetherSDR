@@ -94,6 +94,9 @@ private slots:
     // be driven over HID — point the user at the Ulanzi Studio plugin. (#3485)
     void onUnsupportedVariant(const QString& deviceName);
 #endif
+    // Amber advisory status text — the single styled call site every
+    // advisory state shares (colour-ratchet discipline).
+    void showAttentionStatus(const QString& text);
 
 private:
     struct Pill {

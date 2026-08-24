@@ -33,6 +33,12 @@
 
 namespace AetherSDR {
 
+// Shared amber "attention" style for the status label's advisory states —
+// Linux needs-permission and Windows unsupported-variant. ONE literal, reused:
+// the colour ratchet counts occurrences and the theme set has no text/warning
+// token yet; when one lands, this is the single place to swap it in.
+static const char kAttentionLabelStyle[] = "QLabel { color: #e0a030; }";
+
 // Cached product image — loaded once, shared by dialBodyRect (for
 // aspect-correct sizing) and the canvas paintEvent.  Falls back to a
 // stylized painted body if the asset isn't present.
@@ -680,8 +686,7 @@ void UlanziDialMapperDialog::onAccessRequired(const QString& deviceName)
     QString display = deviceName;
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
-    m_statusLabel->setText(tr("%1 detected — needs permission").arg(display));
-    m_statusLabel->setStyleSheet("QLabel { color: #e0a030; }");
+    showAttentionStatus(tr("%1 detected — needs permission").arg(display));
     if (m_grantAccessBtn) {
         m_grantAccessBtn->setVisible(true);
         m_grantAccessBtn->setEnabled(true);
@@ -776,14 +781,23 @@ void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
     // Don't downgrade a live connection — this state only applies while
     // nothing supported is open.
     if (m_manager && m_manager->isConnected()) return;
-    m_statusLabel->setText(
+    showAttentionStatus(
         tr("%1 detected — this variant can't be driven over HID. "
            "Use the bundled Ulanzi Studio plugin instead (see "
            "plugins/ulanzi-aethersdr in the AetherSDR install/repo).")
             .arg(deviceName));
-    m_statusLabel->setStyleSheet("QLabel { color: #e0a030; }");
 }
 #endif  // Q_OS_WIN && HAVE_HIDAPI
+
+// The one amber call site, shared by every advisory status (Linux
+// needs-permission, Windows unsupported-variant) — the colour ratchet
+// tracks setStyleSheet call sites, so new advisory states reuse this one.
+void UlanziDialMapperDialog::showAttentionStatus(const QString& text)
+{
+    if (!m_statusLabel) return;
+    m_statusLabel->setText(text);
+    m_statusLabel->setStyleSheet(kAttentionLabelStyle);
+}
 
 } // namespace AetherSDR
 
