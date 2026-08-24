@@ -16,6 +16,7 @@
 #include "core/backends/icom/CivCodec.h"
 #include "models/BandDefs.h"
 #include "models/DeclaredBands.h"
+#include "models/SliceModel.h"
 #include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
@@ -84,6 +85,70 @@ int main(int argc, char** argv)
           "an Icom remembers its own state, so the client restores NOTHING");
     check(!caps.hasDownwardExpander,
           "Icom exposes no DEXP surface without an evidenced command path");
+
+    // The Icom transport reports one stable VFO as slice 0. On reconnect,
+    // RadioModel stages the old SliceModel so the UI can keep its subscriptions
+    // alive while the backend confirms the new session. The non-Flex materializer
+    // used to ignore that staged object and allocate a replacement: the VFO was
+    // wired to the replacement by sliceAdded, while RX Controls remained wired
+    // to the original object and stopped following TCI frequency changes.
+    //
+    // Both the IC-705 and IC-7300MK2 use this same family-neutral materializer;
+    // model-specific CI-V profiles begin below the seam and cannot change this
+    // ownership invariant.
+    {
+        auto* icomBackend = dynamic_cast<icom::IcomCivBackend*>(model.backend());
+        check(icomBackend != nullptr, "an Icom backend exists for reconnect coverage");
+        if (icomBackend) {
+            int sliceAdds = 0;
+            QObject::connect(&model, &RadioModel::sliceAdded,
+                             &model, [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            SliceDelta initial;
+            initial.panId = QStringLiteral("icom");
+            initial.inUse = true;
+            initial.active = true;
+            initial.txSlice = true;
+            initial.frequency = 14.074;
+            emit icomBackend->sliceChanged(0, initial);
+
+            SliceModel* subscribedSlice = model.slice(0);
+            check(subscribedSlice != nullptr,
+                  "the first Icom VFO materializes a SliceModel");
+            check(sliceAdds == 1,
+                  "the first Icom VFO announces one UI slice");
+
+            int subscriberUpdates = 0;
+            if (subscribedSlice) {
+                QObject::connect(subscribedSlice, &SliceModel::frequencyChanged,
+                                 subscribedSlice,
+                                 [&subscriberUpdates](double) { ++subscriberUpdates; });
+            }
+
+            // Drive the same lifecycle edge a real RS-BA1 reconnect reports.
+            emit icomBackend->connected();
+            check(model.slices().isEmpty(),
+                  "reconnect stages the prior Icom VFO before fresh state arrives");
+
+            SliceDelta reconnected;
+            reconnected.panId = QStringLiteral("icom");
+            reconnected.inUse = true;
+            reconnected.active = true;
+            reconnected.txSlice = true;
+            reconnected.frequency = 7.074;
+            emit icomBackend->sliceChanged(0, reconnected);
+
+            check(model.slice(0) == subscribedSlice,
+                  "Icom reconnect reclaims the subscribed SliceModel");
+            check(sliceAdds == 1,
+                  "reclaim does not announce a duplicate UI slice");
+            check(subscriberUpdates == 1,
+                  "a pre-reconnect frequency subscriber receives fresh Icom state");
+            check(model.slice(0) && model.slice(0)->frequency() == 7.074,
+                  "the reclaimed Icom VFO applies the radio-authoritative frequency");
+        }
+    }
+
     RadioCapabilities transmittingIcom = caps;
     transmittingIcom.canTransmit = true;
     check(wsprSeamAudioRouteReady(true, transmittingIcom),
