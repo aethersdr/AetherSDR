@@ -61,6 +61,32 @@ inline constexpr std::uint16_t kHighPriorityPort = 1027;
 // not treat it as the primary demultiplexing port.
 inline constexpr std::uint16_t kDdc0DefaultPort = 1035;
 
+// Which DDC an inbound IQ datagram belongs to, decided by the port the RADIO
+// sent it FROM. Returns nullopt when the port is outside [basePort,
+// basePort + numDdc) -- Mic Data, High Priority Status and this session's own
+// Discovery reply all share the PC-side socket, so "not a DDC port" is an
+// ordinary, expected answer rather than an error.
+//
+// basePort + n is verified against p2app's own source, not just the spec,
+// and the two independent paths there agree:
+//   * generalpacket.c assigns DDC i the port `SetPort(VPORTDDCIQ0+i, Port+i)`
+//     when the General packet carries a non-zero DDC0 port (bytes 17-18).
+//   * When that field is ZERO -- which is exactly what buildGeneral() sends,
+//     per the spec's "if set to zero the default port will be used" -- SetPort
+//     falls back to p2app's DefaultPorts[] table, whose VPORTDDCIQ0..9 entries
+//     (indices 8-17) are 1035..1044. The same 1035 + n sequence.
+// So this holds whether or not a client ever negotiates the port, which is
+// what makes kDdc0DefaultPort usable as the default base here.
+//
+// This is the ONLY thing that separates one DDC's stream from another's: the
+// DDC I&Q packet itself carries no DDC index field anywhere (spec pp.53-54,
+// checked byte by byte). p2app ships each DDC through its own dedicated
+// socket rather than combining them, so the spec's "Synchronous DDC"
+// interleaved framing is never emitted and must not be expected here.
+[[nodiscard]] std::optional<int> ddcIndexForSenderPort(
+    std::uint16_t senderPort, int numDdc,
+    std::uint16_t basePort = kDdc0DefaultPort) noexcept;
+
 // Saturn boards' DSP clock. RFC §2.4; saturnregisters.c VSAMPLERATE.
 // The six DDC0 sample rates this radio can run, in ksps, ascending. DDC0 is
 // STEPPED, not continuously tunable -- see AnanBackend::nearestDdc0RateKsps(),
@@ -189,6 +215,47 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps = 48, int numAd
                                                 bool randomEnabled = true,
                                                 int ddc0AdcIndex = 0) noexcept;
 
+// ---- Multi-DDC ----
+//
+// Ceiling on how many DDCs these builders will encode. Four is what a real
+// ANAN-G2 reports: p2app's DiscoveryReply[] has the DDC-count byte hardcoded
+// to 4 and never rewrites it at runtime, even though the gateware's own
+// VNUMDDC is 10. Callers should still clamp to whatever Discovery actually
+// reported rather than assuming this number -- this is the codec's own
+// safety bound (Principle VII), not a statement about the hardware.
+//
+// The wire format itself would allow far more (the 1444-byte packet has room
+// for 80 DDC rows), but the enable bitmap this encoder writes lives in a
+// single byte, so 8 is the structural ceiling regardless.
+inline constexpr int kMaxDdcs = 4;
+
+// One DDC's slot in the DDC-Specific packet. `rateKsps` must be one of
+// 48/96/192/384/768/1536 (p.24); `adcIndex` selects which ADC feeds it,
+// same meaning as buildDdcSpecific()'s ddc0AdcIndex above.
+struct DdcConfig {
+    int rateKsps = 48;
+    int adcIndex = 0;
+};
+
+// Multi-DDC form of the above. Enables DDC 0..N-1 where N = ddcs.size()
+// (capped at kMaxDdcs; anything beyond is IGNORED rather than truncating the
+// packet or running off the array), setting bits 0..N-1 of the byte-7 enable
+// bitmap and filling one 6-byte row per DDC at 17 + 6*n: ADC select, 2-byte
+// rate, CIC1/CIC2, sample size. CIC1/CIC2 are left zero -- the spec marks
+// them "For Future use", exactly as the single-DDC path already leaves them.
+//
+// An EMPTY span produces an all-DDCs-disabled packet, which is a legitimate
+// thing to send (it is how a session stops streaming without tearing down),
+// not an error to guard against.
+//
+// The single-DDC overload above delegates here with a one-element list, so
+// there is exactly one implementation of the row layout and the two cannot
+// drift apart.
+std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs,
+                                                int numAdcs = 2,
+                                                bool ditherEnabled = true,
+                                                bool randomEnabled = true) noexcept;
+
 // ---- High Priority to Hardware (spec p.31-34) ----
 
 // 1444-byte High Priority packet. `run` sets byte 4 bit[0] ONLY -- there is
@@ -226,6 +293,24 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps = 48, int numAd
 // software-selected one -- so there is nothing here for ANT2/ANT3-style
 // params to apply to.
 std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0FreqWord,
+                                                  bool bypassAdc0Filters = true,
+                                                  bool bypassAdc1Filters = true) noexcept;
+
+// Multi-DDC form: one 4-byte frequency/phase word per DDC at 9 + 4*n (p.32),
+// for DDC 0..N-1 where N = ddcFreqWords.size(), capped at kMaxDdcs with the
+// same ignore-the-excess contract as buildDdcSpecific() above.
+//
+// Everything else is identical to the single-DDC overload, INCLUDING the
+// structural refusal to key: there is still no PTT parameter here, and byte
+// 4 still carries only bit[0] (run). Adding DDCs does not add a way to
+// transmit (Constitution Principle VI).
+//
+// Alex0/Alex1 are written exactly as the single-DDC overload does -- they
+// are per-ADC filter/antenna registers, not per-DDC, so they do not grow
+// with the DDC count. Per-DDC ADC selection lives in the DDC-Specific
+// packet's own rows.
+std::array<std::uint8_t, 1444> buildHighPriority(bool run,
+                                                  std::span<const std::uint32_t> ddcFreqWords,
                                                   bool bypassAdc0Filters = true,
                                                   bool bypassAdc1Filters = true) noexcept;
 
