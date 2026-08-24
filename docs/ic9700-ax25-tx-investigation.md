@@ -1,8 +1,9 @@
 # IC-9700 AX.25 Transmit over RS-BA1 — Signal Paths and Investigation Record
 
 **Status:** Investigation record — timing defect fixed and re-tested (does
-NOT resolve the fault); one radio-side anomaly open and now the sole leading
-candidate; deciding experiment specified, not yet run
+NOT resolve the fault); TWO open leads now (radio-side deviation/spectral,
+AND a new client-side post-resample-vs-wire timing/framing gap); deciding
+experiment 2/3 legs run, not yet simultaneous
 **Author:** Nigel Fenton (G0JKN) with Claude, PTT-timing diagnosis by @jensenpat
 **Date:** 2026-08-22, updated 2026-08-24 (consolidates bench work from
 2026-08-12 onward)
@@ -170,6 +171,9 @@ code at every step above.
 | 08-22 | Off-air burst structural analysis (08-12 captures) | bursts full-length (0.60–0.67 s ×3 retries), modulation present start to end | **front-truncation is NOT what these captures show** — PTT timing does not explain this fault instance |
 | 08-22 | Spectral comparison, same analysis on control (bench artifacts: `ax25bench-wire.wav` / `ax25bench-post.wav` 08-20 controls; `ax25-connect-burst.wav` 08-12 off-air; 64k-FFT band-peak method, reproducible from the WAVs) | client wire tap (08-20): peaks 1176 / 2224 Hz — mark/space where they belong. Off-air (08-12): 1175 / **1775** Hz — mark in place, space displaced ~425 Hz | corruption is SPECTRAL, not temporal; consistent with radio-side audio-path anomaly; level-invariant, audible, undecodable |
 | 08-24 | Live re-test with @jensenpat's PTT/CI-V timing fix in place (radio-confirmed keying now awaited, §2.2) | **decode still fails — no improvement over pre-fix behavior** | **the timing fix is EXCLUDED as the cause of this fault instance.** Confirms the 08-22 spectral finding rather than merely being under-explained by it; deviation-pinning / RS-BA1 audio-path anomaly is the sole remaining leading candidate |
+| 08-24 | First half of the deciding experiment (§6): #5058 branch, AetherModem Terminal Connect + APRS Msg send, dual tap armed, live on the bench | **0 samples recorded, 3 separate real-RF trigger attempts** (2× Connect, 1× APRS Msg — all confirmed keyed via the gate log) | **red herring, root-caused, not a client-audio finding:** `RadioModel::setTxPostResampleTapEnabled`/`setTxWireTapEnabled` only arm when `qobject_cast<IcomCivBackend*>` succeeds (RadioModel.cpp ~8232-8262). AE was connected via **Aether-gate**, which presents as a `FLEX-6700` — the active backend was `FlexBackend`, so the cast failed and both taps silently no-op'd regardless of trigger. **Lesson for future taps/txwave use: confirm `get radio` reports the native Icom model/serial (`icom:<ip>`), not a gate's Flex costume, before trusting a "nothing recorded" result as a client-audio finding.** |
+| 08-24 | Reconnected AE directly to the 9700 (Connect by IP, native `IcomCivBackend`, gate stopped to free the RS-BA1 session) — dual tap re-armed, one AX.25 Connect burst, drive 4% | **post-resample: 2/2 decode** (`G0JKN>KB2SKP-12:`, clean). **wire: 0/2, fails to decode.** Peak amplitude IDENTICAL between the two taps (12895/32768, 39.4%, exact match). Mark/space tones near-identical too (1176/2225 Hz post-resample vs 1174/2224 Hz wire) — both in the CORRECT band, not displaced like the 08-22 off-air spectral finding. | **A genuinely new localization, distinct from the radio-side hypothesis**: the corruption sits between the post-resample tap and the wire tap — i.e. inside AetherSDR's own LPCM-encode/packetizer/socket-write stage, upstream of anything the radio touches. Level and tone content are provably NOT the mechanism this time (both taps agree on both); something in TIMING/FRAMING between those two points is the new leading suspect. This is the first client-side leg of the §6 deciding experiment to actually run — the RTL off-air leg (same evening, different connection) is in the ledger's next row. A single simultaneous three-point capture (client can't hold the gate AND a native connection at once with current tooling) is still outstanding. |
+| 08-24 | RTL-SDR V4 off-air, 2 separate 20 s captures via Aether-gate Connect-button bursts (before the backend-mismatch root cause was found; drive 4%, antenna repositioned after saturation tuning at 40%/5%/3%/1%) | **Clean, unclipped, well-shaped bursts both times** — capture 1: 3 bursts ~1 s each at 195-211× floor; capture 2: 4 bursts matching the gate's key log almost exactly. No decode attempted yet (not demodulated to audio). | Off-air RF is present, correctly timed to the keying log, and NOT saturated/garbled at the RF envelope level — consistent with (but does not by itself prove) the corruption being downstream of the radio's actual transmission, matching the new packetizer/socket lead above. Raw IQ saved: `ax25-triple-capture-2026-08-24/real_capture.iq` + `real_capture2.iq`, `native_post_resample.wav` + `native_wire.wav`. |
 
 **Era caveat on the 08-22 spectral row:** the off-air captures (08-12) and the
 client tap controls (08-20) are eight days and several Icom fixes apart. "The
@@ -193,17 +197,44 @@ row is a live re-test on current code and does not carry this caveat.
    adds counters; the drop rule is unchanged. On the recorded bench keyings
    the counter did not advance, so production drops are not established as a
    cause here.
-3. **Deviation pinning / spectral displacement — open, radio-side, and now
-   the SOLE leading candidate for THIS fault** (Finding 1's exclusion
-   removes timing as an alternative). Level-invariance, full-length corrupt
-   bursts, and a displaced space tone all point past the UDP datagrams into
-   the RS-BA1 audio path. AetherSDR's last observable point (the wire tap)
-   is clean in CONTENT — with the honest limit that the tap's frame-count
-   residual (#5060) is unexplained, so "clean" here rests on what decodes,
-   per Finding 4's own rule about instruments.
-4. The wire-tap defects cost a week of chasing a corruption that was in the
+3. **Deviation pinning / spectral displacement — open, radio-side, and A
+   leading candidate for THIS fault, but no longer sole.** Level-invariance,
+   full-length corrupt bursts, and a displaced space tone all point past the
+   UDP datagrams into the RS-BA1 audio path. **SUPERSEDED CLAIM, corrected
+   08-24:** this finding previously said the wire tap is "clean in CONTENT".
+   It is not, on a fresh 08-24 run: post-resample decodes 2/2, the wire tap
+   from the SAME transmission decodes 0/2, with peak amplitude and mark/space
+   tone frequency essentially IDENTICAL between the two. So content is not
+   trivially clean at the wire either — see Finding 5.
+5. **NEW 08-24 — a client-side timing/framing lead, distinct from Finding 3.**
+   Post-resample audio decodes; the wire-tap capture of the SAME burst does
+   not, despite matching level (12895/32768 both) and matching tone
+   frequency (within 1-2 Hz). Ruling out amplitude and tone content as the
+   wire-tap mechanism points at something in TIMING or FRAMING between the
+   post-resample point and the socket write — the LPCM encode, the
+   packetizer, or the datagram framing itself. This does not contradict
+   Finding 3's radio-side evidence (different bursts, different sessions,
+   both could be real); it means the fault may have TWO distinct
+   contributors, or the wire tap itself may still be lying in a way #5060
+   never fully closed (see Finding 6). Needs the RTL-off-air leg captured
+   from THIS SAME burst to disambiguate — not yet done (§6).
+6. The wire-tap defects cost a week of chasing a corruption that was in the
    instrument, and #5060's frame-count residual remains open. Recorded so
-   the next investigator distrusts instruments first — including these.
+   the next investigator distrusts instruments first — including these. The
+   08-24 wire-tap failure (Finding 5) is exactly the kind of result #5060
+   warns about: it MUST be re-examined for an instrument-side explanation
+   before being read as a new client-side defect.
+7. **NEW 08-24 — tooling gotcha, not a physics finding, but costly if
+   repeated.** `RadioModel::setTxPostResampleTapEnabled`/
+   `setTxWireTapEnabled` only arm behind
+   `qobject_cast<icom::IcomCivBackend*>(m_backend.get())` (RadioModel.cpp
+   ~8232-8262). Connected via Aether-gate (which presents as a `FLEX-6700`
+   to AE), the cast fails and both taps silently no-op — three separate
+   real-RF trigger attempts (2× Terminal Connect, 1× APRS Msg send, all
+   confirmed keyed via the gate's own log) produced zero recorded samples
+   with no error. Always confirm `get radio` reports the native Icom
+   model/serial (`icom:<ip>`), not a gate connection, before trusting a
+   `txwave save` "nothing recorded" response as a client-audio finding.
 
 ## 6. The deciding experiment
 
@@ -224,8 +255,32 @@ Same day, same build, same burst. If (1)(2) decode and show 1200/2200 while
 (3) shows a displaced tone or fails to decode: the fault is confirmed
 radio-side in the RS-BA1 audio path, and #5011 gets retitled to say exactly
 that. If (1) or (2) also fails to decode: the fault is client-side after
-all, upstream of where prior taps looked — a new hypothesis the 08-24 result
-does not rule out on its own, since no simultaneous client-side tap
-accompanied the 08-24 re-test. Either way the taps (#5058) are the
-instrument, re-scoped from "find the audio fault" to "prove where the
-boundary is". **Still not run as of 2026-08-24.**
+all, upstream of where prior taps looked.
+
+**Partial run, 2026-08-24 — two legs done, NOT simultaneous, inconclusive
+by design.** Leg (1)+(2) ran together from one burst (client-side, native
+`IcomCivBackend` connection): post-resample 2/2, wire 0/2 (Finding 5). Leg
+(3) ran twice, cleanly, from *different* bursts on a *different* connection
+(Aether-gate, before the backend-mismatch tooling gap in Finding 7 was
+found) — two off-air captures, both showing clean unclipped multi-burst
+RF matched to the gate's key log, not yet demodulated/decoded.
+
+**Why not simultaneous, and what it would take:** Aether-gate holds the
+single permitted RS-BA1 session while it runs; the client-side taps only
+arm behind a native `IcomCivBackend` connection (Finding 7), which needs
+the gate stopped to free that session. With current tooling the two legs
+are mutually exclusive on one AE instance — the gate can feed an
+independent RTL-SDR-style witness while native AE runs the taps only if
+the RTL capture is driven from something OTHER than the gate's own
+RS-BA1 session (it already is — the RTL listens over the air, not via
+RS-BA1 — so the actual blocker was sequencing, not architecture: the gate
+was stopped for the native-connection taps run, so no off-air witness
+was live during THAT specific burst). **Still not run as a single
+matched burst.** Next attempt: keep the gate stopped, AE on the native
+connection with taps armed, RTL-SDR recording throughout (independent of
+the gate — it only needs the frequency, not the gate's session) — one
+Connect click keys all three simultaneously.
+
+Either way the taps (#5058) are the instrument, re-scoped from "find the
+audio fault" to "prove where the boundary is" — and Finding 5 has already
+moved that boundary closer to the client than Finding 3 alone suggested.
