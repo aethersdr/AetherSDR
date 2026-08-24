@@ -9,6 +9,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
+#include <climits>
+#include <unistd.h>
 #elif defined(Q_OS_MACOS)
 #include <libproc.h>
 #include <sys/proc_info.h>
@@ -99,6 +101,20 @@ bool findSocketInode(const QHostAddress& peer, quint16 port, quint64* inodeOut)
     return false;
 }
 
+// QFile::symLinkTarget() absolutizes a relative-looking target against the
+// link's own directory, so a /proc fd entry's raw "socket:[N]" comes back as
+// "/proc/<pid>/fd/socket:[N]" and can never equal the inode tag (measured
+// live on Linux: the sweep resolved nothing, ever). readlink(2) returns the
+// raw link text.
+QString rawLinkTarget(const QString& linkPath)
+{
+    char buf[PATH_MAX];
+    const ssize_t n = ::readlink(QFile::encodeName(linkPath).constData(),
+                                 buf, sizeof(buf) - 1);
+    if (n <= 0) return {};
+    return QString::fromLocal8Bit(buf, static_cast<int>(n));
+}
+
 TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
 {
     TciPeerProcessInfo info;
@@ -119,7 +135,7 @@ TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
         const QStringList fds = fdDir.entryList(QDir::Files | QDir::System
                                                 | QDir::NoDotAndDotDot);
         for (const QString& fd : fds) {
-            if (QFile::symLinkTarget(fdDir.filePath(fd)) != target) continue;
+            if (rawLinkTarget(fdDir.filePath(fd)) != target) continue;
             QFile comm(QStringLiteral("/proc/%1/comm").arg(pid));
             if (comm.open(QIODevice::ReadOnly | QIODevice::Text))
                 info.name = QString::fromUtf8(comm.readAll()).trimmed();
