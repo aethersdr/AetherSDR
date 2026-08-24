@@ -286,7 +286,22 @@ public:
     //
     // Defaults are unchanged, so every test written before this one still faces
     // the same IC-705 it always did.
-    void setCivAddress(std::uint8_t address) { m_addr = address; }
+    void setCivAddress(std::uint8_t address)
+    {
+        m_addr = address;
+        if (address == 0xA2) {
+            // IC-9700 SET 0115/0116 use the radio's own modulation-input
+            // vocabulary.  Do not let this multi-model fake answer those
+            // reads with its IC-705 defaults (where item 0116 is a level), or
+            // a healthy IC-9700 connection reports a fabricated unknown(128)
+            // DATA MOD source before a test has touched either setting.
+            m_settings[115] = 0x00; // DATA OFF MOD = MIC
+            m_settings[116] = 0x00; // DATA MOD = MIC
+            m_settingLevels[112] = 128; // ACC MOD level
+            m_settingLevels[113] = 128; // USB MOD level
+            m_settingLevels[114] = 128; // LAN MOD level
+        }
+    }
     // The tighter of the two windows the name is copied into: 0x40 in a
     // 0x90-byte connect grant, against 0x52 in a 0xA8-byte announce.
     static constexpr std::size_t kMaxNameBytes = 0x90 - 0x40;

@@ -213,6 +213,15 @@ static bool movesPttOrTuner(const CivFrame& f)
         && !f.data.empty();
 }
 
+// Reads and writes share 14 0B.  Only the payload-bearing form changes the
+// physical microphone gain; counting the empty confirmation/poller reads makes
+// an otherwise deterministic write-path assertion depend on scheduler timing.
+static bool writesPhysicalMicGain(const CivFrame& f)
+{
+    return f.cmd == cmd::kLevel && f.hasSub
+        && f.sub == level::kMicGain && !f.data.empty();
+}
+
 // ---------------------------------------------------------------------------
 // CI-V trace capture
 //
@@ -2642,6 +2651,9 @@ int main(int argc, char** argv)
     // result read as "this backend has no panadapter yet".
     {
         CivCase c(0xA2, "IC-9700");
+        check(c.radio.setting(115) == 0x00 && c.radio.setting(116) == 0x00,
+              "auto: the multi-model fake gives IC-9700 modulation inputs "
+              "model-correct defaults rather than IC-705 SET meanings");
         c.radio.setSetting(115, 0x05);      // DATA OFF MOD = LAN
         c.radio.setSetting(116, 0x05);      // DATA MOD = LAN
         c.radio.setSettingLevel(112, 128);  // ACC MOD
@@ -2678,10 +2690,7 @@ int main(int argc, char** argv)
               "the unrelated physical MIC gain");
 
         const int physicalMicWritesBefore = static_cast<int>(std::ranges::count_if(
-            c.radio.civCommands(), [](const CivFrame& frame) {
-                return frame.cmd == cmd::kLevel && frame.hasSub
-                    && frame.sub == level::kMicGain;
-            }));
+            c.radio.civCommands(), writesPhysicalMicGain));
         c.backend.setMicGain(20);
         check(waitFor([&] { return c.radio.settingLevel(114) == 51; }),
               "auto: moving the Phone level while LAN is active writes SET "
@@ -2705,10 +2714,7 @@ int main(int argc, char** argv)
               "IC-9700 LAN modulation level");
 
         const int physicalMicWritesAfter = static_cast<int>(std::ranges::count_if(
-            c.radio.civCommands(), [](const CivFrame& frame) {
-                return frame.cmd == cmd::kLevel && frame.hasSub
-                    && frame.sub == level::kMicGain;
-            }));
+            c.radio.civCommands(), writesPhysicalMicGain));
         check(physicalMicWritesAfter == physicalMicWritesBefore,
               "auto: the LAN-level request never writes physical MIC gain 14 0B");
 
@@ -2734,10 +2740,7 @@ int main(int argc, char** argv)
         c.backend.setMicGain(30);
         check(waitFor([&] {
                   return static_cast<int>(std::ranges::count_if(
-                             c.radio.civCommands(), [](const CivFrame& frame) {
-                                 return frame.cmd == cmd::kLevel && frame.hasSub
-                                     && frame.sub == level::kMicGain;
-                             }))
+                             c.radio.civCommands(), writesPhysicalMicGain))
                       == physicalMicWritesAfter + 1;
               }),
               "auto: moving the Phone level while MIC is active writes the "
