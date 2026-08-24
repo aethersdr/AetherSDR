@@ -106,9 +106,6 @@ GlobeMapView::GlobeMapView(QWidget* parent)
     setAccessibleDescription(tr(
         "Drag to rotate, Shift-drag or use left and right brackets to tilt "
         "the axis, pinch to zoom, and use Home to reset"));
-    setToolTip(tr(
-        "Drag to rotate · Shift-drag to tilt axis · Pinch to zoom · "
-        "Two-finger twist to tilt axis · Home to reset"));
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     grabGesture(Qt::PinchGesture);
