@@ -3568,7 +3568,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setRadioModel(&m_radioModel);
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
-    menu->setDeclaredBands(m_radioModel.declaredBands());
+    menu->setDeclaredBands(m_radioModel.declaredBands(),
+                           m_radioModel.backendCapabilities().declaredBandRanges);
     applyTuningRangeToOverlayMenu(menu);
     applyNotchCapabilities(sw);
     applyRadioSideDspToPanDisplay(sw);

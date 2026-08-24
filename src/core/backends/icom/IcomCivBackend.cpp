@@ -154,6 +154,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
 
+    const std::span<const IcomBand> bands = bandsFor(m);
+    c.declaredBandRanges.reserve(static_cast<int>(bands.size()));
+    for (const IcomBand& band : bands) {
+        c.declaredBandRanges.append(DeclaredBandRange{
+            QString::fromUtf8(band.name.data(), static_cast<int>(band.name.size())),
+            static_cast<double>(band.lowHz),
+            static_cast<double>(band.highHz)});
+    }
+
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
     // Official CI-V guides for both network targets define command 17 text
@@ -177,7 +186,6 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // empty, which is what RadioModel reads as "txPowerMaxWatts applies
     // everywhere" — the prior behaviour, unchanged.
     c.txPowerBands = {};
-    const std::span<const IcomBand> bands = bandsFor(m);
     c.txPowerBands.reserve(static_cast<int>(bands.size()));
     for (const IcomBand& band : bands) {
         c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),

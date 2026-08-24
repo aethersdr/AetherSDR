@@ -145,7 +145,8 @@ public:
     // gateway presenting non-Flex hardware offers its true band set (e.g.
     // an IC-9700's 2m/440/23cm).  Empty (all real Flex radios): the grid
     // is unchanged.  Triggers a band-panel rebuild on change.
-    void setDeclaredBands(const QStringList& bands);
+    void setDeclaredBands(const QStringList& bands,
+                          const QVector<DeclaredBandRange>& ranges = {});
     void syncDaxIqChannel(int channel);
     // Reflect the real WFM demodulator state onto the DAX-panel WFM toggle
     // WITHOUT re-emitting wfmToggleRequested. Self-gated on this menu's slice,
@@ -324,6 +325,7 @@ private:
     QVector<XvtrBand>  m_lastXvtrBands;
     ModelCapabilities  m_radioCapabilities;
     QStringList        m_declaredBands;   // radio-declared band set (see setDeclaredBands)
+    QVector<DeclaredBandRange> m_declaredBandRanges;
 
     // ANT sub-panel
     QWidget*     m_antPanel{nullptr};
