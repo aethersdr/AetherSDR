@@ -126,17 +126,6 @@ jobs:
         if: steps.cache-hidapi.outputs.cache-hit != 'true'
         run: .\scripts\setup\setup-hidapi.ps1
 
-      - name: Cache PortAudio
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        id: cache-portaudio
-        with:
-          path: third_party/portaudio
-          key: portaudio-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-portaudio.ps1') }}
-
-      - name: Setup PortAudio (CW sidetone callback sink, #5200)
-        if: steps.cache-portaudio.outputs.cache-hit != 'true'
-        run: .\scripts\setup\setup-portaudio.ps1
-
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter

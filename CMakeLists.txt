@@ -312,8 +312,16 @@ if(WIN32)
         set(PORTAUDIO_LIBRARIES
             "${PORTAUDIO_ROOT}/lib/portaudio_static_x64.lib"
             winmm dsound ole32 uuid setupapi)
-    endif()   # not-found leaves PORTAUDIO_FOUND unset — same soft-optional
-              # behaviour as the pkg-config path below
+        # CI greps configure output for this exact line — a soft-optional
+        # dependency that vanishes must fail the gate, not silently skip
+        # compiling the sink (same rule as the GPU-spectrum assert).
+        message(STATUS "PortAudio (third_party) found — CW sidetone callback sink enabled")
+    else()
+        # Soft-optional (build proceeds), but VISIBLY: without this the
+        # sidetone silently lands on the push-model QAudioSink path.
+        message(WARNING "PortAudio not found — run scripts/setup/setup-portaudio.ps1; "
+                        "the CW sidetone will use the push-model QAudioSink")
+    endif()
 else()
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)

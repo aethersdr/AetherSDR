@@ -4,8 +4,11 @@
 
 .DESCRIPTION
     Downloads PortAudio v19.7.0 source from GitHub, builds the static library
-    with CMake + MSVC (WASAPI, WDM-KS, DirectSound, and MME host APIs), and
-    places headers/lib in third_party/portaudio/ ready for CMake.
+    with CMake + MSVC, and places headers/lib in third_party/portaudio/ ready
+    for CMake. WASAPI is requested EXPLICITLY (-DPA_USE_WASAPI=ON) because the
+    sidetone sink's whole reason to exist is #3193's WASAPI preference — a
+    future PortAudio bump must not be able to drop it silently. WDM-KS /
+    DirectSound / MME come from upstream's Windows defaults.
 
     Required for the callback-model CW sidetone sink (CwSidetonePortAudioSink)
     and its WASAPI host-API preference (#3193). Without it the Windows build
@@ -70,6 +73,7 @@ cmake -B $buildDir -S $srcDir.FullName -G "Ninja" `
     -DCMAKE_BUILD_TYPE=Release `
     -DPA_BUILD_SHARED=OFF `
     -DPA_BUILD_STATIC=ON `
+    -DPA_USE_WASAPI=ON `
     -DPA_BUILD_EXAMPLES=OFF `
     -DPA_BUILD_TESTS=OFF `
     "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"

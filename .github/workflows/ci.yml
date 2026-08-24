@@ -455,6 +455,22 @@ jobs:
           }
           Select-String -Path configure.log -Pattern 'GPU spectrum rendering enabled'
 
+      # The WIN32 PortAudio detection keys on EXISTS third_party/portaudio and
+      # is soft-optional — if the setup step's output ever goes missing (tag
+      # moved, cache restored a partial tree, output rename in a bump), CMake
+      # would skip CwSidetonePortAudioSink.cpp without a word and this job
+      # would go green having compiled nothing new. Assert the found line so
+      # the coverage this job exists to buy cannot evaporate silently (#5200).
+      - name: Assert PortAudio sidetone sink actually enabled
+        shell: pwsh
+        run: |
+          if (-not (Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found' -Quiet)) {
+            Write-Host "ERROR: setup-portaudio.ps1 ran but CMake did not find third_party/portaudio. Relevant output:"
+            Select-String -Path configure.log -Pattern 'PortAudio|portaudio'
+            exit 1
+          }
+          Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found'
+
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,
         # but a separate step gives clearer CI failure attribution and avoids
