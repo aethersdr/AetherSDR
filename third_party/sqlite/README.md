@@ -29,8 +29,6 @@ target above. Two of them matter, and both are re-established at runtime in
 `SQLITE_DEFAULT_WAL_SYNCHRONOUS=1` is already re-established by
 `PRAGMA synchronous=NORMAL` on both paths, and `SQLITE_OMIT_LOAD_EXTENSION` is
 defence-in-depth only — the C API gate defaults off upstream.
-the build can use system SQLite library, however when doing so
-it cannot be ensured that the library is properly hardened.
 
 ## Updating
 

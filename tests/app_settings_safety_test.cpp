@@ -212,6 +212,43 @@ void testFirstRunInitialization()
            "first-run initialization writes the intentional default profile");
 }
 
+// Pins the runtime hardening SettingsDatabase::open() re-establishes for
+// -DUSE_SYSTEM_SQLITE=ON, where the distro library doesn't carry the
+// vendored target's SQLITE_DEFAULT_FILE_PERMISSIONS=0600. Platform-gated
+// because Windows ACLs have no POSIX owner-only bit for QFileDevice
+// permissions to model.
+void testDatabaseFilePermissions()
+{
+#ifdef Q_OS_WIN
+    std::printf("[SKIP] database file is owner-only on disk (no POSIX mode bits on Windows)\n");
+#else
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    const QFileDevice::Permissions ownerOnly =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+
+    expect(QFile::exists(dbPath()), "first-run load creates the database");
+    expect(QFileInfo(dbPath()).permissions() == ownerOnly,
+           "the database file is owner-read/write only, group/other have no access");
+
+    // journal_mode=WAL is on by default (testFirstRunInitialization's own
+    // profile confirms this store reaches createSchema()), so -wal exists
+    // by the time load() returns; -shm's presence is backend-dependent and
+    // only checked if SettingsDatabase actually created one.
+    const QString walPath = dbPath() + QStringLiteral("-wal");
+    if (QFile::exists(walPath)) {
+        expect(QFileInfo(walPath).permissions() == ownerOnly,
+               "the -wal sidecar is owner-read/write only");
+    }
+    const QString shmPath = dbPath() + QStringLiteral("-shm");
+    if (QFile::exists(shmPath)) {
+        expect(QFileInfo(shmPath).permissions() == ownerOnly,
+               "the -shm sidecar is owner-read/write only");
+    }
+#endif
+}
+
 void testImportPromotesValidTemp()
 {
     const QByteArray pending = settingsDocument(50, QStringLiteral("pending"));
@@ -792,6 +829,8 @@ int main(int argc, char** argv)
         testXmlImportParity();
     } else if (scenario == QStringLiteral("first-run")) {
         testFirstRunInitialization();
+    } else if (scenario == QStringLiteral("database-file-permissions")) {
+        testDatabaseFilePermissions();
     } else if (scenario == QStringLiteral("xml-import-tmp-promotion")) {
         testImportPromotesValidTemp();
     } else if (scenario == QStringLiteral("xml-import-bak-fallback")) {
