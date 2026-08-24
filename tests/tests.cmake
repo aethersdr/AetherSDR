@@ -2611,10 +2611,6 @@ add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 # header-only policy, so the whole truth table is a compile-time assertion; the
 # "saved device that IS the system default still takes the name-match path" row
 # pins the documented reach of the fix.
-add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test.cpp)
-target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
-add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
-
 add_executable(cw_sidetone_start_policy_test
     tests/cw_sidetone_start_policy_test.cpp
 )
@@ -2628,6 +2624,13 @@ add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test
 target_include_directories(cw_sidetone_device_match_test PRIVATE src)
 target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
+
+# #5028 — the RTTY sensitivity slider's confidence mapping. Pure, header-only;
+# the floor/default/ceiling rows are compile-time static_asserts, so every CI
+# build enforces them even outside the ctest gates.
+add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test.cpp)
+target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
+add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
 
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
