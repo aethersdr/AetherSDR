@@ -82,6 +82,8 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
+    check(!caps.hasDownwardExpander,
+          "Icom exposes no DEXP surface without an evidenced command path");
     RadioCapabilities transmittingIcom = caps;
     transmittingIcom.canTransmit = true;
     check(wsprSeamAudioRouteReady(true, transmittingIcom),
@@ -115,6 +117,10 @@ int main(int argc, char** argv)
     // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+    check(!AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+               .meters.hasPaTemperatureTelemetry,
+          "the IC-9700 profile does not declare PA-temperature telemetry");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
@@ -328,12 +334,31 @@ int main(int argc, char** argv)
         // The tri-bander, whose HF grid was entirely unpressable before.
         const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 is in the table");
+        const std::span<const icom::IcomBand> ic9700Bands =
+            icom::bandsFor(*ic9700);
+        check(ic9700Bands.size() == 3
+                  && ic9700Bands[0].name == "2m"
+                  && ic9700Bands[0].lowHz == 144'000'000ULL
+                  && ic9700Bands[1].name == "440"
+                  && ic9700Bands[1].lowHz == 430'000'000ULL
+                  && ic9700Bands[2].name == "23cm"
+                  && ic9700Bands[2].lowHz == 1'240'000'000ULL,
+              "the IC-9700 publishes canonical names with native deck limits");
+        check(icom::bandsFor(*ic705).empty(),
+              "the IC-705 has no discontinuous native-band range override, so "
+              "its declared buttons keep canonical labels");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))
                   == QStringList({QStringLiteral("2m"), QStringLiteral("440"),
                                   QStringLiteral("23cm")}),
               "the IC-9700 declares exactly its three bands");
+        const auto ic9700Preamp = icom::preampLabelsFor(*ic9700);
+        check(ic9700Preamp.size() == 2
+                  && ic9700Preamp[0] == "OFF"
+                  && ic9700Preamp[1] == "P.AMP INT",
+              "the IC-9700 publishes only its internal preamp through the "
+              "shared front-end control");
 
         // AND THE HF-ONLY ROWS DECLARE NOTHING. Empty is a decision here, not
         // an omission: it keeps the built-in HF grid, which is already right for

@@ -112,16 +112,7 @@ void MainWindow::buildMenuBar()
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
     radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
     connect(radioSetup, &QAction::triggered, this, [this] {
-        // Snapshot compression setting before dialog opens — used by the
-        // finished handler to detect a change and recreate the RX audio stream.
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
+        openRadioSetupPage();
     });
 
     auto* chooseRadio = settingsMenu->addAction("Connect to Radio...");
@@ -134,6 +125,22 @@ void MainWindow::buildMenuBar()
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
+
+#ifdef HAVE_SERIALPORT
+    // Primary discoverability entry for #4940 — a Settings-menu shortcut
+    // straight to the FlexControl Tuning Knob group, for the user who
+    // browses Settings looking for it rather than opening AetherControl...
+    // first. Guarded the same as the Serial & Controllers page itself
+    // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
+    // (MainWindow_Controllers.cpp) that offers the same deep-link from
+    // inside the controller window.
+    auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    flexControlKnobAction->setMenuRole(QAction::NoRole);
+    connect(flexControlKnobAction, &QAction::triggered, this, [this] {
+        if (RadioSetupDialog* dlg = openRadioSetupPage())
+            dlg->revealFlexControlSettings();
+    });
+#endif
 
     auto* networkAction = settingsMenu->addAction("Network...");
     connect(networkAction, &QAction::triggered, this, [this] {
@@ -312,16 +319,7 @@ void MainWindow::buildMenuBar()
     });
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
     connect(usbCablesAction, &QAction::triggered, this, [this] {
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
-        if (m_radioSetupDialog)
-            m_radioSetupDialog->selectTab(QStringLiteral("USB Cables"));
+        openRadioSetupPage(QStringLiteral("USB Cables"));
     });
 #ifdef HAVE_MIDI
     auto* midiAction = settingsMenu->addAction("MIDI Mapping...");

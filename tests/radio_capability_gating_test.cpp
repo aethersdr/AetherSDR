@@ -1,5 +1,6 @@
 // Capability-gated UI surfaces: hasProfiles, hasDaxStreams, hasExtendedDsp,
-// hasSupplyVoltageTelemetry, and the three status-bar toggles
+// hasSupplyVoltageTelemetry, hasMainFanTelemetry,
+// hasTransmitFrequencyCheck, and the three status-bar toggles
 // (hasRadioSideCwKeyer / hasVoiceKeyer / hasFullDuplex).
 //
 // The rule these guard (RadioCapabilities.h header comment, aetherd RFC §1) is
@@ -29,6 +30,10 @@
 //                 renders the 0.0f initialiser as a two-decimal measurement.
 //                 Asserted on the CAPABILITY, so this stays true of any future
 //                 family that reports no supply rail.
+//   main fan      hasMainFanTelemetry gates the Radio Vitals Main Fan gauge.
+//                 Unsupported radios omit the instrument rather than showing
+//                 an empty scale, while disconnect restores the permissive
+//                 surface for the next session.
 //   radio DSP     hasRadioSideDsp gates the radio's own NR/NB/ANF/NRL/ANFL/
 //                 ANFT, the APD row and the WNB row. It must NOT gate the
 //                 host-side equivalents — the AetherDSP modules and the
@@ -106,6 +111,7 @@
 #include "gui/VoiceModeGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomCredentials.h"
@@ -248,6 +254,10 @@ int main(int argc, char** argv)
         // readout that ships and works today.
         check(caps.hasSupplyVoltageTelemetry,
               "Flex declares hasSupplyVoltageTelemetry (the \"+13.8A\" meter)");
+        check(caps.hasPaTemperatureTelemetry,
+              "Flex declares hasPaTemperatureTelemetry (the PATEMP meter)");
+        check(caps.hasMainFanTelemetry,
+              "Flex declares hasMainFanTelemetry (the MAINFAN meter)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -256,6 +266,8 @@ int main(int argc, char** argv)
               "hasRadioSideDsp and hasExtendedDsp are independent");
         check(caps.hasRadioSideWaterfallAutoBlack,
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
+        check(!caps.hasTransmitFrequencyCheck,
+              "Flex declares hasTransmitFrequencyCheck=false (REV is local state)");
         // The three status-bar toggles. Same regression shape as the supply-rail
         // field above and worse in kind: these are shipping SmartSDR features
         // whose only implementation is a command-plane verb, so a field added
@@ -264,6 +276,8 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideCwKeyer (the `cwx` text buffer)");
         check(caps.hasVoiceKeyer,
               "Flex declares hasVoiceKeyer (the `dvk` recorder)");
+        check(caps.hasDownwardExpander,
+              "Flex preserves its authoritative DEXP compander surface");
         check(caps.hasFullDuplex,
               "Flex declares hasFullDuplex (radio set full_duplex_enabled=)");
         // Three flags, not one ride on hasRadioSideDsp. All three are true on a
@@ -361,6 +375,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideDsp=false (host runs every noise module)");
         check(!caps.hasRadioSideWaterfallAutoBlack,
               "HL2 declares hasRadioSideWaterfallAutoBlack=false (no display engine)");
+        check(!caps.hasTransmitFrequencyCheck,
+              "HL2 declares hasTransmitFrequencyCheck=false");
         check(!caps.hasWaveforms,
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
@@ -372,6 +388,10 @@ int main(int argc, char** argv)
         // not the stack.
         check(!caps.hasSupplyVoltageTelemetry,
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
+        check(caps.hasPaTemperatureTelemetry,
+              "HL2 declares hasPaTemperatureTelemetry (host-decoded PATEMP)");
+        check(!caps.hasMainFanTelemetry,
+              "HL2 declares hasMainFanTelemetry=false");
         // The three status-bar toggles. The HL2 has no CW text buffer, no voice
         // recorder and no full-duplex setting, so all three labels go away
         // entirely rather than sitting permanently dim.
@@ -379,6 +399,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideCwKeyer=false (no text buffer)");
         check(!caps.hasVoiceKeyer,
               "HL2 declares hasVoiceKeyer=false (no on-radio recorder)");
+        check(!caps.hasDownwardExpander,
+              "HL2 declares hasDownwardExpander=false (no command path)");
         check(!caps.hasFullDuplex,
               "HL2 declares hasFullDuplex=false (exclusive T/R changeover)");
         // The keyer F1-F12 shortcuts, evaluated as updateKeyerAvailability()
@@ -501,6 +523,12 @@ int main(int argc, char** argv)
         const RadioCapabilities caps = model.backendCapabilities();
         check(caps.txPowerBands.size() == 3,
               "Icom declares the three IC-9700 per-band TX power limits");
+        check(caps.hasTransmitFrequencyCheck,
+              "Icom declares the profiled IC-9700 momentary XFC command");
+        check(caps.hasSupplyVoltageTelemetry,
+              "Icom declares the profiled IC-9700 supply-voltage telemetry");
+        check(!caps.hasMainFanTelemetry,
+              "Icom declares no Main Fan telemetry family-wide");
 
         const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
                                           const char* description) {
@@ -563,15 +591,23 @@ int main(int argc, char** argv)
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
         check(!caps.hasRadioSideWaterfallAutoBlack,
               "Sim declares hasRadioSideWaterfallAutoBlack=false");
+        check(!caps.hasTransmitFrequencyCheck,
+              "Sim declares hasTransmitFrequencyCheck=false");
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
+        check(!caps.hasPaTemperatureTelemetry,
+              "Sim declares hasPaTemperatureTelemetry=false");
+        check(!caps.hasMainFanTelemetry,
+              "Sim declares hasMainFanTelemetry=false");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
+        check(!caps.hasDownwardExpander,
+              "Sim declares hasDownwardExpander=false");
         check(!caps.hasFullDuplex, "Sim declares hasFullDuplex=false");
         // The two keyer ACCESSORS, on the one backend in this file that really
         // connects — so this is the only place the permissive rule inside them
@@ -859,13 +895,34 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults hasManualNotch to false (absent unless declared)");
         check(!fresh.hasLmsNoiseFilters,
               "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
+        check(!fresh.hasPaTemperatureTelemetry,
+              "RadioCapabilities defaults PA temperature telemetry to absent");
+        check(!fresh.hasMainFanTelemetry,
+              "RadioCapabilities defaults Main Fan telemetry to absent");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
         FlexBackend flex;
+        hl2::Hl2Backend hl2;
+        SimBackend sim;
         AetherSDR::icom::IcomCivBackend icom;
         const RadioCapabilities flexCaps = flex.capabilities();
+        const RadioCapabilities hl2Caps = hl2.capabilities();
+        const RadioCapabilities simCaps = sim.capabilities();
         const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(!fresh.hasTxFilterControls,
+              "RadioCapabilities defaults TX cutoff controls to absent");
+        check(flexCaps.hasTxFilterControls,
+              "Flex explicitly retains its continuous TX cutoff controls");
+        check(hl2Caps.hasTxFilterControls,
+              "HL2 explicitly retains its host-modulated TX cutoff controls");
+        check(!simCaps.hasTxFilterControls,
+              "Sim explicitly omits TX cutoff controls because it is RX-only");
+        check(!icomCaps.hasTxFilterControls,
+              "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: the TX cutoff editor remains permissive");
 
         check(flexCaps.hasLmsNoiseFilters,
               "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");
@@ -876,6 +933,8 @@ int main(int argc, char** argv)
               "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
         check(icomCaps.hasManualNotch,
               "Icom declares hasManualNotch (16 48 enable, 14 0D position, 16 57 width)");
+        check(!icomCaps.hasPaTemperatureTelemetry,
+              "Icom declares no PA-temperature telemetry without a model profile");
 
         // The gates themselves, through the SAME expression the UI applies, so
         // these assert behaviour rather than paraphrase it.

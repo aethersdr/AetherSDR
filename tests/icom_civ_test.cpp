@@ -140,6 +140,44 @@ static void testBcd()
     check(decodeBcdByte(0x11) == 11, "and decodes back");
 }
 
+static void testFmRepeaterCommands()
+{
+    check(bytesAre(cmdReadRepeaterOffsetDirection(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x0F, 0xFD}),
+          "repeater direction read frame");
+    check(bytesAre(cmdSetRepeaterOffsetDirection(kIc705,
+                                                  RepeaterOffsetDirection::Down),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x0F, 0x11, 0xFD}),
+          "DUP- writes direction 0x11");
+    check(decodeRepeaterOffsetDirection(std::array<std::uint8_t, 1>{0x12})
+              == RepeaterOffsetDirection::Up,
+          "DUP+ direction decodes");
+    check(!decodeRepeaterOffsetDirection(std::array<std::uint8_t, 1>{0x13}),
+          "unknown repeater direction is rejected");
+
+    check(bytesAre(cmdSetRepeaterOffset(kIc705, 600'000),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x0D, 0x00, 0x60, 0x00, 0xFD}),
+          "600 kHz offset is little-endian BCD in 100 Hz units");
+    check(decodeRepeaterOffsetHz(std::array<std::uint8_t, 3>{0x00, 0x60, 0x00})
+              == 600'000,
+          "repeater offset decodes to Hz");
+    check(!decodeRepeaterOffsetHz(std::array<std::uint8_t, 3>{0x00, 0x6A, 0x00}),
+          "non-BCD repeater offset is rejected");
+
+    check(bytesAre(cmdReadRepeaterTone(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1B, 0x00, 0xFD}),
+          "repeater tone read frame");
+    check(bytesAre(cmdSetRepeaterTone(kIc705, 88.5),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1B, 0x00, 0x00, 0x08, 0x85, 0xFD}),
+          "88.5 Hz CTCSS is big-endian BCD in tenths");
+    check(std::abs(decodeRepeaterToneHz(
+                       std::array<std::uint8_t, 3>{0x00, 0x10, 0x00})
+                       .value_or(0.0) - 100.0) < 0.001,
+          "100.0 Hz CTCSS decodes");
+    check(!decodeRepeaterToneHz(std::array<std::uint8_t, 3>{0x01, 0x10, 0x00}),
+          "invalid repeater tone prefix is rejected");
+}
+
 static void testReassembler()
 {
     CivReassembler r;
@@ -306,6 +344,15 @@ static void testCommands()
 {
     check(bytesAre(cmdSetPtt(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0x01, 0xFD}),
           "PTT on is 1C 00 01");
+    check(bytesAre(cmdSetTransmitFrequencyCheck(kIc705, true),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x02, 0x01, 0xFD}),
+          "IC-705 XFC press is 1C 02 01");
+    check(bytesAre(cmdSetTransmitFrequencyCheck(0xA2, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x02, 0x00, 0xFD}),
+          "IC-9700 XFC release uses the model address and 1C 02 00");
+    check(bytesAre(cmdReadTransmitFrequencyCheck(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x02, 0xFD}),
+          "IC-9700 XFC read is 1C 02 with no payload");
     check(bytesAre(cmdReadMeter(kIc705, meter::kSMeter),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x02, 0xFD}),
           "S-meter read is 15 02");
@@ -488,10 +535,10 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The eleven that carry subcommands: 12 14 15 16 18 19 1A 1C 21 26 27. A
+    // The twelve that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 26 27. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 11, "exactly eleven CI-V commands are sub-addressed");
+    check(subAddressed == 12, "exactly twelve CI-V commands are sub-addressed");
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +677,7 @@ int main()
     testTwinPbt();
     testFraming();
     testBcd();
+    testFmRepeaterCommands();
     testReassembler();
     testModes();
     testCommands();

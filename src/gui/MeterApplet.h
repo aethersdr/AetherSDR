@@ -23,11 +23,15 @@ public:
     explicit MeterApplet(QWidget* parent = nullptr);
 
     void setMeterModel(MeterModel* model);
+    void setPaTemperatureTelemetryState(bool connected, bool available);
+    void setSupplyVoltageTelemetryState(bool connected);
+    void setMainFanTelemetryState(bool connected, bool available);
 
 private:
     void resolveIndices();
     void onMeterUpdated(int index, float value);
     void updatePaTempDisplay();
+    void resetSupplyVoltageDisplay();
 
     MeterModel* m_model{nullptr};
 
@@ -44,6 +48,9 @@ private:
     // Lazy-resolved meter index (-1 = not yet found)
     int m_fanIdx{-1};
     bool m_resolved{false};
+    bool m_hasMainFanTelemetryState{false};
+    bool m_mainFanConnected{false};
+    bool m_mainFanAvailable{false};
 };
 
 } // namespace AetherSDR

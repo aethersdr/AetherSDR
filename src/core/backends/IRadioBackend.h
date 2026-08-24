@@ -541,6 +541,44 @@ public:
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
 
+    // FM repeater controls.  These are separate radio registers on an Icom
+    // (tone enable, tone frequency, duplex direction and duplex magnitude),
+    // while a Flex carries the same neutral values in slice status.  Keeping
+    // the four intents explicit lets a backend update only the register the
+    // operator touched; the grouped helper is for memory recall, where all four
+    // must be re-applied after the frequency change in a deterministic order.
+    virtual void setSliceFmToneMode(int sliceId, const QString& mode)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(mode);
+    }
+    virtual void setSliceFmToneValue(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
+    virtual void setSliceRepeaterOffsetDir(int sliceId, const QString& direction)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(direction);
+    }
+    virtual void setSliceFmRepeaterOffset(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
+    virtual void setSliceFmRepeater(int sliceId, const QString& direction,
+                                    double offsetHz, const QString& toneMode,
+                                    double toneHz)
+    {
+        // The IC-705 can clear repeater tone after a frequency change.  Memory
+        // recall calls this only after tuning, and enables the tone last.
+        setSliceFmRepeaterOffset(sliceId, offsetHz);
+        setSliceRepeaterOffsetDir(sliceId, direction);
+        setSliceFmToneValue(sliceId, toneHz);
+        setSliceFmToneMode(sliceId, toneMode);
+    }
+
+    // Momentary receive-on-transmit-frequency state (Icom XFC). This is
+    // radio-wide selected-VFO state, not a memory/slice parameter.
+    virtual void setTransmitFrequencyCheck(bool on) { Q_UNUSED(on); }
+
     virtual void setRitEnabled(bool on) { Q_UNUSED(on); }
     virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
     virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
@@ -733,6 +771,9 @@ signals:
     void configurationWarning(const QString& message);
 
     void capabilitiesChanged();
+
+    // Radio-authoritative state for the momentary transmit-frequency monitor.
+    void transmitFrequencyCheckChanged(bool on);
 
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,
     // not when traffic arrives — the tick has to keep coming after the radio

@@ -8,6 +8,7 @@
 #include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomMeters.h"
 #include "core/backends/icom/IcomModels.h"
+#include "core/backends/icom/IcomControls.h"
 
 #include <algorithm>
 #include <array>
@@ -93,10 +94,20 @@ static void testPowerAndOthers()
     check(meterValue(MeterId::Power, 240, kS9DbmHf) > 10.0, "and the region between is reachable");
 
     // Same CI-V addresses, different radio-specific faces.
-    check(near(meterValue(MeterId::Power, 143, kS9DbmHf, 0xB6), 50.0),
+    check(near(meterValue(MeterId::Power, 143, kS9DbmHf,
+                          MeterCalibration::Ic7300Mk2), 50.0),
           "IC-7300MK2 raw 143 is 50 W");
-    check(near(meterValue(MeterId::Power, 213, kS9DbmHf, 0xB6), 100.0),
+    check(near(meterValue(MeterId::Power, 213, kS9DbmHf,
+                          MeterCalibration::Ic7300Mk2), 100.0),
           "IC-7300MK2 raw 213 is its rated 100 W");
+    check(near(meterValue(MeterId::Power, 255, kS9DbmHf,
+                          MeterCalibration::Uncalibrated), 100.0),
+          "an uncalibrated model reports Po as percent, never borrowed watts");
+    check(near(meterValue(MeterId::Vd, 100, 0,
+                          MeterCalibration::Uncalibrated), 0.0)
+              && near(meterValue(MeterId::Id, 100, 0,
+                                 MeterCalibration::Uncalibrated), 0.0),
+          "an uncalibrated model fabricates neither voltage nor PA current");
 
     check(near(meterValue(MeterId::Swr, 0, 0), 1.0), "SWR 1.0 at zero");
     check(near(meterValue(MeterId::Swr, 48, 0), 1.5), "SWR 1.5");
@@ -109,10 +120,20 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
-    check(near(meterValue(MeterId::Vd, 13, 0, 0xB6), 10.0),
+    check(near(meterValue(MeterId::Vd, 13, 0, MeterCalibration::Ic7300Mk2), 10.0),
           "IC-7300MK2 Vd uses its desktop calibration");
-    check(near(meterValue(MeterId::Id, 97, 0, 0xB6), 10.0),
+    check(near(meterValue(MeterId::Id, 97, 0, MeterCalibration::Ic7300Mk2), 10.0),
           "IC-7300MK2 Id uses its 25 A face");
+    check(near(meterValue(MeterId::Vd, 185, 0,
+                          MeterCalibration::Ic9700Voltage), 13.8),
+          "IC-9700 Vd uses its model-specific calibration");
+    check(near(meterValue(MeterId::Id, 121, 0,
+                          MeterCalibration::Ic9700Voltage), 0.0),
+          "IC-9700 voltage capability does not also claim PA current");
+    check(near(meterValue(MeterId::Power, 213, 0,
+                          MeterCalibration::Ic9700Voltage),
+               213.0 * 100.0 / 255.0),
+          "IC-9700 voltage capability does not borrow another model's watt curve");
 
     // ALC full scale is 120, NOT 255 — the guide says so. Scaling by 255 makes
     // a fully-driven ALC read 47%.
@@ -230,11 +251,11 @@ static void testModelTable()
     const IcomModel* ic705 = modelForCivAddress(0xA4);
     check(ic705 != nullptr, "the IC-705 is in the table");
     check(ic705 && ic705->name == "IC-705", "by name");
-    check(ic705 && ic705->verified, "and it is the one model whose numbers are tier-1 verified");
+    check(ic705 && ic705->verified, "and its numbers are tier-1 verified");
     check(ic705 && ic705->scopePoints == 475 && ic705->scopeMaxAmplitude == 160,
           "475 points, 0..160 — straight from Icom's CI-V guide");
     check(ic705 && ic705->receivers == 1 && ic705->hasWifi, "one receiver, WiFi");
-    check(ic705 && ic705->hasVfoModeCommand,
+    check(ic705 && profileFor(*ic705).supports(IcomFeature::VfoMode),
           "and its official guide verifies selected-VFO 26 00 mode/DATA/filter");
 
     // Geometry genuinely varies, which is why it cannot be a compile-time
@@ -243,7 +264,7 @@ static void testModelTable()
     check(ic7610 && ic7610->scopePoints == 689 && ic7610->scopeMaxAmplitude == 200,
           "the IC-7610 has a DIFFERENT scope geometry");
     check(ic7610 && !ic7610->verified, "and is honestly marked unverified");
-    check(ic7610 && !ic7610->hasVfoModeCommand,
+    check(ic7610 && !profileFor(*ic7610).supports(IcomFeature::VfoMode),
           "so it does not inherit the IC-705's selected-VFO 26 00 shape");
 
     // The IC-9700 is the case that shows the two claims are independent. Its
@@ -256,7 +277,7 @@ static void testModelTable()
     check(ic9700 != nullptr, "the IC-9700 is in the table");
     check(ic9700 && !ic9700->verified,
           "its geometry is cross-referenced, not confirmed against its own guide");
-    check(ic9700 && ic9700->hasVfoModeCommand,
+    check(ic9700 && profileFor(*ic9700).supports(IcomFeature::VfoMode),
           "yet its measured 26 00 mode/DATA/filter shape is attested independently");
 
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
@@ -278,7 +299,7 @@ static void testModelTable()
     check(mk2 && mk2->hasNetwork, "and unlike the original IC-7300 it HAS a network transport");
     check(mk2 && !mk2->hasWifi, "Ethernet, not WiFi — the IC-705 is the WiFi one");
     check(mk2 && mk2->verified, "its numbers came from its own Icom CI-V guide");
-    check(mk2 && mk2->hasVfoModeCommand,
+    check(mk2 && profileFor(*mk2).supports(IcomFeature::VfoMode),
           "including its selected-VFO 26 00 mode/DATA/filter command");
     check(mk2 && mk2->scopePoints == 475 && mk2->scopeMaxAmplitude == 160,
           "475 points, 0..160");
@@ -352,7 +373,7 @@ static void testModelTable()
                //              mode/DATA/filter body cmdSetVfoMode writes
     };
     check(std::all_of(knownModels().begin(), knownModels().end(), [](const IcomModel& m) {
-              return !m.hasVfoModeCommand
+              return !profileFor(m).supports(IcomFeature::VfoMode)
                   || std::find(kAttestedVfoMode.begin(), kAttestedVfoMode.end(),
                                m.civAddress)
                       != kAttestedVfoMode.end();
@@ -363,7 +384,7 @@ static void testModelTable()
     check(std::all_of(kAttestedVfoMode.begin(), kAttestedVfoMode.end(),
                       [](std::uint8_t addr) {
                           const IcomModel* m = modelForCivAddress(addr);
-                          return m && m->hasVfoModeCommand;
+                          return m && profileFor(*m).supports(IcomFeature::VfoMode);
                       }),
           "every attested address is a real model that actually sets the flag");
 }
@@ -380,6 +401,86 @@ static void testUnknownModelIsConservative()
     check(u.txPowerMaxWatts == 0.0, "and claims no power");
     check(u.receivers == 1, "one receiver is the safe assumption");
     check(!u.isKnown(), "and it knows it is unknown");
+}
+
+static void testCapabilityProfiles()
+{
+    const IcomModel& ic705 = *modelForCivAddress(0xA4);
+    const IcomModel& ic9700 = *modelForCivAddress(0xA2);
+    const IcomModel& mk2 = *modelForCivAddress(0xB6);
+    const IcomModelProfile& p705 = profileFor(ic705);
+    const IcomModelProfile& p9700 = profileFor(ic9700);
+    const IcomModelProfile& pMk2 = profileFor(mk2);
+
+    check(p705.supportedBringup && p9700.supportedBringup && pMk2.supportedBringup,
+          "IC-705, IC-7300MK2 and IC-9700 are the intentional bring-up profiles");
+    check(std::ranges::count_if(knownModels(), [](const IcomModel& model) {
+              return profileFor(model).supportedBringup;
+          }) == 3,
+          "exactly three known models have supported command profiles");
+
+    check(p705.setMenu.voxDelayItem == 359 && p705.setMenu.civTransceiveItem == 131,
+          "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");
+    check(pMk2.setMenu.voxDelayItem == 267 && pMk2.setMenu.civTransceiveItem == 89,
+          "IC-7300MK2 owns the distinct VOX delay 0267 and Transceive 0089");
+    check(!p9700.modulation && !p9700.txBandwidth,
+          "IC-9700 borrows no unverified SET-menu or TX-bandwidth map");
+
+    check(p705.fmRepeater && p705.fmRepeater->dialect == FmRepeaterDialect::Extended
+              && p705.fmRepeater->hasDtcs,
+          "IC-705 profile retains official-guide extended repeater support");
+    check(pMk2.fmRepeater && pMk2.fmRepeater->dialect == FmRepeaterDialect::Basic
+              && pMk2.fmRepeater->hasRxCtcss && !pMk2.fmRepeater->hasDtcs,
+          "IC-7300MK2 maps tone squelch without inventing DTCS");
+    check(p9700.fmRepeater && p9700.fmRepeater->dialect == FmRepeaterDialect::Extended
+              && p9700.fmRepeater->hasDtcs && p9700.fmRepeater->hasTxFrequencyReadback,
+          "IC-9700 maps the complete live-proved repeater surface");
+    const FeatureEvidence* live705 = p705.evidenceFor(IcomFeature::FmRepeaterBasic);
+    check(live705 && live705->evidence == EvidenceKind::OfficialGuideAndLiveHardware,
+          "IC-705 tone, level, offset and XFC carry guide plus live evidence");
+
+    check(p705.scope.center && !p705.scope.fixed,
+          "IC-705 scope profile exposes only its attested center mode");
+    check(pMk2.scope.center && pMk2.scope.fixed && pMk2.scope.scrollCenter
+              && pMk2.scope.scrollFixed && pMk2.scope.hasSweepSpeed,
+          "IC-7300MK2 profile records all four scope modes and sweep speed");
+    check(pMk2.rxAntenna && pMk2.rxAntenna->selectable
+              && !pMk2.rxAntenna->readbackAvailable,
+          "IC-7300MK2 RX-ANT quirk is explicit rather than a B6 branch");
+
+    const auto spec = [](std::string_view id) -> const ControlSpec* {
+        const auto it = std::ranges::find(controlSpecs(), id, &ControlSpec::id);
+        return it == controlSpecs().end() ? nullptr : &*it;
+    };
+    const ControlSpec* rxAntenna = spec("rx.antenna");
+    const ControlSpec* dataMode = spec("data.mode");
+    const ControlSpec* txBandwidth = spec("tx.bandwidth.edges");
+    const IcomModel& model705 = *modelForCivAddress(0xA4);
+    const IcomModel& model9700 = *modelForCivAddress(0xA2);
+    const IcomModel& modelMk2 = *modelForCivAddress(0xB6);
+    check(rxAntenna && !controlSupported(model705, p705, *rxAntenna)
+              && controlSupported(modelMk2, pMk2, *rxAntenna),
+          "effective registry gates RX-ANT to the IC-7300MK2 profile");
+    check(dataMode && controlSupported(model705, p705, *dataMode)
+              && controlSupported(model9700, p9700, *dataMode)
+              && controlSupported(modelMk2, pMk2, *dataMode),
+          "all three profiles attest selected-VFO mode/DATA/filter");
+    check(txBandwidth && controlSupported(model705, p705, *txBandwidth)
+              && !controlSupported(model9700, p9700, *txBandwidth)
+              && controlSupported(modelMk2, pMk2, *txBandwidth),
+          "effective registry refuses to borrow TX bandwidth on IC-9700");
+    const IcomModel& identityOnly = *modelForCivAddress(0x98);
+    const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
+    const ControlSpec* frequency = spec("freq");
+    const ControlSpec* scopeMode = spec("scope.onoff");
+    check(identityOnlyProfile.supports(IcomFeature::Core)
+              && identityOnlyProfile.evidenceFor(IcomFeature::Core) == nullptr
+              && frequency
+              && controlSupported(identityOnly, identityOnlyProfile, *frequency),
+          "identity-only models retain the generic CI-V floor without claiming evidence");
+    check(scopeMode && controlSupported(identityOnly, identityOnlyProfile, *scopeMode)
+              && !identityOnlyProfile.supports(IcomFeature::Scope),
+          "scope reachability follows identity geometry while attestation remains absent");
 }
 
 static void testModelDiscovery()
@@ -407,6 +508,11 @@ static void testPowerCurveIsNotShared()
     check(ic9700 && powerCurveFor(*ic9700).empty(),
           "another model gets NO curve rather than the IC-705's");
     check(powerCurveFor(unknownModel()).empty(), "and nor does an unknown radio");
+    check(powerCurveForCalibration(MeterCalibration::Ic7300Mk2).data()
+              == powerCurveIc7300Mk2().data(),
+          "power presentation and conversion share the IC-7300MK2 curve selector");
+    check(powerCurveForCalibration(MeterCalibration::Ic9700Voltage).empty(),
+          "the voltage-only IC-9700 calibration fails closed to relative power");
 }
 
 // The mode vocabulary this backend publishes onto the slice (#5040).
@@ -479,6 +585,7 @@ int main()
     testPollerVisibilityIsImmediate();
     testModelTable();
     testUnknownModelIsConservative();
+    testCapabilityProfiles();
     testModelDiscovery();
     testPowerCurveIsNotShared();
     testModeList();

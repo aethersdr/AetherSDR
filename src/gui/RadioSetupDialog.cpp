@@ -78,6 +78,8 @@
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QPoint>
 #include <QHostAddress>
 #include <QClipboard>
 #include <QDebug>
@@ -6483,6 +6485,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
     {
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
+        m_flexControlGroup = group;
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -7993,6 +7996,45 @@ void RadioSetupDialog::selectTab(const QString& tabName)
         m_navigation->setCurrentItem(item);
         m_navigation->scrollToItem(item, QAbstractItemView::PositionAtCenter);
     }
+}
+
+void RadioSetupDialog::revealFlexControlSettings()
+{
+    selectTab(QStringLiteral("Serial & Controllers"));
+    if (!m_flexControlGroup) {
+        return;
+    }
+    // selectTab() just switched (and, on first visit, built) the page on
+    // this call stack, but the scroll area it's wrapped in (#3345) hasn't
+    // laid out yet — ensureWidgetVisible() against stale/zero geometry is a
+    // no-op. Defer one event-loop turn so layout has actually happened.
+    QPointer<QGroupBox> group = m_flexControlGroup;
+    QTimer::singleShot(0, this, [group] {
+        if (!group) {
+            return;
+        }
+        // The group lives inside the tab's content widget, which
+        // wrapTabInScrollArea() set as the QScrollArea's viewport child —
+        // walk up the parent chain to find that enclosing scroll area.
+        for (QWidget* w = group->parentWidget(); w; w = w->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(w)) {
+                QWidget* content = area->widget();
+                if (!content) {
+                    return;
+                }
+                // Deliberately not ensureWidgetVisible(): it *centers* a
+                // widget taller than the viewport, and the FlexControl
+                // Tuning Knob group (~450-480px) is tall enough that at the
+                // dialog's 960x680 floor, centering pushes the group's own
+                // title and Status row above the top edge — the opposite of
+                // what "reveal" should do. Scroll its top edge into view
+                // directly instead (PR #5157 review).
+                const int y = group->mapTo(content, QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
 }
 
 void RadioSetupDialog::refreshFlexControlButtonActions()

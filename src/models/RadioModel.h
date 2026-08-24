@@ -177,6 +177,8 @@ public:
     bool isConnectAttemptInFlight() const { return m_connectAttemptActive; }
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
+    bool transmitFrequencyCheck() const { return m_transmitFrequencyCheck; }
+    void setTransmitFrequencyCheck(bool on);
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
@@ -958,6 +960,7 @@ signals:
     // lacks this" from "there is no radio" — the latter restores the permissive
     // value (see MainWindow::applyCapabilitiesToUi).
     void capabilitiesChanged(bool connected, const RadioCapabilities& caps);
+    void transmitFrequencyCheckChanged(bool on);
     // Emitted whenever the backend instance is (re)built — including the
     // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
     // m_backend is already destroyed and m_backend now points at the new one.
@@ -1919,6 +1922,7 @@ private:
     int                m_automationSliceFixtureBaselineMaxSlices{4};
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
+    bool               m_transmitFrequencyCheck{false};
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};

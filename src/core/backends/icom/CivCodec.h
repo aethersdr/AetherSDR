@@ -185,6 +185,9 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C; // 100 Hz units, LE BCD
+inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
+inline constexpr std::uint8_t kDuplex       = 0x0F;   // 10 simplex, 11 down, 12 up
 inline constexpr std::uint8_t kLevel        = 0x14;   // sub-addressed levels
 inline constexpr std::uint8_t kMeter        = 0x15;   // sub-addressed meters
 inline constexpr std::uint8_t kFunction     = 0x16;   // sub-addressed on/off functions
@@ -192,6 +195,7 @@ inline constexpr std::uint8_t kCwMessage    = 0x17;   // up to 30 ASCII characte
 inline constexpr std::uint8_t kPower        = 0x18;   // 00 off, 01 on
 inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceiver ID
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
+inline constexpr std::uint8_t kTone         = 0x1B;   // sub 00: repeater CTCSS frequency
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
 inline constexpr std::uint8_t kScope        = 0x27;
 // The attenuator, and it is NOT sub-addressed like 0x14/0x16 — the single
@@ -288,6 +292,7 @@ inline constexpr std::uint8_t kAgc           = 0x12;   // 01 fast, 02 mid, 03 sl
 inline constexpr std::uint8_t kNoiseBlanker  = 0x22;
 inline constexpr std::uint8_t kNoiseReduce   = 0x40;
 inline constexpr std::uint8_t kAutoNotch     = 0x41;
+inline constexpr std::uint8_t kRepeaterTone  = 0x42;
 inline constexpr std::uint8_t kCompressor    = 0x44;
 inline constexpr std::uint8_t kMonitorFn     = 0x45;
 inline constexpr std::uint8_t kVox           = 0x46;
@@ -586,11 +591,34 @@ struct PassbandEdges {
 [[nodiscard]] std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which,
                                                         int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetTransmitFrequencyCheck(std::uint8_t to,
+                                                                     bool on);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequencyCheck(std::uint8_t to);
 // Attenuator. `db` is the dB figure the radio prints (0 or 20 on an
 // IC-705), encoded as one BCD byte. The read form carries no payload.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
+enum class RepeaterOffsetDirection : std::uint8_t {
+    Simplex = 0x10,
+    Down = 0x11,
+    Up = 0x12,
+};
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffsetDirection(
+    std::uint8_t to, RepeaterOffsetDirection direction);
+[[nodiscard]] std::optional<RepeaterOffsetDirection> decodeRepeaterOffsetDirection(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to,
+                                                             int offsetHz);
+[[nodiscard]] std::optional<int> decodeRepeaterOffsetHz(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to,
+                                                           double toneHz);
+[[nodiscard]] std::optional<double> decodeRepeaterToneHz(
+    std::span<const std::uint8_t> payload);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);

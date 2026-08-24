@@ -340,6 +340,24 @@ jobs:
       - name: Test TCI protocol parsing and malformed-input rejection
         run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
 
+      # The TX capture path joins the gate for the reason stated above the TCI
+      # step: its defects are the invisible kind. Capture negotiation has no UI
+      # and no error -- a mic opened on the wrong rung, or a channel/format
+      # canonicalization that slips the interleave, produces audio that sounds
+      # like a DSP fault or like nothing at all, on someone else's operating
+      # system. That is the whole reason AudioFormatNegotiator takes the target
+      # OS as DATA rather than an #ifdef (#3306): a Linux runner proves the
+      # Windows and macOS ladders too.
+      #
+      # These three targets were added by #5017 and, until this step, nothing
+      # on a pull request selected any of them -- the full unfiltered suite runs
+      # only on the weekly sanitizers job, so a regression here had a week to
+      # reach main. They are pure arithmetic over injected inputs -- no widgets,
+      # no audio device, no event loop, no wall clock -- and run in well under a
+      # second against targets the Build step already linked.
+      - name: Test TX capture format negotiation and voice-strip framing
+        run: ctest --test-dir build -R "^(audio_format_negotiation_test|tx_mic_channel_normalizer_test|tx_voice_processor_test)$" --output-on-failure
+
       # THE CI-V MODE MAP IS INVISIBLE FROM THE UI. A missing arm in
       # modeFromNeutral() does not throw, does not log, and does not fail to
       # build — setSliceMode() takes the "no equivalent" path and re-asserts the
@@ -364,7 +382,7 @@ jobs:
         # the weekly sanitizers job would repeat the hasVfoModeCommand lesson
         # in the comment above: the assertion existed, nothing on a PR ran it,
         # and all four checks stayed green. ~21 s for the pair.
-        run: ctest --test-dir build -R "^icom_(civ|civ_scheduler|meters|backend)_test$" --output-on-failure
+        run: ctest --test-dir build -R "^(icom_(civ|civ_scheduler|meters|backend|family)|rf_gain_presentation)_test$" --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
