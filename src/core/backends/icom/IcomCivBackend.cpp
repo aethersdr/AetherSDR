@@ -2361,6 +2361,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 m_accessoryModLevelPercent = pct;
             } else if (item == mod->networkLevelItem) {
                 m_networkModLevelPercent = pct;
+                // SET 0114 is the authoritative mirror behind the shared
+                // mic.gain seam verb while LAN is selected.  Its wire address
+                // is model-specific and therefore absent from the generic
+                // 14 0B control registry; record the logical control only
+                // after a real radio reply has established this value.
+                m_controlsValueKnown.insert(QStringLiteral("mic.gain"));
             } else {
                 return;
             }
