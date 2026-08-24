@@ -1032,17 +1032,14 @@ void GlobeMapView::setLegend(
 void GlobeMapView::resetToHome()
 {
     if (m_hasHome) {
-        // Apply longitude first, then latitude. Unlike rotationTo(), this
-        // constrains roll: north remains at the top and the equator starts
-        // level while the home station is centered on the visible hemisphere.
-        const QQuaternion longitude = QQuaternion::fromAxisAndAngle(
-            { 0.0F, 1.0F, 0.0F }, static_cast<float>(-m_homeLon));
-        const QQuaternion latitude = QQuaternion::fromAxisAndAngle(
-            { 1.0F, 0.0F, 0.0F }, static_cast<float>(m_homeLat));
-        m_rotation = latitude * longitude;
+        m_centerLatitude = m_homeLat;
+        m_centerLongitude = m_homeLon;
     } else {
-        m_rotation = QQuaternion();
+        m_centerLatitude = 0.0;
+        m_centerLongitude = 0.0;
     }
+    m_rollDegrees = 0.0F;
+    rebuildRotation();
     m_cameraDistance = kDefaultCameraDistance;
     m_detailSelectionDirty = true;
     update();
@@ -1106,24 +1103,35 @@ void GlobeMapView::mousePressEvent(QMouseEvent* event)
 void GlobeMapView::applyDragDelta(const QPointF& delta)
 {
     const float degreesPerPixel = 0.28F;
-    const QQuaternion yaw = QQuaternion::fromAxisAndAngle(
-        { 0.0F, 1.0F, 0.0F }, static_cast<float>(delta.x())
-                                      * degreesPerPixel);
-    const QQuaternion pitch = QQuaternion::fromAxisAndAngle(
-        { 1.0F, 0.0F, 0.0F }, static_cast<float>(delta.y())
-                                      * degreesPerPixel);
-    m_rotation = yaw * pitch * m_rotation;
-    m_rotation.normalize();
+    m_centerLongitude = SolarTerminator::normalizeDegrees(
+        m_centerLongitude - delta.x() * degreesPerPixel);
+    m_centerLatitude = std::clamp(
+        m_centerLatitude + delta.y() * degreesPerPixel, -89.5, 89.5);
+    rebuildRotation();
     m_detailSelectionDirty = true;
 }
 
 void GlobeMapView::applyRollDelta(float degrees)
 {
-    const QQuaternion roll = QQuaternion::fromAxisAndAngle(
-        { 0.0F, 0.0F, 1.0F }, degrees);
-    m_rotation = roll * m_rotation;
-    m_rotation.normalize();
+    m_rollDegrees = std::remainder(m_rollDegrees + degrees, 360.0F);
+    rebuildRotation();
     m_detailSelectionDirty = true;
+}
+
+void GlobeMapView::rebuildRotation()
+{
+    // Keep the three user controls independent. Longitude is applied first,
+    // latitude second, and explicit roll last around the camera-facing axis.
+    // Rebuilding from these values avoids the unintended roll produced by
+    // repeatedly multiplying non-commuting yaw/pitch quaternions.
+    const QQuaternion longitude = QQuaternion::fromAxisAndAngle(
+        { 0.0F, 1.0F, 0.0F }, static_cast<float>(-m_centerLongitude));
+    const QQuaternion latitude = QQuaternion::fromAxisAndAngle(
+        { 1.0F, 0.0F, 0.0F }, static_cast<float>(m_centerLatitude));
+    const QQuaternion roll = QQuaternion::fromAxisAndAngle(
+        { 0.0F, 0.0F, 1.0F }, m_rollDegrees);
+    m_rotation = roll * latitude * longitude;
+    m_rotation.normalize();
 }
 
 void GlobeMapView::mouseMoveEvent(QMouseEvent* event)

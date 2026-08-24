@@ -134,6 +134,7 @@ private:
     void updateHover(const QPointF& position);
     void showHoverCard(int markerIndex, const QPointF& position);
     void animateZoomTo(float distance);
+    void rebuildRotation();
     void applyDragDelta(const QPointF& delta);
     void applyRollDelta(float degrees);
     void beginTransientInteraction();
@@ -174,6 +175,9 @@ private:
     bool m_homeMarkerShown{false};
 
     QQuaternion m_rotation;
+    double m_centerLatitude{0.0};
+    double m_centerLongitude{0.0};
+    float m_rollDegrees{0.0F};
     float m_cameraDistance{3.8F};
     QPointF m_lastPointerPosition;
     bool m_dragging{false};
