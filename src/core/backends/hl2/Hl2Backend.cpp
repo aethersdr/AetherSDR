@@ -1373,6 +1373,7 @@ RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
     c.txPowerBands = {};
+    c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");

@@ -334,6 +334,19 @@ int main(int argc, char** argv)
         // The tri-bander, whose HF grid was entirely unpressable before.
         const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 is in the table");
+        const std::span<const icom::IcomBand> ic9700Bands =
+            icom::bandsFor(*ic9700);
+        check(ic9700Bands.size() == 3
+                  && ic9700Bands[0].name == "2m"
+                  && ic9700Bands[0].lowHz == 144'000'000ULL
+                  && ic9700Bands[1].name == "440"
+                  && ic9700Bands[1].lowHz == 430'000'000ULL
+                  && ic9700Bands[2].name == "23cm"
+                  && ic9700Bands[2].lowHz == 1'240'000'000ULL,
+              "the IC-9700 publishes canonical names with native deck limits");
+        check(icom::bandsFor(*ic705).empty(),
+              "the IC-705 has no discontinuous native-band range override, so "
+              "its declared buttons keep canonical labels");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))

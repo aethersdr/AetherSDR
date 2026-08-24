@@ -14,6 +14,17 @@ struct TxPowerBand {
     double maxWatts = 0.0;
 };
 
+// A backend-declared native band. The canonical name remains the model/UI key;
+// the limits let clients present hardware-specific coverage without guessing
+// from a family/model string or overloading a transmit-power capability.
+struct DeclaredBandRange {
+    QString name;
+    double lowHz = 0.0;
+    double highHz = 0.0;
+
+    bool operator==(const DeclaredBandRange&) const = default;
+};
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -73,6 +84,12 @@ struct RadioCapabilities {
     // that told them it was not available.
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
+
+    // Optional per-band native coverage. Empty means "not reported" and keeps
+    // canonical band labels. This is distinct from txPowerBands: receive-only
+    // radios and bands still need honest presentation even when no PA rating
+    // exists.
+    QVector<DeclaredBandRange> declaredBandRanges;
 
     // Manual notch filters (a Flex TNF) the radio can hold at once. ZERO is the
     // load-bearing default: it means "this radio cannot notch", and the UI then

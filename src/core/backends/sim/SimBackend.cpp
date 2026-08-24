@@ -232,6 +232,7 @@ RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.txPowerBands = {};
+    caps.declaredBandRanges = {};
     caps.family = familyName();
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
