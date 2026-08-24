@@ -3452,8 +3452,10 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
 
         add("keyevent", {},
             "keyevent <press|release> <action-id|key-seq> — inject a real key edge through "
-            "the app event filter (momentary shortcuts only — PTT hold, CW keys; other ids "
-            "fire nothing; press is TX-gated)",
+            "the app event filter (momentary shortcuts only — PTT hold, and the CW keys "
+            "once bound: their ids ship unbound, so KeyInjectUnbound until the operator "
+            "binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab "
+            "moves focus yet reports consumed)",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.action = vtok(p, 1);
                 a.value = vtok(p, 2);
@@ -8505,6 +8507,13 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
         // forceUnkey(). failSafeMomentaryKeyingToRx() fires only on
         // deactivation, which a headless bridge session may never trigger,
         // so the watchdog is the actual backstop for an unmatched press.
+        // Known over-arming: "the filter claimed it" can be broader than "we
+        // keyed something" — with keyboard shortcuts disabled the momentary
+        // handler still consumes, and the SWR-sweep guard swallows every
+        // key. Harmless in both directions: onTxWatchdog() clears the flag
+        // on the next poll that finds nothing keyed, and
+        // m_txKeyedAtRequestStart keeps it from claiming a transmission that
+        // was already up before the press.
         markTxBridgeInitiated();
         break;
     case 1:  // KeyInjectUnknownKey

@@ -1326,6 +1326,13 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
         a = m_shortcutManager.actionForKey(seq);
     }
 
+    // A multi-chord sequence ("Ctrl+K, Ctrl+B") would be silently truncated
+    // to its first chord by the seq[0] injection below — reject it instead,
+    // so the verb never reports ok/consumed for chords it did not deliver.
+    // The momentary family is single-chord by construction. (#5079)
+    if (seq.count() > 1)
+        return KeyInjectUnknownKey;
+
     // TX gate on the PRESS only. Blocking a release would leave the transmitter
     // keyed with no way to drop it — the failure failSafeMomentaryKeyingToRx
     // exists to prevent. A release is always safe to deliver.
