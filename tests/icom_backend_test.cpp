@@ -2713,13 +2713,30 @@ int main(int argc, char** argv)
                       && std::abs(*authoritativeRxTone - 103.5) < 0.001;
               }),
               "IC-9700 radio readback owns access mode plus TX and RX tones");
-        IcomCivBackendTestAccess::deliverCurrent(
-            c.backend, CivFrame{kControllerAddress, 0xA2, cmd::kFunction, true,
-                                func::kRepeaterAccess, {0x03}});
-        check(authoritativeToneMode == QStringLiteral("dtcs_tx"),
-              "IC-9700 preserves an unoffered DTCS access state as radio truth");
-        check(!c.backend.capabilities().fmToneModes.contains(QStringLiteral("dtcs_tx")),
-              "preserving DTCS readback does not add a DTCS operator control");
+        const std::array<std::pair<std::uint8_t, const char*>, 8> accessModes{{
+            {0x00, "off"},
+            {0x01, "ctcss_tx"},
+            {0x02, "ctcss_rx"},
+            {0x03, "dtcs_txrx"},
+            {0x06, "dtcs_tx"},
+            {0x07, "ctcss_tx_dtcs_rx"},
+            {0x08, "dtcs_tx_ctcss_rx"},
+            {0x09, "ctcss_txrx"},
+        }};
+        for (const auto& [wireValue, expectedMode] : accessModes) {
+            IcomCivBackendTestAccess::deliverCurrent(
+                c.backend, CivFrame{kControllerAddress, 0xA2, cmd::kFunction, true,
+                                    func::kRepeaterAccess, {wireValue}});
+            check(authoritativeToneMode == QString::fromLatin1(expectedMode),
+                  "IC-9700 preserves every documented 16 5D access state as radio truth");
+        }
+        check(!c.backend.capabilities().fmToneModes.contains(QStringLiteral("dtcs_tx"))
+                  && !c.backend.capabilities().fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                  && !c.backend.capabilities().fmToneModes.contains(
+                      QStringLiteral("ctcss_tx_dtcs_rx"))
+                  && !c.backend.capabilities().fmToneModes.contains(
+                      QStringLiteral("dtcs_tx_ctcss_rx")),
+              "preserving DTCS readback does not add DTCS operator controls");
         c.backend.setSliceFmToneMode(0, QStringLiteral("ctcss_rx"));
         c.backend.setSliceFmToneRxValue(0, 103.5);
         check(waitFor([&] { return IcomCivBackendTestAccess::pumpUntilIdle(c.backend); }),

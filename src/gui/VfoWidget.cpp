@@ -2325,17 +2325,18 @@ void VfoWidget::buildTabContent()
             // copy survives long enough to stop agreeing.
             m_fmToneValueCmb = new GuardedComboBox;
             m_fmToneValueCmb->setAccessibleName("FM tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones)
+            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
                 m_fmToneValueCmb->addItem(QString::number(t.frequency, 'f', 1),
                                            QString::number(t.frequency, 'f', 1));
+            }
             AetherSDR::applyComboStyle(m_fmToneValueCmb);
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
 
             m_fmToneRxValueCmb = new GuardedComboBox;
             m_fmToneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
-            for (double f : tones) {
-                const QString frequency = QString::number(f, 'f', 1);
+            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
+                const QString frequency = QString::number(t.frequency, 'f', 1);
                 m_fmToneRxValueCmb->addItem(frequency, frequency);
             }
             AetherSDR::applyComboStyle(m_fmToneRxValueCmb);

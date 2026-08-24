@@ -16,7 +16,7 @@
 
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomSettings.h"
-#include "core/MemoryFieldValues.h"
+#include "core/CtcssTones.h"
 #include "core/Resampler.h"
 
 namespace AetherSDR::icom {
@@ -147,8 +147,7 @@ bool supportsTransmitFrequencyCheck(const IcomModel* model) noexcept
 
 bool isCanonicalCtcssTone(double hz)
 {
-    return std::isfinite(hz)
-        && MemoryFields::ctcssTones().contains(QString::number(hz, 'f', 1));
+    return std::isfinite(hz) && isCtcssFrequency(hz);
 }
 
 std::optional<QString> fmAccessModeForWireValue(std::uint8_t value)
@@ -161,10 +160,10 @@ std::optional<QString> fmAccessModeForWireValue(std::uint8_t value)
     case 0x00: return QStringLiteral("off");
     case 0x01: return QStringLiteral("ctcss_tx");
     case 0x02: return QStringLiteral("ctcss_rx");
-    case 0x03: return QStringLiteral("dtcs_tx");
-    case 0x06: return QStringLiteral("ctcss_tx_dtcs_rx");
-    case 0x07: return QStringLiteral("dtcs_tx_ctcss_rx");
-    case 0x08: return QStringLiteral("dtcs_txrx");
+    case 0x03: return QStringLiteral("dtcs_txrx");
+    case 0x06: return QStringLiteral("dtcs_tx");
+    case 0x07: return QStringLiteral("ctcss_tx_dtcs_rx");
+    case 0x08: return QStringLiteral("dtcs_tx_ctcss_rx");
     case 0x09: return QStringLiteral("ctcss_txrx");
     default:   return std::nullopt;
     }
