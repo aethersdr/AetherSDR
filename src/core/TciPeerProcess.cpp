@@ -155,7 +155,10 @@ TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
 // carries the version the user sees in Finder (WSJT-X: "3.0.1").  Walk up
 // from ".../Foo.app/Contents/MacOS/foo" to ".../Foo.app/Contents/Info.plist"
 // and read it — a plain file read, never an execution of the client.  A bare
-// executable (no bundle) yields an empty string.
+// executable (no bundle) yields an empty string.  CFBundleShortVersionString
+// is the marketing version; CFBundleVersion is the build number — report
+// both as "3.0.1 (123)" when they differ, since the build is what a support
+// thread ends up asking for.
 QString bundleVersionForExecutable(const QString& exePath)
 {
     const int macosDir = exePath.lastIndexOf(QStringLiteral("/Contents/MacOS/"));
@@ -163,10 +166,12 @@ QString bundleVersionForExecutable(const QString& exePath)
     const QString plist = exePath.left(macosDir) + QStringLiteral("/Contents/Info.plist");
     // NativeFormat on macOS reads property lists (binary or XML).
     QSettings info(plist, QSettings::NativeFormat);
-    QString version = info.value(QStringLiteral("CFBundleShortVersionString")).toString().trimmed();
-    if (version.isEmpty())
-        version = info.value(QStringLiteral("CFBundleVersion")).toString().trimmed();
-    return version;
+    const QString shortVer =
+        info.value(QStringLiteral("CFBundleShortVersionString")).toString().trimmed();
+    const QString build = info.value(QStringLiteral("CFBundleVersion")).toString().trimmed();
+    if (shortVer.isEmpty()) return build;
+    if (build.isEmpty() || build == shortVer) return shortVer;
+    return shortVer + QStringLiteral(" (") + build + QLatin1Char(')');
 }
 
 QHostAddress sockinfoLocalAddress(const in_sockinfo& ini)
