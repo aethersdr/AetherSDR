@@ -27,7 +27,7 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`/`transmit`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
 | Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
@@ -147,7 +147,7 @@ The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
 `doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `txwaterfall` — gated by
+`atu`, `cwx`, `testtone`, `txwaterfall`, `transmit` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
@@ -166,11 +166,16 @@ that should have changed → `grab_widget` for a visual check.
 **Access token.** Enabling the bridge in Radio Setup → Network mints a
 random token (stored in your OS secret store via QtKeychain — macOS
 Keychain / Windows Credential Manager / libsecret-KWallet, never in the
-settings store — RFC #4603 bans credentials from it outright). Copy it
-into your assistant's MCP config as the
-`AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
-verb except `ping` without a matching token. Headless/CI can supply the
-token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
+settings store — RFC #4603 bans credentials from it outright). Make it
+available as `AETHER_MCP_TOKEN` only in the shell session that launches
+your assistant, using a secret-safe input method that does not record the
+value in shell history. `tools/aether_mcp.py` inherits it from the parent
+process environment automatically, so no file needs to carry it. **Do not**
+put the literal token in a shell profile or add an `env` block to `.mcp.json`
+(or any other MCP config file) — those put a live credential on disk instead
+of keeping it in your OS keychain and risk it landing in a commit. The bridge
+rejects every verb except `ping` without a matching token. Headless/CI can
+supply the token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
 
 ### Secure fresh-build handoff
 
@@ -349,7 +354,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`targettune <mhz>`](#targettune) | Absolute tune through the commanded-target and band-stack path. |
 | | [`memory activate <index> [panId]`](#memory) | Recall a radio memory through the normal UI policy. |
-| | [`slice <action>`](#slice) | add/remove/select/tx/mode/filter/agc/diversity/centerlock/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | Per-slice actions — mode, filter, AGC, DSP, FM tone/offset, antennas, links, fixtures. The authoritative set is the [`slice` action table](#slice); it is pinned to the code by `tools/gen_bridge_docs.py --check`. |
 | **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
@@ -368,6 +373,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
 | | [`atu bypass\|start`](#atu) | ATU bypass (no TX) / tune cycle (keys TX). |
 | | [`testtone on [hz] [db] \| off`](#testtone) | Client TX test tone into the mic path. |
+| | [`transmit rfpower\|tunepower <0..100>`](#transmit) | Set RF / tune drive (clamped by `AETHER_AUTOMATION_TX_MAX_POWER`). |
 
 > **Two request forms, always interchangeable.** Bare line (`get slice active mode`)
 > or JSON (`{"cmd":"get","model":"slice","selector":"active","property":"mode"}`).
@@ -1395,6 +1401,9 @@ re-poll `get slices`.
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
+| `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
+| `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
 | `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `link` | `<sliceIdA> <sliceIdB> <on\|off>` | engage or dissolve one cross-panadapter Slice Link pair through the same MainWindow handler as the context menu; multiple independent pairs are supported, but each owned non-diversity slice may belong to only one pair — assert each pair via the reciprocal `linkedTo` snapshot fields |
@@ -2271,6 +2280,50 @@ the default Layer-A inventory and `radio`/`inventory` reads remain available;
 tally, while `resync`/`refresh` send the `sub pan all` subscription command to
 the radio.
 
+### `devices`
+External-device diagnostics and bounded lifecycle control. `devices list`
+reports the available diagnostic names; `devices ulanzi` probes the exact
+macOS HID match used by the Ulanzi backend and joins that inventory with the
+backend's access and system-event suppression state. The inventory is limited
+to devices selected by the production VID/PID dictionary.
+
+```json
+→ {"cmd":"devices","action":"ulanzi"}
+← {"ok":true,"diagnostic":"ulanzi","platform":"macos","supported":true,
+   "enabled":true,
+   "productionMatch":{"vendorId":65521,"productId":130},
+   "matchedCount":1,
+   "matchedDevices":[{"product":"Ulanzi Dial","vendorId":65521,
+                      "productId":130,"primaryUsagePage":1,
+                      "primaryUsage":6}],
+   "inventoryAvailable":true,"accessMode":"shared",
+   "exclusiveOpenStatus":"notPrivileged","sharedOpenStatus":"success",
+   "systemEventsSuppressed":true,"suppressionStatus":"active",
+   "previousMappingPreserved":true,"eventSystemClientRetained":true,
+   "connected":true,"deviceName":"Ulanzi Dial"}
+```
+
+`matchedCount` is the number of devices currently inside the production match
+dictionary; `matchedDevices` exposes the selected devices' identity and primary
+usage for audit. `inventoryAvailable` describes the temporary read-only
+inventory query, while `exclusiveOpen*`, `sharedOpen*`, and `accessMode`
+describe the real backend's access attempts. If macOS rejects an exclusive
+claim for the Bluetooth keyboard-class dial, the backend opens only the exact
+matched device in shared mode and applies a device-scoped system key mapping.
+`systemEventsSuppressed` and `suppressionStatus` report that state;
+`previousMappingPreserved` and `eventSystemClientRetained` are the restoration
+ownership guards.
+
+`devices ulanzi-stop` restores the prior mapping and closes the backend;
+`devices ulanzi-start` starts it again. These lifecycle actions are blocked in
+Observe only mode. A successful stop reports `restorationStatus:"success"`,
+`systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
+
+The read-only diagnostic is available in **Observe only** mode; none of these
+actions keys the transmitter. On non-macOS platforms it returns
+`supported:false` because those backends do not use the affected IOKit claim
+path.
+
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
 investigations. An instant snapshot combines the operating system's native
@@ -3135,6 +3188,13 @@ at once.
 **`controls map`** — every CI-V message the backend names, with its wire address,
 raw and seam ranges, the seam verb it maps to, the UI control that drives it, and
 what it has actually done this session. Read-only; works with no radio attached.
+For Icom, `supported`, `profileFeature`, `profileEvidence`, and `profileSource`
+describe the effective active-model row; an unsupported row is declaration
+inventory, not a claim that the radio accepts it. Core controls and scope on a
+scope-capable discovered model can be reachable with `profileEvidence: "none"`:
+the former is the backend's model-neutral CI-V floor and the latter matches the
+identity geometry already used by scope startup. Evidence remains independent
+so neither is presented as guide- or live-attested.
 
 ```json
 → {"cmd":"controls","args":"map"}
@@ -3360,6 +3420,26 @@ antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 ← {"ok":true,"txtest":"off"}
 ```
 
+### `transmit`
+Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
+TX-gated like `key`, and the gate is reported **before** the value is validated so
+it cannot be probed with nonsense.
+
+The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
+ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
+accessible name, so a verb reaching `TransmitModel` directly would otherwise inherit
+no bound at all — on the surface most likely to be feeding a transverter or an
+amplifier. When a request is clamped the reply says so rather than quietly honouring
+a different number than was asked for.
+
+```json
+→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
+
+→ {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
+← {"ok":true,"transmit":"rfpower","rfPower":30,"tunePower":10,"requested":90,"clampedTo":30}
+```
+
 ### `atu`
 Antenna-tuner control. `bypass` is relay-only (takes the tuner out of circuit so
 meters see the raw load) and does **not** transmit; `start` runs a tune cycle that
@@ -3478,6 +3558,25 @@ actually paint? is the layout right?), because a live spectrum is
 non-deterministic noise and won't golden-match until replay mode (Phase 2)
 lands.
 
+### Workspace pan-layout proof
+
+`workspace pan-layout <id>` drives the same production path as selecting a
+panadapter layout in the UI. It persists `PanadapterLayout`, creates or removes
+pans to reach the layout's count, and reflows Workspace Canvas pan rectangles
+when canvas mode is enabled. Valid IDs are `1`, `2v`, `2h`, `2h1`, `12h`,
+`3v`, `2x2`, `4v`, `3h2`, `2x3`, `4h3`, and `2x4`.
+
+Pan creation and removal settle asynchronously. The initial reply includes
+`targetPanCount`, active-main `panCount`, global `globalPanCount`, and
+`settling`. Poll `workspace status` until the active main surface has the
+target pan count before asserting its live rectangles. Floating pans and pans
+on extra surfaces are outside that count and remain untouched. To prove the
+rectangles persisted, disable and re-enable canvas mode (or restart with the
+same isolated settings profile) and assert the replayed geometry. This action
+returns an error before mutation when the target cannot fit within the radio's
+receiver capacity. It never enables transmit and remains available without
+`AETHER_AUTOMATION_ALLOW_TX`.
+
 ---
 
 ## Gotchas
@@ -3537,7 +3636,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 68 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 70 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3580,12 +3679,13 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
-| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
@@ -3596,6 +3696,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler> — CI-V inject, frame trace, RS-BA1 lease health, or command-scheduler health (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |

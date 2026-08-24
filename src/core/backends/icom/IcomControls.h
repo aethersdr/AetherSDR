@@ -4,6 +4,8 @@
 #include <span>
 #include <string_view>
 
+#include "core/backends/icom/IcomModels.h"
+
 // THE CONTROL REGISTRY — every CI-V message this backend knows about, declared
 // once, in a form something other than a human can read.
 //
@@ -44,6 +46,7 @@ enum class Encoding : std::uint8_t {
     BcdFreq,     // five BCD bytes, little-endian, Hz
     ModeFilter,  // mode byte + filter slot byte
     Bcd4,        // four BCD digits (a scope span, a SET-menu item)
+    Bcd6,        // six BCD digits (repeater offset / CTCSS frequency)
 };
 
 // Which model the value belongs to once it is across the seam. Says where to
@@ -109,9 +112,18 @@ struct ControlSpec {
     // than its fields — the mode-dependent filter ladder, the attenuator's
     // band limits — this is where that lives, so the report explains itself.
     std::string_view note;
+
+    // The model-profile facet required before this row is effective. Core is
+    // the backend's model-neutral CI-V floor; Scope follows the discovered
+    // model's transport geometry. Their evidence can still be "none" so the
+    // registry distinguishes reachability from guide/live attestation.
+    IcomFeature requiredFeature = IcomFeature::Core;
 };
 
 [[nodiscard]] std::span<const ControlSpec> controlSpecs();
+[[nodiscard]] bool controlSupported(const IcomModel& model,
+                                    const IcomModelProfile& profile,
+                                    const ControlSpec& spec) noexcept;
 
 [[nodiscard]] std::string_view encodingName(Encoding e);
 [[nodiscard]] std::string_view planeName(Plane p);

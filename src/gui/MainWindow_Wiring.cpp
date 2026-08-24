@@ -3568,7 +3568,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setRadioModel(&m_radioModel);
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
-    menu->setDeclaredBands(m_radioModel.declaredBands());
+    menu->setDeclaredBands(m_radioModel.declaredBands(),
+                           m_radioModel.backendCapabilities().declaredBandRanges);
     applyTuningRangeToOverlayMenu(menu);
     applyNotchCapabilities(sw);
     applyRadioSideDspToPanDisplay(sw);
@@ -5245,16 +5246,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // XVTR button → open Radio Setup XVTR tab (#571)
     connect(menu, &SpectrumOverlayMenu::xvtrSetupRequested,
             this, [this]() {
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
-        if (m_radioSetupDialog)
-            m_radioSetupDialog->selectTab(QStringLiteral("XVTR"));
+        openRadioSetupPage(QStringLiteral("XVTR"));
     });
 
     // ── WNB / RF Gain ────────────────────────────────────────────────────

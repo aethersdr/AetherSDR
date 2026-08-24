@@ -1088,11 +1088,14 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
             [this](int index) {
         const bool hadMicPeak = m_meterModel.hasMicPeakMeter();
+        const bool hadSupplyVoltage = m_meterModel.hasSupplyVoltage();
         m_meterModel.removeMeter(index);
         // Symmetric on purpose: a meter that goes away must hide the face
         // again, or a radio swap leaves a dead gauge on screen.
-        if (hadMicPeak != m_meterModel.hasMicPeakMeter())
+        if (hadMicPeak != m_meterModel.hasMicPeakMeter()
+            || hadSupplyVoltage != m_meterModel.hasSupplyVoltage()) {
             publishCapabilities(isConnected());
+        }
     });
 
     // A backend may revise its own capabilities mid-session (SimBackend does so
@@ -1103,6 +1106,14 @@ void RadioModel::setupBackend(const QString& family)
     // signal to bind to and cannot observe a stale picture.
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] { publishCapabilities(isConnected()); });
+    connect(m_backend.get(), &IRadioBackend::transmitFrequencyCheckChanged, this,
+            [this](bool on) {
+        if (m_transmitFrequencyCheck == on) {
+            return;
+        }
+        m_transmitFrequencyCheck = on;
+        emit transmitFrequencyCheckChanged(on);
+    });
 
     // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend that
     // declares client-owned settings domains reports state movement; one
@@ -1224,6 +1235,42 @@ void RadioModel::setupBackend(const QString& family)
             connect(s, &SliceModel::squelchCommandIssued, this,
                     [this, s](bool on, int level) {
                 if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
+            });
+            // FM repeater controls are four distinct neutral intents.  Flex
+            // continues to use SliceModel's wire text; every other backend gets
+            // the same operator action through the seam instead of silently
+            // updating only the widgets.
+            connect(s, &SliceModel::fmToneModeCommandIssued, this,
+                    [this, s](const QString& mode) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneMode(s->sliceId(), mode);
+                }
+            });
+            connect(s, &SliceModel::fmToneValueCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
+                    [this, s](const QString& direction) {
+                if (m_backend) {
+                    m_backend->setSliceRepeaterOffsetDir(s->sliceId(), direction);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterOffsetCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmRepeaterOffset(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterRecallCommandIssued, this,
+                    [this, s](const QString& direction, double offsetHz,
+                              const QString& toneMode, double toneHz) {
+                if (m_backend) {
+                    m_backend->setSliceFmRepeater(s->sliceId(), direction, offsetHz,
+                                                  toneMode, toneHz);
+                }
             });
             // RIT / XIT. The control already existed in VfoWidget and drove
             // SliceModel; only the last hop to the seam was missing.
@@ -3687,6 +3734,21 @@ void RadioModel::rebootRadio()
 RadioCapabilities RadioModel::backendCapabilities() const
 {
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+}
+
+void RadioModel::setTransmitFrequencyCheck(bool on)
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    if (on && !backendCapabilities().hasTransmitFrequencyCheck) {
+        return;
+    }
+    // Capability gates a new ON edge, never OFF. The backend retains the
+    // release obligation if authoritative identity changes while ON is queued.
+    // The backend reply owns m_transmitFrequencyCheck. The button's physical
+    // down-state gives immediate press feedback without inventing radio state.
+    m_backend->setTransmitFrequencyCheck(on);
 }
 
 bool RadioModel::hasExtendedDspFilters() const
@@ -6809,6 +6871,10 @@ void RadioModel::onDisconnected()
     m_amplifier.reset();              // clear PGXL presence/operate (#4094)
     if (m_flexBackend) m_flexBackend->clearExtensionHandles();  // drop cached encode handles (#4198)
     m_fullDuplex = false;
+    if (m_transmitFrequencyCheck) {
+        m_transmitFrequencyCheck = false;
+        emit transmitFrequencyCheckChanged(false);
+    }
     // Reset to false so the next connect's skip-peek fast path requires the
     // radio's mf_enable status to actually arrive before treating multiFLEX
     // as enabled. Default-true would silently bypass the conflict check if
@@ -6864,6 +6930,7 @@ void RadioModel::onDisconnected()
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
     m_region.clear();
+    m_declaredBands.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
     m_netCwIndex = 1;
@@ -7737,27 +7804,13 @@ void RadioModel::recallLocalMemory(int index)
 
     // These are the operator-issue setters, the same ones the panel controls
     // call, so each emits its *CommandIssued signal and reaches the radio
-    // through the backend seam. Order matches what `memory apply` does on a
-    // Flex: mode first (it resets the filter to the mode default), then the
-    // stored filter, then frequency.
+    // through the backend seam. Mode goes first because it resets the filter
+    // to the mode default; the stored filter follows, and tuning precedes the
+    // grouped FM repeater state for the IC-705 quirk documented below.
     if (!memory.mode.isEmpty())
         target->setMode(memory.mode);
     if (memory.rxFilterLow != 0 || memory.rxFilterHigh != 0)
         target->setFilterWidth(memory.rxFilterLow, memory.rxFilterHigh);
-
-    // FM repeater and tone fields have no seam route today — a non-Flex backend
-    // never sees SliceModel's Flex wire text for them. Applying them anyway
-    // keeps the model and the UI honest about what the recalled channel is; on
-    // a backend that grows FM support they will already be set.
-    if (!memory.offsetDir.isEmpty()) {
-        target->setRepeaterOffsetDir(memory.offsetDir);
-        target->setFmRepeaterOffsetFreq(std::abs(memory.repeaterOffset));
-    }
-    if (!memory.toneMode.isEmpty()) {
-        target->setFmToneMode(memory.toneMode);
-        target->setFmToneValue(QString::number(memory.toneValue, 'f', 1));
-    }
-    target->setSquelch(memory.squelch, memory.squelchLevel);
 
     // The tuning step, applied directly rather than commanded. On a Flex the
     // panel's follow-up `slice set N step=` round-trips through the radio and
@@ -7767,8 +7820,27 @@ void RadioModel::recallLocalMemory(int index)
     if (memory.step > 0)
         target->applyRecalledStepHz(memory.step);
 
+    // Tune BEFORE applying the repeater configuration.  The IC-705 has a
+    // documented frequency-change quirk that can clear repeater tone, so a
+    // recall that enabled tone and tuned afterwards looked correct in the UI
+    // while the radio had silently disabled it.  The grouped seam verb below
+    // writes tone enable last and always re-applies the complete memory, even
+    // when its values happen to equal the previous channel's model snapshot.
     if (memory.freq > 0.0)
         target->setFrequency(memory.freq);
+
+    if (!memory.offsetDir.isEmpty() || !memory.toneMode.isEmpty()) {
+        const QString direction = memory.offsetDir.isEmpty()
+            ? target->repeaterOffsetDir() : memory.offsetDir;
+        const double offsetMhz = memory.offsetDir.isEmpty()
+            ? target->fmRepeaterOffsetFreq() : std::abs(memory.repeaterOffset);
+        const QString toneMode = memory.toneMode.isEmpty()
+            ? target->fmToneMode() : memory.toneMode;
+        const double toneHz = memory.toneMode.isEmpty()
+            ? target->fmToneValue().toDouble() : memory.toneValue;
+        target->applyRecalledFmRepeater(direction, offsetMhz, toneMode, toneHz);
+    }
+    target->setSquelch(memory.squelch, memory.squelchLevel);
 
     qCInfo(lcProtocol).noquote().nospace()
         << "RadioModel: recalled local memory " << index

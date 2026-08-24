@@ -286,8 +286,18 @@ IcomCivScheduler::Observation IcomCivScheduler::observe(const CivFrame& frame,
     return Observation::Accepted;
 }
 
-void IcomCivScheduler::reset() noexcept
+IcomCivScheduler::ResetResult IcomCivScheduler::reset(TerminalOutcome outcome) noexcept
 {
+    ResetResult result;
+    result.requests.reserve(m_queue.size() + (m_inFlight ? 1U : 0U));
+    for (const Queued& queued : m_queue) {
+        result.requests.push_back(
+            TerminalRequest{queued.request.key, queued.generation, false, outcome});
+    }
+    if (m_inFlight) {
+        result.requests.push_back(TerminalRequest{
+            m_inFlight->request.key, m_inFlight->generation, true, outcome});
+    }
     m_queue.clear();
     m_inFlight.reset();
     m_expired.clear();
@@ -296,6 +306,7 @@ void IcomCivScheduler::reset() noexcept
     m_lastDispatchMs = 0;
     m_inFlightAtMs = 0;
     m_stats = Stats{};
+    return result;
 }
 
 IcomCivScheduler::Stats IcomCivScheduler::stats() const

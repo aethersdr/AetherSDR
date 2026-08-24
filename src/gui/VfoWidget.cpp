@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "core/CtcssTones.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
@@ -2317,16 +2318,16 @@ void VfoWidget::buildTabContent()
             AetherSDR::applyComboStyle(m_fmToneModeCmb);
             toneRow->addWidget(m_fmToneModeCmb, 1);
 
-            // Tone value — simplified list of common CTCSS tones
+            // Tone value — from core/CtcssTones.h, the same table the RX
+            // applet's dropdown and the automation bridge's `slice tone`
+            // validation use. This list used to be a third hand-typed copy of
+            // the same 41 doubles; the values agreed, which is exactly how a
+            // copy survives long enough to stop agreeing.
             m_fmToneValueCmb = new GuardedComboBox;
             m_fmToneValueCmb->setAccessibleName("FM tone frequency");
-            const double tones[] = {67.0,71.9,74.4,77.0,79.7,82.5,85.4,88.5,91.5,94.8,
-                97.4,100.0,103.5,107.2,110.9,114.8,118.8,123.0,127.3,131.8,
-                136.5,141.3,146.2,151.4,156.7,162.2,167.9,173.8,179.9,186.2,
-                192.8,203.5,206.5,210.7,218.1,225.7,229.1,233.6,241.8,250.3,254.1};
-            for (double f : tones)
-                m_fmToneValueCmb->addItem(QString::number(f, 'f', 1),
-                                           QString::number(f, 'f', 1));
+            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones)
+                m_fmToneValueCmb->addItem(QString::number(t.frequency, 'f', 1),
+                                           QString::number(t.frequency, 'f', 1));
             AetherSDR::applyComboStyle(m_fmToneValueCmb);
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
@@ -2368,10 +2369,8 @@ void VfoWidget::buildTabContent()
                 if (m_fmOffsetSpin->signalsBlocked()) return;
                 if (!m_slice) return;
                 m_slice->setFmRepeaterOffsetFreq(val);
-                const QString& dir = m_slice->repeaterOffsetDir();
-                if (dir == "up") m_slice->setTxOffsetFreq(val);
-                else if (dir == "down") m_slice->setTxOffsetFreq(-val);
-                else m_slice->setTxOffsetFreq(0);
+                m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
+                    m_slice->repeaterOffsetDir(), val));
             });
 
             // Direction: − | Simplex | + | REV
@@ -2381,10 +2380,8 @@ void VfoWidget::buildTabContent()
             auto applyDir = [this](const QString& dir) {
                 if (!m_slice) return;
                 m_slice->setRepeaterOffsetDir(dir);
-                double offset = m_slice->fmRepeaterOffsetFreq();
-                if (dir == "up") m_slice->setTxOffsetFreq(offset);
-                else if (dir == "down") m_slice->setTxOffsetFreq(-offset);
-                else m_slice->setTxOffsetFreq(0);
+                m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
+                    dir, m_slice->fmRepeaterOffsetFreq()));
                 m_fmOffsetDown->setChecked(dir == "down");
                 m_fmSimplexBtn->setChecked(dir == "simplex");
                 m_fmOffsetUp->setChecked(dir == "up");
@@ -2413,16 +2410,28 @@ void VfoWidget::buildTabContent()
             dirRow->addWidget(m_fmOffsetUp);
 
             m_fmRevBtn = new QPushButton("REV");
+            m_fmRevBtn->setObjectName("vfoFmReverseButton");
             m_fmRevBtn->setAccessibleName("Reverse repeater offset");
             m_fmRevBtn->setCheckable(true);
             m_fmRevBtn->setStyleSheet(kRevBtn);
             connect(m_fmRevBtn, &QPushButton::toggled, this, [this](bool on) {
-                if (m_fmRevBtn->signalsBlocked() || !m_slice) return;
+                if (m_fmRevBtn->signalsBlocked() || !m_slice
+                    || usesTransmitFrequencyCheck()) return;
                 double offset = m_slice->fmRepeaterOffsetFreq();
                 const QString& dir = m_slice->repeaterOffsetDir();
                 if (dir == "up") m_slice->setTxOffsetFreq(on ? -offset : offset);
                 else if (dir == "down") m_slice->setTxOffsetFreq(on ? offset : -offset);
             });
+            connect(m_fmRevBtn, &QPushButton::pressed, this, [this] {
+                if (usesTransmitFrequencyCheck()) {
+                    m_xfcHeldByThisControl = true;
+                    m_radioModel->setTransmitFrequencyCheck(true);
+                }
+            });
+            connect(m_fmRevBtn, &QPushButton::released, this, [this] {
+                releaseTransmitFrequencyCheck();
+            });
+            m_fmRevBtn->installEventFilter(this);
             dirRow->addWidget(m_fmRevBtn);
 
             fvb->addLayout(dirRow);
@@ -3509,6 +3518,7 @@ void VfoWidget::showEvent(QShowEvent* event)
 
 void VfoWidget::hideEvent(QHideEvent* event)
 {
+    releaseTransmitFrequencyCheck();
     if (m_shadowWidget) {
         m_shadowWidget->hide();
     }
@@ -6123,12 +6133,17 @@ void VfoWidget::populateDaxCombo()
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
     if (m_radioModel) {
+        releaseTransmitFrequencyCheck();
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &VfoWidget::updateAntennaButtons);
         disconnect(m_radioModel, &RadioModel::infoChanged,
                    this, &VfoWidget::populateDaxCombo);
         disconnect(m_radioModel, &RadioModel::connectionStateChanged,
                    this, &VfoWidget::populateDaxCombo);
+        disconnect(m_radioModel, &RadioModel::capabilitiesChanged,
+                   this, nullptr);
+        disconnect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged,
+                   this, nullptr);
     }
     m_radioModel = radioModel;
     if (m_radioModel) {
@@ -6139,9 +6154,62 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
                 this, &VfoWidget::populateDaxCombo);
         connect(m_radioModel, &RadioModel::connectionStateChanged,
                 this, &VfoWidget::populateDaxCombo);
+        connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
+                [this](bool, const RadioCapabilities&) {
+            configureRepeaterReverseControl();
+        });
+        connect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged, this,
+                [this](bool on) {
+            if (usesTransmitFrequencyCheck() && m_fmRevBtn) {
+                m_fmRevBtn->setDown(on);
+            }
+        });
     }
     populateDaxCombo();
     updateAntennaButtons();
+    configureRepeaterReverseControl();
+}
+
+bool VfoWidget::usesTransmitFrequencyCheck() const
+{
+    return m_radioModel && m_radioModel->isConnected()
+        && m_radioModel->backendCapabilities().hasTransmitFrequencyCheck;
+}
+
+void VfoWidget::configureRepeaterReverseControl()
+{
+    if (!m_fmRevBtn) {
+        return;
+    }
+    const bool xfc = usesTransmitFrequencyCheck();
+    if (!xfc) {
+        releaseTransmitFrequencyCheck();
+    }
+    QSignalBlocker blocker(m_fmRevBtn);
+    m_fmRevBtn->setText(xfc ? QStringLiteral("XFC") : QStringLiteral("REV"));
+    m_fmRevBtn->setAccessibleName(xfc ? QStringLiteral("Transmit frequency check")
+                                      : QStringLiteral("Reverse repeater offset"));
+    m_fmRevBtn->setCheckable(!xfc);
+    m_fmRevBtn->setChecked(false);
+    m_fmRevBtn->setDown(xfc && m_radioModel->transmitFrequencyCheck());
+    if (!xfc) {
+        m_xfcHeldByThisControl = false;
+    }
+}
+
+void VfoWidget::releaseTransmitFrequencyCheck()
+{
+    if (!m_xfcHeldByThisControl) {
+        m_xfcHeldByThisControl = false;
+        return;
+    }
+    m_xfcHeldByThisControl = false;
+    if (m_fmRevBtn) {
+        m_fmRevBtn->setDown(false);
+    }
+    if (m_radioModel) {
+        m_radioModel->setTransmitFrequencyCheck(false);
+    }
 }
 
 void VfoWidget::setKiwiSdrManager(KiwiSdrManager* manager)
@@ -6289,6 +6357,13 @@ void VfoWidget::updateAntennaButtons()
 
 bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
 {
+    if (obj == m_fmRevBtn
+        && (event->type() == QEvent::Hide
+            || event->type() == QEvent::HideToParent
+            || event->type() == QEvent::UngrabMouse
+            || event->type() == QEvent::WindowDeactivate)) {
+        releaseTransmitFrequencyCheck();
+    }
     if (obj == m_freqEdit
         && (event->type() == QEvent::ShortcutOverride
             || event->type() == QEvent::KeyPress)) {

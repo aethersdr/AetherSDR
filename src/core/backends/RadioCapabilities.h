@@ -14,6 +14,17 @@ struct TxPowerBand {
     double maxWatts = 0.0;
 };
 
+// A backend-declared native band. The canonical name remains the model/UI key;
+// the limits let clients present hardware-specific coverage without guessing
+// from a family/model string or overloading a transmit-power capability.
+struct DeclaredBandRange {
+    QString name;
+    double lowHz = 0.0;
+    double highHz = 0.0;
+
+    bool operator==(const DeclaredBandRange&) const = default;
+};
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -73,6 +84,12 @@ struct RadioCapabilities {
     // that told them it was not available.
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
+
+    // Optional per-band native coverage. Empty means "not reported" and keeps
+    // canonical band labels. This is distinct from txPowerBands: receive-only
+    // radios and bands still need honest presentation even when no PA rating
+    // exists.
+    QVector<DeclaredBandRange> declaredBandRanges;
 
     // Manual notch filters (a Flex TNF) the radio can hold at once. ZERO is the
     // load-bearing default: it means "this radio cannot notch", and the UI then
@@ -283,6 +300,13 @@ struct RadioCapabilities {
     // tone. A radio can have either, both or neither.
     bool hasManualNotch = false;
 
+    // The radio can temporarily monitor the transmit frequency while the
+    // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
+    // persistent repeater-reverse setting: releasing it returns reception to
+    // the normal frequency. The UI therefore renders a momentary button and
+    // follows the radio's reported state in both directions.
+    bool hasTransmitFrequencyCheck = false;
+
     // The radio reports the PA supply-voltage rail as telemetry — the value the
     // status bar renders directly under the PA temperature. A radio that never
     // reports the rail declares false and that readout goes away, instead of
@@ -301,6 +325,20 @@ struct RadioCapabilities {
     // genuinely having a PA. It already means something other than this.
     bool hasSupplyVoltageTelemetry = false;
 
+    // The radio reports PA temperature as live telemetry. False means the
+    // Radio Vitals applet omits the temperature gauge and its unit selector
+    // instead of presenting an instrument that can never receive a sample.
+    // This is independent of supply voltage: a backend may support either,
+    // both, or neither telemetry source.
+    bool hasPaTemperatureTelemetry = false;
+
+    // The radio reports main-fan speed as live telemetry. False means the
+    // Radio Vitals applet omits the fan gauge instead of presenting an
+    // instrument that can never receive a sample. This is independent of PA
+    // temperature and supply voltage: each telemetry source is declared on
+    // its own evidence.
+    bool hasMainFanTelemetry = false;
+
     // The radio exposes SELECTABLE HARDWARE microphone inputs — the Phone
     // applet's MIC / BAL / LINE / ACC choices, which are FlexRadio's front and
     // rear connectors.
@@ -317,6 +355,13 @@ struct RadioCapabilities {
     // hear network audio produces a transmission with no modulation, which
     // looks like a hardware fault.
     bool hasSelectableMicInputs = false;
+
+    // Whether the radio implements the downward-expander control surfaced as
+    // DEXP in the Phone applet. This is deliberately narrower than
+    // hasRadioSideDsp: receive-side DSP does not imply a TX compander command.
+    // False hides the complete row rather than leaving an optimistic control
+    // with no authoritative command path.
+    bool hasDownwardExpander = false;
 
     // Transmit audio reaches this backend through IRadioBackend::submitTxAudio
     // rather than through a Flex DAX/VITA-49 stream.
@@ -349,6 +394,11 @@ struct RadioCapabilities {
     // advertise the real, discrete set rather than let a continuous-looking
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
+
+    // Whether the radio implements the independent TX low/high cutoff controls
+    // presented by PhoneApplet. False hides the complete control row rather
+    // than offering controls whose writes the backend cannot honour.
+    bool hasTxFilterControls = false;
 
     // The TRANSMIT passband edges this radio can actually reach, in Hz,
     // ASCENDING. Empty means continuous — the Phone applet's low/high cut

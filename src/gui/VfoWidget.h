@@ -693,6 +693,9 @@ private:
     // (NRS/RNN/NRF) — one place so setSlice/syncFromSlice/setHasExtendedDsp
     // can't drift on the mode gate. Caller must hold a valid m_slice. (#2177)
     void updateExtendedDspVisibility();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void releaseTransmitFrequencyCheck();
     // The ONE owner of the radio-side DSP buttons' visibility: ANDs each
     // button's cached mode eligibility with m_hasRadioSideDsp. Both mode
     // recompute sites and setHasRadioSideDsp() route through here, so no
@@ -715,6 +718,7 @@ private:
     QPushButton*   m_fmSimplexBtn{nullptr};
     QPushButton*   m_fmOffsetUp{nullptr};
     QPushButton*   m_fmRevBtn{nullptr};
+    bool           m_xfcHeldByThisControl{false};
     ScrollableLabel* m_markLabel{nullptr};
     ScrollableLabel* m_shiftLabel{nullptr};
     // Mode tab
