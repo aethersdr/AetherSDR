@@ -1448,6 +1448,8 @@ RadioCapabilities Hl2Backend::capabilities() const
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
+    // The host modulator implements a continuous transmit passband.
+    c.hasTxFilterControls = true;
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;

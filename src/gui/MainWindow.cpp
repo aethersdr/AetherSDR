@@ -2995,6 +2995,10 @@ void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
                                           int audioLo, int audioHi)
 {
     if (path == ClientEqApplet::Path::Tx) {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        if (m_radioModel.isConnected() && !caps.hasTxFilterControls) {
+            return;
+        }
         auto& txm = m_radioModel.transmitModel();
         if (audioLo != txm.txFilterLow())  txm.setTxFilterLow(audioLo);
         if (audioHi != txm.txFilterHigh()) txm.setTxFilterHigh(audioHi);
@@ -7132,6 +7136,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // the session and leave a Flex's continuous control stepping through
         // another radio's list.
         if (auto* phone = m_appletPanel->phoneApplet()) {
+            phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});

@@ -3791,6 +3791,8 @@ add_executable(phone_tx_filter_numeric_entry_test
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
 target_include_directories(phone_tx_filter_numeric_entry_test PRIVATE src)
+target_compile_definitions(phone_tx_filter_numeric_entry_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(phone_tx_filter_numeric_entry_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test
 )

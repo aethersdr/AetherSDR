@@ -395,6 +395,11 @@ struct RadioCapabilities {
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
 
+    // Whether the radio implements the independent TX low/high cutoff controls
+    // presented by PhoneApplet. False hides the complete control row rather
+    // than offering controls whose writes the backend cannot honour.
+    bool hasTxFilterControls = false;
+
     // The TRANSMIT passband edges this radio can actually reach, in Hz,
     // ASCENDING. Empty means continuous — the Phone applet's low/high cut
     // steppers keep their own 50 Hz granularity and every value they show is a

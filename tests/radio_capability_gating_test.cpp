@@ -111,6 +111,7 @@
 #include "gui/VoiceModeGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomCredentials.h"
@@ -902,9 +903,26 @@ int main(int argc, char** argv)
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
         FlexBackend flex;
+        hl2::Hl2Backend hl2;
+        SimBackend sim;
         AetherSDR::icom::IcomCivBackend icom;
         const RadioCapabilities flexCaps = flex.capabilities();
+        const RadioCapabilities hl2Caps = hl2.capabilities();
+        const RadioCapabilities simCaps = sim.capabilities();
         const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(!fresh.hasTxFilterControls,
+              "RadioCapabilities defaults TX cutoff controls to absent");
+        check(flexCaps.hasTxFilterControls,
+              "Flex explicitly retains its continuous TX cutoff controls");
+        check(hl2Caps.hasTxFilterControls,
+              "HL2 explicitly retains its host-modulated TX cutoff controls");
+        check(!simCaps.hasTxFilterControls,
+              "Sim explicitly omits TX cutoff controls because it is RX-only");
+        check(!icomCaps.hasTxFilterControls,
+              "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: the TX cutoff editor remains permissive");
 
         check(flexCaps.hasLmsNoiseFilters,
               "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");

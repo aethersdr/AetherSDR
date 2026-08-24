@@ -1827,7 +1827,9 @@ QString atuStatusName(ATUStatus s)
     return QStringLiteral("unknown");
 }
 
-QJsonObject transmitSnapshot(const TransmitModel* t, bool hasDownwardExpander)
+QJsonObject transmitSnapshot(const TransmitModel* t,
+                             bool hasDownwardExpander,
+                             bool hasTxFilterControls)
 {
     QJsonObject snapshot{
         // power / keying (read-only)
@@ -1848,13 +1850,11 @@ QJsonObject transmitSnapshot(const TransmitModel* t, bool hasDownwardExpander)
         {QStringLiteral("monitor"),         t->sbMonitor()},
         {QStringLiteral("monGainSb"),       t->monGainSb()},
         {QStringLiteral("activeMicProfile"),t->activeMicProfile()},
-        // VOX / AM / DEXP / TX filter
+        // VOX / AM / DEXP
         {QStringLiteral("voxEnable"),       t->voxEnable()},
         {QStringLiteral("voxLevel"),        t->voxLevel()},
         {QStringLiteral("voxDelay"),        t->voxDelay()},
         {QStringLiteral("amCarrierLevel"),  t->amCarrierLevel()},
-        {QStringLiteral("txFilterLow"),     t->txFilterLow()},
-        {QStringLiteral("txFilterHigh"),    t->txFilterHigh()},
         // CW
         {QStringLiteral("cwSpeed"),         t->cwSpeed()},
         {QStringLiteral("cwPitch"),         t->cwPitch()},
@@ -1877,6 +1877,10 @@ QJsonObject transmitSnapshot(const TransmitModel* t, bool hasDownwardExpander)
     if (hasDownwardExpander) {
         snapshot.insert(QStringLiteral("dexp"), t->dexpOn());
         snapshot.insert(QStringLiteral("dexpLevel"), t->dexpLevel());
+    }
+    if (hasTxFilterControls) {
+        snapshot.insert(QStringLiteral("txFilterLow"), t->txFilterLow());
+        snapshot.insert(QStringLiteral("txFilterHigh"), t->txFilterHigh());
     }
     return snapshot;
 }
@@ -5484,7 +5488,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = gpsSnapshot(radio);
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel(),
-                                radio->backendCapabilities().hasDownwardExpander);
+                                radio->backendCapabilities().hasDownwardExpander,
+                                radio->backendCapabilities().hasTxFilterControls);
     } else if (model == QLatin1String("cwx")) {
         data = cwxSnapshot(&radio->cwxModel(), radio->cwxActive());
     } else if (model == QLatin1String("equalizer") || model == QLatin1String("eq")) {

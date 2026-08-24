@@ -272,6 +272,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.takesTxAudioOverSeam = false;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
+    caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP

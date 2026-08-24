@@ -322,8 +322,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // and, correctly, unwired: setTxFilter() declines there too, so the two
     // agree rather than the UI promising what the backend refuses.
     if (const auto tbw = txBandwidthProfileFor(*m_model)) {
+        c.hasTxFilterControls = true;
         c.txFilterLowEdgesHz  = QList<int>(tbw->lowEdgesHz.begin(), tbw->lowEdgesHz.end());
         c.txFilterHighEdgesHz = QList<int>(tbw->highEdgesHz.begin(), tbw->highEdgesHz.end());
+    } else {
+        c.hasTxFilterControls = false;
     }
 
     c.hasProfiles = false;

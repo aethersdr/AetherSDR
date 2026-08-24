@@ -191,6 +191,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
     // configurable width list. A Flex's filters are continuous.
     caps.rxFilterWidthsHz = {};
+    caps.hasTxFilterControls = true;
     // DAX audio + DAX IQ ride PanadapterStream's VITA-49 plane, which only this
     // backend owns.
     caps.hasDaxStreams = true;
