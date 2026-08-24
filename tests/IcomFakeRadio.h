@@ -809,6 +809,11 @@ private:
             const int item = decodeBcdByte(frame->data[0]) * 100
                 + decodeBcdByte(frame->data[1]);
             if (frame->data.size() == 2) {
+                // Item numbers are model-owned and can be reused with a
+                // different value shape.  The selected model's level seed
+                // deliberately takes precedence over a legacy enum seed at
+                // the same decimal leaf; setCivAddress() installs the active
+                // model's interpretation before the session starts.
                 if (const auto levelIt = m_settingLevels.find(item);
                     levelIt != m_settingLevels.end()) {
                     const auto bcd = encodeLevel(levelIt->second);
