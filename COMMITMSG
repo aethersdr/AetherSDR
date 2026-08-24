@@ -1,0 +1,8 @@
+fix: Guard AdifParser field length against overflow
+
+Reject non-numeric / negative ADIF field lengths and avoid signed
+addition overflow when slicing the value from the record block.
+
+Fixes #4411
+
+Signed-off-by: Vedant Madane <6527493+VedantMadane@users.noreply.github.com>

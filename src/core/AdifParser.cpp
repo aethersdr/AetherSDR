@@ -23,9 +23,14 @@ static QString extractField(const QString& block, const QString& fieldName)
         QRegularExpression::CaseInsensitiveOption);
     auto m = re.match(block);
     if (!m.hasMatch()) return {};
-    int len = m.captured(1).toInt();
-    int start = m.capturedEnd(0);
-    if (start + len > block.length()) return {};
+    // Field lengths are non-negative. toInt() can return 0 on overflow/underflow
+    // and negative values on crafted input — reject those before sizing.
+    bool ok = false;
+    const int len = m.captured(1).toInt(&ok);
+    if (!ok || len < 0) return {};
+    const int start = m.capturedEnd(0);
+    // Guard signed addition overflow and out-of-range slice.
+    if (len > block.length() - start) return {};
     return block.mid(start, len);
 }
 
