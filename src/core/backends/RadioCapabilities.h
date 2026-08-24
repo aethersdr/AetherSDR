@@ -567,6 +567,17 @@ struct RadioCapabilities {
     // configuration UI goes away.
     bool hasMultiClientSessions = false;
 
+    // SpotHub spots must stay in the client's SpotModel rather than being
+    // published through the radio's command plane. True for a backend whose
+    // radio protocol has no compatible spot service and which explicitly
+    // chooses the existing passive-local fallback. False preserves the
+    // operator's Passive toggle and every existing radio-publication path.
+    //
+    // This is intentionally a backend policy, not a `family == "icom"` check
+    // above the seam. It lets Icom declare its CI-V limitation without
+    // changing Flex, HL2, or Sim spot behavior.
+    bool alwaysUseClientSideSpots = false;
+
     // The RADIO reports its own position/time from an on-board GNSS receiver, so
     // a client can offer a live GPS readout and the station-location dashboard
     // it feeds.

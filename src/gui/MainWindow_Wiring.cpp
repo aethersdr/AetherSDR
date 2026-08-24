@@ -4911,7 +4911,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         QString spotColor = as.value("ManualSpotColor", "#00FF00").toString();
         if (spotColor.length() == 7) spotColor = "#FF" + spotColor.mid(1);
         cmd += " color=" + spotColor;
-        if (SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             m_radioModel.sendCommand(cmd);
         } else {
             QMap<QString, QString> kvs;

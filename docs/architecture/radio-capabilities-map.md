@@ -66,6 +66,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
+| `alwaysUseClientSideSpots` | ❌ | ❌ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. Flex, HL2, and Sim remain under the existing operator Passive toggle. |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar. Icom: ✅ only when the active model profile provides a calibrated Vd curve; unprofiled models neither publish nor poll Vd/Id |
 | `hasPaTemperatureTelemetry` | ✅ | ✅ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA-temperature gauge and °C/°F selector in Radio Vitals. Icom: ❌ until a model profile declares and implements a PA-temperature meter; the IC-9700 has no such declared telemetry |
 | `hasMainFanTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Main Fan gauge in Radio Vitals. All current Icom models are ❌ because the backend does not publish fan-speed telemetry |

@@ -899,6 +899,8 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults PA temperature telemetry to absent");
         check(!fresh.hasMainFanTelemetry,
               "RadioCapabilities defaults Main Fan telemetry to absent");
+        check(!fresh.alwaysUseClientSideSpots,
+              "RadioCapabilities defaults to the existing operator spot policy");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
@@ -910,6 +912,15 @@ int main(int argc, char** argv)
         const RadioCapabilities hl2Caps = hl2.capabilities();
         const RadioCapabilities simCaps = sim.capabilities();
         const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(!flexCaps.alwaysUseClientSideSpots,
+              "Flex keeps its radio-side spot publication behavior");
+        check(!hl2Caps.alwaysUseClientSideSpots,
+              "HL2 keeps its existing operator-controlled spot behavior");
+        check(!simCaps.alwaysUseClientSideSpots,
+              "Sim keeps its existing operator-controlled spot behavior");
+        check(icomCaps.alwaysUseClientSideSpots,
+              "Icom forces SpotHub spots through the passive client model");
 
         check(!fresh.hasTxFilterControls,
               "RadioCapabilities defaults TX cutoff controls to absent");

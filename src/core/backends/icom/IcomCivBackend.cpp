@@ -332,6 +332,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasProfiles = false;
     c.hasWaveforms = false;
     c.hasMultiClientSessions = false;
+    // CI-V has no radio-side spot publication/status service. Keep SpotHub
+    // entries in AetherSDR's existing passive SpotModel so they remain visible
+    // without sending Flex `spot add` commands into this backend.
+    c.alwaysUseClientSideSpots = true;
     c.hasRadioSideWaterfallAutoBlack = false;
     c.persistsMemories = false;
 
