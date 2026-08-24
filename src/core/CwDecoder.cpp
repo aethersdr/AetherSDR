@@ -62,6 +62,17 @@ void CwDecoder::stop()
     }
 
     m_ggmorse.reset();
+
+    // The estimates died with the ggmorse instance — clear them so a later
+    // Zero Beat can't retune the slice on a pitch from a previous run
+    // (#5213).  Locked values are operator-set state, not estimates: keep
+    // them, or applyDecodeParameters() would feed 0 into a still-pressed
+    // lock button on the next start.
+    if (!m_pitchLocked) m_pitch = 0;
+    if (!m_speedLocked) m_speed = 0;
+    if (!m_pitchLocked || !m_speedLocked)
+        emit statsUpdated(m_pitch, m_speed);
+
     qCDebug(lcDsp) << "CwDecoder: stopped";
 }
 
