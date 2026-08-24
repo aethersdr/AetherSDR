@@ -2,6 +2,7 @@
 
 #include "MapView.h"
 
+#include <QHash>
 #include <QImage>
 #include <QMatrix4x4>
 #include <QOpenGLBuffer>
@@ -85,11 +86,42 @@ private:
         bool visible{false};
     };
 
+    struct TileRequest {
+        int zoom{0};
+        int x{0};
+        int y{0};
+        bool baseAtlas{false};
+    };
+
+    struct DetailTile {
+        int zoom{0};
+        int x{0};
+        int y{0};
+        QImage image;
+        std::unique_ptr<QOpenGLTexture> texture;
+        QOpenGLBuffer vertexBuffer{QOpenGLBuffer::VertexBuffer};
+        QOpenGLBuffer indexBuffer{QOpenGLBuffer::IndexBuffer};
+        int indexCount{0};
+        bool loading{false};
+        quint64 lastUsedFrame{0};
+    };
+
     void buildSphereMesh();
     void requestAtlasTiles();
     void requestNextTiles();
     void scheduleAtlasUpload();
     void uploadAtlas();
+    int detailZoomLevel() const;
+    void refreshDetailTiles(const QMatrix4x4& model,
+                            const QMatrix4x4& viewProjection);
+    bool detailTileVisible(int zoom, int x, int y,
+                           const QMatrix4x4& model,
+                           const QMatrix4x4& viewProjection,
+                           QPointF* priorityPoint) const;
+    void uploadDetailTile(DetailTile& tile);
+    void destroyDetailTile(DetailTile& tile);
+    void evictDetailTiles();
+    static QString detailTileKey(int zoom, int x, int y);
     void paintPaths(QPainter& painter, const QMatrix4x4& model,
                     const QMatrix4x4& viewProjection);
     void paintMarkers(QPainter& painter, const QMatrix4x4& model,
@@ -117,12 +149,16 @@ private:
     int m_indexCount{0};
 
     QImage m_atlas;
-    QVector<QPair<int, int>> m_pendingTiles;
+    QVector<TileRequest> m_pendingTiles;
+    QHash<QString, std::shared_ptr<DetailTile>> m_detailTiles;
+    QVector<QString> m_visibleDetailKeys;
     int m_activeTileRequests{0};
+    quint64 m_detailFrame{0};
     QTimer m_atlasUploadTimer;
     QTimer m_terminatorTimer;
     QTimer m_interactionSettleTimer;
     bool m_atlasDirty{false};
+    bool m_detailSelectionDirty{true};
 
     QVector<Marker> m_markers;
     QVector<ProjectedMarker> m_projectedMarkers;

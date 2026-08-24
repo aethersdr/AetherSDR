@@ -24,6 +24,7 @@
 #include <QPainterPath>
 #include <QPinchGesture>
 #include <QResizeEvent>
+#include <QSet>
 #include <QToolButton>
 #include <QVariantAnimation>
 #include <QWheelEvent>
@@ -32,6 +33,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -43,6 +45,9 @@ constexpr int kAtlasSize = kTileCount * kTileSize;
 constexpr int kLatitudeSegments = 96;
 constexpr int kLongitudeSegments = 192;
 constexpr int kMaximumConcurrentTileRequests = 4;
+constexpr int kMaximumVisibleDetailTiles = 160;
+constexpr int kMaximumCachedDetailTiles = 256;
+constexpr int kDetailTileSegments = 8;
 constexpr qint64 kMaximumTileBytes = 1024 * 1024;
 constexpr float kMinimumCameraDistance = 1.55F;
 constexpr float kMaximumCameraDistance = 6.0F;
@@ -94,6 +99,18 @@ QVector3D greatCircleAxis(const QVector3D& from, const QVector3D& to)
         axis = QVector3D::crossProduct(from, { 1.0F, 0.0F, 0.0F });
     }
     return axis.normalized();
+}
+
+double mercatorTileLatitude(double tileY, int zoom)
+{
+    const double tileCount = static_cast<double>(1 << zoom);
+    return qRadiansToDegrees(std::atan(std::sinh(
+        M_PI * (1.0 - 2.0 * tileY / tileCount))));
+}
+
+double mercatorTileLongitude(double tileX, int zoom)
+{
+    return tileX / static_cast<double>(1 << zoom) * 360.0 - 180.0;
 }
 }
 
@@ -172,6 +189,11 @@ GlobeMapView::~GlobeMapView()
         return;
     }
     makeCurrent();
+    for (const std::shared_ptr<DetailTile>& tile :
+         std::as_const(m_detailTiles)) {
+        destroyDetailTile(*tile);
+    }
+    m_detailTiles.clear();
     m_texture.reset();
     if (m_vertexBuffer.isCreated()) {
         m_vertexBuffer.destroy();
@@ -287,6 +309,7 @@ void GlobeMapView::buildSphereMesh()
 void GlobeMapView::resizeGL(int width, int height)
 {
     glViewport(0, 0, width, height);
+    m_detailSelectionDirty = true;
 }
 
 void GlobeMapView::paintGL()
@@ -344,11 +367,44 @@ void GlobeMapView::paintGL()
     m_program->setAttributeBuffer(uvLocation, GL_FLOAT,
         offsetof(Vertex, uv), 2, sizeof(Vertex));
     glDrawElements(GL_TRIANGLES, m_indexCount, GL_UNSIGNED_INT, nullptr);
-    m_program->disableAttributeArray(positionLocation);
-    m_program->disableAttributeArray(uvLocation);
     m_indexBuffer.release();
     m_vertexBuffer.release();
     m_texture->release();
+
+    if (!useInteractionPreview() && m_detailSelectionDirty) {
+        refreshDetailTiles(model, viewProjection);
+    }
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0F, -1.0F);
+    for (const QString& key : std::as_const(m_visibleDetailKeys)) {
+        const auto found = m_detailTiles.find(key);
+        if (found == m_detailTiles.end()) {
+            continue;
+        }
+        DetailTile& tile = **found;
+        tile.lastUsedFrame = m_detailFrame;
+        if (tile.texture == nullptr && !tile.image.isNull()) {
+            uploadDetailTile(tile);
+        }
+        if (tile.texture == nullptr || tile.indexCount == 0) {
+            continue;
+        }
+        tile.texture->bind(0);
+        tile.vertexBuffer.bind();
+        tile.indexBuffer.bind();
+        m_program->setAttributeBuffer(positionLocation, GL_FLOAT,
+            offsetof(Vertex, position), 3, sizeof(Vertex));
+        m_program->setAttributeBuffer(uvLocation, GL_FLOAT,
+            offsetof(Vertex, uv), 2, sizeof(Vertex));
+        glDrawElements(GL_TRIANGLES, tile.indexCount, GL_UNSIGNED_INT,
+                       nullptr);
+        tile.indexBuffer.release();
+        tile.vertexBuffer.release();
+        tile.texture->release();
+    }
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    m_program->disableAttributeArray(positionLocation);
+    m_program->disableAttributeArray(uvLocation);
     m_program->release();
     m_vectorOverlay->update();
 }
@@ -376,12 +432,266 @@ void GlobeMapView::uploadAtlas()
     m_atlasDirty = false;
 }
 
+int GlobeMapView::detailZoomLevel() const
+{
+    if (m_cameraDistance <= 1.68F) {
+        return 6;
+    }
+    if (m_cameraDistance <= 2.05F) {
+        return 5;
+    }
+    if (m_cameraDistance <= 2.65F) {
+        return 4;
+    }
+    if (m_cameraDistance <= 3.35F) {
+        return 3;
+    }
+    return kAtlasZoom;
+}
+
+QString GlobeMapView::detailTileKey(int zoom, int x, int y)
+{
+    return QStringLiteral("%1/%2/%3").arg(zoom).arg(x).arg(y);
+}
+
+bool GlobeMapView::detailTileVisible(
+    int zoom, int x, int y, const QMatrix4x4& model,
+    const QMatrix4x4& viewProjection, QPointF* priorityPoint) const
+{
+    const QPointF viewportCenter(width() * 0.5, height() * 0.5);
+    double bestDistance = std::numeric_limits<double>::max();
+    QPointF bestPoint;
+    bool visible = false;
+    for (int sampleY = 0; sampleY <= 2; ++sampleY) {
+        const double tileY = y + sampleY * 0.5;
+        const double latitude = mercatorTileLatitude(tileY, zoom);
+        for (int sampleX = 0; sampleX <= 2; ++sampleX) {
+            const double tileX = x + sampleX * 0.5;
+            const double longitude = mercatorTileLongitude(tileX, zoom);
+            QPointF screenPoint;
+            if (!projectPoint(geoPoint(latitude, longitude), model,
+                              viewProjection, &screenPoint)) {
+                continue;
+            }
+            constexpr double kViewportMargin = 48.0;
+            if (screenPoint.x() < -kViewportMargin
+                || screenPoint.x() > width() + kViewportMargin
+                || screenPoint.y() < -kViewportMargin
+                || screenPoint.y() > height() + kViewportMargin) {
+                continue;
+            }
+            visible = true;
+            const QPointF delta = screenPoint - viewportCenter;
+            const double distance = QPointF::dotProduct(delta, delta);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestPoint = screenPoint;
+            }
+        }
+    }
+    if (visible && priorityPoint != nullptr) {
+        *priorityPoint = bestPoint;
+    }
+    return visible;
+}
+
+void GlobeMapView::refreshDetailTiles(
+    const QMatrix4x4& model, const QMatrix4x4& viewProjection)
+{
+    struct Candidate {
+        int x{0};
+        int y{0};
+        double priority{0.0};
+    };
+
+    ++m_detailFrame;
+    m_detailSelectionDirty = false;
+    for (const TileRequest& request : std::as_const(m_pendingTiles)) {
+        if (request.baseAtlas) {
+            continue;
+        }
+        const auto found = m_detailTiles.find(detailTileKey(
+            request.zoom, request.x, request.y));
+        if (found != m_detailTiles.end()) {
+            // This request had not started yet (active requests have already
+            // been removed from the queue). Make it eligible for the newly
+            // selected viewport or for cache eviction.
+            (*found)->loading = false;
+        }
+    }
+    m_pendingTiles.erase(std::remove_if(m_pendingTiles.begin(),
+                                        m_pendingTiles.end(),
+        [](const TileRequest& request) { return !request.baseAtlas; }),
+        m_pendingTiles.end());
+
+    const int zoom = detailZoomLevel();
+    if (zoom <= kAtlasZoom) {
+        m_visibleDetailKeys.clear();
+        evictDetailTiles();
+        return;
+    }
+
+    QVector<Candidate> candidates;
+    const int tileCount = 1 << zoom;
+    const QPointF viewportCenter(width() * 0.5, height() * 0.5);
+    for (int y = 0; y < tileCount; ++y) {
+        for (int x = 0; x < tileCount; ++x) {
+            QPointF priorityPoint;
+            if (!detailTileVisible(zoom, x, y, model, viewProjection,
+                                   &priorityPoint)) {
+                continue;
+            }
+            const QPointF delta = priorityPoint - viewportCenter;
+            candidates.append({ x, y,
+                QPointF::dotProduct(delta, delta) });
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& lhs, const Candidate& rhs) {
+                  return lhs.priority < rhs.priority;
+              });
+    if (candidates.size() > kMaximumVisibleDetailTiles) {
+        candidates.resize(kMaximumVisibleDetailTiles);
+    }
+
+    m_visibleDetailKeys.clear();
+    m_visibleDetailKeys.reserve(candidates.size());
+    for (const Candidate& candidate : std::as_const(candidates)) {
+        const QString key = detailTileKey(zoom, candidate.x, candidate.y);
+        m_visibleDetailKeys.append(key);
+        const auto existing = m_detailTiles.find(key);
+        if (existing != m_detailTiles.end()) {
+            (*existing)->lastUsedFrame = m_detailFrame;
+            if ((*existing)->texture == nullptr
+                && (*existing)->image.isNull()
+                && !(*existing)->loading) {
+                (*existing)->loading = true;
+                m_pendingTiles.append(
+                    { zoom, candidate.x, candidate.y, false });
+            }
+            continue;
+        }
+        auto tile = std::make_shared<DetailTile>();
+        tile->zoom = zoom;
+        tile->x = candidate.x;
+        tile->y = candidate.y;
+        tile->loading = true;
+        tile->lastUsedFrame = m_detailFrame;
+        m_detailTiles.insert(key, tile);
+        m_pendingTiles.append({ zoom, candidate.x, candidate.y, false });
+    }
+    evictDetailTiles();
+    requestNextTiles();
+}
+
+void GlobeMapView::uploadDetailTile(DetailTile& tile)
+{
+    if (tile.image.isNull()) {
+        return;
+    }
+    tile.texture = std::make_unique<QOpenGLTexture>(tile.image);
+    tile.texture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+    tile.texture->setMagnificationFilter(QOpenGLTexture::Linear);
+    tile.texture->setWrapMode(QOpenGLTexture::ClampToEdge);
+    tile.texture->generateMipMaps();
+
+    QVector<Vertex> vertices;
+    vertices.reserve((kDetailTileSegments + 1)
+                     * (kDetailTileSegments + 1));
+    for (int row = 0; row <= kDetailTileSegments; ++row) {
+        const double localV = static_cast<double>(row)
+                            / kDetailTileSegments;
+        const double latitude = mercatorTileLatitude(tile.y + localV,
+                                                      tile.zoom);
+        for (int column = 0; column <= kDetailTileSegments; ++column) {
+            const double localU = static_cast<double>(column)
+                                / kDetailTileSegments;
+            const double longitude = mercatorTileLongitude(
+                tile.x + localU, tile.zoom);
+            vertices.append({ geoVector(latitude, longitude) * 1.0002F,
+                              { static_cast<float>(localU),
+                                static_cast<float>(localV) } });
+        }
+    }
+
+    QVector<quint32> indices;
+    indices.reserve(kDetailTileSegments * kDetailTileSegments * 6);
+    const int rowWidth = kDetailTileSegments + 1;
+    for (int row = 0; row < kDetailTileSegments; ++row) {
+        for (int column = 0; column < kDetailTileSegments; ++column) {
+            const quint32 topLeft = static_cast<quint32>(
+                row * rowWidth + column);
+            const quint32 bottomLeft = topLeft + rowWidth;
+            indices.append(topLeft);
+            indices.append(bottomLeft);
+            indices.append(topLeft + 1);
+            indices.append(topLeft + 1);
+            indices.append(bottomLeft);
+            indices.append(bottomLeft + 1);
+        }
+    }
+    tile.indexCount = indices.size();
+    tile.vertexBuffer.create();
+    tile.vertexBuffer.bind();
+    tile.vertexBuffer.allocate(vertices.constData(),
+                               vertices.size() * sizeof(Vertex));
+    tile.vertexBuffer.release();
+    tile.indexBuffer.create();
+    tile.indexBuffer.bind();
+    tile.indexBuffer.allocate(indices.constData(),
+                              indices.size() * sizeof(quint32));
+    tile.indexBuffer.release();
+    tile.image = {};
+}
+
+void GlobeMapView::destroyDetailTile(DetailTile& tile)
+{
+    tile.texture.reset();
+    if (tile.vertexBuffer.isCreated()) {
+        tile.vertexBuffer.destroy();
+    }
+    if (tile.indexBuffer.isCreated()) {
+        tile.indexBuffer.destroy();
+    }
+    tile.indexCount = 0;
+}
+
+void GlobeMapView::evictDetailTiles()
+{
+    if (m_detailTiles.size() <= kMaximumCachedDetailTiles) {
+        return;
+    }
+    QSet<QString> visible;
+    visible.reserve(m_visibleDetailKeys.size());
+    for (const QString& key : std::as_const(m_visibleDetailKeys)) {
+        visible.insert(key);
+    }
+    QVector<QString> candidates;
+    for (auto iterator = m_detailTiles.cbegin();
+         iterator != m_detailTiles.cend(); ++iterator) {
+        if (!visible.contains(iterator.key()) && !iterator.value()->loading) {
+            candidates.append(iterator.key());
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [this](const QString& lhs, const QString& rhs) {
+                  return m_detailTiles.value(lhs)->lastUsedFrame
+                       < m_detailTiles.value(rhs)->lastUsedFrame;
+              });
+    while (m_detailTiles.size() > kMaximumCachedDetailTiles
+           && !candidates.isEmpty()) {
+        const QString key = candidates.takeFirst();
+        const std::shared_ptr<DetailTile> tile = m_detailTiles.take(key);
+        destroyDetailTile(*tile);
+    }
+}
+
 void GlobeMapView::requestAtlasTiles()
 {
     m_pendingTiles.clear();
     for (int y = 0; y < kTileCount; ++y) {
         for (int x = 0; x < kTileCount; ++x) {
-            m_pendingTiles.append({ x, y });
+            m_pendingTiles.append({ kAtlasZoom, x, y, true });
         }
     }
     requestNextTiles();
@@ -395,9 +705,9 @@ void GlobeMapView::requestNextTiles()
     }
     while (m_activeTileRequests < kMaximumConcurrentTileRequests
            && !m_pendingTiles.isEmpty()) {
-        const QPair<int, int> tile = m_pendingTiles.takeFirst();
+        const TileRequest tile = m_pendingTiles.takeFirst();
         const QUrl url(QStringLiteral("https://tile.openstreetmap.org/%1/%2/%3.png")
-            .arg(kAtlasZoom).arg(tile.first).arg(tile.second));
+            .arg(tile.zoom).arg(tile.x).arg(tile.y));
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader,
                           QGV::getTileUserAgent());
@@ -425,11 +735,30 @@ void GlobeMapView::requestNextTiles()
                         image.loadFromData(bytes, "PNG");
                         if (!image.isNull() && image.width() == kTileSize
                             && image.height() == kTileSize) {
-                            QPainter atlasPainter(&m_atlas);
-                            atlasPainter.drawImage(tile.first * kTileSize,
-                                                   tile.second * kTileSize,
-                                                   image);
-                            scheduleAtlasUpload();
+                            if (tile.baseAtlas) {
+                                QPainter atlasPainter(&m_atlas);
+                                atlasPainter.drawImage(tile.x * kTileSize,
+                                                       tile.y * kTileSize,
+                                                       image);
+                                scheduleAtlasUpload();
+                            } else {
+                                const QString key = detailTileKey(
+                                    tile.zoom, tile.x, tile.y);
+                                const auto found = m_detailTiles.constFind(key);
+                                if (found != m_detailTiles.cend()) {
+                                    (*found)->image = std::move(image);
+                                    (*found)->loading = false;
+                                    update();
+                                }
+                            }
+                        }
+                    }
+                    if (!tile.baseAtlas) {
+                        const QString key = detailTileKey(
+                            tile.zoom, tile.x, tile.y);
+                        const auto found = m_detailTiles.constFind(key);
+                        if (found != m_detailTiles.cend()) {
+                            (*found)->loading = false;
                         }
                     }
                     requestNextTiles();
@@ -715,6 +1044,7 @@ void GlobeMapView::resetToHome()
         m_rotation = QQuaternion();
     }
     m_cameraDistance = kDefaultCameraDistance;
+    m_detailSelectionDirty = true;
     update();
 }
 
@@ -740,6 +1070,7 @@ void GlobeMapView::animateZoomTo(float distance)
     connect(m_zoomAnimation.get(), &QVariantAnimation::valueChanged,
             this, [this](const QVariant& value) {
                 m_cameraDistance = value.toFloat();
+                m_detailSelectionDirty = true;
                 update();
             });
     connect(m_zoomAnimation.get(), &QVariantAnimation::finished,
@@ -783,6 +1114,7 @@ void GlobeMapView::applyDragDelta(const QPointF& delta)
                                       * degreesPerPixel);
     m_rotation = yaw * pitch * m_rotation;
     m_rotation.normalize();
+    m_detailSelectionDirty = true;
 }
 
 void GlobeMapView::applyRollDelta(float degrees)
@@ -791,6 +1123,7 @@ void GlobeMapView::applyRollDelta(float degrees)
         { 0.0F, 0.0F, 1.0F }, degrees);
     m_rotation = roll * m_rotation;
     m_rotation.normalize();
+    m_detailSelectionDirty = true;
 }
 
 void GlobeMapView::mouseMoveEvent(QMouseEvent* event)
@@ -857,6 +1190,7 @@ void GlobeMapView::wheelEvent(QWheelEvent* event)
         m_cameraDistance = std::clamp(m_cameraDistance * factor,
                                       kMinimumCameraDistance,
                                       kMaximumCameraDistance);
+        m_detailSelectionDirty = true;
         update();
         event->accept();
         return;
@@ -875,6 +1209,7 @@ bool GlobeMapView::event(QEvent* event)
             m_cameraDistance = std::clamp(m_cameraDistance * factor,
                                           kMinimumCameraDistance,
                                           kMaximumCameraDistance);
+            m_detailSelectionDirty = true;
             update();
             return true;
         } else if (gesture->gestureType() == Qt::RotateNativeGesture) {
@@ -903,6 +1238,7 @@ bool GlobeMapView::event(QEvent* event)
                 m_cameraDistance = std::clamp(
                     m_cameraDistance / static_cast<float>(scale),
                     kMinimumCameraDistance, kMaximumCameraDistance);
+                m_detailSelectionDirty = true;
                 update();
             }
             gestureEvent->accept(pinch);
