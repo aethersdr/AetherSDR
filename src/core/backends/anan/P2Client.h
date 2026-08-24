@@ -115,6 +115,32 @@ public:
     // tick) and is what the keepalive resends from then on.
     Q_INVOKABLE void setDdc0FrequencyHz(double hz);
 
+    // Change one DDC's sample rate on a LIVE session -- no stop, no restart,
+    // no reconnect. Returns false (changing nothing) if the session is not
+    // running, ddcIndex is not one this session enabled, or the rate already
+    // matches.
+    //
+    // Supported by the radio, verified in p2app's own source rather than
+    // assumed: IncomingDDCSpecific.c services DDC-Specific packets in a
+    // continuous thread loop and, on any change, calls
+    // WriteP2DDCRateRegister(), which is a direct
+    // RegisterWrite(VADDRDDCRATES, ...) to the FPGA. Its companion
+    // "something changed" hook, HandlerCheckDDCSettings(), is an EMPTY
+    // function -- p2app writes the rate register and keeps streaming. There
+    // is no teardown on the radio side to mirror.
+    //
+    // This answers the question AnanBackend::beginRateChange()'s own comment
+    // left open ("whether the radio would accept a live rate change without
+    // a session restart at all is a separate, unverified protocol
+    // question"). The caller still has to rebuild ITS OWN WdspChannel, whose
+    // input sample rate really did change -- that part is unavoidable and is
+    // why AnanBackend builds the new channel in the background first.
+    //
+    // Resends the whole DDC-Specific packet, not a partial one: the packet
+    // carries the enable bitmap and every DDC's row, so a partial resend
+    // would disable the others.
+    Q_INVOKABLE bool setDdcRateLive(int ddcIndex, int rateKsps);
+
     [[nodiscard]] bool isRunning() const noexcept { return m_running; }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
 
@@ -189,6 +215,15 @@ private:
     bool m_bypassAdc0Filters = true;
     bool m_bypassAdc1Filters = true;
 
+    // The session's resolved DDC list and the dither/random flags that went
+    // with it, RETAINED (rather than consumed and dropped in start()) so
+    // setDdcRateLive() can rebuild a complete DDC-Specific packet: that
+    // packet carries every DDC's row plus the enable bitmap, so resending it
+    // with only the changed rate known would disable every other DDC.
+    std::vector<DdcConfig> m_activeDdcs;
+    bool m_ditherEnabled = true;
+    bool m_randomEnabled = true;
+
     bool m_running = false;
     bool m_linkUp = false;
 
@@ -204,8 +239,8 @@ private:
     quint64 m_drops = 0;
 
     // How many DDCs this session enabled, so onReadyRead() knows which
-    // sender ports belong to it. Set by start() from Params::activeDdcs
-    // (or 1 for the DDC0 shorthand).
+    // sender ports belong to it. Kept alongside m_activeDdcs (rather than
+    // read from its size) because onReadyRead() consults it per datagram.
     int m_activeDdcCount = 1;
 
     // Reused decode buffer, cleared and refilled per frame rather than

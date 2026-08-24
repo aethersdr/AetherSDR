@@ -96,6 +96,11 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     if (static_cast<int>(ddcs.size()) > kMaxDdcs)
         ddcs.resize(kMaxDdcs);
     m_activeDdcCount = static_cast<int>(ddcs.size());
+    // Retained for setDdcRateLive() -- see its own comment for why the whole
+    // list (not just the count) has to survive start().
+    m_activeDdcs = ddcs;
+    m_ditherEnabled = params.ditherEnabled;
+    m_randomEnabled = params.randomEnabled;
 
     // Every DDC starts at the same frequency DDC0 was given (0/baseband
     // unless a caller retuned first). Per-DDC tuning is a seam this class
@@ -150,6 +155,35 @@ void P2Client::setDdc0FrequencyHz(double hz)
         sendTo(*m_socket,
               buildHighPriority(true, m_ddc0FreqWord, m_bypassAdc0Filters, m_bypassAdc1Filters),
               m_host, kHighPriorityPort);
+}
+
+bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
+{
+    if (!m_running || !m_socket)
+        return false;
+    if (ddcIndex < 0 || ddcIndex >= static_cast<int>(m_activeDdcs.size()))
+        return false;
+
+    auto& slot = m_activeDdcs[static_cast<std::size_t>(ddcIndex)];
+    if (slot.rateKsps == rateKsps)
+        return false;   // nothing to send; caller decides whether that is worth reporting
+
+    slot.rateKsps = rateKsps;
+    // Whole packet, every DDC's row -- see this function's declaration
+    // comment. Same destination port start() used: p2app tells DDC-Specific
+    // from High Priority by which port it arrives on, so this is not
+    // interchangeable with kRadioPort.
+    sendTo(*m_socket,
+          buildDdcSpecific(m_activeDdcs, /*numAdcs=*/2,
+                           m_ditherEnabled, m_randomEnabled),
+          m_host, kDdcSpecificPort);
+
+    // The stream's sample cadence changes underneath us from here, so the
+    // sequence expectation for THIS DDC is no longer meaningful -- clear it
+    // rather than let the next frame look like a gap and inflate the drop
+    // counter for what is a deliberate, operator-initiated change.
+    m_expectedSeq[static_cast<std::size_t>(ddcIndex)].reset();
+    return true;
 }
 
 void P2Client::onKeepaliveTick()
