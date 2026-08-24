@@ -8,13 +8,17 @@
 // which can never fall below 0.5 (it is the larger of two envelopes over their
 // sum) and is 1.0 for a clean tone.  The CW pane's cost runs the other way
 // ([0,1], lower = better), so its mapping cannot be copied verbatim: a slider
-// at 0 must still mean "show everything".  0..100 maps onto 0.50..0.95, and
-// the default of 38 lands the threshold at ~0.67 — the decoder's own 3 dB
-// "locked" point (snrDb == 10*log10(c/(1-c))), so out-of-the-box filtering
-// agrees with what the stats bar already calls UNLOCK.
+// at 0 must still mean "show everything".  0..100 maps onto 0.50..0.95.
+//
+// The default is 0: threshold 0.50 is the confidence floor, so `confidence <
+// threshold` can never fire and out-of-the-box behavior is provably identical
+// to the pane before this control existed — filtering is strictly opt-in.
+// A useful starting value when noise floods the pane is 38, which lands the
+// threshold at ~0.67 — the decoder's own 3 dB "locked" point
+// (snrDb == 10*log10(c/(1-c))), i.e. filter what the stats bar calls UNLOCK.
 namespace AetherSDR {
 
-constexpr int kRttySensitivityDefault = 38;
+constexpr int kRttySensitivityDefault = 0;
 
 constexpr float rttyConfThresholdFor(int sens)
 {

@@ -516,7 +516,12 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttySensSlider->setObjectName(QStringLiteral("rttySensSlider"));
     m_rttySensSlider->setAccessibleName(QStringLiteral("RTTY decoder sensitivity"));
     m_rttySensSlider->setToolTip(QStringLiteral(
-        "Drop low-confidence characters (0 = show everything, 100 = only near-certain copy)"));
+        "Squelch for the decoded text: drops characters the decoder is not confident\n"
+        "about, so noise between transmissions stops filling the pane with gibberish.\n"
+        "0 (default) shows every decoded character — exactly the behavior before this\n"
+        "control existed. Higher values drop more; ~38 filters what the stats bar\n"
+        "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
+        "nothing is retuned and no audio changes."));
     m_rttySensSlider->setRange(0, 100);
     const int savedRttySens = readRttySensitivity();
     m_rttySensSlider->setValue(savedRttySens);

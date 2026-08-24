@@ -197,7 +197,7 @@ private:
     QComboBox*    m_rttyBaudCombo{nullptr};
     QPushButton*  m_rttyRevBtn{nullptr};
     QSlider*      m_rttySensSlider{nullptr};
-    float         m_rttyConfThreshold{0.671f};   // slider default 38 ≈ the decoder's 3 dB lock point
+    float         m_rttyConfThreshold{0.5f};   // slider default 0 = the confidence floor: never drops
 };
 
 } // namespace AetherSDR
