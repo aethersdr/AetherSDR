@@ -119,6 +119,14 @@ IcomCivBackend::IcomCivBackend(QObject* parent)
     // freeze — meters, controls, PTT poll and operator writes alike —
     // recoverable only by reconnecting. QElapsedTimer cannot step backwards.
     m_clock.start();
+
+    // TUNE is its own audio source. In particular it must keep producing when
+    // PC Audio is disabled and AudioEngine has no capture callback to deliver.
+    // One 20 ms callback maps to one complete 48 kHz radio audio frame.
+    m_tuneTimer = new QTimer(this);
+    m_tuneTimer->setTimerType(Qt::PreciseTimer);
+    m_tuneTimer->setInterval(kTuneToneFrameMs);
+    connect(m_tuneTimer, &QTimer::timeout, this, &IcomCivBackend::onTuneAudioTick);
 }
 
 qint64 IcomCivBackend::nowMs() const
@@ -641,6 +649,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    m_tuneTimer->stop();
     ++m_sessionGeneration;
     m_civRecoveryStartedAtMs = 0;
     m_lastCivRecoveryAttemptAtMs = 0;
@@ -1365,6 +1374,9 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 
 void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
+    m_tuneTimer->stop();
+    m_tuning = false;
+    m_preTuneTxPowerPercent = -1;
     const bool was = m_connected;
     m_connected = false;
     ++m_sessionGeneration;
@@ -2447,9 +2459,10 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     // keepalive is the 0x00 idle packet rather than the audio payload. Stopping
     // audio between overs stops audio, not the session.
     //
-    // m_tuning is included because a TUNE carrier is synthesised in place of
-    // this buffer further down and must still reach the radio.
-    if (!m_keyed && !m_tuning) {
+    // TUNE has a backend-owned, radio-rate producer. Letting microphone
+    // callbacks feed this path at the same time creates a second packet cadence
+    // and can overrun the bounded transmit queue.
+    if (m_tuning || !m_keyed) {
         return;
     }
     // The engine hands us interleaved int16 stereo; the radio wants mono at its
@@ -2460,23 +2473,9 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         return;
     const auto* src = reinterpret_cast<const qint16*>(int16Stereo.constData());
     std::vector<float> mono(static_cast<std::size_t>(frames));
-    if (m_tuning) {
-        // A TUNE carrier, synthesised in place of whatever the engine sent.
-        // Phase is carried across buffers: restarting it each block would put a
-        // discontinuity at the block rate, which is a click every few
-        // milliseconds and splatter either side of the carrier.
-        const double step = 2.0 * M_PI * kTuneToneHz / static_cast<double>(sampleRateHz);
-        for (int i = 0; i < frames; ++i) {
-            mono[static_cast<std::size_t>(i)] =
-                kTuneToneAmplitude * static_cast<float>(std::sin(m_tunePhase));
-            m_tunePhase += step;
-            if (m_tunePhase > 2.0 * M_PI)
-                m_tunePhase -= 2.0 * M_PI;
-        }
-    } else {
-        for (int i = 0; i < frames; ++i)
-            mono[static_cast<std::size_t>(i)] =
-                (src[i * 2] + src[i * 2 + 1]) * 0.5f / 32768.0f;
+    for (int i = 0; i < frames; ++i) {
+        mono[static_cast<std::size_t>(i)] =
+            (src[i * 2] + src[i * 2 + 1]) * 0.5f / 32768.0f;
     }
 
     // RESAMPLE, don't refuse.
@@ -2508,6 +2507,25 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
             return;
         const auto* f = reinterpret_cast<const float*>(out.constData());
         mono.assign(f, f + out.size() / static_cast<int>(sizeof(float)));
+    }
+    m_session->sendAudio(mono);
+}
+
+void IcomCivBackend::onTuneAudioTick()
+{
+    if (!m_tuning || !m_session || !m_connected) {
+        return;
+    }
+
+    const int samples = m_audioRateHz * kTuneToneFrameMs / 1000;
+    std::vector<float> mono(static_cast<std::size_t>(samples));
+    const double step = 2.0 * M_PI * kTuneToneHz / static_cast<double>(m_audioRateHz);
+    for (float& sample : mono) {
+        sample = kTuneToneAmplitude * static_cast<float>(std::sin(m_tunePhase));
+        m_tunePhase += step;
+        if (m_tunePhase > 2.0 * M_PI) {
+            m_tunePhase -= 2.0 * M_PI;
+        }
     }
     m_session->sendAudio(mono);
 }
@@ -3711,22 +3729,33 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
         // reaching it from here would already have moved the RF-power setpoint
         // to the tune level and latched m_tuning — leaving the operator's drive
         // overwritten by a carrier that was then refused.
-        if (refuseKeyingInReceiveOnlyMode())
+        if (!m_session || !m_connected || !m_model->hasTransmit
+            || refuseKeyingInReceiveOnlyMode()) {
             return;
-        if (!m_tuning)
-            m_preTuneTxPowerPercent = m_txPowerPercent;
-        if (tunePowerPercent >= 0)
+        }
+        if (m_tuning) {
+            if (tunePowerPercent >= 0) {
+                setTxPower(tunePowerPercent);
+            }
+            return;
+        }
+        m_preTuneTxPowerPercent = m_txPowerPercent;
+        if (tunePowerPercent >= 0) {
             setTxPower(tunePowerPercent);
+        }
         // Raise the tone BEFORE keying, so no part of the keyed window is
         // silent — a tuner sampling that edge can otherwise read infinite SWR.
         m_tuning = true;
         m_tunePhase = 0.0;
+        onTuneAudioTick();
         setKeying(true);
+        m_tuneTimer->start();
         return;
     }
 
     // Unkey BEFORE restoring ordinary RF power. The tune setpoint is temporary
     // and must not become the radio's new operating drive after the carrier.
+    m_tuneTimer->stop();
     setKeying(false);
     m_tuning = false;
     if (m_preTuneTxPowerPercent >= 0) {
