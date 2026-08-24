@@ -27,7 +27,7 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`/`transmit`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
 | Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
@@ -147,7 +147,7 @@ The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
 `contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
 `doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
-`atu`, `cwx`, `testtone`, `txwaterfall` — gated by
+`atu`, `cwx`, `testtone`, `txwaterfall`, `transmit` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
@@ -354,7 +354,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`targettune <mhz>`](#targettune) | Absolute tune through the commanded-target and band-stack path. |
 | | [`memory activate <index> [panId]`](#memory) | Recall a radio memory through the normal UI policy. |
-| | [`slice <action>`](#slice) | add/remove/select/tx/mode/filter/agc/diversity/centerlock/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | Per-slice actions — mode, filter, AGC, DSP, FM tone/offset, antennas, links, fixtures. The authoritative set is the [`slice` action table](#slice); it is pinned to the code by `tools/gen_bridge_docs.py --check`. |
 | **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
@@ -373,6 +373,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
 | | [`atu bypass\|start`](#atu) | ATU bypass (no TX) / tune cycle (keys TX). |
 | | [`testtone on [hz] [db] \| off`](#testtone) | Client TX test tone into the mic path. |
+| | [`transmit rfpower\|tunepower <0..100>`](#transmit) | Set RF / tune drive (clamped by `AETHER_AUTOMATION_TX_MAX_POWER`). |
 
 > **Two request forms, always interchangeable.** Bare line (`get slice active mode`)
 > or JSON (`{"cmd":"get","model":"slice","selector":"active","property":"mode"}`).
@@ -1400,6 +1401,9 @@ re-poll `get slices`.
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
+| `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
+| `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
+| `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
 | `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `link` | `<sliceIdA> <sliceIdB> <on\|off>` | engage or dissolve one cross-panadapter Slice Link pair through the same MainWindow handler as the context menu; multiple independent pairs are supported, but each owned non-diversity slice may belong to only one pair — assert each pair via the reciprocal `linkedTo` snapshot fields |
@@ -3416,6 +3420,26 @@ antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 ← {"ok":true,"txtest":"off"}
 ```
 
+### `transmit`
+Set the transmit drive — `rfpower` (RF Power) or `tunepower` (Tune Power), 0..100.
+TX-gated like `key`, and the gate is reported **before** the value is validated so
+it cannot be probed with nonsense.
+
+The value is additionally **clamped to `AETHER_AUTOMATION_TX_MAX_POWER`**. That
+ceiling is enforced elsewhere in `invoke()`'s widget path, keyed on the control's
+accessible name, so a verb reaching `TransmitModel` directly would otherwise inherit
+no bound at all — on the surface most likely to be feeding a transverter or an
+amplifier. When a request is clamped the reply says so rather than quietly honouring
+a different number than was asked for.
+
+```json
+→ {"cmd":"transmit","action":"rfpower","value":"25"}   # gated
+← {"ok":true,"transmit":"rfpower","rfPower":25,"tunePower":10}
+
+→ {"cmd":"transmit","action":"rfpower","value":"90"}   # ceiling of 30 in force
+← {"ok":true,"transmit":"rfpower","rfPower":30,"tunePower":10,"requested":90,"clampedTo":30}
+```
+
 ### `atu`
 Antenna-tuner control. `bypass` is relay-only (takes the tuner out of circuit so
 meters see the raw load) and does **not** transmit; `start` runs a tune cycle that
@@ -3612,7 +3636,7 @@ receiver capacity. It never enables transmit and remains available without
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 68 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 69 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3672,6 +3696,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler> — CI-V inject, frame trace, RS-BA1 lease health, or command-scheduler health (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
+| `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |

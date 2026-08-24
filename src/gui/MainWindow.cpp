@@ -7112,7 +7112,11 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        m_appletPanel->meterApplet()->setMainFanTelemetryState(
+            connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->meterApplet()->setPaTemperatureTelemetryState(
+            connected, caps.hasPaTemperatureTelemetry);
         // The mic-level gauge follows the METER, not the capability: a Flex
         // does not let a client pick its input either and still publishes
         // MICPEAK. Absence of the meter is the only thing that means the face
@@ -7126,11 +7130,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // the session and leave a Flex's continuous control stepping through
         // another radio's list.
         if (auto* phone = m_appletPanel->phoneApplet()) {
+            phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
-        m_appletPanel->setMicLevelMeterAvailable(
-            !connected || m_radioModel.meterModel().hasMicPeakMeter());
+        m_appletPanel->setMicLevelMeterState(
+            connected ? MicMeterSessionState::Connected
+                      : MicMeterSessionState::Disconnected,
+            m_radioModel.meterModel().hasMicPeakMeter());
     }
 
     // ── Display dBm scale: who owns it ─────────────────────────────────────
@@ -7289,6 +7296,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // meter, and MeterModel emits hwTelemetryChanged whenever EITHER half
     // changes — so on a radio that reports only PA temperature the volts half
     // arrives as its 0.0f initialiser on every tick.
+    if (m_appletPanel) {
+        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(connected);
+    }
     if (m_supplyVoltLabel) {
         m_supplyVoltLabel->setVisible(!connected || caps.hasSupplyVoltageTelemetry);
         if (!connected) {

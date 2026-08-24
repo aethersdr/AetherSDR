@@ -1443,6 +1443,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
+    c.hasDownwardExpander = false;
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
@@ -1493,6 +1494,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    c.hasPaTemperatureTelemetry = true;
+    c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory

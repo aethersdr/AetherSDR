@@ -30,6 +30,10 @@ public:
 
     void setTransmitModel(TransmitModel* model);
 
+    // Hide the complete DEXP row when the connected backend has no
+    // authoritative downward-expander command path.
+    void setDexpVisible(bool visible);
+
     // The TX passband edges the connected radio can actually reach, ascending
     // (RadioCapabilities::txFilterLowEdgesHz / txFilterHighEdgesHz). Empty
     // restores the continuous 50 Hz behaviour.
@@ -61,6 +65,7 @@ private:
     QLabel*  m_voxDelayLabel{nullptr};
 
     // DEXP (radio compander control)
+    QWidget*     m_dexpRow{nullptr};
     QPushButton* m_dexpBtn{nullptr};
     GuardedSlider* m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};

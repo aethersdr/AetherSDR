@@ -251,7 +251,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasGpsLocation = false;
 
     c.hasSupplyVoltageTelemetry =
-        profile.meters.calibration != MeterCalibration::Uncalibrated;
+        hasVoltageCalibration(profile.meters.calibration);
+    c.hasPaTemperatureTelemetry = profile.meters.hasPaTemperatureTelemetry;
+    // No supported Icom model currently publishes fan-speed telemetry. Keep
+    // this family-wide and fail closed until the backend implements a real
+    // CI-V fan meter; do not add speculative per-model profile surface.
+    c.hasMainFanTelemetry = false;
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -272,6 +277,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // > DATA MOD, which must be WLAN for us to be heard at all). A client
     // cannot pick MIC / BAL / LINE / ACC, so the Phone applet collapses to PC.
     c.hasSelectableMicInputs = false;
+
+    // No active Icom profile has a complete, evidenced DEXP SET/read-back
+    // path. In particular, the IC-9700 must not inherit Flex's compander
+    // surface merely because both radios perform other DSP on-radio.
+    c.hasDownwardExpander = false;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -4033,8 +4043,10 @@ QVariantList IcomCivBackend::meterMap() const
 
     QVariantList out;
     for (const auto& m : meterSpecs()) {
-        if ((m.id == MeterId::Vd || m.id == MeterId::Id)
-            && profile.meters.calibration == MeterCalibration::Uncalibrated) {
+        if ((m.id == MeterId::Vd
+             && !hasVoltageCalibration(profile.meters.calibration))
+            || (m.id == MeterId::Id
+                && !hasCurrentCalibration(profile.meters.calibration))) {
             continue;
         }
         QVariantMap r;
@@ -4044,7 +4056,7 @@ QVariantList IcomCivBackend::meterMap() const
         QString unit = sv(m.unit);
         double high = m.high;
         if (m.id == MeterId::Power) {
-            const std::span<const CurvePoint> curve = profile.meters.powerCurve;
+            const std::span<const CurvePoint> curve = powerCurveFor(*m_model);
             if (curve.empty()) {
                 unit = QStringLiteral("Percent");
                 high = 100.0;
@@ -4743,16 +4755,19 @@ void IcomCivBackend::publishModeList()
 
 void IcomCivBackend::publishMeterDefs()
 {
-    const bool calibrated = profileFor(*m_model).meters.calibration
-        != MeterCalibration::Uncalibrated;
+    const MeterCalibration calibration =
+        profileFor(*m_model).meters.calibration;
+    const bool hasVoltage = hasVoltageCalibration(calibration);
+    const bool hasCurrent = hasCurrentCalibration(calibration);
     // Poll eligibility follows the active profile too. This runs both for the
     // handshake name and for an authoritative 0x19 identity correction.
-    m_meters.setVisible(MeterId::Vd, calibrated);
-    m_meters.setVisible(MeterId::Id, calibrated);
+    m_meters.setVisible(MeterId::Vd, hasVoltage);
+    m_meters.setVisible(MeterId::Id, hasCurrent);
 
     for (const MeterSpec& s : meterSpecs()) {
         const int index = static_cast<int>(s.id);
-        if ((s.id == MeterId::Vd || s.id == MeterId::Id) && !calibrated) {
+        if ((s.id == MeterId::Vd && !hasVoltage)
+            || (s.id == MeterId::Id && !hasCurrent)) {
             // Meter indices are stable identities, not positions in the
             // currently visible subset. Withdraw old definitions explicitly
             // so a calibrated handshake name corrected to another model cannot

@@ -214,6 +214,8 @@ void PhoneApplet::buildUI()
     // ── DEXP row: toggle + level slider ────────────────────────────────
     {
         auto* rowW = new QWidget;
+        m_dexpRow = rowW;
+        m_dexpRow->setObjectName(QStringLiteral("phoneDexpRow"));
         rowW->setFixedHeight(24);
         auto* row = new QHBoxLayout(rowW);
         row->setContentsMargins(0, 0, 0, 0);
@@ -467,6 +469,11 @@ void PhoneApplet::buildUI()
 }
 
 // ── Model binding ────────────────────────────────────────────────────────────
+
+void PhoneApplet::setDexpVisible(bool visible)
+{
+    m_dexpRow->setVisible(visible);
+}
 
 int PhoneApplet::steppedEdgeHz(const QList<int>& edges, int currentHz, int dir)
 {

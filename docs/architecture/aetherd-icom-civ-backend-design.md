@@ -237,7 +237,7 @@ caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
 caps.hasTuner               = false;           // no INTERNAL ATU; see note
 caps.hasSupplyVoltageTelemetry =
-    profile.meters.calibration != MeterCalibration::Uncalibrated; // 15 15 Vd
+    hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
 caps.hasGpsLocation         = false;           // GPS exists, protocol won't carry it
 caps.hasProfiles            = false;

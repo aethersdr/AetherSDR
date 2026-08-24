@@ -2,6 +2,8 @@
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
+#include "core/RadioDiscovery.h"
+#include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
@@ -307,6 +309,38 @@ int main(int argc, char** argv)
         expectVerbAccepted(verb, QStringLiteral("14200"), v.calls,
                            at + QStringLiteral("kHz-for-MHz passes (indistinguishable from 14.2 GHz)"));
     }
+
+    // DEXP is part of the automation surface only when the active backend can
+    // carry that intent and report authoritative state. This pins Pat's "UI
+    // and automation capability surface" requirement end to end through the
+    // real local-socket `get transmit` path on a connected unsupported backend.
+    RadioInfo demo;
+    demo.family = SimBackend::familyName();
+    demo.serial = SimBackend::demoSerial();
+    demo.model = SimBackend::demoModelName();
+    radio.connectToRadio(demo);
+    QEventLoop connectLoop;
+    QTimer::singleShot(100, &connectLoop, &QEventLoop::quit);
+    connectLoop.exec();
+
+    const QJsonObject simResponse = client.request(
+        QJsonObject{{QStringLiteral("cmd"), QStringLiteral("get")},
+                    {QStringLiteral("model"), QStringLiteral("transmit")}});
+    const QJsonObject simTransmit =
+        simResponse.value(QStringLiteral("transmit")).toObject();
+    check(simResponse.value(QStringLiteral("ok")).toBool()
+              && !simTransmit.contains(QStringLiteral("dexp"))
+              && !simTransmit.contains(QStringLiteral("dexpLevel")),
+          "a backend without DEXP omits both fields from automation state");
+
+    const QJsonObject unsupportedDexp = client.request(
+        QJsonObject{{QStringLiteral("cmd"), QStringLiteral("get")},
+                    {QStringLiteral("model"), QStringLiteral("transmit")},
+                    {QStringLiteral("property"), QStringLiteral("dexp")}});
+    check(!unsupportedDexp.value(QStringLiteral("ok")).toBool()
+              && unsupportedDexp.value(QStringLiteral("error")).toString()
+                     == QStringLiteral("no property 'dexp' on transmit"),
+          "property narrowing cannot reach unsupported DEXP state");
 
     server.stop();
     return failures == 0 ? 0 : 1;
