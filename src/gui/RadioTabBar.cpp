@@ -399,7 +399,7 @@ QString rowStyleTemplate()
         " padding: 6px 10px;"
         " border: none;"
         " border-radius: 6px;"
-        " background: transparent;"
+        " background: {{color.background.1}};"
         " color: {{color.text.primary}}; }"
         "QPushButton:hover  { background: {{color.background.2}}; }"
         "QPushButton:pressed { background: {{color.background.0}}; }"
@@ -726,15 +726,18 @@ void RadioTabBar::showDiscoveryPopover()
     QVBoxLayout* rows = popover->rows();
 
     auto* heading = new QLabel(QStringLiteral("Discovered radios"), popover->panel());
+    heading->setObjectName(QStringLiteral("discoveredRadiosHeading"));
     ThemeManager::instance().applyStyleSheet(
         heading,
         QStringLiteral("QLabel { color: {{color.text.secondary}};"
+                       " background: {{color.background.1}};"
                        " padding: 4px 10px 2px 10px; font-size: 10px;"
                        " font-weight: bold; }"));
     rows->addWidget(heading);
 
     const QString monoTemplate = QStringLiteral(
         "QLabel { color: {{color.text.secondary}};"
+        " background: {{color.background.1}};"
         " font-family: \"{{font.family.mono}}\", \"JetBrains Mono\", monospace;"
         " font-size: 10px; }");
 
@@ -760,7 +763,7 @@ void RadioTabBar::showDiscoveryPopover()
         auto* name = new QLabel(entry.name, row);
         ThemeManager::instance().applyStyleSheet(
             name, QStringLiteral("QLabel { color: {{color.text.primary}};"
-                                 " background: transparent; font-size: 12px;"
+                                 " background: {{color.background.1}}; font-size: 12px;"
                                  " font-weight: bold; }"));
         rowLayout->addWidget(name);
 

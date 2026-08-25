@@ -28,10 +28,12 @@
 #include "gui/RadioTabBar.h"
 #include "gui/TitleBar.h"
 #include "gui/WindowCaptionButtons.h"
+#include "core/ThemeManager.h"
 
 #include <QAbstractButton>
 #include <QApplication>
 #include <QImage>
+#include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
@@ -299,12 +301,26 @@ int main(int argc, char** argv)
                 QStringLiteral("discoveredRadiosPopover"))) {
             QPushButton* manual = popover->findChild<QPushButton*>(
                 QStringLiteral("connectManuallyRow"));
+            QLabel* heading = popover->findChild<QLabel*>(
+                QStringLiteral("discoveredRadiosHeading"));
             check(manual != nullptr, "the popover exposes its manual-connect row");
+            check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
                 check(manual->text() == QStringLiteral("Connect manually\u2026"),
                       "the manual-connect ellipsis is valid Unicode");
                 check(!manual->styleSheet().contains(QStringLiteral("{{")),
                       "the popover row resolves every theme token");
+            }
+            const QString panelColor = ThemeManager::instance()
+                .color(popover, QStringLiteral("color.background.1"))
+                .name(QColor::HexRgb);
+            if (manual) {
+                check(manual->styleSheet().contains(panelColor, Qt::CaseInsensitive),
+                      "the manual row explicitly paints the panel background");
+            }
+            if (heading) {
+                check(heading->styleSheet().contains(panelColor, Qt::CaseInsensitive),
+                      "the heading explicitly paints the panel background");
             }
             QImage rendered(popover->size(), QImage::Format_ARGB32_Premultiplied);
             rendered.fill(Qt::transparent);
