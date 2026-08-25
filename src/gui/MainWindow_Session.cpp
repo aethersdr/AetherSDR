@@ -30,6 +30,7 @@
 #include "FramelessMessageBox.h"
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
+#include "RfGainPresentation.h"
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwTrace.h"
@@ -1689,7 +1690,9 @@ void MainWindow::wirePanLifecycle()
                 menu->setPanId(pan->panId());
                 menu->setRadioModel(&m_radioModel);
                 menu->setRadioCapabilities(m_radioModel.capabilities());
-                menu->setDeclaredBands(m_radioModel.declaredBands());
+                menu->setDeclaredBands(
+                    m_radioModel.declaredBands(),
+                    m_radioModel.backendCapabilities().declaredBandRanges);
                 applyTuningRangeToOverlayMenu(menu);
                 applyNotchCapabilities(sw);
                 applyRadioSideDspToPanDisplay(sw);
@@ -1781,6 +1784,12 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::rfGainInfoChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setRfGainRange);
+        connect(pan, &PanadapterModel::rfGainInfoChanged,
+                this, [applet](int, int high, int, const QString& unitSuffix) {
+            const int neutral = normalizedRfGainUnitSuffix(unitSuffix)
+                                    == QLatin1String("%") ? high : 0;
+            applet->spectrumWidget()->setRfGainPresentation(unitSuffix, neutral);
+        });
         connect(pan, &PanadapterModel::rfGainChanged,
                 this, [applet](int gain) {
             applet->spectrumWidget()->setRfGain(gain);
@@ -1795,6 +1804,18 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::preampStepChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setPreampStep);
+        const auto syncPreampIndicator = [pan, applet]() {
+            applet->spectrumWidget()->setPreampIndicator(
+                formatPreampIndicator(pan->preampLabels(), pan->preampStep()));
+        };
+        connect(pan, &PanadapterModel::preampLabelsChanged,
+                this, [syncPreampIndicator](const QStringList&) {
+            syncPreampIndicator();
+        });
+        connect(pan, &PanadapterModel::preampStepChanged,
+                this, [syncPreampIndicator](int) {
+            syncPreampIndicator();
+        });
         connect(pan, &PanadapterModel::attenuatorLabelsChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setAttenuatorLabels);
@@ -1817,8 +1838,14 @@ void MainWindow::wirePanLifecycle()
         applet->spectrumWidget()->overlayMenu()->setRfGainRange(
             pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
             pan->rfGainUnitSuffix());
+        const int rfGainNeutral = normalizedRfGainUnitSuffix(pan->rfGainUnitSuffix())
+                                      == QLatin1String("%")
+                                    ? pan->rfGainHigh() : 0;
+        applet->spectrumWidget()->setRfGainPresentation(
+            pan->rfGainUnitSuffix(), rfGainNeutral);
         applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
         applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
+        syncPreampIndicator();
         applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
         applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
 

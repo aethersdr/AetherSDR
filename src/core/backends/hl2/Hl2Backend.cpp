@@ -1373,6 +1373,7 @@ RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
     c.txPowerBands = {};
+    c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
@@ -1443,9 +1444,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
+    c.hasDownwardExpander = false;
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
+    // The host modulator implements a continuous transmit passband.
+    c.hasTxFilterControls = true;
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;
@@ -1469,6 +1473,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    c.alwaysUseClientSideSpots = false;
     // Manual notches, and the one piece of DSP on this radio that is NOT absent
     // just because hasRadioSideDsp is false. The notch runs in WDSP on this
     // host, which is the whole point: the HL2 sends raw IQ, so a notch either
@@ -1493,6 +1498,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    c.hasPaTemperatureTelemetry = true;
+    c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory

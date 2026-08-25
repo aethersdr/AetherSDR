@@ -52,6 +52,12 @@ constexpr std::array<CurvePoint, 3> kVd{{
     {0, 0.0}, {75, 5.0}, {241, 16.0},
 }};
 
+// IC-9700 Vd calibration from the model's CI-V reference guide. This is kept
+// separate from the portable-radio curve: raw 185 is the nominal 13.8 V point.
+constexpr std::array<CurvePoint, 4> kVdIc9700{{
+    {0, 0.0}, {13, 10.0}, {185, 13.8}, {241, 16.0},
+}};
+
 // Id (PA current), raw -> amps. Icom's guide: 0 = 0 A, 121 = 2 A, 241 = 4 A.
 constexpr std::array<CurvePoint, 3> kId{{
     {0, 0.0}, {121, 2.0}, {241, 4.0},
@@ -137,6 +143,34 @@ std::span<const CurvePoint> vdCurve()         { return kVd; }
 std::span<const CurvePoint> idCurve()         { return kId; }
 std::span<const CurvePoint> alcCurve()        { return kAlc; }
 
+std::span<const CurvePoint>
+powerCurveForCalibration(MeterCalibration calibration)
+{
+    switch (calibration) {
+    case MeterCalibration::Ic705:
+        return kPowerIc705;
+    case MeterCalibration::Ic7300Mk2:
+        return kPowerIc7300Mk2;
+    case MeterCalibration::Uncalibrated:
+    case MeterCalibration::Ic9700Voltage:
+        return {};
+    }
+    return {};
+}
+
+bool hasVoltageCalibration(MeterCalibration calibration) noexcept
+{
+    return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic9700Voltage
+        || calibration == MeterCalibration::Ic7300Mk2;
+}
+
+bool hasCurrentCalibration(MeterCalibration calibration) noexcept
+{
+    return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic7300Mk2;
+}
+
 double sMeterDbm(int raw, double s9Dbm)
 {
     // Icom's published breakpoints: 0 = S0, 120 = S9, 241 = S9 + 60 dB.
@@ -182,24 +216,31 @@ double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibratio
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
     case MeterId::Power:
-        if (calibration == MeterCalibration::Uncalibrated) {
-            return std::clamp(raw, 0, 255) * 100.0 / 255.0;
+        if (const std::span<const CurvePoint> curve = powerCurveForCalibration(calibration);
+            !curve.empty()) {
+            return interpolateCurve(curve, raw);
         }
-        return interpolateCurve(desktop ? powerCurveIc7300Mk2()
-                                        : powerCurveIc705(), raw);
+        return std::clamp(raw, 0, 255) * 100.0 / 255.0;
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
     case MeterId::Comp:     return interpolateCurve(kComp, raw);
     case MeterId::Vd:
-        if (calibration == MeterCalibration::Uncalibrated) {
+        if (!hasVoltageCalibration(calibration)) {
             return 0.0;
         }
-        return interpolateCurve(
-                                desktop
-                                    ? std::span<const CurvePoint>(kVdIc7300Mk2)
-                                    : std::span<const CurvePoint>(kVd), raw);
+        switch (calibration) {
+        case MeterCalibration::Ic705:
+            return interpolateCurve(kVd, raw);
+        case MeterCalibration::Ic9700Voltage:
+            return interpolateCurve(kVdIc9700, raw);
+        case MeterCalibration::Ic7300Mk2:
+            return interpolateCurve(kVdIc7300Mk2, raw);
+        case MeterCalibration::Uncalibrated:
+            return 0.0;
+        }
+        return 0.0;
     case MeterId::Id:
-        if (calibration == MeterCalibration::Uncalibrated) {
+        if (!hasCurrentCalibration(calibration)) {
             return 0.0;
         }
         return interpolateCurve(
@@ -232,6 +273,58 @@ void MeterPoller::setVisible(MeterId id, bool visible)
 }
 
 bool MeterPoller::isVisible(MeterId id) const { return stateFor(id).visible; }
+
+void MeterPoller::setTransmitting(bool tx) noexcept
+{
+    if (m_transmitting == tx) {
+        return;
+    }
+    m_transmitting = tx;
+    // A held sample belongs to one keyed interval only. In particular, the
+    // first minimum of a new transmission must not reuse a non-minimum sample
+    // from the previous one.
+    resetMinimumHolds();
+}
+
+bool MeterPoller::shouldPublish(MeterId id, int raw, std::int64_t nowMs,
+                                bool holdIsolatedMinimums)
+{
+    State& state = stateFor(id);
+    const bool minimumHoldMeter = id == MeterId::Swr || id == MeterId::Alc;
+    if (!holdIsolatedMinimums || !m_transmitting || !minimumHoldMeter) {
+        state.hasNonMinimumReading = false;
+        state.minimumCandidateSinceMs = -1;
+        return true;
+    }
+
+    if (raw > 0) {
+        state.hasNonMinimumReading = true;
+        state.minimumCandidateSinceMs = -1;
+        return true;
+    }
+
+    // Before this keyed interval has produced a real sample, minimum is the
+    // honest rest value. There is nothing older to hold.
+    if (!state.hasNonMinimumReading) {
+        return true;
+    }
+
+    if (state.minimumCandidateSinceMs < 0) {
+        state.minimumCandidateSinceMs = nowMs;
+        return false;
+    }
+
+    if (nowMs - state.minimumCandidateSinceMs < kMinimumConfirmationMs) {
+        return false;
+    }
+
+    // The radio has reported minimum continuously for a complete sample
+    // interval. Publish it and stop treating later minimum replies as gaps
+    // until a new non-minimum reading arrives.
+    state.hasNonMinimumReading = false;
+    state.minimumCandidateSinceMs = -1;
+    return true;
+}
 
 std::vector<MeterId> MeterPoller::due(std::int64_t nowMs)
 {
@@ -291,6 +384,14 @@ void MeterPoller::reset() noexcept
         s = State{};
     m_transmitting = false;
     m_quietUntilMs = 0;
+}
+
+void MeterPoller::resetMinimumHolds() noexcept
+{
+    for (State& state : m_state) {
+        state.hasNonMinimumReading = false;
+        state.minimumCandidateSinceMs = -1;
+    }
 }
 
 }  // namespace AetherSDR::icom

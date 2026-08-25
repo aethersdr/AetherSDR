@@ -16,6 +16,7 @@
 #include "core/backends/icom/CivCodec.h"
 #include "models/BandDefs.h"
 #include "models/DeclaredBands.h"
+#include "models/SliceModel.h"
 #include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
@@ -36,11 +37,12 @@ static void check(bool ok, const char* what)
     }
 }
 
-static RadioInfo infoFor(const QString& family)
+static RadioInfo infoFor(const QString& family,
+                         const QString& serial = QStringLiteral("ICOM-TEST-1"))
 {
     RadioInfo i;
     i.family  = family;
-    i.serial  = QStringLiteral("ICOM-TEST-1");
+    i.serial  = serial;
     i.address = QHostAddress(QStringLiteral("192.0.2.1"));   // TEST-NET-1, unroutable
     i.port    = 50001;
     return i;
@@ -82,6 +84,126 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
+    check(!caps.hasDownwardExpander,
+          "Icom exposes no DEXP surface without an evidenced command path");
+
+    // The Icom transport reports one stable VFO as slice 0. On reconnect,
+    // RadioModel stages the old SliceModel so the UI can keep its subscriptions
+    // alive while the backend confirms the new session. The non-Flex materializer
+    // used to ignore that staged object and allocate a replacement: the VFO was
+    // wired to the replacement by sliceAdded, while RX Controls remained wired
+    // to the original object and stopped following TCI frequency changes.
+    //
+    // Both the IC-705 and IC-7300MK2 use this same family-neutral materializer;
+    // model-specific CI-V profiles begin below the seam and cannot change this
+    // ownership invariant.
+    {
+        RadioModel reconnectModel;
+        reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
+        auto* icomBackend =
+            dynamic_cast<icom::IcomCivBackend*>(reconnectModel.backend());
+        check(icomBackend != nullptr, "an Icom backend exists for reconnect coverage");
+        if (icomBackend) {
+            int sliceAdds = 0;
+            QObject::connect(&reconnectModel, &RadioModel::sliceAdded,
+                             &reconnectModel,
+                             [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            const bool firstConnected = QMetaObject::invokeMethod(
+                icomBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(firstConnected, "the first Icom session reaches its connected edge");
+
+            SliceDelta initial;
+            initial.panId = QStringLiteral("icom");
+            initial.inUse = true;
+            initial.active = true;
+            initial.txSlice = true;
+            initial.frequency = 14.074;
+            emit icomBackend->sliceChanged(0, initial);
+
+            SliceModel* subscribedSlice = reconnectModel.slice(0);
+            check(subscribedSlice != nullptr,
+                  "the first Icom VFO materializes a SliceModel");
+            check(sliceAdds == 1,
+                  "the first Icom VFO announces one UI slice");
+
+            int subscriberUpdates = 0;
+            if (subscribedSlice) {
+                QObject::connect(subscribedSlice, &SliceModel::frequencyChanged,
+                                 subscribedSlice,
+                                 [&subscriberUpdates](double) { ++subscriberUpdates; });
+            }
+
+            // Re-enter through connectRadio while the old session is live. Icom
+            // synchronously emits disconnected before starting the replacement,
+            // exactly matching an operator reconnect to the selected radio.
+            reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
+            const bool replacementConnected = QMetaObject::invokeMethod(
+                icomBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(replacementConnected,
+                  "the same Icom reaches its replacement connected edge");
+
+            SliceDelta reconnected;
+            reconnected.panId = QStringLiteral("icom");
+            reconnected.inUse = true;
+            reconnected.active = true;
+            reconnected.txSlice = true;
+            reconnected.frequency = 7.074;
+            emit icomBackend->sliceChanged(0, reconnected);
+
+            check(reconnectModel.slice(0) == subscribedSlice,
+                  "Icom reconnect reclaims the subscribed SliceModel");
+            check(sliceAdds == 1,
+                  "reclaim does not announce a duplicate UI slice");
+            check(subscriberUpdates == 1,
+                  "a pre-reconnect frequency subscriber receives fresh Icom state");
+            check(reconnectModel.slice(0)
+                      && reconnectModel.slice(0)->frequency() == 7.074,
+                  "the reclaimed Icom VFO applies the radio-authoritative frequency");
+
+        }
+    }
+
+    // A different physical radio in the same family also reports slice 0.
+    // Reclaim must be identity-shaped, not family/id-shaped: the old object
+    // carries radio A's partially reported state and subscriptions.
+    {
+        RadioModel swapModel;
+        swapModel.connectToRadio(infoFor(QStringLiteral("icom")));
+        auto* swapBackend = dynamic_cast<icom::IcomCivBackend*>(swapModel.backend());
+        check(swapBackend != nullptr, "an Icom backend exists for radio-swap coverage");
+        if (swapBackend) {
+            int sliceAdds = 0;
+            QObject::connect(&swapModel, &RadioModel::sliceAdded,
+                             &swapModel, [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            const bool firstConnected = QMetaObject::invokeMethod(
+                swapBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(firstConnected, "radio A reaches its real connected edge");
+            SliceModel* radioASlice = swapModel.slice(0);
+
+            // Select B while A is still connected. connectToRadio overwrites
+            // m_lastInfo with B before IcomCivBackend synchronously tears A down;
+            // this is the ordering that requires the separate connected-session
+            // serial rather than a disconnect-time read of m_lastInfo.
+            swapModel.connectToRadio(infoFor(QStringLiteral("icom"),
+                                             QStringLiteral("ICOM-TEST-2")));
+            const bool connected = QMetaObject::invokeMethod(
+                swapBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(connected, "the second Icom session reaches its real connected edge");
+            check(swapModel.slice(0) != nullptr,
+                  "the second Icom radio materializes its own slice");
+            check(swapModel.slice(0) != radioASlice,
+                  "a different Icom serial does not reclaim the prior radio's slice");
+            check(sliceAdds == 2,
+                  "a different Icom serial announces one replacement UI slice");
+        }
+    }
+
     RadioCapabilities transmittingIcom = caps;
     transmittingIcom.canTransmit = true;
     check(wsprSeamAudioRouteReady(true, transmittingIcom),
@@ -115,6 +237,10 @@ int main(int argc, char** argv)
     // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+    check(!AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+               .meters.hasPaTemperatureTelemetry,
+          "the IC-9700 profile does not declare PA-temperature telemetry");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
@@ -328,12 +454,31 @@ int main(int argc, char** argv)
         // The tri-bander, whose HF grid was entirely unpressable before.
         const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 is in the table");
+        const std::span<const icom::IcomBand> ic9700Bands =
+            icom::bandsFor(*ic9700);
+        check(ic9700Bands.size() == 3
+                  && ic9700Bands[0].name == "2m"
+                  && ic9700Bands[0].lowHz == 144'000'000ULL
+                  && ic9700Bands[1].name == "440"
+                  && ic9700Bands[1].lowHz == 430'000'000ULL
+                  && ic9700Bands[2].name == "23cm"
+                  && ic9700Bands[2].lowHz == 1'240'000'000ULL,
+              "the IC-9700 publishes canonical names with native deck limits");
+        check(icom::bandsFor(*ic705).empty(),
+              "the IC-705 has no discontinuous native-band range override, so "
+              "its declared buttons keep canonical labels");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))
                   == QStringList({QStringLiteral("2m"), QStringLiteral("440"),
                                   QStringLiteral("23cm")}),
               "the IC-9700 declares exactly its three bands");
+        const auto ic9700Preamp = icom::preampLabelsFor(*ic9700);
+        check(ic9700Preamp.size() == 2
+                  && ic9700Preamp[0] == "OFF"
+                  && ic9700Preamp[1] == "P.AMP INT",
+              "the IC-9700 publishes only its internal preamp through the "
+              "shared front-end control");
 
         // AND THE HF-ONLY ROWS DECLARE NOTHING. Empty is a decision here, not
         // an omission: it keeps the built-in HF grid, which is already right for

@@ -232,6 +232,7 @@ RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.txPowerBands = {};
+    caps.declaredBandRanges = {};
     caps.family = familyName();
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
@@ -265,11 +266,13 @@ RadioCapabilities SimBackend::capabilities() const
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
+    caps.hasDownwardExpander = false;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
+    caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
@@ -282,6 +285,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    caps.alwaysUseClientSideSpots = false;
     // No manual notch. The synthetic scene has an auto-notch in its mixer, but
     // nothing implements a placed, tracking null — so the +TNF button and the
     // panadapter's add-notch entries stay hidden here rather than appearing and
@@ -292,6 +296,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
+    caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};

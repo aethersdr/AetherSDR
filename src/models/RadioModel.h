@@ -1848,6 +1848,10 @@ private:
     // Reclaim-by-ID is only valid against the same radio — slice indexes and
     // stream IDs collide near-certainly across different radios.
     QString m_staleSessionSerial;
+    // Discovery serial of the non-Flex session that actually connected. This
+    // cannot be derived from m_lastInfo at disconnect: a same-family selection
+    // replaces m_lastInfo before the old backend emits disconnected().
+    QString m_connectedSessionSerial;
     // #3977: OUR handle from the PREVIOUS session (captured at registration
     // into m_ownSessionHandle, consumed at stage time). Reclaim eviction must
     // only fire when the staged pan still records THIS handle — pan status

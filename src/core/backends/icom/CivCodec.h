@@ -143,6 +143,11 @@ inline constexpr std::size_t kFreqBytes = 5;
 [[nodiscard]] std::vector<std::uint8_t> encodeFreq(std::uint64_t hz,
                                                     std::size_t bytes = kFreqBytes);
 [[nodiscard]] std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd);
+// Use at command boundaries whose protocol shape declares an exact number of
+// frequency bytes. Generic decodeFreq() intentionally supports multiple Icom
+// models and therefore cannot enforce a command's arity by itself.
+[[nodiscard]] std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes);
 
 // A scope EDGE frequency, which can be NEGATIVE.
 //

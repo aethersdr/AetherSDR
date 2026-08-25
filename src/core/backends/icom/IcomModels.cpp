@@ -184,9 +184,9 @@ constexpr IcomModel kUnknown{
 // is the safe direction to be wrong in: we offer a frequency it declines,
 // rather than silently withholding one it supports.
 constexpr std::array<IcomBand, 3> kIc9700Bands{{
-    {  144'000'000ULL,   148'000'000ULL, 100.0},   // 2 m
-    {  430'000'000ULL,   450'000'000ULL,  75.0},   // 70 cm
-    {1'240'000'000ULL, 1'300'000'000ULL,  10.0},   // 23 cm
+    {"2m",     144'000'000ULL,   148'000'000ULL, 100.0},
+    {"440",    430'000'000ULL,   450'000'000ULL,  75.0},
+    {"23cm", 1'240'000'000ULL, 1'300'000'000ULL,  10.0},
 }};
 
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
@@ -207,6 +207,12 @@ constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
 
 constexpr std::array<std::string_view, 3> kHfPreampLabels{
     "OFF", "P.AMP1", "P.AMP2"};
+// Publish only the IC-9700's internal preamp through the shared front-end
+// control. External P.AMP is separately enabled per band in SET menu items
+// 0093..0095; treating those persistent settings as ordinary preamp steps
+// makes the radio reject the request and restore its authoritative state.
+constexpr std::array<std::string_view, 2> kIc9700PreampLabels{
+    "OFF", "P.AMP INT"};
 constexpr std::array<AttenStep, 2> kHfAttenuatorSteps{{
     {"OFF", 0}, {"20 dB", 20}}};
 constexpr std::array<std::string_view, 10> kIc705Modes{
@@ -429,7 +435,7 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 
 std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
 {
-    return profileFor(model).meters.powerCurve;
+    return powerCurveForCalibration(profileFor(model).meters.calibration);
 }
 
 std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
@@ -537,8 +543,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .cwTextKeyer = CwTextKeyerProfile{},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic705,
-                                          powerCurveIc705(), 4.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic705,
+            .currentFullScaleAmps = 4.0,
+            .holdIsolatedTxMinimums = true,
+        },
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
@@ -553,8 +562,12 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Uncalibrated, {}, 0.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic9700Voltage,
+            .currentFullScaleAmps = 0.0,
+        },
         .civRecovery = CivRecoveryProfile{1000, 3},
+        .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
@@ -571,8 +584,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},
         .scope = ScopeCommandProfile{true, true, true, true, true},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic7300Mk2,
-                                          powerCurveIc7300Mk2(), 25.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic7300Mk2,
+            .currentFullScaleAmps = 25.0,
+            .holdIsolatedTxMinimums = true,
+        },
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };

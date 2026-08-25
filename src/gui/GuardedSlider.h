@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DragValuePopup.h"
+#include "Theme.h"
 
 #include <QSlider>
 #include <QComboBox>
@@ -44,11 +45,13 @@ public:
     explicit GuardedSlider(QWidget* parent = nullptr)
         : QSlider(parent)
     {
+        installHoverSuppressor();
     }
 
     explicit GuardedSlider(Qt::Orientation orientation, QWidget* parent = nullptr)
         : QSlider(orientation, parent)
     {
+        installHoverSuppressor();
     }
 
     void setDragValueFormatter(DragValueFormatter formatter) {
@@ -151,6 +154,20 @@ protected:
     AetherSDR::DragValuePopup* m_dragValuePopup{nullptr};
     bool m_dragValuePopupEnabled{true};
     bool m_dragValueActive{false};
+
+private:
+    // #4869: every QSlider gets Qt::WA_Hover forced on by the Fusion style
+    // regardless of stylesheet (see SliderHoverSuppressor in Theme.h for the
+    // full mechanism), which triggers a hover repaint that leaves stale
+    // pixels at a fractional UI scale. Installing from the constructor
+    // covers every GuardedSlider — including the ones styled via
+    // ThemeManager::applyStyleSheet() directly rather than through
+    // applyPrimarySliderStyle() (EqApplet's band sliders, TitleBar's
+    // master/headphone sliders, RadioSetupDialog's filter slider, ...) —
+    // without touching any of those call sites.
+    void installHoverSuppressor() {
+        installEventFilter(&AetherSDR::detail::SliderHoverSuppressor::instance());
+    }
 };
 
 // QComboBox subclass that only responds to wheel events when the dropdown

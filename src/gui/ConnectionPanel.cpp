@@ -34,6 +34,7 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSpinBox>
 #include <QStyle>
 #include <QTcpSocket>
 #include <QHostInfo>
@@ -194,6 +195,18 @@ RadioBindSettings bindSettingsFromProfile(const QJsonObject& profile)
     settings.interfaceName = bind.value("interface_name").toString();
     settings.bindAddress = QHostAddress(bind.value("last_successful_ipv4").toString());
     return settings;
+}
+
+bool icomBasePortFromProfile(const QJsonObject& profile, quint16* basePort)
+{
+    const int stored = profile.value("icom").toObject().value("base_port").toInt(0);
+    if (stored <= 0 || stored > IcomSettings::maximumBasePort()) {
+        return false;
+    }
+    if (basePort) {
+        *basePort = static_cast<quint16>(stored);
+    }
+    return true;
 }
 
 QString staleSelectionText(const RadioBindSettings& settings)
@@ -750,9 +763,49 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     ThemeManager::instance().applyStyleSheet(m_manualIcomPassEdit, lineEditStyle);
     m_manualIcomPassRow = addManualRow(QStringLiteral("Icom password:"), m_manualIcomPassEdit);
 
-    // The CI-V address is the third thing the operator has to read off the
-    // radio, alongside the two above — theirs live in the Network menu, this
-    // one in Connectors > CI-V. Without it the address can only ever be the
+    // The RS-BA1 transport is always three UDP ports: control, CI-V and audio.
+    // NAT deployments commonly forward several radios through one public IP,
+    // so the operator chooses only the first external port and the next two are
+    // derived. The ordinary on-radio triplet remains the zero-effort default.
+    m_manualIcomPortCombo = new QComboBox(manualGroup);
+    m_manualIcomPortCombo->setObjectName(QStringLiteral("connectionManualIcomPortMode"));
+    m_manualIcomPortCombo->setAccessibleName(tr("Icom network ports"));
+    m_manualIcomPortCombo->setAccessibleDescription(
+        tr("Use the standard Icom UDP ports, or choose a custom first port for NAT. "
+           "The CI-V and audio ports are the next two sequential ports."));
+    AetherSDR::applyComboStyle(m_manualIcomPortCombo, comboExtraRules);
+    m_manualIcomPortCombo->addItem(
+        tr("Standard (%1–%2)")
+            .arg(IcomSettings::defaultBasePort())
+            .arg(IcomSettings::defaultBasePort() + 2),
+        QStringLiteral("__standard__"));
+    m_manualIcomPortCombo->addItem(tr("Custom NAT ports..."),
+                                   QStringLiteral("__custom__"));
+    m_manualIcomPortRow =
+        addManualRow(QStringLiteral("Icom ports:"), m_manualIcomPortCombo);
+
+    m_manualIcomBasePortSpin = new QSpinBox(manualGroup);
+    m_manualIcomBasePortSpin->setObjectName(QStringLiteral("connectionManualIcomBasePort"));
+    m_manualIcomBasePortSpin->setAccessibleName(tr("Icom first UDP port"));
+    m_manualIcomBasePortSpin->setAccessibleDescription(
+        tr("First external UDP port forwarded to the radio. AetherSDR also uses the next "
+           "two ports for CI-V and audio."));
+    m_manualIcomBasePortSpin->setRange(1, IcomSettings::maximumBasePort());
+    m_manualIcomBasePortSpin->setValue(IcomSettings::controlPort());
+    m_manualIcomBasePortSpin->setToolTip(
+        tr("First of three sequential UDP ports: control, CI-V, audio"));
+    m_manualIcomPortCustomRow =
+        addManualRow(QStringLiteral("First UDP port:"), m_manualIcomBasePortSpin);
+
+    if (!IcomSettings::usesDefaultPorts()) {
+        m_manualIcomPortCombo->setCurrentIndex(1);
+    }
+    connect(m_manualIcomPortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { syncIcomPortCustomRow(); });
+
+    // The CI-V address is another value the operator may have to read off the
+    // radio. The network credentials live in the Network menu, while this one
+    // lives in Connectors > CI-V. Without it the address can only ever be the
     // IC-705 default, and every other model in kModels is unreachable: CI-V is
     // addressed, so an IC-9700 on 0xA2 silently ignores everything sent to
     // 0xA4. No ID reply, no model, and the conservative unknown fallback means
@@ -1296,6 +1349,7 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomPassword.clear();
     m_pendingIcomHost.clear();
     m_pendingIcomResolvedHost.clear();
+    m_pendingIcomBasePort = 0;
     m_pendingIcomBindSettings = RadioBindSettings{};
     m_pendingIcomSessionBindAddress.clear();
 }
@@ -1323,22 +1377,23 @@ void ConnectionPanel::setConnected(bool connected)
             // host and credentials together.
             saveManualProfile(m_pendingIcomHost,
                               m_pendingIcomBindSettings,
-                              m_pendingIcomSessionBindAddress);
+                              m_pendingIcomSessionBindAddress,
+                              m_pendingIcomBasePort);
             if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
                 // MainWindow retains the resolved address in LastRoutedRadioIp.
                 // Mirror the profile under that key as well so a hostname such
                 // as ic-705.local still restores the Icom family at startup.
                 saveManualProfile(m_pendingIcomResolvedHost,
                                   m_pendingIcomBindSettings,
-                                  m_pendingIcomSessionBindAddress);
+                                  m_pendingIcomSessionBindAddress,
+                                  m_pendingIcomBasePort);
             }
         }
     }
     if (!connected || !m_pendingIcomPassword.isEmpty()) {
         // Cleared on BOTH edges: a failed attempt must not commit on the next
         // unrelated connect, and a committed one must not commit twice.
-        m_pendingIcomPassword.clear();
-        m_pendingIcomHost.clear();
+        clearPendingIcomCredentials();
     }
 
     m_connected = connected;
@@ -2052,6 +2107,23 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     if (restoreFamily)
         setManualFamily(familyFromProfile(profile));
 
+    // The external port triplet belongs to the routed endpoint, not to the
+    // physical Icom model. Restore it only when the operator chose a saved
+    // address (or startup restored one), never while an editable address is
+    // being typed character by character.
+    if (restoreFamily
+        && familyFromProfile(profile) == QLatin1String(kFamilyIcom)
+        && m_manualIcomPortCombo && m_manualIcomBasePortSpin) {
+        quint16 basePort = IcomSettings::defaultBasePort();
+        const bool hasSavedBasePort = icomBasePortFromProfile(profile, &basePort);
+        const bool standard = !hasSavedBasePort
+            || basePort == IcomSettings::defaultBasePort();
+        m_manualIcomPortCombo->setCurrentIndex(standard ? 0 : 1);
+        m_manualIcomBasePortSpin->setValue(
+            standard ? IcomSettings::defaultBasePort() : basePort);
+        syncIcomPortCustomRow();
+    }
+
     RadioBindSettings settings = bindSettingsFromProfile(profile);
     if (settings.mode == RadioBindMode::Explicit) {
         const auto resolved = NetworkPathResolver::resolveExplicitSelection(
@@ -2213,23 +2285,49 @@ void ConnectionPanel::syncIcomCivCustomRow()
     m_manualIcomCivCustomRow->setVisible(icom && custom);
 }
 
+void ConnectionPanel::syncIcomPortCustomRow()
+{
+    if (!m_manualIcomPortCombo || !m_manualIcomPortCustomRow) {
+        return;
+    }
+    const bool icom = currentManualFamily() == QLatin1String(kFamilyIcom);
+    const bool custom =
+        m_manualIcomPortCombo->currentData().toString() == QLatin1String("__custom__");
+    m_manualIcomPortCustomRow->setVisible(icom && custom);
+}
+
+quint16 ConnectionPanel::selectedIcomBasePort() const
+{
+    if (m_manualIcomPortCombo && m_manualIcomBasePortSpin
+        && m_manualIcomPortCombo->currentData().toString()
+               == QLatin1String("__custom__")) {
+        return static_cast<quint16>(m_manualIcomBasePortSpin->value());
+    }
+    return IcomSettings::defaultBasePort();
+}
+
 void ConnectionPanel::updateManualFamilyHints()
 {
     const QString family = currentManualFamily();
     const bool hl2  = family == QLatin1String(kFamilyHl2);
     const bool icom = family == QLatin1String(kFamilyIcom);
 
-    // The credential pair belongs to Icom alone. Hiding the row CONTAINERS
-    // rather than the fields keeps their labels from being left behind.
+    // The credentials and network selectors belong to Icom alone. Hiding the
+    // row CONTAINERS rather than the fields keeps their labels from being left
+    // behind.
     if (m_manualIcomUserRow)
         m_manualIcomUserRow->setVisible(icom);
     if (m_manualIcomPassRow)
         m_manualIcomPassRow->setVisible(icom);
+    if (m_manualIcomPortRow) {
+        m_manualIcomPortRow->setVisible(icom);
+    }
     if (m_manualIcomCivRow)
         m_manualIcomCivRow->setVisible(icom);
     // The hex row has a second condition — "Custom..." — so it gets the shared
     // helper rather than a copy of the visibility rule.
     syncIcomCivCustomRow();
+    syncIcomPortCustomRow();
 
     if (icom) {
         // Fill from settings, and read the password out of the keychain — which
@@ -2281,7 +2379,8 @@ void ConnectionPanel::updateManualFamilyHints()
             icom
                 ? QStringLiteral(
                       "Enter the radio address and the network user name and password "
-                      "configured for network control. %1")
+                      "configured for network control. Standard UDP ports are used unless "
+                      "you choose a custom three-port NAT range. %1")
                       .arg(passwordStorageHint)
                 : hl2
                 ? QStringLiteral(
@@ -2339,7 +2438,8 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
 
 void ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
-                                        const QHostAddress& lastSuccessfulLocalIp)
+                                        const QHostAddress& lastSuccessfulLocalIp,
+                                        quint16 icomBasePort)
 {
     if (targetIp.trimmed().isEmpty())
         return;
@@ -2359,6 +2459,16 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
     bind["interface_name"] = settings.interfaceName;
     bind["last_successful_ipv4"] = lastSuccessfulLocalIp.toString();
     profile["bind"] = bind;
+
+    if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
+        QJsonObject icom;
+        const quint16 basePort = icomBasePort != 0
+            ? icomBasePort
+            : selectedIcomBasePort();
+        icom["base_port"] = basePort;
+        profile["icom"] = icom;
+        profile["schema_version"] = 2;
+    }
 
     profiles[targetIp] = profile;
     saveRoutedProfiles(profiles);
@@ -2561,8 +2671,17 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             }
         }
 
-        // NOT setLastHost, and NOT save(), until the radio has actually
-        // accepted us.
+        // One operator value describes the complete RS-BA1 forwarding rule.
+        // The radio transport always opens control, CI-V and audio as three
+        // independent UDP streams, in that order. Bound the base in the widget
+        // and again in IcomSettings so base+2 can never wrap past 65535.
+        const quint16 basePort = selectedIcomBasePort();
+        IcomSettings::setBasePort(basePort);
+
+        // Do NOT setLastHost or save the credential until the radio has
+        // actually accepted us. The non-secret port choice is safe to retain
+        // immediately so a retry and the backend's reconnect timer use the
+        // same forwarding triplet.
         //
         // Both used to run here, before the connect was even attempted. One
         // mistyped password therefore replaced a working keychain entry with a
@@ -2578,6 +2697,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         IcomCredentials::setSessionPassword(pass);
         m_pendingIcomHost = trimmedIp;
         m_pendingIcomPassword = pass;
+        m_pendingIcomBasePort = basePort;
         m_pendingIcomBindSettings = bindSettings;
         m_pendingIcomSessionBindAddress =
             bindSettings.mode == RadioBindMode::Explicit
@@ -2608,13 +2728,15 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         RadioInfo info;
         info.family   = QString::fromLatin1(kFamilyIcom);
         info.address  = resolved;
-        info.port     = IcomSettings::controlPort();
+        info.port     = basePort;
         info.model    = QStringLiteral("Icom");
         info.name     = info.model;
         // No discovery means no MAC and no reported serial, so the host is the
         // only stable identity this radio has for us. It has to be SOMETHING:
         // the restore/persist scope keys off it.
-        info.serial   = QStringLiteral("icom:%1").arg(resolved.toString());
+        info.serial   = basePort == IcomSettings::defaultBasePort()
+            ? QStringLiteral("icom:%1").arg(resolved.toString())
+            : QStringLiteral("icom:%1:%2").arg(resolved.toString()).arg(basePort);
         info.nickname = info.model;
         // Manual Icom sessions use the same retention path as routed Flex and
         // HL2 sessions. Without this marker MainWindow removes

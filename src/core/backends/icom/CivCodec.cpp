@@ -228,6 +228,15 @@ std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd)
     return hz;
 }
 
+std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes)
+{
+    if (bcd.size() != expectedBytes) {
+        return std::nullopt;
+    }
+    return decodeFreq(bcd);
+}
+
 std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd)
 {
     if (bcd.empty() || bcd.size() > 8)

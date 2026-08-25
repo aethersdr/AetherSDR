@@ -197,6 +197,17 @@ static void testFmRepeaterCommands()
     check(!decodeRepeaterToneRegister(
               std::array<std::uint8_t, 3>{0x00, 0x0A, 0x23}),
           "non-BCD extended tone data is rejected");
+    const std::array<std::uint8_t, 5> txFrequency{
+        0x00, 0x56, 0x42, 0x48, 0x04};
+    check(decodeFreqExact(txFrequency, kFreqBytes) == 448'425'600ULL,
+          "IC-9700 transmit-frequency readback decodes at exact arity");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 4>{0x00, 0x56, 0x42, 0x48}, kFreqBytes),
+          "truncated transmit-frequency readback is rejected");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 6>{0x00, 0x56, 0x42, 0x48, 0x04, 0x00},
+              kFreqBytes),
+          "oversized transmit-frequency readback is rejected");
 }
 
 static void testReassembler()

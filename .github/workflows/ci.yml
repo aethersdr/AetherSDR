@@ -382,7 +382,7 @@ jobs:
         # the weekly sanitizers job would repeat the hasVfoModeCommand lesson
         # in the comment above: the assertion existed, nothing on a PR ran it,
         # and all four checks stayed green. ~21 s for the pair.
-        run: ctest --test-dir build -R "^icom_(civ|civ_scheduler|meters|backend)_test$" --output-on-failure
+        run: ctest --test-dir build -R "^(icom_(civ|civ_scheduler|meters|backend|family)|rf_gain_presentation)_test$" --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
