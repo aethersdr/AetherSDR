@@ -268,6 +268,18 @@ private:
     QLineEdit*   m_manualIcomCivEdit{nullptr};
     void         populateIcomCivCombo();
     void         syncIcomCivCustomRow();
+    // Custom RS-BA1 ports. Off by default: the fields are blank until the
+    // checkbox is ticked, and IcomSettings::setPorts() only writes non-default
+    // values when it is — see syncIcomPortsRow(). #5051 (NAT/port-forwarding
+    // with multiple Icom radios behind one external IP: only the port group
+    // baked into the connect path could be reached).
+    QWidget*     m_manualIcomPortsRow{nullptr};
+    QCheckBox*   m_manualIcomPortsCheck{nullptr};
+    QWidget*     m_manualIcomPortsCustomRow{nullptr};
+    QLineEdit*   m_manualIcomControlPortEdit{nullptr};
+    QLineEdit*   m_manualIcomSerialPortEdit{nullptr};
+    QLineEdit*   m_manualIcomAudioPortEdit{nullptr};
+    void         syncIcomPortsRow();
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.

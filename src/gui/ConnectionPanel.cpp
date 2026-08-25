@@ -2,6 +2,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // shared nickname + MAC->serial helpers
 #include "core/backends/icom/IcomCredentials.h"  // password -> OS keychain, never settings
+#include "core/backends/icom/IcomProtocol.h"     // icom::kControlPort/kSerialPort/kAudioPort
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
 #include "core/backends/icom/IcomModels.h"       // knownModels() -> the chooser's items
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
@@ -26,6 +27,7 @@
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIntValidator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -826,6 +828,64 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // left in as a comment promising something it does not do.
     connect(m_manualIcomCivCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { syncIcomCivCustomRow(); });
+
+    // Custom RS-BA1 ports — hidden behind a checkbox, same reasoning as the
+    // CI-V custom row above: rarely needed (Icom's own defaults work for a
+    // single radio behind a single IP), but without it a radio whose ports
+    // were moved on the network side — a second Icom behind the same NAT/port-
+    // forward, or a router that only forwards one port group — is completely
+    // unreachable. #5051.
+    m_manualIcomPortsCheck = new QCheckBox(tr("Use non-default ports"), manualGroup);
+    m_manualIcomPortsCheck->setObjectName(QStringLiteral("connectionManualIcomPortsCheck"));
+    m_manualIcomPortsCheck->setAccessibleDescription(
+        tr("Override the RS-BA1 control/CI-V/audio port numbers — needed when the radio's "
+           "own ports were changed, or a router forwards this radio to a different port "
+           "group (e.g. a second Icom behind the same external IP)."));
+    m_manualIcomPortsRow = addManualRow(QStringLiteral("Icom ports:"), m_manualIcomPortsCheck);
+
+    auto* portsRowWidget = new QWidget(manualGroup);
+    auto* portsRow = new QHBoxLayout(portsRowWidget);
+    portsRow->setContentsMargins(0, 0, 0, 0);
+    portsRow->setSpacing(8);
+    // 1-65535 — Icom radios use plain UDP/TCP ports; leaving a field blank
+    // falls back to IcomSettings' own default (the compile-time constant) at
+    // read time, not the empty string being coerced to port 0.
+    auto* portValidator = new QIntValidator(1, 65535, this);
+    const auto makePortField = [&](const QString& objectName, const QString& placeholder,
+                                    const QString& accessibleName) -> QLineEdit* {
+        auto* edit = new QLineEdit(portsRowWidget);
+        edit->setObjectName(objectName);
+        edit->setValidator(portValidator);
+        edit->setPlaceholderText(placeholder);
+        edit->setAccessibleName(accessibleName);
+        edit->setMinimumHeight(kManualFieldHeight);
+        portsRow->addWidget(edit, 1);
+        return edit;
+    };
+    m_manualIcomControlPortEdit = makePortField(
+        QStringLiteral("connectionManualIcomControlPort"),
+        QString::number(icom::kControlPort), tr("Control port"));
+    m_manualIcomSerialPortEdit = makePortField(
+        QStringLiteral("connectionManualIcomCivPort"),
+        QString::number(icom::kSerialPort), tr("CI-V port"));
+    m_manualIcomAudioPortEdit = makePortField(
+        QStringLiteral("connectionManualIcomAudioPort"),
+        QString::number(icom::kAudioPort), tr("Audio port"));
+    m_manualIcomPortsCustomRow =
+        addManualRow(QStringLiteral("Control/CI-V/audio:"), portsRowWidget);
+
+    connect(m_manualIcomPortsCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_manualIcomPortsCustomRow)
+            m_manualIcomPortsCustomRow->setVisible(checked);
+        if (!checked) {
+            // Blank fields read as "use IcomSettings' defaults" — see
+            // syncIcomPortsRow() — so unchecking clears any half-typed
+            // override rather than leaving stale digits behind a hidden row.
+            if (m_manualIcomControlPortEdit) m_manualIcomControlPortEdit->clear();
+            if (m_manualIcomSerialPortEdit)  m_manualIcomSerialPortEdit->clear();
+            if (m_manualIcomAudioPortEdit)   m_manualIcomAudioPortEdit->clear();
+        }
+    });
 
     // One column, set from the widest label. Rows that are hidden for a family
     // still count: the Icom rows appear and disappear as the operator changes
@@ -2213,6 +2273,37 @@ void ConnectionPanel::syncIcomCivCustomRow()
     m_manualIcomCivCustomRow->setVisible(icom && custom);
 }
 
+// Seeds the checkbox + fields from IcomSettings the first time the Icom
+// family is selected, same isEmpty()-guarded pattern as m_manualIpEdit /
+// m_manualIcomUserEdit above — a value already typed this session is never
+// clobbered by a settings read triggered from elsewhere (applySavedSource-
+// Selection() picking a recent host, for instance).
+void ConnectionPanel::syncIcomPortsRow()
+{
+    if (!m_manualIcomPortsCheck || !m_manualIcomPortsCustomRow)
+        return;
+    if (currentManualFamily() == QLatin1String(kFamilyIcom)
+        && m_manualIcomControlPortEdit && m_manualIcomControlPortEdit->text().isEmpty()
+        && m_manualIcomSerialPortEdit  && m_manualIcomSerialPortEdit->text().isEmpty()
+        && m_manualIcomAudioPortEdit   && m_manualIcomAudioPortEdit->text().isEmpty()
+        && !m_manualIcomPortsCheck->isChecked()) {
+        const quint16 control = IcomSettings::controlPort();
+        const quint16 serial  = IcomSettings::serialPort();
+        const quint16 audio   = IcomSettings::audioPort();
+        const bool nonDefault = control != icom::kControlPort
+                              || serial  != icom::kSerialPort
+                              || audio   != icom::kAudioPort;
+        if (nonDefault) {
+            m_manualIcomControlPortEdit->setText(QString::number(control));
+            m_manualIcomSerialPortEdit->setText(QString::number(serial));
+            m_manualIcomAudioPortEdit->setText(QString::number(audio));
+            const QSignalBlocker blocker(m_manualIcomPortsCheck);
+            m_manualIcomPortsCheck->setChecked(true);
+        }
+    }
+    m_manualIcomPortsCustomRow->setVisible(m_manualIcomPortsCheck->isChecked());
+}
+
 void ConnectionPanel::updateManualFamilyHints()
 {
     const QString family = currentManualFamily();
@@ -2230,6 +2321,9 @@ void ConnectionPanel::updateManualFamilyHints()
     // The hex row has a second condition — "Custom..." — so it gets the shared
     // helper rather than a copy of the visibility rule.
     syncIcomCivCustomRow();
+    if (m_manualIcomPortsRow)
+        m_manualIcomPortsRow->setVisible(icom);
+    syncIcomPortsRow();
 
     if (icom) {
         // Fill from settings, and read the password out of the keychain — which
@@ -2503,6 +2597,27 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         }
 
         IcomSettings::setUsername(user);
+        // Unchecked, or checked with every field blank: write the compile-time
+        // defaults back, same as an unset CI-V address falls back to auto below
+        // — an operator who ticked the box, typed nothing and connected anyway
+        // gets the standard ports, not port 0 (an empty QLineEdit::text().toUInt()
+        // is 0, and IcomCivBackend would happily bind that).
+        if (m_manualIcomPortsCheck && m_manualIcomPortsCheck->isChecked()
+            && m_manualIcomControlPortEdit && m_manualIcomSerialPortEdit
+            && m_manualIcomAudioPortEdit) {
+            const QString controlText = m_manualIcomControlPortEdit->text().trimmed();
+            const QString serialText  = m_manualIcomSerialPortEdit->text().trimmed();
+            const QString audioText   = m_manualIcomAudioPortEdit->text().trimmed();
+            const quint16 control = controlText.isEmpty()
+                ? icom::kControlPort : static_cast<quint16>(controlText.toUInt());
+            const quint16 serial = serialText.isEmpty()
+                ? icom::kSerialPort : static_cast<quint16>(serialText.toUInt());
+            const quint16 audio = audioText.isEmpty()
+                ? icom::kAudioPort : static_cast<quint16>(audioText.toUInt());
+            IcomSettings::setPorts(control, serial, audio);
+        } else {
+            IcomSettings::setPorts(icom::kControlPort, icom::kSerialPort, icom::kAudioPort);
+        }
         // Hex, with or without an 0x prefix or a trailing h — the radio's own
         // menu writes it as "A2h", so accept what the operator is looking at.
         // An unparseable or out-of-range entry is IGNORED rather than clamped:
