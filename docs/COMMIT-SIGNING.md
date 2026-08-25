@@ -34,6 +34,51 @@ The fastest path from zero to signing:
 pointed at this doc. If you are the contributor reading directly, skim
 past it — the per-platform reference sections below are what you want.
 
+### First: are you running in a managed container?
+
+**Claude Code on the web, and other hosted agent containers, already sign
+commits — there is nothing to set up.** Check this before anything else:
+
+```sh
+git config --get gpg.ssh.program
+```
+
+If that prints a path like `/tmp/code-sign` (a symlink to the environment
+manager), the container signs every commit with a **server-held key**. The
+configured `user.signingkey` is read and then ignored — the signer says so if
+you invoke it directly:
+
+```
+Debug: Key file set to "…" (ignored, using server key)
+```
+
+Commits come out authored as `Claude <noreply@anthropic.com>`, which GitHub
+resolves to the `claude` account, and they land with the **Verified** badge.
+So: do not generate a key, do not ask the contributor to register anything on
+GitHub, and do not write signing config into the repo. In particular, a
+`SessionStart` hook that sets `user.signingkey` would follow the repo onto the
+contributor's own laptop and clobber their personal signing key — the hook
+fires wherever the repo is opened, not only in the container.
+
+**The one failure mode worth knowing:** signing can fail silently in the first
+minute of container startup, before the signing backend is ready. Git does not
+error — it just writes an unsigned commit. If a commit came out unsigned,
+confirm it and repair it:
+
+```sh
+git cat-file commit HEAD | grep -c 'BEGIN SSH SIGNATURE'   # 0 = unsigned
+git commit --amend --no-edit                               # re-signs
+git push --force-with-lease
+```
+
+Note that local `git log --show-signature` cannot verify these signatures: the
+signer implements `-Y sign` only, so verification reports a bad signature even
+when the commit is genuinely good. GitHub's badge on the PR is the authority —
+ignore the local verdict.
+
+If `gpg.ssh.program` is unset or points at `ssh-keygen`, you are on a normal
+machine: continue with the algorithm below.
+
 ### Your job
 
 The user wants commit signing set up so their PRs to
