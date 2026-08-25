@@ -828,26 +828,54 @@ void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
     if (m_connected) return;
 
     m_unsupportedVariant = deviceName;
-    // The status label gets ~212 px in this fixed 640 px row (measured on the
-    // running dialog: status 212, Setup 69, "Last event:" 93, Reset 127,
-    // Close 57), and it does not wrap or elide.  The device name alone is
-    // wider than that, so it must NOT go in the label — an earlier attempt
-    // put it here and clipped mid-name at
-    // 'Ulanzi D100H (KEHWIN "Dial_Lite",'.  The label is therefore a fixed
-    // short phrase that always fits; the name lives in the button tooltip
-    // and in the Setup dialog, which have room for it. (#3485)
-    // "Unsupported dial" measures 192 px in this label's font; the budget is
-    // 212.  Do not lengthen it without re-measuring — "Not usable over HID"
-    // (228 px) and "Unsupported variant" (228 px) both overflow, and the
-    // label neither wraps nor elides, so overflow is a silent mid-word cut.
-    showAttentionStatus(tr("Unsupported dial"));
+    refreshVariantStatus();
+}
+
+void UlanziDialMapperDialog::setTciClientConnected(bool connected)
+{
+    if (m_tciClientConnected == connected) return;
+    m_tciClientConnected = connected;
+    if (!m_unsupportedVariant.isEmpty() && !m_connected)
+        refreshVariantStatus();
+}
+
+void UlanziDialMapperDialog::refreshVariantStatus()
+{
+    if (m_unsupportedVariant.isEmpty()) return;
+
+    // Wording matters here.  These units are NOT broken — they are driven
+    // through Ulanzi Studio's plugin over TCI, and a user whose dial is
+    // already working that way must not be told it is "unsupported".  So the
+    // label names the path that WORKS rather than the one that does not.
+    //
+    // Budget: the status label gets 212 px of the fixed 640 px bottom row
+    // (measured on the running dialog: status 212, Setup 69, "Last event:" 93,
+    // Reset 127, Close 57) and it neither wraps nor elides, so overflow is a
+    // silent mid-word cut — an earlier attempt put the device name here and
+    // clipped at 'Ulanzi D100H (KEHWIN "Dial_Lite",'.  Measured with
+    // QFontMetrics in the label's own font: "Use Ulanzi Studio" 204 px (fits),
+    // "Studio plugin only" 216 px and "Unsupported variant" 228 px (both
+    // overflow).  Re-measure before lengthening.  The device name lives in the
+    // button tooltip and the Setup dialog, which have room. (#3485)
+    showAttentionStatus(tr("Use Ulanzi Studio"));
+
     if (m_variantHelpBtn) {
+        // TciServer reports only peer address/port (TciClientInfo), never an
+        // application name, so a live client cannot be attributed to the
+        // Ulanzi plugin specifically — say "a TCI client", not "your dial".
         m_variantHelpBtn->setToolTip(
-            tr("%1 — cannot be driven over HID. Click for setup instructions.")
-                .arg(deviceName));
+            m_tciClientConnected
+                ? tr("%1 — not driven over HID. A TCI client is connected, so "
+                     "if this dial is mapped in Ulanzi Studio it is already "
+                     "working. Click for setup instructions.")
+                      .arg(m_unsupportedVariant)
+                : tr("%1 — cannot be driven over HID. Click for setup "
+                     "instructions.")
+                      .arg(m_unsupportedVariant));
         m_variantHelpBtn->setVisible(true);
     }
 }
+
 
 void UlanziDialMapperDialog::onVariantHelpClicked()
 {

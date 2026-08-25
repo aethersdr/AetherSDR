@@ -46,6 +46,20 @@ public:
 
     friend class UlanziDialCanvas;
 
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+    // Tell the dialog whether any TCI client is currently connected.  The
+    // unsupported-variant advisory means "this HID mapper cannot drive the
+    // dial", NOT "your dial is broken" — these units are driven through
+    // Ulanzi Studio's plugin over TCI, and when that is live the dial is
+    // working.  MainWindow owns the TciServer and pushes the state in, so the
+    // dialog gains no dependency on it. (#3485)
+    //
+    // NOTE: TciServer exposes only peer address/port (TciClientInfo), not an
+    // application name, so this cannot tell the Ulanzi plugin from any other
+    // TCI client.  The wording is therefore hedged accordingly.
+    void setTciClientConnected(bool connected);
+#endif
+
 protected:
     // Re-run layoutPills after the dialog is fully shown.  Until that
     // point, m_canvas->mapTo/mapFrom return values relative to an
@@ -150,6 +164,9 @@ private:
 #if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
     QPushButton* m_variantHelpBtn{nullptr};  // shown only on unsupported variant
     QString m_unsupportedVariant;            // GUI-thread copy, queued-signal fed
+    bool m_tciClientConnected{false};        // pushed in by MainWindow
+    // Re-render the advisory for the current variant + TCI state.
+    void refreshVariantStatus();
 #endif
     // GUI-thread mirror of the backend's connection state.  The advisory
     // handlers must NOT call m_manager->isConnected() directly: on Windows the

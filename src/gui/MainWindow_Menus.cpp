@@ -358,8 +358,37 @@ void MainWindow::buildMenuBar()
 #else
         MidiControlManager* midi = nullptr;
 #endif
+        const bool fresh = !m_ulanziMapperDialog;
         showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
                               &m_shortcutManager, midi);
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+        // The unsupported-OEM-variant advisory needs to know whether anything
+        // is driving AetherSDR over TCI: these dials work through the Ulanzi
+        // Studio plugin over TCI, so a user whose dial is already working must
+        // not read "unsupported".  MainWindow owns the TciServer and pushes
+        // the state in, keeping the dialog free of any TCI dependency. (#3485)
+        //
+        // showOrRaisePersistent() constructs the dialog only when the QPointer
+        // is null, so `fresh` is true exactly once per dialog instance.  The
+        // clientCountChanged connect MUST be guarded that way: this lambda
+        // runs on every reopen and Qt::UniqueConnection cannot cover a lambda
+        // connect (see the same note at MainWindow.cpp:6703), so an unguarded
+        // connect would stack one slot per open.
+        if (m_ulanziMapperDialog) {
+            if (fresh) {
+                if (TciServer* tci = tciServer()) {
+                    connect(tci, &TciServer::clientCountChanged,
+                            m_ulanziMapperDialog, [this](int count) {
+                                if (m_ulanziMapperDialog)
+                                    m_ulanziMapperDialog->setTciClientConnected(count > 0);
+                            });
+                }
+            }
+            // Push the current state on every open, fresh or raised.
+            TciServer* tci = tciServer();
+            m_ulanziMapperDialog->setTciClientConnected(tci && tci->clientCount() > 0);
+        }
+#endif
     });
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
