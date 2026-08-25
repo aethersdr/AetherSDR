@@ -57,9 +57,12 @@ enum class FmTonePresentation {
 // surfaced to clients. A FlexBackend may seed this FROM ModelCapabilities, but
 // the two are distinct concepts (derived-from-name vs reported-by-backend).
 //
-// ADDING A FIELD: every field below defaults to false/0/empty, so a backend
-// that omits one silently declares the feature ABSENT — set it explicitly in
-// FlexBackend, Hl2Backend AND SimBackend. Then record it in
+// ADDING A FIELD: feature-presence fields default to false/0/empty, so a
+// backend that omits one silently declares the feature ABSENT. Shape fields
+// that describe an already-established control instead default to the legacy
+// shape (for example PROC's 0..2 domain), avoiding a disconnected or older
+// backend briefly losing an existing surface. In both cases, set the field
+// explicitly in FlexBackend, Hl2Backend AND SimBackend. Then record it in
 // docs/architecture/radio-capabilities-map.md, which maps every field to the
 // code that reads it (and lists the ones nothing reads yet). A capability no
 // consumer reads looks identical, from here, to one that works.
@@ -329,7 +332,8 @@ struct RadioCapabilities {
 
     // Inclusive upper bound of the radio's speech-processor level control.
     // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
-    // continuous control may publish 100. The minimum is always zero.
+    // continuous control publishes a maximum greater than 2. The minimum is
+    // always zero. The legacy-shape default is intentional; see ADDING A FIELD.
     int speechProcessorLevelMaximum = 2;
     QString speechProcessorLabel = QStringLiteral("PROC");
 

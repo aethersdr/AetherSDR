@@ -9,6 +9,7 @@
 
 #include <QPushButton>
 #include <QAccessible>
+#include <QStyle>
 #include <QLabel>
 #include <QLineEdit>
 #include <QIntValidator>
@@ -75,6 +76,7 @@ static const QString kGreenActive =
 static constexpr const char* kButtonBase =
     "QPushButton { background: #1a3a5a; border: 1px solid #205070; "
     "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; }"
+    "QPushButton[continuousCompressor=\"true\"] { font-size: 11px; font-weight: normal; }"
     "QPushButton:hover { background: #204060; }";
 
 static const QString kStepBtnStyle =
@@ -477,8 +479,7 @@ void PhoneCwApplet::buildPhonePanel()
 void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int maximum)
 {
     maximum = qBound(2, maximum, 100);
-    const bool continuousCompressor = label == QLatin1String("COMP")
-        && maximum == 100;
+    const bool continuousCompressor = maximum > 2;
     const QString accessibleName = continuousCompressor
         ? tr("Speech compressor") : tr("Speech processor");
     m_procBtn->setText(continuousCompressor ? QStringLiteral("COMP")
@@ -488,11 +489,9 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
     // presentation enough room and a clearer weight; preserve every legacy
     // backend's established PROC geometry and typography exactly.
     m_procBtn->setFixedWidth(continuousCompressor ? 54 : 48);
-    const QString compressorLegibility = continuousCompressor
-        ? QStringLiteral("QPushButton { font-size: 11px; font-weight: normal; }")
-        : QString{};
-    m_procBtn->setStyleSheet(QString(kButtonBase) + kGreenActive
-                             + compressorLegibility);
+    m_procBtn->setProperty("continuousCompressor", continuousCompressor);
+    m_procBtn->style()->unpolish(m_procBtn);
+    m_procBtn->style()->polish(m_procBtn);
     if (m_procBtn->accessibleName() != accessibleName) {
         m_procBtn->setAccessibleName(accessibleName);
         if (QAccessible::isActive()) {

@@ -121,8 +121,7 @@ int main(int argc, char** argv)
               && procButton->accessibleName() == QLatin1String("Speech compressor"),
           "IC-9700 presentation uses the radio-native COMP label and accessible name");
     check(procButton->width() == 54
-              && procButton->styleSheet().contains(
-                  QLatin1String("font-weight: normal")),
+              && procButton->property("continuousCompressor").toBool(),
           "IC-9700 COMP label uses its legible model-gated presentation");
     if (QAccessible::isActive()) {
         check(g_nameChangedObjects.contains(procButton),
@@ -145,8 +144,7 @@ int main(int argc, char** argv)
     model.setSpeechProcessorLevelMaximum(2);
     check(procSlider->maximum() == 2 && model.speechProcessorLevel() == 2
               && procButton->width() == 48
-              && !procButton->styleSheet().contains(
-                  QLatin1String("font-weight: normal")),
+              && !procButton->property("continuousCompressor").toBool(),
           "three-position capability restores and bounds the legacy surface");
 
     QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
