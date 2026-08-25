@@ -2605,16 +2605,49 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         if (m_manualIcomPortsCheck && m_manualIcomPortsCheck->isChecked()
             && m_manualIcomControlPortEdit && m_manualIcomSerialPortEdit
             && m_manualIcomAudioPortEdit) {
-            const QString controlText = m_manualIcomControlPortEdit->text().trimmed();
-            const QString serialText  = m_manualIcomSerialPortEdit->text().trimmed();
-            const QString audioText   = m_manualIcomAudioPortEdit->text().trimmed();
-            const quint16 control = controlText.isEmpty()
-                ? icom::kControlPort : static_cast<quint16>(controlText.toUInt());
-            const quint16 serial = serialText.isEmpty()
-                ? icom::kSerialPort : static_cast<quint16>(serialText.toUInt());
-            const quint16 audio = audioText.isEmpty()
-                ? icom::kAudioPort : static_cast<quint16>(audioText.toUInt());
-            IcomSettings::setPorts(control, serial, audio);
+            // PARSE WITH `ok`, AND REFUSE RATHER THAN SUBSTITUTE — the same
+            // reasoning as the CI-V address below, and for the same reason.
+            //
+            // The QIntValidator on these fields is NOT the range guarantee: Qt
+            // validators gate interactive keystrokes only, so anything that
+            // assigns text directly — the automation bridge's `invoke … setText`,
+            // a restored value, a future programmatic caller — lands unvalidated.
+            // Measured, not assumed: `setText 999999` sticks, and an unguarded
+            // static_cast<quint16> silently truncated it to 16959, which is IN
+            // range, so neither setPorts()'s zero-check nor IcomSettings' own
+            // portOr() read guard would catch it. The operator would then get a
+            // connect timeout blaming the radio for their typo — exactly the
+            // symptom IcomSettings.h says these fields exist to cure.
+            struct PortField {
+                QLineEdit*  edit;
+                quint16     fallback;
+                const char* label;
+            };
+            const PortField fields[] = {
+                {m_manualIcomControlPortEdit, icom::kControlPort, "Control"},
+                {m_manualIcomSerialPortEdit,  icom::kSerialPort,  "CI-V"},
+                {m_manualIcomAudioPortEdit,   icom::kAudioPort,   "Audio"},
+            };
+            quint16 parsed[3] = {};
+            for (int i = 0; i < 3; ++i) {
+                const QString text = fields[i].edit->text().trimmed();
+                if (text.isEmpty()) {
+                    parsed[i] = fields[i].fallback;
+                    continue;
+                }
+                bool ok = false;
+                const uint value = text.toUInt(&ok);
+                if (!ok || value < 1 || value > 65535) {
+                    setStatusText(tr("%1 port \"%2\" is not a number between 1 and 65535 "
+                                     "— not connecting.")
+                                      .arg(QLatin1String(fields[i].label), text));
+                    fields[i].edit->setFocus();
+                    fields[i].edit->selectAll();
+                    return;
+                }
+                parsed[i] = static_cast<quint16>(value);
+            }
+            IcomSettings::setPorts(parsed[0], parsed[1], parsed[2]);
         } else {
             IcomSettings::setPorts(icom::kControlPort, icom::kSerialPort, icom::kAudioPort);
         }

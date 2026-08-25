@@ -73,6 +73,30 @@ int main(int argc, char** argv)
     check(IcomSettings::serialPort() == icom::kSerialPort, "an out-of-range port falls back too");
     check(IcomSettings::civAddress() == 0xA4, "and so does a zero CI-V address");
 
+    // THE READ GUARD ABOVE CANNOT SEE A TRUNCATED PORT, and that is the point
+    // of this block. setPorts() takes quint16, so an out-of-range value has
+    // already wrapped by the time it arrives: a caller that parses "999999"
+    // with an unguarded static_cast hands over 16959, which is a perfectly
+    // legal port. portOr() accepts it, the document stores it, and every
+    // subsequent connect quietly dials the wrong one — presenting as the
+    // connect timeout that IcomSettings.h says these fields exist to cure.
+    //
+    // The narrow contract this pins: the RANGE CHECK BELONGS TO THE CALLER,
+    // before the quint16 conversion. Asserted here so a future caller that
+    // reintroduces the bare cast has something to fail against — it is not
+    // catchable below this seam (regression: the first revision of the
+    // #5051/#5225 connect-panel port fields did exactly this).
+    IcomSettings::setPorts(static_cast<quint16>(999999u), 50005, 50006);
+    check(IcomSettings::controlPort() == 16959,
+          "setPorts() cannot rescue a value the caller already truncated — "
+          "999999 arrives as 16959 and is stored verbatim");
+    check(IcomSettings::controlPort() != icom::kControlPort,
+          "and it is NOT quietly corrected to the default, which is why the "
+          "caller must range-check before converting");
+
+    // Restore a sane document for the rest of the file.
+    IcomSettings::reset();
+
     // ---- THE SECURITY PROPERTY --------------------------------------------
     //
     // ("Icom", "Password") is registered in SettingsCredentialPolicy, so a
