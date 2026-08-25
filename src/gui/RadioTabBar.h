@@ -7,6 +7,7 @@
 #include <QWidget>
 
 class QHBoxLayout;
+class QScrollArea;
 class QTimer;
 
 namespace AetherSDR {
@@ -151,6 +152,9 @@ public:
     void showDiscoveryPopover();
     bool isDiscoveryPopoverVisible() const;
 
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
     // Introspection for the automation bridge (`titlebar` model).
     QVariantMap state() const;
 
@@ -162,11 +166,16 @@ signals:
 private:
     void rebuild();
     void applyActiveState();
+    RadioTab* linkCarrierTab() const;
+    void updateTabViewport(RadioTab* ensureVisible = nullptr);
     // Push the current link state (override colour, alarm phase, glow level)
     // onto the tabs — the active one carries it, the rest stay neutral.
     void applyLinkVisuals();
 
     QHBoxLayout*         m_layout{nullptr};
+    QScrollArea*         m_scrollArea{nullptr};
+    QWidget*             m_tabHost{nullptr};
+    QHBoxLayout*         m_tabsLayout{nullptr};
     QList<RadioTabEntry> m_radios;
     QList<RadioTabEntry> m_discovered;
     QList<RadioTab*>     m_tabs;

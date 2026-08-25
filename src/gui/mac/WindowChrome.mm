@@ -5,8 +5,12 @@
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 
 namespace {
+
+constexpr CGFloat kTitleBarHeight = 52.0;
+char kTitleBarMaterialKey;
 
 NSWindow* nativeWindowFor(QWidget* widget)
 {
@@ -62,6 +66,31 @@ void applyFramelessWindowStyle(QWidget* window, int cornerRadius)
             // Continuous ("squircle") curvature, matching the system's own
             // window corners rather than a plain circular arc.
             content.layer.cornerCurve = kCACornerCurveContinuous;
+        }
+
+        NSView* existingMaterial = objc_getAssociatedObject(
+            content, &kTitleBarMaterialKey);
+        NSVisualEffectView* material =
+            [existingMaterial isKindOfClass:[NSVisualEffectView class]]
+                ? (NSVisualEffectView*)existingMaterial
+                : nil;
+        if (!material) {
+            const NSRect bounds = content.bounds;
+            const NSRect frame = NSMakeRect(0.0,
+                                            NSHeight(bounds) - kTitleBarHeight,
+                                            NSWidth(bounds),
+                                            kTitleBarHeight);
+            material = [[NSVisualEffectView alloc] initWithFrame:frame];
+            material.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+            material.material = NSVisualEffectMaterialHUDWindow;
+            material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            material.state = NSVisualEffectStateFollowsWindowActiveState;
+            [content addSubview:material positioned:NSWindowBelow relativeTo:nil];
+            objc_setAssociatedObject(content, &kTitleBarMaterialKey, material,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+#if !__has_feature(objc_arc)
+            [material release];
+#endif
         }
     }
 

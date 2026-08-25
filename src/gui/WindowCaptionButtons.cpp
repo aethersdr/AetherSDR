@@ -34,33 +34,26 @@ constexpr int kLightSize      = 12;
 constexpr int kLightSlotWidth = 20;   // centre-to-centre pitch
 constexpr int kLightSlotHeight = 22;
 
-// Cluster colours, active window.  Deliberately literal: these are the system's
-// values, not ours to theme — a "red" close light that followed our accent
-// would stop reading as a close button.
-QColor trafficLightColor(CaptionButton::Role role, bool windowActive)
+QString semanticControlToken(CaptionButton::Role role)
 {
-    if (!windowActive) {
-        return QColor(0x56, 0x5a, 0x60);   // uniform grey when unfocused
-    }
     switch (role) {
-        case CaptionButton::Role::Close:           return QColor(0xff, 0x5f, 0x57);
-        case CaptionButton::Role::Minimize:        return QColor(0xfe, 0xbc, 0x2e);
-        case CaptionButton::Role::MaximizeRestore: return QColor(0x28, 0xc8, 0x40);
+        case CaptionButton::Role::Close:
+            return QStringLiteral("color.titlebar.caption.semantic.close");
+        case CaptionButton::Role::Minimize:
+            return QStringLiteral("color.titlebar.caption.semantic.minimize");
+        case CaptionButton::Role::MaximizeRestore:
+            return QStringLiteral("color.titlebar.caption.semantic.maximize");
     }
-    return QColor(0x56, 0x5a, 0x60);
+    return QStringLiteral("color.titlebar.caption.semantic.inactive");
 }
 
-QColor chipHoverColor(CaptionButton::Role role)
+QColor semanticControlColor(const QWidget* widget, CaptionButton::Role role,
+                            bool windowActive = true)
 {
-    // Traffic-light semantics, matching the platform convention the Linux
-    // variant is imitating; deliberately literal rather than themed, because
-    // red/amber/green *is* the affordance being borrowed.
-    switch (role) {
-        case CaptionButton::Role::Close:           return QColor(0xff, 0x5f, 0x57);
-        case CaptionButton::Role::Minimize:        return QColor(0xfe, 0xbc, 0x2e);
-        case CaptionButton::Role::MaximizeRestore: return QColor(0x28, 0xc8, 0x40);
-    }
-    return QColor(0xfe, 0xbc, 0x2e);
+    const QString token = windowActive
+        ? semanticControlToken(role)
+        : QStringLiteral("color.titlebar.caption.semantic.inactive");
+    return ThemeManager::instance().color(widget, token);
 }
 
 QString roleAccessibleName(CaptionButton::Role role, bool maximized)
@@ -198,7 +191,7 @@ void CaptionButton::paintTrafficLight(QPainter& p) const
                                (height() - kLightSize) / 2.0),
                        QSizeF(kLightSize, kLightSize));
 
-    QColor fill = trafficLightColor(m_role, m_windowActive);
+    QColor fill = semanticControlColor(this, m_role, m_windowActive);
     if (isDown()) {
         fill = fill.darker(120);
     }
@@ -220,7 +213,9 @@ void CaptionButton::paintTrafficLight(QPainter& p) const
         return;
     }
 
-    QPen glyphPen(QColor(0, 0, 0, 160), 1.2);
+    const QColor semanticGlyph = ThemeManager::instance().color(
+        this, QStringLiteral("color.titlebar.caption.semantic.glyph"));
+    QPen glyphPen(semanticGlyph, 1.2);
     glyphPen.setCapStyle(Qt::RoundCap);
     p.setPen(glyphPen);
     p.setBrush(Qt::NoBrush);
@@ -241,7 +236,7 @@ void CaptionButton::paintTrafficLight(QPainter& p) const
             // Two opposed filled triangles — the platform's zoom mark.  Pointing
             // outward when the window can grow, inward when it is already zoomed.
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(0, 0, 0, 160));
+            p.setBrush(semanticGlyph);
             QPainterPath a, b;
             if (m_maximized) {
                 a.moveTo(c.x() - 3.4, c.y() - 3.4);
@@ -359,7 +354,7 @@ void CaptionButton::paintEvent(QPaintEvent* ev)
                          kChipRadius, kChipRadius);
 
     const bool hot = isHot() || isDown();
-    p.fillPath(shape, hot ? chipHoverColor(m_role)
+    p.fillPath(shape, hot ? semanticControlColor(this, m_role)
                           : theme.color(this, QStringLiteral("color.background.1")));
     p.setPen(QPen(theme.color(this, m_focusVisible
                                         ? QStringLiteral("color.border.accent")
@@ -370,7 +365,9 @@ void CaptionButton::paintEvent(QPaintEvent* ev)
     if (hot) {
         // Black glyph on the filled chip — the design's hover affordance, and
         // black on all three fills clears 4.5:1.
-        QPen pen(QColor(0, 0, 0), 1.0);
+        QPen pen(theme.color(
+                     this, QStringLiteral("color.titlebar.caption.semantic.glyph")),
+                 1.0);
         pen.setCapStyle(Qt::FlatCap);
         p.setPen(pen);
         const qreal l = qRound(chip.left() + 3) + 0.5;

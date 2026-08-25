@@ -11,8 +11,11 @@
 #include <QPainterPath>
 #include <QPaintEvent>
 #include <QPushButton>
+#include <QPointer>
 #include <QRadialGradient>
 #include <QScreen>
+#include <QScrollArea>
+#include <QSizePolicy>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -30,6 +33,10 @@ constexpr int  kTabPadX       = 14;
 constexpr int  kTabPadY       = 6;
 constexpr int  kDotDiameter   = 7;
 constexpr int  kDotTextGap    = 8;
+constexpr int  kAddButtonSize = 28;
+constexpr int  kStripSpacing  = 6;
+constexpr int  kStripMaxWidth = 560;
+constexpr int  kStripMinWidth = 112;
 constexpr qreal kNameSizePx   = 12.5;
 constexpr qreal kStatusSizePx = 9.5;
 // A heartbeat swells the dot's glow and lets it fall away over this long.  The
@@ -409,15 +416,38 @@ RadioTabBar::RadioTabBar(QWidget* parent)
 {
     setObjectName(QStringLiteral("radioTabBar"));
     setAccessibleName(QStringLiteral("Radios"));
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setMaximumWidth(kStripMaxWidth);
 
     m_layout = new QHBoxLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);
-    m_layout->setSpacing(6);
+    m_layout->setSpacing(kStripSpacing);
+
+    m_scrollArea = new QScrollArea(this);
+    m_scrollArea->setObjectName(QStringLiteral("radioTabScroller"));
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    m_scrollArea->setWidgetResizable(false);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setFocusPolicy(Qt::NoFocus);
+    m_scrollArea->setFixedHeight(kTabHeight);
+    m_scrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_scrollArea->viewport()->setAutoFillBackground(false);
+
+    m_tabHost = new QWidget;
+    m_tabHost->setObjectName(QStringLiteral("radioTabHost"));
+    m_tabHost->setFixedHeight(kTabHeight);
+    m_tabHost->setAutoFillBackground(false);
+    m_tabsLayout = new QHBoxLayout(m_tabHost);
+    m_tabsLayout->setContentsMargins(0, 0, 0, 0);
+    m_tabsLayout->setSpacing(kStripSpacing);
+    m_scrollArea->setWidget(m_tabHost);
+    m_layout->addWidget(m_scrollArea, 1);
 
     m_addButton = new QToolButton(this);
     m_addButton->setObjectName(QStringLiteral("radioTabAddButton"));
     m_addButton->setText(QStringLiteral("+"));
-    m_addButton->setFixedSize(28, kTabHeight);
+    m_addButton->setFixedSize(kAddButtonSize, kTabHeight);
     m_addButton->setCursor(Qt::PointingHandCursor);
     m_addButton->setFocusPolicy(Qt::StrongFocus);
     m_addButton->setAccessibleName(QStringLiteral("Add radio"));
@@ -469,6 +499,19 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     });
 }
 
+QSize RadioTabBar::sizeHint() const
+{
+    const int tabsWidth = m_tabsLayout ? m_tabsLayout->sizeHint().width() : 0;
+    const int addWidth = m_addButton && m_addButton->isVisible()
+        ? kStripSpacing + kAddButtonSize : 0;
+    return QSize(qMin(kStripMaxWidth, tabsWidth + addWidth), kTabHeight);
+}
+
+QSize RadioTabBar::minimumSizeHint() const
+{
+    return QSize(kStripMinWidth, kTabHeight);
+}
+
 void RadioTabBar::setLinkIndicator(const QColor& overrideColor, bool alarm)
 {
     m_linkOverride = overrideColor;
@@ -508,25 +551,7 @@ void RadioTabBar::pulseLink(const QColor& beatColor)
 void RadioTabBar::applyLinkVisuals()
 {
     const qreal eased = m_pulseLevel * m_pulseLevel;
-
-    // With no active radio the link state still has something to say —
-    // "searching" is reported precisely when nothing is connected, which is the
-    // state the indicator matters most in, and it is the whole reason the strip
-    // survives minimal mode.  Keying the carrier purely off m_activeId left it
-    // rendering nowhere in exactly that case, so fall back to the first tab.
-    // Once a radio is active it carries the state, as before.
-    RadioTab* carrier = nullptr;
-    for (RadioTab* tab : std::as_const(m_tabs)) {
-        if (tab->entry().id == m_activeId) { carrier = tab; break; }
-    }
-    if (!carrier && !m_activeId.isEmpty()) {
-        // An active id that matches no tab yet (the strip is mid-rebuild) is
-        // not the disconnected case — leave the state uncarried rather than
-        // painting it onto an unrelated radio.
-        carrier = nullptr;
-    } else if (!carrier && !m_tabs.isEmpty()) {
-        carrier = m_tabs.first();
-    }
+    RadioTab* carrier = linkCarrierTab();
 
     for (RadioTab* tab : std::as_const(m_tabs)) {
         // Only the carrier shows the link state — the others describe radios
@@ -538,6 +563,33 @@ void RadioTabBar::applyLinkVisuals()
         tab->setAlarmVisible(m_alarmVisible);
         tab->setBeatColor(isCarrier ? m_beatColor : QColor());
         tab->setPulse(isCarrier ? eased : 0.0);
+    }
+}
+
+RadioTab* RadioTabBar::linkCarrierTab() const
+{
+    for (RadioTab* tab : m_tabs) {
+        if (tab->entry().id == m_activeId) {
+            return tab;
+        }
+    }
+    return m_activeId.isEmpty() && !m_tabs.isEmpty() ? m_tabs.first() : nullptr;
+}
+
+void RadioTabBar::updateTabViewport(RadioTab* ensureVisible)
+{
+    if (!m_tabHost || !m_tabsLayout || !m_scrollArea) {
+        return;
+    }
+    m_tabHost->setFixedWidth(qMax(0, m_tabsLayout->sizeHint().width()));
+    updateGeometry();
+    if (ensureVisible) {
+        const QPointer<RadioTab> target(ensureVisible);
+        QTimer::singleShot(0, m_scrollArea, [this, target]() {
+            if (target && m_tabs.contains(target)) {
+                m_scrollArea->ensureWidgetVisible(target, kStripSpacing, 0);
+            }
+        });
     }
 }
 
@@ -590,7 +642,7 @@ void RadioTabBar::rebuild()
     // holds keyboard focus.
     while (m_tabs.size() > m_radios.size()) {
         RadioTab* tab = m_tabs.takeLast();
-        m_layout->removeWidget(tab);
+        m_tabsLayout->removeWidget(tab);
         tab->deleteLater();
     }
     while (m_tabs.size() < m_radios.size()) {
@@ -614,8 +666,7 @@ void RadioTabBar::rebuild()
             applyActiveState();
             emit radioActivated(tab->entry().id);
         });
-        // Insert before the "+" button, which always stays last.
-        m_layout->insertWidget(m_tabs.size(), tab);
+        m_tabsLayout->addWidget(tab);
         m_tabs.append(tab);
     }
     for (int i = 0; i < m_radios.size(); ++i) {
@@ -631,13 +682,7 @@ void RadioTabBar::applyActiveState()
     // carrier and takes the radio-link indicator with it — the exact loss the
     // strip is kept in minimal mode to prevent.  With no active radio that is
     // the first tab, not nothing.
-    RadioTab* shown = nullptr;
-    for (RadioTab* tab : std::as_const(m_tabs)) {
-        if (tab->entry().id == m_activeId) { shown = tab; break; }
-    }
-    if (!shown && m_activeId.isEmpty() && !m_tabs.isEmpty()) {
-        shown = m_tabs.first();
-    }
+    RadioTab* shown = linkCarrierTab();
 
     for (RadioTab* tab : std::as_const(m_tabs)) {
         const bool isActive = tab->entry().id == m_activeId;
@@ -647,6 +692,7 @@ void RadioTabBar::applyActiveState()
     if (m_addButton) {
         m_addButton->setVisible(!m_compact);
     }
+    updateTabViewport(shown);
     applyLinkVisuals();
 }
 
@@ -822,6 +868,14 @@ QVariantMap RadioTabBar::state() const
         {QStringLiteral("tabs"), tabs},
         {QStringLiteral("discovered"), discovered},
         {QStringLiteral("activeId"), m_activeId},
+        {QStringLiteral("width"), width()},
+        {QStringLiteral("maximumWidth"), maximumWidth()},
+        {QStringLiteral("contentWidth"),
+         m_tabsLayout ? m_tabsLayout->sizeHint().width() : 0},
+        {QStringLiteral("overflowing"),
+         m_tabHost && m_scrollArea
+             ? m_tabHost->width() > m_scrollArea->viewport()->width()
+             : false},
         {QStringLiteral("popoverVisible"), isDiscoveryPopoverVisible()},
         {QStringLiteral("pulseEnabled"), m_pulseEnabled},
         // The discovery heartbeat, which the active tab's dot now carries.
