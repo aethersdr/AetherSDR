@@ -198,7 +198,8 @@ private:
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
-                           const QHostAddress& lastSuccessfulLocalIp);
+                           const QHostAddress& lastSuccessfulLocalIp,
+                           quint16 icomBasePort = 0);
     void saveLowBandwidthPreference(bool enabled);
     void setManualMessage(const QString& text, bool error = false);
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
@@ -285,6 +286,7 @@ private:
     QString      m_pendingIcomPassword;
     QString      m_pendingIcomHost;
     QString      m_pendingIcomResolvedHost;
+    quint16      m_pendingIcomBasePort{0};
     RadioBindSettings m_pendingIcomBindSettings;
     QHostAddress m_pendingIcomSessionBindAddress;
     QLineEdit*   m_manualIpEdit{nullptr};

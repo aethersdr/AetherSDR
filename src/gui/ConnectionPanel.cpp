@@ -1349,6 +1349,7 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomPassword.clear();
     m_pendingIcomHost.clear();
     m_pendingIcomResolvedHost.clear();
+    m_pendingIcomBasePort = 0;
     m_pendingIcomBindSettings = RadioBindSettings{};
     m_pendingIcomSessionBindAddress.clear();
 }
@@ -1376,22 +1377,23 @@ void ConnectionPanel::setConnected(bool connected)
             // host and credentials together.
             saveManualProfile(m_pendingIcomHost,
                               m_pendingIcomBindSettings,
-                              m_pendingIcomSessionBindAddress);
+                              m_pendingIcomSessionBindAddress,
+                              m_pendingIcomBasePort);
             if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
                 // MainWindow retains the resolved address in LastRoutedRadioIp.
                 // Mirror the profile under that key as well so a hostname such
                 // as ic-705.local still restores the Icom family at startup.
                 saveManualProfile(m_pendingIcomResolvedHost,
                                   m_pendingIcomBindSettings,
-                                  m_pendingIcomSessionBindAddress);
+                                  m_pendingIcomSessionBindAddress,
+                                  m_pendingIcomBasePort);
             }
         }
     }
     if (!connected || !m_pendingIcomPassword.isEmpty()) {
         // Cleared on BOTH edges: a failed attempt must not commit on the next
         // unrelated connect, and a committed one must not commit twice.
-        m_pendingIcomPassword.clear();
-        m_pendingIcomHost.clear();
+        clearPendingIcomCredentials();
     }
 
     m_connected = connected;
@@ -2436,7 +2438,8 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
 
 void ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
-                                        const QHostAddress& lastSuccessfulLocalIp)
+                                        const QHostAddress& lastSuccessfulLocalIp,
+                                        quint16 icomBasePort)
 {
     if (targetIp.trimmed().isEmpty())
         return;
@@ -2459,7 +2462,10 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
 
     if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
         QJsonObject icom;
-        icom["base_port"] = selectedIcomBasePort();
+        const quint16 basePort = icomBasePort != 0
+            ? icomBasePort
+            : selectedIcomBasePort();
+        icom["base_port"] = basePort;
         profile["icom"] = icom;
         profile["schema_version"] = 2;
     }
@@ -2691,6 +2697,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         IcomCredentials::setSessionPassword(pass);
         m_pendingIcomHost = trimmedIp;
         m_pendingIcomPassword = pass;
+        m_pendingIcomBasePort = basePort;
         m_pendingIcomBindSettings = bindSettings;
         m_pendingIcomSessionBindAddress =
             bindSettings.mode == RadioBindMode::Explicit

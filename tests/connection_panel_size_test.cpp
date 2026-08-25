@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFont>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
@@ -219,6 +220,12 @@ void checkIcomCustomNatPorts()
     report("custom NAT range derives the audio port",
            IcomSettings::audioPort() == 52003);
 
+    // The authenticated endpoint is the one emitted above. Editing the still-
+    // visible field while that request is in flight must not change what a
+    // later success callback retains for restart.
+    if (basePort) {
+        basePort->setValue(51001);
+    }
     panel.setConnected(true);
     const QJsonObject profiles = QJsonDocument::fromJson(
         settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}"))
@@ -226,7 +233,7 @@ void checkIcomCustomNatPorts()
     const int savedBase = profiles.value(QStringLiteral("127.0.0.1"))
                               .toObject().value(QStringLiteral("icom"))
                               .toObject().value(QStringLiteral("base_port")).toInt();
-    report("successful routed profile retains the custom base port", savedBase == 52001);
+    report("successful routed profile retains the requested base port", savedBase == 52001);
 
     if (hadIcom) {
         settings.setValue(QStringLiteral("Icom"), previousIcom);
