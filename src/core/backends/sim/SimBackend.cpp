@@ -255,6 +255,7 @@ RadioCapabilities SimBackend::capabilities() const
     // exceptions", and a simulator has none.
     caps.receiveOnlyModes = {};
     caps.hasTuner = false;
+    caps.hideUnavailableTunerControls = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;

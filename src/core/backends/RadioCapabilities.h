@@ -276,6 +276,11 @@ struct RadioCapabilities {
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
     bool hasTuner = false;         // antenna tuner / ATU
+    // Some radios reserve no tuner surface at all; others intentionally keep
+    // the established controls visible-but-disabled when hasTuner is false.
+    // False preserves that established presentation. Only a backend with
+    // exact model evidence should request that the unavailable controls hide.
+    bool hideUnavailableTunerControls = false;
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 

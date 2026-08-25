@@ -3946,6 +3946,8 @@ void RadioModel::publishCapabilities(bool connected)
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
     m_transmitModel.setSpeechProcessorLevelMaximum(
         connected ? caps.speechProcessorLevelMaximum : 2);
+    m_transmitModel.setHideUnavailableTunerControls(
+        connected && caps.hideUnavailableTunerControls);
     refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);

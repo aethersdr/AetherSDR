@@ -2387,6 +2387,30 @@ int main(int argc, char** argv)
         }
     };
 
+    // An exact IC-9700 connection never admits the tuner read into its startup
+    // inventory. Stop periodic reconciliation at the connected edge so a later
+    // phase cannot make this negative pass for the wrong reason.
+    {
+        CivCase c(0xA2, "IC-9700");
+        std::vector<std::vector<std::uint8_t>> startupInventory;
+        QObject::connect(&c.backend, &IRadioBackend::connected, &app, [&] {
+            // Capture the scheduler at the connected edge, after the complete
+            // startup snapshot is admitted and before its first paced write.
+            startupInventory = IcomCivBackendTestAccess::queuedFrames(c.backend);
+            QTimer::singleShot(0, &c.backend, [&] {
+                IcomCivBackendTestAccess::stopPollers(c.backend);
+            });
+        });
+        c.backend.connectRadio(c.request());
+        check(waitFor([&] { return c.backend.isConnected(); }),
+              "IC-9700 startup inventory: the session connects");
+        check(std::ranges::none_of(startupInventory, [](const std::vector<std::uint8_t>& frame) {
+                  return frame == cmdReadTuner(0xA2);
+              }),
+              "IC-9700 startup inventory omits tuner reads");
+        c.backend.disconnectRadio();
+    }
+
     // A user-visible Network Radio Name is only a handshake hint. The 0x19
     // reply is authoritative and can replace the hinted model's meter set —
     // here IC-705 Vd+Id becomes IC-9700 Vd-only. Definitions must be replaced
@@ -2440,6 +2464,31 @@ int main(int argc, char** argv)
                       && frame.sub == meter::kId;
               }),
               "identity correction: IC-9700 does not poll unsupported Id");
+        c.radio.clearCivLog();
+        c.backend.setAtu(true);
+        c.backend.setAtu(false);
+        QSignalSpy tunerErrorSpy(&c.backend, &IRadioBackend::extensionError);
+        c.backend.invokeExtension(QStringLiteral("icom"),
+                                  QStringLiteral("tuner.start"), 0x9700, {});
+        check(waitFor([&] { return tunerErrorSpy.count() == 1; }),
+              "identity correction: IC-9700 rejects the tuner extension");
+        check(std::ranges::none_of(c.radio.civCommands(), [](const CivFrame& frame) {
+                  return frame.cmd == cmd::kControl && frame.hasSub
+                      && frame.sub == control::kTuner;
+              }),
+              "identity correction: IC-9700 emits no tuner command");
+
+        IcomCivBackendTestAccess::stopPollers(c.backend);
+        IcomCivBackendTestAccess::runControlPhase(c.backend, 2);
+        check(waitFor([&] {
+                  return IcomCivBackendTestAccess::pumpUntilIdle(c.backend);
+              }),
+              "identity correction: IC-9700 reconciliation phase drains");
+        check(std::ranges::none_of(c.radio.civCommands(), [](const CivFrame& frame) {
+                  return frame.cmd == cmd::kControl && frame.hasSub
+                      && frame.sub == control::kTuner;
+              }),
+              "identity correction: IC-9700 periodic polling omits tuner reads");
 
         c.backend.disconnectRadio();
     }

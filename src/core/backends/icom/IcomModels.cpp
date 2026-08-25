@@ -571,6 +571,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     // from silently becoming a write contract for another transmitter.
     static const IcomModelProfile kIc705Profile{
         .supportedBringup = true,
+        .hasTunerControl = true,
         .guideRevision = "IC-705 CI-V Reference Guide 2020",
         .features = kIc705Evidence,
         .modulation = ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
@@ -618,6 +619,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
+        .hasTunerControl = true,
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,
         .modulation = ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,

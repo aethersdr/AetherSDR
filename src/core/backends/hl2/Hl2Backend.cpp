@@ -1420,6 +1420,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
     c.hasTuner = false;
+    c.hideUnavailableTunerControls = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
     // Both moot while hasRadioSideDsp is false — the host runs every filter

@@ -229,6 +229,57 @@ void testAtuSuccessTogglesToBypass()
                && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu start"));
 }
 
+void testAtuCapabilityControlsVisibility()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+
+    QWidget* atu = namedWidget(applet, QStringLiteral("ATU tune"));
+    QWidget* mem = namedWidget(applet, QStringLiteral("ATU memories"));
+    QWidget* indicators = namedWidget(applet, QStringLiteral("ATU status indicators"));
+    QWidget* profile = namedWidget(applet, QStringLiteral("TX profile"));
+    QWidget* tune = namedWidget(applet, QStringLiteral("Tune"));
+    QWidget* mox = namedWidget(applet, QStringLiteral("MOX transmit"));
+    report("ATU capability widgets exist",
+           atu && mem && indicators && profile && tune && mox);
+    if (!atu || !mem || !indicators || !profile || !tune || !mox) {
+        return;
+    }
+
+    applet.resize(520, applet.sizeHint().height());
+    applet.show();
+    QApplication::processEvents();
+    const int profileWidth = profile->width();
+    const int tuneWidth = tune->width();
+    const int moxWidth = mox->width();
+
+    model.setHasTuner(false);
+    QApplication::processEvents();
+    report("ordinary absent tuner keeps ATU button visible", !atu->isHidden());
+    report("ordinary absent tuner disables ATU button", !atu->isEnabled());
+    report("ordinary absent tuner keeps explanatory tooltip reachable",
+           !atu->toolTip().isEmpty());
+
+    model.setHideUnavailableTunerControls(true);
+    QApplication::processEvents();
+    report("absent tuner hides ATU button", atu->isHidden());
+    report("absent tuner hides MEM button", mem->isHidden());
+    report("absent tuner hides ATU status indicators", indicators->isHidden());
+    report("absent tuner preserves TUNE", !tune->isHidden());
+    report("absent tuner preserves MOX", !mox->isHidden());
+    report("absent tuner preserves profile dropdown width",
+           profile->width() == profileWidth);
+    report("absent tuner preserves TUNE button width", tune->width() == tuneWidth);
+    report("absent tuner preserves MOX button width", mox->width() == moxWidth);
+
+    model.setHasTuner(true);
+    QApplication::processEvents();
+    report("present tuner restores ATU button", !atu->isHidden());
+    report("present tuner restores MEM button", !mem->isHidden());
+    report("present tuner restores ATU status indicators", !indicators->isHidden());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -254,6 +305,7 @@ int main(int argc, char** argv)
     testCapabilityPowerScaleHonoursBandCeiling();
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
+    testAtuCapabilityControlsVisibility();
 
     std::printf("\n%s\n",
                 g_failed == 0

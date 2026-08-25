@@ -278,6 +278,15 @@ void TransmitModel::setHasTuner(bool present)
     emit hasTunerChanged(present);
 }
 
+void TransmitModel::setHideUnavailableTunerControls(bool hide)
+{
+    if (m_hideUnavailableTunerControls == hide) {
+        return;
+    }
+    m_hideUnavailableTunerControls = hide;
+    emit hideUnavailableTunerControlsChanged(hide);
+}
+
 void TransmitModel::setRfPower(int power)
 {
     power = qBound(0, power, 100);

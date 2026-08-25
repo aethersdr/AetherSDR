@@ -208,6 +208,11 @@ public:
     // than briefly greying out a control that does exist.
     void setHasTuner(bool present);
     [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
+    void setHideUnavailableTunerControls(bool hide);
+    [[nodiscard]] bool hideUnavailableTunerControls() const
+    {
+        return m_hideUnavailableTunerControls;
+    }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -320,6 +325,7 @@ signals:
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
     void hasTunerChanged(bool present);
+    void hideUnavailableTunerControlsChanged(bool hide);
     void tuneChanged(bool tuning);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
@@ -424,6 +430,7 @@ private:
     int    m_rfPower{100};
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
+    bool   m_hideUnavailableTunerControls{false};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};

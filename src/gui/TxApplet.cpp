@@ -217,15 +217,23 @@ void TxApplet::buildUI()
         m_profileCombo->setAccessibleDescription("Select transmit profile");
         row->addWidget(m_profileCombo, 1);  // 1 out of 2 = 50%
 
+        m_atuStatusGroup = new QWidget;
+        m_atuStatusGroup->setAccessibleName(tr("ATU status indicators"));
+        m_atuStatusGroup->setAccessibleDescription(
+            tr("Automatic antenna tuner success, bypass, and memory status"));
+        QSizePolicy atuStatusPolicy = m_atuStatusGroup->sizePolicy();
+        atuStatusPolicy.setRetainSizeWhenHidden(true);
+        m_atuStatusGroup->setSizePolicy(atuStatusPolicy);
+        auto* indRow = new QHBoxLayout(m_atuStatusGroup);
+        indRow->setContentsMargins(0, 0, 0, 0);
+        indRow->setSpacing(0);
         m_successInd = makeIndicator("Success");
         m_bypInd     = makeIndicator("Byp");
         m_memInd     = makeIndicator("Mem");
-        auto* indRow = new QHBoxLayout;
-        indRow->setSpacing(0);
         indRow->addWidget(m_successInd);
         indRow->addWidget(m_bypInd);
         indRow->addWidget(m_memInd);
-        row->addLayout(indRow, 1);  // 1 out of 2 = 50%
+        row->addWidget(m_atuStatusGroup, 1);  // 1 out of 2 = 50%
         vbox->addLayout(row);
     }
 
@@ -270,6 +278,9 @@ void TxApplet::buildUI()
         markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
         m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        QSizePolicy atuButtonPolicy = m_atuBtn->sizePolicy();
+        atuButtonPolicy.setRetainSizeWhenHidden(true);
+        m_atuBtn->setSizePolicy(atuButtonPolicy);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setAccessibleName("ATU tune");
         m_atuBtn->setAccessibleDescription("Start automatic antenna tuner");
@@ -285,6 +296,9 @@ void TxApplet::buildUI()
         m_memBtn->setStyleSheet(btnStyle);
         m_memBtn->setCheckable(true);
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        QSizePolicy memButtonPolicy = m_memBtn->sizePolicy();
+        memButtonPolicy.setRetainSizeWhenHidden(true);
+        m_memBtn->setSizePolicy(memButtonPolicy);
         m_memBtn->setFixedHeight(22);
         m_memBtn->setAccessibleName("ATU memories");
         m_memBtn->setAccessibleDescription("Toggle ATU memory recall");
@@ -508,6 +522,12 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         updateAtuAvailability();
     });
     m_radioHasTuner = m_model->hasTuner();
+    connect(m_model, &TransmitModel::hideUnavailableTunerControlsChanged,
+            this, [this](bool hide) {
+                m_hideUnavailableTunerControls = hide;
+                updateAtuAvailability();
+            });
+    m_hideUnavailableTunerControls = m_model->hideUnavailableTunerControls();
 
     syncFromModel();
     syncAtuIndicators();
@@ -516,8 +536,12 @@ void TxApplet::setTransmitModel(TransmitModel* model)
 
 void TxApplet::updateAtuAvailability()
 {
-    if (!m_atuBtn || !m_memBtn)
+    if (!m_atuBtn || !m_memBtn || !m_atuStatusGroup)
         return;
+    const bool visible = m_radioHasTuner || !m_hideUnavailableTunerControls;
+    m_atuBtn->setVisible(visible);
+    m_memBtn->setVisible(visible);
+    m_atuStatusGroup->setVisible(visible);
     const bool enabled = m_radioHasTuner && !m_tgxlOperate;
     m_atuBtn->setEnabled(enabled);
     m_memBtn->setEnabled(enabled);

@@ -425,6 +425,9 @@ struct IcomModelProfile {
     bool supportedBringup = false;
     int speechProcessorLevelMaximum = 2;
     std::string_view speechProcessorLabel = "PROC";
+    // Absence means unsupported. A profile opts in only with model-guide
+    // evidence for an internal or supported external-tuner command path.
+    bool hasTunerControl = false;
     std::string_view guideRevision;
     std::span<const FeatureEvidence> features;
 

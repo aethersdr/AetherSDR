@@ -349,7 +349,9 @@ constexpr std::array kSpecs = {
                 "setAtu", "txAtuBtn", true,
                 "NOT a tune carrier — it runs the model's internal or external "
                 "antenna-tuner matching cycle and it KEYS. There is no universal "
-                "attachment query, so capabilities().hasTuner follows canTransmit and the "
+                "attachment query; established Icom models retain this surface, "
+                "while the exact IC-9700 profile disables it because that radio "
+                "has no supported tuner path. The "
                 "button is honest about the OUTCOME (00 none / 01 matched / 02 "
                 "tuning) rather than about the hardware."},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",

@@ -208,8 +208,9 @@ something unexpected on one with an AH-705.
 
 CI-V transceive does not announce every front-panel change. The backend rotates
 read requests for RF/power/mic/MON/VOX/notch/preamp/attenuator/tuner state on
-the link timer. These are state observations, never a reason to replay a saved
-client value: both Icom models declare an empty `clientSettingsDomains`, so the
+the link timer. Tuner reads are omitted only for the IC-9700's exact model
+profile. These are state observations, never a reason to replay a saved
+client value: supported Icom profiles declare an empty `clientSettingsDomains`, so the
 radio remains authoritative across reconnects.
 
 The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
@@ -255,7 +256,7 @@ caps.canTransmit            = true;
 caps.txPowerMaxWatts        = 10.0;
 caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
-caps.hasTuner               = false;           // no INTERNAL ATU; see note
+caps.hasTuner               = profile.hasTunerControl; // IC-9700 alone withdraws it
 caps.hasSupplyVoltageTelemetry =
     hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
@@ -269,12 +270,13 @@ caps.canReboot              = false;           // see note
 caps.clientSettingsDomains  = {};              // radio remembers its own state
 ```
 
-**`hasTuner = false` is a judgement call, not a fact.** The IC-705 has no
-internal ATU, but `1C 01` controls an *external* AH-705 — and there is no command
-to detect whether one is attached. So the capability is unanswerable from the
-radio. False is the safer default (no tuner UI on a radio that probably has
-none); an operator with an AH-705 is better served by an explicit setting than by
-a control that appears unconditionally and silently fails.
+**`hasTuner` preserves the established Icom tuner surface except for one exact
+model exclusion.** The IC-705 keeps `1C 01` because it controls the supported
+external AH-705 path even though attachment cannot be detected. The
+IC-7300MK2 and unprofiled transmitting Icom models likewise retain their prior
+behavior. Only the IC-9700 profile sets `hasTunerControl=false`: that radio has
+no supported tuner path, so the backend omits tuner reads and writes and the UI
+hides the tuner-only controls while retaining their layout space.
 
 **`canReboot = false` despite `18 00` / `18 01` existing.** Those turn the
 transceiver off and on — but over WiFi, powering off drops the WLAN interface,
@@ -390,7 +392,8 @@ fail closed. Radio truth wins again as soon as the bounded window expires.
 | overflow | 500 ms | RX and visible |
 | NR, NB, auto/manual notch state | 1000 ms | connected |
 | frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
-| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, RIT/XIT | 3000 ms | connected |
+| tuner | 3000 ms | connected, except exact IC-9700 profile |
 
 #### State convergence is snapshot + transceive + polling
 

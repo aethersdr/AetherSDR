@@ -94,6 +94,7 @@ private:
     // so an applet built before either model has reported looks exactly as it
     // did before this gate existed.
     bool m_radioHasTuner{true};
+    bool m_hideUnavailableTunerControls{false};
     bool m_tgxlOperate{false};
 
     // Gauges (HGauge*)
@@ -113,6 +114,7 @@ private:
     QLabel* m_successInd{nullptr};
     QLabel* m_bypInd{nullptr};
     QLabel* m_memInd{nullptr};
+    QWidget* m_atuStatusGroup{nullptr};
     QLabel* m_activeInd{nullptr};
     QLabel* m_calInd{nullptr};
     QLabel* m_availInd{nullptr};

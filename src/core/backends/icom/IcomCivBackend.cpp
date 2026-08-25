@@ -335,10 +335,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // its tuner state (1C 01 read) well enough for the button to tell the truth
     // once a cycle has run.
     //
-    // So: offered, and honest about the outcome rather than about the hardware.
-    // A start on a radio with no tuner reports NONE and the button returns to
-    // rest, which is a better answer than a control that is not there.
-    c.hasTuner = m.hasTransmit;
+    // So: preserve that established surface for the IC-705 and other Icom
+    // transmitters unless an exact model profile says otherwise. The IC-9700
+    // is that exception: it has no supported tuner path, so advertising the
+    // controls there would be a false capability claim.
+    c.hasTuner = m.hasTransmit && profile.hasTunerControl;
+    c.hideUnavailableTunerControls = m.civAddress == 0xA2;
 
     // The radio chooses its own modulation input from its own menu (MOD Input
     // > DATA MOD, which must be WLAN for us to be heard at all). A client
@@ -969,7 +971,9 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                              tuneOffset::kXitOnOff})
         queueStartupRead(cmdReadTuneOffset(m_session->civAddress(), sub));
-    queueStartupRead(cmdReadTuner(m_session->civAddress()));
+    if (profileFor(*m_model).hasTunerControl) {
+        queueStartupRead(cmdReadTuner(m_session->civAddress()));
+    }
 }
 
 // The radio answered 0x19 0x00. Decide whether to believe it, and where that
@@ -3820,12 +3824,15 @@ void IcomCivBackend::setVox(bool on, int level, int delayMs)
 // THE ANTENNA TUNER, and it keys.
 //
 // `1C 01 02` starts a matching cycle on an EXTERNAL AH-705; `1C 01 00` bypasses.
-// There is no command to ask whether a tuner is attached, so a start on a radio
-// with none is a request that simply does nothing — which is why
-// capabilities().hasTuner stays operator-driven rather than claiming knowledge
-// the protocol cannot give us.
+// There is no command to ask whether an external tuner is attached, so the
+// established Icom surface remains available unless the exact model profile
+// rules it out. The IC-9700 is the known no-tuner exception.
 void IcomCivBackend::setAtu(bool start)
 {
+    if (!m_model || !profileFor(*m_model).hasTunerControl) {
+        qCWarning(lcIcomTx) << "refusing antenna-tuner command: unsupported by active Icom profile";
+        return;
+    }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
                                 start ? 0x02 : 0x00));
     // sendUserCommand queues a readback after the radio has applied the write;
@@ -4998,6 +5005,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
         // an operator with an AH-705 can reach it without the TUNE button
         // running an ATU that may not be attached.
+        if (!m_model || !profileFor(*m_model).hasTunerControl) {
+            emit extensionError(requestId, QStringLiteral("antenna tuner unsupported"));
+            return;
+        }
         sendUserCommand(buildFrameSub(m_session ? m_session->civAddress() : 0xA4,
                                       cmd::kControl, control::kTuner,
                                       std::array<std::uint8_t, 1>{0x02}));
@@ -5444,7 +5455,9 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadFunction(addr, fn));
         }
         queueControl(cmdReadAttenuator(addr));
-        queueControl(cmdReadTuner(addr));
+        if (profileFor(*m_model).hasTunerControl) {
+            queueControl(cmdReadTuner(addr));
+        }
         for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                                  tuneOffset::kXitOnOff}) {
             queueControl(cmdReadTuneOffset(addr, sub));

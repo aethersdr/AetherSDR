@@ -170,6 +170,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // "adding a field" rule in RadioCapabilities.h.
     caps.receiveOnlyModes = {};
     caps.hasTuner = true;
+    caps.hideUnavailableTunerControls = false;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     // The radio owns its reference and its own calibration ("radio set cal_freq",
     // "radio pll_start", freq_error_ppb) — that surface is the Frequency Offset
