@@ -285,6 +285,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    caps.alwaysUseClientSideSpots = false;
     // No manual notch. The synthetic scene has an auto-notch in its mixer, but
     // nothing implements a placed, tracking null — so the +TNF button and the
     // panadapter's add-notch entries stay hidden here rather than appearing and

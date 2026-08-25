@@ -1473,6 +1473,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    c.alwaysUseClientSideSpots = false;
     // Manual notches, and the one piece of DSP on this radio that is NOT absent
     // just because hasRadioSideDsp is false. The notch runs in WDSP on this
     // host, which is the whole point: the HL2 sends raw IQ, so a notch either

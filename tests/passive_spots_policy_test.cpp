@@ -3,6 +3,7 @@
 #include "core/SpotCommandPolicy.h"
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QString>
 #include <cstdio>
 
@@ -56,6 +57,38 @@ void testSendPolicyUsesAppSettings()
            !SpotCommandPolicy::shouldSendSpotAddCommands(true));
 }
 
+void testShippingPublicationCallSites()
+{
+    QFile spotSubsystem(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Spots.cpp"));
+    report("the policy test can inspect the shipping SpotHub wiring",
+           spotSubsystem.open(QIODevice::ReadOnly));
+    const QByteArray spotWiring = spotSubsystem.readAll();
+
+    report("SpotHub sources gate publication on the backend capability",
+           spotWiring.count(
+               "m_radioModel.backendCapabilities().alwaysUseClientSideSpots") == 3);
+    report("SpotHub sources retain the passive-local SpotModel route",
+           spotWiring.contains(
+               "addPassiveSpotToModel(spot, source, spotColor, lifetimeSec);"));
+    report("WSJT-X retains the passive-local SpotModel route",
+           spotWiring.contains(
+               "addPassiveSpotToModel(colored, \"WSJT-X\", colored.color,"));
+
+    QFile panWiring(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
+    report("the policy test can inspect the shipping manual-spot wiring",
+           panWiring.open(QIODevice::ReadOnly));
+    const QByteArray manualWiring = panWiring.readAll();
+
+    report("manual spots gate publication on the backend capability",
+           manualWiring.contains(
+               "m_radioModel.backendCapabilities().alwaysUseClientSideSpots"));
+    report("manual spots retain the passive-local SpotModel route",
+           manualWiring.contains(
+               "m_radioModel.spotModel().applySpotStatus(spotId, kvs);"));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -69,6 +102,7 @@ int main(int argc, char** argv)
 
     testSettingParsing();
     testSendPolicyUsesAppSettings();
+    testShippingPublicationCallSites();
 
     return g_failed == 0 ? 0 : 1;
 }

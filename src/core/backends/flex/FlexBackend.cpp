@@ -220,6 +220,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
+    caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs
     // keeps an unbounded list — so this is a UI-side sanity limit rather than a
     // radio-reported one, and it is set high enough never to be the thing that
