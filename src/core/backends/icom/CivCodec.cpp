@@ -808,17 +808,12 @@ std::optional<int> decodeRepeaterOffsetHz(std::span<const std::uint8_t> payload)
 
 std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to)
 {
-    return cmdReadCtcssTone(to, repeaterTone::kTxCtcss);
+    return cmdReadRepeaterToneRegister(to, repeaterTone::kTxCtcss);
 }
 
 std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
 {
     return cmdSetCtcssTone(to, repeaterTone::kTxCtcss, toneHz);
-}
-
-std::vector<std::uint8_t> cmdReadCtcssTone(std::uint8_t to, std::uint8_t which)
-{
-    return buildFrameSub(to, cmd::kTone, which);
 }
 
 std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,

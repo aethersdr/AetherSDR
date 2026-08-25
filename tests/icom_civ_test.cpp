@@ -210,7 +210,8 @@ static void testFmRepeaterCommands()
     check(bytesAre(cmdSetRepeaterAccess(kIc705, 0x09),
                    {0xFE, 0xFE, kIc705, kControllerAddress, 0x16, 0x5D, 0x09, 0xFD}),
           "CTCSS TX/RX access selector write frame");
-    check(bytesAre(cmdReadCtcssTone(kIc705, repeaterTone::kRxCtcss),
+    check(bytesAre(cmdReadRepeaterToneRegister(
+                       kIc705, repeaterTone::kRxCtcss),
                    {0xFE, 0xFE, kIc705, kControllerAddress, 0x1B, 0x01, 0xFD}),
           "receive CTCSS tone read frame");
     check(bytesAre(cmdSetCtcssTone(kIc705, repeaterTone::kRxCtcss, 103.5),

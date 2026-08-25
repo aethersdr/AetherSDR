@@ -3257,6 +3257,8 @@ int main(int argc, char** argv)
     // command is defined to answer.
     {
         CivCase c(0xA2, "IC-9700");
+        c.radio.m_repeaterAccess = 0x03;
+        c.radio.m_repeaterRxToneHz = 67.0;
         c.backend.connectRadio(c.request());
         check(waitFor([&] { return c.backend.isConnected(); }),
               "IC-9700 XFC: the session comes up");

@@ -150,25 +150,6 @@ bool isCanonicalCtcssTone(double hz)
     return std::isfinite(hz) && isCtcssFrequency(hz);
 }
 
-std::optional<QString> fmAccessModeForWireValue(std::uint8_t value)
-{
-    // IC-9700 CI-V Reference Guide 2019, command 16 5D.  The capability
-    // intentionally offers only the four CTCSS choices in this change, but
-    // every documented radio value is still decoded so an unoffered DTCS
-    // state cannot be misrepresented as Off in the model or UI.
-    switch (value) {
-    case 0x00: return QStringLiteral("off");
-    case 0x01: return QStringLiteral("ctcss_tx");
-    case 0x02: return QStringLiteral("ctcss_rx");
-    case 0x03: return QStringLiteral("dtcs_txrx");
-    case 0x06: return QStringLiteral("dtcs_tx");
-    case 0x07: return QStringLiteral("ctcss_tx_dtcs_rx");
-    case 0x08: return QStringLiteral("dtcs_tx_ctcss_rx");
-    case 0x09: return QStringLiteral("ctcss_txrx");
-    default:   return std::nullopt;
-    }
-}
-
 }  // namespace
 
 IcomCivBackend::IcomCivBackend(QObject* parent)
@@ -937,9 +918,8 @@ void IcomCivBackend::sendConnectReadBurst()
         queueStartupRead(cmdReadRepeaterOffset(m_session->civAddress()));
     }
     if (ctcssRxProfileFor(m_model)) {
-        queueStartupRead(cmdReadRepeaterAccess(m_session->civAddress()));
-        queueStartupRead(cmdReadCtcssTone(m_session->civAddress(), repeaterTone::kTxCtcss));
-        queueStartupRead(cmdReadCtcssTone(m_session->civAddress(), repeaterTone::kRxCtcss));
+        queueStartupRead(cmdReadRepeaterToneRegister(
+            m_session->civAddress(), repeaterTone::kTxCtcss));
     } else if (fm && fm->hasTxCtcss) {
         queueStartupRead(cmdReadFunction(m_session->civAddress(), func::kRepeaterTone));
         queueStartupRead(cmdReadRepeaterTone(m_session->civAddress()));
@@ -2830,7 +2810,7 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
     case cmd::kTone:
         if (parsed->hasSub && (parsed->sub == repeaterTone::kTxCtcss
                                || parsed->sub == repeaterTone::kRxCtcss)) {
-            return cmdReadCtcssTone(addr, parsed->sub);
+            return cmdReadRepeaterToneRegister(addr, parsed->sub);
         }
         break;
     case cmd::kVfoMode:
@@ -5299,9 +5279,11 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadRepeaterOffset(addr));
         }
         if (fm && fm->hasTxCtcss) {
-            queueControl(cmdReadCtcssTone(addr, repeaterTone::kTxCtcss));
+            queueControl(cmdReadRepeaterToneRegister(
+                addr, repeaterTone::kTxCtcss));
             if (ctcssRxProfileFor(m_model)) {
-                queueControl(cmdReadCtcssTone(addr, repeaterTone::kRxCtcss));
+                queueControl(cmdReadRepeaterToneRegister(
+                    addr, repeaterTone::kRxCtcss));
             }
         }
         for (std::uint8_t fn : {func::kMonitorFn, func::kVox}) {
@@ -5328,9 +5310,6 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadTuneOffset(addr, sub));
         }
         if (extendedFmReadbackProfileFor(m_model)) {
-            queueControl(cmdReadRepeaterAccess(addr));
-            queueControl(cmdReadRepeaterToneRegister(
-                addr, repeaterTone::kRxCtcss));
             queueControl(cmdReadRepeaterToneRegister(
                 addr, repeaterTone::kDtcs));
         }

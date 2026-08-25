@@ -681,6 +681,9 @@ private:
         }
         if (frame->cmd == cmd::kFunction && frame->hasSub && !frame->data.empty()) {
             m_functions[frame->sub] = frame->data.front();
+            if (frame->sub == repeaterAccess::kFunction) {
+                m_repeaterAccess = frame->data.front();
+            }
             pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
@@ -1018,7 +1021,7 @@ public:
     RepeaterOffsetDirection m_repeaterOffsetDirection = RepeaterOffsetDirection::Down;
     int m_repeaterOffsetHz = 600'000;
     double m_repeaterToneHz = 88.5;
-    std::uint8_t m_repeaterAccess = 0x03;
+    std::uint8_t m_repeaterAccess = 0x09;
     double m_repeaterRxToneHz = 103.5;
     int m_repeaterDtcsCode = 23;
     bool m_repeaterDtcsTxReverse = false;

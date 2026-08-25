@@ -649,8 +649,6 @@ enum class RepeaterOffsetDirection : std::uint8_t {
 [[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
     std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
-[[nodiscard]] std::vector<std::uint8_t> cmdReadCtcssTone(std::uint8_t to,
-                                                         std::uint8_t which);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to,
                                                         std::uint8_t which,
                                                         double toneHz);
