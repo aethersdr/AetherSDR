@@ -68,19 +68,28 @@ void applyFramelessWindowStyle(QWidget* window, int cornerRadius)
             content.layer.cornerCurve = kCACornerCurveContinuous;
         }
 
+        // A subview of `content` always composites above the QNSView's own
+        // backing layer. Putting the effect there covers every Qt-painted
+        // title-bar control even when the subview is ordered below the other
+        // subviews. Install it as a sibling immediately beneath the Qt content
+        // surface instead, so the translucent Qt tint reveals the material
+        // without sacrificing the brand, tabs, or caption controls.
+        NSView* frameView = content.superview;
         NSView* existingMaterial = objc_getAssociatedObject(
             content, &kTitleBarMaterialKey);
         NSVisualEffectView* material =
             [existingMaterial isKindOfClass:[NSVisualEffectView class]]
                 ? (NSVisualEffectView*)existingMaterial
                 : nil;
-        if (!material) {
+        if (!material && frameView) {
             material = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
             material.translatesAutoresizingMaskIntoConstraints = NO;
             material.material = NSVisualEffectMaterialHUDWindow;
             material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
             material.state = NSVisualEffectStateFollowsWindowActiveState;
-            [content addSubview:material positioned:NSWindowBelow relativeTo:nil];
+            [frameView addSubview:material
+                       positioned:NSWindowBelow
+                       relativeTo:content];
             [NSLayoutConstraint activateConstraints:@[
                 [material.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
                 [material.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
