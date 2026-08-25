@@ -852,6 +852,7 @@ foreach(APP_SETTINGS_SCENARIO
         newer-schema-readonly
         dirty-row-save
         display-slice-depth-default
+        display-pan-menu-state
         nickname-key-roundtrip
         browser-api)
     add_test(

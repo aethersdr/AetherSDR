@@ -1,5 +1,6 @@
 #include "SpectrumOverlayMenu.h"
 #include "DeclaredBandMenuPolicy.h"
+#include "DisplaySettings.h"
 #include "DspParamPopup.h"
 #include "MemoryBrowsePanel.h"
 #include "SpectrumWidget.h"
@@ -12,7 +13,6 @@
 #include "models/SliceModel.h"
 #include "models/BandDefs.h"
 #include "models/BandSettings.h"
-#include "core/AppSettings.h"
 #include "core/KiwiSdrManager.h"
 
 #include <QPushButton>
@@ -991,23 +991,25 @@ void SpectrumOverlayMenu::setPanId(const QString& id)
 
 void SpectrumOverlayMenu::setPanSlotIndex(int idx)
 {
-    if (m_panSlotIndex == idx)
+    if (m_panSlotIndex == idx) {
         return;
+    }
     m_panSlotIndex = idx;
 
     // Restore this slot's saved collapsed/expanded state (client-side UI
     // preference — same per-slot persistence pattern as VfoWidget's
     // SliceFlagCollapsed_<sliceId>, keyed here by the client-assigned pan
     // slot rather than a radio-side id).
-    if (m_panSlotIndex < 0)
+    if (m_panSlotIndex < 0) {
         return;
-    auto& s = AppSettings::instance();
-    const bool savedExpanded = s.value(
-        QString("PanMenuExpanded_%1").arg(m_panSlotIndex), "True").toString() == "True";
+    }
+    const bool savedExpanded =
+        DisplaySettings::panMenuExpanded(m_panSlotIndex);
     if (savedExpanded != m_expanded) {
         m_expanded = savedExpanded;
-        if (!m_expanded)
+        if (!m_expanded) {
             hideAllSubPanels();
+        }
         updateLayout();
     }
 }
@@ -1422,9 +1424,7 @@ void SpectrumOverlayMenu::toggle()
     // Persist per-slot so each panadapter remembers its own collapsed state
     // across restarts (see setPanSlotIndex()).
     if (m_panSlotIndex >= 0) {
-        AppSettings::instance().setValue(
-            QString("PanMenuExpanded_%1").arg(m_panSlotIndex),
-            m_expanded ? "True" : "False");
+        DisplaySettings::setPanMenuExpanded(m_panSlotIndex, m_expanded);
     }
 }
 
