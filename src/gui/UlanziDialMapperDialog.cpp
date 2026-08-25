@@ -856,7 +856,7 @@ void UlanziDialMapperDialog::onVariantHelpClicked()
     // points at the plugin's own release, which actually carries the
     // packaged .zip; the AetherSDR release assets do not include it. (#3485)
     QMessageBox box(this);
-    box.setWindowTitle(tr("Ulanzi dial — setup required"));
+    box.setWindowTitle(tr("Ulanzi Dial — Setup Required"));
     box.setIcon(QMessageBox::Information);
     box.setTextFormat(Qt::RichText);
     box.setText(tr("<b>%1</b> cannot be driven over HID.")
