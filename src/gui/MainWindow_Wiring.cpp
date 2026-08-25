@@ -40,6 +40,7 @@
 #include "ModeFilterPresets.h"
 #include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
+#include "BandApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
@@ -7973,6 +7974,29 @@ void MainWindow::wireMeters()
             m_radioModel.transmitModel().apdConfigurable());
     });
 
+    if (m_appletPanel && m_appletPanel->bandApplet()) {
+        connect(m_appletPanel->bandApplet(), &BandApplet::bandSelected,
+                this, [this](const QString& bandName, double freqMhz, const QString& mode,
+                             const QString& stackKeyHint) {
+            PanadapterApplet* pan = nullptr;
+            if (SliceModel* s = activeSlice()) {
+                pan = m_panStack ? m_panStack->panadapter(s->panId()) : nullptr;
+            }
+            if (!pan && m_panStack) {
+                pan = m_panStack->activeApplet();
+                if (!pan && !m_panStack->allApplets().isEmpty())
+                    pan = m_panStack->allApplets().first();
+            }
+            if (pan && pan->spectrumWidget() && pan->spectrumWidget()->overlayMenu()) {
+                emit pan->spectrumWidget()->overlayMenu()->bandSelected(
+                    bandName, freqMhz, mode, stackKeyHint);
+            }
+        });
+        connect(m_appletPanel->bandApplet(), &BandApplet::xvtrSetupRequested,
+                this, [this]() {
+            openRadioSetupPage(QStringLiteral("XVTR"));
+        });
+    }
 }
 
 // Adaptive RX filter (RFC #3878): per FFT frame, drive the fit engine for every

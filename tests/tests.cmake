@@ -10935,6 +10935,19 @@ target_link_libraries(kat500_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt
 add_test(NAME kat500_tx_controls_test COMMAND kat500_tx_controls_test)
 set_tests_properties(kat500_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(band_applet_test
+    tests/band_applet_test.cpp
+    src/gui/BandApplet.cpp
+)
+target_include_directories(band_applet_test PRIVATE src)
+target_link_libraries(band_applet_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(band_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME band_applet_test COMMAND band_applet_test)
+set_tests_properties(band_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp

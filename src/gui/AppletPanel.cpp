@@ -5,6 +5,7 @@
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "RxApplet.h"
+#include "BandApplet.h"
 #include "SMeterWidget.h"
 #include "CrossNeedleMeterApplet.h"
 #include "CrossNeedleMeterSettings.h"
@@ -168,7 +169,7 @@ constexpr int kStackBottomMargin = 8;
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "WFM", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
+    "PWR", "RX", "WFM", "BAND", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -774,6 +775,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     markHardwareConditional("WFM");
     connect(m_wfmApplet, &WfmApplet::availabilityChanged,
             this, &AppletPanel::setWfmAvailable);
+
+    m_bandApplet = new BandApplet;
+    m_appletOrder.append(makeEntry("BAND", "Band", m_bandApplet, false, m_drawer, m_drawerLayout, "BAND"));
 
     // Tuner / Amp entries use makeEntry like everything else;
     // MainWindow toggles tray-button visibility via setTunerVisible /
@@ -1483,6 +1487,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
     static const QMap<QString, QString> kCategory = {
         {QStringLiteral("RX"),    QStringLiteral("Receive")},
         {QStringLiteral("WFM"),   QStringLiteral("Receive")},
+        {QStringLiteral("BAND"),  QStringLiteral("Receive")},
         {QStringLiteral("MPAN"),  QStringLiteral("Receive")},
         {QStringLiteral("KSDR"),  QStringLiteral("Receive")},
         {QStringLiteral("DEMO"),  QStringLiteral("Receive")},
@@ -2017,6 +2022,8 @@ void AppletPanel::setSlice(SliceModel* slice)
     if (m_wfmApplet) {
         m_wfmApplet->setSlice(slice);
     }
+    if (m_bandApplet)
+        m_bandApplet->setSlice(slice);
     if (m_aetherClockApplet)
         m_aetherClockApplet->setSlice(slice);
 
@@ -2170,7 +2177,7 @@ QStringList AppletPanel::defaultButtonOrder() const
     // labels (WAVE→"WAV", PHNE→"PHN", TXDSP→"VUDU"). TUN/AMP/AG are omitted:
     // updateHardwareAvailability() adds them when the hardware appears, and the
     // user's Hidden choice is respected after that.
-    QStringList out = {"VU", "PWR", "RX", "TX", "P/CW"};
+    QStringList out = {"VU", "PWR", "RX", "BAND", "TX", "P/CW"};
     const QStringList rest = {
         "LCK", "PHNE", "EQ", "WAVE", "TXDSP",
         "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "SS", "MQTT"
