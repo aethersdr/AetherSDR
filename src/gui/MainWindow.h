@@ -21,6 +21,7 @@
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
 #include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
+#include "gui/ConnectSliceEnumerationGuard.h"
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
@@ -1338,6 +1339,9 @@ private:
     // write is dropped, and must outlast a slow rebuild. See the header.
     BandRecallSelectionGuard m_bandRecallSelection{
         kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
+    static constexpr int kConnectSliceEnumerationGraceMs = 3000;
+    ConnectSliceEnumerationGuard m_connectSliceEnumeration{
+        kConnectSliceEnumerationGraceMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1498,7 +1502,6 @@ private:
 
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
-    bool m_initialSliceEnumeration{true};
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};

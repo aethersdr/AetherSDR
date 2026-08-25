@@ -5854,8 +5854,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // one place so the count cannot leak across sessions.
     noteAutoConnectFinished(connected);
 
-    if (!connected) {
-        m_initialSliceEnumeration = true;
+    if (connected) {
+        m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());
+    } else {
+        m_connectSliceEnumeration.cancelArm();
     }
 
     m_connPanel->setConnected(connected);

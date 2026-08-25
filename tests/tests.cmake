@@ -1194,6 +1194,7 @@ add_test(NAME band_recall_slice_selection_policy_test
 add_executable(radiomodel_slice_connect_enumeration_test
     tests/radiomodel_slice_connect_enumeration_test.cpp
 )
+target_include_directories(radiomodel_slice_connect_enumeration_test PRIVATE src)
 target_link_libraries(radiomodel_slice_connect_enumeration_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_slice_connect_enumeration_test
     COMMAND radiomodel_slice_connect_enumeration_test)

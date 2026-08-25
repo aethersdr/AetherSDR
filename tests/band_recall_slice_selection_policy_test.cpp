@@ -162,6 +162,29 @@ int main()
               "regression guard: TopologyFallback on connect would improperly send active=1");
     }
 
+    // firstSliceSelectionSource maps initialConnectEnumeration boolean to the right enum
+    check(firstSliceSelectionSource(true) == RadioSliceSelectionSource::InitialEnumeration,
+          "firstSliceSelectionSource(true) -> InitialEnumeration");
+    check(firstSliceSelectionSource(false) == RadioSliceSelectionSource::TopologyFallback,
+          "firstSliceSelectionSource(false) -> TopologyFallback");
+
+    // ConnectSliceEnumerationGuard time-window lifecycle
+    {
+        ConnectSliceEnumerationGuard guard(3000);
+        check(!guard.isActive(0), "guard initially inactive");
+        guard.arm(1000);
+        check(guard.isActive(1000), "guard active at arm time");
+        check(guard.isActive(3999), "guard active before window expiry");
+        check(!guard.isActive(4000), "guard inactive at window expiry");
+        check(!guard.isActive(5000), "guard inactive after window expiry");
+
+        // cancelArm explicitly disarms
+        guard.arm(10000);
+        check(guard.isActive(10000), "guard armed again");
+        guard.cancelArm();
+        check(!guard.isActive(10000), "guard inactive after cancelArm");
+    }
+
     if (failures == 0) {
         std::printf("\nAll band-recall slice-selection policy tests passed.\n");
         return 0;

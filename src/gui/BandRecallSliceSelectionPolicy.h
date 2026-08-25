@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gui/ConnectSliceEnumerationGuard.h"
+
 namespace AetherSDR {
 
 // MainWindow reaches the active-slice setter from three radio-driven sources:
@@ -38,12 +40,20 @@ inline RadioSliceSelectionDecision radioSliceSelectionDecision(
     }
 
     // TopologyFallback is the only source that may assert the selection: it
-    // fires when the active slice was REMOVED, so the radio has no valid active
-    // slice and must be told which one takes over.
+    // fires when the active slice was removed or created into an empty list
+    // mid-session, so the radio has no valid active slice and must be told
+    // which one takes over.
     return {
         true,
         source != RadioSliceSelectionSource::TopologyFallback,
     };
+}
+
+inline RadioSliceSelectionSource firstSliceSelectionSource(bool initialConnectEnumeration)
+{
+    return initialConnectEnumeration
+        ? RadioSliceSelectionSource::InitialEnumeration
+        : RadioSliceSelectionSource::TopologyFallback;
 }
 
 inline const char* radioSliceSelectionSourceName(RadioSliceSelectionSource source)

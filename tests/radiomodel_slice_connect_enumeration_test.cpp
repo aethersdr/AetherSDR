@@ -15,9 +15,10 @@
 // This test verifies that:
 // 1. Initial connect enumeration emits ZERO "active=1" commands to the wire.
 // 2. The client correctly converges on the radio-reported active slice (slice 1).
-// 3. Using TopologyFallback on connect would emit "slice set 0 active=1", proving
-//    that this test catches call-site regressions.
-// 4. Mid-session slice creation into an empty list uses TopologyFallback.
+// 3. TopologyFallback outside connect window emits "slice set 0 active=1", proving
+//    that the production firstSliceSelectionSource decision correctly gates wire writes.
+// 4. Mid-session slice creation into an empty list (after connect window expires) uses TopologyFallback.
+// 5. ConnectSliceEnumerationGuard does not latch across disconnect/reconnect cycles.
 
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -42,9 +43,9 @@ static void check(bool ok, const char* what)
 struct SliceWiringHarness {
     RadioModel* model{nullptr};
     int activeSliceId{-1};
-    bool initialSliceEnumeration{true};
+    ConnectSliceEnumerationGuard connectEnumerationGuard;
+    qint64 nowMs{1000};
     QStringList emittedCommands;
-    bool forceTopologyFallbackForTest{false};
 
     void attach(RadioModel* m) {
         model = m;
@@ -60,15 +61,8 @@ struct SliceWiringHarness {
 
         const bool firstSlice = (activeSliceId < 0);
         if (firstSlice) {
-            RadioSliceSelectionSource source = initialSliceEnumeration
-                ? RadioSliceSelectionSource::InitialEnumeration
-                : RadioSliceSelectionSource::TopologyFallback;
-
-            if (forceTopologyFallbackForTest) {
-                source = RadioSliceSelectionSource::TopologyFallback;
-            }
-
-            initialSliceEnumeration = false;
+            const RadioSliceSelectionSource source =
+                firstSliceSelectionSource(connectEnumerationGuard.isActive(nowMs));
 
             const RadioSliceSelectionDecision decision =
                 radioSliceSelectionDecision(false, source);
@@ -112,6 +106,8 @@ int main(int argc, char** argv)
     {
         RadioModel model;
         SliceWiringHarness harness;
+        harness.connectEnumerationGuard.arm(1000);
+        harness.nowMs = 1050;
         harness.attach(&model);
 
         // Simulate connect enumeration burst from FlexRadio:
@@ -146,12 +142,12 @@ int main(int argc, char** argv)
     }
 
     // =========================================================================
-    // Test 2: Regression check — TopologyFallback WOULD emit active=1
+    // Test 2: Regression check — TopologyFallback when guard inactive emits active=1
     // =========================================================================
     {
         RadioModel model;
         SliceWiringHarness harness;
-        harness.forceTopologyFallbackForTest = true;
+        harness.nowMs = 10000;  // Guard un-armed / inactive
         harness.attach(&model);
 
         QMap<QString, QString> s0_kvs;
@@ -161,7 +157,7 @@ int main(int argc, char** argv)
         model.handleSliceStatusForTest(0, s0_kvs, false);
 
         check(harness.emittedCommands.contains("slice set 0 active=1"),
-              "Regression guard: TopologyFallback on connect improperly sends active=1");
+              "Regression guard: TopologyFallback when guard is inactive sends active=1");
     }
 
     // =========================================================================
@@ -170,6 +166,8 @@ int main(int argc, char** argv)
     {
         RadioModel model;
         SliceWiringHarness harness;
+        harness.connectEnumerationGuard.arm(1000);
+        harness.nowMs = 1050;
         harness.attach(&model);
 
         // Connect enumeration
@@ -184,9 +182,12 @@ int main(int argc, char** argv)
         model.handleSliceStatusForTest(0, QMap<QString, QString>{}, true);
         harness.onSliceRemoved(0);
         check(harness.activeSliceId == -1, "All slices removed: activeSliceId is -1");
-        check(!harness.initialSliceEnumeration, "Initial connect enumeration is false");
 
-        // Operator creates a new slice mid-session
+        // Operator creates a new slice mid-session (nowMs past 3000ms window)
+        harness.nowMs = 10000;
+        check(!harness.connectEnumerationGuard.isActive(harness.nowMs),
+              "Connect enumeration guard is inactive mid-session");
+
         QMap<QString, QString> s1_kvs;
         s1_kvs["in_use"] = "1";
         s1_kvs["RF_frequency"] = "21.074000";
@@ -195,6 +196,34 @@ int main(int argc, char** argv)
 
         check(harness.emittedCommands.contains("slice set 1 active=1"),
               "Mid-session slice creation into empty list asserts active=1 via TopologyFallback");
+    }
+
+    // =========================================================================
+    // Test 4: Reconnect lifecycle — guard re-arms and does not latch
+    // =========================================================================
+    {
+        RadioModel model;
+        SliceWiringHarness harness;
+        // Session 1: connect, enumerate, disconnect
+        harness.connectEnumerationGuard.arm(1000);
+        harness.nowMs = 1050;
+        harness.attach(&model);
+
+        QMap<QString, QString> s0_kvs;
+        s0_kvs["in_use"] = "1";
+        s0_kvs["RF_frequency"] = "14.074000";
+        s0_kvs["active"] = "1";
+        model.handleSliceStatusForTest(0, s0_kvs, false);
+        check(harness.emittedCommands.isEmpty(), "Session 1 connect emitted 0 commands");
+
+        // Disconnect: cancelArm
+        harness.connectEnumerationGuard.cancelArm();
+        check(!harness.connectEnumerationGuard.isActive(1050), "Disconnected: guard inactive");
+
+        // Session 2: Reconnect at t=20000
+        harness.connectEnumerationGuard.arm(20000);
+        check(harness.connectEnumerationGuard.isActive(20050), "Session 2: guard active during burst");
+        check(!harness.connectEnumerationGuard.isActive(25000), "Session 2: guard expires cleanly");
     }
 
     if (g_failures == 0) {

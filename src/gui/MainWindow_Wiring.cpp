@@ -1664,12 +1664,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // make first-enumerated always win. The adoption check later in
         // onSliceAdded() reads s->isActive() as subsequent slices arrive, so the
         // client converges on the radio-authoritative active slice.
-        // Mid-session creation into an empty list (after initial enumeration is done)
+        // Mid-session creation into an empty list (after initial enumeration window has passed)
         // routes through TopologyFallback to assert the selection as needed.
-        const RadioSliceSelectionSource source = m_initialSliceEnumeration
-            ? RadioSliceSelectionSource::InitialEnumeration
-            : RadioSliceSelectionSource::TopologyFallback;
-        m_initialSliceEnumeration = false;
+        const auto nowMs = QDateTime::currentMSecsSinceEpoch();
+        const RadioSliceSelectionSource source =
+            firstSliceSelectionSource(m_connectSliceEnumeration.isActive(nowMs));
         selectSliceFromRadioState(s, source);
 
         // Detect initial band from radio's frequency
