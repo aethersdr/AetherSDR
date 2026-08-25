@@ -37,11 +37,12 @@ static void check(bool ok, const char* what)
     }
 }
 
-static RadioInfo infoFor(const QString& family)
+static RadioInfo infoFor(const QString& family,
+                         const QString& serial = QStringLiteral("ICOM-TEST-1"))
 {
     RadioInfo i;
     i.family  = family;
-    i.serial  = QStringLiteral("ICOM-TEST-1");
+    i.serial  = serial;
     i.address = QHostAddress(QStringLiteral("192.0.2.1"));   // TEST-NET-1, unroutable
     i.port    = 50001;
     return i;
@@ -97,12 +98,21 @@ int main(int argc, char** argv)
     // model-specific CI-V profiles begin below the seam and cannot change this
     // ownership invariant.
     {
-        auto* icomBackend = dynamic_cast<icom::IcomCivBackend*>(model.backend());
+        RadioModel reconnectModel;
+        reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
+        auto* icomBackend =
+            dynamic_cast<icom::IcomCivBackend*>(reconnectModel.backend());
         check(icomBackend != nullptr, "an Icom backend exists for reconnect coverage");
         if (icomBackend) {
             int sliceAdds = 0;
-            QObject::connect(&model, &RadioModel::sliceAdded,
-                             &model, [&sliceAdds](SliceModel*) { ++sliceAdds; });
+            QObject::connect(&reconnectModel, &RadioModel::sliceAdded,
+                             &reconnectModel,
+                             [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            const bool firstConnected = QMetaObject::invokeMethod(
+                icomBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(firstConnected, "the first Icom session reaches its connected edge");
 
             SliceDelta initial;
             initial.panId = QStringLiteral("icom");
@@ -112,7 +122,7 @@ int main(int argc, char** argv)
             initial.frequency = 14.074;
             emit icomBackend->sliceChanged(0, initial);
 
-            SliceModel* subscribedSlice = model.slice(0);
+            SliceModel* subscribedSlice = reconnectModel.slice(0);
             check(subscribedSlice != nullptr,
                   "the first Icom VFO materializes a SliceModel");
             check(sliceAdds == 1,
@@ -125,10 +135,15 @@ int main(int argc, char** argv)
                                  [&subscriberUpdates](double) { ++subscriberUpdates; });
             }
 
-            // Drive the same lifecycle edge a real RS-BA1 reconnect reports.
-            emit icomBackend->connected();
-            check(model.slices().isEmpty(),
-                  "reconnect stages the prior Icom VFO before fresh state arrives");
+            // Re-enter through connectRadio while the old session is live. Icom
+            // synchronously emits disconnected before starting the replacement,
+            // exactly matching an operator reconnect to the selected radio.
+            reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
+            const bool replacementConnected = QMetaObject::invokeMethod(
+                icomBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(replacementConnected,
+                  "the same Icom reaches its replacement connected edge");
 
             SliceDelta reconnected;
             reconnected.panId = QStringLiteral("icom");
@@ -138,14 +153,54 @@ int main(int argc, char** argv)
             reconnected.frequency = 7.074;
             emit icomBackend->sliceChanged(0, reconnected);
 
-            check(model.slice(0) == subscribedSlice,
+            check(reconnectModel.slice(0) == subscribedSlice,
                   "Icom reconnect reclaims the subscribed SliceModel");
             check(sliceAdds == 1,
                   "reclaim does not announce a duplicate UI slice");
             check(subscriberUpdates == 1,
                   "a pre-reconnect frequency subscriber receives fresh Icom state");
-            check(model.slice(0) && model.slice(0)->frequency() == 7.074,
+            check(reconnectModel.slice(0)
+                      && reconnectModel.slice(0)->frequency() == 7.074,
                   "the reclaimed Icom VFO applies the radio-authoritative frequency");
+
+        }
+    }
+
+    // A different physical radio in the same family also reports slice 0.
+    // Reclaim must be identity-shaped, not family/id-shaped: the old object
+    // carries radio A's partially reported state and subscriptions.
+    {
+        RadioModel swapModel;
+        swapModel.connectToRadio(infoFor(QStringLiteral("icom")));
+        auto* swapBackend = dynamic_cast<icom::IcomCivBackend*>(swapModel.backend());
+        check(swapBackend != nullptr, "an Icom backend exists for radio-swap coverage");
+        if (swapBackend) {
+            int sliceAdds = 0;
+            QObject::connect(&swapModel, &RadioModel::sliceAdded,
+                             &swapModel, [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            const bool firstConnected = QMetaObject::invokeMethod(
+                swapBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(firstConnected, "radio A reaches its real connected edge");
+            SliceModel* radioASlice = swapModel.slice(0);
+
+            // Select B while A is still connected. connectToRadio overwrites
+            // m_lastInfo with B before IcomCivBackend synchronously tears A down;
+            // this is the ordering that requires the separate connected-session
+            // serial rather than a disconnect-time read of m_lastInfo.
+            swapModel.connectToRadio(infoFor(QStringLiteral("icom"),
+                                             QStringLiteral("ICOM-TEST-2")));
+            const bool connected = QMetaObject::invokeMethod(
+                swapBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(connected, "the second Icom session reaches its real connected edge");
+            check(swapModel.slice(0) != nullptr,
+                  "the second Icom radio materializes its own slice");
+            check(swapModel.slice(0) != radioASlice,
+                  "a different Icom serial does not reclaim the prior radio's slice");
+            check(sliceAdds == 2,
+                  "a different Icom serial announces one replacement UI slice");
         }
     }
 
