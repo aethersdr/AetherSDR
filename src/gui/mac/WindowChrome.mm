@@ -75,17 +75,18 @@ void applyFramelessWindowStyle(QWidget* window, int cornerRadius)
                 ? (NSVisualEffectView*)existingMaterial
                 : nil;
         if (!material) {
-            const NSRect bounds = content.bounds;
-            const NSRect frame = NSMakeRect(0.0,
-                                            NSHeight(bounds) - kTitleBarHeight,
-                                            NSWidth(bounds),
-                                            kTitleBarHeight);
-            material = [[NSVisualEffectView alloc] initWithFrame:frame];
-            material.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+            material = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+            material.translatesAutoresizingMaskIntoConstraints = NO;
             material.material = NSVisualEffectMaterialHUDWindow;
             material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
             material.state = NSVisualEffectStateFollowsWindowActiveState;
             [content addSubview:material positioned:NSWindowBelow relativeTo:nil];
+            [NSLayoutConstraint activateConstraints:@[
+                [material.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+                [material.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+                [material.topAnchor constraintEqualToAnchor:content.topAnchor],
+                [material.heightAnchor constraintEqualToConstant:kTitleBarHeight],
+            ]];
             objc_setAssociatedObject(content, &kTitleBarMaterialKey, material,
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 #if !__has_feature(objc_arc)

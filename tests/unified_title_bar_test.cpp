@@ -18,10 +18,10 @@
 //     line and its accessible name both have to name the state in words.  A
 //     screenshot review passes happily without them, so the guard lives here.
 //
-//   * MIDDLE-DOT ENCODING.  The status line joins its parts with U+00B7.  Built
-//     from raw UTF-8 bytes inside QStringLiteral it lands as two UTF-16 code
-//     units and renders "Â·" — which shipped once, looked like a font problem,
-//     and is only visible if something compares the actual string.
+//   * UNICODE ENCODING.  The status line's U+00B7 and the discovery popover's
+//     U+2026 must be Unicode escapes or source characters inside QStringLiteral.
+//     Raw UTF-8 bytes land as mojibake, look like a font problem, and are only
+//     visible if something compares the actual string.
 //
 // Runs headless (offscreen); asserts on widget state, never on pixels.
 
@@ -32,6 +32,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QImage>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
 
@@ -296,6 +297,20 @@ int main(int argc, char** argv)
                    "the popover lists every discovered radio");
         if (QWidget* popover = tabs->findChild<QWidget*>(
                 QStringLiteral("discoveredRadiosPopover"))) {
+            QPushButton* manual = popover->findChild<QPushButton*>(
+                QStringLiteral("connectManuallyRow"));
+            check(manual != nullptr, "the popover exposes its manual-connect row");
+            if (manual) {
+                check(manual->text() == QStringLiteral("Connect manually\u2026"),
+                      "the manual-connect ellipsis is valid Unicode");
+                check(!manual->styleSheet().contains(QStringLiteral("{{")),
+                      "the popover row resolves every theme token");
+            }
+            QImage rendered(popover->size(), QImage::Format_ARGB32_Premultiplied);
+            rendered.fill(Qt::transparent);
+            popover->render(&rendered);
+            check(paintedPixelCount(rendered) > 0,
+                  "the discovered-radios popover paints an opaque themed panel");
             popover->close();
         }
 

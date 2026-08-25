@@ -401,7 +401,8 @@ QString rowStyleTemplate()
         " border-radius: 6px;"
         " background: transparent;"
         " color: {{color.text.primary}}; }"
-        "QPushButton:hover  { background: {{color.titlebar.tab.hover}}; }"
+        "QPushButton:hover  { background: {{color.background.2}}; }"
+        "QPushButton:pressed { background: {{color.background.0}}; }"
         "QPushButton:focus  { border: 1px solid {{color.border.accent}}; }");
 }
 
@@ -795,7 +796,7 @@ void RadioTabBar::showDiscoveryPopover()
                                   " max-height: 1px; }"));
     rows->addWidget(separator);
 
-    auto* manual = new QPushButton(QStringLiteral("Connect manually\xE2\x80\xA6"),
+    auto* manual = new QPushButton(QStringLiteral("Connect manually\u2026"),
                                    popover->panel());
     manual->setFlat(true);
     manual->setCursor(Qt::PointingHandCursor);
