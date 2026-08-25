@@ -33,7 +33,7 @@
 
 namespace AetherSDR {
 
-// Shared "attention" style for the status label's advisory states â€” Linux
+// Shared "attention" style for the status label's advisory states — Linux
 // needs-permission and Windows unsupported-variant.  Resolved through
 // ThemeManager against color.accent.warning, which docs/style/
 // theme-style-guide.md designates for warning foregrounds, so the advisory
@@ -41,7 +41,7 @@ namespace AetherSDR {
 static const char kAttentionLabelStyle[] =
     "QLabel { color: {{color.accent.warning}}; }";
 
-// Cached product image â€” loaded once, shared by dialBodyRect (for
+// Cached product image — loaded once, shared by dialBodyRect (for
 // aspect-correct sizing) and the canvas paintEvent.  Falls back to a
 // stylized painted body if the asset isn't present.
 static QPixmap& ulanziDialPixmap()
@@ -92,8 +92,8 @@ private:
 
 namespace {
 
-// Immutable signature â†” pill mapping.  These bindings represent what
-// physical button on the dial emits which kernel event â€” they're a
+// Immutable signature ↔ pill mapping.  These bindings represent what
+// physical button on the dial emits which kernel event — they're a
 // property of the firmware, not user-configurable.  Verified against
 // dial firmware 1.x: changing this table requires re-flashing the dial.
 //
@@ -107,12 +107,12 @@ struct PillSpec {
     double nx, ny;              // anchor on dial body (0..1)
     int    side;                // 0 top, 1 right, 2 bottom, 3 left
 };
-// defaultAction must be one of the action IDs below (not the label) â€”
+// defaultAction must be one of the action IDs below (not the label) —
 // loadActions calls findData() against the combo's stored data role.
 // Default action IDs use the prefixed form ("shortcut:<id>") that
-// MainWindow's dispatcher parses.  The signature â†” pill mapping is a
+// MainWindow's dispatcher parses.  The signature ↔ pill mapping is a
 // firmware property; the function bound to each pill is configurable.
-// Rotary (vfo_tune) is intentionally absent â€” the rotary signal is
+// Rotary (vfo_tune) is intentionally absent — the rotary signal is
 // routed by MainWindow directly, separate from the button mapper.
 constexpr PillSpec kPillSpecs[] = {
     {"top_left",   "Top Left",   "KEY_PREVIOUSSONG",  "shortcut:mox_toggle",   0.21, 0.06, 0},
@@ -162,7 +162,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
                                                ShortcutManager*     shortcuts,
                                                MidiControlManager*  midi,
                                                QWidget*             parent)
-    : PersistentDialog(tr("Ulanzi Dial â€” Control Mapping"),
+    : PersistentDialog(tr("Ulanzi Dial — Control Mapping"),
                        QStringLiteral("UlanziDialMapperGeom"),
                        parent)
     , m_manager(manager)
@@ -214,7 +214,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
 
     bottomRow->addStretch(1);
 
-    m_lastEventLabel = new QLabel(tr("Last event: â€”"));
+    m_lastEventLabel = new QLabel(tr("Last event: —"));
     m_lastEventLabel->setStyleSheet("QLabel { color: #8ea8c0; }");
     bottomRow->addWidget(m_lastEventLabel);
 
@@ -222,7 +222,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
 
     m_resetBtn = new QPushButton(tr("Reset to Defaults"));
     connect(m_resetBtn, &QPushButton::clicked, this, [this] {
-        // Reset each combo to its default action.  The signature â†” pill
+        // Reset each combo to its default action.  The signature ↔ pill
         // binding is hardcoded so there's nothing to reset there.
         for (int i = 0; i < m_pills.size(); ++i) {
             if (!m_pills[i].combo) continue;
@@ -263,7 +263,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
         onConnectionChanged(m_manager->isConnected(), m_manager->deviceName());
 #if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
         // The manager started long before this dialog existed, so the variant
-        // signal has already fired â€” recover the state.  This must NOT read
+        // signal has already fired — recover the state.  This must NOT read
         // the getter directly: the backend lives on the ExtControllers thread
         // and unsupportedVariantName() would race rescan().  Hop to the
         // backend's own thread, take the (mutex-guarded) snapshot there, and
@@ -288,9 +288,9 @@ QPoint UlanziDialMapperDialog::normalizedAnchor(double nx, double ny)
 
 QRect UlanziDialMapperDialog::dialBodyRect() const
 {
-    // Fixed geometry inside the upper region (620 Ã— 555) of the canvas
-    // (620 Ã— 590). Body honours the trimmed image aspect (512:562 â‰ˆ 0.911)
-    // at 320Ã—352, centered in the upper region to leave vertical space for
+    // Fixed geometry inside the upper region (620 × 555) of the canvas
+    // (620 × 590). Body honours the trimmed image aspect (512:562 ≈ 0.911)
+    // at 320×352, centered in the upper region to leave vertical space for
     // the bottom rotary and single-tap combo controls at y >= 525.
     const int bw = 320;
     const int bh = 352;
@@ -384,7 +384,7 @@ void UlanziDialMapperDialog::buildPills()
         p.combo->setFixedWidth(pillId == QLatin1String("dial_press") ? 180 : 120);
         if (dialogParented) p.combo->raise();
 
-        // (unassigned) â€” always first.
+        // (unassigned) — always first.
         p.combo->addItem(tr("(unassigned)"), QStringLiteral("None"));
 
         // All ShortcutManager actions.  Label format: "[Category] Name"
@@ -398,7 +398,7 @@ void UlanziDialMapperDialog::buildPills()
             }
         }
 
-        // MIDI Toggle/Trigger/Gate params â€” only the discrete-event and gate
+        // MIDI Toggle/Trigger/Gate params — only the discrete-event and gate
         // types make sense on a button.  Continuous params would need a
         // rotary, which is intentionally not bound here.
 #ifdef HAVE_MIDI
@@ -449,15 +449,15 @@ void UlanziDialMapperDialog::layoutPills()
         const int touchGap = 4;       // tiny visible breathing room
         QPoint center;
         if (p.id == QLatin1String("top_left")) {
-            // Dialog-parented â€” hardcoded dialog coords.
+            // Dialog-parented — hardcoded dialog coords.
             p.combo->resize(120, p.combo->sizeHint().height());
             p.combo->move(120, 100);
             p.combo->raise();
             p.pillCenter = QPoint(120 + 60, 100 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("top_middle")) {
-            // Pill is a dialog child â€” hardcode dialog coords.
-            // Window 640 wide, combo 120 wide â†’ x = 260.
+            // Pill is a dialog child — hardcode dialog coords.
+            // Window 640 wide, combo 120 wide → x = 260.
             // Hardcoded y above the dial body within the dialog.
             p.combo->resize(120, p.combo->sizeHint().height());
             p.combo->move(260, 100);
@@ -465,7 +465,7 @@ void UlanziDialMapperDialog::layoutPills()
             p.pillCenter = QPoint(320, 100 + p.combo->height() / 2);
             return;
         } else if (p.id == QLatin1String("top_right")) {
-            // Dialog-parented â€” hardcoded dialog coords.
+            // Dialog-parented — hardcoded dialog coords.
             p.combo->resize(120, p.combo->sizeHint().height());
             p.combo->move(400, 100);
             p.combo->raise();
@@ -497,7 +497,7 @@ void UlanziDialMapperDialog::layoutPills()
                       center.y() - sz.height() / 2);
     };
 
-    // Bound by m_pills.size() â€” buildPills() calls refreshPillLabel inside
+    // Bound by m_pills.size() — buildPills() calls refreshPillLabel inside
     // its loop, which re-enters layoutPills before every pill exists.
     for (int i = 0; i < m_pills.size(); ++i) {
         place(m_pills[i]);
@@ -515,7 +515,7 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    // Background â€” match the surrounding dialog.
+    // Background — match the surrounding dialog.
     p.fillRect(rect(), QColor("#0f0f1a"));
 
     const QRect body = m_owner->dialBodyRect();
@@ -564,7 +564,7 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
         p.drawEllipse(knobCenter, 12, 12);
     }
 
-    // No connector lines / anchor dots â€” pills sit physically next to
+    // No connector lines / anchor dots — pills sit physically next to
     // the dial body so the spatial mapping is conveyed by adjacency.
 }
 
@@ -585,7 +585,7 @@ void UlanziDialMapperDialog::migrateLegacyMappings()
 QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
 {
     // The document is authoritative; an absent entry means "built-in default".
-    // Legacy flat keys are not consulted here â€” migrateLegacyMappings() has
+    // Legacy flat keys are not consulted here — migrateLegacyMappings() has
     // already claimed and deleted them at startup.
     const QString bound = UlanziDialMappings::actionForPill(pillId);
     if (!bound.isEmpty())
@@ -664,7 +664,7 @@ void UlanziDialMapperDialog::onButtonEvent(const QString& signature, int action)
     const QString pillId = pillForSignature(signature);
     const QString suffix = pillId.isEmpty()
         ? tr(" (unmapped)")
-        : QStringLiteral(" â†’ %1").arg(pillId);
+        : QStringLiteral(" → %1").arg(pillId);
     m_lastEventLabel->setText(tr("Last event: %1%2 (%3)")
                                   .arg(signature, suffix,
                                        action == 1 ? "press" : "release"));
@@ -701,13 +701,13 @@ void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& 
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
     m_statusLabel->setText(connected
-        ? tr("Connected â€” %1").arg(display)
+        ? tr("Connected — %1").arg(display)
         : tr("Disconnected"));
     m_statusLabel->setStyleSheet(connected
         ? "QLabel { color: #4dd87a; }"
         : "QLabel { color: #cc3333; }");
 #ifdef Q_OS_LINUX
-    // Once connected, the access problem is resolved â€” hide the offer.
+    // Once connected, the access problem is resolved — hide the offer.
     if (connected && m_grantAccessBtn)
         m_grantAccessBtn->setVisible(false);
 #endif
@@ -720,7 +720,7 @@ void UlanziDialMapperDialog::onAccessRequired(const QString& deviceName)
     QString display = deviceName;
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
-    showAttentionStatus(tr("%1 detected â€” needs permission").arg(display));
+    showAttentionStatus(tr("%1 detected — needs permission").arg(display));
     if (m_grantAccessBtn) {
         m_grantAccessBtn->setVisible(true);
         m_grantAccessBtn->setEnabled(true);
@@ -739,7 +739,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
 
     if (m_grantAccessBtn) {
         m_grantAccessBtn->setEnabled(false);
-        m_grantAccessBtn->setText(tr("Authorizingâ€¦"));
+        m_grantAccessBtn->setText(tr("Authorizing…"));
     }
 
     // Install the udev access rule and reload, as root via polkit. The rule
@@ -747,7 +747,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
     // as an argv element (not interpolated into the script) to avoid any
     // quoting/injection concern.
     static const QString kRule = QStringLiteral(
-        "# AetherSDR â€” Ulanzi Dial access (#3599)\n"
+        "# AetherSDR — Ulanzi Dial access (#3599)\n"
         "SUBSYSTEM==\"input\", KERNEL==\"event*\", "
         "ATTRS{name}==\"Ulanzi Dial*\", TAG+=\"uaccess\"\n");
     static const QString kScript = QStringLiteral(
@@ -758,7 +758,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
 
     auto* proc = new QProcess(this);
     // If pkexec can't even start, QProcess emits errorOccurred and never emits
-    // finished â€” recover the button instead of leaving it stuck on "Authorizingâ€¦".
+    // finished — recover the button instead of leaving it stuck on "Authorizing…".
     connect(proc, &QProcess::errorOccurred, this,
             [this, proc](QProcess::ProcessError) {
         if (proc->state() != QProcess::NotRunning) return;  // started; finished will handle it
@@ -779,7 +779,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
         if (m_grantAccessBtn) m_grantAccessBtn->setText(tr("Grant access"));
         if (code == 0) {
             if (m_statusLabel) {
-                m_statusLabel->setText(tr("Access granted â€” connectingâ€¦"));
+                m_statusLabel->setText(tr("Access granted — connecting…"));
                 m_statusLabel->setStyleSheet("QLabel { color: #4dd87a; }");
             }
             // The udev trigger applies the ACL asynchronously; give logind a
@@ -823,27 +823,40 @@ void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
         return;
     }
 
-    // Don't downgrade a live connection â€” this state only applies while
+    // Don't downgrade a live connection — this state only applies while
     // nothing supported is open.
     if (m_connected) return;
 
     m_unsupportedVariant = deviceName;
-    // Keep the LABEL short: the dialog is setFixedSize(640, 675) and this
-    // label shares one non-wrapping row with the "last event" readout, so a
-    // sentence of instructions is silently clipped mid-word.  The procedure
-    // lives behind the button instead, where it has room to be read. (#3485)
-    showAttentionStatus(tr("%1 â€” not usable over HID").arg(deviceName));
-    if (m_variantHelpBtn) m_variantHelpBtn->setVisible(true);
+    // The status label gets ~212 px in this fixed 640 px row (measured on the
+    // running dialog: status 212, Setup 69, "Last event:" 93, Reset 127,
+    // Close 57), and it does not wrap or elide.  The device name alone is
+    // wider than that, so it must NOT go in the label — an earlier attempt
+    // put it here and clipped mid-name at
+    // 'Ulanzi D100H (KEHWIN "Dial_Lite",'.  The label is therefore a fixed
+    // short phrase that always fits; the name lives in the button tooltip
+    // and in the Setup dialog, which have room for it. (#3485)
+    // "Unsupported dial" measures 192 px in this label's font; the budget is
+    // 212.  Do not lengthen it without re-measuring — "Not usable over HID"
+    // (228 px) and "Unsupported variant" (228 px) both overflow, and the
+    // label neither wraps nor elides, so overflow is a silent mid-word cut.
+    showAttentionStatus(tr("Unsupported dial"));
+    if (m_variantHelpBtn) {
+        m_variantHelpBtn->setToolTip(
+            tr("%1 — cannot be driven over HID. Click for setup instructions.")
+                .arg(deviceName));
+        m_variantHelpBtn->setVisible(true);
+    }
 }
 
 void UlanziDialMapperDialog::onVariantHelpClicked()
 {
-    // Rich text so the plugin release is a real clickable link â€” retyping a
+    // Rich text so the plugin release is a real clickable link — retyping a
     // URL out of a status label is not a usable acquisition path.  The link
     // points at the plugin's own release, which actually carries the
     // packaged .zip; the AetherSDR release assets do not include it. (#3485)
     QMessageBox box(this);
-    box.setWindowTitle(tr("Ulanzi dial â€” setup required"));
+    box.setWindowTitle(tr("Ulanzi dial — setup required"));
     box.setIcon(QMessageBox::Information);
     box.setTextFormat(Qt::RichText);
     box.setText(tr("<b>%1</b> cannot be driven over HID.")
@@ -851,11 +864,11 @@ void UlanziDialMapperDialog::onVariantHelpClicked()
     box.setInformativeText(
         tr("<p>This variant's vendor collection stays silent unless Ulanzi "
            "Studio performs its activation handshake, and its keyboard and "
-           "mouse collections are captured by Windows â€” so AetherSDR cannot "
+           "mouse collections are captured by Windows — so AetherSDR cannot "
            "read it directly.</p>"
            "<p>Drive it through Ulanzi Studio instead:</p>"
            "<ol>"
-           "<li>Enable TCI: <b>Settings â†’ Autostart TCI with AetherSDR</b>.</li>"
+           "<li>Enable TCI: <b>Settings → Autostart TCI with AetherSDR</b>.</li>"
            "<li>Download <code>com.g0jkn.aethersdr.ulanziPlugin.zip</code> from "
            "<a href=\"https://github.com/nigelfenton/aethersdr-ulanzi-plugin/releases/latest\">"
            "the AetherSDR Ulanzi plugin release</a>.</li>"
@@ -869,12 +882,17 @@ void UlanziDialMapperDialog::onVariantHelpClicked()
 #endif  // Q_OS_WIN && HAVE_HIDAPI
 
 // The one amber call site, shared by every advisory status (Linux
-// needs-permission, Windows unsupported-variant) â€” the colour ratchet
+// needs-permission, Windows unsupported-variant) — the colour ratchet
 // tracks setStyleSheet call sites, so new advisory states reuse this one.
 void UlanziDialMapperDialog::showAttentionStatus(const QString& text)
 {
     if (!m_statusLabel) return;
     m_statusLabel->setText(text);
+    // Safety net for a larger system font or a longer translation: without
+    // this the label cuts mid-word with no ellipsis and no tooltip, which is
+    // how the first two attempts at this advisory shipped unreadable text.
+    // The full string always stays reachable on hover. (#3485)
+    m_statusLabel->setToolTip(text);
     ThemeManager::instance().applyStyleSheet(m_statusLabel,
                                              QString::fromLatin1(kAttentionLabelStyle));
 }
