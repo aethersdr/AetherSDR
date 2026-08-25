@@ -17,6 +17,12 @@ the checkout you were invoked in. Someone else may be working in it, and a
 `git checkout` there retargets them silently. (Some setups make this a hard
 rule in a local `CLAUDE.local.md`; treat it as one regardless.)
 
+Where `gh` is unavailable — Claude Code Remote and web sessions have no `gh`
+CLI — use the GitHub MCP tools (`mcp__github__*`) in its place throughout:
+`pull_request_read` for `gh pr view` / `gh pr diff`, `issue_read` for
+`gh issue view`, and `pull_request_review_write` +
+`add_comment_to_pending_review` for the step 8 posting flow.
+
 ## 1. Gather
 
 - `gh pr view <PR> --json title,body,author,baseRefName,headRefName,state,mergeable,statusCheckRollup,closingIssuesReferences,reviews,comments`
