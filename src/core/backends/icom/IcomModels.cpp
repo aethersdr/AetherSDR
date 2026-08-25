@@ -606,9 +606,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        true, true, true, true, true, true},
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{
-            .calibration = MeterCalibration::Ic9700Voltage,
-            .currentFullScaleAmps = 0.0,
+            .calibration = MeterCalibration::Ic9700,
+            .currentFullScaleAmps = 20.0,
             .powerConversion = MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
+            .hasPaCurrentTelemetry = true,
         },
         .civRecovery = CivRecoveryProfile{1000, 3},
         .preampLabels = kIc9700PreampLabels,

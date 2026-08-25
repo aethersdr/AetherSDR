@@ -314,6 +314,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasSupplyVoltageTelemetry =
         hasVoltageCalibration(profile.meters.calibration);
     c.hasPaTemperatureTelemetry = profile.meters.hasPaTemperatureTelemetry;
+    c.hasPaCurrentTelemetry = profile.meters.hasPaCurrentTelemetry
+        && hasCurrentCalibration(profile.meters.calibration);
     // No supported Icom model currently publishes fan-speed telemetry. Keep
     // this family-wide and fail closed until the backend implements a real
     // CI-V fan meter; do not add speculative per-model profile surface.

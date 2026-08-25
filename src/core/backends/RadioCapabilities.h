@@ -359,6 +359,12 @@ struct RadioCapabilities {
     // both, or neither telemetry source.
     bool hasPaTemperatureTelemetry = false;
 
+    // The radio reports PA drain current as calibrated live telemetry. The
+    // Radio Vitals applet may reuse its PA-instrument row for this only when
+    // PA temperature is unavailable; the capability is deliberately separate
+    // because some radios define PACURRENT with an unusable/clipped range.
+    bool hasPaCurrentTelemetry = false;
+
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
     // instrument that can never receive a sample. This is independent of PA

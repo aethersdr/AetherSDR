@@ -125,15 +125,18 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Id, 97, 0, MeterCalibration::Ic7300Mk2), 10.0),
           "IC-7300MK2 Id uses its 25 A face");
     check(near(meterValue(MeterId::Vd, 185, 0,
-                          MeterCalibration::Ic9700Voltage), 13.8),
+                          MeterCalibration::Ic9700), 13.8),
           "IC-9700 Vd uses its model-specific calibration");
     check(near(meterValue(MeterId::Id, 121, 0,
-                          MeterCalibration::Ic9700Voltage), 0.0),
-          "IC-9700 voltage capability does not also claim PA current");
+                          MeterCalibration::Ic9700), 10.0),
+          "IC-9700 Id midpoint is 10 A");
+    check(near(meterValue(MeterId::Id, 241, 0,
+                          MeterCalibration::Ic9700), 20.0),
+          "IC-9700 Id full scale is 20 A");
     check(near(meterValue(MeterId::Power, 213, 0,
-                          MeterCalibration::Ic9700Voltage),
+                          MeterCalibration::Ic9700),
                213.0 * 100.0 / 255.0),
-          "IC-9700 voltage capability does not borrow another model's watt curve");
+          "IC-9700 meter calibration does not borrow another model's watt curve");
 
     // ALC full scale is 120, NOT 255 — the guide says so. Scaling by 255 makes
     // a fully-driven ALC read 47%.
@@ -578,7 +581,7 @@ static void testPowerCurveIsNotShared()
           "the IC-9700 gets its own relative Po curve, not the IC-705 watts curve");
     if (ic9700) {
         check(profileFor(*ic9700).meters.calibration
-                      == MeterCalibration::Ic9700Voltage
+                      == MeterCalibration::Ic9700
                   && profileFor(*ic9700).meters.powerConversion
                       == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
               "the IC-9700 retains voltage calibration alongside relative Po conversion");
@@ -610,8 +613,8 @@ static void testPowerCurveIsNotShared()
     check(powerCurveForCalibration(MeterCalibration::Ic7300Mk2).data()
               == powerCurveIc7300Mk2().data(),
           "power presentation and conversion share the IC-7300MK2 curve selector");
-    check(powerCurveForCalibration(MeterCalibration::Ic9700Voltage).empty(),
-          "the voltage-only IC-9700 calibration fails closed to relative power");
+    check(powerCurveForCalibration(MeterCalibration::Ic9700).empty(),
+          "the IC-9700 meter calibration fails closed to relative power");
 }
 
 // The mode vocabulary this backend publishes onto the slice (#5040).

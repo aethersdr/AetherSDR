@@ -20,6 +20,7 @@
 // original constructor position, so construction order is unchanged.
 
 #include "MainWindow.h"
+#include "MeterApplet.h"
 
 #include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
@@ -1295,6 +1296,11 @@ void MainWindow::wireRadioModel()
         // S-Meter: use raw interlock state so Level/Compression modes work
         // during VOX/hardware CW without the effectiveTx power threshold (#877)
         m_appletPanel->setMeterTransmitting(tx);
+        // PA drain current is meaningful only while the radio is physically
+        // transmitting. Do not drive it from the optimistic MOX fan-out: an
+        // operator unkey precedes the authoritative interlock edge, and direct
+        // amplifier state also shares that generic meter fan-out.
+        m_appletPanel->meterApplet()->setTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);

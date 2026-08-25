@@ -394,6 +394,10 @@ struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
     PowerConversion powerConversion = PowerConversion::NativeWatts;
+    // UI exposure is narrower than wire decoding. Several Icom profiles have
+    // an Id calibration, but each model must be approved independently before
+    // Radio Vitals offers that instrument.
+    bool hasPaCurrentTelemetry = false;
     // Live IC-705 and IC-7300MK2 evidence: SWR/ALC can return an isolated
     // minimum between real keyed samples. Never lend that interpretation to a
     // model whose own meter stream has not demonstrated it.

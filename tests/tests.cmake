@@ -2806,6 +2806,8 @@ add_executable(meter_applet_capability_test
     src/core/AsyncLogWriter.cpp
 )
 target_include_directories(meter_applet_capability_test PRIVATE src)
+target_compile_definitions(meter_applet_capability_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(meter_applet_capability_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
 )

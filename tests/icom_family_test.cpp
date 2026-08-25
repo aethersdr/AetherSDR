@@ -258,6 +258,17 @@ int main(int argc, char** argv)
               *AetherSDR::icom::modelForCivAddress(0xA2))
                .meters.hasPaTemperatureTelemetry,
           "the IC-9700 profile does not declare PA-temperature telemetry");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .meters.hasPaCurrentTelemetry,
+          "the IC-9700 profile independently declares Radio Vitals PA current");
+    check(!AetherSDR::icom::profileFor(
+               *AetherSDR::icom::modelForCivAddress(0xA4))
+               .meters.hasPaCurrentTelemetry
+              && !AetherSDR::icom::profileFor(
+                      *AetherSDR::icom::modelForCivAddress(0xB6))
+                      .meters.hasPaCurrentTelemetry,
+          "IC-705 and IC-7300MK2 do not inherit the IC-9700 Radio Vitals surface");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
