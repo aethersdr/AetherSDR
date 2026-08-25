@@ -67,6 +67,7 @@
           },
           "titlebar": {
             "background":             "#eb0d1624",
+            "background.mac":         "#9e0d1624",
             "border":                 "#2978bee6",
             "tab": {
               "hover":            "#12ffffff",
@@ -83,7 +84,14 @@
               "glyph.hover": "{color.gray.50}",
               "hover":       "#14ffffff",
               "close.hover": "#c42b1c",
-              "close.glyph": "#ffffff"
+              "close.glyph": "#ffffff",
+              "semantic": {
+                "close":    "#ff5f57",
+                "minimize": "#febc2e",
+                "maximize": "#28c840",
+                "inactive": "#565a60",
+                "glyph":    "#a0000000"
+              }
             }
           },
           "brand": {

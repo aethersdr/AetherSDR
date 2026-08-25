@@ -41,8 +41,9 @@ namespace AetherSDR::mac {
 bool isSupported();
 
 // Restore the rounded corners, drop shadow and native edge-resizing that
-// Qt::FramelessWindowHint takes away.  Idempotent; safe to call again after Qt
-// re-creates the window (which it does whenever window flags change).
+// Qt::FramelessWindowHint takes away, and install the 52 px visual-effect
+// material behind Qt's translucent title-bar tint. Idempotent; safe to call
+// again after Qt re-creates the window (which it does whenever flags change).
 void applyFramelessWindowStyle(QWidget* window, int cornerRadius);
 
 } // namespace AetherSDR::mac

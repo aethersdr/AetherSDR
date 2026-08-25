@@ -169,6 +169,7 @@ private:
     void handleTitleDoubleClick(QMouseEvent* ev);
     void showFeatureRequestDialogImpl();
     void updatePcAudioToolTip();
+    void applyPcAudioStyle();
     void applyBarStyle();
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
@@ -194,6 +195,9 @@ private:
     QLabel*      m_dockLeftLbl{nullptr};
     QLabel*      m_dockRightLbl{nullptr};
     QLabel*      m_popOutLbl{nullptr};
+    bool         m_appletPanelVisible{true};
+    bool         m_appletPanelDockedLeft{false};
+    bool         m_appletPanelFloating{false};
     QPointer<PersistentDialog> m_issueReporterDialog;
     QFrame*      m_dockSep{nullptr};
     bool         m_minimalMode{false};
@@ -244,7 +248,7 @@ protected:
 
 private:
     void updateMaximizeIcon();
-    QString currentBeatColor() const;  // #20c060 or throttle color
+    QColor currentBeatColor() const;
 };
 
 } // namespace AetherSDR

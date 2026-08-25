@@ -1190,16 +1190,17 @@ MainWindow::MainWindow(QWidget* parent)
         // MainWindow's direct children (QStatusBar, the central widget,
         // QSizeGrip) are all native windows that would otherwise swallow
         // every edge event before the top level saw it — see the
-        // FramelessResizer header (#4827).  topMoveReserve = TitleBar::kHeight
-        // reserves the whole title bar for its own drag-to-move handler and
-        // the menu bar / min-max-close controls it hosts, rather than the
-        // resizer's edge margin. MainWindow's title bar owns move and control
-        // hit-testing while the filter keeps all native child edges covered.
-        // The 8 px band is shared by every platform's custom frame.
-        // Stays installed
+        // FramelessResizer header (#4827). The 8 px band remains live on every
+        // Linux edge/corner; the title-bar content is vertically inset around
+        // it, and reliable compositors receive startSystemResize(). Windows
+        // answers its edges in WM_NCHITTEST instead. macOS restores
+        // NSWindowStyleMaskResizable in WindowChrome.mm, so AppKit owns native
+        // edge resizing and this filter must not intercept it. Stays installed
         // across frameless toggles — when the system frame is back on, the
         // platform owns resize and our filter no-ops.
-        FramelessResizer::install(this, 8, TitleBar::kHeight);
+#ifndef Q_OS_MAC
+        FramelessResizer::install(this, 8);
+#endif
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The
@@ -11106,10 +11107,17 @@ void MainWindow::floatAppletPanel()
         // back, healing an already-poisoned config on first use.
         if (m_appletPanelFloatWindow->isMaximized()
             || m_appletPanelFloatWindow->isFullScreen()) {
+            const QRect restoredNormalGeometry =
+                m_appletPanelFloatWindow->normalGeometry();
             m_appletPanelFloatWindow->setWindowState(
                 m_appletPanelFloatWindow->windowState()
                 & ~(Qt::WindowMaximized | Qt::WindowFullScreen));
-            m_appletPanelFloatWindow->resize(320, 720);
+            if (restoredNormalGeometry.isValid()
+                && !restoredNormalGeometry.isEmpty()) {
+                m_appletPanelFloatWindow->setGeometry(restoredNormalGeometry);
+            } else {
+                m_appletPanelFloatWindow->resize(320, 720);
+            }
             AppSettings::instance().setValue(
                 "AppletPanelFloatGeometry",
                 m_appletPanelFloatWindow->saveGeometry().toBase64());

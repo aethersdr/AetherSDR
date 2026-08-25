@@ -31,6 +31,8 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QImage>
+#include <QScrollArea>
 #include <QSlider>
 
 #include <cstdio>
@@ -53,6 +55,20 @@ static void checkEqual(int got, int want, const char* what)
         std::fprintf(stderr, "FAIL: %s (got %d, want %d)\n", what, got, want);
         ++g_failures;
     }
+}
+
+static int paintedPixelCount(const QImage& image)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            if (qAlpha(line[x]) > 0) {
+                ++count;
+            }
+        }
+    }
+    return count;
 }
 
 static RadioTab* tabWithId(TitleBar& bar, const QString& id)
@@ -119,6 +135,46 @@ int main(int argc, char** argv)
             check(b->focusPolicy() != Qt::NoFocus,
                   "every caption control is keyboard-reachable");
         }
+    }
+
+    // Every caption language is constructible and paintable in one headless
+    // process. This catches the prior macOS-only coverage gap: compile-time
+    // platform selection still chooses the production style, but the shared
+    // painter contract for Windows, Linux and macOS is exercised here.
+    struct CaptionContract {
+        CaptionStyle style;
+        const char* stateName;
+        int buttonWidth;
+        int buttonHeight;
+    };
+    const CaptionContract captionContracts[] = {
+        {CaptionStyle::WindowsCaption, "windows", 46, 52},
+        {CaptionStyle::LinuxChips, "linuxChips", 23, 23},
+        {CaptionStyle::MacTrafficLights, "macTrafficLights", 20, 22},
+    };
+    for (const CaptionContract& contract : captionContracts) {
+        WindowCaptionButtons controls(contract.style);
+        controls.adjustSize();
+        controls.show();
+        app.processEvents();
+        const QVariantMap controlState = controls.state();
+        check(controlState.value(QStringLiteral("style")).toString()
+                  == QLatin1String(contract.stateName),
+              "caption cluster reports the requested platform style");
+        for (const char* role : {"close", "minimize", "maximize"}) {
+            const QVariantMap button = controlState.value(QLatin1String(role)).toMap();
+            checkEqual(button.value(QStringLiteral("width")).toInt(),
+                       contract.buttonWidth,
+                       "caption button width matches its platform contract");
+            checkEqual(button.value(QStringLiteral("height")).toInt(),
+                       contract.buttonHeight,
+                       "caption button height matches its platform contract");
+        }
+        QImage rendered(controls.size(), QImage::Format_ARGB32_Premultiplied);
+        rendered.fill(Qt::transparent);
+        controls.render(&rendered);
+        check(paintedPixelCount(rendered) > 0,
+              "caption cluster paints visible platform controls");
     }
 
     // ── Radio tabs ──────────────────────────────────────────────────────────
@@ -238,6 +294,47 @@ int main(int argc, char** argv)
         const QVariantMap radios = tabs->state();
         checkEqual(radios.value(QStringLiteral("discovered")).toList().size(), 2,
                    "the popover lists every discovered radio");
+        if (QWidget* popover = tabs->findChild<QWidget*>(
+                QStringLiteral("discoveredRadiosPopover"))) {
+            popover->close();
+        }
+
+        // The strip must not make the whole title bar wider for every radio.
+        // All configured tabs still exist and remain keyboard-reachable inside
+        // a clipped horizontal viewport; selecting an off-screen active radio
+        // scrolls it into view while the + button remains outside the viewport.
+        const int twoRadioMinimum = tabs->minimumSizeHint().width();
+        QList<RadioTabEntry> manyRadios;
+        for (int index = 0; index < 8; ++index) {
+            RadioTabEntry entry;
+            entry.id = QStringLiteral("RADIO-%1").arg(index);
+            entry.name = QStringLiteral("Configured Radio %1").arg(index + 1);
+            entry.transport = QStringLiteral("192.0.2.%1").arg(index + 10);
+            entry.status = index == 7 ? RadioTabStatus::Connected
+                                      : RadioTabStatus::Available;
+            manyRadios.append(entry);
+        }
+        tabs->setRadios(manyRadios);
+        tabs->setActiveRadio(manyRadios.last().id);
+        app.processEvents();
+        app.processEvents();
+        checkEqual(tabs->findChildren<RadioTab*>().size(), 8,
+                   "overflow keeps one keyboard-reachable tab per configured radio");
+        checkEqual(tabs->minimumSizeHint().width(), twoRadioMinimum,
+                   "radio-strip minimum width does not grow with radio count");
+        check(tabs->maximumWidth() <= 560,
+              "radio strip has a finite title-bar width ceiling");
+        QScrollArea* scroller =
+            tabs->findChild<QScrollArea*>(QStringLiteral("radioTabScroller"));
+        RadioTab* lastTab = tabWithId(*bar, manyRadios.last().id);
+        check(scroller != nullptr && lastTab != nullptr,
+              "overflow strip exposes its viewport and final tab");
+        if (scroller && lastTab) {
+            const QRect lastInViewport(lastTab->mapTo(scroller->viewport(), QPoint()),
+                                       lastTab->size());
+            check(scroller->viewport()->rect().intersects(lastInViewport),
+                  "activating an overflow tab scrolls it into view");
+        }
     }
 
     if (g_failures == 0) {

@@ -94,6 +94,7 @@ band of reserved-but-empty space above the old strip for as long as they matched
 | Token | Canonical (dark) | Refs |
 |---|---|---|
 | `color.titlebar.background` | `#eb0d1624` | the 52 px bar's surface (0.92 alpha) |
+| `color.titlebar.background.mac` | `#9e0d1624` | macOS tint over the native visual-effect material (0.62 alpha) |
 | `color.titlebar.border` | `#2978bee6` | 1 px rule under the bar (0.16 alpha) |
 | `color.titlebar.tab.hover` | `#12ffffff` | inactive radio tab, hovered |
 | `color.titlebar.tab.active.background` | `#1a00b4d8` | active radio tab fill |
@@ -106,6 +107,11 @@ band of reserved-but-empty space above the old strip for as long as they matched
 | `color.titlebar.caption.hover` | `#14ffffff` | window-control hover wash |
 | `color.titlebar.caption.close.hover` | `#c42b1c` | close control hover fill |
 | `color.titlebar.caption.close.glyph` | `#ffffff` | close glyph on that fill |
+| `color.titlebar.caption.semantic.close` | `#ff5f57` | macOS close light and Linux close-chip hover |
+| `color.titlebar.caption.semantic.minimize` | `#febc2e` | macOS minimize light and Linux minimize-chip hover |
+| `color.titlebar.caption.semantic.maximize` | `#28c840` | macOS zoom light and Linux maximize-chip hover |
+| `color.titlebar.caption.semantic.inactive` | `#565a60` | inactive macOS traffic-light cluster |
+| `color.titlebar.caption.semantic.glyph` | `#a0000000` | dark glyph on semantic caption fills |
 | `color.brand.wordmark` | `#eaf2fb` | the "Aether" half of the wordmark |
 | `color.brand.gradient` | linear 100° | the "SDR" half (`#3aa7ff → #5de3ff → #8ef7e6`) |
 
@@ -113,9 +119,9 @@ The `status.*` triple is a **redundant** encoding: every radio tab also spells
 its state out in words, on the rendered status line and in its accessible name.
 Nothing in the bar may depend on the dot's colour alone (WCAG 1.4.1).
 
-The traffic-light / caption-chip fills on macOS and Linux are deliberately
-**not** tokenised — red/amber/green *is* the affordance being borrowed from the
-platform, and a themed "red" close control would stop reading as one.
+The traffic-light / caption-chip fills retain the platform semantic values in
+both bundled themes, but still resolve through tokens so custom and future light
+themes can preserve contrast without bypassing the theme system.
 
 ### Meter colours (specialised — paint code only)
 
@@ -202,15 +208,15 @@ resolver converts that storage format to `rgba()` before applying QSS; raw
 - Text: **4**
 - Accents: **6** (3 cyan family + 3 status)
 - Borders: **4**
-- Title bar + brand: **15** (14 scalar + 1 gradient)
+- Title bar + brand: **21** (20 scalar + 1 gradient)
 - Meters: **6**
 - Spectrum / waterfall: **5** (4 scalar + 1 gradient)
 - Slice: **9** (A–H + TX)
 - Font: **6**
 - Sizing: **5**
 
-**Total: 66 tokens** — still inside the 50-80 envelope from the RFC.
-(51 at the Phase 1 migration; +15 for the unified title bar and brand mark.)
+**Total: 72 tokens** — still inside the 50-80 envelope from the RFC.
+(51 at the Phase 1 migration; +21 for the unified title bar and brand mark.)
 
 ## Migration risks
 

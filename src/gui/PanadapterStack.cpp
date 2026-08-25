@@ -17,14 +17,15 @@
 #include <QTimer>
 #include <QWindow>
 
-// After moving a QRhiWidget between top-level windows, force a fresh initialize()
-// cycle so Metal binds to the new NSView. The backing-store notification is sent
-// before the actual reparent; sending it again here can make QRhiWidget remove a
-// stale cleanup callback from the wrong QRhi during startup floating restore.
+// After moving a QRhiWidget or its native surface, force a fresh initialize()
+// cycle so the platform backend binds to the final native-child geometry. The
+// backing-store notification is sent before an actual top-level reparent;
+// sending it again here can remove a stale cleanup callback from the wrong QRhi
+// during startup floating restore.
 static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
-#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+#if defined(AETHER_GPU_SPECTRUM)
     const bool wasVisible = sw->isVisible();
     sw->hide();
     sw->resetGpuResources();
@@ -363,6 +364,9 @@ void PanadapterStack::refreshAfterLayoutShift()
     // cost already paid when floating or docking a pan.
     for (PanadapterApplet* applet : std::as_const(m_pans)) {
         if (!applet) continue;
+        // A dock/visibility change in this window cannot move a panadapter
+        // hosted by a floating pan window or an additional canvas window.
+        if (applet->window() != window()) continue;
         if (SpectrumWidget* sw = applet->spectrumWidget()) {
             refreshAfterReparent(sw);
         }

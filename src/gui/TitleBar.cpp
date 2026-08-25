@@ -60,14 +60,15 @@ constexpr int kTransferTimeoutMs = 15000;
 // with a thin shaded strip flush against one inner wall, representing
 // the applet panel docked on that side.  Visual language matches the
 // pop-out icon's thin-strip-as-panel motif.
-QPixmap buildDockSideIcon(bool fillLeft, bool active)
+QPixmap buildDockSideIcon(const QWidget* widget, bool fillLeft, bool active)
 {
     QPixmap pm(16, 18);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, false);
-    const QColor stroke(active ? QColor(255, 255, 255, 230)
-                                : QColor(138, 168, 192, 200));
+    const QColor stroke = ThemeManager::instance().color(
+        widget, active ? QStringLiteral("color.titlebar.caption.glyph.hover")
+                       : QStringLiteral("color.titlebar.caption.glyph"));
     p.setPen(QPen(stroke, 1));
     p.setBrush(Qt::NoBrush);
     // Outline 13×14: columns 1 and 14, rows 2 and 16.  Interior 12×13.
@@ -89,14 +90,15 @@ QPixmap buildDockSideIcon(bool fillLeft, bool active)
 // representing the applet panel detached into its own window.  The
 // filled area is 25% of the hollow square's interior so the relative
 // sizing reads as "small floating window".
-QPixmap buildPopOutIcon(bool active)
+QPixmap buildPopOutIcon(const QWidget* widget, bool active)
 {
     QPixmap pm(16, 18);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, false);
-    const QColor stroke(active ? QColor(255, 255, 255, 230)
-                                : QColor(138, 168, 192, 200));
+    const QColor stroke = ThemeManager::instance().color(
+        widget, active ? QStringLiteral("color.titlebar.caption.glyph.hover")
+                       : QStringLiteral("color.titlebar.caption.glyph"));
     p.setPen(QPen(stroke, 1));
     p.setBrush(Qt::NoBrush);
     // Main-window hollow rect on the left.  Same vertical extent as the
@@ -290,11 +292,13 @@ TitleBar::TitleBar(QWidget* parent)
     // the active tab names.
     m_mfBtn = new QPushButton("multiFLEX");
     m_mfBtn->setFlat(true);
-    m_mfBtn->setStyleSheet(
-        "QPushButton { color: #20c060; font-size: 11px; font-weight: bold; "
-        "border: 1px solid #20c060; border-radius: 4px; "
-        "background: transparent; padding: 0px 3px; }"
-        "QPushButton:hover { background: rgba(32, 192, 96, 30); }");
+    ThemeManager::instance().applyStyleSheet(
+        m_mfBtn,
+        QStringLiteral(
+            "QPushButton { color: {{color.accent.success}}; font-size: 11px;"
+            " font-weight: bold; border: 1px solid {{color.accent.success}};"
+            " border-radius: 4px; background: transparent; padding: 0px 3px; }"
+            "QPushButton:hover { background: {{color.titlebar.tab.active.background}}; }"));
     m_mfBtn->setVisible(false);
     m_mfBtn->setCursor(Qt::PointingHandCursor);
     m_mfBtn->setAccessibleName("multiFLEX status");
@@ -316,9 +320,12 @@ TitleBar::TitleBar(QWidget* parent)
     audio->setSpacing(8);
 
     m_otherTxLabel = new QLabel();
-    m_otherTxLabel->setStyleSheet(
-        "QLabel { background: white; color: #cc0000; font-size: 12px; "
-        "font-weight: bold; border-radius: 3px; padding: 2px 8px; }");
+    ThemeManager::instance().applyStyleSheet(
+        m_otherTxLabel,
+        QStringLiteral(
+            "QLabel { background: {{color.titlebar.caption.close.glyph}};"
+            " color: {{color.accent.danger}}; font-size: 12px; font-weight: bold;"
+            " border-radius: 3px; padding: 2px 8px; }"));
     m_otherTxLabel->setVisible(false);
     markDragHandle(m_otherTxLabel);
     audio->addWidget(m_otherTxLabel);
@@ -338,10 +345,13 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerLabel->setFixedHeight(22);
     m_txTimerLabel->setMinimumWidth(52);
     m_txTimerLabel->setAlignment(Qt::AlignCenter);
-    m_txTimerLabel->setStyleSheet(
-        "QLabel { color: #20c060; border: 1px solid #20c060; border-radius: 3px; "
-        "background: transparent; font-size: 11px; font-weight: bold; "
-        "padding: 0px 4px; }");
+    ThemeManager::instance().applyStyleSheet(
+        m_txTimerLabel,
+        QStringLiteral(
+            "QLabel { color: {{color.accent.success}};"
+            " border: 1px solid {{color.accent.success}}; border-radius: 3px;"
+            " background: transparent; font-size: 11px; font-weight: bold;"
+            " padding: 0px 4px; }"));
     m_txTimerLabel->setToolTip(QStringLiteral("Transmit timer — elapsed key-down time"));
     m_txTimerLabel->setAccessibleName(QStringLiteral("Transmit timer"));
     m_txTimerLabel->setAccessibleDescription(
@@ -395,23 +405,10 @@ TitleBar::TitleBar(QWidget* parent)
         "Toggle PC receive playback and PC microphone voice transmit");
     updatePcAudioToolTip();
 
-    auto updatePcStyle = [this]() {
-        // 12 px radius on a 24 px control = a pill.  Colours stay literal here
-        // rather than tokenised: this is the one control on the bar whose green
-        // reads as "audio is live on this computer", the same green the status
-        // bar and the network indicator use.
-        m_pcBtn->setStyleSheet(m_pcBtn->isChecked()
-            ? "QPushButton { background: #1a6030; color: #40ff80; border: 1px solid #20a040; "
-              "border-radius: 12px; font-size: 10px; font-weight: bold; }"
-              "QPushButton:hover { background: #207040; }"
-            : "QPushButton { background: #1a2a3a; color: #607080; border: 1px solid #304050; "
-              "border-radius: 12px; font-size: 10px; font-weight: bold; }"
-              "QPushButton:hover { background: #243848; }");
-    };
-    updatePcStyle();
+    applyPcAudioStyle();
 
-    connect(m_pcBtn, &QPushButton::toggled, this, [this, updatePcStyle](bool on) {
-        updatePcStyle();
+    connect(m_pcBtn, &QPushButton::toggled, this, [this](bool on) {
+        applyPcAudioStyle();
         auto& ss = AppSettings::instance();
         ss.setValue("PcAudioEnabled", on ? "True" : "False");
         ss.save();
@@ -534,7 +531,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     const QString dockLblStyle = QStringLiteral(
         "QLabel { padding: 0 6px; border-radius: 4px; }"
-        "QLabel:hover { background: #203040; }");
+        "QLabel:hover { background: {{color.titlebar.caption.hover}}; }");
 
     // Dock-side selectors (applet panel left vs right of the panadapter).
     // Click is wired via eventFilter() like the min/max/close trio.
@@ -548,8 +545,9 @@ TitleBar::TitleBar(QWidget* parent)
     m_dockLeftLbl->setAccessibleDescription(
         tr("Move the applet panel to the left of the panadapter, or hide it "
            "if it is already docked there"));
-    m_dockLeftLbl->setStyleSheet(dockLblStyle);
-    m_dockLeftLbl->setPixmap(buildDockSideIcon(/*fillLeft=*/true, /*active=*/false));
+    ThemeManager::instance().applyStyleSheet(m_dockLeftLbl, dockLblStyle);
+    m_dockLeftLbl->setPixmap(
+        buildDockSideIcon(m_dockLeftLbl, /*fillLeft=*/true, /*active=*/false));
     m_dockLeftLbl->installEventFilter(this);
     m_hbox->addWidget(m_dockLeftLbl);
 
@@ -563,8 +561,9 @@ TitleBar::TitleBar(QWidget* parent)
     m_dockRightLbl->setAccessibleDescription(
         tr("Move the applet panel to the right of the panadapter, or hide it "
            "if it is already docked there"));
-    m_dockRightLbl->setStyleSheet(dockLblStyle);
-    m_dockRightLbl->setPixmap(buildDockSideIcon(/*fillLeft=*/false, /*active=*/true));
+    ThemeManager::instance().applyStyleSheet(m_dockRightLbl, dockLblStyle);
+    m_dockRightLbl->setPixmap(
+        buildDockSideIcon(m_dockRightLbl, /*fillLeft=*/false, /*active=*/true));
     m_dockRightLbl->installEventFilter(this);
     m_hbox->addWidget(m_dockRightLbl);
 
@@ -578,8 +577,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_popOutLbl->setAccessibleDescription(
         tr("Float the applet panel in its own window, or dock it back into "
            "the main window"));
-    m_popOutLbl->setStyleSheet(dockLblStyle);
-    m_popOutLbl->setPixmap(buildPopOutIcon(/*active=*/false));
+    ThemeManager::instance().applyStyleSheet(m_popOutLbl, dockLblStyle);
+    m_popOutLbl->setPixmap(buildPopOutIcon(m_popOutLbl, /*active=*/false));
     m_popOutLbl->installEventFilter(this);
     m_hbox->addWidget(m_popOutLbl);
 
@@ -631,15 +630,23 @@ TitleBar::TitleBar(QWidget* parent)
         applyBarStyle();
         applyAudioIcon(m_speakerBtn, AudioIcon::Speaker, m_speakerBtn->isChecked());
         applyAudioIcon(m_headphoneBtn, AudioIcon::Headphone, m_headphoneBtn->isChecked());
+        setAppletDockState(m_appletPanelVisible, m_appletPanelDockedLeft);
+        setAppletFloating(m_appletPanelFloating);
     });
 }
 
 void TitleBar::applyBarStyle()
 {
+#ifdef Q_OS_MAC
+    const QString backgroundToken = QStringLiteral("color.titlebar.background.mac");
+#else
+    const QString backgroundToken = QStringLiteral("color.titlebar.background");
+#endif
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         this,
-        QStringLiteral("TitleBar { background: {{color.titlebar.background}};"
-                       " border-bottom: 1px solid {{color.titlebar.border}}; }"));
+        QStringLiteral("TitleBar { background: {{%1}};"
+                       " border-bottom: 1px solid {{color.titlebar.border}}; }")
+            .arg(backgroundToken));
 }
 
 void TitleBar::showEvent(QShowEvent* ev)
@@ -940,16 +947,21 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
 
 void TitleBar::setAppletFloating(bool floating)
 {
+    m_appletPanelFloating = floating;
     if (m_popOutLbl)
-        m_popOutLbl->setPixmap(buildPopOutIcon(floating));
+        m_popOutLbl->setPixmap(buildPopOutIcon(m_popOutLbl, floating));
 }
 
 void TitleBar::setAppletDockState(bool visible, bool left)
 {
+    m_appletPanelVisible = visible;
+    m_appletPanelDockedLeft = left;
     if (m_dockLeftLbl)
-        m_dockLeftLbl->setPixmap(buildDockSideIcon(true,  visible &&  left));
+        m_dockLeftLbl->setPixmap(
+            buildDockSideIcon(m_dockLeftLbl, true, visible && left));
     if (m_dockRightLbl)
-        m_dockRightLbl->setPixmap(buildDockSideIcon(false, visible && !left));
+        m_dockRightLbl->setPixmap(
+            buildDockSideIcon(m_dockRightLbl, false, visible && !left));
 }
 
 void TitleBar::updateMaximizeIcon()
@@ -1033,13 +1045,26 @@ void TitleBar::setPcAudioEnabled(bool on)
 {
     QSignalBlocker b(m_pcBtn);
     m_pcBtn->setChecked(on);
-    m_pcBtn->setStyleSheet(on
-        ? "QPushButton { background: #1a6030; color: #40ff80; border: 1px solid #20a040; "
-          "border-radius: 3px; font-size: 10px; font-weight: bold; }"
-          "QPushButton:hover { background: #207040; }"
-        : "QPushButton { background: #1a2a3a; color: #607080; border: 1px solid #304050; "
-          "border-radius: 3px; font-size: 10px; font-weight: bold; }"
-          "QPushButton:hover { background: #243848; }");
+    applyPcAudioStyle();
+}
+
+void TitleBar::applyPcAudioStyle()
+{
+    if (!m_pcBtn) {
+        return;
+    }
+    const QString style = m_pcBtn->isChecked()
+        ? QStringLiteral(
+              "QPushButton { background: {{color.background.success}};"
+              " color: {{color.text.primary}}; border: 1px solid {{color.accent.success}};"
+              " border-radius: 12px; font-size: 10px; font-weight: bold; }"
+              "QPushButton:hover { background: {{color.background.success}}; }")
+        : QStringLiteral(
+              "QPushButton { background: {{color.background.1}};"
+              " color: {{color.text.secondary}}; border: 1px solid {{color.border.strong}};"
+              " border-radius: 12px; font-size: 10px; font-weight: bold; }"
+              "QPushButton:hover { background: {{color.background.2}}; }");
+    ThemeManager::instance().applyStyleSheet(m_pcBtn, style);
 }
 
 void TitleBar::setPcAudioDevices(const QString& inputDevice, const QString& outputDevice)
@@ -1422,10 +1447,12 @@ void TitleBar::setChildDialogsFramelessMode(bool on)
 QColor TitleBar::linkOverrideColor() const
 {
     if (m_missedBeats >= kHeartbeatAlarmThreshold) {
-        return QColor(QStringLiteral("#cc2020"));   // link lost
+        return ThemeManager::instance().color(
+            this, QStringLiteral("color.accent.danger"));
     }
     if (m_discovering) {
-        return QColor(QStringLiteral("#e0a020"));   // searching, no link yet
+        return ThemeManager::instance().color(
+            this, QStringLiteral("color.accent.warning"));
     }
     return QColor();
 }
@@ -1448,9 +1475,11 @@ void TitleBar::setDiscovering(bool active)
     pushLinkIndicator();
 }
 
-QString TitleBar::currentBeatColor() const
+QColor TitleBar::currentBeatColor() const
 {
-    return m_throttleFlashColor.isEmpty() ? QStringLiteral("#20c060") : m_throttleFlashColor;
+    return m_throttleFlashColor.isEmpty()
+        ? ThemeManager::instance().color(this, QStringLiteral("color.accent.success"))
+        : QColor(m_throttleFlashColor);
 }
 
 void TitleBar::onHeartbeat()
@@ -1462,7 +1491,7 @@ void TitleBar::onHeartbeat()
     // data now, not decoration: a link that stops answering simply stops
     // breathing, which is the same signal the old 100 ms flash carried.
     if (m_radioTabs) {
-        m_radioTabs->pulseLink(QColor(currentBeatColor()));
+        m_radioTabs->pulseLink(currentBeatColor());
     }
 }
 

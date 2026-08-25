@@ -128,12 +128,18 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.text.primary", QString("#c8d8e8"));
     m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
     m_tokens.insert("color.titlebar.background", QString("#eb0d1624"));
+    m_tokens.insert("color.titlebar.background.mac", QString("#9e0d1624"));
     m_tokens.insert("color.titlebar.border", QString("#2978bee6"));
     m_tokens.insert("color.titlebar.caption.close.glyph", QString("#ffffff"));
     m_tokens.insert("color.titlebar.caption.close.hover", QString("#c42b1c"));
     m_tokens.insert("color.titlebar.caption.glyph", QString("#8ea8c0"));
     m_tokens.insert("color.titlebar.caption.glyph.hover", QString("#e6f0fa"));
     m_tokens.insert("color.titlebar.caption.hover", QString("#14ffffff"));
+    m_tokens.insert("color.titlebar.caption.semantic.close", QString("#ff5f57"));
+    m_tokens.insert("color.titlebar.caption.semantic.glyph", QString("#a0000000"));
+    m_tokens.insert("color.titlebar.caption.semantic.inactive", QString("#565a60"));
+    m_tokens.insert("color.titlebar.caption.semantic.maximize", QString("#28c840"));
+    m_tokens.insert("color.titlebar.caption.semantic.minimize", QString("#febc2e"));
     m_tokens.insert("color.titlebar.status.available", QString("#506070"));
     m_tokens.insert("color.titlebar.status.connected", QString("#4dd87a"));
     m_tokens.insert("color.titlebar.status.inUse", QString("#ffb84d"));

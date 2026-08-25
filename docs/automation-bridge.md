@@ -2695,12 +2695,13 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 ← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
    "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
    "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
-   "radios":{"activeId":"DEMO-0001","popoverVisible":false,
-             "pulseEnabled":true,
+   "radios":{"activeId":"DEMO-0001","width":560,"maximumWidth":560,
+             "contentWidth":257,"overflowing":false,
+             "popoverVisible":false,"pulseEnabled":true,
              "tabs":[{"id":"DEMO-0001","name":"Simulator (not on the air)",
                       "status":"connected",
                       "statusLine":"Simulator (not on the air) · connected · DEMO",
-                      "transport":"127.0.0.1","active":true,
+                      "transport":"127.0.0.1","active":true,"linkCarrier":true,
                       "screenRect":[233,43,257,40],
                       "accessibleName":"Radio Simulator (not on the air), connected"}],
              "discovered":[…]},
@@ -2718,7 +2719,9 @@ bar and **must be 0** — anything else means something is reserving a strip abo
 the unified bar, which is the wasted top row this design exists to remove.
 `chrome.captionButtons.style` is `macTrafficLights`, `windows` or `linuxChips`;
 the window is frameless on all three platforms, so the controls are always the
-app's own. `radios.tabs[].status` is one of `connected` / `available` /
+app's own. `radios.overflowing` reports whether the bounded tab viewport is
+currently clipping configured radios, and `radios.tabs[].linkCarrier` identifies
+the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
 `in use`, and `statusLine` is the text the tab actually renders — assert against
 that rather than the dot colour, since [status is never encoded by colour
 alone](a11y.md). `screenRect` (on the bar and on each tab) is `[x, y, w, h]` in
@@ -4117,8 +4120,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
-| `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> |
-| `applet` | — | applet <dock <left\|right>\|float <on\|off>\|show\|hide\|state> |
+| `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> — drive the unified title bar's own controls |
+| `applet` | — | applet <dock <left\|right>\|float <on\|off>\|show\|hide\|state> — drive the applet panel's dock side, floating and visibility |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
 | `keyevent` | — | keyevent <press\|release> <action-id\|key-seq> — inject a real key edge through the app event filter (momentary shortcuts only — PTT hold, and the CW keys once bound: their ids ship unbound, so KeyInjectUnbound until the operator binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab moves focus yet reports consumed) |
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
