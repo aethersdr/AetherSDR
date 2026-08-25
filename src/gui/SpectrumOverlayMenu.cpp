@@ -469,12 +469,18 @@ void SpectrumOverlayMenu::buildBandPanel()
     grid->setContentsMargins(2, 2, 2, 2);
     grid->setSpacing(2);
 
-    const QString bandBtnStyle =
-        "QPushButton { background: rgba(30, 40, 55, 220); "
-        "border: 1px solid #304050; border-radius: 3px; "
-        "color: #c8d8e8; font-size: 11px; font-weight: bold; }"
-        "QPushButton:hover { background: rgba(0, 112, 192, 180); "
-        "border: 1px solid #0090e0; }";
+    m_bandButtons.clear();
+    m_bandBtnFreqs.clear();
+
+    const QString bandBtnStyle = ThemeManager::instance().resolve(
+        QStringLiteral(
+            "QPushButton { background: rgba(30, 40, 55, 220); "
+            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+            "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
+            "QPushButton:hover { background: rgba(0, 112, 192, 180); "
+            "border: 1px solid {{color.accent}}; }"
+            "QPushButton:checked { background: {{color.accent.dim}}; color: {{color.text.primary}}; "
+            "border: 1px solid {{color.accent}}; }"));
 
     constexpr int layout[][3] = {
         {0, 1, 2},      // 160, 80, 60
@@ -506,11 +512,13 @@ void SpectrumOverlayMenu::buildBandPanel()
             } else if (bandName.isEmpty()) {
                 btn->setEnabled(false);
             } else {
+                btn->setCheckable(true);
                 connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
                     hideAllSubPanels();
                     emit bandSelected(bandName, freq, mode);
                 });
                 m_bandBtnFreqs.append({btn, freq});
+                m_bandButtons.append({btn, bandName});
             }
 
             grid->addWidget(btn, row, col);
@@ -518,6 +526,7 @@ void SpectrumOverlayMenu::buildBandPanel()
     }
 
     applyTuningRangeToBandButtons();
+    updateActiveBandHighlight();
     m_bandPanel->adjustSize();
 }
 
@@ -1173,7 +1182,12 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
         m_slice->disconnect(this);
     m_slice = slice;
     refreshAntennaCombo();
+    updateActiveBandHighlight();
     if (!m_slice) return;
+
+    connect(m_slice, &SliceModel::frequencyChanged, this, [this](double /*freqMhz*/) {
+        updateActiveBandHighlight();
+    });
 
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
         if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
@@ -1383,6 +1397,7 @@ void SpectrumOverlayMenu::showBandPanelAt(const QPoint& pos)
     if (!m_bandPanel)
         return;
 
+    updateActiveBandHighlight();
     m_bandPanelVisible = true;
     m_bandPanel->move(pos);
     m_bandPanel->raise();
@@ -3005,6 +3020,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     // here is about to dangle. Cleared HERE rather than after the rebuild,
     // because deleteLater() on the panel takes its children with it.
     m_bandBtnFreqs.clear();
+    m_bandButtons.clear();
 
     // Rebuild the main band panel to insert XVTR bands between
     // HF bands and utility buttons (WWV/GEN/2200/630/XVTR). (#571)
@@ -3024,19 +3040,25 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     grid->setContentsMargins(2, 2, 2, 2);
     grid->setSpacing(2);
 
-    const QString bandBtnStyle =
-        "QPushButton { background: rgba(30, 40, 55, 220); "
-        "border: 1px solid #304050; border-radius: 3px; "
-        "color: #c8d8e8; font-size: 11px; font-weight: bold; }"
-        "QPushButton:hover { background: rgba(0, 112, 192, 180); "
-        "border: 1px solid #0090e0; }";
+    const QString bandBtnStyle = ThemeManager::instance().resolve(
+        QStringLiteral(
+            "QPushButton { background: rgba(30, 40, 55, 220); "
+            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+            "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
+            "QPushButton:hover { background: rgba(0, 112, 192, 180); "
+            "border: 1px solid {{color.accent}}; }"
+            "QPushButton:checked { background: {{color.accent.dim}}; color: {{color.text.primary}}; "
+            "border: 1px solid {{color.accent}}; }"));
 
-    const QString xvtrBtnStyle =
-        "QPushButton { background: rgba(30, 40, 55, 220); "
-        "border: 1px solid #304050; border-radius: 3px; "
-        "color: #00d0ff; font-size: 11px; font-weight: bold; }"
-        "QPushButton:hover { background: rgba(0, 112, 192, 180); "
-        "border: 1px solid #0090e0; }";
+    const QString xvtrBtnStyle = ThemeManager::instance().resolve(
+        QStringLiteral(
+            "QPushButton { background: rgba(30, 40, 55, 220); "
+            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+            "color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; }"
+            "QPushButton:hover { background: rgba(0, 112, 192, 180); "
+            "border: 1px solid {{color.accent}}; }"
+            "QPushButton:checked { background: {{color.accent.dim}}; color: {{color.text.primary}}; "
+            "border: 1px solid {{color.accent}}; }"));
 
     // HF bands (indices 0-10)
     constexpr int hfLayout[][3] = {
@@ -3050,6 +3072,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
         btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
         btn->setStyleSheet(bandBtnStyle);
+        btn->setCheckable(true);
         const QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
         const double  freq = BAND_GRID[idx].freqMhz;
         const QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
@@ -3058,6 +3081,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             emit bandSelected(bandName, freq, mode);
         });
         m_bandBtnFreqs.append({btn, freq});
+        m_bandButtons.append({btn, bandName});
         return btn;
     };
 
@@ -3082,6 +3106,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             auto* btn = new QPushButton(label, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
             btn->setStyleSheet(bandBtnStyle);
+            btn->setCheckable(true);
             const double  freq = def.defaultFreqMhz;
             const QString mode = QString::fromLatin1(def.defaultMode);
             connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
@@ -3089,6 +3114,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
                 emit bandSelected(bandName, freq, mode);
             });
             m_bandBtnFreqs.append({btn, freq});
+            m_bandButtons.append({btn, bandName});
             grid->addWidget(btn, row, col % 3);
             if (++col % 3 == 0)
                 ++row;
@@ -3128,6 +3154,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         auto* btn = new QPushButton(bands[i].name, m_bandPanel);
         btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
         btn->setStyleSheet(xvtrBtnStyle);
+        btn->setCheckable(true);
         const double freq = bands[i].rfFreqMhz;
         const QString name = bands[i].name;
         const QString stackKey = bands[i].stackKey;
@@ -3137,6 +3164,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         });
         grid->addWidget(btn, row + i / 3, i % 3);
         m_xvtrBandBtns.append(btn);
+        m_bandButtons.append({btn, name});
     }
     if (xvtrBandCount > 0) {
         row += (xvtrBandCount + 2) / 3;  // advance past XVTR rows
@@ -3175,16 +3203,20 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             } else if (bandName.isEmpty()) {
                 btn->setEnabled(false);
             } else {
+                btn->setCheckable(true);
                 connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
                     hideAllSubPanels();
                     emit bandSelected(bandName, freq, mode);
                 });
+                m_bandBtnFreqs.append({btn, freq});
+                m_bandButtons.append({btn, bandName});
             }
             grid->addWidget(btn, row, col);
         }
         ++row;
     }
 
+    updateActiveBandHighlight();
     m_bandPanel->adjustSize();
     m_bandPanelVisible = bandPanelWasVisible;
     if (bandPanelWasVisible)
@@ -3316,6 +3348,49 @@ void SpectrumOverlayMenu::applyTuningRangeToBandButtons()
                   .arg(m_tuningMinMhz, 0, 'f', 3)
                   .arg(m_tuningMaxMhz, 0, 'f', 3));
         ++it;
+    }
+}
+
+void SpectrumOverlayMenu::updateActiveBandHighlight()
+{
+    if (!m_slice) {
+        for (const auto& entry : m_bandButtons) {
+            if (entry.button) {
+                QSignalBlocker b(entry.button);
+                entry.button->setChecked(false);
+            }
+        }
+        return;
+    }
+
+    const double freq = m_slice->frequency();
+    QString activeBand = BandSettings::bandForFrequency(freq);
+
+    for (const auto& xvtr : m_lastXvtrBands) {
+        if (std::abs(freq - xvtr.rfFreqMhz) < 0.5) {
+            activeBand = xvtr.name;
+            break;
+        }
+    }
+
+    for (const auto& range : m_declaredBandRanges) {
+        if (range.lowHz > 0.0 && range.highHz > 0.0) {
+            const double lowMhz = range.lowHz / 1.0e6;
+            const double highMhz = range.highHz / 1.0e6;
+            if (freq >= lowMhz && freq <= highMhz) {
+                activeBand = range.name;
+                break;
+            }
+        }
+    }
+
+    for (const auto& entry : m_bandButtons) {
+        if (!entry.button)
+            continue;
+
+        const bool match = (entry.bandName.compare(activeBand, Qt::CaseInsensitive) == 0);
+        QSignalBlocker b(entry.button);
+        entry.button->setChecked(match);
     }
 }
 

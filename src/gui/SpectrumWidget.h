@@ -74,7 +74,17 @@ struct WfGradientStop { float pos; int r, g, b; };
 const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
 
 // Returns the display name for a color scheme.
-const char* wfSchemeName(WfColorScheme scheme);
+inline const char* wfSchemeName(WfColorScheme scheme)
+{
+    switch (scheme) {
+    case WfColorScheme::Grayscale: return "Grayscale";
+    case WfColorScheme::BlueGreen: return "Blue-Green";
+    case WfColorScheme::Fire:      return "Fire";
+    case WfColorScheme::Plasma:    return "Plasma";
+    case WfColorScheme::Purple:    return "Purple";
+    default:                       return "Default";
+    }
+}
 
 // Spectrum render mode for the panadapter surface.
 enum class SpectrumRenderMode : int {

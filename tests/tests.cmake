@@ -3720,6 +3720,39 @@ add_test(NAME spectrum_overlay_wheel_guard_test
 set_tests_properties(spectrum_overlay_wheel_guard_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(spectrum_overlay_band_highlight_test
+    tests/spectrum_overlay_band_highlight_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_band_highlight_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_band_highlight_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_band_highlight_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_band_highlight_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_band_highlight_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_band_highlight_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_band_highlight_test
+         COMMAND spectrum_overlay_band_highlight_test)
+set_tests_properties(spectrum_overlay_band_highlight_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp
 )
@@ -4169,6 +4202,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vkamp_connection_test
     radio_capability_gating_test
     system_info_dialog_test
+    spectrum_overlay_band_highlight_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

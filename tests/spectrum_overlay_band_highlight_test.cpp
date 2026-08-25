@@ -1,0 +1,116 @@
+#include "gui/SpectrumOverlayMenu.h"
+#include "models/SliceModel.h"
+
+#include <QApplication>
+#include <QPushButton>
+#include <QWidget>
+
+#include <cstdio>
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failed = 0;
+
+void report(const char* name, bool ok)
+{
+    std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", name);
+    if (!ok) {
+        ++g_failed;
+    }
+}
+
+QPushButton* findBandButton(QWidget& parent, const QString& text)
+{
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto buttons = parent.findChildren<QPushButton*>();
+    for (auto* btn : buttons) {
+        if (btn->text() == text) {
+            return btn;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    QApplication app(argc, argv);
+
+    QWidget parent;
+    SpectrumOverlayMenu menu(&parent);
+    SliceModel slice(0);
+
+    auto* btn20 = findBandButton(parent, "20");
+    auto* btn40 = findBandButton(parent, "40");
+    auto* btn80 = findBandButton(parent, "80");
+    auto* btnWwv = findBandButton(parent, "WWV");
+    auto* btnGen = findBandButton(parent, "GEN");
+
+    report("Band buttons present in overlay menu",
+           btn20 && btn40 && btn80 && btnWwv && btnGen);
+
+    // Initial state without slice
+    menu.setSlice(nullptr);
+    report("No button checked when slice is null",
+           btn20 && !btn20->isChecked() && btn40 && !btn40->isChecked() &&
+           btnGen && !btnGen->isChecked() && btnWwv && !btnWwv->isChecked());
+
+    // Tune slice to 20m (14.225 MHz) and attach
+    slice.setFrequency(14.225);
+    menu.setSlice(&slice);
+    report("20m button highlighted when slice frequency is 14.225 MHz",
+           btn20 && btn20->isChecked() && btn40 && !btn40->isChecked() &&
+           btnGen && !btnGen->isChecked() && btnWwv && !btnWwv->isChecked());
+
+    // Frequency changes to 40m (7.150 MHz)
+    slice.setFrequency(7.150);
+    report("40m button highlighted when frequency changes to 7.150 MHz",
+           btn40 && btn40->isChecked() && btn20 && !btn20->isChecked() &&
+           btnGen && !btnGen->isChecked());
+
+    // Frequency changes to general coverage (15.000 MHz)
+    slice.setFrequency(15.000);
+    report("GEN button highlighted on 15.000 MHz",
+           btnGen && btnGen->isChecked() && btn20 && !btn20->isChecked() &&
+           btn40 && !btn40->isChecked());
+
+    // Frequency changes to 80m (3.800 MHz)
+    slice.setFrequency(3.800);
+    report("80m button highlighted on 3.800 MHz",
+           btn80 && btn80->isChecked() && btnGen && !btnGen->isChecked());
+
+    // Test with XVTR bands
+    QVector<SpectrumOverlayMenu::XvtrBand> xvtrs = {
+        {"222", 222.100, "X1"},
+        {"1296", 1296.100, "X2"}
+    };
+    menu.setXvtrBands(xvtrs);
+    app.processEvents();
+
+    auto* btn222 = findBandButton(parent, "222");
+    auto* btn1296 = findBandButton(parent, "1296");
+    btn20 = findBandButton(parent, "20");
+    btnGen = findBandButton(parent, "GEN");
+
+    report("XVTR buttons created after setXvtrBands",
+           btn222 != nullptr && btn1296 != nullptr);
+
+    slice.setFrequency(222.100);
+    report("XVTR 222 button highlighted when tuned to 222.100 MHz",
+           btn222 && btn222->isChecked() && btn1296 && !btn1296->isChecked());
+
+    slice.setFrequency(14.074);
+    report("20m button highlighted after XVTR rebuild",
+           btn20 && btn20->isChecked() && btn222 && !btn222->isChecked());
+
+    // Detach slice
+    menu.setSlice(nullptr);
+    report("All buttons unhighlighted after detaching slice",
+           btn20 && !btn20->isChecked() && btn222 && !btn222->isChecked() &&
+           btnGen && !btnGen->isChecked());
+
+    return g_failed == 0 ? 0 : 1;
+}

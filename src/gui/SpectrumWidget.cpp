@@ -872,18 +872,6 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
     return v.data();
 }
 
-const char* wfSchemeName(WfColorScheme scheme)
-{
-    switch (scheme) {
-    case WfColorScheme::Grayscale: return "Grayscale";
-    case WfColorScheme::BlueGreen: return "Blue-Green";
-    case WfColorScheme::Fire:      return "Fire";
-    case WfColorScheme::Plasma:    return "Plasma";
-    case WfColorScheme::Purple:    return "Purple";
-    default:                       return "Default";
-    }
-}
-
 // Interpolate a normalized value t (0–1) through the given gradient stops.
 static QRgb interpolateGradient(float t, const WfGradientStop* stops, int n)
 {

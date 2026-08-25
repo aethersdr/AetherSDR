@@ -320,12 +320,18 @@ private:
     // deleteLater() on every rebuild, so entries can outlive their buttons by a
     // full event-loop turn if a range update lands in that window.
     QVector<QPair<QPointer<QPushButton>, double>> m_bandBtnFreqs;
+    struct BandButtonEntry {
+        QPointer<QPushButton> button;
+        QString bandName;
+    };
+    QVector<BandButtonEntry> m_bandButtons;
     double m_tuningMinMhz{0.0};
     double m_tuningMaxMhz{0.0};
     // True until a connected backend says otherwise, so a disconnected session
     // keeps the button rather than having it appear on connect.
     bool m_notchesSupported{true};
     void applyTuningRangeToBandButtons();
+    void updateActiveBandHighlight();
 
     // Cached state for band-panel rebuilds — setXvtrBands() and
     // setRadioCapabilities() each store their argument and trigger
