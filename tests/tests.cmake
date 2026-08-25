@@ -3524,6 +3524,15 @@ target_include_directories(ulanzi_chord_decoder_test PRIVATE src)
 target_link_libraries(ulanzi_chord_decoder_test PRIVATE Qt6::Core)
 add_test(NAME ulanzi_chord_decoder_test COMMAND ulanzi_chord_decoder_test)
 
+# Header-only table + transition rule, so no manager source is needed — the
+# Windows manager itself is Q_OS_WIN-gated and calls hid_enumerate directly.
+add_executable(ulanzi_variant_table_test
+    tests/ulanzi_variant_table_test.cpp
+)
+target_include_directories(ulanzi_variant_table_test PRIVATE src)
+target_link_libraries(ulanzi_variant_table_test PRIVATE Qt6::Core)
+add_test(NAME ulanzi_variant_table_test COMMAND ulanzi_variant_table_test)
+
 add_executable(ulanzi_mapping_migration_test
     tests/ulanzi_mapping_migration_test.cpp
     src/core/UlanziDialMappings.cpp

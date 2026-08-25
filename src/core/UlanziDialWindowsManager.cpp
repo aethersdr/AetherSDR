@@ -4,8 +4,10 @@
 #include "UlanziDialWindowsManager.h"
 #include "core/LogManager.h"
 #include "core/UlanziChordDecoder.h"
+#include "core/UlanziVariantTable.h"
 
 #include <QDebug>
+#include <QMutexLocker>
 #include <QTimer>
 
 #include <hidapi/hidapi.h>
@@ -45,23 +47,6 @@ int hidKbdToLinuxKey(unsigned char keycode)
 
 constexpr const wchar_t* kProductMatch = L"Ulanzi Dial";
 
-// Known Ulanzi OEM variants that enumerate over HID but CANNOT be driven by
-// this backend: their vendor collection is silent unless the Ulanzi Studio
-// app performs its activation handshake, and their keyboard/mouse
-// collections are OS-captured on Windows. Match them so the mapper can say
-// so, instead of sitting on "Disconnected" forever. Note the trap that
-// stalled #3485: the Windows PnP FriendlyName for these units IS
-// "Ulanzi Dial" (the BLE GAP name), but hidapi reports the HID string
-// descriptor, which is the OEM product string below. (#3485)
-struct KnownVariant {
-    unsigned short vid;
-    unsigned short pid;             // 0 = any
-    const wchar_t* displayName;
-};
-constexpr KnownVariant kUnsupportedVariants[] = {
-    {0xFFF1, 0x0082, L"Ulanzi D100H (KEHWIN \"Dial_Lite\", BLE)"},
-    {0x2207, 0x0019, L"Ulanzi D200 (Zkswe \"ulanzi\", USB)"},
-};
 
 } // namespace
 
@@ -90,20 +75,36 @@ void UlanziDialWindowsManager::start()
     if (rescan()) {
         m_pollTimer->start();
         emit connectionChanged(true, m_deviceName);
-    } else {
-        notifyVariantIfSeen();
     }
+    // Publish either way: a successful rescan means no variant is the sole
+    // dial present, which is itself a state consumers need. (#3485)
+    publishVariantState();
     m_hotplugTimer->start();
 }
 
-void UlanziDialWindowsManager::notifyVariantIfSeen()
+QString UlanziDialWindowsManager::unsupportedVariantName() const
 {
-    // Only while no supported device is open, and only once per variant —
-    // hotplugCheck() re-runs rescan() every few seconds. (#3485)
-    if (m_variantSeen.isEmpty() || m_variantSeen == m_variantNotified)
+    // Called from the GUI thread; m_variantSeen is written by rescan() on
+    // the ExtControllers thread. (#3485)
+    QMutexLocker lock(&m_variantMutex);
+    return m_variantSeen;
+}
+
+void UlanziDialWindowsManager::publishVariantState()
+{
+    // Emit only on a real transition, in BOTH directions: hotplugCheck()
+    // re-runs rescan() every few seconds, so an unconditional emit would
+    // spam, but skipping the empty case would leave the dialog claiming a
+    // dial that has been unplugged is still present. (#3485)
+    QString current;
+    {
+        QMutexLocker lock(&m_variantMutex);
+        current = m_variantSeen;
+    }
+    if (!UlanziVariant::shouldPublish(m_variantNotified, current))
         return;
-    m_variantNotified = m_variantSeen;
-    emit unsupportedVariantDetected(m_variantSeen);
+    m_variantNotified = current;
+    emit unsupportedVariantChanged(current);
 }
 
 void UlanziDialWindowsManager::stop()
@@ -111,22 +112,34 @@ void UlanziDialWindowsManager::stop()
     m_pollTimer->stop();
     m_hotplugTimer->stop();
     closeAll();
+    // Scanning is off, so nothing will refresh this — drop the variant state
+    // and tell consumers, or the mapper keeps showing the advisory for a dial
+    // we are no longer looking for.  Clearing m_variantNotified via
+    // publishVariantState() also means re-enabling scanning with the same
+    // variant still plugged in emits afresh rather than being deduped. (#3485)
+    {
+        QMutexLocker lock(&m_variantMutex);
+        m_variantSeen.clear();
+    }
+    publishVariantState();
 }
 
 bool UlanziDialWindowsManager::rescan()
 {
     closeAll();
-    m_variantSeen.clear();
+    {
+        QMutexLocker lock(&m_variantMutex);
+        m_variantSeen.clear();
+    }
     struct hid_device_info* infos = hid_enumerate(0, 0);
     for (auto* info = infos; info; info = info->next) {
         if (!info->product_string) continue;
         if (wcsstr(info->product_string, kProductMatch) == nullptr) {
-            for (const KnownVariant& v : kUnsupportedVariants) {
-                if (info->vendor_id == v.vid
-                    && (v.pid == 0 || info->product_id == v.pid)) {
-                    m_variantSeen = QString::fromWCharArray(v.displayName);
-                    break;
-                }
+            const QString variant = UlanziVariant::lookup(info->vendor_id,
+                                                          info->product_id);
+            if (!variant.isEmpty()) {
+                QMutexLocker lock(&m_variantMutex);
+                m_variantSeen = variant;
             }
             continue;
         }
@@ -168,11 +181,12 @@ void UlanziDialWindowsManager::hotplugCheck()
     if (!m_devices.isEmpty()) return;
     if (rescan()) {
         m_pollTimer->start();
-        m_variantNotified.clear();
         emit connectionChanged(true, m_deviceName);
-    } else {
-        notifyVariantIfSeen();
     }
+    // rescan() has already refreshed m_variantSeen (cleared it on success,
+    // or set it if an unsupported variant is the only dial on the bus), so
+    // one call covers appear, disappear and swap. (#3485)
+    publishVariantState();
 }
 
 void UlanziDialWindowsManager::poll()
