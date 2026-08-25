@@ -510,10 +510,10 @@ load-bearing**:
 | Channel duplication | `TciServer` divides by `2 * sizeof(float)` and sees half the frames it has. |
 
 Both failures are **silent** — audio flows, meters move, the session is healthy.
-That is why `icom_backend_test` asserts the ratio (4800 mono samples in at 48 kHz
-→ ~2400 stereo frames out at 24 kHz) rather than merely asserting that audio
-arrived, and why it also asserts the *negative*: a passthrough would emit ~4800
-frames, so the test fails a backend that skipped the conversion.
+The retired `icom_backend_test` fake-radio fixture asserted the ratio (4800 mono
+samples in at 48 kHz → ~2400 stereo frames out at 24 kHz) rather than merely
+asserting that audio arrived. This conversion and its negative passthrough case
+now require automation-bridge validation against a real Icom radio.
 
 `Resampler::processMonoToStereo` does both halves in one call. It is stateful
 (r8brain), so the instance is built once at connect — a fresh one per callback

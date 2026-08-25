@@ -27,6 +27,7 @@ jobs:
           - id: asan-ubsan
             label: ASan + UBSan
             build_type: Debug
+            receiver_churn: "OFF"
             # ASan + UBSan applied via CXXFLAGS / LDFLAGS so the flags
             # reach every target the build produces — including the
             # standalone unit-test executables (declared in
@@ -48,6 +49,7 @@ jobs:
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
+            receiver_churn: "ON"
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
             runtime_env: |
@@ -62,7 +64,8 @@ jobs:
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: |
           cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }}
+            -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }} \
+            -DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=${{ matrix.sanitizer.receiver_churn }}
 
       - name: Build
         run: cmake --build build --parallel

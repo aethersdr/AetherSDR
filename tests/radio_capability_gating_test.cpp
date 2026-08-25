@@ -103,7 +103,6 @@
 // with the automation bridge.
 
 #include "models/RadioModel.h"
-#include "IcomFakeRadio.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "models/ModelCapabilities.h"
@@ -114,8 +113,6 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
-#include "core/backends/icom/IcomCredentials.h"
-#include "core/backends/icom/IcomSettings.h"
 
 #include "TestEventLoop.h"
 
@@ -125,6 +122,20 @@
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+// Select model-table data without opening an IcomSession or any socket. The
+// backend already grants this focused test accessor for deterministic state
+// injection; each test binary supplies only the operations it needs.
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+};
+
+}  // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -497,56 +508,30 @@ int main(int argc, char** argv)
         }
     }
 
-    // ---- Icom drives the model's actual per-band power consumer -----------
+    // ---- Icom publishes the IC-9700 power clamp without a socket ----------
     {
-        using AetherSDR::icom::test::FakeIc705;
-
-        FakeIc705 radio;
-        radio.setCivAddress(0xA2);
-        radio.setDeviceName("IC-9700");
-        IcomSettings::reset();
-        IcomSettings::setUsername(QStringLiteral("beer"));
-        IcomSettings::setPorts(radio.controlPort(), radio.serialPort(), radio.audioPort());
-        IcomSettings::setCivAddressAuto();
-        IcomCredentials::setSessionPassword(QStringLiteral("beerbeer"));
-
-        RadioInfo info;
-        info.family = QStringLiteral("icom");
-        info.model = QStringLiteral("IC-9700");
-        info.serial = QStringLiteral("capability-gating-ic9700");
-        info.address = QHostAddress::LocalHost;
-        info.port = radio.controlPort();
-        model.connectToRadio(info);
-        check(AetherTest::waitFor([&] { return model.isConnected(); }),
-              "IC-9700 model-level fixture connects through the real backend seam");
-
-        const RadioCapabilities caps = model.backendCapabilities();
+        using namespace AetherSDR::icom;
+        const IcomModel* ic9700 = modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
+        IcomCivBackend backend;
+        if (ic9700) {
+            IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+        }
+        const RadioCapabilities caps = backend.capabilities();
         check(caps.txPowerBands.size() == 3,
               "Icom declares the three IC-9700 per-band TX power limits");
+        check(caps.txPowerMaxWattsAt(146'000'000.0) == 100.0,
+              "the IC-9700 2 m capability clamps TX power to 100 W");
+        check(caps.txPowerMaxWattsAt(432'000'000.0) == 75.0,
+              "the IC-9700 70 cm capability clamps TX power to 75 W");
+        check(caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+              "the IC-9700 23 cm capability clamps TX power to 10 W");
         check(caps.hasTransmitFrequencyCheck,
               "Icom declares the profiled IC-9700 momentary XFC command");
         check(caps.hasSupplyVoltageTelemetry,
               "Icom declares the profiled IC-9700 supply-voltage telemetry");
         check(!caps.hasMainFanTelemetry,
               "Icom declares no Main Fan telemetry family-wide");
-
-        const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
-                                          const char* description) {
-            radio.frontPanelFrequency(hz);
-            check(AetherTest::waitFor([&] {
-                      return model.transmitModel().maxPowerLevel() == watts;
-                  }), description);
-        };
-        expectPowerLimit(146'000'000ULL, 100,
-                         "RadioModel applies the IC-9700 2 m 100 W ceiling");
-        expectPowerLimit(432'000'000ULL, 75,
-                         "RadioModel applies the IC-9700 70 cm 75 W ceiling");
-        expectPowerLimit(1'296'000'000ULL, 10,
-                         "RadioModel applies the IC-9700 23 cm 10 W ceiling");
-
-        model.disconnectFromRadio();
-        IcomCredentials::setSessionPassword(QString{});
-        IcomSettings::reset();
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------

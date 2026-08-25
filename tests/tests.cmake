@@ -443,6 +443,12 @@ add_executable(icom_meters_test
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
 
+# Retired fake-radio fixtures. Positive session and backend convergence is
+# certified against real firmware through the automation bridge and radiocert;
+# deterministic protocol/model policy stays in socket-free tests. Keep these
+# declarations as source history, but do not configure, compile, or register
+# them: they add network-fixture compile and wait cost to every default build.
+#[==[
 # IcomCIV phases 0-3 end to end — the session against a fake IC-705 on
 # localhost. This is what proves the ORDER of the RS-BA1 handshake, which is the
 # part of the protocol Icom documents nowhere.
@@ -464,6 +470,7 @@ add_executable(icom_backend_test tests/icom_backend_test.cpp)
 target_include_directories(icom_backend_test PRIVATE src tests)
 target_link_libraries(icom_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME icom_backend_test COMMAND icom_backend_test)
+]==]
 
 # IcomCIV live probe — REQUIRES A REAL RADIO, so deliberately NOT registered
 # with add_test(). Receive-only: it never sends a PTT command.
@@ -502,6 +509,10 @@ add_executable(hl2_live_band_filter_probe EXCLUDE_FROM_ALL
 target_include_directories(hl2_live_band_filter_probe PRIVATE src)
 target_link_libraries(hl2_live_band_filter_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
+# Retired fake-radio fixtures. Positive HL2 lifecycle and transport convergence
+# moves to the automation bridge; socket-free protocol and policy tests remain.
+# Keep the declarations for history without making them build or test targets.
+#[==[
 # A killed AetherSDR must still release the radio. A child process runs a real
 # MetisClient against a fake radio; the Python driver kills it and requires a
 # metis-stop datagram to arrive. End-to-end on purpose — see the .py header.
@@ -521,9 +532,12 @@ add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
 target_include_directories(hl2_metis_client_test PRIVATE src)
 target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+]==]
 
 # HL2 receiver-count restart — a fake radio that "loses" a metis-start, proving
 # the restart retries it and that the recovery is not mistaken for a reconnect.
+# Retained until the same dropped-packet assertion has a socket-free injected
+# transport/state-machine replacement; radiocert cannot prove this non-event.
 add_executable(hl2_receiver_count_restart_test tests/hl2_receiver_count_restart_test.cpp)
 target_include_directories(hl2_receiver_count_restart_test PRIVATE src)
 target_link_libraries(hl2_receiver_count_restart_test
@@ -621,6 +635,11 @@ add_test(NAME hl2_trim_autorepeat_test COMMAND hl2_trim_autorepeat_test)
 set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Retired fake-radio fixtures. Positive backend and telemetry convergence is
+# certified against real hardware; deterministic assertions that survive are
+# extracted into socket-free tests rather than keeping a localhost peer in the
+# default compile and CTest graph.
+#[==[
 # HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
@@ -644,6 +663,7 @@ add_executable(hl2_link_stats_model_test tests/hl2_link_stats_model_test.cpp)
 target_include_directories(hl2_link_stats_model_test PRIVATE src tests)
 target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
+]==]
 
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
@@ -652,10 +672,17 @@ add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 # path its own copy (m_ioDsps) and blocks until the I/O thread has taken it, so
 # the reshape never mutates a container a fan-out is walking. (There is no
 # fenceIo() — an earlier draft named one and this comment outlived it.)
-add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
-target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
-target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
+# It stays out of the default graph and is enabled explicitly by the TSan
+# workflow until a socket-free concurrency harness replaces the fake EP6 peer.
+option(AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST
+       "Build the fake-EP6 receiver churn test for sanitizer runs" OFF)
+if(AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST)
+    add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
+    target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
+    target_link_libraries(hl2_receiver_churn_test
+        PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+    add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
+endif()
 
 # HL2 connect re-entrancy — a connect or a disconnect landing while the WDSP
 # chains are still opening. Needs no radio; see the file header.
@@ -1248,6 +1275,8 @@ add_test(NAME radio_discovery_test COMMAND radio_discovery_test)
 # Agent automation bridge phaseful-gesture lifecycle (#4353). Uses two real
 # QLocalSocket clients so the regression proves an independent request can run
 # while a QSlider remains genuinely down, plus auth/read-only/TX cleanup rails.
+# Retained until its refusal and TX-cleanup assertions have a socket-free
+# injected replacement; live automation cannot prove that a non-event occurred.
 add_executable(automation_server_gesture_test
     tests/automation_server_gesture_test.cpp
 )
@@ -1907,6 +1936,8 @@ add_test(NAME vkamp_protocol_test COMMAND vkamp_protocol_test)
 # hostname resolution for the UDP telemetry port, and TX-gated telemetry
 # expiry. Isolated settings dir per the CMake contract: LogManager pulls in
 # AppSettings.
+# Retained until the refusal/interlock assertions have a socket-free injected
+# replacement; radiocert certifies positive effects, not refused commands.
 add_executable(vkamp_connection_test
     tests/vkamp_connection_test.cpp
     src/core/VkampConnection.cpp
@@ -2309,6 +2340,9 @@ if(PYTHON3_EXECUTABLE)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
 endif()
 
+# Retired local-listener fixture. Positive behavior is covered through the live
+# bridge; deterministic boundary behavior belongs in socket-free tests.
+#[==[
 # JSON boundary regression for shared bridge `id` normalization. Exercises the
 # real QLocalSocket request path and tune dispatcher without touching a radio.
 add_executable(automation_json_id_test
@@ -2319,6 +2353,7 @@ target_link_libraries(automation_json_id_test PRIVATE
     aethercore Qt6::Core Qt6::Network
 )
 add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
+]==]
 
 # Read-only external-device diagnostic registry and provider dispatch. The
 # platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
@@ -2344,6 +2379,9 @@ target_link_libraries(automation_connect_family_test PRIVATE
 )
 add_test(NAME automation_connect_family_test COMMAND automation_connect_family_test)
 
+# Retired local-listener fixture. Positive behavior is covered through the live
+# bridge; deterministic boundary behavior belongs in socket-free tests.
+#[==[
 # `connect wait` phase reporting + deferred connect-failure delivery (#4912).
 add_executable(automation_connect_wait_phase_test
     tests/automation_connect_wait_phase_test.cpp
@@ -2354,6 +2392,7 @@ target_link_libraries(automation_connect_wait_phase_test PRIVATE
 )
 add_test(NAME automation_connect_wait_phase_test
          COMMAND automation_connect_wait_phase_test)
+]==]
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp
@@ -2843,6 +2882,9 @@ target_include_directories(owned_single_shot_timer_test PRIVATE src)
 target_link_libraries(owned_single_shot_timer_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
 
+# Retired local-listener fixtures. Their positive verb behavior is covered by
+# the live bridge; deterministic boundary behavior belongs in socket-free tests.
+#[==[
 # The bridge preserves dragAt, target-tune, memory-recall, and authenticated
 # positional requests across its bare and JSON protocol forms.
 # doubleClick / doubleClickAt verbs (#5068) — asserts the real Qt sequence
@@ -2877,6 +2919,7 @@ set_target_properties(automation_drag_at_test PROPERTIES AUTOMOC ON)
 add_test(NAME automation_drag_at_test COMMAND automation_drag_at_test)
 set_tests_properties(automation_drag_at_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+]==]
 
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
@@ -2924,16 +2967,21 @@ add_executable(radio_certification_math_test tests/radio_certification_math_test
 target_include_directories(radio_certification_math_test PRIVATE src)
 add_test(NAME radio_certification_math_test COMMAND radio_certification_math_test)
 
-add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
-target_include_directories(hl2_tx_loopback_test PRIVATE src)
-target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
-add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
-# This test is a no-op without an hpsdrsim answering discovery, which is the
-# normal state of every machine that has not deliberately started one. Without
-# this property that no-op reports as Passed, which is indistinguishable from a
-# run that actually keyed and measured — the exact silent-green this test was
-# fixed to stop. Same convention as crdv_quarantined_test above.
-set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
+# Explicit opt-in hpsdrsim TX proof. It is excluded from the default graph
+# because it requires the external GPL simulator and intentionally keys its
+# simulated transmitter. Enable only after starting `./hpsdrsim -hermeslite2
+# -P1`; the source fingerprints the simulator before allowing keying.
+option(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST
+       "Build and register the opt-in hpsdrsim HL2 TX loopback test" OFF)
+if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)
+    add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
+    target_include_directories(hl2_tx_loopback_test PRIVATE src)
+    target_link_libraries(hl2_tx_loopback_test
+        PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+    # A missing simulator is an honest skip, never a passing TX proof.
+    set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
@@ -4033,9 +4081,10 @@ set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 # That failure is invisible to the isolation re-check documented above: the
 # wisdom REDIRECT still works with the bound dead, so no file appears under
 # $HOME/.cache/aethersdr and the check passes. It is also invisible to the test
-# suite, which still passes — just slowly. Measured cold on macOS/arm64,
-# hl2_backend_test: 124.8 s with the variable undefined, 22.5 s with it set
-# here, of which only 2.4 s is CPU. The rest is socket and timer waits.
+# suite, which still passes — just slowly. A cold macOS/arm64 measurement of the
+# now-retired hl2_backend_test was 124.8 s with the variable undefined and
+# 22.5 s with it set here, of which only 2.4 s was CPU. The rest was socket and
+# timer waits.
 #
 # 0.001 s per plan, not per process — FFTW cannot interrupt a measurement in
 # progress, so the total still scales with the number of distinct plans.

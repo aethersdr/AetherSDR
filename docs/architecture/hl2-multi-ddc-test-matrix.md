@@ -181,19 +181,22 @@ Enable *Settings → Autostart TCI*.
 | 7.3 | Kill the app at 4 DDCs (SIGTERM) | Radio released; reconnect works without a power cycle | **HW** |
 | 7.4 | Pull the ethernet at 4 DDCs | Clean disconnect, no hang | **HW** |
 | 7.5 | CPU at 4 DDCs | Four WDSP channels + four FFTs — record the number | TODO |
-| 7.6 | Add/close on a LOSSY link (wifi, or a shaped path) | Link stays up. The stream restart's metis-start is retried on loss; unretried, one dropped datagram ended the session ~2 s later on the silence watchdog | `hl2_receiver_count_restart_test` |
-| 7.7 | ~10 add/close cycles, then check every survivor | Spectrum and audio still arrive for each. Closing the middle renumbers every later DDC, and a chain wired to an index goes quiet with nothing logged | `hl2_receiver_churn_test` |
-| 7.8 | 7.7 under `-fsanitize=thread` | No race naming the receiver vector. Read the DIFFERENTIAL, not the count — QtCore is uninstrumented, so every `BlockingQueuedConnection` reports as a race (`hl2_backend_test` alone: 57). See HERMES §20.15.1 | TODO |
+| 7.6 | Add/close on a LOSSY link (wifi, or a shaped path) | Link stays up. The stream restart's metis-start is retried on loss; unretried, one dropped datagram ended the session ~2 s later on the silence watchdog | `hl2_receiver_count_restart_test` (retained pending socket-free injection) |
+| 7.7 | ~10 add/close cycles, then check every survivor | Spectrum and audio still arrive for each. Closing the middle renumbers every later DDC, and a chain wired to an index goes quiet with nothing logged | Live bridge + `hl2_receiver_churn_test` |
+| 7.8 | 7.7 under `-fsanitize=thread` | No race naming the receiver vector. Read the DIFFERENTIAL, not the count — QtCore is uninstrumented, so every `BlockingQueuedConnection` reports as a race (`hl2_backend_test` alone measured 57 before retirement). See HERMES §20.15.1 | Weekly TSan with receiver churn enabled |
 
 Row 7.3 matters: the SIGTERM wedge was fixed by `Hl2EmergencyStop` (#4503,
 now in main). `kill -9` still wedges the radio — that is expected, not a bug.
 
-Rows 7.6–7.8 came out of review rather than operation, and 7.8 is the only one
-here that needs a special build:
+Rows 7.6–7.8 came out of review rather than operation. Row 7.6 remains in the
+default suite until its dropped-packet assertion has a socket-free injected
+replacement. Receiver churn stays out of ordinary builds and is re-enabled by
+the TSan workflow with:
 
 ```bash
 CXXFLAGS="-fsanitize=thread -g -fno-omit-frame-pointer -O1" LDFLAGS="-fsanitize=thread" \
-  cmake -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  cmake -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON
 ```
 
 ---
