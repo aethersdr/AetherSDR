@@ -353,7 +353,7 @@ QString statusBarStationLabelStyle(int fontPx)
     return QStringLiteral(
         "QLabel { color: {{color.text.primary}}; font-size: %1px; "
         "background: {{color.background.0}}; "
-        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }")
+        "border: 1px solid {{color.border.strong}}; padding: 2px 12px; }")
         .arg(fontPx);
 }
 
@@ -5558,17 +5558,14 @@ void MainWindow::buildUI()
     m_sizeGrip->raise();
     m_sizeGrip->setVisible(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.border.strong}}; }"
         "QStatusBar::item { border: none; }"
         "QLabel { background: transparent; }");
 
-    const QString valStyle  = "QLabel { color: #8aa8c0; font-size: 21px; }";
-    const QString sepStyle  = "QLabel { color: #304050; font-size: 21px; }";
-    const QString greyInd   = "QLabel { color: #404858; font-weight: bold; font-size: 21px; }";
-    const QString greenInd  = "QLabel { color: #00e060; font-weight: bold; font-size: 21px; }";
-    const QString redInd    = "QLabel { color: #e04040; font-weight: bold; font-size: 21px; }";
-    const QString greyIndLg = "QLabel { color: #404858; font-weight: bold; font-size: 24px; }";
-    const QString greenIndLg= "QLabel { color: #00e060; font-weight: bold; font-size: 24px; }";
+    const QString sepStyle =
+        "QLabel { color: {{color.border.strong}}; font-size: 21px; }";
+    const QString greyIndLg =
+        "QLabel { color: {{color.text.disabled}}; font-weight: bold; font-size: 24px; }";
 
     // Use a container with HBoxLayout for 3-section layout:
     // [left items] → stretch → [STATION centered] → stretch → [right items]
@@ -5579,7 +5576,7 @@ void MainWindow::buildUI()
 
     auto addSep = [&]() -> QLabel* {
         auto* sep = new QLabel(" · ");
-        sep->setStyleSheet(sepStyle);
+        ThemeManager::instance().applyStyleSheet(sep, sepStyle);
         hbox->addWidget(sep);
         return sep;
     };
@@ -5596,9 +5593,14 @@ void MainWindow::buildUI()
         m_automationChip->setObjectName(QStringLiteral("automationChip"));
         m_automationChip->setAccessibleName(
             QStringLiteral("Agent automation bridge active: %1").arg(agent));
-        m_automationChip->setStyleSheet(
-            "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
-            " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
+        ThemeManager::instance().applyStyleSheet(
+            m_automationChip,
+            QStringLiteral(
+                "QLabel { color: {{color.toggle.warning.foreground.checked}};"
+                " background: {{color.toggle.warning.background.checked}};"
+                " border: 1px solid {{color.toggle.warning.border.checked}};"
+                " font-weight: bold; font-size: 18px; border-radius: 4px;"
+                " padding: 2px 10px; }"));
         m_automationChip->setToolTip(
             QStringLiteral("Agent automation bridge active — other MultiFlex stations see this client as \"%1\"")
                 .arg(agent));
@@ -5619,7 +5621,8 @@ void MainWindow::buildUI()
         QPainter pp(&pm);
         pp.setRenderHint(QPainter::Antialiasing);
 
-        const QColor stroke(255, 255, 255, 210);
+        const QColor stroke = ThemeManager::instance().color(
+            this, QStringLiteral("color.text.primary"));
 
         // Polyline: noise floor at y=22, multiple peaks of varying height,
         // with extra detail between peaks for the "real FFT" texture.
@@ -5666,7 +5669,7 @@ void MainWindow::buildUI()
     hbox->addSpacing(8);
 
     m_tnfIndicator = new QLabel("TNF");
-    m_tnfIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_tnfIndicator, greyIndLg);
     m_tnfIndicator->setCursor(Qt::PointingHandCursor);
     m_tnfIndicator->setToolTip(buildTnfTooltip(m_radioModel.tnfModel()));
     m_tnfIndicator->installEventFilter(this);
@@ -5682,7 +5685,7 @@ void MainWindow::buildUI()
             this, [updateTnfTooltip](int) { updateTnfTooltip(); });
 
     m_cwxIndicator = new QLabel("CWX");
-    m_cwxIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_cwxIndicator, greyIndLg);
     m_cwxIndicator->setCursor(Qt::PointingHandCursor);
     m_cwxIndicator->setToolTip("CW Keyer — click to toggle");
     m_cwxIndicator->installEventFilter(this);
@@ -5690,7 +5693,7 @@ void MainWindow::buildUI()
 
 #ifdef AETHER_ASR_ENABLED
     m_asrIndicator = new QLabel("ASR");
-    m_asrIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_asrIndicator, greyIndLg);
     m_asrIndicator->setCursor(Qt::PointingHandCursor);
     m_asrIndicator->setToolTip("Speech-to-text (Copy Assist) — click to toggle");
     m_asrIndicator->installEventFilter(this);
@@ -5698,14 +5701,14 @@ void MainWindow::buildUI()
 #endif
 
     m_dvkIndicator = new QLabel("DVK");
-    m_dvkIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_dvkIndicator, greyIndLg);
     m_dvkIndicator->setCursor(Qt::PointingHandCursor);
     m_dvkIndicator->setToolTip("Digital Voice Keyer — click to toggle");
     m_dvkIndicator->installEventFilter(this);
     hbox->addWidget(m_dvkIndicator);
 
     m_fdxIndicator = new QLabel("FDX");
-    m_fdxIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_fdxIndicator, greyIndLg);
     m_fdxIndicator->setCursor(Qt::PointingHandCursor);
     m_fdxIndicator->setToolTip("Full Duplex — RX stays active during TX (click to toggle)");
     m_fdxIndicator->installEventFilter(this);
@@ -5899,9 +5902,12 @@ void MainWindow::buildUI()
             }
 #endif
             if (cpuPct >= 0.0) {
-                QString color = "#8aa8c0";
-                if (cpuPct >= 80.0) color = "#e05050";
-                else if (cpuPct >= 50.0) color = "#f0c040";
+                QString color = "{{color.text.secondary}}";
+                if (cpuPct >= 80.0) {
+                    color = "{{color.accent.danger}}";
+                } else if (cpuPct >= 50.0) {
+                    color = "{{color.accent.warning}}";
+                }
                 m_cpuLabel->setText(QString("CPU: %1%").arg(cpuPct, 0, 'f', 1));
                 applyStatusBarCompactLabelStyle(m_cpuLabel, color);
             }
@@ -6099,7 +6105,10 @@ void MainWindow::buildUI()
     m_txIndicator->setAccessibleName("Cancel transmit");
     m_txIndicator->setAccessibleDescription("Click to send key up, PTT off, Tune off, and MOX off.");
     m_txIndicator->installEventFilter(this);
-    m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
+    ThemeManager::instance().applyStyleSheet(
+        m_txIndicator,
+        QStringLiteral("QLabel { color: {{color.text.disabled}};"
+                       " font-weight: bold; font-size: 21px; }"));
     hbox->addWidget(m_txIndicator);
 
     addSep();
