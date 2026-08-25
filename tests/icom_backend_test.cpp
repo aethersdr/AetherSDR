@@ -148,6 +148,16 @@ struct IcomCivBackendTestAccess {
         return backend.m_preampStep;
     }
 
+    static bool tuneActive(const IcomCivBackend& backend)
+    {
+        return backend.m_tuning;
+    }
+
+    static bool tuneTimerActive(const IcomCivBackend& backend)
+    {
+        return backend.m_tuneTimer && backend.m_tuneTimer->isActive();
+    }
+
     static void reassertPreamp(IcomCivBackend& backend)
     {
         backend.reassertPanPreampWireStep(backend.m_preampStep);
@@ -1144,6 +1154,106 @@ int main(int argc, char** argv)
             check(std::abs(powerWrites.back() - 94) <= 1,
                   "TUNE release restores the operator's prior 37% RF power");
         }
+    }
+
+    // TUNE ownership must end on EVERY unkey, not only when the TUNE toggle
+    // calls setTune(false). MOX, CW PTT and the automation watchdog call
+    // setKeying(false) directly, while radio protection can report PTT OFF on
+    // its own. A stale tune lease leaves the timer feeding the modulation input,
+    // holds RF power at the tune value and suppresses all later microphone PCM.
+    {
+        QByteArray pcm(1024 * 2 * static_cast<int>(sizeof(qint16)), 0);
+        auto* samples = reinterpret_cast<qint16*>(pcm.data());
+        for (int i = 0; i < 1024; ++i) {
+            const qint16 sample = static_cast<qint16>(
+                8000 * std::sin(2.0 * M_PI * 1000.0 * i / 24000.0));
+            samples[i * 2] = sample;
+            samples[i * 2 + 1] = sample;
+        }
+        const auto restoredPowerWasWritten = [&radio](int minimumRaw) {
+            return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                               [minimumRaw](const CivFrame& frame) {
+                return frame.cmd == cmd::kLevel && frame.hasSub
+                    && frame.sub == level::kRfPower
+                    && decodeLevel(frame.data).value_or(-1) >= minimumRaw;
+            });
+        };
+
+        backend.setTxPower(37);
+        check(waitSchedulerIdle(), "direct-unkey fixture's ordinary power converges");
+        radio.clearCivLog();
+        const int beforeDirectTune = radio.audioPacketsFromClient();
+        backend.setTune(true, 10);
+        check(waitFor([&] {
+                  return radio.audioPacketsFromClient() > beforeDirectTune;
+              }, 1000),
+              "backend-owned TUNE audio starts without a microphone callback");
+        check(IcomCivBackendTestAccess::tuneTimerActive(backend),
+              "the backend-owned TUNE timer is active while keyed");
+
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "a direct unkey converges during TUNE");
+        check(!IcomCivBackendTestAccess::tuneActive(backend)
+                  && !IcomCivBackendTestAccess::tuneTimerActive(backend),
+              "a direct unkey releases TUNE ownership and stops its producer");
+        check(restoredPowerWasWritten(93),
+              "a direct unkey restores the operator's pre-TUNE RF power");
+        QTest::qWait(80);
+        const int afterDirectUnkey = radio.audioPacketsFromClient();
+        QTest::qWait(100);
+        check(radio.audioPacketsFromClient() == afterDirectUnkey,
+              "no backend-owned TUNE packets continue after direct unkey");
+
+        // The old m_tuning latch also blocked the ordinary PCM path forever.
+        // A later explicit key must own the stream normally again.
+        backend.setKeying(true);
+        check(waitSchedulerIdle(), "ordinary key after direct TUNE unkey converges");
+        for (int i = 0; i < 20; ++i) {
+            backend.submitTxAudio(pcm, 24000, /*clientLeveled=*/false);
+        }
+        check(waitFor([&] {
+                  return radio.audioPacketsFromClient() > afterDirectUnkey;
+              }, 1000),
+              "ordinary microphone PCM resumes after direct TUNE unkey");
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "ordinary post-TUNE unkey converges");
+
+        backend.setTxPower(41);
+        check(waitSchedulerIdle(), "radio-unkey fixture's ordinary power converges");
+        radio.clearCivLog();
+        const int beforeRadioTune = radio.audioPacketsFromClient();
+        backend.setTune(true, 10);
+        check(waitFor([&] {
+                  return radio.audioPacketsFromClient() > beforeRadioTune;
+              }, 1000),
+              "second TUNE cycle starts its backend-owned producer");
+
+        // Confirm the optimistic ON edge first, then simulate the radio
+        // protecting itself by reporting PTT OFF independently of the client.
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
+                       control::kPtt, 0x01, kCivEom});
+        QTest::qWait(40);
+        radio.m_pttOverride = false;
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
+                       control::kPtt, 0x00, kCivEom});
+        check(waitFor([&] {
+                  return !IcomCivBackendTestAccess::tuneActive(backend);
+              }, 1000),
+              "a radio-reported PTT OFF releases TUNE ownership");
+        check(!IcomCivBackendTestAccess::tuneTimerActive(backend),
+              "a radio-reported PTT OFF stops the TUNE producer");
+        check(waitSchedulerIdle(), "radio-reported TUNE unkey restores power");
+        check(restoredPowerWasWritten(104),
+              "radio-reported unkey restores the operator's 41% RF power");
+        QTest::qWait(80);
+        const int afterRadioUnkey = radio.audioPacketsFromClient();
+        QTest::qWait(100);
+        check(radio.audioPacketsFromClient() == afterRadioUnkey,
+              "no backend-owned TUNE packets continue after radio unkey");
+        radio.m_pttOverride.reset();
+        backend.setKeying(false);
+        check(waitSchedulerIdle(),
+              "radio-unkey fixture returns the fake radio to ordinary RX state");
     }
 
     // ---- THE CONNECT-TIME STATE PULL --------------------------------------

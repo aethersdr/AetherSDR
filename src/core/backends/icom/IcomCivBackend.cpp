@@ -2305,11 +2305,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // state having just changed.
             if (keyed == m_keyed)
                 return;
+            const int restoreTunePower = !keyed ? stopTuneProducer() : -1;
             m_keyed = keyed;
             m_meters.setTransmitting(m_keyed);
+            if (!keyed && m_session) {
+                m_session->flushTxAudio();
+            }
             TransmitDelta t;
             t.mox = m_keyed;
             emit transmitChanged(t);
+            if (restoreTunePower >= 0) {
+                setTxPower(restoreTunePower);
+            }
             return;
         }
         if (frame.hasSub && frame.sub == control::kTuner && !frame.data.empty()) {
@@ -2513,7 +2520,16 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
 
 void IcomCivBackend::onTuneAudioTick()
 {
-    if (!m_tuning || !m_session || !m_connected) {
+    if (!m_tuning || !m_keyed || !m_session || !m_connected) {
+        return;
+    }
+
+    queueTuneAudioFrame();
+}
+
+void IcomCivBackend::queueTuneAudioFrame()
+{
+    if (!m_session || !m_connected) {
         return;
     }
 
@@ -2528,6 +2544,19 @@ void IcomCivBackend::onTuneAudioTick()
         }
     }
     m_session->sendAudio(mono);
+}
+
+int IcomCivBackend::stopTuneProducer()
+{
+    m_tuneTimer->stop();
+    if (!m_tuning) {
+        return -1;
+    }
+
+    m_tuning = false;
+    const int restore = m_preTuneTxPowerPercent;
+    m_preTuneTxPowerPercent = -1;
+    return restore;
 }
 
 // ---------------------------------------------------------------------------
@@ -3696,6 +3725,11 @@ void IcomCivBackend::setKeying(bool key)
     if (key && refuseKeyingInReceiveOnlyMode())
         return;
 
+    // TUNE is an audio-source lease, not merely the TUNE button's latch. Every
+    // unkey path ends that lease before the PTT-off command leaves: MOX, CW PTT,
+    // automation/watchdog release and setTune(false) all converge here.
+    const int restoreTunePower = !key ? stopTuneProducer() : -1;
+
     m_pendingPttIntent = key;
     m_pendingPttUntilMs = nowMs() + 1000;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
@@ -3713,8 +3747,12 @@ void IcomCivBackend::setKeying(bool key)
         emit transmitChanged(t);
     }
     m_meters.setTransmitting(key);
-    if (!key && m_session)
+    if (!key && m_session) {
         m_session->flushTxAudio();   // queued audio belongs to the transmission that ended
+    }
+    if (restoreTunePower >= 0) {
+        setTxPower(restoreTunePower);
+    }
 }
 
 void IcomCivBackend::setTune(bool on, int tunePowerPercent)
@@ -3747,7 +3785,10 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
         // silent — a tuner sampling that edge can otherwise read infinite SWR.
         m_tuning = true;
         m_tunePhase = 0.0;
-        onTuneAudioTick();
+        // This priming frame intentionally precedes the optimistic keyed edge.
+        // Periodic ticks are keyed-gated; keeping the one-shot generator
+        // separate prevents that fail-closed guard from deleting the prime.
+        queueTuneAudioFrame();
         setKeying(true);
         m_tuneTimer->start();
         return;
@@ -3755,14 +3796,7 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
 
     // Unkey BEFORE restoring ordinary RF power. The tune setpoint is temporary
     // and must not become the radio's new operating drive after the carrier.
-    m_tuneTimer->stop();
     setKeying(false);
-    m_tuning = false;
-    if (m_preTuneTxPowerPercent >= 0) {
-        const int restore = m_preTuneTxPowerPercent;
-        m_preTuneTxPowerPercent = -1;
-        setTxPower(restore);
-    }
 }
 
 void IcomCivBackend::setTxPower(int percent)
