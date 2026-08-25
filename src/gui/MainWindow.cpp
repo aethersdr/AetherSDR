@@ -7118,6 +7118,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
+            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
+            connected ? caps.speechProcessorLevelMaximum : 2);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);

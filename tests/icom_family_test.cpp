@@ -269,6 +269,21 @@ int main(int argc, char** argv)
                       *AetherSDR::icom::modelForCivAddress(0xB6))
                       .meters.hasPaCurrentTelemetry,
           "IC-705 and IC-7300MK2 do not inherit the IC-9700 Radio Vitals surface");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .speechProcessorLevelMaximum == 100,
+          "the IC-9700 profile declares its continuous processor range");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .speechProcessorLabel == "COMP",
+          "the IC-9700 profile declares its radio-native COMP label");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA4))
+                  .speechProcessorLevelMaximum == 2
+              && AetherSDR::icom::profileFor(
+                     *AetherSDR::icom::modelForCivAddress(0xB6))
+                     .speechProcessorLevelMaximum == 2,
+          "IC-705 and IC-7300MK2 retain the three-position processor contract");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {

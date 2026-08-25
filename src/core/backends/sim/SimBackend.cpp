@@ -301,6 +301,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
     caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
     caps.hasPaCurrentTelemetry = false;       // synthetic scene; no PA current
+    caps.speechProcessorLevelMaximum = 2;
+    caps.speechProcessorLabel = QStringLiteral("PROC");
     caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.

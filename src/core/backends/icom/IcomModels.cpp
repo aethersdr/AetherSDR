@@ -594,6 +594,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     };
     static const IcomModelProfile kIc9700Profile{
         .supportedBringup = true,
+        .speechProcessorLevelMaximum = 100,
+        .speechProcessorLabel = "COMP",
         .guideRevision = "IC-9700 CI-V Reference Guide 2019",
         .features = kIc9700Evidence,
         .bands = kIc9700Bands,

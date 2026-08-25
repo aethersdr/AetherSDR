@@ -423,6 +423,8 @@ struct CivRecoveryProfile {
 // borrow another model's command shape or calibration.
 struct IcomModelProfile {
     bool supportedBringup = false;
+    int speechProcessorLevelMaximum = 2;
+    std::string_view speechProcessorLabel = "PROC";
     std::string_view guideRevision;
     std::span<const FeatureEvidence> features;
 

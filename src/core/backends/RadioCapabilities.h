@@ -327,6 +327,12 @@ struct RadioCapabilities {
     // tone. A radio can have either, both or neither.
     bool hasManualNotch = false;
 
+    // Inclusive upper bound of the radio's speech-processor level control.
+    // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
+    // continuous control may publish 100. The minimum is always zero.
+    int speechProcessorLevelMaximum = 2;
+    QString speechProcessorLabel = QStringLiteral("PROC");
+
     // The radio can temporarily monitor the transmit frequency while the
     // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
     // persistent repeater-reverse setting: releasing it returns reception to

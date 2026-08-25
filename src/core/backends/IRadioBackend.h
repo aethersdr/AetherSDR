@@ -447,11 +447,12 @@ public:
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
 
-    // The speech processor, as the operator sees it: an enable plus one of
-    // three presets (0 = NOR, 1 = DX, 2 = DX+).
+    // The speech processor, as the operator sees it: an enable plus a
+    // normalized level. RadioCapabilities publishes whether the presentation
+    // is Flex's three presets (0..2) or an evidenced continuous range.
     //
     // That shape is FlexRadio's, and it is not universal. On a radio with its
-    // own compressor the two halves are SEPARATE registers — the IC-705 wants
+    // own compressor the two halves are SEPARATE registers — an Icom wants
     // 16 44 for the enable and 14 0E for how hard — so a backend receives both
     // together and decides how to spend them. Default no-op: Flex takes this as
     // text from TransmitModel, and a host-modulating backend runs its own

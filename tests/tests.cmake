@@ -3110,6 +3110,8 @@ add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
 add_executable(radio_capability_gating_test tests/radio_capability_gating_test.cpp)
 target_include_directories(radio_capability_gating_test PRIVATE src tests)
 target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
+target_compile_definitions(radio_capability_gating_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
 
 # RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
@@ -3916,6 +3918,8 @@ add_executable(phone_cw_mic_gain_authority_test
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
+target_compile_definitions(phone_cw_mic_gain_authority_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(phone_cw_mic_gain_authority_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test
 )

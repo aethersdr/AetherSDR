@@ -294,6 +294,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // it, 16 57 picks one of three widths. Not a TNF and not the auto notch —
     // see the capability's own note.
     c.hasManualNotch = true;
+    c.speechProcessorLevelMaximum = profile.speechProcessorLevelMaximum;
+    c.speechProcessorLabel = QString::fromUtf8(
+        profile.speechProcessorLabel.data(),
+        static_cast<qsizetype>(profile.speechProcessorLabel.size()));
     // Publish the momentary UI only when the active model profile attests both
     // the XFC command family and the FM facet's release contract. An address is
     // identity, not evidence that a command shape is supported.
@@ -1980,7 +1984,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         }
         case level::kCompLevel: {
-            // The radio's 0..10 compressor mapped back onto NOR/DX/DX+.
+            // Normalize the radio's compressor register to 0..100. The model
+            // capability decides whether that full domain survives to a
+            // continuous control or is bounded to the legacy preset surface.
             m_compLevelPercent = pct;
             TransmitDelta t;
             t.speechProcLevel = pct;
@@ -3636,12 +3642,14 @@ void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
 void IcomCivBackend::setSpeechProcessor(bool on, int level)
 {
     m_compEnable = on;
-    m_compLevelPercent = level;
+    const int maximum = m_model
+        ? profileFor(*m_model).speechProcessorLevelMaximum : 2;
+    m_compLevelPercent = std::clamp(level, 0, maximum);
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
 
-    // TWO REGISTERS, not one. The operator's control is Flex-shaped — an enable
-    // plus NOR/DX/DX+ — and on this radio the enable is a function (16 44) while
-    // "how hard" is a level (14 0E, 0000..0255 spanning 0..10). Sending only the
+    // TWO REGISTERS, not one: 16 44 enables the compressor and 14 0E sets its
+    // level. Presentation is profile-shaped (legacy presets or continuous
+    // COMP). Sending only the
     // enable is what left AetherSDR's PROC disagreeing with a front panel that
     // plainly showed the compressor on.
     sendUserCommand(cmdSetFunction(addr, func::kCompressor, on ? 1 : 0));
@@ -3658,13 +3666,12 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
     if (!on)
         return;   // the level is meaningless while the compressor is bypassed
 
-    // NOR / DX / DX+ onto the radio's 0..10 scale. Icom publishes no mapping —
-    // these are thirds of its range, which is the honest reading of a
-    // three-position control against a continuous one, and they are here rather
-    // than open-coded so the choice is visible and adjustable.
+    // Legacy Icom profiles retain NOR / DX / DX+ thirds. A profile with an
+    // evidenced continuous control writes the normalized percent directly.
     static constexpr std::array<int, 3> kProcLevels{3, 6, 9};   // of 10
-    const int preset = std::clamp(level, 0, 2);
-    const int raw = kProcLevels[static_cast<std::size_t>(preset)] * 255 / 10;
+    const int raw = maximum == 100
+        ? percentToLevelRaw(m_compLevelPercent)
+        : kProcLevels[static_cast<std::size_t>(m_compLevelPercent)] * 255 / 10;
     sendUserCommand(cmdSetLevel(addr, level::kCompLevel, raw));
 }
 

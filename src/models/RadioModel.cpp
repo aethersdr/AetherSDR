@@ -3944,6 +3944,8 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    m_transmitModel.setSpeechProcessorLevelMaximum(
+        connected ? caps.speechProcessorLevelMaximum : 2);
     refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
