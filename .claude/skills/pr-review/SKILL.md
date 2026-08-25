@@ -258,8 +258,8 @@ tests). Say in the report what you verified vs. only read. Never trust a
 green CI badge over a local reproduction when they disagree.
 
 **"CI is green" is not "the suite passes."** Every `ctest` call in `ci.yml` is
-`-R`-filtered to a handful of named tests, so only a few of the ~240 tests
-gate a merge. If you run the suite locally, expect failures that have nothing
+`-R`-filtered to a handful of named tests, so only a small fraction of the suite
+gates a merge. If you run the suite locally, expect failures that have nothing
 to do with the PR.
 
 **Before blaming the PR for a test failure, prove it.** Build the PR's merge
