@@ -344,6 +344,17 @@ jobs:
           . .\packaging\windows\store-identity.ps1
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign -ExcludeDfnrModel -RequirePdb
 
+      - name: Verify MSIX upload artifact present
+        if: always()
+        shell: pwsh
+        run: |
+          $upload = Get-ChildItem -Filter 'AetherSDR-*.msixupload' -ErrorAction SilentlyContinue
+          if (-not $upload) {
+            Write-Host '::warning::No .msixupload produced - Store submission artifact will be missing from this release.'
+          } else {
+            Write-Host "MSIX upload artifact: $($upload.Name)"
+          }
+
       # Hard gate for the PDB-regression class (#3946). The Create MSIX
       # package step above is continue-on-error (to tolerate MSIX SDK/tool
       # flakes), which ALSO swallows create-msix.ps1's -RequirePdb throw — so

@@ -283,7 +283,10 @@ Each Store submission must carry a higher `Identity.Version` than the live one.
 The MSIX version is derived from `project(AetherSDR VERSION ...)` in
 `CMakeLists.txt` and normalized to four parts. Within a single month, weekly
 releases must bump the CalVer **patch** (and the 4th hotfix component if
-needed), or Partner Center will reject the package as not newer.
+needed), or Partner Center will reject the package as not newer. That
+rejection happens after the GitHub tag and release artifacts are created, so
+bump the CalVer version and re-tag; the existing release is not retracted
+automatically.
 
 ### Promoting to fully automatic later
 
