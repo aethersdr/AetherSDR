@@ -392,6 +392,7 @@ signals:
     void txSliceModeChanged(const QString& mode);
     void commandReady(const QString& cmd);
     void pttBlocked(const QString& message);
+    void atuTuneFailed(AetherSDR::ATUStatus status, const QString& message);
     // Quindar active-phase signal (#2262).  Emitted on the GUI thread
     // immediately when intro/outro starts and again when each finishes,
     // sized from the tone's current duration.  Used by the strip's
@@ -492,6 +493,7 @@ private:
     ATUStatus m_atuStatus{ATUStatus::None};
     bool      m_memoriesEnabled{false};
     bool      m_usingMemory{false};
+    bool      m_userAbortedAtu{false};
 
     // TX profiles
     QStringList m_profileList;
