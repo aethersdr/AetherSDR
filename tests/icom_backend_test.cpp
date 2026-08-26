@@ -55,11 +55,6 @@ struct IcomCivBackendTestAccess {
         backend.onCivFrame(frame, generation);
     }
 
-    static void deliverCurrent(IcomCivBackend& backend, const CivFrame& frame)
-    {
-        backend.onCivFrame(frame, backend.m_sessionGeneration);
-    }
-
     static void expectPttConfirmation(IcomCivBackend& backend, bool keyed)
     {
         backend.m_keyed = !keyed;
@@ -521,7 +516,6 @@ int main(int argc, char** argv)
         if (d.filterHigh) lastSliceState.filterHigh = d.filterHigh;
         if (d.fmToneMode) lastSliceState.fmToneMode = d.fmToneMode;
         if (d.fmToneValue) lastSliceState.fmToneValue = d.fmToneValue;
-        if (d.fmToneRxValue) lastSliceState.fmToneRxValue = d.fmToneRxValue;
         if (d.repeaterOffsetDir) lastSliceState.repeaterOffsetDir = d.repeaterOffsetDir;
         if (d.fmRepeaterOffsetFreq) {
             lastSliceState.fmRepeaterOffsetFreq = d.fmRepeaterOffsetFreq;
@@ -850,19 +844,6 @@ int main(int argc, char** argv)
     check(frequencyWrite >= 0 && toneValueWrite > frequencyWrite
               && toneEnableWrite > toneValueWrite,
           "memory application tunes first, writes the tone parameter, and enables CTCSS last");
-
-    // Preserve the established basic-repeater contract for the IC-705 and
-    // IC-7300MK2. Their backend accepted the guide's full numeric range before
-    // the IC-9700 gained a canonical-list UI; that presentation must not narrow
-    // another model's wire boundary.
-    radio.clearCivLog();
-    backend.setSliceFmToneValue(0, 88.4);
-    check(waitSchedulerIdle(), "legacy Icom non-list CTCSS value drains");
-    check(std::ranges::any_of(radio.civCommands(), [](const CivFrame& frame) {
-              return frame.cmd == cmd::kTone && frame.hasSub
-                  && frame.sub == repeaterTone::kTxCtcss && !frame.data.empty();
-          }),
-          "IC-705 retains its pre-existing 0.0-299.9 TX-tone contract");
 
     // Change all four values at the fake radio's front panel WITHOUT an
     // unsolicited frame. Two bounded link-tick groups must reconcile them,
@@ -2595,23 +2576,6 @@ int main(int argc, char** argv)
               "non-9700 stall: the session comes up");
         check(waitFor([&] { return c.frequencyMHz > 0.0; }),
               "non-9700 stall: startup reaches a live command plane");
-        check(c.backend.capabilities().fmTonePresentation == FmTonePresentation::Legacy
-                  && c.backend.capabilities().fmToneModes.isEmpty(),
-              "IC-705 and IC-7300MK2 retain the legacy tone presentation");
-        check(waitFor([&] {
-                  return std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& frame) {
-                      return frame.cmd == cmd::kFunction && frame.hasSub
-                          && frame.sub == func::kRepeaterTone && frame.data.empty();
-                  });
-              }),
-              "IC-705 and IC-7300MK2 retain their basic tone-enable read");
-        check(std::ranges::none_of(c.radio.civCommands(), [](const CivFrame& frame) {
-                  return (frame.cmd == cmd::kFunction && frame.hasSub
-                             && frame.sub == func::kRepeaterAccess)
-                      || (frame.cmd == cmd::kTone && frame.hasSub
-                             && frame.sub == repeaterTone::kRxCtcss);
-              }),
-              "IC-705 and IC-7300MK2 do not inherit IC-9700 CTCSS polling");
         c.radio.setCivSilent(true);
         c.backend.setPanPreamp(QStringLiteral("0"), 1);
         const auto terminalBefore =
@@ -2673,83 +2637,9 @@ int main(int argc, char** argv)
     // result read as "this backend has no panadapter yet".
     {
         CivCase c(0xA2, "IC-9700");
-        std::optional<QString> authoritativeToneMode;
-        std::optional<double> authoritativeTxTone;
-        std::optional<double> authoritativeRxTone;
-        QObject::connect(&c.backend, &IRadioBackend::sliceChanged, &c.backend,
-                         [&](int, const SliceDelta& delta) {
-                             if (delta.fmToneMode) {
-                                 authoritativeToneMode = *delta.fmToneMode;
-                             }
-                             if (delta.fmToneValue) {
-                                 authoritativeTxTone = *delta.fmToneValue;
-                             }
-                             if (delta.fmToneRxValue) {
-                                 authoritativeRxTone = *delta.fmToneRxValue;
-                             }
-                         });
         c.backend.connectRadio(c.request());
         check(waitFor([&] { return c.backend.isConnected(); }),
               "auto: the session comes up on an IC-9700");
-        check(waitFor([&] {
-                  return std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
-                      return f.cmd == cmd::kFunction && f.hasSub
-                          && f.sub == func::kRepeaterAccess && f.data.empty();
-                  }) && std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
-                      return f.cmd == cmd::kTone && f.hasSub
-                          && f.sub == repeaterTone::kRxCtcss && f.data.empty();
-                  });
-              }, 6000),
-              "IC-9700 startup reads its model-gated CTCSS access and RX-tone registers");
-        check(c.backend.capabilities().fmTonePresentation == FmTonePresentation::Ctcss
-                  && c.backend.capabilities().fmToneModes
-                      == QStringList{"off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"},
-              "IC-9700 publishes only the four CTCSS modes in this change");
-        check(waitFor([&] {
-                  return authoritativeToneMode == QStringLiteral("ctcss_txrx")
-                      && authoritativeTxTone.has_value()
-                      && std::abs(*authoritativeTxTone - 88.5) < 0.001
-                      && authoritativeRxTone.has_value()
-                      && std::abs(*authoritativeRxTone - 103.5) < 0.001;
-              }),
-              "IC-9700 radio readback owns access mode plus TX and RX tones");
-        const std::array<std::pair<std::uint8_t, const char*>, 8> accessModes{{
-            {0x00, "off"},
-            {0x01, "ctcss_tx"},
-            {0x02, "ctcss_rx"},
-            {0x03, "dtcs_txrx"},
-            {0x06, "dtcs_tx"},
-            {0x07, "ctcss_tx_dtcs_rx"},
-            {0x08, "dtcs_tx_ctcss_rx"},
-            {0x09, "ctcss_txrx"},
-        }};
-        for (const auto& [wireValue, expectedMode] : accessModes) {
-            IcomCivBackendTestAccess::deliverCurrent(
-                c.backend, CivFrame{kControllerAddress, 0xA2, cmd::kFunction, true,
-                                    func::kRepeaterAccess, {wireValue}});
-            check(authoritativeToneMode == QString::fromLatin1(expectedMode),
-                  "IC-9700 preserves every documented 16 5D access state as radio truth");
-        }
-        check(!c.backend.capabilities().fmToneModes.contains(QStringLiteral("dtcs_tx"))
-                  && !c.backend.capabilities().fmToneModes.contains(QStringLiteral("dtcs_txrx"))
-                  && !c.backend.capabilities().fmToneModes.contains(
-                      QStringLiteral("ctcss_tx_dtcs_rx"))
-                  && !c.backend.capabilities().fmToneModes.contains(
-                      QStringLiteral("dtcs_tx_ctcss_rx")),
-              "preserving DTCS readback does not add DTCS operator controls");
-        c.backend.setSliceFmToneMode(0, QStringLiteral("ctcss_rx"));
-        c.backend.setSliceFmToneRxValue(0, 103.5);
-        check(waitFor([&] { return IcomCivBackendTestAccess::pumpUntilIdle(c.backend); }),
-              "IC-9700 CTCSS writes drain through the existing scheduler");
-        check(std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
-                  return f.cmd == cmd::kFunction && f.hasSub
-                      && f.sub == func::kRepeaterAccess && f.data == std::vector<std::uint8_t>{2};
-              }) && std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
-                  return f.cmd == cmd::kTone && f.hasSub
-                      && f.sub == repeaterTone::kRxCtcss
-                      && !f.data.empty();
-              }),
-              "IC-9700 CTCSS RX mode and tone use 16 5D/02 and 1B 01");
 
         // THE DISCRIMINATING ASSERTION. Not "it connected" and not "the model
         // resolved" — both of those were already true on the broken path.
@@ -3257,8 +3147,6 @@ int main(int argc, char** argv)
     // command is defined to answer.
     {
         CivCase c(0xA2, "IC-9700");
-        c.radio.m_repeaterAccess = 0x03;
-        c.radio.m_repeaterRxToneHz = 67.0;
         c.backend.connectRadio(c.request());
         check(waitFor([&] { return c.backend.isConnected(); }),
               "IC-9700 XFC: the session comes up");

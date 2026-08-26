@@ -121,20 +121,6 @@ const FmRepeaterProfile* ctcssRxProfileFor(const IcomModel* model) noexcept
     return &*profile.fmRepeater;
 }
 
-QString repeaterAccessName(std::uint8_t value)
-{
-    switch (value) {
-    case 0x00: return QStringLiteral("off");
-    case 0x01: return QStringLiteral("ctcss_tx");
-    case 0x02: return QStringLiteral("ctcss_rx");
-    case 0x03: return QStringLiteral("dtcs_txrx");
-    case 0x06: return QStringLiteral("dtcs_tx");
-    case 0x07: return QStringLiteral("ctcss_tx_dtcs_rx");
-    case 0x08: return QStringLiteral("dtcs_tx_ctcss_rx");
-    case 0x09: return QStringLiteral("ctcss_txrx");
-    default:   return {};
-    }
-}
 bool supportsTransmitFrequencyCheck(const IcomModel* model) noexcept
 {
     if (!model) {
@@ -2043,7 +2029,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (!fm || !access) {
                 return;
             }
-            const QString mode = repeaterAccessName(*access);
+            const QString mode = QString::fromLatin1(repeaterAccessModeName(*access));
             const bool offered = std::ranges::any_of(
                 fm->accessModes, [&mode](std::string_view candidate) {
                     return mode == QString::fromUtf8(
@@ -4312,8 +4298,8 @@ QVariantMap IcomCivBackend::repeaterStateMap() const
         return out;
     }
     if (m_repeaterAccess) {
-        out.insert(QStringLiteral("accessMode"),
-                   repeaterAccessName(*m_repeaterAccess));
+        out.insert(QStringLiteral("accessMode"), QString::fromLatin1(
+                       repeaterAccessModeName(*m_repeaterAccess)));
     }
     if (m_repeaterToneHz) {
         out.insert(QStringLiteral("txCtcssHz"), *m_repeaterToneHz);

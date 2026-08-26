@@ -880,6 +880,21 @@ std::optional<std::uint8_t> decodeRepeaterAccess(
     }
 }
 
+std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
+{
+    switch (value) {
+    case 0x00: return "off";
+    case 0x01: return "ctcss_tx";
+    case 0x02: return "ctcss_rx";
+    case 0x03: return "dtcs_txrx";
+    case 0x06: return "dtcs_tx";
+    case 0x07: return "ctcss_tx_dtcs_rx";
+    case 0x08: return "dtcs_tx_ctcss_rx";
+    case 0x09: return "ctcss_txrx";
+    default:   return {};
+    }
+}
+
 std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     std::uint8_t to, std::uint8_t which)
 {

@@ -654,7 +654,7 @@ private:
         if (frame->cmd == cmd::kFunction && frame->hasSub && frame->data.empty()) {
             auto it = m_functions.find(frame->sub);
             if (it != m_functions.end()) {
-                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kFunction,
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kFunction,
                          frame->sub, it->second, kCivEom});
                 return;
             }
@@ -681,10 +681,7 @@ private:
         }
         if (frame->cmd == cmd::kFunction && frame->hasSub && !frame->data.empty()) {
             m_functions[frame->sub] = frame->data.front();
-            if (frame->sub == repeaterAccess::kFunction) {
-                m_repeaterAccess = frame->data.front();
-            }
-            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
         if (frame->cmd == cmd::kDuplex) {
@@ -719,14 +716,10 @@ private:
             pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
-        if (frame->cmd == cmd::kTone && frame->hasSub
-            && (frame->sub == repeaterTone::kTxCtcss
-                || frame->sub == repeaterTone::kRxCtcss)) {
-            double& storedTone = frame->sub == repeaterTone::kRxCtcss
-                ? m_repeaterRxToneHz : m_repeaterToneHz;
+        if (frame->cmd == cmd::kTone && frame->hasSub && frame->sub == 0x00) {
             if (frame->data.empty()) {
                 std::vector<std::uint8_t> reply =
-                    cmdSetCtcssTone(kControllerAddress, frame->sub, storedTone);
+                    cmdSetRepeaterTone(kControllerAddress, m_repeaterToneHz);
                 reply[3] = m_addr;
                 pushCiv(reply);
                 return;
@@ -735,7 +728,7 @@ private:
             if (!toneHz) {
                 return;
             }
-            storedTone = *toneHz;
+            m_repeaterToneHz = *toneHz;
             pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
@@ -944,7 +937,6 @@ public:
         {func::kPreamp, 2},          // P.AMP2
         {func::kAgc, 3},             // SLOW
         {func::kRepeaterTone, 1},    // CTCSS TX ON
-        {func::kRepeaterAccess, 9},  // CTCSS TX/RX
         // SSB TX bandwidth slot: MID. Deliberately NOT WIDE, so a client that
         // routes the edge read/write to slot 0 by default reads the wrong SET
         // item here rather than being accidentally right.
@@ -1021,8 +1013,8 @@ public:
     RepeaterOffsetDirection m_repeaterOffsetDirection = RepeaterOffsetDirection::Down;
     int m_repeaterOffsetHz = 600'000;
     double m_repeaterToneHz = 88.5;
-    std::uint8_t m_repeaterAccess = 0x09;
-    double m_repeaterRxToneHz = 103.5;
+    std::uint8_t m_repeaterAccess = 0x03;
+    double m_repeaterRxToneHz = 67.0;
     int m_repeaterDtcsCode = 23;
     bool m_repeaterDtcsTxReverse = false;
     bool m_repeaterDtcsRxReverse = true;

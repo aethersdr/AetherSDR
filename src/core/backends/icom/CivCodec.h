@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -644,6 +645,10 @@ enum class RepeaterOffsetDirection : std::uint8_t {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
 [[nodiscard]] std::optional<std::uint8_t> decodeRepeaterAccess(
     std::span<const std::uint8_t> payload);
+// Normalized radio-state token for each documented IC-9700 16 5D value.
+// Empty means reserved/unknown. Kept here with the wire decoder so socket-free
+// protocol tests can pin every value without a fake radio session.
+[[nodiscard]] std::string_view repeaterAccessModeName(std::uint8_t value) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     std::uint8_t to, std::uint8_t which);
 [[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(

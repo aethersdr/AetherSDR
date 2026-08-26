@@ -180,9 +180,25 @@ static void testFmRepeaterCommands()
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x16, 0x5D, 0xFD}),
           "IC-9700 extended access read is 16 5D");
     check(decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x08}) == 0x08,
-          "documented mixed DTCS/TSQL access value decodes");
+           "documented mixed DTCS/TSQL access value decodes");
     check(!decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x04}),
-          "reserved repeater access value is rejected");
+           "reserved repeater access value is rejected");
+    const std::array<std::pair<std::uint8_t, std::string_view>, 8> accessModes{{
+        {0x00, "off"},
+        {0x01, "ctcss_tx"},
+        {0x02, "ctcss_rx"},
+        {0x03, "dtcs_txrx"},
+        {0x06, "dtcs_tx"},
+        {0x07, "ctcss_tx_dtcs_rx"},
+        {0x08, "dtcs_tx_ctcss_rx"},
+        {0x09, "ctcss_txrx"},
+    }};
+    for (const auto& [wireValue, expectedMode] : accessModes) {
+        check(repeaterAccessModeName(wireValue) == expectedMode,
+              "every documented 16 5D value keeps its radio-authoritative meaning");
+    }
+    check(repeaterAccessModeName(0x04).empty(),
+          "reserved 16 5D value has no normalized state token");
     check(bytesAre(cmdReadRepeaterToneRegister(0xA2, repeaterTone::kRxCtcss),
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01, 0xFD}),
           "IC-9700 RX CTCSS read is 1B 01");
