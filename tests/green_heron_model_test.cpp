@@ -647,7 +647,12 @@ void testDeliberateDisconnectClearsThePanel()
     FakeDevice device(kRoster + kUpdates);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return model.isConnected(); });
+    // The roster, not the link: disconnectFromHost() is not gated, so waiting
+    // on isConnected() would not have failed here — it would have made all
+    // three assertions below vacuous. "A deliberate disconnect clears the
+    // roster" is not evidence of clearing unless there was a roster to clear.
+    report("the roster landed before the disconnect",
+           waitFor([&]() { return !model.announcedOrder().isEmpty(); }));
 
     model.disconnectFromHost();
     report("a deliberate disconnect is not stale", !model.isStale());
