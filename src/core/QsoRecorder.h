@@ -146,6 +146,13 @@ public slots:
     // shut the gate in every inter-element gap (#4281).
     void setCwOverActive(bool active);
 
+private:
+    // Auto-record + idle-timer bookkeeping shared by a voice over (onMoxChanged)
+    // and a CW over (setCwOverActive). Split out so the CW path cannot write
+    // m_transmitting, which MOX alone owns (#4281).
+    void applyOverBookkeeping(bool overActive);
+public:
+
 signals:
     void recordingStarted(const QString& filePath);
     void recordingStopped(const QString& filePath, int durationSecs);

@@ -236,18 +236,32 @@ void QsoRecorder::onMoxChanged(bool mox)
 {
     // Gate RX vs TX writes (#3556). Set before any early-return so the feed
     // slots see the correct state immediately on the TX/RX edge.
+    //
+    // MOX is the SOLE writer of m_transmitting. setCwOverActive deliberately
+    // does not come through here: a CW over outlives the interlock by design
+    // (#4281), so letting it write this flag made two writers disagree for the
+    // length of the hang — long enough that a voice over started inside that
+    // window had m_transmitting forced false underneath it and the rest of the
+    // over was dropped, with no further MOX edge to repair it.
     m_transmitting.store(mox, std::memory_order_release);
+    applyOverBookkeeping(mox);
+}
 
+// The half of onMoxChanged that is about an OVER rather than about the
+// interlock: start an auto-record when one begins, run the idle timer when one
+// ends. A CW over needs exactly this and must NOT touch m_transmitting (#4281).
+void QsoRecorder::applyOverBookkeeping(bool overActive)
+{
     // Only auto-record when in client-side recording mode
     bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
-    if (mox) {
+    if (overActive) {
         // TX started — begin recording if auto-record is on and not already
         // recording. Auto trigger: a standing refusal is reported once, not on
         // every key-down (see beginRecording).
         if (clientSide && m_autoRecord && !m_recording)
             beginRecording(StartTrigger::Auto);
 
-        // Reset idle timer on each TX
+        // Reset idle timer on each over
         m_idleTimer->stop();
     } else {
         // TX ended — start idle countdown
@@ -260,11 +274,10 @@ void QsoRecorder::setCwOverActive(bool active)
 {
     // Set before delegating so both feed slots see the over immediately.
     m_cwOverActive.store(active, std::memory_order_release);
-    // Reuse the MOX bookkeeping: a CW over must still start an auto-record and
-    // manage the idle timer exactly as a voice over does. What it must NOT do is
-    // let the raw interlock close the gate mid-over — that is what m_cwOverActive
-    // above prevents.
-    onMoxChanged(active);
+    // A CW over must still start an auto-record and run the idle timer exactly
+    // as a voice over does — but it must NOT write m_transmitting, which MOX
+    // owns. See onMoxChanged for what went wrong when it did.
+    applyOverBookkeeping(active);
 }
 
 // ── File management ─────────────────────────────────────────────────────────
