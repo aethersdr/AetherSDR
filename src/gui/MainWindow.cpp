@@ -1754,24 +1754,35 @@ MainWindow::MainWindow(QWidget* parent)
         // shim path; wiring the applet to THAT one is why the controls did nothing.
         // simBackend() returns nullptr unless the demo backend is active, so these
         // are safely no-ops on a real radio. Same (main) thread → direct calls.
-        auto simBackend = [this]() -> SimBackend* {
-            return dynamic_cast<SimBackend*>(m_radioModel.backend());
-        };
+        // Routed through the "sim" extension namespace rather than a
+        // dynamic_cast to the backend type (M0, #5263) — the same path the
+        // fault-injection buttons below already take. invokeBackendExtension
+        // is a no-op with nothing connected, and a non-sim backend answers
+        // "unknown namespace", so these are safe on a real radio.
         connect(demo, &DemoApplet::demoNoiseToggled, this,
-                [simBackend](const QString& ch, bool on) {
-            if (auto* sim = simBackend()) sim->setDemoNoiseEnabled(ch, on);
+                [this](const QString& ch, bool on) {
+            m_radioModel.invokeBackendExtension(
+                QStringLiteral("sim"), QStringLiteral("noise.enable"), 0,
+                QVariantMap{{QStringLiteral("ch"), ch}, {QStringLiteral("on"), on}});
         });
         connect(demo, &DemoApplet::demoNoiseLevelChanged, this,
-                [simBackend](const QString& ch, double db) {
-            if (auto* sim = simBackend()) sim->setDemoNoiseLevel(ch, db);
+                [this](const QString& ch, double db) {
+            m_radioModel.invokeBackendExtension(
+                QStringLiteral("sim"), QStringLiteral("noise.level"), 0,
+                QVariantMap{{QStringLiteral("ch"), ch}, {QStringLiteral("db"), db}});
         });
         connect(demo, &DemoApplet::demoNoiseKnobChanged, this,
-                [simBackend](const QString& ch, const QString& knob, double v) {
-            if (auto* sim = simBackend()) sim->setDemoNoiseKnob(ch, knob, v);
+                [this](const QString& ch, const QString& knob, double v) {
+            m_radioModel.invokeBackendExtension(
+                QStringLiteral("sim"), QStringLiteral("noise.knob"), 0,
+                QVariantMap{{QStringLiteral("ch"), ch},
+                            {QStringLiteral("knob"), knob},
+                            {QStringLiteral("v"), v}});
         });
         connect(demo, &DemoApplet::demoPresetRequested, this,
-                [simBackend](const QString& preset) {
-            if (auto* sim = simBackend()) sim->loadDemoNoisePreset(preset);
+                [this](const QString& preset) {
+            m_radioModel.invokeBackendExtension(
+                QStringLiteral("sim"), QStringLiteral("noise.preset"), 0, preset);
         });
         // Fault-injection buttons (RFC #4288 #4) → backend->invokeExtension("sim",…),
         // the same path the `sim` automation verb uses. The signal carries
@@ -5857,18 +5868,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Demo mode: reveal the Demo Noise control tile only while connected to the
-    // synthetic demo radio; hide it for real radios. On demo connect, push the
-    // applet's control state to the engine so the audio scene == what the sliders
-    // show (the applet owns the startup scene — no drift). (RFC #4288)
-    if (m_appletPanel) {
-        auto* conn = m_radioModel.connection();
-        const bool demo = connected && conn && conn->isSyntheticDemo();
-        m_appletPanel->setDemoVisible(demo);
-        if (demo) {
-            if (auto* applet = m_appletPanel->demoApplet())
-                applet->pushSceneToEngine();
-        }
+    // Demo scene push on connect: the applet owns the startup scene, so its
+    // control state is pushed to the engine the moment the demo connects (no
+    // drift between sliders and audio). Demo-ness is read from the capability
+    // handshake, not the connection type (M0, #5263). Tile VISIBILITY moved to
+    // applyCapabilitiesToUi — the Demo Noise applet is a sim-cluster applet,
+    // and applet-granularity hiding rides the capability fan-out. (RFC #4288)
+    if (m_appletPanel && connected
+        && m_radioModel.backendCapabilities().extensionNamespaces.contains(
+               QStringLiteral("sim"))) {
+        if (auto* applet = m_appletPanel->demoApplet())
+            applet->pushSceneToEngine();
     }
 
     // Pause/resume the discovery re-bind loop in step with the connection
@@ -6726,43 +6736,11 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         }, Qt::QueuedConnection);
     }
 
-    // Demo ANF / NB → the AUDIBLE mixer (SimBackend::m_audio).
-    //
-    // Wired HERE, per backend swap, rather than once in the constructor: the
-    // signals come from the synthetic RadioConnection that SimBackend owns, so a
-    // ctor-time binding against the startup backend's connection is dead the
-    // moment the sim swaps in. Qt drops these automatically when the backend is
-    // destroyed, so re-running per swap cannot duplicate them.
-    if (auto* sim = dynamic_cast<SimBackend*>(backend)) {
-        if (auto* conn = sim->connection()) {
-            disconnect(conn, &RadioConnection::demoAnfChanged, sim, nullptr);
-            disconnect(conn, &RadioConnection::demoNbChanged, sim, nullptr);
-            connect(conn, &RadioConnection::demoAnfChanged, sim,
-                    [sim](bool on) { sim->setDemoAnf(on); }, Qt::QueuedConnection);
-            connect(conn, &RadioConnection::demoNbChanged, sim,
-                    [sim](bool on) { sim->setDemoNb(on); }, Qt::QueuedConnection);
-
-            // Demo VFO / mode → the AUDIBLE mixer, via the same seam intents a
-            // real backend receives.
-            //
-            // These have to be forwarded from the synthetic wire rather than left
-            // to RadioModel's seam calls: the demo's SliceModel is materialised by
-            // the synthetic `slice 0 …` status, and that creation path never wires
-            // the frequency/mode intents to the backend (it wires them to
-            // m_flexBackend, which is null in demo mode). So operator tuning
-            // reached the wire as "slice tune 0 …", RadioConnection re-emitted it
-            // as demoVfoChanged — and nothing consumed it. Result: the birdie
-            // never moved and sideband never changed, in demo mode only.
-            disconnect(conn, &RadioConnection::demoVfoChanged, sim, nullptr);
-            disconnect(conn, &RadioConnection::demoModeChanged, sim, nullptr);
-            connect(conn, &RadioConnection::demoVfoChanged, sim,
-                    [sim](double mhz) { sim->setSliceFrequency(0, mhz * 1.0e6); },
-                    Qt::QueuedConnection);
-            connect(conn, &RadioConnection::demoModeChanged, sim,
-                    [sim](const QString& mode) { sim->setSliceMode(0, mode); },
-                    Qt::QueuedConnection);
-        }
-    }
+    // Demo ANF / NB / VFO / mode forwarding: no longer wired here. Both ends
+    // are SimBackend's own objects (its synthetic RadioConnection back into
+    // itself), so the wiring moved into SimBackend's constructor where the
+    // pair lives and dies together (M0, #5263) — this site used to rewire it
+    // per backend swap behind a dynamic_cast.
 
     // Spectrum seam (RFC #4288 Route A): NOT rendered here.
     //
@@ -7403,6 +7381,18 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     }
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+
+    // Demo Noise tile: a sim-cluster applet, so applet-granularity hiding is
+    // the doctrine's one sanctioned hide (#5263). Gated on the "sim"
+    // extension namespace from the capability handshake — the first
+    // production reader of extensionNamespaces — rather than a backend type
+    // test. Deliberately NOT permissive on disconnect: a demo tile with no
+    // radio attached would be noise, matching its pre-M0 behavior.
+    if (m_appletPanel) {
+        m_appletPanel->setDemoVisible(
+            connected
+            && caps.extensionNamespaces.contains(QStringLiteral("sim")));
     }
 
     // ── GPS: the status-bar position readout and the dialog it opens ────────

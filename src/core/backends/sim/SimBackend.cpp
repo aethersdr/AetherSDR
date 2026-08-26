@@ -72,6 +72,27 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
 
+    // The synthetic wire's demo intents route back into THIS backend: ANF/NB
+    // to the audible mixer, and VFO/mode to the seam slice intents (the demo's
+    // SliceModel is materialised by the synthetic `slice 0 …` status, and that
+    // creation path wires frequency/mode intents to m_flexBackend, which is
+    // null in demo mode — so without this forward the birdie never moved and
+    // sideband never changed, in demo mode only). Wired HERE, in the ctor,
+    // because both ends are owned by this backend and die together — this
+    // used to live in MainWindow behind a dynamic_cast<SimBackend*>, rewired
+    // per backend swap (M0, #5263). Cross-thread (m_connection lives on its
+    // worker), so queued.
+    connect(m_connection, &RadioConnection::demoAnfChanged, this,
+            [this](bool on) { setDemoAnf(on); }, Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoNbChanged, this,
+            [this](bool on) { setDemoNb(on); }, Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoVfoChanged, this,
+            [this](double mhz) { setSliceFrequency(0, mhz * 1.0e6); },
+            Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoModeChanged, this,
+            [this](const QString& mode) { setSliceMode(0, mode); },
+            Qt::QueuedConnection);
+
     // RFC #4288 (the VFO=0 fix): on the live hybrid path the synthetic wire
     // connection delivers Flex-format pan/slice status, but RadioModel decodes
     // that wire status ONLY through FlexBackend (decodeSliceStatus /
@@ -301,6 +322,11 @@ RadioCapabilities SimBackend::capabilities() const
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};
+    // The "sim" namespace: fault injection (RFC #4288 #4) + the Demo Noise
+    // scene verbs (noise.*). Declared so clients can gate the Demo Noise
+    // applet on the HANDSHAKE instead of a dynamic_cast to this type — the
+    // first production reader of extensionNamespaces (M0, #5263).
+    caps.extensionNamespaces = {QStringLiteral("sim")};
     return caps;
 }
 
@@ -514,6 +540,40 @@ void SimBackend::invokeExtension(const QString& ns, const QString& verb,
         if (requestId != 0)
             emit extensionError(requestId,
                                 QStringLiteral("sim: not connected — connect the demo first"));
+        return;
+    }
+    // Demo Noise scene verbs (M0, #5263) — the DemoApplet's controls, routed
+    // through the seam instead of a dynamic_cast to this type. Compound args
+    // ride a QVariantMap; a preset is its bare name.
+    if (verb == QLatin1String("noise.enable")) {
+        const QVariantMap m = arg.toMap();
+        setDemoNoiseEnabled(m.value(QStringLiteral("ch")).toString(),
+                            m.value(QStringLiteral("on")).toBool());
+        if (requestId != 0)
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        return;
+    }
+    if (verb == QLatin1String("noise.level")) {
+        const QVariantMap m = arg.toMap();
+        setDemoNoiseLevel(m.value(QStringLiteral("ch")).toString(),
+                          m.value(QStringLiteral("db")).toDouble());
+        if (requestId != 0)
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        return;
+    }
+    if (verb == QLatin1String("noise.knob")) {
+        const QVariantMap m = arg.toMap();
+        setDemoNoiseKnob(m.value(QStringLiteral("ch")).toString(),
+                         m.value(QStringLiteral("knob")).toString(),
+                         m.value(QStringLiteral("v")).toDouble());
+        if (requestId != 0)
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        return;
+    }
+    if (verb == QLatin1String("noise.preset")) {
+        loadDemoNoisePreset(arg.toString());
+        if (requestId != 0)
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
         return;
     }
     const bool handled = applyFault(verb, arg);

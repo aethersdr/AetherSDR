@@ -603,6 +603,10 @@ int main(int argc, char** argv)
               "Sim declares hasPaTemperatureTelemetry=false");
         check(!caps.hasMainFanTelemetry,
               "Sim declares hasMainFanTelemetry=false");
+        check(caps.extensionNamespaces.contains(QStringLiteral("sim")),
+              "Sim declares the 'sim' extension namespace — the Demo Noise "
+              "tile gates on this handshake, not on the backend type "
+              "(M0, #5263)");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
