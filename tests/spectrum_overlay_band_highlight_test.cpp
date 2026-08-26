@@ -106,11 +106,36 @@ int main(int argc, char* argv[])
     report("20m button highlighted after XVTR rebuild",
            btn20 && btn20->isChecked() && btn222 && !btn222->isChecked());
 
+    // Test with radio capability for 2m (native 2m button labelled "2") and XVTR overlap (finding 3 / finding 4)
+    ModelCapabilities caps;
+    caps.has2Meters = true;
+    menu.setRadioCapabilities(caps);
+    QVector<SpectrumOverlayMenu::XvtrBand> xvtrsWithOverlap = {
+        {"2m-Sat", 144.200, "X1"}
+    };
+    menu.setXvtrBands(xvtrsWithOverlap);
+    app.processEvents();
+
+    auto* btn2 = findBandButton(parent, "2");
+    auto* btn2mSat = findBandButton(parent, "2m-Sat");
+    report("Native 2m button '2' and XVTR button '2m-Sat' created",
+           btn2 != nullptr && btn2mSat != nullptr);
+
+    // Tune within the XVTR window: XVTR must win over native/declared 2m band (finding 3)
+    slice.setFrequency(144.200);
+    report("XVTR button takes precedence over 2m button when overlapping",
+           btn2mSat && btn2mSat->isChecked() && btn2 && !btn2->isChecked());
+
+    // Tune within 2m band but outside XVTR ±500 kHz window: 2m button highlighted
+    slice.setFrequency(146.000);
+    report("2m button highlighted when outside XVTR window",
+           btn2 && btn2->isChecked() && btn2mSat && !btn2mSat->isChecked());
+
     // Detach slice
     menu.setSlice(nullptr);
     report("All buttons unhighlighted after detaching slice",
-           btn20 && !btn20->isChecked() && btn222 && !btn222->isChecked() &&
-           btnGen && !btnGen->isChecked());
+           btn20 && !btn20->isChecked() && btn2 && !btn2->isChecked() &&
+           btn2mSat && !btn2mSat->isChecked() && btnGen && !btnGen->isChecked());
 
     return g_failed == 0 ? 0 : 1;
 }

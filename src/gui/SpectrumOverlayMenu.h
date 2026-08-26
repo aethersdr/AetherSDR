@@ -325,6 +325,7 @@ private:
         QString bandName;
     };
     QVector<BandButtonEntry> m_bandButtons;
+    QString m_lastHighlightedBand;
     double m_tuningMinMhz{0.0};
     double m_tuningMaxMhz{0.0};
     // True until a connected backend says otherwise, so a disconnected session

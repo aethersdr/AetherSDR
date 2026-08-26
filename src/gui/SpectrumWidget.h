@@ -74,6 +74,8 @@ struct WfGradientStop { float pos; int r, g, b; };
 const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
 
 // Returns the display name for a color scheme.
+// Inlined in header so standalone test targets (e.g. spectrum_overlay_band_highlight_test)
+// link cleanly without pulling in the full SpectrumWidget TU.
 inline const char* wfSchemeName(WfColorScheme scheme)
 {
     switch (scheme) {
