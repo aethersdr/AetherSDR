@@ -1713,7 +1713,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
-            m_qsoRecorder, &QsoRecorder::onMoxChanged);
+            m_qsoRecorder, &QsoRecorder::setCwOverActive);
     // Let the CW record pump skip rendering while no file is open (#4281).
     // Direct connections: the slot is a single atomic store that touches no Qt
     // state, and recordingStarted is emitted once the file is open and
