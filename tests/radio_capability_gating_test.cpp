@@ -513,25 +513,28 @@ int main(int argc, char** argv)
         using namespace AetherSDR::icom;
         const IcomModel* ic9700 = modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
-        IcomCivBackend backend;
+        // Guarded as a block: without the guard a failed lookup would run the
+        // six checks below against the constructor's unknownModel() seed and
+        // report six misleading capability failures for one missing table row.
         if (ic9700) {
+            IcomCivBackend backend;
             IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 3,
+                  "Icom declares the three IC-9700 per-band TX power limits");
+            check(caps.txPowerMaxWattsAt(146'000'000.0) == 100.0,
+                  "the IC-9700 2 m capability clamps TX power to 100 W");
+            check(caps.txPowerMaxWattsAt(432'000'000.0) == 75.0,
+                  "the IC-9700 70 cm capability clamps TX power to 75 W");
+            check(caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+                  "the IC-9700 23 cm capability clamps TX power to 10 W");
+            check(caps.hasTransmitFrequencyCheck,
+                  "Icom declares the profiled IC-9700 momentary XFC command");
+            check(caps.hasSupplyVoltageTelemetry,
+                  "Icom declares the profiled IC-9700 supply-voltage telemetry");
+            check(!caps.hasMainFanTelemetry,
+                  "Icom declares no Main Fan telemetry family-wide");
         }
-        const RadioCapabilities caps = backend.capabilities();
-        check(caps.txPowerBands.size() == 3,
-              "Icom declares the three IC-9700 per-band TX power limits");
-        check(caps.txPowerMaxWattsAt(146'000'000.0) == 100.0,
-              "the IC-9700 2 m capability clamps TX power to 100 W");
-        check(caps.txPowerMaxWattsAt(432'000'000.0) == 75.0,
-              "the IC-9700 70 cm capability clamps TX power to 75 W");
-        check(caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
-              "the IC-9700 23 cm capability clamps TX power to 10 W");
-        check(caps.hasTransmitFrequencyCheck,
-              "Icom declares the profiled IC-9700 momentary XFC command");
-        check(caps.hasSupplyVoltageTelemetry,
-              "Icom declares the profiled IC-9700 supply-voltage telemetry");
-        check(!caps.hasMainFanTelemetry,
-              "Icom declares no Main Fan telemetry family-wide");
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------

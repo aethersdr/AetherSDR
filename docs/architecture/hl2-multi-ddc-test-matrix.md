@@ -191,7 +191,7 @@ now in main). `kill -9` still wedges the radio — that is expected, not a bug.
 Rows 7.6–7.8 came out of review rather than operation. Row 7.6 remains in the
 default suite until its dropped-packet assertion has a socket-free injected
 replacement. Receiver churn stays out of ordinary builds and is re-enabled by
-the TSan workflow with:
+both weekly sanitizer lanes; to reproduce the TSan leg locally:
 
 ```bash
 CXXFLAGS="-fsanitize=thread -g -fno-omit-frame-pointer -O1" LDFLAGS="-fsanitize=thread" \
@@ -230,14 +230,17 @@ pre-#4471 panadapter that drew the raw wire. #4471 added the receive-side
 conjugation and the expectation went stale. The run-to-run variation was the
 hardcoded `192.168.1.12` reaching a simulator on another machine.
 
-No exclusion is needed any more — run the whole suite:
+The test is no longer part of a default configure: it must be enabled with
+`-DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON` (the weekly sanitizer lanes do, for
+compile coverage). On a build configured that way, run the whole suite:
 
 ```bash
 QT_QPA_PLATFORM=offscreen ctest --test-dir build -j22
 ```
 
-It SKIPS cleanly when no simulator is running, so it is safe in CI and on a
-machine connected to real hardware — and the skip is honest rather than silent:
-it exits 77, and `SKIP_RETURN_CODE` on the `add_test` makes ctest report
-`***Skipped`. A run that measured nothing cannot be mistaken for one that keyed
-and passed.
+When enabled it SKIPS cleanly when no simulator is running, so it is safe in CI
+and on a machine connected to real hardware — and the skip is honest rather
+than silent: it exits 77, and `SKIP_RETURN_CODE` on the `add_test` makes ctest
+report `***Skipped`. A run that measured nothing cannot be mistaken for one
+that keyed and passed. On a default configure the test is not registered at
+all, so a green whole-suite run says nothing about TX loopback either way.

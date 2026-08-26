@@ -512,8 +512,11 @@ load-bearing**:
 Both failures are **silent** — audio flows, meters move, the session is healthy.
 The retired `icom_backend_test` fake-radio fixture asserted the ratio (4800 mono
 samples in at 48 kHz → ~2400 stereo frames out at 24 kHz) rather than merely
-asserting that audio arrived. This conversion and its negative passthrough case
-now require automation-bridge validation against a real Icom radio.
+asserting that audio arrived. The resampler half stays covered by the retained
+`tx_mic_channel_normalizer_test`; the backend-level negative passthrough
+assertion (a backend that skips the conversion emits ~4800 frames) awaits a
+socket-free injected replacement (#5254) — live validation cannot prove that
+non-event.
 
 `Resampler::processMonoToStereo` does both halves in one call. It is stateful
 (r8brain), so the instance is built once at connect — a fresh one per callback

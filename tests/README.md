@@ -1,7 +1,9 @@
 # tests/
 
 Automated unit tests — `*_test.cpp` files compiled by CMake and run
-in CI. To run the suite locally:
+in CI, except the retired fixtures listed under "Network-fixture
+boundary" below, which stay in source for history but are not
+configured or compiled. To run the suite locally:
 
 ```sh
 cmake -B build -S .
@@ -58,17 +60,22 @@ Three socket fixtures remain registered until their negative assertions have
 socket-free replacements: `vkamp_connection_test` (bypass/antenna interlocks),
 `automation_server_gesture_test` (TX-keying refusals and cleanup), and
 `hl2_receiver_count_restart_test` (dropped Metis-start retry). The fake IC-9700
-connection in `radio_capability_gating_test` is replaced by a socket-free model
-table assertion for its 100/75/10 W band ceilings.
+connection in `radio_capability_gating_test` is replaced by a socket-free
+capability-table assertion of its 100/75/10 W band ceilings; RadioModel's
+application of that ceiling to the transmit model currently has no registered
+test, and its socket-free replacement is tracked in #5254.
 
 Two HL2 tests are explicit rather than part of the default graph:
 
-- Weekly TSan enables `hl2_receiver_churn_test` with
-  `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` so the receiver-vector race
-  remains reachable while a socket-free concurrency harness is designed.
+- Both weekly sanitizer lanes enable `hl2_receiver_churn_test` with
+  `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` — TSan for the receiver-vector
+  race, ASan for the use-after-free class — while a socket-free concurrency
+  harness is designed.
 - An operator running `./hpsdrsim -hermeslite2 -P1` may enable and run
   `hl2_tx_loopback_test` with `-DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON`.
-  The test fingerprints the simulator before it can key.
+  The test fingerprints the simulator before it can key. The weekly sanitizer
+  lanes build it for compile coverage; without a simulator it skips honestly
+  (exit 77, reported by ctest as Skipped).
 
 **Not to be confused with [`/docs/qa/`](../docs/qa/)**, which holds
 *manual* QA checklists and test plans — human procedures for features

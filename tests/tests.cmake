@@ -672,8 +672,9 @@ add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 # path its own copy (m_ioDsps) and blocks until the I/O thread has taken it, so
 # the reshape never mutates a container a fan-out is walking. (There is no
 # fenceIo() — an earlier draft named one and this comment outlived it.)
-# It stays out of the default graph and is enabled explicitly by the TSan
-# workflow until a socket-free concurrency harness replaces the fake EP6 peer.
+# It stays out of the default graph and is enabled explicitly by both weekly
+# sanitizer lanes — TSan for the race, ASan for the sequential use-after-free
+# — until a socket-free concurrency harness replaces the fake EP6 peer.
 option(AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST
        "Build the fake-EP6 receiver churn test for sanitizer runs" OFF)
 if(AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST)
@@ -2971,6 +2972,12 @@ add_test(NAME radio_certification_math_test COMMAND radio_certification_math_tes
 # because it requires the external GPL simulator and intentionally keys its
 # simulated transmitter. Enable only after starting `./hpsdrsim -hermeslite2
 # -P1`; the source fingerprints the simulator before allowing keying.
+#
+# An option() rather than the EXCLUDE_FROM_ALL convention the live probes
+# above use, on purpose: when enabled this must stay a REGISTERED test so the
+# SKIP_RETURN_CODE 77 accounting below keeps a missing simulator visibly
+# Skipped rather than silently green. The weekly sanitizer lanes enable it for
+# compile coverage; without a simulator it skips honestly there.
 option(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST
        "Build and register the opt-in hpsdrsim HL2 TX loopback test" OFF)
 if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)

@@ -3192,11 +3192,12 @@ Two consequences worth carrying forward:
 
 `tests/hl2_receiver_churn_test.cpp` gives this a place to be seen: it adds and
 closes receivers against a flowing fake EP6 stream, which is the contended
-window. It stays out of the default build and is enabled only in the weekly
-TSan configuration with `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` until a
-socket-free concurrency harness replaces the peer. A plain pass is not race
-proof; under TSan, read the differential rather than the absolute Qt artifact
-count described above.
+window. It stays out of the default build and is enabled in both weekly
+sanitizer lanes with `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` — TSan for
+the race, ASan for the sequential use-after-free the allocator otherwise hides
+— until a socket-free concurrency harness replaces the peer. A plain pass is
+not race proof; under TSan, read the differential rather than the absolute Qt
+artifact count described above.
 
 ### 20.16 What is proven, and what is not
 
@@ -3414,9 +3415,10 @@ Against the HL2 at 192.168.1.21, RX-only:
 
 The former `hl2_link_stats_test` and `hl2_link_stats_model_test` fake-radio
 fixtures covered the seam and consumer halves of this contract. They are
-retired from the build; telemetry liveness, disconnect clearing, and the
-readouts must be verified through the automation bridge against real HL2
-hardware.
+retired from the build; telemetry liveness and the readouts are verified
+through the automation bridge against real HL2 hardware, while the
+disconnect-edge clearing and RTT refuse-to-claim predicates — non-events a
+live run cannot prove — await socket-free injected replacements (#5254).
 
 ---
 

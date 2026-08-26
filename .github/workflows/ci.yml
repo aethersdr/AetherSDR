@@ -204,7 +204,7 @@ jobs:
       - name: Test meter geometry and gauge scaling
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test|hgauge_hover_popup_test" --output-on-failure
+        run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test|hgauge_hover_popup_test" --no-tests=error --output-on-failure
 
       # band_edges_test joins the gate for the reason stated above the meter
       # tests: it pins a defect that every existing assertion in the tree was
@@ -220,7 +220,7 @@ jobs:
       # emission token out of a 60m segment fails here rather than showing up as
       # voice markers that quietly never appear.
       - name: Test band edges and band-plan voice labels
-        run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --output-on-failure
+        run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --no-tests=error --output-on-failure
 
       # The workspace-canvas suites (RFC #4887) join the gate on the same
       # rationale, and for a specific reason: their whole value proposition is
@@ -244,7 +244,7 @@ jobs:
       - name: Test workspace canvas
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^workspace_" --output-on-failure
+        run: ctest --test-dir build -R "^workspace_" --no-tests=error --output-on-failure
 
       # Slippy-map world wrap. Same reasoning as the step above: the target is
       # already linked by Build, the test runs in milliseconds, and it touches
@@ -256,19 +256,19 @@ jobs:
       - name: Test map wrap
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^map_wrap_test$" --output-on-failure
+        run: ctest --test-dir build -R "^map_wrap_test$" --no-tests=error --output-on-failure
 
       # PSK Reporter query scope, parser bounds, rate-limit backoff, path
       # unwrapping, and solar-position math. Pure Core test with no network.
       - name: Test PSK Reporter map behavior
-        run: ctest --test-dir build -R "^psk_reporter_map_behavior_test$" --output-on-failure
+        run: ctest --test-dir build -R "^psk_reporter_map_behavior_test$" --no-tests=error --output-on-failure
 
       # Async marker/path/terminator cache replacement must retain visible
       # content and cancel superseded work. Offscreen GUI test, no network.
       - name: Test PSK Reporter map live updates
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^map_live_update_test$" --output-on-failure
+        run: ctest --test-dir build -R "^map_live_update_test$" --no-tests=error --output-on-failure
 
       # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
       # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
@@ -278,7 +278,7 @@ jobs:
       - name: Test demo backend threading
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^sim_signal_source_test$" --output-on-failure
+        run: ctest --test-dir build -R "^sim_signal_source_test$" --no-tests=error --output-on-failure
 
       # The MIDI settings store and the #4888 profile import/export boundary:
       # the .map/XML importers (a parser fed contributor-supplied files —
@@ -296,19 +296,19 @@ jobs:
       # (RelWithDebInfo, Intel Mac), against a target the Build step already
       # linked.
       - name: Test MIDI settings and profile import/export
-        run: ctest --test-dir build -R "^midi_settings_test$" --output-on-failure
+        run: ctest --test-dir build -R "^midi_settings_test$" --no-tests=error --output-on-failure
 
       # NR2's AGC recovery and settings migration claims are deterministic,
       # headless, and already built by the Linux `all` target. Run them on PRs
       # so a compiled-but-unexecuted regression cannot merge unnoticed.
       - name: Test NR2 DSP and settings migration
-        run: ctest --test-dir build -R "^(spectral_nr|nr2_settings_model)_test$" --output-on-failure
+        run: ctest --test-dir build -R "^(spectral_nr|nr2_settings_model)_test$" --no-tests=error --output-on-failure
 
       # Restored after #4877 bounded FFTW planning for every test. This step was
       # previously 188-190 s on a cold runner; it now measures ~3 s while still
       # exercising six four-second AM/SAM audio bursts through the real HL2 DSP.
       - name: Test HL2 AM/SAM DC blocker
-        run: ctest --test-dir build -R "^hl2_am_dcblock_test$" --output-on-failure
+        run: ctest --test-dir build -R "^hl2_am_dcblock_test$" --no-tests=error --output-on-failure
 
       # ulanzi_mapping_migration_test was on this gate (added by #4834) and is
       # not any more. Unlike hl2_am_dcblock_test above it was not costing
@@ -338,7 +338,7 @@ jobs:
       # target the Build step already linked. The one event-loop wait polls to
       # a deadline, so a loaded runner makes it slower rather than red.
       - name: Test TCI protocol parsing and malformed-input rejection
-        run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
+        run: ctest --test-dir build -R "^tci_protocol_test$" --no-tests=error --output-on-failure
 
       # The TX capture path joins the gate for the reason stated above the TCI
       # step: its defects are the invisible kind. Capture negotiation has no UI
@@ -356,7 +356,7 @@ jobs:
       # no audio device, no event loop, no wall clock -- and run in well under a
       # second against targets the Build step already linked.
       - name: Test TX capture format negotiation and voice-strip framing
-        run: ctest --test-dir build -R "^(audio_format_negotiation_test|tx_mic_channel_normalizer_test|tx_voice_processor_test)$" --output-on-failure
+        run: ctest --test-dir build -R "^(audio_format_negotiation_test|tx_mic_channel_normalizer_test|tx_voice_processor_test)$" --no-tests=error --output-on-failure
 
       # THE CI-V MODE MAP IS INVISIBLE FROM THE UI. A missing arm in
       # modeFromNeutral() does not throw, does not log, and does not fail to
@@ -375,10 +375,16 @@ jobs:
       # file ran that target either. A capability flag that gates which frame
       # reaches the radio is exactly the kind of claim worth failing a merge on.
       - name: Test Icom CI-V codec, model table and command scheduler
-        # Enumerate every retained target and fail if the expression ever
-        # selects none. ctest otherwise exits 0 for an empty selection, which
-        # let the retired icom_backend_test disappear from this gate silently.
-        run: ctest --test-dir build -R "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|rf_gain_presentation_test)$" --no-tests=error --output-on-failure
+        # Guard both erosion modes. --no-tests=error fails an EMPTY selection,
+        # but ctest still exits 0 when a proper subset matches — which is
+        # exactly how the retired icom_backend_test disappeared from this gate
+        # while four other names kept it green. The count pin below fails the
+        # step the moment any single enumerated target stops registering.
+        env:
+          ICOM_GATE: "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|rf_gain_presentation_test)$"
+        run: |
+          test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "5"
+          ctest --test-dir build -R "$ICOM_GATE" --no-tests=error --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
@@ -666,7 +672,7 @@ jobs:
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
       - name: Test ThumbDV portability paths
-        run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure
+        run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --no-tests=error --output-on-failure
 
       # cross_needle_meter_test renders widgets; the offscreen platform makes
       # its measurements deterministic (verified bit-identical across
@@ -678,7 +684,7 @@ jobs:
       - name: Test cross-needle meter geometry
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "cross_needle_meter_test" --output-on-failure
+        run: ctest --test-dir build -R "cross_needle_meter_test" --no-tests=error --output-on-failure
 
       - name: sccache stats
         if: always()
@@ -913,7 +919,7 @@ jobs:
         run: cmake --build build -j$(sysctl -n hw.ncpu)
 
       - name: Run macOS MNR regression test
-        run: ctest --test-dir build -R '^mac_nr_filter_test$' --output-on-failure
+        run: ctest --test-dir build -R '^mac_nr_filter_test$' --no-tests=error --output-on-failure
 
       - name: Run ASR GPU probe test (#4535 regression)
         # arm64 runner = Apple Silicon: exercises the real Metal device init and
@@ -928,7 +934,7 @@ jobs:
         # library-path line in the log, where a reviewer can actually see them.
         env:
           AETHER_ASR_EXPECT_PRECOMPILED: "1"
-        run: ctest --test-dir build -R asr_gpu_probe_test -V
+        run: ctest --test-dir build -R asr_gpu_probe_test -V --no-tests=error
 
       - name: Compile ASR Metal kernels with the Intel-DMG flag set
         # This job passes no CMAKE_OSX_DEPLOYMENT_TARGET, so it always takes the
