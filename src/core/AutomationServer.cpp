@@ -5653,6 +5653,12 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
         if (!m_radioModel || !m_radioModel->isConnected()) {
             return err(QStringLiteral("no connected radio available"));
         }
+        // `sub slice all` is Flex wire text; on a backend with no command
+        // plane it is dropped, and an ok for work that never happens is the
+        // same defect as a permanently dim button (M0, #5263).
+        if (!m_radioModel->hasCommandPlane()) {
+            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
+        }
         m_radioModel->sendCommand(QStringLiteral("sub slice all"));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("pending"), true}};
@@ -5661,6 +5667,11 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
     if (normalizedAction == QLatin1String("unregister")) {
         if (!m_radioModel || !m_radioModel->isConnected()) {
             return err(QStringLiteral("no connected radio available"));
+        }
+        // `client unregister` is a Flex multiFLEX verb — same drop class as
+        // resync above (M0, #5263).
+        if (!m_radioModel->hasCommandPlane()) {
+            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
         }
         const QString name = value.trimmed();
         static const QRegularExpression safeName(
@@ -6741,6 +6752,11 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(QStringLiteral("refused: cannot remove the last slice"));
         if (!radio->slice(id))
             return err(QStringLiteral("no slice with id ") + arg);
+        // `slice remove` is Flex wire text and no seam verb exists for it yet
+        // — refuse rather than report ok for a command the model will drop
+        // (M0, #5263).
+        if (!radio->hasCommandPlane())
+            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
         radio->sendCommand(QStringLiteral("slice remove %1").arg(id));
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("remove")},
                            {QStringLiteral("id"), id}};
@@ -8205,6 +8221,11 @@ void AutomationServer::applyAgentStation(const QString& name)
 {
     if (!m_radioModel || !m_radioModel->isConnected() || name.isEmpty())
         return;
+    // Defense in depth behind doStation's refusal: `client station` is Flex
+    // wire text, and this can also run from the reconnect re-apply path
+    // (M0, #5263).
+    if (!m_radioModel->hasCommandPlane())
+        return;
     if (!m_stationApplied) {
         // Capture the user's real station name once, to restore it later. Same
         // fallback the connect handshake uses (AppSettings StationName → host).
@@ -8222,7 +8243,7 @@ void AutomationServer::restoreStation()
 {
     if (!m_stationApplied || m_priorStationName.isEmpty())
         return;
-    if (m_radioModel && m_radioModel->isConnected())
+    if (m_radioModel && m_radioModel->isConnected() && m_radioModel->hasCommandPlane())
         m_radioModel->sendCommand(QStringLiteral("client station %1").arg(m_priorStationName));
     m_stationApplied = false;
 }
@@ -8238,6 +8259,10 @@ QJsonObject AutomationServer::doStation(const QString& name)
         return err(QStringLiteral("station name must be a single token (no spaces)"));
     if (!m_radioModel->isConnected())
         return err(QStringLiteral("not connected — connect to a radio before setting the station name"));
+    // `client station` is a Flex multiFLEX identity verb; refuse where the
+    // backend would drop it (M0, #5263).
+    if (!m_radioModel->hasCommandPlane())
+        return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
     m_agentStation = n;
     applyAgentStation(n);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
