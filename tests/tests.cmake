@@ -443,6 +443,15 @@ add_executable(icom_meters_test
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
 
+# Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
+# per-deck watt derivation, sibling-model isolation, and unkey clearing.
+add_executable(icom_power_derivation_test
+    tests/icom_power_derivation_test.cpp)
+target_include_directories(icom_power_derivation_test PRIVATE src)
+target_link_libraries(icom_power_derivation_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
+
 # Retired fake-radio fixtures. Positive session and backend convergence is
 # certified against real firmware through the automation bridge and radiocert;
 # deterministic protocol/model policy stays in socket-free tests. Keep these

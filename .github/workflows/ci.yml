@@ -381,9 +381,9 @@ jobs:
         # while four other names kept it green. The count pin below fails the
         # step the moment any single enumerated target stops registering.
         env:
-          ICOM_GATE: "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|rf_gain_presentation_test)$"
+          ICOM_GATE: "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|rf_gain_presentation_test|icom_power_derivation_test)$"
         run: |
-          test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "5"
+          test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "6"
           ctest --test-dir build -R "$ICOM_GATE" --no-tests=error --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
