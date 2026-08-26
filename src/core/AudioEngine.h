@@ -1043,6 +1043,16 @@ private:
     QElapsedTimer      m_cwPumpElapsed;
     bool               m_cwPumpActive{false};            // audio-thread only
     std::atomic<bool>  m_cwKeyedThisOver{false};
+    // steady_clock ns of our last CW key-down, written by every keyer path and
+    // read by the pump to age the latch out. 0 = never keyed. See
+    // kCwOverHangMs and onCwRecordPump (#4281).
+    std::atomic<int64_t> m_cwLastKeyDownNs{0};
+    // How long after the last element the CW over is considered finished.
+    // Must exceed the longest gap WITHIN an over, which is the inter-word gap
+    // (7 dit units): 1500 ms covers that down to about 6 WPM. The cost of a
+    // longer value is trailing silence recorded after each over; the cost of a
+    // shorter one is the over being split, which is the defect this fixes.
+    static constexpr int64_t kCwOverHangMs = 1500;
     std::atomic<bool>  m_qsoRecordingActive{false};   // a recording file is open
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the

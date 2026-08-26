@@ -32,9 +32,20 @@ enum class TxRecorderSource {
 constexpr TxRecorderSource txRecorderSource(bool radioTransmitting,
                                             bool cwKeyedThisOver)
 {
-    if (!radioTransmitting) return TxRecorderSource::None;
-    return cwKeyedThisOver ? TxRecorderSource::CwSidetone
-                           : TxRecorderSource::Mic;
+    // cwKeyedThisOver is tested FIRST, and deliberately without regard to the
+    // interlock. Under break-in the radio drops the interlock between EVERY
+    // element — measured on a FLEX-8400 at 20 WPM: 47 false-edges in 15.8 s,
+    // gaps a median 52 ms long. Asking "is the radio keyed right now" therefore
+    // answers "no" throughout every inter-element gap, and an earlier version of
+    // this function returned None there. That let the mic tap back into the
+    // recorder in every gap (audible as the operator's voice under the CW) and
+    // stopped the pump emitting the silence that preserves morse spacing.
+    //
+    // The over is the unit of ownership, not the element. The latch spans it:
+    // set on our first key-down, aged out by the pump once the elements stop.
+    if (cwKeyedThisOver)   return TxRecorderSource::CwSidetone;
+    if (radioTransmitting) return TxRecorderSource::Mic;
+    return TxRecorderSource::None;
 }
 
 // The two call sites' predicates, so the "exactly one owner" rule is stated

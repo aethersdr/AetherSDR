@@ -52,9 +52,12 @@ static_assert(std::is_same_v<decltype(txRecorderSource),
 
 // ── Truth table, verified at compile time as well as at run time ────────────
 static_assert(txRecorderSource(false, false) == TxRecorderSource::None);
-static_assert(txRecorderSource(false, true)  == TxRecorderSource::None);
 static_assert(txRecorderSource(true,  false) == TxRecorderSource::Mic);
 static_assert(txRecorderSource(true,  true)  == TxRecorderSource::CwSidetone);
+// ★ The row this fix turns over. It used to assert None, on the assumption that
+// "not transmitting" means the over is finished. Break-in disproves that: the
+// interlock is false in every inter-element gap while the over continues.
+static_assert(txRecorderSource(false, true)  == TxRecorderSource::CwSidetone);
 
 // Rendering additionally requires an open file. Ownership stays a two-input
 // contract (pinned above); "is there a file" is a separate question, so the
@@ -64,6 +67,9 @@ static_assert(!cwRecordPumpShouldRender(TxRecorderSource::None,       true));
 static_assert(!cwRecordPumpShouldRender(TxRecorderSource::Mic,        true));
 static_assert( cwRecordPumpShouldRender(TxRecorderSource::CwSidetone, true));
 static_assert(!cwRecordPumpShouldRender(TxRecorderSource::CwSidetone, false));
+// A gap inside an over still renders — the generator emits silence there, and
+// that silence is what preserves the morse spacing in the file.
+static_assert( cwRecordPumpShouldRender(txRecorderSource(false, true), true));
 
 int main()
 {
@@ -105,8 +111,17 @@ int main()
                      "receive: no producer owns the recorder's TX slot");
         ok &= expect(!cwRecordPumpOwnsRecorder(txRecorderSource(false, false)),
                      "receive: the CW record pump stays idle");
-        ok &= expect(!cwRecordPumpOwnsRecorder(txRecorderSource(false, true)),
-                     "a stale CW latch cannot run the pump while receiving");
+        ok &= expect(micTapOwnsRecorder(txRecorderSource(true, false)),
+                     "voice over: the mic tap owns the slot");
+        // The latch is NOT stale during an over — the interlock is simply low
+        // between elements. The pump must keep ownership across that gap, or
+        // the mic tap fills it and the morse spacing is lost. Staleness is
+        // handled by ageing the latch (AudioEngine::kCwOverHangMs), not by
+        // reading the interlock.
+        ok &= expect(cwRecordPumpOwnsRecorder(txRecorderSource(false, true)),
+                     "#4281: the pump keeps the slot through an inter-element gap");
+        ok &= expect(!micTapOwnsRecorder(txRecorderSource(false, true)),
+                     "#4281: the mic tap is blocked through an inter-element gap");
     }
 
     // ── The render gate: own the slot AND have somewhere to put it ─────────
@@ -122,8 +137,10 @@ int main()
                      "no render: our CW over with NO recording open");
         ok &= expect(!cwRecordPumpShouldRender(txRecorderSource(true, false), true),
                      "no render: a voice over never drives the CW pump");
-        ok &= expect(!cwRecordPumpShouldRender(txRecorderSource(false, true), true),
-                     "no render: receiving, even with a recording open");
+        ok &= expect(!cwRecordPumpShouldRender(txRecorderSource(false, false), true),
+                     "no render: truly receiving, even with a recording open");
+        ok &= expect(cwRecordPumpShouldRender(txRecorderSource(false, true), true),
+                     "#4281: DO render through a gap — the silence is the spacing");
 
         // Rendering implies ownership, never the reverse.
         bool implies = true;

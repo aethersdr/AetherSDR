@@ -8242,7 +8242,13 @@ void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point 
     // Latch that this TX over is a CW over (our keyer fired). The record pump
     // gates on this so it captures CW but not voice/DAX/tune overs that never
     // key the sidetone. Reset on the radio TX→RX edge (setRadioTransmitting).
-    if (down) m_cwKeyedThisOver.store(true, std::memory_order_release);
+    if (down) {
+        m_cwKeyedThisOver.store(true, std::memory_order_release);
+        m_cwLastKeyDownNs.store(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count(),
+            std::memory_order_release);
+    }
 }
 
 // ── CW-sidetone record pump (#2539) ──────────────────────────────────────────
@@ -8266,6 +8272,17 @@ void AudioEngine::onCwRecordPump()
     // fired this over. Whether the PC mic capture stream is open is deliberately
     // not part of this — it stays up across mode changes whenever mic_selection
     // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
+    // Age the CW-over latch: the over is finished once no element has been keyed
+    // for kCwOverHangMs. Done here, on the pump's free-running tick, rather than
+    // on the interlock edge — see setRadioTransmitting (#4281).
+    if (m_cwKeyedThisOver.load(std::memory_order_acquire)) {
+        const int64_t lastNs = m_cwLastKeyDownNs.load(std::memory_order_acquire);
+        const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (lastNs != 0 && (nowNs - lastNs) > kCwOverHangMs * 1000000LL)
+            m_cwKeyedThisOver.store(false, std::memory_order_release);
+    }
+
     const TxRecorderSource src = txRecorderSource();
     const bool active = cwRecordPumpOwnsRecorder(src);
 
@@ -9008,7 +9025,10 @@ void AudioEngine::setRadioTransmitting(bool tx)
 
     // Close the CW-record over on unkey so the next over re-arms cleanly (the
     // pump latches on our keyer, clears here). #2539.
-    if (!tx) m_cwKeyedThisOver.store(false, std::memory_order_release);
+    // NOT cleared here any more. Break-in drops the interlock between every CW
+    // element, so clearing on this edge destroyed the "this over" latch in every
+    // inter-element gap (#4281). The pump ages it out instead, kCwOverHangMs
+    // after the last key-down, which is the point the over has actually ended.
 
     // TX→RX edge: NR2 is bypassed entirely during TX (see the RX DSP chain
     // ~line 1512: raw PCM goes straight to writeAudio so the filter doesn't
