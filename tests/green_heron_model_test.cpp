@@ -17,6 +17,7 @@
 #include <QHostAddress>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimer>
 
 #include <cmath>
 #include <cstdio>
@@ -76,7 +77,12 @@ public:
                 m_received += m_connection->readAll();
             });
             if (m_autoReplay) {
-                sendScript();
+                if (m_replayDelayMs > 0) {
+                    QTimer::singleShot(m_replayDelayMs, this,
+                                       [this]() { sendScript(); });
+                } else {
+                    sendScript();
+                }
             }
         });
     }
@@ -84,6 +90,19 @@ public:
     quint16 port() const { return m_server.serverPort(); }
     int connections() const { return m_connections; }
     QByteArray received() const { return m_received; }
+
+    // Replay the script this long AFTER the connection is accepted, rather
+    // than from inside the newConnection handler.
+    //
+    // This exists because of a platform divergence that a loopback test cannot
+    // otherwise express. On Linux the whole roster is already in the socket
+    // buffer by the time QTcpSocket::connected fires, so a test that waits on
+    // isConnected() and then performs an isReady()-gated call passes anyway —
+    // by accident. On macOS it is not, and the same test failed every run. The
+    // ordering being modelled is the DEVICE's (TCP is up, the device has not
+    // spoken yet), which is a real state on every platform; leaving it to
+    // scheduling luck means only some platforms ever test it.
+    void setReplayDelay(int ms) { m_replayDelayMs = ms; }
 
     // Accept the next connection but say nothing until the test calls send().
     // The real device replays its roster on reconnect; how LONG it takes to is
@@ -128,6 +147,7 @@ private:
     QByteArray m_received;
     int m_chunk{0};
     int m_connections{0};
+    int m_replayDelayMs{0};
     bool m_autoReplay{true};
 };
 
@@ -238,10 +258,29 @@ void testRecordsSplitOneByteAtATimeStillParse()
 
 void testSelectIsFireAndForgetAndNeverAssumed()
 {
+    // Replayed after the link comes up, so the window this test has to wait
+    // out is the device's silence rather than whatever the platform's socket
+    // buffering happens to do.
     FakeDevice device(kRoster + kUpdates);
+    device.setReplayDelay(200);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return model.isConnected(); });
+    // isReady(), not isConnected(): selectPort() moves real relays and refuses
+    // a merely-connected model, by design. And SWITCHADD — the record that
+    // opens that gate — carries no selection, so isReady() alone is still not
+    // this test's precondition: the SWITCHUPDATE naming OFF has to have landed
+    // too, or the "local state is NOT updated" check below reads an empty
+    // string rather than the OFF it means to hold constant.
+    //
+    // On a Linux loopback both are in the socket buffer by the time `connected`
+    // fires; on macOS they are not. Gating on the wrong predicate here failed
+    // 5/5 on macOS and never on the Linux gate.
+    const bool ready = waitFor([&]() {
+        return model.isReady()
+               && model.switchState(QStringLiteral("AS-84F-1")).selected
+                      == QLatin1String("OFF");
+    });
+    report("the roster and its updates landed", ready);
 
     const bool sent = model.selectPort(QStringLiteral("AS-84F-1"),
                                        QStringLiteral("Beam-20"));
@@ -336,7 +375,7 @@ void testKeepAliveIsTheNulByte()
     FakeDevice device(kRoster);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return model.isConnected(); });
+    report("the link came up", waitFor([&]() { return model.isConnected(); }));
     waitFor([&]() { return false; }, 300);   // let any stray write land
     report("the client sends nothing before the device speaks",
            device.received().isEmpty(), device.received().toStdString());
@@ -436,7 +475,11 @@ void testTheAnnouncementArrivesBeforeTheFirstHeading()
     device.setAutoReplay(false);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return model.isConnected(); });
+    // autoReplay is off, so there is nothing to wait for past TCP itself —
+    // checked anyway because device.send() on a connection that never arrived
+    // is a silent no-op, and every assertion below would then pass for the
+    // wrong reason.
+    report("the link came up", waitFor([&]() { return model.isConnected(); }));
 
     device.send(kRotorAdd);
     waitFor([&]() { return false; }, 200);
@@ -489,7 +532,10 @@ void testTurnIsFireAndForgetAndNeverAssumed()
     FakeDevice device(kRoster + kUpdates + kRotorAdd + kRotorPoint);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return !model.rotorNames().isEmpty(); });
+    // turnTo() is gated on liveness the way selectPort() is gated on
+    // isReady(), so the POINT has to have landed before the command goes out.
+    report("the rotator arrived",
+           waitFor([&]() { return !model.rotorNames().isEmpty(); }));
 
     const bool sent = model.turnTo(QStringLiteral("Rotor"), 89.0);
     report("turnTo reports the command went out", sent);
@@ -522,7 +568,11 @@ void testTurnRefusesAnUnencodableHeading()
     FakeDevice device(kRoster + kUpdates + kRotorPoint);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return !model.rotorNames().isEmpty(); });
+    // Without this the refusal below could be the liveness gate turning down
+    // an absent rotator rather than the encoder turning down 400.0 — the
+    // assertion would pass while testing nothing.
+    report("the rotator arrived",
+           waitFor([&]() { return !model.rotorNames().isEmpty(); }));
 
     report("a heading past 360 is refused",
            !model.turnTo(QStringLiteral("Rotor"), 400.0));
@@ -541,7 +591,9 @@ void testRotorStateBelongsToTheSocketItArrivedOn()
     FakeDevice device(kRoster + kUpdates + kRotorPoint);
     GreenHeronModel model;
     model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
-    waitFor([&]() { return !model.rotorNames().isEmpty(); });
+    // "gone after the drop" is only evidence if it was there before it.
+    report("the rotator arrived",
+           waitFor([&]() { return !model.rotorNames().isEmpty(); }));
 
     device.setAutoReplay(false);
     device.drop();
