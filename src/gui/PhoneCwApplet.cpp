@@ -482,8 +482,10 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
     const bool continuousCompressor = maximum > 2;
     const QString accessibleName = continuousCompressor
         ? tr("Speech compressor") : tr("Speech processor");
-    m_procBtn->setText(continuousCompressor ? QStringLiteral("COMP")
-                                            : QStringLiteral("PROC"));
+    m_procBtn->setText(label.isEmpty()
+                           ? (continuousCompressor ? QStringLiteral("COMP")
+                                                   : QStringLiteral("PROC"))
+                           : label);
     // The four bold glyphs are ambiguous at the legacy button's 48 px width
     // on macOS (the final P renders like F). Give only the continuous IC-9700
     // presentation enough room and a clearer weight; preserve every legacy

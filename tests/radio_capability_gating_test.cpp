@@ -537,6 +537,22 @@ int main(int argc, char** argv)
                   "Icom declares the profiled IC-9700 supply-voltage telemetry");
             check(!caps.hasMainFanTelemetry,
                   "Icom declares no Main Fan telemetry family-wide");
+            check(caps.speechProcessorLevelMaximum == 100
+                      && caps.speechProcessorLabel == QStringLiteral("COMP"),
+                  "IC-9700 alone declares the continuous COMP presentation");
+        }
+
+        for (const char* siblingName : {"IC-705", "IC-7300MK2"}) {
+            const IcomModel* sibling = modelForName(siblingName);
+            check(sibling != nullptr, "the protected sibling Icom model resolves");
+            if (sibling) {
+                IcomCivBackend backend;
+                IcomCivBackendTestAccess::selectModel(backend, *sibling);
+                const RadioCapabilities caps = backend.capabilities();
+                check(caps.speechProcessorLevelMaximum == 2
+                          && caps.speechProcessorLabel == QStringLiteral("PROC"),
+                      "non-9700 Icom models retain the legacy PROC presentation");
+            }
         }
     }
 
@@ -892,6 +908,9 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults Main Fan telemetry to absent");
         check(!fresh.alwaysUseClientSideSpots,
               "RadioCapabilities defaults to the existing operator spot policy");
+        check(fresh.speechProcessorLevelMaximum == 2
+                  && fresh.speechProcessorLabel == QStringLiteral("PROC"),
+              "RadioCapabilities defaults to the legacy PROC presentation");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
@@ -912,6 +931,18 @@ int main(int argc, char** argv)
               "Sim keeps its existing operator-controlled spot behavior");
         check(icomCaps.alwaysUseClientSideSpots,
               "Icom forces SpotHub spots through the passive client model");
+        check(flexCaps.speechProcessorLevelMaximum == 2
+                  && flexCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "Flex retains the legacy PROC presentation");
+        check(hl2Caps.speechProcessorLevelMaximum == 2
+                  && hl2Caps.speechProcessorLabel == QStringLiteral("PROC"),
+              "HL2 retains the legacy PROC presentation");
+        check(simCaps.speechProcessorLevelMaximum == 2
+                  && simCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "Sim retains the legacy PROC presentation");
+        check(icomCaps.speechProcessorLevelMaximum == 2
+                  && icomCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "an unidentified Icom retains the legacy PROC presentation");
 
         check(!fresh.hasTxFilterControls,
               "RadioCapabilities defaults TX cutoff controls to absent");
