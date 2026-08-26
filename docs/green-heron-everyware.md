@@ -278,6 +278,36 @@ Locks propagate one switch per round-robin step, so the full set takes a few
 seconds to converge. Lock state briefly appearing on some switches and not
 others is the device's cadence, not a bug.
 
+#### How stable is announcement order?
+
+Append-only across reconnects is the right answer *within* a session — it
+protects the lock-slot basis against a partial replay arriving in a different
+order — and it is an open question *across* a server that came back different.
+Half of that is now measured, read-only, against the reference installation:
+
+> Ten consecutive connections, each opened, read until the roster landed, and
+> closed. All ten announced `AS-84F-1, AS-84F-3, AS-84F-2, AS-84F-4`, first
+> byte at 36–41 ms. Nothing was transmitted, not even the keepalive.
+
+So the order is **not** a per-connection race: the server replays a stored
+ordering rather than re-deriving one each time a client arrives. A server
+enumerating its serial bus per connect would have varied at least once in ten
+tries.
+
+**What this does not establish is cold-start stability.** A server that
+enumerates once at service startup and caches the result would look exactly
+like this on every reconnect and could still announce in a different order
+after a restart — at which point `announcedOrder()`'s append-only list keeps
+the pre-restart basis and `locksBySwitch()` mislabels which switch holds which
+antenna, with no crash and nothing logged. The reference installation is not
+ours to restart, so that half is untested rather than disproved. Treat it as an
+assumption, not a fact.
+
+One mitigation exists today and is not discoverable: `disconnectFromHost()`
+clears `m_announced`, so a **deliberate Disconnect followed by Connect** rebuilds
+the basis from scratch. An automatic reconnect after a link drop deliberately
+does not.
+
 ### `SWITCHUPDATE` field 4
 
 The Green Heron **wireless link signal** — `-27` on switches 1–2 and `-28` on
