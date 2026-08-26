@@ -212,16 +212,6 @@ public:
         return it == m_settings.end() ? -1 : static_cast<int>(it->second);
     }
     void setSetting(int item, std::uint8_t value) { m_settings[item] = value; }
-    [[nodiscard]] int settingLevel(int item) const
-    {
-        const auto it = m_settingLevels.find(item);
-        return it == m_settingLevels.end() ? -1 : it->second;
-    }
-    void setSettingLevel(int item, int value)
-    {
-        m_settingLevels[item] = std::clamp(value, 0, 255);
-    }
-    void clearSettingLevel(int item) { m_settingLevels.erase(item); }
     [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
     {
         return m_renewalSequences;
@@ -287,22 +277,7 @@ public:
     //
     // Defaults are unchanged, so every test written before this one still faces
     // the same IC-705 it always did.
-    void setCivAddress(std::uint8_t address)
-    {
-        m_addr = address;
-        if (address == 0xA2) {
-            // IC-9700 SET 0115/0116 use the radio's own modulation-input
-            // vocabulary.  Do not let this multi-model fake answer those
-            // reads with its IC-705 defaults (where item 0116 is a level), or
-            // a healthy IC-9700 connection reports a fabricated unknown(128)
-            // DATA MOD source before a test has touched either setting.
-            m_settings[115] = 0x00; // DATA OFF MOD = MIC
-            m_settings[116] = 0x00; // DATA MOD = MIC
-            m_settingLevels[112] = 128; // ACC MOD level
-            m_settingLevels[113] = 128; // USB MOD level
-            m_settingLevels[114] = 128; // LAN MOD level
-        }
-    }
+    void setCivAddress(std::uint8_t address) { m_addr = address; }
     // The tighter of the two windows the name is copied into: 0x40 in a
     // 0x90-byte connect grant, against 0x52 in a 0xA8-byte announce.
     static constexpr std::size_t kMaxNameBytes = 0x90 - 0x40;
@@ -809,37 +784,15 @@ private:
             const int item = decodeBcdByte(frame->data[0]) * 100
                 + decodeBcdByte(frame->data[1]);
             if (frame->data.size() == 2) {
-                // Item numbers are model-owned and can be reused with a
-                // different value shape.  The selected model's level seed
-                // deliberately takes precedence over a legacy enum seed at
-                // the same decimal leaf; setCivAddress() installs the active
-                // model's interpretation before the session starts.
-                if (const auto levelIt = m_settingLevels.find(item);
-                    levelIt != m_settingLevels.end()) {
-                    const auto bcd = encodeLevel(levelIt->second);
-                    pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kSetting,
-                             0x05, frame->data[0], frame->data[1],
-                             bcd[0], bcd[1], kCivEom});
-                    return;
-                }
                 auto it = m_settings.find(item);
                 if (it == m_settings.end())
                     return;   // no such leaf on this model — silence, not an error
-                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kSetting,
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
                          0x05, frame->data[0], frame->data[1], it->second, kCivEom});
                 return;
             }
-            if (frame->data.size() == 4) {
-                const auto raw = decodeLevel(std::span(frame->data).subspan(2));
-                if (raw) {
-                    m_settingLevels[item] = *raw;
-                    pushCiv({0xFE, 0xFE, kControllerAddress, m_addr,
-                             kCivOk, kCivEom});
-                }
-                return;
-            }
             m_settings[item] = frame->data[2];
-            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
         if (frame->cmd == cmd::kTuneOffset && frame->hasSub && frame->data.empty()) {
@@ -1050,7 +1003,6 @@ public:
         {116, 0x80},   // USB MOD level
         {117, 0x80},   // WLAN MOD level
     };
-    std::map<int, int> m_settingLevels;
     // USB-D on FIL2 — NOT the client's construction default (USB, FIL1), so a
     // test asserting DIGU is asserting the client actually read 26 rather than
     // kept its own guess.

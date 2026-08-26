@@ -294,7 +294,7 @@ constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
 }};
 
-constexpr std::array<FeatureEvidence, 10> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 11> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
