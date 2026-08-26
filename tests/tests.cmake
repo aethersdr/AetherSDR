@@ -1176,6 +1176,12 @@ target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
 
+# In-use radio share gate (#4448), single-sourced for both connect paths — header-only.
+add_executable(connection_sharing_policy_test tests/connection_sharing_policy_test.cpp)
+target_include_directories(connection_sharing_policy_test PRIVATE src)
+target_link_libraries(connection_sharing_policy_test PRIVATE Qt6::Core)
+add_test(NAME connection_sharing_policy_test COMMAND connection_sharing_policy_test)
+
 # Last-session DAX restore window + quit-time key prune (#4558) — header-only.
 add_executable(dax_restore_policy_test tests/dax_restore_policy_test.cpp)
 target_include_directories(dax_restore_policy_test PRIVATE src)

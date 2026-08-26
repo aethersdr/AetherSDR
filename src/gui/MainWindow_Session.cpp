@@ -31,6 +31,7 @@
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwTrace.h"
@@ -504,12 +505,12 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
     if (m_autoConnectAttempts.value(info.serial) >= kMaxAutoConnectAttempts)
         return;
 
-    // Fail closed on a busy non-Flex radio, matching the manual connect gate in
-    // ConnectionPanel (#4448): HPSDR Protocol 1 is single-client, so connecting to
-    // an HL2 that is already streaming wedges both clients. Say so instead of
-    // silently doing nothing — this is the startup path, and the operator is
-    // staring at "Looking for your radio…".
-    if (info.inUse && info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) != 0) {
+    // Fail closed on a busy single-client radio, matching the manual connect
+    // gate in ConnectionPanel (#4448) — the rule is shared via
+    // ConnectionSharingPolicy.h so the two gates cannot drift. Say so instead
+    // of silently doing nothing — this is the startup path, and the operator
+    // is staring at "Looking for your radio…".
+    if (info.inUse && !AetherSDR::familySupportsSharedInUseConnect(info.family)) {
         m_connPanel->setStatusText(
             QStringLiteral("%1 is already in use by another client and can't be shared.")
                 .arg(info.model));

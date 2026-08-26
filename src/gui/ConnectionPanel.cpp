@@ -1,5 +1,6 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
+#include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
 #include "core/backends/hl2/Hl2Discovery.h"   // shared nickname + MAC->serial helpers
 #include "core/backends/icom/IcomCredentials.h"  // password -> OS keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
@@ -1904,10 +1905,11 @@ void ConnectionPanel::onLocalConnectClicked()
         return;
 
     const RadioInfo& info = m_radios[row];
-    // F5 (#4448): a non-Flex family (HL2) is single-client under HPSDR Protocol 1
-    // — an in-use radio can't be shared, and connecting would wedge both clients.
-    // Fail closed. Flex multiFlex sharing is a separate, Flex-only path.
-    if (info.inUse && info.family != QLatin1String("flex")) {
+    // F5 (#4448): an in-use radio of a single-client family can't be shared,
+    // and connecting would wedge both clients. Fail closed. The rule lives in
+    // ConnectionSharingPolicy.h — one home, shared with the startup
+    // auto-connect gate in MainWindow_Session.
+    if (info.inUse && !AetherSDR::familySupportsSharedInUseConnect(info.family)) {
         setStatusText(QStringLiteral(
             "%1 is already in use by another client and can't be shared.")
             .arg(info.model));
