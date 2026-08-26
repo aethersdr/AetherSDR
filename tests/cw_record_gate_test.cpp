@@ -157,23 +157,62 @@ int main()
     // This is the property the recorder depends on and cannot check for itself:
     // it writes whatever arrives. If both predicates were ever true together
     // the WAV would interleave mic and sidetone block by block.
+    // The full ownership truth table, stated explicitly. This replaces an
+    // earlier "exactly one owner" loop that compared cwRecordPumpOwnsRecorder
+    // against micTapOwnsRecorder — since those are defined as (s == CwSidetone)
+    // and (s != CwSidetone), that assertion reduced to x != !x and could not
+    // fail for any input. An exhaustive table cannot go vacuous the same way.
     {
-        bool exclusive = true;
-        for (int i = 0; i < 4; ++i) {
-            const bool tx = (i & 1) != 0;
-            const bool cw = (i & 2) != 0;
-            const auto s = txRecorderSource(tx, cw);
-            const bool pump = cwRecordPumpOwnsRecorder(s);
-            const bool mic  = micTapOwnsRecorder(s);
-            if (pump == mic) {
-                exclusive = false;
-                std::printf("  tx=%d cw=%d -> %s  pump=%d mic=%d\n",
-                            tx ? 1 : 0, cw ? 1 : 0, name(s),
-                            pump ? 1 : 0, mic ? 1 : 0);
+        struct Row { bool tx; bool cw; TxRecorderSource want; const char* why; };
+        static constexpr Row kRows[] = {
+            {false, false, TxRecorderSource::None,
+             "receiving, nothing keyed"},
+            {true,  false, TxRecorderSource::Mic,
+             "#3556: a voice over is the mic's"},
+            {true,  true,  TxRecorderSource::CwSidetone,
+             "#4281: our CW over is the pump's"},
+            {false, true,  TxRecorderSource::CwSidetone,
+             "#4281: an inter-element gap is still our over"},
+        };
+        bool table = true;
+        for (const Row& r : kRows) {
+            const auto got = txRecorderSource(r.tx, r.cw);
+            if (got != r.want) {
+                table = false;
+                std::printf("  tx=%d cw=%d -> %s, wanted %s (%s)\n",
+                            r.tx ? 1 : 0, r.cw ? 1 : 0,
+                            name(got), name(r.want), r.why);
             }
         }
-        ok &= expect(exclusive,
-                     "exactly one producer owns the recorder's TX slot in every state");
+        ok &= expect(table, "ownership truth table holds for all four states");
+    }
+
+    // #4281: the over-hang is what holds RX audio off after the last element, so
+    // its LENGTH is correctness, not tuning — every extra millisecond is a
+    // millisecond of the other station's reply missing from the recording.
+    {
+        static_assert(cwOverHangMs(20) == 480,
+                      "#4281: 8 dit units at 20 WPM is 480 ms");
+        static_assert(cwOverHangMs(30) == 320, "8 units at 30 WPM");
+        static_assert(cwOverHangMs(0)  == cwOverHangMs(20),
+                      "a nonsense speed falls back to 20 WPM, never divides by zero");
+        // It must outlast the longest silence inside an over (the inter-word
+        // gap, 7 units) at every speed, or an over splits mid-transmission.
+        bool covers = true;
+        for (int wpm = 5; wpm <= 60; ++wpm) {
+            const long long interWordGapMs = 7LL * 1200 / wpm;
+            if (cwOverHangMs(wpm) <= interWordGapMs) {
+                covers = false;
+                std::printf("  %d WPM: hang %lldms <= inter-word gap %lldms\n",
+                            wpm, cwOverHangMs(wpm), interWordGapMs);
+            }
+        }
+        ok &= expect(covers,
+                     "#4281: the over-hang outlasts an inter-word gap at 5-60 WPM");
+        // ...and must NOT be the old fixed 1500 ms, which held RX off for 1.5 s
+        // after every over regardless of speed.
+        ok &= expect(cwOverHangMs(20) < 1500,
+                     "#4281: the hang is far shorter than the 1500 ms first attempt");
     }
 
     return ok ? 0 : 1;

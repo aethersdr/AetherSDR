@@ -8244,11 +8244,20 @@ void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point 
     // key the sidetone. Reset on the radio TX→RX edge (setRadioTransmitting).
     if (down) {
         m_cwKeyedThisOver.store(true, std::memory_order_release);
-        m_cwLastKeyDownNs.store(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count(),
-            std::memory_order_release);
+        // If the interlock is already up, this over has transmitted. The other
+        // direction — interlock rising after the first element — is handled in
+        // setRadioTransmitting, because the radio's edge lags the key by a few ms.
+        if (m_radioTransmitting.load(std::memory_order_acquire))
+            m_cwOverHadTx.store(true, std::memory_order_release);
     }
+    // Stamp BOTH edges. The over ends a fixed number of dit units after the last
+    // edge; timing that from key-down alone would add the element's own duration
+    // (up to 3 units for a dah) to every measurement and hold the over open that
+    // much longer, which costs receive audio (#4281).
+    m_cwLastKeyEdgeNs.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(),
+        std::memory_order_release);
 }
 
 // ── CW-sidetone record pump (#2539) ──────────────────────────────────────────
@@ -8276,11 +8285,13 @@ void AudioEngine::onCwRecordPump()
     // for kCwOverHangMs. Done here, on the pump's free-running tick, rather than
     // on the interlock edge — see setRadioTransmitting (#4281).
     if (m_cwKeyedThisOver.load(std::memory_order_acquire)) {
-        const int64_t lastNs = m_cwLastKeyDownNs.load(std::memory_order_acquire);
+        const int64_t lastNs = m_cwLastKeyEdgeNs.load(std::memory_order_acquire);
         const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        if (lastNs != 0 && (nowNs - lastNs) > kCwOverHangMs * 1000000LL)
+        if (lastNs != 0 && (nowNs - lastNs) > cwOverHangMs() * 1000000LL) {
             m_cwKeyedThisOver.store(false, std::memory_order_release);
+            m_cwOverHadTx.store(false, std::memory_order_release);
+        }
     }
 
     const TxRecorderSource src = txRecorderSource();
@@ -9010,6 +9021,12 @@ void AudioEngine::setRadioTransmitting(bool tx)
         return;
 
     if (tx) {
+        // The radio really is transmitting, so if our keyer has fired this over
+        // it is a genuine CW over and the pump may own the recorder's TX slot.
+        // The interlock's rising edge lags the key by a few ms, which is why
+        // this is latched here as well as in setCwKeyDown (#4281).
+        if (m_cwKeyedThisOver.load(std::memory_order_acquire))
+            m_cwOverHadTx.store(true, std::memory_order_release);
         // radioTransmittingChanged originates on the UI thread while AudioEngine
         // owns its QAudioSource and health tracker on the audio thread. Preserve
         // the existing immediate atomic TX edge, but sample capture state only

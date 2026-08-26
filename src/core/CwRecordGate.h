@@ -68,6 +68,21 @@ constexpr bool micTapOwnsRecorder(TxRecorderSource s)
 // txRecorderSource(): ownership must stay a two-input contract, because the
 // defect this file exists to prevent was exactly an extra input smuggled into
 // that decision. The test pins that shape.
+// How long after the last CW key EDGE the over is considered finished.
+//
+// Must outlast the longest silence WITHIN an over — the inter-word gap, 7 dit
+// units — and no longer: for its whole duration the recorder holds RX audio off
+// so the pump's silence is not interleaved with receive audio, so every extra
+// millisecond is a millisecond of the other station's reply missing from the
+// file. In QSK they answer within 200-400 ms.
+//
+// 8 units = inter-word gap + 1 unit of margin. A dit is 1200/WPM ms.
+constexpr int kCwOverHangUnits = 8;
+constexpr long long cwOverHangMs(int wpm)
+{
+    return kCwOverHangUnits * 1200LL / (wpm > 0 ? wpm : 20);
+}
+
 constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
 {
     return cwRecordPumpOwnsRecorder(s) && recordingOpen;

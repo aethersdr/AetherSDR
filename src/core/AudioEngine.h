@@ -185,12 +185,19 @@ public:
     TxRecorderSource txRecorderSource() const {
         return AetherSDR::txRecorderSource(
             m_radioTransmitting.load(std::memory_order_acquire),
-            m_cwKeyedThisOver.load(std::memory_order_acquire));
+            // "our CW over is in progress" = our keyer fired AND the radio has
+            // keyed during it. Not the raw latch: see m_cwOverHadTx.
+            m_cwKeyedThisOver.load(std::memory_order_acquire)
+                && m_cwOverHadTx.load(std::memory_order_acquire));
     }
     // Whether a Client-Side recording is open, so the CW record pump can skip
     // rendering samples nothing will store (#4281). Orthogonal to ownership
     // above: that answers WHOSE audio belongs in the file, this answers whether
     // there is a file. Stored from QsoRecorder's start/stop signals.
+    // Mirror of TransmitModel::cwSpeed, used only to size the CW over-hang.
+    void setCwWpm(int wpm) {
+        if (wpm > 0) m_cwWpm.store(wpm, std::memory_order_relaxed);
+    }
     void setQsoRecordingActive(bool on) {
         m_qsoRecordingActive.store(on, std::memory_order_release);
     }
@@ -1043,16 +1050,48 @@ private:
     QElapsedTimer      m_cwPumpElapsed;
     bool               m_cwPumpActive{false};            // audio-thread only
     std::atomic<bool>  m_cwKeyedThisOver{false};
-    // steady_clock ns of our last CW key-down, written by every keyer path and
-    // read by the pump to age the latch out. 0 = never keyed. See
-    // kCwOverHangMs and onCwRecordPump (#4281).
-    std::atomic<int64_t> m_cwLastKeyDownNs{0};
-    // How long after the last element the CW over is considered finished.
-    // Must exceed the longest gap WITHIN an over, which is the inter-word gap
-    // (7 dit units): 1500 ms covers that down to about 6 WPM. The cost of a
-    // longer value is trailing silence recorded after each over; the cost of a
-    // shorter one is the over being split, which is the defect this fixes.
-    static constexpr int64_t kCwOverHangMs = 1500;
+    // Our keyer fired AND the radio actually keyed at some point in this over.
+    // The pump is free-running (startCwRecordPump is invoked once and never
+    // stopped), and ownership deliberately ignores the interlock so break-in
+    // gaps do not end the over — which together meant a key-down that never
+    // transmitted (TX-inhibited radio, disconnected, CWX local sidetone
+    // feedback) took the recorder's TX slot and could auto-start a recording.
+    // Latching the interlock rather than sampling it keeps gaps covered while
+    // requiring that a transmission happened at all (#4281).
+    std::atomic<bool>  m_cwOverHadTx{false};
+    // steady_clock ns of our last CW key EDGE — down or up. Written by every
+    // keyer path, read by the pump to age the latch out. 0 = never keyed.
+    // Both edges are stamped deliberately: stamping only key-down measured the
+    // element's own duration as part of the gap, so the over ran long by up to
+    // 3 units. See cwOverHangMs() and onCwRecordPump (#4281).
+    std::atomic<int64_t> m_cwLastKeyEdgeNs{0};
+    // Local keyer speed, mirrored from TransmitModel::cwSpeed so the pump can
+    // size the over-hang in dit units rather than wall-clock milliseconds.
+    std::atomic<int>   m_cwWpm{20};
+    // How long after the last key edge the CW over is considered finished.
+    //
+    // It must outlast the longest silence WITHIN an over — the inter-word gap,
+    // 7 dit units — and no longer, because for its whole duration the recorder
+    // holds RX audio off (QsoRecorder::feedRxAudio) so the pump's silence is
+    // not interleaved with receive audio. Every extra millisecond here is a
+    // millisecond of the other station's reply missing from the recording, and
+    // in QSK they answer within 200-400 ms.
+    //
+    // 8 units = the inter-word gap plus one unit of margin for keyer jitter.
+    // At 20 WPM that is 480 ms; at 30 WPM, 320 ms. A fixed 1500 ms (the first
+    // version of this fix) cost 1.5 s of deafness after EVERY over at every
+    // speed, which is a regression against the recorder's own purpose.
+    //
+    // Known limitation: Farnsworth sending stretches word gaps beyond 7 units
+    // at the character speed this reports, so a Farnsworth over may split at a
+    // word boundary. That degrades to the pre-fix behaviour for one gap rather
+    // than losing audio.
+    //
+    // The arithmetic lives in CwRecordGate.h so it is pinned by the same test
+    // as the ownership rule.
+    int64_t cwOverHangMs() const {
+        return AetherSDR::cwOverHangMs(m_cwWpm.load(std::memory_order_relaxed));
+    }
     std::atomic<bool>  m_qsoRecordingActive{false};   // a recording file is open
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the
