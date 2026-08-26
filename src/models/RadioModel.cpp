@@ -6349,6 +6349,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("client low_bw_connect");
 
     m_guiClientRegistrationState.begin();
+    // The radio dumps slice status in response to GUI-client registration,
+    // which lands BEFORE the "client gui" reply that dispatches the sub batch.
+    // Arming at "sub slice all" opens the window after onSliceAdded has already
+    // chosen its source, so the guard is never consulted (#4759).
+    emit sliceConnectEnumerationStarted();
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
         if (code != 0) {
@@ -6403,7 +6408,6 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // response — exactly as the second sub batch (sub tnf/dax/codec/…) below
         // already does. The previous one-RTT-per-sub chain serialized ~11 round
         // trips (~0.7 s on a LAN) into the connect handshake for no protocol reason.
-        emit sliceConnectEnumerationStarted();
         sendCmd("sub slice all");
         sendCmd("sub pan all");
         sendCmd("sub tx all");

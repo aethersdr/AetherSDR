@@ -71,7 +71,9 @@ AETHER_AUTOMATION_SOCKET=aethersdr-4166 \
 `AETHER_AUTOMATION_IDENTITY` deterministically selects a process-scoped Flex
 GUI client UUID, so concurrent worktrees do not displace one another through
 the radio's duplicate-client takeover behavior. If it is omitted, the socket,
-automation label, or PID is used in that order. `AETHER_AUTOMATION_AGENT_NAME`
+automation label, or PID is used in that order (transient identity, so multi-slice
+session restore is not preserved across runs; set a stable identity when testing
+session persistence). `AETHER_AUTOMATION_AGENT_NAME`
 sets the station label shown to other Multi-Flex clients; the legacy
 `AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
 followed by the neutral default `Automation`. The agent name is display-only

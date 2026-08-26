@@ -18,9 +18,9 @@ namespace AetherSDR {
 // internal state without transmitting an active command back to the radio
 // (see FlexLib Slice.cs:2035: _UpdateActive(..., update_radio: false)).
 //
-// The window is armed by RadioModel right before 'sub slice all' is dispatched,
-// and disarmed when the 'slice list' response is received. The timeout (default
-// 3000ms) acts as a safety backstop.
+// The window is armed by RadioModel right before 'client gui' registration
+// is dispatched, and disarmed when the 'slice list' response is received. The
+// timeout (default 3000ms) acts as a safety backstop.
 //
 // Pure policy — no timers, no widgets, no clock. The caller injects nowMs and
 // owns every side effect. Unit-tested in band_recall_slice_selection_policy_test
@@ -47,19 +47,13 @@ public:
 
     // True while the connect enumeration window is open.
     // Marks the guard as consulted if active.
-    bool isActive(qint64 nowMs)
+    bool isActive(qint64 nowMs) const
     {
         if (nowMs >= 0 && nowMs < m_untilMs) {
             m_consulted = true;
             return true;
         }
         return false;
-    }
-
-    // Const inspection without mutating consulted state
-    bool isActive(qint64 nowMs) const
-    {
-        return nowMs >= 0 && nowMs < m_untilMs;
     }
 
     // True once armed and then expired without ever being consulted while open.
@@ -71,9 +65,9 @@ public:
     int windowMs() const { return m_windowMs; }
 
 private:
-    int    m_windowMs{3000};
-    qint64 m_untilMs{0};
-    bool   m_consulted{false};
+    int          m_windowMs{3000};
+    qint64       m_untilMs{0};
+    mutable bool m_consulted{false};
 };
 
 }  // namespace AetherSDR

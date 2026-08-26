@@ -257,7 +257,7 @@ int main(int argc, char** argv)
     {
         RadioModel model;
         SliceWiringHarness harness;
-        // Armed on connect sub slice all
+        // Armed on connect client gui registration
         harness.connectEnumerationGuard.arm(1000);
         harness.nowMs = 1050;
         harness.attach(&model);
