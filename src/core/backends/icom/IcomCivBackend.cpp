@@ -2365,7 +2365,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 // mic.gain seam verb while LAN is selected.  Its wire address
                 // is model-specific and therefore absent from the generic
                 // 14 0B control registry; record the logical control only
-                // after a real radio reply has established this value.
+                // after a real radio reply has established this value.  The
+                // same logical known-state may also be established by a 14 0B
+                // reply while MIC is authoritative; publishPhoneModulationLevel()
+                // always re-derives the displayed value from the active input,
+                // so the set records readiness rather than register identity.
                 m_controlsValueKnown.insert(QStringLiteral("mic.gain"));
             } else {
                 return;
@@ -3669,6 +3673,8 @@ void IcomCivBackend::setMicGain(int gainPercent)
             // arrives, the shared slider does not describe it and must not
             // turn a construction/physical-mic mirror into a LAN write.
             if (m_networkModLevelPercent < 0) {
+                qCWarning(lcIcomTx)
+                    << "ignoring Phone level change: LAN MOD readback is not established";
                 return;
             }
             m_networkModLevelPercent = std::clamp(gainPercent, 0, 100);
@@ -4661,6 +4667,8 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         if (mod && mod->phoneLevelFollowsNetworkInput
             && activeInput == mod->networkOnlyValue) {
             if (m_networkModLevelPercent < 0) {
+                qCWarning(lcIcomTx)
+                    << "mic.gain scrub skipped: LAN MOD readback is not established";
                 return false;
             }
             setMicGain(m_networkModLevelPercent);
