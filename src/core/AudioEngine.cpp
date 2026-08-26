@@ -8266,7 +8266,8 @@ void AudioEngine::onCwRecordPump()
     // fired this over. Whether the PC mic capture stream is open is deliberately
     // not part of this — it stays up across mode changes whenever mic_selection
     // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
-    const bool active = cwRecordPumpOwnsRecorder(txRecorderSource());
+    const TxRecorderSource src = txRecorderSource();
+    const bool active = cwRecordPumpOwnsRecorder(src);
 
     if (active != m_cwPumpActive) {
         m_cwPumpActive = active;
@@ -8284,7 +8285,8 @@ void AudioEngine::onCwRecordPump()
     // here would stop auto-record from ever triggering on a CW over. Restart the
     // clock so the first render after a start measures its own tick rather than
     // the whole skipped span.
-    if (!m_qsoRecordingActive.load(std::memory_order_acquire)) {
+    if (!cwRecordPumpShouldRender(
+            src, m_qsoRecordingActive.load(std::memory_order_acquire))) {
         m_cwPumpElapsed.restart();
         return;
     }

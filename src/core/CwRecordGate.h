@@ -48,4 +48,18 @@ constexpr bool micTapOwnsRecorder(TxRecorderSource s)
     return s != TxRecorderSource::CwSidetone;
 }
 
+// Whether the pump should spend the render at all. Ownership above answers
+// WHOSE audio belongs in the file; this adds the orthogonal question of whether
+// there IS a file — with none open, QsoRecorder::feedTxAudio discards every
+// block, so rendering is pure waste on the audio thread (#4281).
+//
+// Deliberately a SEPARATE function rather than a third parameter to
+// txRecorderSource(): ownership must stay a two-input contract, because the
+// defect this file exists to prevent was exactly an extra input smuggled into
+// that decision. The test pins that shape.
+constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
+{
+    return cwRecordPumpOwnsRecorder(s) && recordingOpen;
+}
+
 } // namespace AetherSDR

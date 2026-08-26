@@ -56,6 +56,15 @@ static_assert(txRecorderSource(false, true)  == TxRecorderSource::None);
 static_assert(txRecorderSource(true,  false) == TxRecorderSource::Mic);
 static_assert(txRecorderSource(true,  true)  == TxRecorderSource::CwSidetone);
 
+// Rendering additionally requires an open file. Ownership stays a two-input
+// contract (pinned above); "is there a file" is a separate question, so the
+// defect that started this — an extra input folded into ownership — cannot
+// come back through this door either.
+static_assert(!cwRecordPumpShouldRender(TxRecorderSource::None,       true));
+static_assert(!cwRecordPumpShouldRender(TxRecorderSource::Mic,        true));
+static_assert( cwRecordPumpShouldRender(TxRecorderSource::CwSidetone, true));
+static_assert(!cwRecordPumpShouldRender(TxRecorderSource::CwSidetone, false));
+
 int main()
 {
     bool ok = true;
@@ -98,6 +107,33 @@ int main()
                      "receive: the CW record pump stays idle");
         ok &= expect(!cwRecordPumpOwnsRecorder(txRecorderSource(false, true)),
                      "a stale CW latch cannot run the pump while receiving");
+    }
+
+    // ── The render gate: own the slot AND have somewhere to put it ─────────
+    // With no file open QsoRecorder::feedTxAudio discards every block, so
+    // rendering is waste on the audio thread. This must not disturb the gate
+    // SIGNAL, which is what starts an auto-record — that ordering lives in
+    // onCwRecordPump and is covered by bench Arm E, not here.
+    {
+        const auto cw = txRecorderSource(true, true);
+        ok &= expect(cwRecordPumpShouldRender(cw, true),
+                     "render: our CW over with a recording open");
+        ok &= expect(!cwRecordPumpShouldRender(cw, false),
+                     "no render: our CW over with NO recording open");
+        ok &= expect(!cwRecordPumpShouldRender(txRecorderSource(true, false), true),
+                     "no render: a voice over never drives the CW pump");
+        ok &= expect(!cwRecordPumpShouldRender(txRecorderSource(false, true), true),
+                     "no render: receiving, even with a recording open");
+
+        // Rendering implies ownership, never the reverse.
+        bool implies = true;
+        for (int i = 0; i < 8; ++i) {
+            const auto s2 = txRecorderSource((i & 1) != 0, (i & 2) != 0);
+            if (cwRecordPumpShouldRender(s2, (i & 4) != 0)
+                && !cwRecordPumpOwnsRecorder(s2))
+                implies = false;
+        }
+        ok &= expect(implies, "render is only ever a narrowing of ownership");
     }
 
     // ── Exactly one producer, for every reachable input ─────────────────────
