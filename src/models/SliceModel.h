@@ -413,6 +413,7 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
+    void lockCommandIssued(bool locked);
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);

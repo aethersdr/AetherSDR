@@ -336,6 +336,7 @@ void SliceModel::setLocked(bool locked)
     // FlexAPI: "slice lock <id>" / "slice unlock <id>"
     sendCommand(locked ? QString("slice lock %1").arg(m_id)
                        : QString("slice unlock %1").arg(m_id));
+    emit lockCommandIssued(locked);
     if (!locked) {
         m_lockedFeedbackTimer.stop();
         setLockedFeedbackActive(false);

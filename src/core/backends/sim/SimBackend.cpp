@@ -254,6 +254,7 @@ RadioCapabilities SimBackend::capabilities() const
     // mode already. Empty, not "all of them", because this field means "the
     // exceptions", and a simulator has none.
     caps.receiveOnlyModes = {};
+    caps.hasRadioDialLock = false;
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;

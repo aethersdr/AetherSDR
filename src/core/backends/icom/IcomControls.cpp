@@ -293,9 +293,11 @@ constexpr std::array kSpecs = {
                 0, 1, "on/off", 0, 1,
                 "setSliceManualNotch", "dspMNBtn", true, ""},
     ControlSpec{"dial.lock", 0x16, 0x50, true, "Dial lock",
-                Plane::Radio, Encoding::OnOff, Wiring::Declared,
+                Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used."},
+                "setRadioDialLock", "sliceLockButtons", true,
+                "IC-9700 capability-gated; radio-global readback is mirrored "
+                "to every slice lock surface."},
     ControlSpec{"notch.width", 0x16, 0x57, true, "Manual notch width",
                 Plane::Slice, Encoding::Enum, Wiring::Declared,
                 0, 2, "step", 0, 2,

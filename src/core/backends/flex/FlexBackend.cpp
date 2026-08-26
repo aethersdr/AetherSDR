@@ -169,6 +169,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // receive-only mode guard to refuse. Stated rather than defaulted, per the
     // "adding a field" rule in RadioCapabilities.h.
     caps.receiveOnlyModes = {};
+    caps.hasRadioDialLock = false;
     caps.hasTuner = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     // The radio owns its reference and its own calibration ("radio set cal_freq",

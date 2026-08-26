@@ -85,6 +85,7 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    void setRadioDialLock(bool locked) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
@@ -508,6 +509,7 @@ private:
     std::optional<std::uint64_t> m_repeaterTxFrequencyHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
+    std::optional<bool> m_radioDialLocked;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //

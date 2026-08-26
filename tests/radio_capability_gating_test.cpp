@@ -113,6 +113,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomSession.h"
 
 #include "TestEventLoop.h"
 
@@ -132,6 +133,32 @@ struct IcomCivBackendTestAccess {
     static void selectModel(IcomCivBackend& backend, const IcomModel& model)
     {
         backend.m_model = &model;
+    }
+
+    static void deliverDialLock(IcomCivBackend& backend, int value)
+    {
+        backend.m_connected = true;
+        backend.m_sessionGeneration = 1;
+        CivFrame frame;
+        frame.cmd = cmd::kFunction;
+        frame.hasSub = true;
+        frame.sub = func::kDialLock;
+        frame.data = {static_cast<std::uint8_t>(value)};
+        backend.onCivFrame(frame, 1);
+    }
+
+    static void prepareDialLockWrite(IcomCivBackend& backend,
+                                     const IcomModel& model)
+    {
+        backend.m_model = &model;
+        backend.m_connected = true;
+        backend.m_session = std::make_unique<IcomSession>();
+        backend.m_session->setCivAddress(model.civAddress);
+    }
+
+    static QString lastOutboundCiv(const IcomCivBackend& backend)
+    {
+        return backend.m_lastOutboundCiv;
     }
 };
 
@@ -535,8 +562,59 @@ int main(int argc, char** argv)
                   "Icom declares the profiled IC-9700 momentary XFC command");
             check(caps.hasSupplyVoltageTelemetry,
                   "Icom declares the profiled IC-9700 supply-voltage telemetry");
+            check(caps.hasRadioDialLock,
+                  "Icom declares the IC-9700 radio-authoritative dial lock");
+
+            IcomCivBackend lockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(lockWriter, *ic9700);
+            lockWriter.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(lockWriter)
+                      == QStringLiteral("16 50 01"),
+                  "IC-9700 dial lock sends CI-V 16 50 01");
+            IcomCivBackend unlockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(unlockWriter, *ic9700);
+            unlockWriter.setRadioDialLock(false);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(unlockWriter)
+                      == QStringLiteral("16 50 00"),
+                  "IC-9700 dial unlock sends CI-V 16 50 00");
+
+            QSignalSpy lockSpy(&backend, &IRadioBackend::radioDialLockChanged);
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.count() == 1 && lockSpy.takeFirst().at(0).toBool(),
+                  "IC-9700 dial-lock readback publishes the locked state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.isEmpty(),
+                  "unchanged IC-9700 dial-lock polling does not republish state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 0);
+            check(lockSpy.count() == 1 && !lockSpy.takeFirst().at(0).toBool(),
+                  "IC-9700 front-panel unlock readback publishes the unlocked state");
             check(!caps.hasMainFanTelemetry,
                   "Icom declares no Main Fan telemetry family-wide");
+        }
+    }
+
+    // ---- A radio-global dial lock reaches every slice surface ------------
+    {
+        RadioModel fanoutModel;
+        QString fixtureError;
+        check(fanoutModel.automationApplySliceFixture(0, QString(), &fixtureError),
+              "dial-lock fan-out fixture creates slice 0");
+        check(fanoutModel.automationApplySliceFixture(1, QString(), &fixtureError),
+              "dial-lock fan-out fixture creates slice 1");
+        SliceModel* first = fanoutModel.slice(0);
+        SliceModel* second = fanoutModel.slice(1);
+        check(first && second, "dial-lock fan-out fixture resolves both slices");
+        if (first && second) {
+            const bool invoked = QMetaObject::invokeMethod(
+                fanoutModel.backend(), "radioDialLockChanged",
+                Qt::DirectConnection, Q_ARG(bool, true));
+            check(invoked, "backend dial-lock signal is invokable through the seam");
+            check(first->isLocked() && second->isLocked(),
+                  "radio-authoritative lock fans out to every slice surface");
+            QMetaObject::invokeMethod(fanoutModel.backend(), "radioDialLockChanged",
+                                      Qt::DirectConnection, Q_ARG(bool, false));
+            check(!first->isLocked() && !second->isLocked(),
+                  "radio-authoritative unlock clears every slice surface");
         }
     }
 

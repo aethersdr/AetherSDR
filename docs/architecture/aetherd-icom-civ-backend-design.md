@@ -817,8 +817,8 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Six constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, and
+**Five constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 57` manual-notch width, and
 `27 1E` scope fixed edges. Not all of them should be wired: the notch width
 is deliberately left to the operator's own choice, and the fixed edges are three
 saved presets per band that a pan drag must never overwrite. CW pitch is the one
@@ -1019,7 +1019,7 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
 | `16 48` | Manual notch | ✅ | ✗ constant only |
 | `16 4F` | Twin peak filter (RTTY) | ✗ | ✗ |
-| `16 50` | Dial lock | ✅ | ✗ constant only |
+| `16 50` | Dial lock | ✅ | ✅ IC-9700 capability-gated read/write + polling |
 | `16 56` | DSP IF filter SHARP/SOFT | ✗ | ✗ |
 | `16 57` | Manual notch width W/M/N | ✗ | ✗ |
 | `16 58` | SSB TX bandwidth W/M/N | ✗ | ✗ |

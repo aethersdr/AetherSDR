@@ -714,6 +714,7 @@ void RadioModel::setupBackend(const QString& family)
     // and dropAllSessionModelsForFamilySwitch() deletes every slice before the
     // swap. What the rule is really about is a sender that lives as long as the
     // RadioModel: `this`, or a value member such as m_transmitModel.
+    m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
 
     {
@@ -1113,6 +1114,17 @@ void RadioModel::setupBackend(const QString& family)
         }
         m_transmitFrequencyCheck = on;
         emit transmitFrequencyCheckChanged(on);
+    });
+    connect(m_backend.get(), &IRadioBackend::radioDialLockChanged, this,
+            [this](bool locked) {
+        m_radioDialLocked = locked;
+        SliceDelta delta;
+        delta.locked = locked;
+        for (SliceModel* slice : std::as_const(m_slices)) {
+            if (slice) {
+                slice->applyChanges(delta);
+            }
+        }
     });
 
     // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend that
@@ -6905,6 +6917,7 @@ void RadioModel::onDisconnected()
         m_transmitFrequencyCheck = false;
         emit transmitFrequencyCheckChanged(false);
     }
+    m_radioDialLocked.reset();
     // Reset to false so the next connect's skip-peek fast path requires the
     // radio's mf_enable status to actually arrive before treating multiFLEX
     // as enabled. Default-true would silently bypass the conflict check if
@@ -8521,6 +8534,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
     if (!s)
         return;
 
+    if (m_radioDialLocked && backendCapabilities().hasRadioDialLock) {
+        SliceDelta delta;
+        delta.locked = *m_radioDialLocked;
+        s->applyChanges(delta);
+    }
+
     // ONE place, called from EVERY site that constructs a SliceModel.
     //
     // These were originally written inline in the backend's slice-materialising
@@ -8551,6 +8570,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
             [this, s](const QString& antenna) {
         if (m_backend && !usesFlexCommandPlane())
             m_backend->setSliceRxAntenna(s->sliceId(), antenna);
+    });
+    connect(s, &SliceModel::lockCommandIssued, this,
+            [this](bool locked) {
+        if (m_backend && backendCapabilities().hasRadioDialLock) {
+            m_backend->setRadioDialLock(locked);
+        }
     });
     // "Make this the transmit slice." On a radio with one transmitter the
     // backend MOVES transmit rather than setting a flag, and republishes both

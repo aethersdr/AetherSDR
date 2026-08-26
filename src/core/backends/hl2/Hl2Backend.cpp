@@ -1419,6 +1419,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
+    c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;

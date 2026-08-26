@@ -221,6 +221,7 @@ public:
         Q_UNUSED(sliceId);
         Q_UNUSED(antenna);
     }
+    virtual void setRadioDialLock(bool locked) { Q_UNUSED(locked); }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -778,6 +779,9 @@ signals:
 
     // Radio-authoritative state for the momentary transmit-frequency monitor.
     void transmitFrequencyCheckChanged(bool on);
+    // Radio-authoritative global dial-lock state. RadioModel fans this out to
+    // every slice because a radio-global control must not look per-slice.
+    void radioDialLockChanged(bool locked);
 
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,
     // not when traffic arrives — the tick has to keep coming after the radio

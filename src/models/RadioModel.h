@@ -1927,6 +1927,7 @@ private:
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
     bool               m_transmitFrequencyCheck{false};
+    std::optional<bool> m_radioDialLocked;
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};

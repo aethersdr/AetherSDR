@@ -272,6 +272,10 @@ struct RadioCapabilities {
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
+    // The radio exposes an authoritative, client-settable dial lock. This is
+    // distinct from AetherSDR's local per-slice tuning guard: a radio-side
+    // lock may be global and may also follow front-panel changes.
+    bool hasRadioDialLock = false;
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)

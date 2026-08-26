@@ -318,6 +318,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // this family-wide and fail closed until the backend implements a real
     // CI-V fan meter; do not add speculative per-model profile surface.
     c.hasMainFanTelemetry = false;
+    // Verified IC-9700 CI-V 16 50 dial lock. Keep other Icom profiles dark
+    // until their model-specific behavior is reviewed; this radio-global
+    // capability must not be inferred from family membership.
+    c.hasRadioDialLock = m.name == std::string_view{"IC-9700"};
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -765,6 +769,7 @@ void IcomCivBackend::disconnectRadio()
     m_pendingPttUntilMs = 0;
     m_transmitFrequencyCheck = false;
     m_xfcReleaseRequired = false;
+    m_radioDialLocked.reset();
     // The radio keeps its own DSP state across our sessions and we have not
     // read it back, so "unknown" is the only honest starting point — carrying
     // the last session's belief would suppress the first command that matters.
@@ -896,6 +901,9 @@ void IcomCivBackend::sendConnectReadBurst()
                             func::kCompressor, func::kMonitorFn, func::kVox,
                             func::kBreakIn})
         queueStartupRead(cmdReadFunction(m_session->civAddress(), fn));
+    if (capabilities().hasRadioDialLock) {
+        queueStartupRead(cmdReadFunction(m_session->civAddress(), func::kDialLock));
+    }
 
     // FM repeater state lives in three more command families.  Read every
     // field at connect so an FM memory or front-panel setup opens in the UX as
@@ -2135,6 +2143,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             m_mnEnableSent = v ? 1 : 0;
             SliceDelta d; d.mn = (v != 0);
             emit sliceChanged(sliceId(), d);
+            return;
+        }
+        case func::kDialLock: {
+            if (!capabilities().hasRadioDialLock || (v != 0 && v != 1)) {
+                return;
+            }
+            const bool locked = v != 0;
+            if (m_radioDialLocked == locked) {
+                return;
+            }
+            m_radioDialLocked = locked;
+            emit radioDialLockChanged(locked);
             return;
         }
         case func::kMonitorFn: {
@@ -3626,6 +3646,15 @@ void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
     m_rxAntennaExternal = external;
     sendUserCommand(cmdSetRxAntenna(m_session ? m_session->civAddress() : 0xB6,
                                     external));
+}
+
+void IcomCivBackend::setRadioDialLock(bool locked)
+{
+    if (!capabilities().hasRadioDialLock) {
+        return;
+    }
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA2,
+                                   func::kDialLock, locked ? 1 : 0));
 }
 
 void IcomCivBackend::setSpeechProcessor(bool on, int level)
@@ -5393,6 +5422,9 @@ void IcomCivBackend::onLinkTick()
     for (std::uint8_t fn : {func::kAutoNotch, func::kManualNotch,
                             func::kNoiseReduce, func::kNoiseBlanker}) {
         queueControl(cmdReadFunction(addr, fn));
+    }
+    if (capabilities().hasRadioDialLock) {
+        queueControl(cmdReadFunction(addr, func::kDialLock));
     }
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (ctcssRxProfileFor(m_model)) {
