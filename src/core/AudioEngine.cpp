@@ -8278,6 +8278,17 @@ void AudioEngine::onCwRecordPump()
     }
     if (!active) return;
 
+    // No open recording: QsoRecorder::feedTxAudio would discard every block, so
+    // render nothing. Deliberately BELOW the gate signal above, which must keep
+    // firing — onMoxChanged is what starts an auto-record, so suppressing it
+    // here would stop auto-record from ever triggering on a CW over. Restart the
+    // clock so the first render after a start measures its own tick rather than
+    // the whole skipped span.
+    if (!m_qsoRecordingActive.load(std::memory_order_acquire)) {
+        m_cwPumpElapsed.restart();
+        return;
+    }
+
     // Frame count from elapsed wall-time so morse timing in the WAV tracks real
     // time despite timer jitter on a busy audio thread.
     const qint64 ns = m_cwPumpElapsed.nsecsElapsed();

@@ -1714,6 +1714,19 @@ MainWindow::MainWindow(QWidget* parent)
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
+    // Let the CW record pump skip rendering while no file is open (#4281).
+    // Direct connections: the slot is a single atomic store that touches no Qt
+    // state, and recordingStarted is emitted once the file is open and
+    // m_recording is set — so the flag is true before the recorder can accept
+    // anything, and a queued hop cannot lose the first elements of an over.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted,
+            m_audio, [ae = m_audio](const QString&) {
+        ae->setQsoRecordingActive(true);
+    }, Qt::DirectConnection);
+    connect(m_qsoRecorder, &QsoRecorder::recordingStopped,
+            m_audio, [ae = m_audio](const QString&, int) {
+        ae->setQsoRecordingActive(false);
+    }, Qt::DirectConnection);
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in

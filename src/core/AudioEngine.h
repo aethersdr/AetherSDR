@@ -187,6 +187,13 @@ public:
             m_radioTransmitting.load(std::memory_order_acquire),
             m_cwKeyedThisOver.load(std::memory_order_acquire));
     }
+    // Whether a Client-Side recording is open, so the CW record pump can skip
+    // rendering samples nothing will store (#4281). Orthogonal to ownership
+    // above: that answers WHOSE audio belongs in the file, this answers whether
+    // there is a file. Stored from QsoRecorder's start/stop signals.
+    void setQsoRecordingActive(bool on) {
+        m_qsoRecordingActive.store(on, std::memory_order_release);
+    }
     bool kiwiSdrAudioTransmitMuted() const;
     bool hasKiwiSdrAudioSource(const QString& sourceId) const;
     int  txInputSampleRate() const { return m_txInputRate; }
@@ -1036,6 +1043,7 @@ private:
     QElapsedTimer      m_cwPumpElapsed;
     bool               m_cwPumpActive{false};            // audio-thread only
     std::atomic<bool>  m_cwKeyedThisOver{false};
+    std::atomic<bool>  m_qsoRecordingActive{false};   // a recording file is open
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the
     // sidetone audio thread so the mirror lambda can return cheaply
