@@ -124,6 +124,7 @@ struct ControlSpec {
 [[nodiscard]] bool controlSupported(const IcomModel& model,
                                     const IcomModelProfile& profile,
                                     const ControlSpec& spec) noexcept;
+[[nodiscard]] int speechProcessorRawLevel(int maximum, int level) noexcept;
 
 [[nodiscard]] std::string_view encodingName(Encoding e);
 [[nodiscard]] std::string_view planeName(Plane p);

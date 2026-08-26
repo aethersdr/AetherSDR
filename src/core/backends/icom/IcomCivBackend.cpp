@@ -3668,11 +3668,7 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
 
     // Legacy Icom profiles retain NOR / DX / DX+ thirds. A profile with an
     // evidenced continuous control writes the normalized percent directly.
-    static constexpr std::array<int, 3> kProcLevels{3, 6, 9};   // of 10
-    const int raw = maximum > 2
-        ? percentToLevelRaw(m_compLevelPercent)
-        : kProcLevels[static_cast<std::size_t>(
-              std::clamp(m_compLevelPercent, 0, 2))] * 255 / 10;
+    const int raw = speechProcessorRawLevel(maximum, m_compLevelPercent);
     sendUserCommand(cmdSetLevel(addr, level::kCompLevel, raw));
 }
 

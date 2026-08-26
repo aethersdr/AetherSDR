@@ -12,6 +12,7 @@
 #include "models/RadioModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
 #include "models/BandDefs.h"
@@ -284,6 +285,14 @@ int main(int argc, char** argv)
                      *AetherSDR::icom::modelForCivAddress(0xB6))
                      .speechProcessorLevelMaximum == 2,
           "IC-705 and IC-7300MK2 retain the three-position processor contract");
+    check(icom::speechProcessorRawLevel(100, 0) == 0
+              && icom::speechProcessorRawLevel(100, 50) == 128
+              && icom::speechProcessorRawLevel(100, 100) == 255,
+          "IC-9700 continuous COMP maps 0/50/100 percent to raw 0/128/255");
+    check(icom::speechProcessorRawLevel(2, 0) == 76
+              && icom::speechProcessorRawLevel(2, 1) == 153
+              && icom::speechProcessorRawLevel(2, 2) == 229,
+          "sibling Icom processor presets retain raw 76/153/229 encoding");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
