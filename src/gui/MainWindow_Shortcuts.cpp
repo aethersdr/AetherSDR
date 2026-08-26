@@ -572,36 +572,35 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             m_dvkPanel->hide();
             updateKeyerAvailability();
         }
-        m_cwxPanel->setVisible(show);
+        // Docked/floating presentation and splitter sizing live in
+        // showCwxPanel()/hideCwxPanel() (MainWindow_Wiring.cpp) — this
+        // handler only owns the DVK mutual exclusion and indicator styling.
+        if (show) showCwxPanel();
+        else      hideCwxPanel();
         m_cwxIndicator->setStyleSheet(show
             ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
             : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-        if (show) {
-            auto sizes = m_splitter->sizes();
-            if (sizes.size() >= 4) {
-                int cwxW = 250;
-                int total = sizes[0] + sizes[1] + sizes[2];
-                sizes[0] = cwxW;
-                sizes[1] = 0;
-                sizes[2] = total - cwxW;
-                m_splitter->setSizes(sizes);
-            }
-        }
         return true;
     }
     if (obj == m_dvkIndicator && event->type() == QEvent::MouseButtonPress) {
         if (!m_dvkIndicator->isEnabled()) return true;
         bool show = !m_dvkPanel->isVisible();
-        // Close CWX (mutual exclusion)
+        // Close CWX (mutual exclusion). hideCwxPanel() (not a bare
+        // m_cwxPanel->hide()) so a floating CWX window gets hidden too,
+        // rather than leaving an empty floating window on screen while its
+        // now-hidden content sits reparented inside it.
         if (show && m_cwxPanel->isVisible()) {
-            m_cwxPanel->hide();
+            hideCwxPanel();
             updateKeyerAvailability();
         }
         m_dvkPanel->setVisible(show);
         m_dvkIndicator->setStyleSheet(show
             ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
             : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-        if (show) {
+        // Splitter index 0 is CWX's docked slot — skip this resize while
+        // CWX is floating (detached from the splitter; see floatCwxPanel()),
+        // or sizes[0]=0 would zero out DVK's own slot instead.
+        if (show && !m_cwxFloatingWindow) {
             auto sizes = m_splitter->sizes();
             if (sizes.size() >= 4) {
                 int dvkW = 250;

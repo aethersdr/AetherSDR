@@ -4806,6 +4806,10 @@ void MainWindow::buildUI()
     m_cwxPanel->setTransmittingProvider([this]() {
         return m_radioModel.transmitModel().isTransmitting();
     });
+    // Pop-out/dock button in the panel's own title row — see
+    // floatCwxPanel()/dockCwxPanel() (MainWindow_Wiring.cpp).
+    connect(m_cwxPanel, &CwxPanel::popOutClicked, this, &MainWindow::floatCwxPanel);
+    connect(m_cwxPanel, &CwxPanel::dockClicked, this, &MainWindow::dockCwxPanel);
     splitter->addWidget(m_cwxPanel);
     m_cwxPanel->hide();
 

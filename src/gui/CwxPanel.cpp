@@ -228,11 +228,39 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
 
-    // Title
+    // Title row — label + pop-out/dock toggle
+    auto* titleRow = new QWidget;
+    AetherSDR::ThemeManager::instance().applyStyleSheet(titleRow, "QWidget { background: {{color.background.0}}; }");
+    auto* titleLayout = new QHBoxLayout(titleRow);
+    titleLayout->setContentsMargins(8, 6, 6, 6);
+    titleLayout->setSpacing(4);
+
     m_titleLabel = new QLabel("CWX");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
-                         "padding: 6px 8px; background: {{color.background.0}}; }");
-    vbox->addWidget(m_titleLabel);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; }");
+    titleLayout->addWidget(m_titleLabel);
+    titleLayout->addStretch();
+
+    // Pop-out / dock toggle (⬈ when docked, ↩ when floating) — same glyph
+    // and \uXXXX-escape convention as PanadapterApplet's pop-out button
+    // (a raw UTF-8 literal here would only decode correctly under the
+    // AetherSDR/aethercore targets' /utf-8 flag, not the standalone test
+    // targets that compile this file directly).
+    m_popOutBtn = new QPushButton(QStringLiteral("\u2b08"));  // ⬈
+    m_popOutBtn->setObjectName(QStringLiteral("cwxPopOutBtn"));
+    m_popOutBtn->setAccessibleName(tr("Pop out CWX"));
+    m_popOutBtn->setToolTip(tr("Pop out CWX"));
+    m_popOutBtn->setFixedSize(18, 16);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_popOutBtn,
+        "QPushButton { background: transparent; color: {{color.text.label}}; "
+        "border: none; font-size: 11px; padding: 0; }"
+        "QPushButton:hover { color: {{color.text.primary}}; }");
+    connect(m_popOutBtn, &QPushButton::clicked, this, [this]() {
+        if (m_floating) emit dockClicked();
+        else            emit popOutClicked();
+    });
+    titleLayout->addWidget(m_popOutBtn);
+
+    vbox->addWidget(titleRow);
 
     // Stacked widget for Send/Live vs Setup
     m_stack = new QStackedWidget;
@@ -378,6 +406,29 @@ void CwxPanel::setDisplayName(const QString& name)
 QString CwxPanel::displayName() const
 {
     return m_titleLabel ? m_titleLabel->text() : QString{};
+}
+
+void CwxPanel::setFloatingState(bool floating)
+{
+    m_floating = floating;
+    // Docked: fixed 250px width matches the splitter's other left-side
+    // panels (DVK). Floating: free resize inside CwxFloatingWindow, whose
+    // own minimumSize() takes over.
+    if (floating) {
+        setMinimumWidth(0);
+        setMaximumWidth(QWIDGETSIZE_MAX);
+    } else {
+        setFixedWidth(250);
+    }
+    if (m_popOutBtn) {
+        const QString actionName = floating ? tr("Dock CWX") : tr("Pop out CWX");
+        // \uXXXX escapes, not raw UTF-8 literals — see the constructor's
+        // pop-out button comment for why.
+        m_popOutBtn->setText(floating ? QStringLiteral("\u21a9")   // ↩
+                                       : QStringLiteral("\u2b08")); // ⬈
+        m_popOutBtn->setAccessibleName(actionName);
+        m_popOutBtn->setToolTip(actionName);
+    }
 }
 
 void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,

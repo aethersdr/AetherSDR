@@ -103,6 +103,14 @@ public:
     CwxBubble* pendingBubble() const { return m_pendingBubble; }
     int        historyBubbleCount() const;
 
+    // Toggle between the docked (fixed-width, splitter-hosted) and floating
+    // (free-resize, top-level-hosted) presentations. Owner (MainWindow) calls
+    // this after reparenting the panel into/out of a CwxFloatingWindow; the
+    // panel itself only knows how to look right in each state, not how to
+    // get there — matches PanadapterApplet::setFloatingState().
+    void setFloatingState(bool floating);
+    bool isFloating() const { return m_floating; }
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 
@@ -110,6 +118,12 @@ private slots:
     void onCharSent(int index);
     void onSpeedChanged(int wpm);
     void onTransmissionCancelled();
+
+signals:
+    // Emitted by the title-row pop-out/dock button; MainWindow owns the
+    // actual reparenting (see MainWindow::floatCwxPanel()/dockCwxPanel()).
+    void popOutClicked();
+    void dockClicked();
 
 private:
     void buildSendView();
@@ -124,6 +138,8 @@ private:
 
     CwxModel*       m_model{nullptr};
     QLabel*         m_titleLabel{nullptr};
+    QPushButton*    m_popOutBtn{nullptr};
+    bool            m_floating{false};
 
     QStackedWidget* m_stack{nullptr};
 

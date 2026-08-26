@@ -168,6 +168,49 @@ void testDisplayNameCanFollowTheRadioFamily()
                && speed && speed->minimum() == 5 && speed->maximum() == 100);
 }
 
+void testFloatingStateTogglesPopOutButtonAndWidth()
+{
+    Fixture f;
+    auto* popOutBtn = f.panel.findChild<QPushButton*>(QStringLiteral("cwxPopOutBtn"));
+    report("pop-out button is present", popOutBtn != nullptr);
+    if (!popOutBtn) return;
+
+    report("docked panel has the fixed splitter width",
+           !f.panel.isFloating() && f.panel.maximumWidth() == 250
+               && f.panel.minimumWidth() == 250);
+    const QString dockedTip = popOutBtn->toolTip();
+
+    int popOutClicks = 0, dockClicks = 0;
+    QObject::connect(&f.panel, &CwxPanel::popOutClicked,
+                     [&popOutClicks]() { ++popOutClicks; });
+    QObject::connect(&f.panel, &CwxPanel::dockClicked,
+                     [&dockClicks]() { ++dockClicks; });
+
+    popOutBtn->click();
+    report("clicking the button while docked emits popOutClicked, not dockClicked",
+           popOutClicks == 1 && dockClicks == 0);
+
+    // MainWindow::floatCwxPanel() would call this after reparenting into
+    // CwxFloatingWindow; simulate it directly since this test builds
+    // CwxPanel in isolation.
+    f.panel.setFloatingState(true);
+    report("setFloatingState(true) allows free resize",
+           f.panel.isFloating() && f.panel.maximumWidth() > 250);
+    report("setFloatingState(true) changes the button's tooltip",
+           popOutBtn->toolTip() != dockedTip);
+
+    popOutBtn->click();
+    report("clicking the button while floating emits dockClicked",
+           popOutClicks == 1 && dockClicks == 1);
+
+    f.panel.setFloatingState(false);
+    report("setFloatingState(false) restores the fixed splitter width",
+           !f.panel.isFloating() && f.panel.maximumWidth() == 250
+               && f.panel.minimumWidth() == 250);
+    report("setFloatingState(false) restores the docked tooltip",
+           popOutBtn->toolTip() == dockedTip);
+}
+
 void testSimpleKeyerDoesNotExpandSpeedModifiers()
 {
     CwxModel model;
@@ -501,6 +544,7 @@ int main(int argc, char** argv)
     std::printf("CWX panel behavior test harness\n\n");
 
     testLiveButtonTogglesOff();
+    testFloatingStateTogglesPopOutButtonAndWidth();
     testDisplayNameCanFollowTheRadioFamily();
     testSimpleKeyerDoesNotExpandSpeedModifiers();
     testSendButtonSendsWhenLiveOff();

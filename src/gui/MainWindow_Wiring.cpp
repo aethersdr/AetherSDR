@@ -26,6 +26,8 @@
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AppletPanel.h"
+#include "CwxFloatingWindow.h"
+#include "CwxPanel.h"
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
 #include "OwnedSingleShotTimer.h"
@@ -73,6 +75,7 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QJsonDocument>
+#include <QSplitter>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QPointer>
@@ -6695,6 +6698,115 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
                 emittedNs);
         }
         break;  // one pan owns this stream id
+    }
+}
+
+// ── CWX docked/floating presentation ──────────────────────────────────────
+//
+// Client-side UI preference (window arrangement), not radio-authoritative
+// state — see AGENTS.md's Settings Authority Policy. Mirrors
+// PanadapterStack::floatPanadapter()/dockPanadapter(), minus the GPU-surface
+// teardown that class needs and CwxPanel's plain QWidget content does not.
+
+void MainWindow::showCwxPanel()
+{
+    if (!m_cwxPanel) return;
+
+    const bool floatingPref = AppSettings::instance()
+        .value("CwxPanelFloating", "False").toString() == "True";
+    if (floatingPref) {
+        floatCwxPanel();
+        return;
+    }
+
+    m_cwxPanel->setVisible(true);
+    if (m_splitter) {
+        auto sizes = m_splitter->sizes();
+        if (sizes.size() >= 4) {
+            const int cwxW = 250;
+            const int total = sizes[0] + sizes[1] + sizes[2];
+            sizes[0] = cwxW;
+            sizes[1] = 0;
+            sizes[2] = total - cwxW;
+            m_splitter->setSizes(sizes);
+        }
+    }
+}
+
+void MainWindow::hideCwxPanel()
+{
+    // Floating: hide the window but keep it alive — the next showCwxPanel()
+    // re-shows the same instance at the same geometry rather than tearing
+    // down and rebuilding.
+    if (m_cwxFloatingWindow) {
+        m_cwxFloatingWindow->hide();
+        return;
+    }
+    if (m_cwxPanel) m_cwxPanel->setVisible(false);
+}
+
+void MainWindow::floatCwxPanel()
+{
+    if (!m_cwxPanel) return;
+
+    if (m_cwxFloatingWindow) {
+        // Already floating (possibly hidden by hideCwxPanel()) — just show it.
+        m_cwxFloatingWindow->show();
+        m_cwxFloatingWindow->raise();
+        m_cwxFloatingWindow->activateWindow();
+        return;
+    }
+
+    auto* fw = new CwxFloatingWindow(this);
+    fw->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    fw->adoptPanel(m_cwxPanel);   // reparents directly out of m_splitter
+    m_cwxPanel->setFloatingState(true);
+    m_cwxPanel->show();
+    m_cwxFloatingWindow = fw;
+    trackPersistentDialog(fw);  // runtime frameless-toggle propagation
+
+    connect(fw, &CwxFloatingWindow::dockRequested, this, &MainWindow::dockCwxPanel);
+
+    auto& s = AppSettings::instance();
+    s.setValue("CwxPanelFloating", "True");
+    s.save();
+
+    fw->show();
+    fw->raise();
+    fw->activateWindow();
+}
+
+void MainWindow::dockCwxPanel()
+{
+    if (!m_cwxFloatingWindow) return;
+
+    CwxFloatingWindow* fw = m_cwxFloatingWindow;
+    m_cwxFloatingWindow = nullptr;
+
+    CwxPanel* panel = fw->takePanel();
+    fw->hide();
+    fw->deleteLater();
+
+    auto& s = AppSettings::instance();
+    s.setValue("CwxPanelFloating", "False");
+    s.save();
+
+    if (!panel) return;
+    panel->setFloatingState(false);
+
+    if (m_splitter) {
+        m_splitter->insertWidget(0, panel);
+        panel->show();
+        auto sizes = m_splitter->sizes();
+        if (sizes.size() >= 4) {
+            const int cwxW = 250;
+            const int total = sizes[0] + sizes[1] + sizes[2];
+            sizes[0] = cwxW;
+            sizes[1] = 0;
+            sizes[2] = total - cwxW;
+            m_splitter->setSizes(sizes);
+        }
     }
 }
 

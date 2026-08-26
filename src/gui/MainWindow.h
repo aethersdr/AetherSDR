@@ -176,6 +176,7 @@ class UlanziDialMacOSManager;
 class UlanziDialBackend;
 #endif
 class CwxPanel;
+class CwxFloatingWindow;
 class DvkPanel;
 #ifdef HAVE_RADE
 class RADEEngine;
@@ -870,6 +871,19 @@ private:
 #ifdef AETHER_ASR_ENABLED
     void showCopyAssist();
 #endif
+    // Show/hide the CWX panel, respecting its persisted docked/floating
+    // preference (CwxPanelFloating in AppSettings) — the counterpart to
+    // MainWindow_Shortcuts.cpp's m_cwxIndicator click handler, which owns
+    // the DVK mutual-exclusion and indicator styling around these calls.
+    void showCwxPanel();
+    void hideCwxPanel();
+    // Reparent the CWX panel between the splitter and a CwxFloatingWindow.
+    // Persists the docked/floating preference so the next showCwxPanel()
+    // (this session or a future one) opens in the same presentation, and —
+    // via CwxFloatingWindow's PersistentDialog base — the floating window's
+    // last size/position.
+    void floatCwxPanel();
+    void dockCwxPanel();
     void scheduleDigitalVoiceAutoStart();
     void stopDigitalVoiceService(bool waitForExit);
     void showPskReporterMapDialog();
@@ -1446,6 +1460,7 @@ private:
     QLabel* m_asrIndicator{nullptr};  // status-bar ASR (Copy Assist) toggle
 #endif
     CwxPanel* m_cwxPanel{nullptr};
+    QPointer<CwxFloatingWindow> m_cwxFloatingWindow;
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};

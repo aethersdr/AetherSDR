@@ -942,6 +942,7 @@ set(GUI_SOURCES
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/FramelessResizer.cpp
     src/gui/PanFloatingWindow.cpp
+    src/gui/CwxFloatingWindow.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
