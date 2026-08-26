@@ -8263,11 +8263,10 @@ void AudioEngine::startCwRecordPump()
 void AudioEngine::onCwRecordPump()
 {
     // Active only when WE are sending CW: the radio is keyed AND our keyer has
-    // fired this over. isTxStreaming() (mic capture) is never true in CW, so a
-    // voice over can't reach here even if mis-flagged.
-    const bool active = m_radioTransmitting.load(std::memory_order_acquire)
-                        && m_cwKeyedThisOver.load(std::memory_order_acquire)
-                        && !isTxStreaming();
+    // fired this over. Whether the PC mic capture stream is open is deliberately
+    // not part of this — it stays up across mode changes whenever mic_selection
+    // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
+    const bool active = cwRecordPumpOwnsRecorder(txRecorderSource());
 
     if (active != m_cwPumpActive) {
         m_cwPumpActive = active;
@@ -8582,9 +8581,11 @@ void AudioEngine::onTxAudioReady()
     // ── Final-output monitor tap (+ local CW/CWX sidetone for recording) ──
     // Mirror the post-PUDU monitor at the chain's tail (post-limiter) for the
     // PUDU TX monitor and the Client-Side QSO recorder's VOICE tap (#3556).
-    // This path is mic-driven, so it only carries phone/SSB. Local CW/CWX
-    // sidetone has no mic stream and is fed to the recorder separately by the
-    // CW record pump (onCwRecordPump, #2539).
+    // This path is mic-driven and carries phone/SSB. It also keeps running
+    // during a CW over — mic capture is tied to mic_selection, not to mode —
+    // so the recorder edge of this signal is gated on the current TX-slot owner
+    // in MainWindow. Local CW/CWX sidetone is fed to the recorder separately by
+    // the CW record pump (onCwRecordPump, #2539, #4281).
     if (auto* mon = m_txFinalMonitor.load(std::memory_order_acquire)) {
         mon->feedTxPostDsp(data);
     }

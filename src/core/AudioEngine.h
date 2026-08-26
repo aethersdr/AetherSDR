@@ -24,6 +24,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "CwRecordGate.h"
 #include "TxMicChannelNormalizer.h"
 #include "TxCaptureHealthTracker.h"
 #include "SpectralNR.h"
@@ -176,6 +177,16 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    // Which producer currently owns the QSO recorder's TX slot (#2539,
+    // #4281). Both the mic monitor tap and the CW record pump reach
+    // QsoRecorder::feedTxAudio, so both ends ask this one question rather
+    // than each keeping its own idea of who is recording. See
+    // CwRecordGate.h for why mic-capture state is not an input.
+    TxRecorderSource txRecorderSource() const {
+        return AetherSDR::txRecorderSource(
+            m_radioTransmitting.load(std::memory_order_acquire),
+            m_cwKeyedThisOver.load(std::memory_order_acquire));
+    }
     bool kiwiSdrAudioTransmitMuted() const;
     bool hasKiwiSdrAudioSource(const QString& sourceId) const;
     int  txInputSampleRate() const { return m_txInputRate; }

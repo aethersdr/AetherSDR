@@ -1683,8 +1683,16 @@ MainWindow::MainWindow(QWidget* parent)
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
     // single time-interleaved RX/TX stream.
+    // Gated on the current TX-slot owner: this tap keeps running through a CW
+    // over (mic capture follows mic_selection, not mode), and the recorder
+    // cannot tell mic bytes from pumped sidetone — ungated, room noise landed
+    // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
+    // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+        if (!micTapOwnsRecorder(m_audio->txRecorderSource())) return;
+        m_qsoRecorder->feedTxAudio(pcm);
+    });
     // Host-modulated backends (HL2) take their transmit audio from the SAME tap
     // the recorder uses: fully processed, after the test tone, compressor and
     // EQ. One path means the TONE button, the microphone and the recording all
