@@ -29,9 +29,9 @@ def require(condition: bool, message: str) -> None:
 
 def main() -> int:
     root = Path(sys.argv[1])
-    globe = (root / "src/gui/map/GlobeMapView.cpp").read_text()
-    display = (root / "src/gui/map/MapDisplayWidget.cpp").read_text()
-    dialog = (root / "src/gui/PskReporterMapDialog.cpp").read_text()
+    globe = (root / "src/gui/map/GlobeMapView.cpp").read_text(encoding="utf-8")
+    display = (root / "src/gui/map/MapDisplayWidget.cpp").read_text(encoding="utf-8")
+    dialog = (root / "src/gui/PskReporterMapDialog.cpp").read_text(encoding="utf-8")
 
     destructor = function_body(globe, "GlobeMapView::~GlobeMapView()")
     require("cancelTileRequests();" in destructor,
