@@ -2310,6 +2310,13 @@ set_tests_properties(relay_bar_a11y_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
+add_executable(fm_tone_presentation_test
+    tests/fm_tone_presentation_test.cpp
+)
+target_include_directories(fm_tone_presentation_test PRIVATE src)
+target_link_libraries(fm_tone_presentation_test PRIVATE Qt6::Core)
+add_test(NAME fm_tone_presentation_test COMMAND fm_tone_presentation_test)
+
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
 add_executable(native_widget_topology_test
@@ -2337,8 +2344,8 @@ if(PYTHON3_EXECUTABLE)
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
     # RxApplet/VfoWidget are full-desktop translation units with no practical
-    # unit-test link seam. Pin the model-capability gate that keeps IC-9700's
-    # TX:/RX: prefixes off Flex and every legacy backend.
+    # unit-test link seam. Pin their radio-backed presentation wiring; label
+    # behavior itself is covered by fm_tone_presentation_test above.
     add_test(NAME fm_tone_presentation_contract
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tests/fm_tone_presentation_contract_test.py

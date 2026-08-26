@@ -31,6 +31,15 @@ enum class FmTonePresentation {
     Ctcss,
 };
 
+[[nodiscard]] inline const QStringList& legacyFmToneModes()
+{
+    static const QStringList modes{
+        QStringLiteral("off"),
+        QStringLiteral("ctcss_tx"),
+    };
+    return modes;
+}
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is

@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "FmTonePresentation.h"
 #include "core/CtcssTones.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -6216,19 +6217,18 @@ void VfoWidget::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    const bool distinguishTxRx = presentation == FmTonePresentation::Ctcss;
     for (int i = 0; i < m_fmToneValueCmb->count(); ++i) {
         const QString frequency = m_fmToneValueCmb->itemData(i).toString();
         m_fmToneValueCmb->setItemText(
-            i, distinguishTxRx ? QStringLiteral("TX: %1").arg(frequency) : frequency);
+            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, frequency));
         m_fmToneRxValueCmb->setItemText(
-            i, distinguishTxRx ? QStringLiteral("RX: %1").arg(frequency) : frequency);
+            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, frequency));
     }
     const bool modeEligible = m_slice && hasFmToneControls(m_slice->mode());
     const QString selected = m_slice
         ? m_slice->fmToneMode() : m_fmToneModeCmb->currentData().toString();
     const QStringList modes = presentation == FmTonePresentation::Ctcss
-        ? caps.fmToneModes : QStringList{QStringLiteral("off"), QStringLiteral("ctcss_tx")};
+        ? caps.fmToneModes : legacyFmToneModes();
     {
         QSignalBlocker blocker(m_fmToneModeCmb);
         m_fmToneModeCmb->clear();

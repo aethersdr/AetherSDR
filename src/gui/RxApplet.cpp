@@ -2,6 +2,7 @@
 #include "core/CtcssTones.h"
 
 #include "gui/FilterStepMath.h"
+#include "gui/FmTonePresentation.h"
 #include "FilterPassbandWidget.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "FrequencyEntryParser.h"
@@ -1911,7 +1912,6 @@ void RxApplet::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    const bool distinguishTxRx = presentation == FmTonePresentation::Ctcss;
     for (int i = 0; i < CTCSS_COUNT; ++i) {
         const CTCSSTone& tone = CTCSS_TONES[i];
         const QString frequency = QString::number(tone.frequency, 'f', 1);
@@ -1919,9 +1919,9 @@ void RxApplet::configureFmToneControls()
             ? QString("%1 %2 %3").arg(tone.code).arg(tone.designation).arg(frequency)
             : frequency;
         m_toneValueCmb->setItemText(
-            i, distinguishTxRx ? QStringLiteral("TX: %1").arg(toneLabel) : toneLabel);
+            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, toneLabel));
         m_toneRxValueCmb->setItemText(
-            i, distinguishTxRx ? QStringLiteral("RX: %1").arg(toneLabel) : toneLabel);
+            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, toneLabel));
     }
     const QString sliceMode = m_slice ? m_slice->mode() : QString();
     const bool modeEligible = sliceMode == QLatin1String("FM")
@@ -1929,7 +1929,7 @@ void RxApplet::configureFmToneControls()
     const QString selected = m_slice
         ? m_slice->fmToneMode() : m_toneModeCmb->currentData().toString();
     const QStringList modes = presentation == FmTonePresentation::Ctcss
-        ? caps.fmToneModes : QStringList{QStringLiteral("off"), QStringLiteral("ctcss_tx")};
+        ? caps.fmToneModes : legacyFmToneModes();
     {
         QSignalBlocker blocker(m_toneModeCmb);
         m_toneModeCmb->clear();
