@@ -4094,3 +4094,31 @@ foreach(_aether_target IN LISTS _aether_test_targets)
         target_link_libraries(${_aether_target} PRIVATE aether_test_wisdom_isolation)
     endif()
 endforeach()
+
+# ── Default test timeout — every test gets a ceiling ────────────────────────
+#
+# No suite-wide timeout existed before this: `enable_testing()` without
+# `include(CTest)` configures none, so a hung test blocked its CI gate
+# indefinitely — map_live_update_test ran 35 minutes producing nothing before
+# it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
+# failure: ctest counts it as failed, so --output-on-failure finally prints
+# the captured output that a hang withholds.
+#
+# 300s is data-derived, not a guess: across the last 10 gate-lane runs and
+# the 4 most recent full-suite sanitizer runs, 90% of tests average under
+# ~3s and the slowest legitimate completion ever recorded is spectral_nr_test
+# at 276.6s under the sanitizer lane (#5271 has the tables). If a test
+# legitimately outgrows 300s, give IT a bigger explicit TIMEOUT below its
+# add_test — never raise this default for one test's sake.
+#
+# The loop only fills the gap: a test that already declares its own TIMEOUT
+# (vkamp_connection_test, asr_gpu_probe_test) keeps it. A CMake TIMEOUT
+# property always beats a `ctest --timeout` flag, so this is authoritative
+# in every lane — gate steps, sanitizers, and local dev alike.
+get_directory_property(_aether_registered_tests TESTS)
+foreach(_aether_test IN LISTS _aether_registered_tests)
+    get_test_property(${_aether_test} TIMEOUT _aether_existing_timeout)
+    if(NOT _aether_existing_timeout)
+        set_tests_properties(${_aether_test} PROPERTIES TIMEOUT 300)
+    endif()
+endforeach()
