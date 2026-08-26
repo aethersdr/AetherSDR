@@ -1356,7 +1356,15 @@ void MainWindow::zoomActivePanadapter(double factor)
     }
     newCenter = std::max(newCenter, newBw / 2.0);
 
-    sw->setFrequencyRange(newCenter, newBw);
+    // Request only -- do NOT call sw->setFrequencyRange() here. That is
+    // setFrequencyRangeInternal() under the hood, which marks this guess
+    // CONFIRMED the instant the key is pressed, before the backend has
+    // done anything with it (ten9876, #5142 review). Every other pan-range
+    // requester (SWR sweep, mouse/wheel/pinch via
+    // frequencyRangeChangeRequested) only calls applyPanRangeRequest() and
+    // lets the confirmed value update when the echo actually arrives --
+    // this shortcut is the one path that skipped that and baked the guess
+    // straight into waterfall history rows if the radio's answer differed.
     applyPanRangeRequest(s->panId(), newCenter, newBw, "pan-zoom");
 }
 
