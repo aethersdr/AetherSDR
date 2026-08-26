@@ -1,7 +1,5 @@
-// Regression coverage for the active-slice command that could undo a FLEX
-// band-stack recall and leave the waterfall mapped to the wrong band.
-
 #include "gui/BandRecallSliceSelectionPolicy.h"
+#include "gui/ConnectSliceEnumerationGuard.h"
 
 #include <cstdio>
 
@@ -168,21 +166,34 @@ int main()
     check(firstSliceSelectionSource(false) == RadioSliceSelectionSource::TopologyFallback,
           "firstSliceSelectionSource(false) -> TopologyFallback");
 
-    // ConnectSliceEnumerationGuard time-window lifecycle
+    // ConnectSliceEnumerationGuard time-window lifecycle & expiration diagnostics
     {
         ConnectSliceEnumerationGuard guard(3000);
         check(!guard.isActive(0), "guard initially inactive");
+        check(!guard.isActive(-1), "guard rejects negative nowMs");
+        check(!guard.expiredUnused(0), "un-armed guard is not expired-unused");
+
         guard.arm(1000);
-        check(guard.isActive(1000), "guard active at arm time");
+        check(!guard.expiredUnused(1050), "armed guard inside window is not expired-unused");
+        check(guard.isActive(1000), "guard active at arm time (consulted)");
         check(guard.isActive(3999), "guard active before window expiry");
         check(!guard.isActive(4000), "guard inactive at window expiry");
         check(!guard.isActive(5000), "guard inactive after window expiry");
+        check(!guard.expiredUnused(5000), "guard consulted while active is NOT expired-unused");
+
+        // Expired without being consulted
+        ConnectSliceEnumerationGuard unconsultedGuard(3000);
+        unconsultedGuard.arm(1000);
+        check(!unconsultedGuard.expiredUnused(2000), "inside window: not expired-unused");
+        check(unconsultedGuard.expiredUnused(4000), "at expiry without consultation: expired-unused");
+        check(unconsultedGuard.expiredUnused(5000), "after expiry without consultation: expired-unused");
 
         // cancelArm explicitly disarms
         guard.arm(10000);
         check(guard.isActive(10000), "guard armed again");
         guard.cancelArm();
         check(!guard.isActive(10000), "guard inactive after cancelArm");
+        check(!guard.expiredUnused(20000), "cancelled guard is not expired-unused");
     }
 
     if (failures == 0) {

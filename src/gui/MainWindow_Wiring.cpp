@@ -1667,6 +1667,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Mid-session creation into an empty list (after initial enumeration window has passed)
         // routes through TopologyFallback to assert the selection as needed.
         const auto nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (m_connectSliceEnumeration.expiredUnused(nowMs)) {
+            qCWarning(lcProtocol) << "MainWindow: connect slice enumeration window expired unused; falling back to TopologyFallback";
+        }
         const RadioSliceSelectionSource source =
             firstSliceSelectionSource(m_connectSliceEnumeration.isActive(nowMs));
         selectSliceFromRadioState(s, source);

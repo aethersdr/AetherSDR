@@ -842,6 +842,14 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
+            this, [this]() {
+        m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());
+    });
+    connect(&m_radioModel, &RadioModel::sliceConnectEnumerationFinished,
+            this, [this]() {
+        m_connectSliceEnumeration.cancelArm();
+    });
     // Start the reconstruction window at actual dispatch, not at UI intent:
     // requestPanBand() can defer behind a profile-load hold.
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,

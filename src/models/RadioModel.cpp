@@ -6403,6 +6403,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // response — exactly as the second sub batch (sub tnf/dax/codec/…) below
         // already does. The previous one-RTT-per-sub chain serialized ~11 round
         // trips (~0.7 s on a LAN) into the connect handshake for no protocol reason.
+        emit sliceConnectEnumerationStarted();
         sendCmd("sub slice all");
         sendCmd("sub pan all");
         sendCmd("sub tx all");
@@ -6606,6 +6607,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                 sendCmd("slice list",
                     [this](int code3, const QString& body) {
+                        emit sliceConnectEnumerationFinished();
                         const quint64 restoreGeneration = m_sessionModelGeneration;
                         QTimer::singleShot(kSessionRestorePruneDelayMs, this, [this, restoreGeneration]() {
                             pruneStaleSessionModels(restoreGeneration);

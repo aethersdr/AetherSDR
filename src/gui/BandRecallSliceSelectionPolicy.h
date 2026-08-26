@@ -1,7 +1,5 @@
 #pragma once
 
-#include "gui/ConnectSliceEnumerationGuard.h"
-
 namespace AetherSDR {
 
 // MainWindow reaches the active-slice setter from three radio-driven sources:

@@ -23,6 +23,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "gui/BandRecallSliceSelectionPolicy.h"
+#include "gui/ConnectSliceEnumerationGuard.h"
 
 #include <QCoreApplication>
 #include <QStringList>
@@ -224,6 +225,57 @@ int main(int argc, char** argv)
         harness.connectEnumerationGuard.arm(20000);
         check(harness.connectEnumerationGuard.isActive(20050), "Session 2: guard active during burst");
         check(!harness.connectEnumerationGuard.isActive(25000), "Session 2: guard expires cleanly");
+    }
+
+    // =========================================================================
+    // Test 5: Slow enumeration — window expires before slice burst arrives
+    // =========================================================================
+    {
+        RadioModel model;
+        SliceWiringHarness harness;
+        harness.connectEnumerationGuard.arm(1000);
+        // Burst arrives at t=5000 (after 3000ms window expired at t=4000)
+        harness.nowMs = 5000;
+        harness.attach(&model);
+
+        check(harness.connectEnumerationGuard.expiredUnused(harness.nowMs),
+              "Guard reports expired-unused when burst arrives after timeout");
+
+        QMap<QString, QString> s0_kvs;
+        s0_kvs["in_use"] = "1";
+        s0_kvs["RF_frequency"] = "14.074000";
+        s0_kvs["active"] = "0";
+        model.handleSliceStatusForTest(0, s0_kvs, false);
+
+        check(harness.emittedCommands.contains("slice set 0 active=1"),
+              "Slow enumeration past guard window falls back to TopologyFallback");
+    }
+
+    // =========================================================================
+    // Test 6: Event-driven finish — sliceConnectEnumerationFinished disarms guard
+    // =========================================================================
+    {
+        RadioModel model;
+        SliceWiringHarness harness;
+        // Armed on connect sub slice all
+        harness.connectEnumerationGuard.arm(1000);
+        harness.nowMs = 1050;
+        harness.attach(&model);
+
+        // Enumeration completes (slice list reply)
+        harness.connectEnumerationGuard.cancelArm();
+        check(!harness.connectEnumerationGuard.isActive(harness.nowMs),
+              "Guard immediately disarmed upon enumeration completion");
+
+        // Subsequent slice created on empty radio adopts via TopologyFallback
+        QMap<QString, QString> s0_kvs;
+        s0_kvs["in_use"] = "1";
+        s0_kvs["RF_frequency"] = "14.074000";
+        s0_kvs["active"] = "0";
+        model.handleSliceStatusForTest(0, s0_kvs, false);
+
+        check(harness.emittedCommands.contains("slice set 0 active=1"),
+              "Post-enumeration created slice on empty radio asserts active=1 via TopologyFallback");
     }
 
     if (g_failures == 0) {
