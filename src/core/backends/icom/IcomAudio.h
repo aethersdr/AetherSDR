@@ -98,6 +98,10 @@ public:
     // distinguishable.
     [[nodiscard]] std::size_t droppedBytes() const noexcept { return m_droppedBytes; }
     [[nodiscard]] std::size_t dropEvents() const noexcept { return m_dropEvents; }
+    // TEST-ONLY: production never needs this — IcomSession builds a fresh
+    // TxPacketizer per connect, so the counters start at zero for every
+    // session.  It exists so a test can assert two independent overflow
+    // sequences without constructing a second packetiser.
     void resetDropCounters() noexcept { m_droppedBytes = 0; m_dropEvents = 0; }
 
     // Roughly 250 ms at 48 kHz mono s16. Past that the operator is hearing
