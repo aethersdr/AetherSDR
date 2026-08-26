@@ -260,9 +260,11 @@ Decide the layer before writing the test (#5232):
 firmware enters the default graph.** A fake radio proves the client agrees
 with our model of the radio, not with the radio; the model freezes while
 firmware moves, so the test fails on correct changes or stays green on real
-divergence (#5232). One legacy exception remains
-(`gui_client_registration_recovery_test`'s fake FLEX-6700 handshake peer),
-tracked for extraction in #5254. Mining a retired fake peer's frame tables as
+divergence (#5232). Three legacy exceptions remain in
+the default graph, all tracked for socket-free extraction in #5254:
+`vkamp_connection_test` (fake VKAMP amplifier), `hl2_receiver_count_restart_test`
+(fake Metis radio), and `gui_client_registration_recovery_test` (fake FLEX-6700
+handshake peer). Mining a retired fake peer's frame tables as
 *input data* for injected-transport tests is encouraged; running the fake as
 a live socket peer is not. Loopback mocks of documented HTTP APIs
 (`asr_remote_backend_test`) are a different trade — that contract is
@@ -270,12 +272,19 @@ versioned and published; radio firmware behavior is not.
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under
-test is real, the socket is how you reach it.
+test is real, the socket is how you reach it. The carve-out exempts a test
+from the fake-firmware ban, not from visibility: any new socket-owning test
+is disclosed in the PR body, its `tests.cmake` block names the socket it
+binds, reviewers notify the operator before continuing, and the test fails
+fast (or skips, exit 77) when it cannot bind rather than consuming its
+timeout.
 
 Prefer behavioral seams over source-text assertions: a test that greps a
 source file for an expression breaks on behavior-preserving refactors and
 gets deleted by whoever it fires on. Applets already link into unit tests,
 so the seam is a `tests.cmake` entry, not a missing capability.
+
+### Version and release files
 
 Current version: **26.8.4**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
@@ -356,18 +365,22 @@ contributors with existing GPG workflows.
 - Every `ctest` invocation in a workflow carries `--no-tests=error`: a `-R`
   filter that matches nothing exits 0, so a deregistered or renamed test
   silently shrinks the gate while the job stays green — #5232 demonstrated
-  this live. (The Icom step got the flag in #5232; the remaining steps are
-  tracked in #5254.)
+  this live. (#5232 swept the flag across all filtered PR-gate steps; the
+  unfiltered sanitizer sweep remains tracked in #5254.)
+- An enumerated gate additionally pins its selection count — the Icom gate
+  asserts `Total Tests: 5` (#5232). `--no-tests=error` only catches a regex
+  matching zero; a regex matching 3 of 5 still exits 0, and the pinned count
+  is what catches that. Prefer the count check wherever a gate enumerates.
 - Deregistering or renaming a test requires grepping `.github/workflows/`
   for its name in the same PR. The gate regexes are part of the test's
   surface.
 - A test joins a PR gate with a comment saying what it guards and what it
   costs — the existing per-target justifications are the model. Keep timing
   claims honest or omit them.
-- A flaky gate test gets an issue and, if unresolved, quarantine off the
-  gate — not retrigger commits. One contributor pushed empty retriggers on
-  two open PRs in one day for `icom_backend_test` (#5144, #5137); its
-  socket-free replacement (#5254) is the fix, quarantine is the interim.
+- A flaky gate test gets an issue naming the root cause and, if unresolved,
+  quarantine off the gate — never empty retrigger commits, which cost every
+  contributor and record nothing. (For `icom_backend_test` the root cause
+  was the socket layer; #5254 is the fix, quarantine the interim.)
 
 ---
 
