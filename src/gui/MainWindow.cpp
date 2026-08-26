@@ -7405,6 +7405,25 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
 
+    // TX Band Settings and Inhibit-during-TUNE drive Flex interlock/band
+    // verbs that a backend with no command plane drops. Doctrine (#5263):
+    // dim, never hide — the entries stay visible on every family, disabled
+    // with a reason where the backend cannot honor them. Permissive on
+    // disconnect like every gate in this function.
+    {
+        const bool cmdPlane = !connected || m_radioModel.hasCommandPlane();
+        const QString why =
+            cmdPlane ? QString() : tr("Not supported by this radio");
+        if (m_txBandAction) {
+            m_txBandAction->setEnabled(cmdPlane);
+            m_txBandAction->setToolTip(why);
+        }
+        if (m_tuneInhibitMenu) {
+            m_tuneInhibitMenu->menuAction()->setEnabled(cmdPlane);
+            m_tuneInhibitMenu->menuAction()->setToolTip(why);
+        }
+    }
+
     // ── GPS: the status-bar position readout and the dialog it opens ────────
     //
     // Family capability and unit presence are separate facts. Flex radios can
