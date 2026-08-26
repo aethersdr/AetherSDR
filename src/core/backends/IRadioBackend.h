@@ -814,6 +814,11 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    // An explicit radio readback confirmed the keyed state. This is distinct
+    // from transmitChanged because optimistic state may already equal the
+    // answer and therefore produce no delta. Backends without a separate
+    // command/readback plane need not emit it.
+    void keyingStateConfirmed(bool keyed);
 
     // Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode
     // split, #4094). Typed + present-only; the backend translates the SmartSDR

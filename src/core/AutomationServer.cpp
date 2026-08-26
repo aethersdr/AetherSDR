@@ -3446,9 +3446,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]|session|scheduler> — CI-V inject, frame "
-            "trace, RS-BA1 lease health, or command-scheduler health (Icom; send "
-            "is TX-gated)",
+            "civ <send <hex>|trace [all]|session|scheduler|incident> — CI-V "
+            "inject, frame trace, lease/scheduler health, or last incident "
+            "(Icom; send is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doCiv(a.action, a.value);
@@ -7965,8 +7965,10 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     const QString a = action.trimmed().toLower();
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("session")
+                        && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
-        return err(QStringLiteral("civ requires an action (send|trace|session|scheduler)"));
+        return err(QStringLiteral(
+            "civ requires an action (send|trace|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -8000,6 +8002,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
+                       : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
                        : a == QLatin1String("scheduler")
                            ? QStringLiteral("civ.scheduler.status")
                                                      : QStringLiteral("civ.session");

@@ -1136,6 +1136,9 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // A backend's explicit keyed-state readback, including unchanged answers
+    // hidden by the change-gated radioTransmittingChanged signal.
+    void radioTransmitConfirmed(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
     // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX)
     // and false otherwise. Deliberately excludes TUNE/two-tone/ATU carriers,

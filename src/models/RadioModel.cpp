@@ -1358,6 +1358,8 @@ void RadioModel::setupBackend(const QString& family)
                     m_cwxModel.adoptSpeed(*delta.cwSpeed);
                 }
             });
+    connect(m_backend.get(), &IRadioBackend::keyingStateConfirmed,
+            this, &RadioModel::radioTransmitConfirmed);
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,

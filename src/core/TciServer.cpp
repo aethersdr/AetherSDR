@@ -16,8 +16,10 @@
 
 #include <QWebSocketServer>
 #include <QWebSocket>
+#include <QAbstractSocket>
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -84,6 +86,40 @@ constexpr qint64 kTxSummaryEveryBlocks = 48;
 // client. With it, the same drag settles to ~20 over 2.8 s.
 constexpr int kPowerRateLimitMs = 100;
 
+// The live IC-7300MK2 capture showed the radio-authoritative CI-V unkey edge
+// settling in 149 ms while an optimistic local edge arrived immediately. Keep
+// the TCI presentation monotonic across one CI-V timeout-sized interval, but
+// resume publishing conservative keyed state well inside the existing 1250 ms
+// PTT contract if an accepted CI-V PTT-off readback never arrives.
+constexpr int kIcomTciUnkeySettleMs = 500;
+
+QString tciCommandName(const QString& message)
+{
+    const QString trimmed = message.trimmed().toLower();
+    const int colon = trimmed.indexOf(QLatin1Char(':'));
+    const int semicolon = trimmed.indexOf(QLatin1Char(';'));
+    int end = trimmed.size();
+    if (colon >= 0) {
+        end = std::min(end, colon);
+    }
+    if (semicolon >= 0) {
+        end = std::min(end, semicolon);
+    }
+
+    QString command;
+    command.reserve(std::min(end, 48));
+    for (const QChar ch : trimmed.left(end)) {
+        if (!(ch.isLetterOrNumber() || ch == QLatin1Char('_'))) {
+            break;
+        }
+        command.append(ch);
+        if (command.size() == 48) {
+            break;
+        }
+    }
+    return command;
+}
+
 // parseStatusHandle / streamStatusBelongsToUs  → StreamStatus.h
 // trx↔slice mapping                            → TciTrxMap (m_trxMap, #4567)
 
@@ -99,6 +135,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
 {
+    m_tciPttTelemetryClock.start();
+
     // Load per-channel RX gains from persistence (decoupled from DaxRxGain<n>, #1627).
     // Migrate DaxRxGain<n> → TciRxGain<n> on first read so existing users keep
     // their current balance when the applets split.
@@ -130,6 +168,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_lastRadioTx = m_model->isRadioTransmitting();
         connect(m_model, &RadioModel::radioTransmittingChanged, this,
             &TciServer::onRadioTransmittingChanged);
+        connect(m_model, &RadioModel::radioTransmitConfirmed, this,
+            &TciServer::onRadioTransmitConfirmed);
         connect(&m_model->meterModel(), &MeterModel::txMetersChanged,
                 this, [this](float fwd, float swr, bool swrValid) {
             m_cachedFwdPower = fwd;
@@ -708,6 +748,7 @@ void TciServer::onNewConnection()
         ClientState cs;
         cs.socket = ws;
         cs.protocol = protocol;
+        cs.connectedAtMs = m_tciPttTelemetryClock.elapsed();
         // Resamplers are created lazily per-channel in onDaxAudioReady()
         // so each DAX channel has its own stateful r8brain instance (#1806).
         m_clients.append(cs);
@@ -718,6 +759,10 @@ void TciServer::onNewConnection()
                 this, &TciServer::onBinaryMessage);
         connect(ws, &QWebSocket::disconnected,
                 this, &TciServer::onClientDisconnected);
+        connect(ws, &QWebSocket::errorOccurred, this,
+                [this, ws](QAbstractSocket::SocketError error) {
+                    noteClientSocketError(ws, static_cast<int>(error));
+                });
 
         qCInfo(lcCat) << "TciServer: client connected from"
                       << ws->peerAddress().toString();
@@ -735,6 +780,8 @@ void TciServer::onClientDisconnected()
 
     for (int i = 0; i < m_clients.size(); ++i) {
         if (m_clients[i].socket == ws) {
+            m_lastDisconnect = disconnectSnapshot(m_clients[i], ws);
+            m_lastDisconnectAtMs = m_tciPttTelemetryClock.elapsed();
             if (m_pendingTrxRequest && m_pendingTrxRequest->client == ws) {
                 m_pendingTrxRequest.reset();
             }
@@ -786,6 +833,11 @@ void TciServer::onClientDisconnected()
     // log it so the cause of mid-session RX loss is visible.
     qCWarning(lcCat) << "TciServer: client disconnected (TCP drop),"
                      << m_clients.size() << "remaining";
+    if (!m_lastDisconnect.isEmpty()) {
+        qCWarning(lcCat).noquote()
+            << "TCI disconnect incident"
+            << QJsonDocument(m_lastDisconnect).toJson(QJsonDocument::Compact);
+    }
     emit clientCountChanged(m_clients.size());
     emit clientsChanged();
     if (m_clients.isEmpty()) {
@@ -830,8 +882,86 @@ QVector<TciClientInfo> TciServer::connectedClients() const
     return out;
 }
 
+TciServer::ClientState* TciServer::clientStateFor(QWebSocket* socket)
+{
+    for (ClientState& client : m_clients) {
+        if (client.socket == socket) {
+            return &client;
+        }
+    }
+    return nullptr;
+}
+
+void TciServer::noteClientTextTx(QWebSocket* socket, const QString& message)
+{
+    ClientState* client = clientStateFor(socket);
+    if (!client) {
+        return;
+    }
+    client->lastTextTxAtMs = m_tciPttTelemetryClock.elapsed();
+    client->lastTxCommand = tciCommandName(message);
+}
+
+void TciServer::noteClientSocketError(QWebSocket* socket, int error)
+{
+    ClientState* client = clientStateFor(socket);
+    if (!client) {
+        return;
+    }
+    client->lastSocketError = error;
+    client->lastSocketErrorAtMs = m_tciPttTelemetryClock.elapsed();
+    client->lastSocketErrorString = socket
+        ? socket->errorString().simplified().left(160) : QString();
+}
+
+QJsonObject TciServer::disconnectSnapshot(
+    const ClientState& client, const QWebSocket* socket) const
+{
+    const qint64 now = m_tciPttTelemetryClock.elapsed();
+    const auto age = [now](qint64 atMs) {
+        return atMs >= 0 ? std::max<qint64>(0, now - atMs) : -1;
+    };
+    const QString closeReason = socket
+        ? socket->closeReason().simplified().left(160) : QString();
+    const QString socketError = !client.lastSocketErrorString.isEmpty()
+        ? client.lastSocketErrorString
+        : (socket ? socket->errorString().simplified().left(160) : QString());
+
+    return QJsonObject{
+        {QStringLiteral("contractVersion"), 1},
+        {QStringLiteral("closeCode"), socket
+            ? static_cast<int>(socket->closeCode()) : -1},
+        {QStringLiteral("closeReason"), closeReason},
+        {QStringLiteral("socketState"), socket
+            ? static_cast<int>(socket->state()) : -1},
+        {QStringLiteral("socketError"), client.lastSocketError},
+        {QStringLiteral("socketErrorString"), socketError},
+        {QStringLiteral("connectionAgeMs"), age(client.connectedAtMs)},
+        {QStringLiteral("lastTextRxAgeMs"), age(client.lastTextRxAtMs)},
+        {QStringLiteral("lastTextTxAgeMs"), age(client.lastTextTxAtMs)},
+        {QStringLiteral("lastSocketErrorAgeMs"), age(client.lastSocketErrorAtMs)},
+        {QStringLiteral("lastRxCommand"), client.lastRxCommand},
+        {QStringLiteral("lastTxCommand"), client.lastTxCommand},
+        {QStringLiteral("ptt"), QJsonObject{
+            {QStringLiteral("owned"), client.socket == m_tciPttClient},
+            {QStringLiteral("requestedOn"), m_tciPttRequestedOn},
+            {QStringLiteral("confirmedOn"), m_tciPttConfirmedOn},
+            {QStringLiteral("unkeySettling"), m_icomUnkeySettle.isSettling()},
+            {QStringLiteral("generation"),
+                static_cast<qint64>(m_tciPttGeneration)},
+            {QStringLiteral("lastOutcome"), m_tciPttLastOutcome},
+        }},
+    };
+}
+
 QJsonObject TciServer::routingSnapshot() const
 {
+    const qint64 telemetryNow = m_tciPttTelemetryClock.isValid()
+        ? m_tciPttTelemetryClock.elapsed() : -1;
+    const auto age = [telemetryNow](qint64 atMs) {
+        return telemetryNow >= 0 && atMs >= 0
+            ? std::max<qint64>(0, telemetryNow - atMs) : -1;
+    };
     const auto ownerName = [this]() {
         switch (m_routingState.owner()) {
         case TciRoutingState::TxRouteOwner::External:
@@ -891,8 +1021,33 @@ QJsonObject TciServer::routingSnapshot() const
         {QStringLiteral("requestedOn"), m_tciPttRequestedOn},
         {QStringLiteral("confirmedOn"), m_tciPttConfirmedOn},
         {QStringLiteral("cancelPending"), m_tciPttCancelPending},
+        {QStringLiteral("unkeySettling"), m_icomUnkeySettle.isSettling()},
         {QStringLiteral("generation"), static_cast<qint64>(m_tciPttGeneration)},
+        {QStringLiteral("requestCount"), static_cast<qint64>(m_tciPttRequestCount)},
+        {QStringLiteral("onRequestCount"), static_cast<qint64>(m_tciPttOnRequestCount)},
+        {QStringLiteral("offRequestCount"), static_cast<qint64>(m_tciPttOffRequestCount)},
+        {QStringLiteral("acceptedOnCount"), static_cast<qint64>(m_tciPttAcceptedOnCount)},
+        {QStringLiteral("confirmedOnCount"), static_cast<qint64>(m_tciPttConfirmedOnCount)},
+        {QStringLiteral("confirmationTimeoutCount"),
+            static_cast<qint64>(m_tciPttConfirmationTimeoutCount)},
+        {QStringLiteral("unkeySettleCount"),
+            static_cast<qint64>(m_tciPttUnkeySettleCount)},
+        {QStringLiteral("suppressedRekeyCount"),
+            static_cast<qint64>(m_tciPttSuppressedRekeyCount)},
+        {QStringLiteral("unkeySettleTimeoutCount"),
+            static_cast<qint64>(m_tciPttUnkeySettleTimeoutCount)},
+        {QStringLiteral("lastRequestedOn"), m_tciPttLastRequestedOn},
+        {QStringLiteral("lastRequestAgeMs"), age(m_tciPttLastRequestAtMs)},
+        {QStringLiteral("lastAcceptedAgeMs"), age(m_tciPttLastAcceptedAtMs)},
+        {QStringLiteral("lastConfirmedAgeMs"), age(m_tciPttLastConfirmedAtMs)},
+        {QStringLiteral("lastOutcome"), m_tciPttLastOutcome},
+        {QStringLiteral("lastOutcomeAgeMs"), age(m_tciPttLastOutcomeAtMs)},
     };
+
+    QJsonObject lastDisconnect = m_lastDisconnect;
+    if (!lastDisconnect.isEmpty()) {
+        lastDisconnect.insert(QStringLiteral("ageMs"), age(m_lastDisconnectAtMs));
+    }
 
     return QJsonObject{
         {QStringLiteral("ok"), true},
@@ -915,6 +1070,7 @@ QJsonObject TciServer::routingSnapshot() const
         {QStringLiteral("pendingRoutes"), pendingRoutes},
         {QStringLiteral("lastRouteError"), m_lastRouteError},
         {QStringLiteral("ptt"), ptt},
+        {QStringLiteral("lastDisconnect"), lastDisconnect},
         {QStringLiteral("endpoints"), endpoints},
     };
 }
@@ -943,6 +1099,8 @@ void TciServer::onTextMessage(const QString& msg)
     const QStringList cmds = msg.split(';', Qt::SkipEmptyParts);
     for (const auto& cmd : cmds) {
         QString trimmed = cmd.trimmed().toLower();
+        client.lastTextRxAtMs = m_tciPttTelemetryClock.elapsed();
+        client.lastRxCommand = tciCommandName(trimmed);
 
         // Handle audio start/stop at server level (affects per-client state)
         if (trimmed.startsWith("audio_start")) {
@@ -1157,6 +1315,7 @@ void TciServer::onTextMessage(const QString& msg)
             handleSplitRequest(ws, *request);
         }
         if (const auto request = client.protocol->takeTrxRequest()) {
+            notePttRequest(*request);
             handleTrxRequest(ws, *request);
         }
 
@@ -1164,8 +1323,10 @@ void TciServer::onTextMessage(const QString& msg)
         QString notification = client.protocol->pendingNotification();
         if (!notification.isEmpty()) {
             for (auto& cs : m_clients) {
-                if (cs.socket != ws)
+                if (cs.socket != ws) {
+                    noteClientTextTx(cs.socket, notification);
                     cs.socket->sendTextMessage(notification);
+                }
             }
         }
 
@@ -1925,7 +2086,16 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
     if (!client || !m_model) {
         return;
     }
-    if (request.transmitting && (m_routeTransitionInFlight || m_tciPttCancelPending)) {
+    if (request.transmitting && m_icomUnkeySettle.isAwaitingConfirmation()
+        && !m_icomUnkeySettle.isSettling()) {
+        replyText(client, QStringLiteral("trx:%1,%2;")
+                              .arg(request.trx)
+                              .arg(m_tciPttClient == client ? "true" : "false"));
+        return;
+    }
+    if (request.transmitting
+        && (m_routeTransitionInFlight || m_tciPttCancelPending
+            || m_icomUnkeySettle.isSettling())) {
         m_pendingTrxRequest = PendingTrxRequest { client, request };
         return;
     }
@@ -1955,9 +2125,26 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
             abortTciPtt();
             return;
         }
+        const bool boundedIcomSettle = m_tciPttConfirmedOn
+            && m_model->family() == QLatin1String("icom");
+        if (boundedIcomSettle) {
+            beginIcomUnkeySettle();
+        }
         ++m_tciPttGeneration;
         m_tciPttRequestedOn = false;
         requestTciPttOff();
+        if (m_icomUnkeySettle.isSettling()) {
+            // RadioModel and IcomCivBackend publish an optimistic local false
+            // synchronously. If that edge did not arrive, acknowledge the
+            // release here; either way the settle barrier retains ownership
+            // until delayed CI-V readback has had one bounded chance to land.
+            if (!m_tciPttUnkeyReported) {
+                broadcastActualTxState(false);
+                m_tciPttUnkeyReported = true;
+            }
+            stopTxChrono();
+            return;
+        }
         if (!m_model->isRadioTransmitting()) {
             broadcastActualTxState(false);
             stopTxChrono();
@@ -2118,6 +2305,9 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         self->m_tciPttWantsAudio = wantsAudio;
         self->m_tciPttRequestedOn = true;
         self->m_tciPttConfirmedOn = false;
+        ++self->m_tciPttAcceptedOnCount;
+        self->m_tciPttLastAcceptedAtMs = self->m_tciPttTelemetryClock.elapsed();
+        self->notePttOutcome(QStringLiteral("key-on-pending"));
         const quint64 generation = ++self->m_tciPttGeneration;
 
         if (wantsAudio) {
@@ -2136,6 +2326,12 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
                 || self->m_tciPttConfirmedOn) {
                 return;
             }
+            ++self->m_tciPttConfirmationTimeoutCount;
+            self->notePttOutcome(QStringLiteral("confirmation-timeout"));
+            qCWarning(lcCat)
+                << "TCI PTT confirmation timeout: radio never reported keyed"
+                << "trx" << request.trx
+                << "generation" << generation;
             self->abortTciPtt();
             if (socket) {
                 self->replyText(socket, QStringLiteral("trx:%1,false;").arg(request.trx));
@@ -2143,6 +2339,70 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         });
         self->finishRouteTransition(transitionGeneration);
     });
+}
+
+void TciServer::notePttRequest(const TciProtocol::TrxRequest& request)
+{
+    ++m_tciPttRequestCount;
+    if (request.transmitting) {
+        ++m_tciPttOnRequestCount;
+    } else {
+        ++m_tciPttOffRequestCount;
+    }
+    m_tciPttLastRequestedOn = request.transmitting;
+    m_tciPttLastRequestAtMs = m_tciPttTelemetryClock.elapsed();
+}
+
+void TciServer::notePttOutcome(const QString& outcome)
+{
+    m_tciPttLastOutcome = outcome;
+    m_tciPttLastOutcomeAtMs = m_tciPttTelemetryClock.elapsed();
+}
+
+void TciServer::beginIcomUnkeySettle()
+{
+    if (!m_model || m_model->family() != QLatin1String("icom")) {
+        return;
+    }
+
+    m_tciPttUnkeyReported = false;
+    ++m_tciPttUnkeySettleCount;
+    const quint64 generation = m_icomUnkeySettle.begin();
+    notePttOutcome(QStringLiteral("icom-unkey-settling"));
+
+    QPointer<TciServer> self(this);
+    QTimer::singleShot(kIcomTciUnkeySettleMs, this, [self, generation]() {
+        if (self) {
+            self->finishIcomUnkeySettle(generation);
+        }
+    });
+}
+
+void TciServer::finishIcomUnkeySettle(quint64 generation)
+{
+    const IcomTciUnkeySettle::Expiry expiry =
+        m_icomUnkeySettle.expire(generation);
+    if (expiry == IcomTciUnkeySettle::Expiry::Stale) {
+        return;
+    }
+
+    m_tciPttUnkeyReported = false;
+    if (expiry == IcomTciUnkeySettle::Expiry::TimedOut) {
+        ++m_tciPttUnkeySettleTimeoutCount;
+        notePttOutcome(QStringLiteral("icom-unkey-not-confirmed"));
+        qCWarning(lcCat)
+            << "TCI Icom unkey settle expired without authoritative CI-V confirmation"
+            << "generation" << generation;
+        broadcastActualTxState(true);
+        return;
+    }
+
+    notePttOutcome(QStringLiteral("radio-confirmed-unkeyed"));
+    ++m_tciPttGeneration;
+    m_tciPttClient.clear();
+    m_tciPttConfirmedOn = false;
+    m_tciPttWantsAudio = false;
+    drainDeferredRoutingAndPtt();
 }
 
 // ── Binary message handler (TX audio from TCI client) ───────────────────
@@ -2940,7 +3200,9 @@ void TciServer::sendInitBurst(QWebSocket* client)
         // WSJT-X reconciles against on connect; a wrong/late one explains the
         // "TCI failed set rxfreq" some users hit right at WSJT-X startup.
         qCDebug(lcCat).noquote() << "TCI tx→init:" << (cmd + QLatin1Char(';'));
-        client->sendTextMessage(cmd + ';');
+        const QString message = cmd + QLatin1Char(';');
+        noteClientTextTx(client, message);
+        client->sendTextMessage(message);
     }
     qCDebug(lcCat) << "TCI: sent init burst," << commands.size() << "commands";
 }
@@ -2952,6 +3214,7 @@ void TciServer::replyText(QWebSocket* ws, const QString& msg)
     // at the top of onTextMessage via their early `continue`; log them here so
     // every command's response is visible when chasing CAT timeouts (#tci-diag).
     qCDebug(lcCat).noquote() << "TCI tx→client:" << msg.trimmed();
+    noteClientTextTx(ws, msg);
     ws->sendTextMessage(msg);
 }
 
@@ -2961,8 +3224,10 @@ void TciServer::broadcast(const QString& msg)
     // The vfo: echo here is exactly what WSJT-X's do_frequency() waits ≤2s on
     // before it throws "TCI failed set rxfreq" and drops the socket.
     qCDebug(lcCat).noquote() << "TCI tx→all:" << msg.trimmed();
-    for (auto& cs : m_clients)
+    for (auto& cs : m_clients) {
+        noteClientTextTx(cs.socket, msg);
         cs.socket->sendTextMessage(msg);
+    }
     emit tciMessage(QStringLiteral("tx"), msg);
 }
 
@@ -3067,6 +3332,8 @@ void TciServer::abortTciPtt()
     const quint64 generation = m_tciPttGeneration;
     m_tciPttRequestedOn = false;
     m_tciPttCancelPending = m_tciPttCancelPending || pendingKeyUp;
+    m_tciPttUnkeyReported = false;
+    m_icomUnkeySettle.cancel();
 
     // Teardown paths fail closed and bypass optional PTT outro delays.
     if (m_model && hadSession) {
@@ -3078,6 +3345,9 @@ void TciServer::abortTciPtt()
     m_tciPttConfirmedOn = false;
     m_tciPttWantsAudio = false;
     m_tciPttClient.clear();
+    if (hadSession && m_tciPttLastOutcome == QLatin1String("key-on-pending")) {
+        notePttOutcome(QStringLiteral("aborted"));
+    }
 
     if (pendingKeyUp) {
         QPointer<TciServer> self(this);
@@ -3220,6 +3490,19 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
     m_lastRadioTx = transmitting;
 
     if (transmitting) {
+        if (m_icomUnkeySettle.isSettling()) {
+            // The model/UI has already adopted this radio-authoritative keyed
+            // edge. Suppress only its TCI presentation during the bounded Icom
+            // settle window, preventing one accepted unkey from looking like a
+            // new key request to WSJT-X. If it persists, the timer republishes
+            // true and records the failed unkey.
+            ++m_tciPttSuppressedRekeyCount;
+            notePttOutcome(QStringLiteral("icom-unkey-transient-keyed"));
+            qCWarning(lcCat)
+                << "TCI Icom unkey settle: withheld transient keyed readback"
+                << "generation" << m_icomUnkeySettle.activeGeneration();
+            return;
+        }
         if (m_tciPttCancelPending) {
             // A cancelled key-up won the command race. Do not publish a
             // transient trx:true that clients could interpret as a new owner.
@@ -3232,6 +3515,9 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
         if (m_tciPttClient && m_tciPttRequestedOn) {
             m_tciPttConfirmedOn = true;
             m_tciPttRequestedOn = false;
+            ++m_tciPttConfirmedOnCount;
+            m_tciPttLastConfirmedAtMs = m_tciPttTelemetryClock.elapsed();
+            notePttOutcome(QStringLiteral("radio-confirmed-keyed"));
             ++m_tciPttGeneration;
             broadcastActualTxState(true);
             if (m_tciPttWantsAudio) {
@@ -3251,6 +3537,20 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
     if (m_tciPttRequestedOn && !m_tciPttConfirmedOn) {
         return;
     }
+    if (m_icomUnkeySettle.isSettling()) {
+        if (!m_tciPttUnkeyReported) {
+            broadcastActualTxState(false);
+            m_tciPttUnkeyReported = true;
+        }
+        stopTxChrono();
+        return;
+    }
+    if (m_icomUnkeySettle.isAwaitingConfirmation()) {
+        // The bounded window timed out and conservatively republished keyed.
+        // An accepted CI-V readback is delivered separately immediately after
+        // this state edge and is the only event allowed to release ownership.
+        return;
+    }
     const bool cancelledLateKeyUp = m_tciPttCancelPending;
     if (cancelledLateKeyUp) {
         m_tciPttCancelPending = false;
@@ -3260,12 +3560,44 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
         broadcastActualTxState(false);
     }
     if (m_tciPttClient) {
+        notePttOutcome(QStringLiteral("radio-confirmed-unkeyed"));
         ++m_tciPttGeneration;
         m_tciPttClient.clear();
         m_tciPttConfirmedOn = false;
         m_tciPttWantsAudio = false;
         stopTxChrono();
     }
+    drainDeferredRoutingAndPtt();
+}
+
+void TciServer::onRadioTransmitConfirmed(bool transmitting)
+{
+    if (transmitting) {
+        return;
+    }
+
+    const IcomTciUnkeySettle::Confirmation confirmation =
+        m_icomUnkeySettle.confirmOff();
+    if (confirmation == IcomTciUnkeySettle::Confirmation::Ignored) {
+        return;
+    }
+    if (confirmation == IcomTciUnkeySettle::Confirmation::PendingExpiry) {
+        // Preserve the field-tested 500 ms presentation barrier. The timer now
+        // has authoritative proof to consume instead of inferring success from
+        // the optimistic local false edge.
+        return;
+    }
+
+    // A readback may arrive after the bounded presentation window. The timeout
+    // deliberately retained ownership and republished keyed; retire that
+    // conservative state only when the radio eventually answers PTT off.
+    notePttOutcome(QStringLiteral("radio-confirmed-unkeyed-late"));
+    broadcastActualTxState(false);
+    ++m_tciPttGeneration;
+    m_tciPttClient.clear();
+    m_tciPttConfirmedOn = false;
+    m_tciPttWantsAudio = false;
+    stopTxChrono();
     drainDeferredRoutingAndPtt();
 }
 

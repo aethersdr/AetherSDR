@@ -418,6 +418,20 @@ add_executable(icom_civ_scheduler_test
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
+# Socket-free backend incident-state transition. Positive session convergence
+# is certified against real firmware through the automation bridge.
+add_executable(icom_incident_telemetry_test
+    tests/icom_incident_telemetry_test.cpp)
+target_include_directories(icom_incident_telemetry_test PRIVATE src)
+target_link_libraries(icom_incident_telemetry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_incident_telemetry_test COMMAND icom_incident_telemetry_test)
+
+# Pure state-machine coverage: no WebSocket, network socket, or radio fixture.
+add_executable(icom_tci_unkey_settle_test
+    tests/icom_tci_unkey_settle_test.cpp)
+target_include_directories(icom_tci_unkey_settle_test PRIVATE src)
+add_test(NAME icom_tci_unkey_settle_test COMMAND icom_tci_unkey_settle_test)
+
 add_executable(icom_scope_test
     tests/icom_scope_test.cpp
     src/core/backends/icom/IcomScope.cpp

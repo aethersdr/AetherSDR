@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QJsonDocument>
 #include <QLoggingCategory>
 #include <QTimer>
 #include <QVariant>
@@ -31,6 +32,7 @@ Q_LOGGING_CATEGORY(lcIcomPan, "aether.icom.pan")
 // wants to switch on after a hang is the stall warning, and nothing else.
 Q_LOGGING_CATEGORY(lcIcomLink, "aether.icom.link")
 Q_LOGGING_CATEGORY(lcIcomScheduler, "aether.icom.scheduler")
+Q_LOGGING_CATEGORY(lcIcomIncident, "aether.icom.incident")
 
 // Which CI-V address we ended up talking to, and why. Its own category because
 // a wrong address is SILENT — the radio simply never answers — so when the
@@ -75,6 +77,33 @@ constexpr int kLinkTickMs = 1000;
 // zone is needed at all: a click with a pixel of hand movement arrives as a
 // centre request, and without this every stray click moved the dial.
 constexpr double kPanDragDeadZoneFraction = 0.01;
+
+QString priorityName(IcomCivScheduler::Priority priority)
+{
+    switch (priority) {
+    case IcomCivScheduler::Priority::Emergency:   return QStringLiteral("emergency");
+    case IcomCivScheduler::Priority::Operator:    return QStringLiteral("operator");
+    case IcomCivScheduler::Priority::Maintenance: return QStringLiteral("maintenance");
+    case IcomCivScheduler::Priority::Control:     return QStringLiteral("control");
+    case IcomCivScheduler::Priority::Ptt:         return QStringLiteral("ptt");
+    case IcomCivScheduler::Priority::ActiveMeter: return QStringLiteral("active-meter");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString completionName(IcomCivScheduler::Completion completion)
+{
+    switch (completion) {
+    case IcomCivScheduler::Completion::Reply:          return QStringLiteral("reply");
+    case IcomCivScheduler::Completion::StaleReply:     return QStringLiteral("stale-reply");
+    case IcomCivScheduler::Completion::LateReply:      return QStringLiteral("late-reply");
+    case IcomCivScheduler::Completion::LateStaleReply: return QStringLiteral("late-stale-reply");
+    case IcomCivScheduler::Completion::Timeout:        return QStringLiteral("timeout");
+    case IcomCivScheduler::Completion::Displaced:      return QStringLiteral("displaced");
+    case IcomCivScheduler::Completion::NoReply:        return QStringLiteral("no-reply");
+    }
+    return QStringLiteral("unknown");
+}
 
 QByteArray floatBytes(const std::vector<float>& v)
 {
@@ -1188,6 +1217,15 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
     m_deviceName = deviceName.trimmed();
     m_connected = true;
+    m_connectedAtMs = nowMs();
+    m_lastIncident.clear();
+    m_civScheduler.clearTransactionHistory();
+    m_pttIncidentReported = false;
+    m_civBacklogIncidentReported = false;
+    m_lastInboundCivAtMs = 0;
+    m_lastOutboundCiv.clear();
+    m_lastOutboundCivKey.clear();
+    m_lastOutboundCivAtMs = 0;
 
     // RESOLVE THE MODEL FROM THE NAME, NOW.
     //
@@ -1463,6 +1501,9 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
     m_tuning = false;
     m_preTuneTxPowerPercent = -1;
     const bool was = m_connected;
+    if (was && !reason.isEmpty()) {
+        recordIncident(QStringLiteral("session-disconnected"), reason);
+    }
     m_connected = false;
     ++m_sessionGeneration;
     if (m_session) {
@@ -2513,12 +2554,29 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                     qCWarning(lcIcomScheduler)
                         << "radio reports KEYED after an unkey request; "
                            "publishing radio truth";
+                } else if (!confirmsIntent && *m_pendingPttIntent) {
+                    qCWarning(lcIcomScheduler)
+                        << "radio did not confirm key-on before the PTT intent window expired";
+                    if (!m_pttIncidentReported) {
+                        recordIncident(
+                            QStringLiteral("ptt-not-confirmed"),
+                            QStringLiteral("radio reported unkeyed after key-on confirmation window"));
+                        m_pttIncidentReported = true;
+                    }
+                } else if (confirmsIntent) {
+                    m_pttIncidentReported = false;
                 }
                 m_pendingPttIntent.reset();
                 m_pendingPttUntilMs = 0;
             } else if (observation == IcomCivScheduler::Observation::Stale) {
                 return;
             }
+            // Accepted means this explicit PTT readback belongs to the current
+            // scheduler generation. Publish that proof even when the value is
+            // unchanged from our optimistic edge; TCI's unkey barrier must not
+            // mistake local presentation state for a radio acknowledgement.
+            const bool acceptedReadback =
+                observation == IcomCivScheduler::Observation::Accepted;
             // ON CHANGE ONLY. This is the answer to a poll that runs four times
             // a second, and it used to republish the transmit state on every
             // one of them — a 4 Hz stream of "the radio is transmitting" events
@@ -2528,8 +2586,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // Republishing unchanged state is never merely wasteful on a path
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
-            if (keyed == m_keyed)
+            if (keyed == m_keyed) {
+                if (acceptedReadback) {
+                    emit keyingStateConfirmed(keyed);
+                }
                 return;
+            }
             const int restoreTunePower = !keyed ? stopTuneProducer() : -1;
             m_keyed = keyed;
             m_meters.setTransmitting(m_keyed);
@@ -2542,6 +2604,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             TransmitDelta t;
             t.mox = m_keyed;
             emit transmitChanged(t);
+            if (acceptedReadback) {
+                emit keyingStateConfirmed(keyed);
+            }
             if (restoreTunePower >= 0) {
                 setTxPower(restoreTunePower);
             }
@@ -3002,6 +3067,7 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
             hex += QStringLiteral("%1 ").arg(dispatch->frame[i], 2, 16, QLatin1Char('0'));
         }
         m_lastOutboundCiv = hex.trimmed();
+        m_lastOutboundCivKey = QString::fromStdString(dispatch->key);
         m_lastOutboundCivAtMs = nowMs;
     }
     m_session->sendCiv(dispatch->frame);
@@ -3023,7 +3089,28 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
     out.insert(QStringLiteral("coalesced"), static_cast<qulonglong>(stats.coalesced));
     out.insert(QStringLiteral("replies"), static_cast<qulonglong>(stats.replies));
     out.insert(QStringLiteral("staleReplies"), static_cast<qulonglong>(stats.staleReplies));
+    out.insert(QStringLiteral("lateReplies"), static_cast<qulonglong>(stats.lateReplies));
+    out.insert(QStringLiteral("unmatchedFrames"),
+               static_cast<qulonglong>(stats.unmatchedFrames));
     out.insert(QStringLiteral("timeouts"), static_cast<qulonglong>(stats.timeouts));
+    out.insert(QStringLiteral("responseSamples"),
+               static_cast<qulonglong>(stats.responseSamples));
+    out.insert(QStringLiteral("lastResponseMs"),
+               static_cast<qlonglong>(stats.lastResponseMs));
+    out.insert(QStringLiteral("maxResponseMs"),
+               static_cast<qlonglong>(stats.maxResponseMs));
+    out.insert(QStringLiteral("averageResponseMs"),
+               stats.responseSamples > 0
+                   ? static_cast<double>(stats.totalResponseMs)
+                         / static_cast<double>(stats.responseSamples)
+                   : -1.0);
+    out.insert(QStringLiteral("lastResponseAgeMs"),
+               stats.lastResponseAtMs > 0
+                   ? std::max<qint64>(0, nowMs() - stats.lastResponseAtMs) : -1);
+    out.insert(QStringLiteral("lastCompletedKey"),
+               QString::fromStdString(stats.lastCompletedKey));
+    out.insert(QStringLiteral("lastTimeoutKey"),
+               QString::fromStdString(stats.lastTimeoutKey));
     out.insert(QStringLiteral("cancelledRequests"),
                static_cast<qulonglong>(m_schedulerCancelledRequests));
     out.insert(QStringLiteral("failedRequests"),
@@ -3039,6 +3126,92 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
                    std::max<qint64>(0, m_pendingPttUntilMs - nowMs()));
     }
     return out;
+}
+
+QVariantList IcomCivBackend::schedulerTransactionTrace(std::size_t limit) const
+{
+    QVariantList out;
+    const auto& events = m_civScheduler.recentTransactions();
+    const std::size_t begin = events.size() > limit ? events.size() - limit : 0;
+    const qint64 now = nowMs();
+    for (std::size_t i = begin; i < events.size(); ++i) {
+        const IcomCivScheduler::TransactionEvent& event = events[i];
+        QVariantMap row;
+        row.insert(QStringLiteral("key"), QString::fromStdString(event.key));
+        row.insert(QStringLiteral("priority"), priorityName(event.priority));
+        row.insert(QStringLiteral("generation"),
+                   QVariant::fromValue<qulonglong>(event.generation));
+        row.insert(QStringLiteral("completion"), completionName(event.completion));
+        row.insert(QStringLiteral("ageMs"),
+                   std::max<qint64>(0, now - event.completedAtMs));
+        row.insert(QStringLiteral("queueWaitMs"),
+                   static_cast<qlonglong>(event.queueWaitMs));
+        row.insert(QStringLiteral("responseMs"),
+                   static_cast<qlonglong>(event.responseMs));
+        out.push_back(row);
+    }
+    return out;
+}
+
+QVariantMap IcomCivBackend::incidentSnapshot(const QString& kind,
+                                             const QString& reason) const
+{
+    const qint64 now = nowMs();
+    QVariantMap out;
+    out.insert(QStringLiteral("schemaVersion"), 1);
+    out.insert(QStringLiteral("kind"), kind);
+    out.insert(QStringLiteral("reason"), reason);
+    out.insert(QStringLiteral("capturedAtUtc"),
+               QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    out.insert(QStringLiteral("connected"), m_connected);
+    out.insert(QStringLiteral("sessionAgeMs"),
+               m_connectedAtMs > 0 ? std::max<qint64>(0, now - m_connectedAtMs) : -1);
+    out.insert(QStringLiteral("model"),
+               QString::fromUtf8(m_model->name.data(),
+                                 static_cast<int>(m_model->name.size())));
+    out.insert(QStringLiteral("civAddress"),
+               QStringLiteral("0x%1")
+                   .arg(m_session ? m_session->civAddress() : m_model->civAddress,
+                        2, 16, QLatin1Char('0')));
+
+    QVariantMap commandPlane;
+    commandPlane.insert(QStringLiteral("lastInboundAgeMs"),
+                        m_lastInboundCivAtMs > 0
+                            ? std::max<qint64>(0, now - m_lastInboundCivAtMs) : -1);
+    commandPlane.insert(QStringLiteral("lastOutboundAgeMs"),
+                        m_lastOutboundCivAtMs > 0
+                            ? std::max<qint64>(0, now - m_lastOutboundCivAtMs) : -1);
+    commandPlane.insert(QStringLiteral("lastOutboundKey"), m_lastOutboundCivKey);
+    commandPlane.insert(QStringLiteral("scheduler"), schedulerDiagnostics());
+    commandPlane.insert(QStringLiteral("transactions"), schedulerTransactionTrace());
+    out.insert(QStringLiteral("commandPlane"), commandPlane);
+
+    QVariantMap ptt;
+    ptt.insert(QStringLiteral("publishedKeyed"), m_keyed);
+    ptt.insert(QStringLiteral("pendingIntent"), m_pendingPttIntent.has_value());
+    if (m_pendingPttIntent) {
+        ptt.insert(QStringLiteral("intentKeyed"), *m_pendingPttIntent);
+        ptt.insert(QStringLiteral("confirmationRemainingMs"),
+                   std::max<qint64>(0, m_pendingPttUntilMs - now));
+    }
+    out.insert(QStringLiteral("ptt"), ptt);
+
+    if (m_session) {
+        out.insert(QStringLiteral("lease"), m_session->leaseDiagnostics());
+        out.insert(QStringLiteral("transport"), m_session->transportDiagnostics());
+    }
+    return out;
+}
+
+void IcomCivBackend::recordIncident(const QString& kind, const QString& reason)
+{
+    QVariantMap snapshot = incidentSnapshot(kind, reason);
+    snapshot.insert(QStringLiteral("sequence"),
+                    QVariant::fromValue<qulonglong>(++m_incidentSequence));
+    m_lastIncident = snapshot;
+    qCWarning(lcIcomIncident).noquote()
+        << "ICOM INCIDENT"
+        << QJsonDocument::fromVariant(m_lastIncident).toJson(QJsonDocument::Compact);
 }
 
 void IcomCivBackend::serviceSchedulerWaiters(
@@ -4028,6 +4201,7 @@ void IcomCivBackend::setKeying(bool key)
 
     m_pendingPttIntent = key;
     m_pendingPttUntilMs = nowMs() + 1000;
+    m_pttIncidentReported = false;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
     // PUBLISH IT. Setting m_keyed silently here and leaving the announcement to
     // the poll does not work now that the poll only speaks on change: our own
@@ -5110,6 +5284,15 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, schedulerDiagnostics());
         return;
     }
+    if (verb == QLatin1String("civ.incident")) {
+        emit extensionResult(
+            requestId,
+            m_lastIncident.isEmpty()
+                ? incidentSnapshot(QStringLiteral("live"),
+                                   QStringLiteral("no incident captured this session"))
+                : m_lastIncident);
+        return;
+    }
     if (verb == QLatin1String("civ.scheduler.wait-idle")) {
         int timeoutMs = arg.toMap().value(QStringLiteral("timeoutMs"), 3000).toInt();
         if (!arg.canConvert<QVariantMap>()) {
@@ -5133,6 +5316,8 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         QVariantMap result;
         if (m_session) {
             result = m_session->leaseDiagnostics();
+            result.insert(QStringLiteral("transport"),
+                          m_session->transportDiagnostics());
         } else {
             result.insert(QStringLiteral("connected"), false);
             result.insert(QStringLiteral("lastRenewalResult"),
@@ -5320,11 +5505,30 @@ void IcomCivBackend::onLinkTick()
     emit linkStatsUpdated(out);
 
     const IcomCivScheduler::Stats schedulerStats = m_civScheduler.stats();
+    if (schedulerStats.queueDepth < 4) {
+        m_civBacklogIncidentReported = false;
+    }
     if (schedulerStats.timeouts > m_schedulerTimeoutsReported) {
         qCWarning(lcIcomScheduler)
             << "CI-V read timeout; scheduler recovered"
             << "timeouts" << schedulerStats.timeouts
-            << "queueDepth" << schedulerStats.queueDepth;
+            << "queueDepth" << schedulerStats.queueDepth
+            << "lastTimeoutKey" << QString::fromStdString(schedulerStats.lastTimeoutKey)
+            << "lastResponseMs" << schedulerStats.lastResponseMs;
+        if (schedulerStats.lastTimeoutKey == "ptt" && m_pendingPttIntent
+            && *m_pendingPttIntent && !m_pttIncidentReported) {
+            recordIncident(
+                QStringLiteral("ptt-confirmation-timeout"),
+                QStringLiteral("CI-V PTT transaction timed out while key-on confirmation was pending"));
+            m_pttIncidentReported = true;
+        }
+        if (schedulerStats.queueDepth >= 8 && !m_civBacklogIncidentReported) {
+            recordIncident(
+                QStringLiteral("civ-timeout-backlog"),
+                QStringLiteral("CI-V read timed out with %1 queued transactions")
+                    .arg(schedulerStats.queueDepth));
+            m_civBacklogIncidentReported = true;
+        }
         m_schedulerTimeoutsReported = schedulerStats.timeouts;
     }
 
@@ -5491,6 +5695,9 @@ void IcomCivBackend::onLinkTick()
         << "The transport is still up (rxPackets" << out.rxPackets
         << "), so this is the command plane alone."
         << "Read `civ trace all` for the frames either side of it.";
+    recordIncident(QStringLiteral("civ-stall"),
+                   QStringLiteral("no CI-V frame for %1 ms while transport remained active")
+                       .arg(silentMs));
 
     // The 0x04 data-pipe restart, scheduler termination, and retry timer are a
     // single model capability.  Profiles without it retain main's warn-only

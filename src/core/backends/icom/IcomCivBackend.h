@@ -269,6 +269,11 @@ private:
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    [[nodiscard]] QVariantList schedulerTransactionTrace(
+        std::size_t limit = 32) const;
+    [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,
+                                               const QString& reason) const;
+    void recordIncident(const QString& kind, const QString& reason);
     enum class SchedulerWaiterOutcome : std::uint8_t {
         Completed,
         TimedOut,
@@ -386,6 +391,7 @@ private:
     bool m_xfcReleaseRequired = false;
     std::optional<bool> m_pendingPttIntent;
     qint64 m_pendingPttUntilMs = 0;
+    bool m_pttIncidentReported = false;
     bool m_overflow = false;
     double m_vdVolts = 0.0;
     double m_idAmps = 0.0;
@@ -617,11 +623,20 @@ private:
     quint64 m_schedulerTimeoutsReported = 0;
     quint64 m_schedulerCancelledRequests = 0;
     quint64 m_schedulerFailedRequests = 0;
+    bool m_civBacklogIncidentReported = false;
+
+    // Last structured incident survives a dropped session so support can read
+    // it after the sockets are gone. It is replaced only by a newer incident
+    // or a successfully connected new session.
+    QVariantMap m_lastIncident;
+    quint64 m_incidentSequence = 0;
+    qint64 m_connectedAtMs = 0;
 
     // CI-V stall detection. The transport can be healthy while the command
     // plane is dead — see onLinkTick — so these track the command plane alone.
     qint64  m_lastInboundCivAtMs = 0;
     QString m_lastOutboundCiv;      // the last frame we sent, as hex
+    QString m_lastOutboundCivKey;   // payload-free semantic transaction id
     qint64  m_lastOutboundCivAtMs = 0;
     bool    m_civStallReported = false;
     qint64  m_civRecoveryStartedAtMs = 0;
