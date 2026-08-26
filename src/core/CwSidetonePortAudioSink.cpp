@@ -459,10 +459,14 @@ void CwSidetonePortAudioSink::stop()
         qCInfo(lcAudio) << "CwSidetonePortAudioSink: stopping —"
                         << "callbacks=" << m_cbCount.load(std::memory_order_relaxed)
                         << "peak=" << (m_cbPeakMicro.load(std::memory_order_relaxed) / 1e6);
-        m_edgeProbe.dump("PortAudio", m_actualRate);
         // Halt the callback before clearing the generator pointer so we
-        // don't race with paCallback dereferencing a torn-down generator.
+        // don't race with paCallback dereferencing a torn-down generator —
+        // and before dumping the edge probe, which resets the same members
+        // (m_count, m_samplePos, m_tone, m_quietRun) that scan() writes from
+        // inside the callback.  The probe belongs on this side of the barrier
+        // for exactly the reason the generator pointer does.
         Pa_StopStream(m_stream);
+        m_edgeProbe.dump("PortAudio", m_actualRate);
         m_generator.store(nullptr, std::memory_order_release);
         Pa_CloseStream(m_stream);
         m_stream = nullptr;
