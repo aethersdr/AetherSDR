@@ -139,6 +139,7 @@ public:
     // and power: two of them transmit and the third cannot be undone over WiFi.
     [[nodiscard]] QVariantList controlMap() const;
     [[nodiscard]] QVariantMap profileMap() const;
+    [[nodiscard]] QVariantMap repeaterStateMap() const;
     [[nodiscard]] QVariantList meterMap() const;
     [[nodiscard]] QVariantMap controlScrub(const QString& filter);
     // Returns false when the row cannot be re-asserted safely — the scrub's
@@ -164,6 +165,7 @@ private slots:
     void onAudio(const std::vector<float>& mono);
     void onMeterTick();
     void onLinkTick();
+    void onTuneAudioTick();
 
 private:
     // Focused access for the generation-gate regression test.  The test must
@@ -172,6 +174,9 @@ private:
     // path cannot make that queued-delivery race deterministic.
     friend struct IcomCivBackendTestAccess;
 
+    void queueTuneAudioFrame();
+    [[nodiscard]] int stopTuneProducer();
+    void reassertPanPreampWireStep(int step);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a
@@ -364,6 +369,7 @@ private:
 
     QTimer* m_meterTimer = nullptr;
     QTimer* m_linkTimer = nullptr;
+    QTimer* m_tuneTimer = nullptr;
 
     QString m_deviceName;
     std::uint64_t m_frequencyHz = 0;
@@ -492,6 +498,12 @@ private:
     std::optional<double> m_repeaterToneHz;
     std::optional<icom::RepeaterOffsetDirection> m_repeaterOffsetDirection;
     std::optional<int> m_repeaterOffsetHz;
+    std::optional<std::uint8_t> m_repeaterAccess;
+    std::optional<double> m_repeaterRxToneHz;
+    std::optional<int> m_repeaterDtcsCode;
+    std::optional<bool> m_repeaterDtcsTxReverse;
+    std::optional<bool> m_repeaterDtcsRxReverse;
+    std::optional<std::uint64_t> m_repeaterTxFrequencyHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
 
@@ -510,9 +522,10 @@ private:
     // modulating ambient room noise from its own microphone, and that happened
     // to be enough for an antenna tuner to see something.
     //
-    // The tone REPLACES the outgoing audio inside submitTxAudio rather than
-    // being generated on a timer, so its cadence is the transmit callback's
-    // cadence and it cannot drift against the stream it is riding.
+    // The carrier owns a 20 ms radio-rate producer while TUNE is active. It
+    // cannot depend on microphone capture callbacks: PC Audio may be disabled,
+    // and then a keyed IC-705 receives no samples at all. Exact 20 ms frames
+    // match the RS-BA1 packetizer's framing without borrowing the mic stream.
     bool m_tuning = false;
     // Last non-off value reported by 16 47. The shared UI is still boolean,
     // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
@@ -521,6 +534,7 @@ private:
     int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
+    static constexpr int kTuneToneFrameMs = 20;
     // -6 dBFS. Loud enough for a tuner to read instantly, short of the clipping
     // that would splatter a carrier the operator is deliberately leaving up.
     static constexpr float kTuneToneAmplitude = 0.5f;

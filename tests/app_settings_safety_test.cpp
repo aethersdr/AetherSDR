@@ -576,6 +576,41 @@ void testThreeDSliceDepthDefaultAndOptIn()
            "3D Slice Shadow can be disabled again after opting in");
 }
 
+void testPanMenuStateDefaultAndPerSlotPersistence()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    expect(DisplaySettings::panMenuExpanded(0),
+           "the panadapter menu defaults expanded when no state exists");
+    expect(DisplaySettings::panMenuExpanded(1),
+           "each additional pan slot defaults expanded independently");
+
+    DisplaySettings::setPanMenuExpanded(0, false);
+    DisplaySettings::setPanMenuExpanded(1, true);
+    expect(!DisplaySettings::panMenuExpanded(0),
+           "slot zero remembers a collapsed menu");
+    expect(DisplaySettings::panMenuExpanded(1),
+           "slot one remains expanded when slot zero is collapsed");
+
+    QString persisted;
+    expect(settings.readAppRowFromDisk(QStringLiteral("Display"), persisted),
+           "pan menu state is committed to the settings database");
+    const QJsonObject slotStates = QJsonDocument::fromJson(persisted.toUtf8())
+                                      .object()
+                                      .value(QStringLiteral("panMenuExpanded"))
+                                      .toObject();
+    expect(slotStates.value(QStringLiteral("0")).toString() == QStringLiteral("False")
+               && slotStates.value(QStringLiteral("1")).toString() == QStringLiteral("True"),
+           "all pan slots share one nested Display configuration object");
+
+    settings.reset();
+    settings.load();
+    expect(!DisplaySettings::panMenuExpanded(0)
+               && DisplaySettings::panMenuExpanded(1),
+           "independent pan menu states survive a settings reload");
+}
+
 // A nickname is stored under a key derived from the radio's MAC, folded to the
 // XML-era sanitized convention by Hl2Discovery::nicknameSettingsKey(). The
 // SQLite store no longer rejects exotic characters, but the sanitized key IS
@@ -816,6 +851,8 @@ int main(int argc, char** argv)
         testDirtyRowSaves();
     } else if (scenario == QStringLiteral("display-slice-depth-default")) {
         testThreeDSliceDepthDefaultAndOptIn();
+    } else if (scenario == QStringLiteral("display-pan-menu-state")) {
+        testPanMenuStateDefaultAndPerSlotPersistence();
     } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
         testNicknameKeySurvivesDisk();
     } else if (scenario == QStringLiteral("browser-api")) {

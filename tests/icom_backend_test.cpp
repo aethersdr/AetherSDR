@@ -137,6 +137,41 @@ struct IcomCivBackendTestAccess {
         const auto recovery = profileFor(*backend.m_model).civRecovery;
         return recovery ? recovery->maxAttempts : 0;
     }
+
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static int preampStep(const IcomCivBackend& backend)
+    {
+        return backend.m_preampStep;
+    }
+
+    static bool tuneActive(const IcomCivBackend& backend)
+    {
+        return backend.m_tuning;
+    }
+
+    static bool tuneTimerActive(const IcomCivBackend& backend)
+    {
+        return backend.m_tuneTimer && backend.m_tuneTimer->isActive();
+    }
+
+    static void reassertPreamp(IcomCivBackend& backend)
+    {
+        backend.reassertPanPreampWireStep(backend.m_preampStep);
+    }
+
+    static QVariantMap repeaterState(const IcomCivBackend& backend)
+    {
+        return backend.repeaterStateMap();
+    }
+
+    static QVariantList controls(const IcomCivBackend& backend)
+    {
+        return backend.controlMap();
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -281,6 +316,83 @@ static void testStaleSessionFrameIsDropped()
 
 }
 
+static void testTxMeterMinimumHoldAtBackendSeam()
+{
+    const IcomModel* ic705 = modelForName("IC-705");
+    check(ic705 != nullptr, "TX meter hold test resolves the IC-705 profile");
+    if (!ic705) {
+        return;
+    }
+
+    IcomCivBackend backend;
+    IcomCivBackendTestAccess::selectModel(backend, *ic705);
+    IcomCivBackendTestAccess::prepareGeneration(backend, 1);
+
+    CivFrame ptt;
+    ptt.to = kControllerAddress;
+    ptt.from = kIc705Addr;
+    ptt.cmd = cmd::kControl;
+    ptt.hasSub = true;
+    ptt.sub = control::kPtt;
+    ptt.data = {0x01};
+    IcomCivBackendTestAccess::expectPttConfirmation(backend, true);
+    IcomCivBackendTestAccess::deliver(backend, ptt, 1);
+
+    CivFrame swr;
+    swr.to = kControllerAddress;
+    swr.from = kIc705Addr;
+    swr.cmd = cmd::kMeter;
+    swr.hasSub = true;
+    swr.sub = meter::kSwr;
+    swr.data = {0x00, 0x80};
+
+    QSignalSpy meterSpy(&backend, &IRadioBackend::meterUpdate);
+    IcomCivBackendTestAccess::deliver(backend, swr, 1);
+    check(meterSpy.count() == 1,
+          "a real keyed IC-705 SWR reply crosses the backend seam");
+
+    swr.data = {0x00, 0x00};
+    IcomCivBackendTestAccess::deliver(backend, swr, 1);
+    check(meterSpy.count() == 1,
+          "an isolated keyed IC-705 SWR minimum is held below the shared meter seam");
+
+    swr.data = {0x00, 0x82};
+    IcomCivBackendTestAccess::deliver(backend, swr, 1);
+    check(meterSpy.count() == 2,
+          "the next real IC-705 SWR reply publishes without UI-side smoothing changes");
+}
+
+static void testPreampWireStateRemainsAuthoritative()
+{
+    IcomCivBackend backend;
+    const IcomModel* ic9700 = modelForName("IC-9700");
+    check(ic9700 != nullptr, "IC-9700 preamp test resolves its model");
+    if (!ic9700) {
+        return;
+    }
+    IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+    IcomCivBackendTestAccess::prepareGeneration(backend, 1);
+
+    CivFrame reported;
+    reported.to = kControllerAddress;
+    reported.from = 0xA2;
+    reported.cmd = cmd::kFunction;
+    reported.hasSub = true;
+    reported.sub = func::kPreamp;
+    reported.data = {0x02};
+    IcomCivBackendTestAccess::deliver(backend, reported, 1);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 2,
+          "IC-9700 wire state 02 is mirrored without being renamed P.AMP INT");
+
+    IcomCivBackendTestAccess::reassertPreamp(backend);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 2,
+          "diagnostic reassert preserves the radio-adopted wire state");
+
+    backend.setPanPreamp(QStringLiteral("0"), 2);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 1,
+          "operator intent remains bounded to OFF/P.AMP INT on the IC-9700");
+}
+
 static void testDestructorCancelsWaiter(QCoreApplication& app)
 {
     auto backend = std::make_unique<IcomCivBackend>();
@@ -347,6 +459,8 @@ int main(int argc, char** argv)
     qRegisterMetaType<AetherSDR::MeterDef>("MeterDef");
 
     testStaleSessionFrameIsDropped();
+    testTxMeterMinimumHoldAtBackendSeam();
+    testPreampWireStateRemainsAuthoritative();
     testDestructorCancelsWaiter(app);
     testTerminalWaiterReentrySurvivesReset(app);
 
@@ -1097,6 +1211,106 @@ int main(int argc, char** argv)
             check(std::abs(powerWrites.back() - 94) <= 1,
                   "TUNE release restores the operator's prior 37% RF power");
         }
+    }
+
+    // TUNE ownership must end on EVERY unkey, not only when the TUNE toggle
+    // calls setTune(false). MOX, CW PTT and the automation watchdog call
+    // setKeying(false) directly, while radio protection can report PTT OFF on
+    // its own. A stale tune lease leaves the timer feeding the modulation input,
+    // holds RF power at the tune value and suppresses all later microphone PCM.
+    {
+        QByteArray pcm(1024 * 2 * static_cast<int>(sizeof(qint16)), 0);
+        auto* samples = reinterpret_cast<qint16*>(pcm.data());
+        for (int i = 0; i < 1024; ++i) {
+            const qint16 sample = static_cast<qint16>(
+                8000 * std::sin(2.0 * M_PI * 1000.0 * i / 24000.0));
+            samples[i * 2] = sample;
+            samples[i * 2 + 1] = sample;
+        }
+        const auto restoredPowerWasWritten = [&radio](int minimumRaw) {
+            return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                               [minimumRaw](const CivFrame& frame) {
+                return frame.cmd == cmd::kLevel && frame.hasSub
+                    && frame.sub == level::kRfPower
+                    && decodeLevel(frame.data).value_or(-1) >= minimumRaw;
+            });
+        };
+
+        backend.setTxPower(37);
+        check(waitSchedulerIdle(), "direct-unkey fixture's ordinary power converges");
+        radio.clearCivLog();
+        const int beforeDirectTune = radio.audioPacketsFromClient();
+        backend.setTune(true, 10);
+        check(waitFor([&] {
+                  return radio.audioPacketsFromClient() > beforeDirectTune;
+              }, 1000),
+              "backend-owned TUNE audio starts without a microphone callback");
+        check(IcomCivBackendTestAccess::tuneTimerActive(backend),
+              "the backend-owned TUNE timer is active while keyed");
+
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "a direct unkey converges during TUNE");
+        check(!IcomCivBackendTestAccess::tuneActive(backend)
+                  && !IcomCivBackendTestAccess::tuneTimerActive(backend),
+              "a direct unkey releases TUNE ownership and stops its producer");
+        check(restoredPowerWasWritten(93),
+              "a direct unkey restores the operator's pre-TUNE RF power");
+        QTest::qWait(80);
+        const int afterDirectUnkey = radio.audioPacketsFromClient();
+        QTest::qWait(100);
+        check(radio.audioPacketsFromClient() == afterDirectUnkey,
+              "no backend-owned TUNE packets continue after direct unkey");
+
+        // The old m_tuning latch also blocked the ordinary PCM path forever.
+        // A later explicit key must own the stream normally again.
+        backend.setKeying(true);
+        check(waitSchedulerIdle(), "ordinary key after direct TUNE unkey converges");
+        for (int i = 0; i < 20; ++i) {
+            backend.submitTxAudio(pcm, 24000, /*clientLeveled=*/false);
+        }
+        check(waitFor([&] {
+                  return radio.audioPacketsFromClient() > afterDirectUnkey;
+              }, 1000),
+              "ordinary microphone PCM resumes after direct TUNE unkey");
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "ordinary post-TUNE unkey converges");
+
+        backend.setTxPower(41);
+        check(waitSchedulerIdle(), "radio-unkey fixture's ordinary power converges");
+        radio.clearCivLog();
+        const int beforeRadioTune = radio.audioPacketsFromClient();
+        backend.setTune(true, 10);
+        check(waitFor([&] {
+                  return radio.audioPacketsFromClient() > beforeRadioTune;
+              }, 1000),
+              "second TUNE cycle starts its backend-owned producer");
+
+        // Confirm the optimistic ON edge first, then simulate the radio
+        // protecting itself by reporting PTT OFF independently of the client.
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
+                       control::kPtt, 0x01, kCivEom});
+        QTest::qWait(40);
+        radio.m_pttOverride = false;
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
+                       control::kPtt, 0x00, kCivEom});
+        check(waitFor([&] {
+                  return !IcomCivBackendTestAccess::tuneActive(backend);
+              }, 1000),
+              "a radio-reported PTT OFF releases TUNE ownership");
+        check(!IcomCivBackendTestAccess::tuneTimerActive(backend),
+              "a radio-reported PTT OFF stops the TUNE producer");
+        check(waitSchedulerIdle(), "radio-reported TUNE unkey restores power");
+        check(restoredPowerWasWritten(104),
+              "radio-reported unkey restores the operator's 41% RF power");
+        QTest::qWait(80);
+        const int afterRadioUnkey = radio.audioPacketsFromClient();
+        QTest::qWait(100);
+        check(radio.audioPacketsFromClient() == afterRadioUnkey,
+              "no backend-owned TUNE packets continue after radio unkey");
+        radio.m_pttOverride.reset();
+        backend.setKeying(false);
+        check(waitSchedulerIdle(),
+              "radio-unkey fixture returns the fake radio to ordinary RX state");
     }
 
     // ---- THE CONNECT-TIME STATE PULL --------------------------------------
@@ -2561,6 +2775,17 @@ int main(int argc, char** argv)
         expectedStartup.push_back(cmdScopeDataOutput(addr, true));
         check(startupInventory == expectedStartup,
               "continuous model: startup inventory, order, and request count are unchanged");
+        const QVariantList controls = IcomCivBackendTestAccess::controls(c.backend);
+        const bool extendedRowsStayUnsupported = std::ranges::all_of(
+            controls, [](const QVariant& value) {
+                const QVariantMap row = value.toMap();
+                const QString feature = row.value(QStringLiteral("profileFeature")).toString();
+                return feature != QLatin1String("fm-repeater-extended-readback")
+                    || !row.value(QStringLiteral("supported")).toBool();
+            });
+        check(extendedRowsStayUnsupported,
+              "continuous model: extended IC-9700 readback is absent from the "
+              "IC-705/IC-7300MK2 effective control surface");
 
         // #5119 freezes the healthy IC-705 / IC-7300MK2 scheduler contract.
         // Pin every distinct steady-state group, including the phase-12 SET
@@ -2818,10 +3043,15 @@ int main(int argc, char** argv)
                 || frame.cmd == cmd::kReadRepeaterOffset
                 || frame.cmd == cmd::kSetRepeaterOffset
                 || (frame.cmd == cmd::kFunction && frame.hasSub
-                    && frame.sub == func::kRepeaterTone)
-                || (frame.cmd == cmd::kTone && frame.hasSub && frame.sub == 0x00)
+                    && (frame.sub == func::kRepeaterTone
+                        || frame.sub == repeaterAccess::kFunction))
+                || (frame.cmd == cmd::kTone && frame.hasSub
+                    && (frame.sub == repeaterTone::kTxCtcss
+                        || frame.sub == repeaterTone::kRxCtcss
+                        || frame.sub == repeaterTone::kDtcs))
                 || (frame.cmd == cmd::kControl && frame.hasSub
-                    && frame.sub == control::kXfc);
+                    && (frame.sub == control::kXfc
+                        || frame.sub == control::kReadTxFreq));
         };
         check(std::none_of(c.radio.civCommands().begin(), c.radio.civCommands().end(),
                            isRepeaterOrXfc),
@@ -2922,6 +3152,32 @@ int main(int argc, char** argv)
               "IC-9700 XFC: the session comes up");
         check(c.backend.capabilities().hasTransmitFrequencyCheck,
               "IC-9700 advertises the verified momentary XFC capability");
+        check(waitFor([&] {
+                  const QVariantMap state =
+                      IcomCivBackendTestAccess::repeaterState(c.backend);
+                  return state.value(QStringLiteral("accessMode")).toString()
+                             == QLatin1String("dtcs_txrx")
+                      && std::abs(state.value(QStringLiteral("rxCtcssHz")).toDouble()
+                                  - 67.0) < 0.001
+                      && state.value(QStringLiteral("dtcsCode")).toInt() == 23
+                      && !state.value(QStringLiteral("dtcsTxReverse")).toBool()
+                      && state.value(QStringLiteral("dtcsRxReverse")).toBool()
+                      && state.value(QStringLiteral("txFrequencyHz")).toULongLong()
+                             == 448'425'600ULL;
+              }),
+              "IC-9700 adopts capability-gated access, RX CTCSS, DTCS polarity, "
+              "and TX-frequency readback without changing the shared UI model");
+        const QVariantList controls = IcomCivBackendTestAccess::controls(c.backend);
+        const int supportedExtendedRows = static_cast<int>(std::ranges::count_if(
+            controls, [](const QVariant& value) {
+                const QVariantMap row = value.toMap();
+                return row.value(QStringLiteral("profileFeature")).toString()
+                           == QLatin1String("fm-repeater-extended-readback")
+                    && row.value(QStringLiteral("supported")).toBool();
+            }));
+        check(supportedExtendedRows == 4,
+              "IC-9700 effective control map exposes exactly four read-only "
+              "extended repeater rows");
         c.radio.clearCivLog();
         c.backend.setTransmitFrequencyCheck(true);
         check(waitFor([&] { return c.radio.m_transmitFrequencyCheck; }),

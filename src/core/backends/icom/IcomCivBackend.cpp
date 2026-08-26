@@ -92,6 +92,35 @@ const FmRepeaterProfile* basicFmProfileFor(const IcomModel* model) noexcept
     return &*profile.fmRepeater;
 }
 
+const FmRepeaterProfile* extendedFmReadbackProfileFor(
+    const IcomModel* model) noexcept
+{
+    if (!model) {
+        return nullptr;
+    }
+    const IcomModelProfile& profile = profileFor(*model);
+    if (!profile.supports(IcomFeature::FmRepeaterExtendedReadback)
+        || !profile.fmRepeater) {
+        return nullptr;
+    }
+    return &*profile.fmRepeater;
+}
+
+QString repeaterAccessName(std::uint8_t value)
+{
+    switch (value) {
+    case 0x00: return QStringLiteral("off");
+    case 0x01: return QStringLiteral("ctcss_tx");
+    case 0x02: return QStringLiteral("ctcss_rx");
+    case 0x03: return QStringLiteral("dtcs_txrx");
+    case 0x06: return QStringLiteral("dtcs_tx");
+    case 0x07: return QStringLiteral("ctcss_tx_dtcs_rx");
+    case 0x08: return QStringLiteral("dtcs_tx_ctcss_rx");
+    case 0x09: return QStringLiteral("ctcss_txrx");
+    default:   return {};
+    }
+}
+
 bool supportsTransmitFrequencyCheck(const IcomModel* model) noexcept
 {
     if (!model) {
@@ -119,6 +148,14 @@ IcomCivBackend::IcomCivBackend(QObject* parent)
     // freeze — meters, controls, PTT poll and operator writes alike —
     // recoverable only by reconnecting. QElapsedTimer cannot step backwards.
     m_clock.start();
+
+    // TUNE is its own audio source. In particular it must keep producing when
+    // PC Audio is disabled and AudioEngine has no capture callback to deliver.
+    // One 20 ms callback maps to one complete 48 kHz radio audio frame.
+    m_tuneTimer = new QTimer(this);
+    m_tuneTimer->setTimerType(Qt::PreciseTimer);
+    m_tuneTimer->setInterval(kTuneToneFrameMs);
+    connect(m_tuneTimer, &QTimer::timeout, this, &IcomCivBackend::onTuneAudioTick);
 }
 
 qint64 IcomCivBackend::nowMs() const
@@ -154,6 +191,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
 
+    const std::span<const IcomBand> bands = bandsFor(m);
+    c.declaredBandRanges.reserve(static_cast<int>(bands.size()));
+    for (const IcomBand& band : bands) {
+        c.declaredBandRanges.append(DeclaredBandRange{
+            QString::fromUtf8(band.name.data(), static_cast<int>(band.name.size())),
+            static_cast<double>(band.lowHz),
+            static_cast<double>(band.highHz)});
+    }
+
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
     // Official CI-V guides for both network targets define command 17 text
@@ -177,7 +223,6 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // empty, which is what RadioModel reads as "txPowerMaxWatts applies
     // everywhere" — the prior behaviour, unchanged.
     c.txPowerBands = {};
-    const std::span<const IcomBand> bands = bandsFor(m);
     c.txPowerBands.reserve(static_cast<int>(bands.size()));
     for (const IcomBand& band : bands) {
         c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),
@@ -253,6 +298,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasSupplyVoltageTelemetry =
         hasVoltageCalibration(profile.meters.calibration);
     c.hasPaTemperatureTelemetry = profile.meters.hasPaTemperatureTelemetry;
+    // No supported Icom model currently publishes fan-speed telemetry. Keep
+    // this family-wide and fail closed until the backend implements a real
+    // CI-V fan meter; do not add speculative per-model profile surface.
+    c.hasMainFanTelemetry = false;
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -273,6 +322,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // > DATA MOD, which must be WLAN for us to be heard at all). A client
     // cannot pick MIC / BAL / LINE / ACC, so the Phone applet collapses to PC.
     c.hasSelectableMicInputs = false;
+
+    // No active Icom profile has a complete, evidenced DEXP SET/read-back
+    // path. In particular, the IC-9700 must not inherit Flex's compander
+    // surface merely because both radios perform other DSP on-radio.
+    c.hasDownwardExpander = false;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -305,13 +359,20 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // and, correctly, unwired: setTxFilter() declines there too, so the two
     // agree rather than the UI promising what the backend refuses.
     if (const auto tbw = txBandwidthProfileFor(*m_model)) {
+        c.hasTxFilterControls = true;
         c.txFilterLowEdgesHz  = QList<int>(tbw->lowEdgesHz.begin(), tbw->lowEdgesHz.end());
         c.txFilterHighEdgesHz = QList<int>(tbw->highEdgesHz.begin(), tbw->highEdgesHz.end());
+    } else {
+        c.hasTxFilterControls = false;
     }
 
     c.hasProfiles = false;
     c.hasWaveforms = false;
     c.hasMultiClientSessions = false;
+    // CI-V has no radio-side spot publication/status service. Keep SpotHub
+    // entries in AetherSDR's existing passive SpotModel so they remain visible
+    // without sending Flex `spot add` commands into this backend.
+    c.alwaysUseClientSideSpots = true;
     c.hasRadioSideWaterfallAutoBlack = false;
     c.persistsMemories = false;
 
@@ -337,6 +398,14 @@ void IcomCivBackend::publishCapabilities()
     if (m_connected && m_xfcReleaseRequired
         && !supportsTransmitFrequencyCheck(m_model)) {
         setTransmitFrequencyCheck(false);
+    }
+    if (!extendedFmReadbackProfileFor(m_model)) {
+        m_repeaterAccess.reset();
+        m_repeaterRxToneHz.reset();
+        m_repeaterDtcsCode.reset();
+        m_repeaterDtcsTxReverse.reset();
+        m_repeaterDtcsRxReverse.reset();
+        m_repeaterTxFrequencyHz.reset();
     }
     emit capabilitiesChanged();
 }
@@ -621,6 +690,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    m_tuneTimer->stop();
     ++m_sessionGeneration;
     m_civRecoveryStartedAtMs = 0;
     m_lastCivRecoveryAttemptAtMs = 0;
@@ -687,6 +757,12 @@ void IcomCivBackend::disconnectRadio()
     m_repeaterToneHz.reset();
     m_repeaterOffsetDirection.reset();
     m_repeaterOffsetHz.reset();
+    m_repeaterAccess.reset();
+    m_repeaterRxToneHz.reset();
+    m_repeaterDtcsCode.reset();
+    m_repeaterDtcsTxReverse.reset();
+    m_repeaterDtcsRxReverse.reset();
+    m_repeaterTxFrequencyHz.reset();
     // Same reasoning, applied to every OTHER control: the scrub mirrors are
     // stale the moment the session ends, so a scrub run after a reconnect that
     // dropped a read must report NOT-TESTED rather than re-asserting the
@@ -819,6 +895,19 @@ void IcomCivBackend::sendConnectReadBurst()
     }
     if (supportsTransmitFrequencyCheck(m_model)) {
         queueStartupRead(cmdReadTransmitFrequencyCheck(m_session->civAddress()));
+    }
+    // The IC-9700's extended access selector, receive tone, DTCS polarity and
+    // transmit-frequency readback are a separate capability from the shared
+    // basic surface above.  In particular, guide-only IC-705 metadata must not
+    // start new traffic on its live-proven path merely because the bytes look
+    // similar.  The model profile is the sole activation gate.
+    if (extendedFmReadbackProfileFor(m_model)) {
+        queueStartupRead(cmdReadRepeaterAccess(m_session->civAddress()));
+        queueStartupRead(cmdReadRepeaterToneRegister(
+            m_session->civAddress(), repeaterTone::kRxCtcss));
+        queueStartupRead(cmdReadRepeaterToneRegister(
+            m_session->civAddress(), repeaterTone::kDtcs));
+        queueStartupRead(cmdReadTransmitFrequency(m_session->civAddress()));
     }
 
     // THE PASSBAND ITSELF, not just the slot that holds it: the width the
@@ -1345,6 +1434,9 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 
 void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
+    m_tuneTimer->stop();
+    m_tuning = false;
+    m_preTuneTxPowerPercent = -1;
     const bool was = m_connected;
     m_connected = false;
     ++m_sessionGeneration;
@@ -1730,21 +1822,46 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
 
     case cmd::kTone: {
-        const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
-        if (!fm || !fm->hasTxCtcss) {
+        if (!frame.hasSub) {
             return;
         }
-        if (!frame.hasSub || frame.sub != 0x00) {
+        if (frame.sub == repeaterTone::kTxCtcss) {
+            const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+            if (!fm || !fm->hasTxCtcss) {
+                return;
+            }
+            const auto toneHz = decodeRepeaterToneHz(frame.data);
+            if (!toneHz) {
+                return;
+            }
+            m_repeaterToneHz = *toneHz;
+            SliceDelta d;
+            d.fmToneValue = *toneHz;
+            emit sliceChanged(sliceId(), d);
             return;
         }
-        const auto toneHz = decodeRepeaterToneHz(frame.data);
-        if (!toneHz) {
+        const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
+        if (!fm) {
             return;
         }
-        m_repeaterToneHz = *toneHz;
-        SliceDelta d;
-        d.fmToneValue = *toneHz;
-        emit sliceChanged(sliceId(), d);
+        const auto value = decodeRepeaterToneRegister(frame.data);
+        if (!value) {
+            return;
+        }
+        if (frame.sub == repeaterTone::kRxCtcss) {
+            if (!fm->hasRxCtcss || value->txReverse || value->rxReverse
+                || value->value > 2999) {
+                return;
+            }
+            m_repeaterRxToneHz = static_cast<double>(value->value) / 10.0;
+        } else if (frame.sub == repeaterTone::kDtcs) {
+            if (!fm->hasDtcs || value->value > 999) {
+                return;
+            }
+            m_repeaterDtcsCode = value->value;
+            m_repeaterDtcsTxReverse = value->txReverse;
+            m_repeaterDtcsRxReverse = value->rxReverse;
+        }
         return;
     }
 
@@ -1884,6 +2001,24 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         const int v = frame.data[0];
         switch (frame.sub) {
+        case repeaterAccess::kFunction: {
+            const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
+            const auto access = decodeRepeaterAccess(frame.data);
+            if (!fm || !access) {
+                return;
+            }
+            const QString mode = repeaterAccessName(*access);
+            const bool offered = std::ranges::any_of(
+                fm->accessModes, [&mode](std::string_view candidate) {
+                    return mode == QString::fromUtf8(
+                        candidate.data(), static_cast<int>(candidate.size()));
+                });
+            if (!offered) {
+                return;
+            }
+            m_repeaterAccess = *access;
+            return;
+        }
         // WHICH OF THE THREE TRANSMIT PASSBANDS IS IN CIRCUIT. Not a passband
         // itself — it names the SET item that holds one, so the only useful
         // thing to do with it is go and read that item.
@@ -1985,6 +2120,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // The PREAMP control, not the RF-gain slider. It used to publish
             // into SliceDelta::rfGain, which is what made a three-position
             // switch look like a gain reading.
+            // Preserve the radio's wire state independently of the labels the
+            // UI is allowed to offer. 16 02 carries 00/01/02 even when a
+            // model's verified presentation ladder names fewer positions.
             m_preampStep = std::clamp(v, 0, 2);
             emit panPreampChanged(panId(), m_preampStep);
             return;
@@ -2190,7 +2328,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (!raw)
             return;
 
-        m_meters.markAnswered(spec->id, nowMs());
+        const qint64 answeredAtMs = nowMs();
+        m_meters.markAnswered(spec->id, answeredAtMs);
+        const bool holdIsolatedMinimums = m_model
+            && profileFor(*m_model).meters.holdIsolatedTxMinimums;
+        if (!m_meters.shouldPublish(spec->id, *raw, answeredAtMs,
+                                    holdIsolatedMinimums)) {
+            return;
+        }
         const double value = meterValue(
             spec->id, *raw, s9ReferenceFor(m_frequencyHz),
             m_model ? profileFor(*m_model).meters.calibration
@@ -2270,11 +2415,31 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // state having just changed.
             if (keyed == m_keyed)
                 return;
+            const int restoreTunePower = !keyed ? stopTuneProducer() : -1;
             m_keyed = keyed;
             m_meters.setTransmitting(m_keyed);
+            if (!keyed && m_session) {
+                m_session->flushTxAudio();
+            }
             TransmitDelta t;
             t.mox = m_keyed;
             emit transmitChanged(t);
+            if (restoreTunePower >= 0) {
+                setTxPower(restoreTunePower);
+            }
+            if (m_session && extendedFmReadbackProfileFor(m_model)) {
+                // The IC-9700 can clear or retain XFC across a PTT edge. Ask
+                // for both facts after the confirmed edge and record the
+                // radio's answer; never infer the TX frequency from our RX
+                // presentation or change the shared XFC UI path.
+                for (const std::vector<std::uint8_t>& read
+                     : {cmdReadTransmitFrequencyCheck(m_session->civAddress()),
+                        cmdReadTransmitFrequency(m_session->civAddress())}) {
+                    queueRead(read, semanticKey(read),
+                              IcomCivScheduler::Priority::Control);
+                }
+                pumpCiv(frameAtMs);
+            }
             return;
         }
         if (frame.hasSub && frame.sub == control::kTuner && !frame.data.empty()) {
@@ -2312,6 +2477,16 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 m_transmitFrequencyCheck = on;
                 emit transmitFrequencyCheckChanged(on);
             }
+        }
+        if (frame.hasSub && frame.sub == control::kReadTxFreq) {
+            if (!extendedFmReadbackProfileFor(m_model)) {
+                return;
+            }
+            const auto hz = decodeFreqExact(frame.data, m_model->freqBytes);
+            if (!hz) {
+                return;
+            }
+            m_repeaterTxFrequencyHz = *hz;
         }
         return;
     }
@@ -2424,9 +2599,10 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     // keepalive is the 0x00 idle packet rather than the audio payload. Stopping
     // audio between overs stops audio, not the session.
     //
-    // m_tuning is included because a TUNE carrier is synthesised in place of
-    // this buffer further down and must still reach the radio.
-    if (!m_keyed && !m_tuning) {
+    // TUNE has a backend-owned, radio-rate producer. Letting microphone
+    // callbacks feed this path at the same time creates a second packet cadence
+    // and can overrun the bounded transmit queue.
+    if (m_tuning || !m_keyed) {
         return;
     }
     // The engine hands us interleaved int16 stereo; the radio wants mono at its
@@ -2437,23 +2613,9 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         return;
     const auto* src = reinterpret_cast<const qint16*>(int16Stereo.constData());
     std::vector<float> mono(static_cast<std::size_t>(frames));
-    if (m_tuning) {
-        // A TUNE carrier, synthesised in place of whatever the engine sent.
-        // Phase is carried across buffers: restarting it each block would put a
-        // discontinuity at the block rate, which is a click every few
-        // milliseconds and splatter either side of the carrier.
-        const double step = 2.0 * M_PI * kTuneToneHz / static_cast<double>(sampleRateHz);
-        for (int i = 0; i < frames; ++i) {
-            mono[static_cast<std::size_t>(i)] =
-                kTuneToneAmplitude * static_cast<float>(std::sin(m_tunePhase));
-            m_tunePhase += step;
-            if (m_tunePhase > 2.0 * M_PI)
-                m_tunePhase -= 2.0 * M_PI;
-        }
-    } else {
-        for (int i = 0; i < frames; ++i)
-            mono[static_cast<std::size_t>(i)] =
-                (src[i * 2] + src[i * 2 + 1]) * 0.5f / 32768.0f;
+    for (int i = 0; i < frames; ++i) {
+        mono[static_cast<std::size_t>(i)] =
+            (src[i * 2] + src[i * 2 + 1]) * 0.5f / 32768.0f;
     }
 
     // RESAMPLE, don't refuse.
@@ -2487,6 +2649,47 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         mono.assign(f, f + out.size() / static_cast<int>(sizeof(float)));
     }
     m_session->sendAudio(mono);
+}
+
+void IcomCivBackend::onTuneAudioTick()
+{
+    if (!m_tuning || !m_keyed || !m_session || !m_connected) {
+        return;
+    }
+
+    queueTuneAudioFrame();
+}
+
+void IcomCivBackend::queueTuneAudioFrame()
+{
+    if (!m_session || !m_connected) {
+        return;
+    }
+
+    const int samples = m_audioRateHz * kTuneToneFrameMs / 1000;
+    std::vector<float> mono(static_cast<std::size_t>(samples));
+    const double step = 2.0 * M_PI * kTuneToneHz / static_cast<double>(m_audioRateHz);
+    for (float& sample : mono) {
+        sample = kTuneToneAmplitude * static_cast<float>(std::sin(m_tunePhase));
+        m_tunePhase += step;
+        if (m_tunePhase > 2.0 * M_PI) {
+            m_tunePhase -= 2.0 * M_PI;
+        }
+    }
+    m_session->sendAudio(mono);
+}
+
+int IcomCivBackend::stopTuneProducer()
+{
+    m_tuneTimer->stop();
+    if (!m_tuning) {
+        return -1;
+    }
+
+    m_tuning = false;
+    const int restore = m_preTuneTxPowerPercent;
+    m_preTuneTxPowerPercent = -1;
+    return restore;
 }
 
 // ---------------------------------------------------------------------------
@@ -3266,12 +3469,24 @@ void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
 // none at all.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
-    // Clamp, never refuse — the seam's rule for every stepped control.
-    const int wanted = std::clamp(step, 0, 2);
+    // Operator intent is bounded by the model's verified presentation ladder.
+    // This deliberately prevents the IC-9700 UI from requesting External
+    // P.AMP states while still allowing radio-originated state 02 to be
+    // mirrored and reasserted unchanged by the diagnostic scrub path below.
+    const int maxStep = std::max(
+        0, static_cast<int>(preampLabelsFor(*m_model).size()) - 1);
+    const int wanted = std::clamp(step, 0, maxStep);
     m_preampStep = wanted;
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kPreamp, wanted));
     emit panPreampChanged(panId(), wanted);
+}
+
+void IcomCivBackend::reassertPanPreampWireStep(int step)
+{
+    const int wireStep = std::clamp(step, 0, 2);
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
+                                   func::kPreamp, wireStep));
 }
 
 void IcomCivBackend::setPanAttenuator(const QString&, int step)
@@ -3643,6 +3858,11 @@ void IcomCivBackend::setKeying(bool key)
     if (key && refuseKeyingInReceiveOnlyMode())
         return;
 
+    // TUNE is an audio-source lease, not merely the TUNE button's latch. Every
+    // unkey path ends that lease before the PTT-off command leaves: MOX, CW PTT,
+    // automation/watchdog release and setTune(false) all converge here.
+    const int restoreTunePower = !key ? stopTuneProducer() : -1;
+
     m_pendingPttIntent = key;
     m_pendingPttUntilMs = nowMs() + 1000;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
@@ -3660,8 +3880,12 @@ void IcomCivBackend::setKeying(bool key)
         emit transmitChanged(t);
     }
     m_meters.setTransmitting(key);
-    if (!key && m_session)
+    if (!key && m_session) {
         m_session->flushTxAudio();   // queued audio belongs to the transmission that ended
+    }
+    if (restoreTunePower >= 0) {
+        setTxPower(restoreTunePower);
+    }
 }
 
 void IcomCivBackend::setTune(bool on, int tunePowerPercent)
@@ -3676,29 +3900,36 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
         // reaching it from here would already have moved the RF-power setpoint
         // to the tune level and latched m_tuning — leaving the operator's drive
         // overwritten by a carrier that was then refused.
-        if (refuseKeyingInReceiveOnlyMode())
+        if (!m_session || !m_connected || !m_model->hasTransmit
+            || refuseKeyingInReceiveOnlyMode()) {
             return;
-        if (!m_tuning)
-            m_preTuneTxPowerPercent = m_txPowerPercent;
-        if (tunePowerPercent >= 0)
+        }
+        if (m_tuning) {
+            if (tunePowerPercent >= 0) {
+                setTxPower(tunePowerPercent);
+            }
+            return;
+        }
+        m_preTuneTxPowerPercent = m_txPowerPercent;
+        if (tunePowerPercent >= 0) {
             setTxPower(tunePowerPercent);
+        }
         // Raise the tone BEFORE keying, so no part of the keyed window is
         // silent — a tuner sampling that edge can otherwise read infinite SWR.
         m_tuning = true;
         m_tunePhase = 0.0;
+        // This priming frame intentionally precedes the optimistic keyed edge.
+        // Periodic ticks are keyed-gated; keeping the one-shot generator
+        // separate prevents that fail-closed guard from deleting the prime.
+        queueTuneAudioFrame();
         setKeying(true);
+        m_tuneTimer->start();
         return;
     }
 
     // Unkey BEFORE restoring ordinary RF power. The tune setpoint is temporary
     // and must not become the radio's new operating drive after the carrier.
     setKeying(false);
-    m_tuning = false;
-    if (m_preTuneTxPowerPercent >= 0) {
-        const int restore = m_preTuneTxPowerPercent;
-        m_preTuneTxPowerPercent = -1;
-        setTxPower(restore);
-    }
 }
 
 void IcomCivBackend::setTxPower(int percent)
@@ -3999,6 +4230,44 @@ QVariantMap IcomCivBackend::profileMap() const
     return out;
 }
 
+QVariantMap IcomCivBackend::repeaterStateMap() const
+{
+    QVariantMap out;
+    out.insert(QStringLiteral("model"), QString::fromUtf8(
+        m_model->name.data(), static_cast<int>(m_model->name.size())));
+    out.insert(QStringLiteral("supported"),
+               extendedFmReadbackProfileFor(m_model) != nullptr);
+    if (!extendedFmReadbackProfileFor(m_model)) {
+        return out;
+    }
+    if (m_repeaterAccess) {
+        out.insert(QStringLiteral("accessMode"),
+                   repeaterAccessName(*m_repeaterAccess));
+    }
+    if (m_repeaterToneHz) {
+        out.insert(QStringLiteral("txCtcssHz"), *m_repeaterToneHz);
+    }
+    if (m_repeaterRxToneHz) {
+        out.insert(QStringLiteral("rxCtcssHz"), *m_repeaterRxToneHz);
+    }
+    if (m_repeaterDtcsCode) {
+        out.insert(QStringLiteral("dtcsCode"), *m_repeaterDtcsCode);
+    }
+    if (m_repeaterDtcsTxReverse) {
+        out.insert(QStringLiteral("dtcsTxReverse"),
+                   *m_repeaterDtcsTxReverse);
+    }
+    if (m_repeaterDtcsRxReverse) {
+        out.insert(QStringLiteral("dtcsRxReverse"),
+                   *m_repeaterDtcsRxReverse);
+    }
+    if (m_repeaterTxFrequencyHz) {
+        out.insert(QStringLiteral("txFrequencyHz"),
+                   static_cast<qulonglong>(*m_repeaterTxFrequencyHz));
+    }
+    return out;
+}
+
 // The METER half of the registry: every 0x15 subcommand this backend polls,
 // with the scale it publishes and — the part that matters — how long ago it last
 // produced a reading.
@@ -4203,7 +4472,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         return false;
 
     if (id == QLatin1String("rf.gain"))  { setPanRfGain(pan, m_rfGainPercent); return true; }
-    if (id == QLatin1String("preamp"))   { setPanPreamp(pan, m_preampStep); return true; }
+    if (id == QLatin1String("preamp"))   { reassertPanPreampWireStep(m_preampStep); return true; }
     if (id == QLatin1String("atten"))    { setPanAttenuator(pan, m_attenStep); return true; }
     if (id == QLatin1String("rx.antenna")) {
         setSliceRxAntenna(slice, m_rxAntennaExternal
@@ -4618,6 +4887,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, profileMap());
         return;
     }
+    if (verb == QLatin1String("repeater.state")) {
+        emit extensionResult(requestId, repeaterStateMap());
+        return;
+    }
     if (verb == QLatin1String("controls.meters")) {
         emit extensionResult(requestId, meterMap());
         return;
@@ -4957,6 +5230,13 @@ void IcomCivBackend::onLinkTick()
         for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                                  tuneOffset::kXitOnOff}) {
             queueControl(cmdReadTuneOffset(addr, sub));
+        }
+        if (extendedFmReadbackProfileFor(m_model)) {
+            queueControl(cmdReadRepeaterAccess(addr));
+            queueControl(cmdReadRepeaterToneRegister(
+                addr, repeaterTone::kRxCtcss));
+            queueControl(cmdReadRepeaterToneRegister(
+                addr, repeaterTone::kDtcs));
         }
     }
     // SET-menu changes can originate on the front panel. Refresh slowly: they

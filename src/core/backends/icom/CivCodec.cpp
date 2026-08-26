@@ -228,6 +228,15 @@ std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd)
     return hz;
 }
 
+std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes)
+{
+    if (bcd.size() != expectedBytes) {
+        return std::nullopt;
+    }
+    return decodeFreq(bcd);
+}
+
 std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd)
 {
     if (bcd.empty() || bcd.size() > 8)
@@ -832,6 +841,60 @@ std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload
         return std::nullopt;
     }
     return static_cast<double>(tenths) / 10.0;
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kFunction, repeaterAccess::kFunction);
+}
+
+std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload[0]) {
+    case 0x00:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x09:
+        return payload[0];
+    default:
+        return std::nullopt;
+    }
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload)
+{
+    const auto validBcd = [](std::uint8_t byte) {
+        return (byte & 0x0F) <= 9 && ((byte >> 4) & 0x0F) <= 9;
+    };
+    if (payload.size() != 3 || (payload[0] & 0xEE) != 0
+        || !validBcd(payload[1]) || !validBcd(payload[2])) {
+        return std::nullopt;
+    }
+    return RepeaterToneRegister{
+        decodeBcdByte(payload[1]) * 100 + decodeBcdByte(payload[2]),
+        (payload[0] & 0x10) != 0,
+        (payload[0] & 0x01) != 0,
+    };
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kReadTxFreq);
 }
 
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)

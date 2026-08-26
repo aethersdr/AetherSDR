@@ -184,9 +184,9 @@ constexpr IcomModel kUnknown{
 // is the safe direction to be wrong in: we offer a frequency it declines,
 // rather than silently withholding one it supports.
 constexpr std::array<IcomBand, 3> kIc9700Bands{{
-    {  144'000'000ULL,   148'000'000ULL, 100.0},   // 2 m
-    {  430'000'000ULL,   450'000'000ULL,  75.0},   // 70 cm
-    {1'240'000'000ULL, 1'300'000'000ULL,  10.0},   // 23 cm
+    {"2m",     144'000'000ULL,   148'000'000ULL, 100.0},
+    {"440",    430'000'000ULL,   450'000'000ULL,  75.0},
+    {"23cm", 1'240'000'000ULL, 1'300'000'000ULL,  10.0},
 }};
 
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
@@ -207,6 +207,12 @@ constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
 
 constexpr std::array<std::string_view, 3> kHfPreampLabels{
     "OFF", "P.AMP1", "P.AMP2"};
+// Publish only the IC-9700's internal preamp through the shared front-end
+// control. External P.AMP is separately enabled per band in SET menu items
+// 0093..0095; treating those persistent settings as ordinary preamp steps
+// makes the radio reject the request and restore its authoritative state.
+constexpr std::array<std::string_view, 2> kIc9700PreampLabels{
+    "OFF", "P.AMP INT"};
 constexpr std::array<AttenStep, 2> kHfAttenuatorSteps{{
     {"OFF", 0}, {"20 dB", 20}}};
 constexpr std::array<std::string_view, 10> kIc705Modes{
@@ -223,7 +229,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 10> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 11> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -240,12 +246,14 @@ constexpr std::array<FeatureEvidence, 10> kIc705Evidence{{
      "IC-705 CI-V Reference Guide 2020; live tone/level/offset/XFC proof"},
     {IcomFeature::FmRepeaterExtended, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, 16 5D and 1B 00/01/02"},
+    {IcomFeature::FmRepeaterExtendedReadback, EvidenceKind::None,
+     "not activated; preserve the live-proven basic IC-705 path"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020, 1C 02"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
 }};
 
-constexpr std::array<FeatureEvidence, 10> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 11> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -264,11 +272,13 @@ constexpr std::array<FeatureEvidence, 10> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 0C/0D, 0F, 16 42, 1B 00"},
     {IcomFeature::FmRepeaterExtended, EvidenceKind::None,
      "DTCS and mixed tone access not documented for IC-7300MK2"},
+    {IcomFeature::FmRepeaterExtendedReadback, EvidenceKind::None,
+     "extended repeater readback is not attested"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
 }};
 
-constexpr std::array<FeatureEvidence, 8> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 9> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -279,6 +289,9 @@ constexpr std::array<FeatureEvidence, 8> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide 2019; PR #5149 live trace"},
     {IcomFeature::FmRepeaterExtended, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019, pp. 4-5 and 11; PR #5149 live trace"},
+    {IcomFeature::FmRepeaterExtendedReadback,
+     EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-9700 16 5D, 1B 01/02 and 1C 03; PR #5149 live trace"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019, 1C 02/03; PR #5149 live trace"},
     {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
@@ -530,7 +543,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .cwTextKeyer = CwTextKeyerProfile{},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic705, 4.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic705,
+            .currentFullScaleAmps = 4.0,
+            .holdIsolatedTxMinimums = true,
+        },
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
@@ -545,8 +562,12 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic9700Voltage, 0.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic9700Voltage,
+            .currentFullScaleAmps = 0.0,
+        },
         .civRecovery = CivRecoveryProfile{1000, 3},
+        .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
@@ -563,7 +584,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},
         .scope = ScopeCommandProfile{true, true, true, true, true},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic7300Mk2, 25.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic7300Mk2,
+            .currentFullScaleAmps = 25.0,
+            .holdIsolatedTxMinimums = true,
+        },
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };
@@ -593,6 +618,8 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::RxAntenna:           return "rx-antenna";
     case IcomFeature::FmRepeaterBasic:     return "fm-repeater-basic";
     case IcomFeature::FmRepeaterExtended:  return "fm-repeater-extended";
+    case IcomFeature::FmRepeaterExtendedReadback:
+        return "fm-repeater-extended-readback";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
     }

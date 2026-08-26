@@ -1185,6 +1185,21 @@ void RadioModel::setupBackend(const QString& family)
             // non-Flex backend, so nothing would create the model and every delta
             // would be dropped (slice panel stuck at 0.000000). Materialise it on
             // the first delta and route mode intents back through the seam.
+            if (auto it = m_staleSlices.find(sliceId);
+                it != m_staleSlices.end() && it.value()) {
+                s = it.value();
+                m_staleSlices.erase(it);
+                qCDebug(lcProtocol) << "RadioModel: reclaimed non-Flex slice"
+                                    << sliceId << "from previous session";
+                m_slices.append(s);
+                s->applyChanges(mapped);
+                m_meterModel.setActiveTxSlice(activeTxSliceNum());
+                refreshTxPowerLimit();
+                // Reuse the same SliceModel so every UI subscriber — including
+                // RX Controls — stays attached. A sliceAdded here would build a
+                // duplicate VFO for an object the UI already owns.
+                return;
+            }
             s = new SliceModel(sliceId, this);
             connect(s, &SliceModel::modeChangeRequested, this,
                     [this, s](const QString& mode) {
@@ -5837,6 +5852,14 @@ void RadioModel::onConnected()
     // replay — with the fixture set staying poisoned for the session.
     clearAutomationSliceFixtures();
     stageSessionModelsForReconnect();
+    // The selected discovery serial names the non-Flex session that actually
+    // reached Connected. Keep it separate from m_lastInfo: a same-family radio
+    // swap overwrites m_lastInfo before IcomCivBackend::connectRadio() tears the
+    // old session down, so disconnect-time lookup there would attribute radio
+    // A's staged models to radio B and defeat the cross-radio reclaim guard.
+    if (!m_flexBackend) {
+        m_connectedSessionSerial = m_lastInfo.serial;
+    }
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
@@ -6012,6 +6035,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     m_foreignSliceOwners.clear();
     m_activePanId.clear();
     m_staleSessionSerial.clear();
+    m_connectedSessionSerial.clear();
     m_chassisSerial.clear();
 }
 
@@ -6918,8 +6942,16 @@ void RadioModel::onDisconnected()
     // next connect can refuse to reclaim them against a different radio.
     // Keep the previous value if this disconnect never learned a serial
     // (e.g. handshake failed before the info reply).
-    if (!m_chassisSerial.isEmpty())
+    if (!m_chassisSerial.isEmpty()) {
         m_staleSessionSerial = m_chassisSerial;
+    } else if (!m_connectedSessionSerial.isEmpty()) {
+        // Seam backends do not receive Flex's `info chassis_serial` reply. The
+        // serial captured on their successful connect edge is the authority
+        // that prevents slice id 0 from one physical radio being reclaimed by
+        // another radio of the same family.
+        m_staleSessionSerial = m_connectedSessionSerial;
+    }
+    m_connectedSessionSerial.clear();
     m_chassisSerial.clear();
     m_callsign.clear();
     // Clear the nickname here too, not just on the connectToRadio() seeding
@@ -6930,6 +6962,7 @@ void RadioModel::onDisconnected()
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
     m_region.clear();
+    m_declaredBands.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
     m_netCwIndex = 1;

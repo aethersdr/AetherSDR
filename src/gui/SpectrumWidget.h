@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBlackMode.h"
+#include "RfGainPresentation.h"
 
 #include <limits>
 #include <algorithm>
@@ -124,7 +125,7 @@ public:
     ~SpectrumWidget() override;
 
     // Per-pan settings persistence
-    void setPanIndex(int idx) { m_panIndex = idx; }
+    void setPanIndex(int idx);
     int panIndex() const { return m_panIndex; }
     QString settingsKey(const QString& base) const;
     void loadSettings();
@@ -394,6 +395,21 @@ public:
             reacquireNoiseFloorLock();
         }
         markOverlayDirty();
+    }
+    void setRfGainPresentation(const QString& suffix, int neutralValue) {
+        const QString normalized = normalizedRfGainUnitSuffix(suffix);
+        if (m_rfGainUnitSuffix != normalized
+            || m_rfGainNeutralValue != neutralValue) {
+            m_rfGainUnitSuffix = normalized;
+            m_rfGainNeutralValue = neutralValue;
+            markOverlayDirty();
+        }
+    }
+    void setPreampIndicator(const QString& text) {
+        if (m_preampIndicator != text) {
+            m_preampIndicator = text;
+            markOverlayDirty();
+        }
     }
     void setWideActive(bool on) {
         if (m_wideActive != on) {
@@ -1741,6 +1757,9 @@ private:
     bool m_wnbActive{false};
     bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
+    QString m_rfGainUnitSuffix{QStringLiteral("dB")};
+    int m_rfGainNeutralValue = 0;
+    QString m_preampIndicator;
     bool m_wideActive{false};
 
     // HF propagation forecast overlay

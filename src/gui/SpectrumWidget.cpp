@@ -12,6 +12,7 @@
 #include "PanadapterMessageOverlay.h"
 #include "SoftwareOpenGlRequest.h"
 #include "SpectrumOverlayMenu.h"
+#include "RfGainPresentation.h"
 #include "VfoWidget.h"
 #include "DisplaySettings.h"
 #include "MacCursorCompat.h"
@@ -2447,6 +2448,16 @@ QString SpectrumWidget::settingsKey(const QString& base) const
     if (m_panIndex == 0)
         return base;  // backward compat — no suffix for pan 0
     return QString("%1_%2").arg(base).arg(m_panIndex);
+}
+
+void SpectrumWidget::setPanIndex(int idx)
+{
+    m_panIndex = idx;
+    // Let the overlay menu (the +RX/+TNF/Band/ANT/Display/Memory/DAX button
+    // rail) key its persisted collapsed/expanded state to this slot.
+    if (m_overlayMenu) {
+        m_overlayMenu->setPanSlotIndex(idx);
+    }
 }
 
 void SpectrumWidget::loadSettings()
@@ -13948,7 +13959,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     && m_propKIndex >= 0
                     && m_propAIndex >= 0
                     && m_propSfi > 0;
-                if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
+                const bool showRfGain = shouldShowRfGainIndicator(
+                    m_rfGainValue, m_rfGainNeutralValue);
+                if (m_wnbActive || showRfGain || !m_preampIndicator.isEmpty()
+                    || showProp || m_wideActive) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
                     const QColor indicatorColor(0xc8, 0xd8, 0xe8, 180);
@@ -13970,12 +13984,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     if (m_wideActive) {
                         drawSegment(QStringLiteral("WIDE"), indicatorColor);
                     }
-                    if (m_rfGainValue != 0) {
-                        drawSegment(
-                            QStringLiteral("%1%2 dB")
-                                .arg(m_rfGainValue > 0 ? "+" : "")
-                                .arg(m_rfGainValue),
-                            indicatorColor);
+                    if (!m_preampIndicator.isEmpty()) {
+                        drawSegment(m_preampIndicator, indicatorColor);
+                    }
+                    if (showRfGain) {
+                        drawSegment(formatRfGainIndicator(
+                                        m_rfGainValue, m_rfGainUnitSuffix),
+                                    indicatorColor);
                     }
                     if (m_wnbActive) {
                         drawSegment(QStringLiteral("WNB"),
@@ -15095,7 +15110,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             && m_propKIndex >= 0
             && m_propAIndex >= 0
             && m_propSfi > 0;
-        if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
+        const bool showRfGain = shouldShowRfGainIndicator(
+            m_rfGainValue, m_rfGainNeutralValue);
+        if (m_wnbActive || showRfGain || !m_preampIndicator.isEmpty()
+            || showProp || m_wideActive) {
             QFont indFont = p.font();
             indFont.setPointSize(18);
             indFont.setBold(true);
@@ -15124,12 +15142,15 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
                 drawSegment(QStringLiteral("WIDE"), indicatorColor);
             }
 
+            if (!m_preampIndicator.isEmpty()) {
+                drawSegment(m_preampIndicator, indicatorColor);
+            }
+
             // RF Gain (to the left of WIDE)
-            if (m_rfGainValue != 0) {
-                const QString gainStr = (m_rfGainValue > 0)
-                    ? QString("+%1dB").arg(m_rfGainValue)
-                    : QString("%1dB").arg(m_rfGainValue);
-                drawSegment(gainStr, indicatorColor);
+            if (showRfGain) {
+                drawSegment(formatRfGainIndicator(
+                                m_rfGainValue, m_rfGainUnitSuffix),
+                            indicatorColor);
             }
 
             // WNB (to the left of RF Gain)

@@ -1,5 +1,6 @@
 // Capability-gated UI surfaces: hasProfiles, hasDaxStreams, hasExtendedDsp,
-// hasSupplyVoltageTelemetry, hasTransmitFrequencyCheck, and the three status-bar toggles
+// hasSupplyVoltageTelemetry, hasMainFanTelemetry,
+// hasTransmitFrequencyCheck, and the three status-bar toggles
 // (hasRadioSideCwKeyer / hasVoiceKeyer / hasFullDuplex).
 //
 // The rule these guard (RadioCapabilities.h header comment, aetherd RFC §1) is
@@ -29,6 +30,10 @@
 //                 renders the 0.0f initialiser as a two-decimal measurement.
 //                 Asserted on the CAPABILITY, so this stays true of any future
 //                 family that reports no supply rail.
+//   main fan      hasMainFanTelemetry gates the Radio Vitals Main Fan gauge.
+//                 Unsupported radios omit the instrument rather than showing
+//                 an empty scale, while disconnect restores the permissive
+//                 surface for the next session.
 //   radio DSP     hasRadioSideDsp gates the radio's own NR/NB/ANF/NRL/ANFL/
 //                 ANFT, the APD row and the WNB row. It must NOT gate the
 //                 host-side equivalents — the AetherDSP modules and the
@@ -98,7 +103,6 @@
 // with the automation bridge.
 
 #include "models/RadioModel.h"
-#include "IcomFakeRadio.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "models/ModelCapabilities.h"
@@ -106,10 +110,9 @@
 #include "gui/VoiceModeGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
-#include "core/backends/icom/IcomCredentials.h"
-#include "core/backends/icom/IcomSettings.h"
 
 #include "TestEventLoop.h"
 
@@ -119,6 +122,20 @@
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+// Select model-table data without opening an IcomSession or any socket. The
+// backend already grants this focused test accessor for deterministic state
+// injection; each test binary supplies only the operations it needs.
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+};
+
+}  // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -250,6 +267,8 @@ int main(int argc, char** argv)
               "Flex declares hasSupplyVoltageTelemetry (the \"+13.8A\" meter)");
         check(caps.hasPaTemperatureTelemetry,
               "Flex declares hasPaTemperatureTelemetry (the PATEMP meter)");
+        check(caps.hasMainFanTelemetry,
+              "Flex declares hasMainFanTelemetry (the MAINFAN meter)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -268,6 +287,8 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideCwKeyer (the `cwx` text buffer)");
         check(caps.hasVoiceKeyer,
               "Flex declares hasVoiceKeyer (the `dvk` recorder)");
+        check(caps.hasDownwardExpander,
+              "Flex preserves its authoritative DEXP compander surface");
         check(caps.hasFullDuplex,
               "Flex declares hasFullDuplex (radio set full_duplex_enabled=)");
         // Three flags, not one ride on hasRadioSideDsp. All three are true on a
@@ -380,6 +401,8 @@ int main(int argc, char** argv)
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
         check(caps.hasPaTemperatureTelemetry,
               "HL2 declares hasPaTemperatureTelemetry (host-decoded PATEMP)");
+        check(!caps.hasMainFanTelemetry,
+              "HL2 declares hasMainFanTelemetry=false");
         // The three status-bar toggles. The HL2 has no CW text buffer, no voice
         // recorder and no full-duplex setting, so all three labels go away
         // entirely rather than sitting permanently dim.
@@ -387,6 +410,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideCwKeyer=false (no text buffer)");
         check(!caps.hasVoiceKeyer,
               "HL2 declares hasVoiceKeyer=false (no on-radio recorder)");
+        check(!caps.hasDownwardExpander,
+              "HL2 declares hasDownwardExpander=false (no command path)");
         check(!caps.hasFullDuplex,
               "HL2 declares hasFullDuplex=false (exclusive T/R changeover)");
         // The keyer F1-F12 shortcuts, evaluated as updateKeyerAvailability()
@@ -483,54 +508,33 @@ int main(int argc, char** argv)
         }
     }
 
-    // ---- Icom drives the model's actual per-band power consumer -----------
+    // ---- Icom publishes the IC-9700 power clamp without a socket ----------
     {
-        using AetherSDR::icom::test::FakeIc705;
-
-        FakeIc705 radio;
-        radio.setCivAddress(0xA2);
-        radio.setDeviceName("IC-9700");
-        IcomSettings::reset();
-        IcomSettings::setUsername(QStringLiteral("beer"));
-        IcomSettings::setPorts(radio.controlPort(), radio.serialPort(), radio.audioPort());
-        IcomSettings::setCivAddressAuto();
-        IcomCredentials::setSessionPassword(QStringLiteral("beerbeer"));
-
-        RadioInfo info;
-        info.family = QStringLiteral("icom");
-        info.model = QStringLiteral("IC-9700");
-        info.serial = QStringLiteral("capability-gating-ic9700");
-        info.address = QHostAddress::LocalHost;
-        info.port = radio.controlPort();
-        model.connectToRadio(info);
-        check(AetherTest::waitFor([&] { return model.isConnected(); }),
-              "IC-9700 model-level fixture connects through the real backend seam");
-
-        const RadioCapabilities caps = model.backendCapabilities();
-        check(caps.txPowerBands.size() == 3,
-              "Icom declares the three IC-9700 per-band TX power limits");
-        check(caps.hasTransmitFrequencyCheck,
-              "Icom declares the profiled IC-9700 momentary XFC command");
-        check(caps.hasSupplyVoltageTelemetry,
-              "Icom declares the profiled IC-9700 supply-voltage telemetry");
-
-        const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
-                                          const char* description) {
-            radio.frontPanelFrequency(hz);
-            check(AetherTest::waitFor([&] {
-                      return model.transmitModel().maxPowerLevel() == watts;
-                  }), description);
-        };
-        expectPowerLimit(146'000'000ULL, 100,
-                         "RadioModel applies the IC-9700 2 m 100 W ceiling");
-        expectPowerLimit(432'000'000ULL, 75,
-                         "RadioModel applies the IC-9700 70 cm 75 W ceiling");
-        expectPowerLimit(1'296'000'000ULL, 10,
-                         "RadioModel applies the IC-9700 23 cm 10 W ceiling");
-
-        model.disconnectFromRadio();
-        IcomCredentials::setSessionPassword(QString{});
-        IcomSettings::reset();
+        using namespace AetherSDR::icom;
+        const IcomModel* ic9700 = modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
+        // Guarded as a block: without the guard a failed lookup would run the
+        // six checks below against the constructor's unknownModel() seed and
+        // report six misleading capability failures for one missing table row.
+        if (ic9700) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 3,
+                  "Icom declares the three IC-9700 per-band TX power limits");
+            check(caps.txPowerMaxWattsAt(146'000'000.0) == 100.0,
+                  "the IC-9700 2 m capability clamps TX power to 100 W");
+            check(caps.txPowerMaxWattsAt(432'000'000.0) == 75.0,
+                  "the IC-9700 70 cm capability clamps TX power to 75 W");
+            check(caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+                  "the IC-9700 23 cm capability clamps TX power to 10 W");
+            check(caps.hasTransmitFrequencyCheck,
+                  "Icom declares the profiled IC-9700 momentary XFC command");
+            check(caps.hasSupplyVoltageTelemetry,
+                  "Icom declares the profiled IC-9700 supply-voltage telemetry");
+            check(!caps.hasMainFanTelemetry,
+                  "Icom declares no Main Fan telemetry family-wide");
+        }
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -585,9 +589,13 @@ int main(int argc, char** argv)
               "Sim declares hasSupplyVoltageTelemetry=false");
         check(!caps.hasPaTemperatureTelemetry,
               "Sim declares hasPaTemperatureTelemetry=false");
+        check(!caps.hasMainFanTelemetry,
+              "Sim declares hasMainFanTelemetry=false");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
+        check(!caps.hasDownwardExpander,
+              "Sim declares hasDownwardExpander=false");
         check(!caps.hasFullDuplex, "Sim declares hasFullDuplex=false");
         // The two keyer ACCESSORS, on the one backend in this file that really
         // connects — so this is the only place the permissive rule inside them
@@ -877,13 +885,43 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
         check(!fresh.hasPaTemperatureTelemetry,
               "RadioCapabilities defaults PA temperature telemetry to absent");
+        check(!fresh.hasMainFanTelemetry,
+              "RadioCapabilities defaults Main Fan telemetry to absent");
+        check(!fresh.alwaysUseClientSideSpots,
+              "RadioCapabilities defaults to the existing operator spot policy");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
         FlexBackend flex;
+        hl2::Hl2Backend hl2;
+        SimBackend sim;
         AetherSDR::icom::IcomCivBackend icom;
         const RadioCapabilities flexCaps = flex.capabilities();
+        const RadioCapabilities hl2Caps = hl2.capabilities();
+        const RadioCapabilities simCaps = sim.capabilities();
         const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(!flexCaps.alwaysUseClientSideSpots,
+              "Flex keeps its radio-side spot publication behavior");
+        check(!hl2Caps.alwaysUseClientSideSpots,
+              "HL2 keeps its existing operator-controlled spot behavior");
+        check(!simCaps.alwaysUseClientSideSpots,
+              "Sim keeps its existing operator-controlled spot behavior");
+        check(icomCaps.alwaysUseClientSideSpots,
+              "Icom forces SpotHub spots through the passive client model");
+
+        check(!fresh.hasTxFilterControls,
+              "RadioCapabilities defaults TX cutoff controls to absent");
+        check(flexCaps.hasTxFilterControls,
+              "Flex explicitly retains its continuous TX cutoff controls");
+        check(hl2Caps.hasTxFilterControls,
+              "HL2 explicitly retains its host-modulated TX cutoff controls");
+        check(!simCaps.hasTxFilterControls,
+              "Sim explicitly omits TX cutoff controls because it is RX-only");
+        check(!icomCaps.hasTxFilterControls,
+              "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: the TX cutoff editor remains permissive");
 
         check(flexCaps.hasLmsNoiseFilters,
               "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");

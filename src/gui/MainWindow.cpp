@@ -2995,6 +2995,10 @@ void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
                                           int audioLo, int audioHi)
 {
     if (path == ClientEqApplet::Path::Tx) {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        if (m_radioModel.isConnected() && !caps.hasTxFilterControls) {
+            return;
+        }
         auto& txm = m_radioModel.transmitModel();
         if (audioLo != txm.txFilterLow())  txm.setTxFilterLow(audioLo);
         if (audioHi != txm.txFilterHigh()) txm.setTxFilterHigh(audioHi);
@@ -6013,11 +6017,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     xvtrBands.append({x.name, x.rfFreq, QString("X%1").arg(x.index)});
             }
             const ModelCapabilities caps = m_radioModel.capabilities();
+            const QVector<DeclaredBandRange> declaredBandRanges =
+                m_radioModel.backendCapabilities().declaredBandRanges;
             const QStringList declaredBands = m_radioModel.declaredBands();
             for (auto* applet : m_panStack->allApplets()) {
                 auto* menu = applet->spectrumWidget()->overlayMenu();
                 menu->setRadioCapabilities(caps);
-                menu->setDeclaredBands(declaredBands);
+                menu->setDeclaredBands(declaredBands, declaredBandRanges);
                 menu->setXvtrBands(xvtrBands);
                 applyTuningRangeToOverlayMenu(menu);
                 applyNotchCapabilities(applet->spectrumWidget());
@@ -7112,6 +7118,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        m_appletPanel->meterApplet()->setMainFanTelemetryState(
+            connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
         m_appletPanel->meterApplet()->setPaTemperatureTelemetryState(
             connected, caps.hasPaTemperatureTelemetry);
@@ -7128,6 +7136,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // the session and leave a Flex's continuous control stepping through
         // another radio's list.
         if (auto* phone = m_appletPanel->phoneApplet()) {
+            phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
+            phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }

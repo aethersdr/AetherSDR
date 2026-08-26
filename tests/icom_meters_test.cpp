@@ -242,6 +242,54 @@ static void testPollerVisibilityIsImmediate()
     check(contains(p.due(5000), MeterId::SMeter), "re-showing polls immediately");
 }
 
+static void testPolledTxMeterMinimumHold()
+{
+    MeterPoller p;
+    p.setTransmitting(true);
+
+    // With no real sample in this keyed interval, minimum is the only truth we
+    // have and must be published rather than replaced with stale state.
+    check(p.shouldPublish(MeterId::Swr, 0, 1000, true),
+          "the first keyed SWR minimum is published when there is nothing to hold");
+    check(p.shouldPublish(MeterId::Alc, 0, 1000, true),
+          "the first keyed ALC minimum is published when there is nothing to hold");
+
+    check(p.shouldPublish(MeterId::Swr, 80, 1200, true),
+          "a real SWR sample is published immediately");
+    check(!p.shouldPublish(MeterId::Swr, 0, 1300, true),
+          "an isolated SWR minimum between samples is held");
+    check(p.shouldPublish(MeterId::Swr, 82, 1350, true),
+          "the next real SWR sample replaces the held placeholder immediately");
+
+    check(p.shouldPublish(MeterId::Alc, 60, 1400, true),
+          "a real ALC sample is published immediately");
+    check(!p.shouldPublish(MeterId::Alc, 0, 1500, true),
+          "an isolated ALC minimum between samples is held");
+    check(!p.shouldPublish(MeterId::Alc, 0,
+                           1500 + MeterPoller::kMinimumConfirmationMs - 1, true),
+          "a minimum remains held for the complete confirmation interval");
+    check(p.shouldPublish(MeterId::Alc, 0,
+                          1500 + MeterPoller::kMinimumConfirmationMs, true),
+          "a sustained ALC minimum becomes authoritative");
+
+    // The policy is deliberately not a family-wide meter smoother. Other
+    // readings, including forward power, keep their existing publication.
+    check(p.shouldPublish(MeterId::Power, 0, 2000, true),
+          "the minimum hold does not alter other Icom meters");
+
+    check(p.shouldPublish(MeterId::Swr, 80, 2050, false)
+              && p.shouldPublish(MeterId::Swr, 0, 2100, false),
+          "a model without the meter-profile facet keeps every SWR sample");
+
+    (void)p.shouldPublish(MeterId::Swr, 48, 2200, true);
+    check(!p.shouldPublish(MeterId::Swr, 0, 2250, true),
+          "a keyed SWR minimum can be held before an edge");
+    p.setTransmitting(false);
+    p.setTransmitting(true);
+    check(p.shouldPublish(MeterId::Swr, 0, 2300, true),
+          "a new keyed interval never inherits the previous transmission's hold");
+}
+
 // ---------------------------------------------------------------------------
 // Phase 5 — the model table
 // ---------------------------------------------------------------------------
@@ -304,6 +352,13 @@ static void testModelTable()
     check(mk2 && mk2->scopePoints == 475 && mk2->scopeMaxAmplitude == 160,
           "475 points, 0..160");
     check(mk2 && mk2->tuningMaxHz == 74'800'000ULL, "0.03 to 74.8 MHz");
+    check(ic705 && mk2
+              && profileFor(*ic705).meters.holdIsolatedTxMinimums
+              && profileFor(*mk2).meters.holdIsolatedTxMinimums,
+          "IC-705 and IC-7300MK2 enable their live-proven TX meter minimum hold");
+    check(ic9700 && !profileFor(*ic9700).meters.holdIsolatedTxMinimums
+              && !profileFor(unknownModel()).meters.holdIsolatedTxMinimums,
+          "IC-9700 and unknown Icoms do not borrow the TX meter minimum hold");
     check(ic7300 && mk2 && ic7300->civAddress != mk2->civAddress,
           "and it is a DIFFERENT CI-V address from the original — 0x94 vs 0xB6");
 
@@ -583,6 +638,7 @@ int main()
     testPollerInFlightTimeout();
     testPollerUserGuard();
     testPollerVisibilityIsImmediate();
+    testPolledTxMeterMinimumHold();
     testModelTable();
     testUnknownModelIsConservative();
     testCapabilityProfiles();

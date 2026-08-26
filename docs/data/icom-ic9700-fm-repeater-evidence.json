@@ -1,0 +1,90 @@
+{
+  "model": "IC-9700",
+  "civAddress": "A2",
+  "authority": {
+    "document": "IC-9700 CI-V Reference Guide (2019)",
+    "pages": [4, 5, 11],
+    "liveTrace": "docs/data/icom-ic9700-fm-repeater-live-trace.txt"
+  },
+  "scope": "Capability-gated readback only; the existing basic FM repeater UI and command paths are unchanged.",
+  "registers": [
+    {
+      "field": "repeaterOffset",
+      "read": "0C",
+      "write": "0D dd dd dd",
+      "encoding": "three little-endian packed-BCD bytes in 100 Hz units",
+      "validation": "all nibbles BCD; unsigned magnitude; direction is 0F",
+      "preservedTrace": "19:10:18.865-18.879 read and 19:10:21.433-21.472 write/read"
+    },
+    {
+      "field": "duplex",
+      "read": "0F",
+      "write": "0F value",
+      "values": {
+        "simplexWrite": "10",
+        "simplexReadback": "00",
+        "duplexMinus": "11",
+        "duplexPlus": "12"
+      },
+      "liveObservation": [
+        "19:10:21.500 TX 0F 10 followed by 19:10:21.533 RX 0F 00",
+        "19:10:24.502 TX 0F 11 followed by 19:10:24.567 RX 0F 11",
+        "19:10:26.844 TX 0F 12 followed by 19:10:26.899 RX 0F 12"
+      ]
+    },
+    {
+      "field": "accessSelector",
+      "readWrite": "16 5D value",
+      "values": {
+        "00": "off",
+        "01": "ctcss_tx",
+        "02": "ctcss_rx",
+        "03": "dtcs_txrx",
+        "06": "dtcs_tx",
+        "07": "ctcss_tx_dtcs_rx",
+        "08": "dtcs_tx_ctcss_rx",
+        "09": "ctcss_txrx"
+      },
+      "preservedTrace": "19:10:18.927 TX read followed by 19:10:18.933 RX 16 5D 00",
+      "valueProvenance": "00 is live-trace-attested; 01, 02, 03, 06, 07, 08, and 09 are guide-cited and codec-tested, but not live-trace-attested"
+    },
+    {
+      "field": "txCtcss",
+      "readWrite": "1B 00 pp dd dd",
+      "encoding": "packed BCD in 0.1 Hz units; reserved polarity byte must be zero",
+      "preservedTrace": "19:10:18.956 TX read followed by 19:10:18.959 RX 1B 00 00 10 35"
+    },
+    {
+      "field": "rxCtcss",
+      "readWrite": "1B 01 pp dd dd",
+      "encoding": "packed BCD in 0.1 Hz units; reserved polarity byte must be zero",
+      "preservedTrace": "19:10:18.986 TX read followed by 19:10:18.988 RX 1B 01 00 06 70"
+    },
+    {
+      "field": "dtcsCodeAndPolarity",
+      "readWrite": "1B 02 pp dd dd",
+      "encoding": "three-digit packed-BCD code; pp bit 4 reverses TX polarity and bit 0 reverses RX polarity",
+      "validation": "reject any pp bits outside 0x11 and every non-BCD nibble",
+      "preservedTrace": "19:10:19.016 TX read followed by 19:10:19.020 RX 1B 02 00 00 23"
+    },
+    {
+      "field": "reverseXfc",
+      "readWrite": "1C 02 value",
+      "values": {"00": "off", "01": "on"},
+      "semantics": "temporary cross-frequency check; never represented as a fourth duplex mode",
+      "preservedTrace": "19:10:30.950-31.700 records set/readback for both on and off"
+    },
+    {
+      "field": "transmitFrequency",
+      "read": "1C 03",
+      "encoding": "five-byte little-endian packed-BCD frequency",
+      "policy": "refresh after every confirmed PTT edge and record radio truth without changing the shared RX frequency presentation",
+      "preservedTrace": "19:10:19.075 TX read followed by 19:10:19.079 RX 1C 03 00 56 42 48 04"
+    }
+  ],
+  "crossModelContract": {
+    "IC-705": "Existing basic 0C/0D, 0F, 16 42, 1B 00 and 1C 02 behavior is unchanged; zero new 16 5D, 1B 01/02 or 1C 03 traffic.",
+    "IC-7300MK2": "Existing basic repeater behavior is unchanged; zero new 16 5D, 1B 01/02 or 1C 03 traffic.",
+    "unknownIcom": "No repeater profile and zero basic or extended repeater traffic."
+  }
+}

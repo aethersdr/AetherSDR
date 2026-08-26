@@ -143,6 +143,11 @@ inline constexpr std::size_t kFreqBytes = 5;
 [[nodiscard]] std::vector<std::uint8_t> encodeFreq(std::uint64_t hz,
                                                     std::size_t bytes = kFreqBytes);
 [[nodiscard]] std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd);
+// Use at command boundaries whose protocol shape declares an exact number of
+// frequency bytes. Generic decodeFreq() intentionally supports multiple Icom
+// models and therefore cannot enforce a command's arity by itself.
+[[nodiscard]] std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes);
 
 // A scope EDGE frequency, which can be NEGATIVE.
 //
@@ -356,6 +361,22 @@ inline constexpr std::uint8_t kTuner = 0x01;
 inline constexpr std::uint8_t kXfc   = 0x02;
 inline constexpr std::uint8_t kReadTxFreq = 0x03;
 }  // namespace control
+
+namespace repeaterAccess {
+inline constexpr std::uint8_t kFunction = 0x5D;
+}  // namespace repeaterAccess
+
+namespace repeaterTone {
+inline constexpr std::uint8_t kTxCtcss = 0x00;
+inline constexpr std::uint8_t kRxCtcss = 0x01;
+inline constexpr std::uint8_t kDtcs    = 0x02;
+}  // namespace repeaterTone
+
+struct RepeaterToneRegister {
+    int value = 0;
+    bool txReverse = false;
+    bool rxReverse = false;
+};
 
 namespace scope {
 inline constexpr std::uint8_t kWaveData    = 0x00;
@@ -619,6 +640,14 @@ enum class RepeaterOffsetDirection : std::uint8_t {
                                                            double toneHz);
 [[nodiscard]] std::optional<double> decodeRepeaterToneHz(
     std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
+[[nodiscard]] std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which);
+[[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);
