@@ -2842,3 +2842,27 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
+
+# CPack Configuration
+string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
+
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "FlexRadio transceiver client")
+set(CPACK_PACKAGE_DESCRIPTION "AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines.
+Built from the ground up with Qt6 and C++20,
+it speaks the SmartSDR protocol natively and aims to
+replicate the full SmartSDR experience.")
+set(CPACK_PACKAGE_CONTACT "Jeremy KK7GWY <info@aethersdr.com>")
+set(CPACK_PACKAGE_VENDOR "AetherSDR Development Team")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://www.aethersdr.com/")
+# Deb
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SECTION "hamradio")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+# RPM
+set(CPACK_RPM_PACKAGE_NAME ${PROJECT_NAME_LOWER})
+set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_AUTOREQ ON)
+
+include(CPack)
