@@ -48,6 +48,11 @@ def main() -> int:
     require("aboutToBeDestroyed" in globe and "Qt::DirectConnection" in globe,
             "context recreation must trigger synchronous GL cleanup")
 
+    unavailable = function_body(
+        globe, "void GlobeMapView::reportRendererUnavailable(")
+    require("qCWarning(lcPskReporterGlobe)" in unavailable,
+            "globe fallback reason must be recorded in categorized logs")
+
     cancel = function_body(globe, "void GlobeMapView::cancelTileRequests()")
     for operation in ("disconnect(", "reply->abort();", "reply->deleteLater();"):
         require(operation in cancel,

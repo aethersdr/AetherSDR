@@ -12,6 +12,7 @@
 #include <QHash>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QNetworkAccessManager>
@@ -38,6 +39,8 @@
 #include <limits>
 
 namespace AetherSDR {
+
+Q_LOGGING_CATEGORY(lcPskReporterGlobe, "aether.pskreporter.globe")
 
 namespace {
 constexpr int kAtlasZoom = 2;
@@ -272,12 +275,12 @@ void GlobeMapView::initializeGL()
         || !m_program->addShaderFromSourceCode(QOpenGLShader::Fragment,
                                                 kFragmentShader)
         || !m_program->link()) {
-        qWarning("PSK Reporter globe shader setup failed: %s",
-                 qPrintable(m_program->log()));
+        const QString shaderLog = m_program->log();
         m_program.reset();
         reportRendererUnavailable(
             tr("The globe renderer is unavailable because OpenGL shaders "
-               "could not be initialized."));
+               "could not be initialized."),
+            shaderLog);
         return;
     }
     buildSphereMesh();
@@ -816,12 +819,18 @@ void GlobeMapView::cancelTileRequests()
     }
 }
 
-void GlobeMapView::reportRendererUnavailable(const QString& reason)
+void GlobeMapView::reportRendererUnavailable(const QString& reason,
+                                             const QString& detail)
 {
     if (m_rendererUnavailableReported) {
         return;
     }
     m_rendererUnavailableReported = true;
+    if (detail.isEmpty()) {
+        qCWarning(lcPskReporterGlobe).noquote() << reason;
+    } else {
+        qCWarning(lcPskReporterGlobe).noquote() << reason << detail;
+    }
     QTimer::singleShot(0, this, [this, reason] {
         emit rendererUnavailable(reason);
     });

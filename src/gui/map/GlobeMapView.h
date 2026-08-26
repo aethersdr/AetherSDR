@@ -117,7 +117,8 @@ private:
     void requestNextTiles();
     void cancelTileRequests();
     void cleanupOpenGlResources();
-    void reportRendererUnavailable(const QString& reason);
+    void reportRendererUnavailable(const QString& reason,
+                                   const QString& detail = {});
     void scheduleAtlasUpload();
     void uploadAtlas();
     int detailZoomLevel() const;
