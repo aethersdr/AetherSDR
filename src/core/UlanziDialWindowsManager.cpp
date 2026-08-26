@@ -47,7 +47,6 @@ int hidKbdToLinuxKey(unsigned char keycode)
 
 constexpr const wchar_t* kProductMatch = L"Ulanzi Dial";
 
-
 } // namespace
 
 UlanziDialWindowsManager::UlanziDialWindowsManager(QObject* parent)

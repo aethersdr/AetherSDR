@@ -7,11 +7,21 @@
 namespace AetherSDR {
 namespace UlanziVariant {
 
-// Known Ulanzi OEM dial variants that enumerate over HID but CANNOT be driven
-// by the native HID backends: their vendor collection stays silent unless the
-// Ulanzi Studio app performs its activation handshake, and their keyboard and
-// mouse collections are captured by the OS.  Recognising them lets the mapper
-// say so instead of sitting on "Disconnected" forever.
+// Known Ulanzi OEM dial variants that enumerate over HID but cannot be driven
+// by the WINDOWS native HID backend: their vendor collection stays silent
+// unless the Ulanzi Studio app performs its activation handshake, and their
+// keyboard/consumer collections are captured by Windows.  Recognising them
+// lets the mapper say so instead of sitting on "Disconnected" forever.
+//
+// ⚠ SCOPE — this is a statement about the Windows backend ONLY, and a macOS
+// port must NOT adopt it wholesale.  macOS drives this exact VID/PID today:
+// UlanziDialMacOSManager pins 0xFFF1/0x0082 as its primary supported device
+// and opens it with kIOHIDOptionsTypeSeizeDevice, suppressing the consumer
+// usages that Windows leaves OS-captured — the capability Windows lacks.
+// Verified on real hardware 2026-08-25: the same physical D100H connects on
+// macOS (shared open, after the Input Monitoring grant — see #5247) while
+// failing to match at all on Windows.  A macOS consumer of this table should
+// use it for IDENTITY only, never as a drivability verdict.
 //
 // The trap that stalled #3485: the Windows PnP FriendlyName for these units IS
 // "Ulanzi Dial" (the BLE GAP name), but hidapi reports the HID string
@@ -30,7 +40,12 @@ struct KnownVariant {
 };
 
 inline constexpr KnownVariant kUnsupportedVariants[] = {
+    // Three independent sightings: live hid_enumerate on Windows, the
+    // reporter's BLE descriptor dump in #5126, and the bench unit behind
+    // UlanziDialMacOSManager's kUlanziVendorId/kUlanziProductId.
     {0xFFF1, 0x0082, "Ulanzi D100H (KEHWIN \"Dial_Lite\", BLE)"},
+    // UNVERIFIED against a physical unit in this round — identity comes from a
+    // single earlier live enumeration.  Confirm before relying on it.
     {0x2207, 0x0019, "Ulanzi D200 (Zkswe \"ulanzi\", USB)"},
 };
 
