@@ -1466,6 +1466,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.forwardPowerRequiresSmoothing = true;
     c.hasRadioDialLock = false;
     c.hasTuner = false;
+    c.hasTunerMemories = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
     // Both moot while hasRadioSideDsp is false — the host runs every filter

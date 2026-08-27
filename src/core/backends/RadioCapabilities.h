@@ -310,7 +310,8 @@ struct RadioCapabilities {
     // knowing the address selected by the client.
     bool hasNetworkConfigurationReadback = false;
     bool hasPrivateIpConnectionPolicy = false; // SmartSDR private-IP enforcement setting
-    bool hasTuner = false;         // antenna tuner / ATU
+    bool hasTuner = false;         // antenna tuner / ATU matching control
+    bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 

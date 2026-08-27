@@ -118,6 +118,8 @@
 #include "TestEventLoop.h"
 
 #include <QCoreApplication>
+#include <QFile>
+#include <QFileInfo>
 #include <QSignalSpy>
 
 #include <cstdio>
@@ -164,6 +166,22 @@ struct IcomCivBackendTestAccess {
     static std::uint8_t activeCivAddress(const IcomCivBackend& backend)
     {
         return backend.m_session ? backend.m_session->civAddress() : 0;
+    }
+
+    static bool queueTunerRead(IcomCivBackend& backend, std::uint8_t address,
+                               IcomCivScheduler::Priority priority)
+    {
+        return backend.queueTunerReadIfSupported(address, priority);
+    }
+
+    static bool sendTunerCommand(IcomCivBackend& backend, bool start)
+    {
+        return backend.sendTunerCommandIfSupported(start);
+    }
+
+    static std::size_t queuedRequestCount(const IcomCivBackend& backend)
+    {
+        return backend.m_civScheduler.m_queue.size();
     }
 };
 
@@ -665,6 +683,30 @@ int main(int argc, char** argv)
                   "Icom declares the profiled IC-9700 supply-voltage telemetry");
             check(!caps.hasMainFanTelemetry,
                   "Icom declares no Main Fan telemetry family-wide");
+            check(!caps.hasTuner,
+                  "IC-9700 publishes tuner controls as unavailable");
+            check(!caps.hasTunerMemories,
+                  "IC-9700 publishes tuner-memory controls as unavailable");
+            const std::size_t queuedBefore =
+                IcomCivBackendTestAccess::queuedRequestCount(backend);
+            check(!IcomCivBackendTestAccess::queueTunerRead(
+                      backend, 0xA2, IcomCivScheduler::Priority::Maintenance)
+                      && !IcomCivBackendTestAccess::queueTunerRead(
+                          backend, 0xA2, IcomCivScheduler::Priority::Control)
+                      && IcomCivBackendTestAccess::queuedRequestCount(backend)
+                          == queuedBefore,
+                  "IC-9700 suppresses startup and periodic tuner reads");
+            check(!IcomCivBackendTestAccess::sendTunerCommand(backend, true)
+                      && !IcomCivBackendTestAccess::sendTunerCommand(backend, false),
+                  "IC-9700 suppresses ordinary tuner start and bypass writes");
+            QSignalSpy tunerErrorSpy(&backend, &IRadioBackend::extensionError);
+            backend.invokeExtension(QStringLiteral("icom"),
+                                    QStringLiteral("tuner.start"), 9700, {});
+            check(tunerErrorSpy.count() == 1
+                      && tunerErrorSpy.first().at(0).toULongLong() == 9700
+                      && tunerErrorSpy.first().at(1).toString()
+                          == QStringLiteral("antenna tuner unsupported"),
+                  "IC-9700 rejects the tuner extension before radio I/O");
             check(caps.speechProcessorLevelMaximum == 100
                       && caps.speechProcessorLabel == QStringLiteral("COMP"),
                   "IC-9700 alone declares the continuous COMP presentation");
@@ -701,6 +743,15 @@ int main(int argc, char** argv)
                       "IC-7300MK2 retains the legacy PROC presentation");
                 check(caps.fmDtcsCodes.isEmpty(),
                       "Icom models without documented DTCS do not activate controls");
+                check(caps.hasTuner,
+                      "evidenced sibling Icom models retain tuner control");
+                check(!caps.hasTunerMemories,
+                      "Icom tuner support does not invent Flex ATU memories");
+                check(IcomCivBackendTestAccess::queueTunerRead(
+                          backend, sibling->civAddress,
+                          IcomCivScheduler::Priority::Maintenance)
+                          && IcomCivBackendTestAccess::sendTunerCommand(backend, true),
+                      "evidenced sibling profiles retain accepted tuner read/write paths");
             }
         }
 
@@ -798,6 +849,23 @@ int main(int argc, char** argv)
         }
     }
 
+    // The retired socket fixture cannot reach connect-burst and timer call
+    // sites in the default test graph. Pair the behavioral helper assertions
+    // above with a narrow source-contract pin so deleting either production
+    // wiring edge, or bypassing the guarded ordinary write path, fails CI.
+    {
+        const QFileInfo testSource(QString::fromUtf8(__FILE__));
+        QFile backendSource(testSource.dir().filePath(
+            QStringLiteral("../src/core/backends/icom/IcomCivBackend.cpp")));
+        check(backendSource.open(QIODevice::ReadOnly),
+              "Icom backend source is available for the narrow wiring contract");
+        const QByteArray source = backendSource.readAll();
+        check(source.count("queueTunerReadIfSupported(") == 3,
+              "startup and periodic tuner reads both use the guarded helper");
+        check(source.count("sendTunerCommandIfSupported(") == 2,
+              "the ordinary setAtu path uses the guarded tuner-write helper");
+    }
+
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
     {
         QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
@@ -836,6 +904,9 @@ int main(int argc, char** argv)
         check(caps.txPowerBands.isEmpty(),
               "Sim explicitly leaves per-band TX power limits empty");
         check(!caps.hasDaxStreams, "Sim declares hasDaxStreams=false");
+        check(!model.transmitModel().hasTuner()
+                  && !model.transmitModel().hasTunerMemories(),
+              "connected Sim propagates tuner and memory capabilities to the transmit model");
         check(!caps.hasExtendedDsp, "Sim declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
         check(!caps.hasRadioSideWaterfallAutoBlack,
@@ -1009,6 +1080,9 @@ int main(int argc, char** argv)
         check(relayFired,
               "relay: capabilitiesChanged fired on the disconnect edge");
         check(!model.isConnected(), "disconnected from the synthetic demo radio");
+        check(model.transmitModel().hasTuner()
+                  && model.transmitModel().hasTunerMemories(),
+              "disconnect restores permissive tuner and memory presentation");
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(uiWouldShow(model.isConnected(), caps.hasProfiles),
@@ -1262,6 +1336,15 @@ int main(int argc, char** argv)
               "Sim explicitly omits TX cutoff controls because it is RX-only");
         check(!icomCaps.hasTxFilterControls,
               "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(!icomCaps.hasTuner,
+              "an unidentified Icom cannot surface unverified tuner control");
+        check(!fresh.hasTunerMemories,
+              "RadioCapabilities defaults tuner memories to unavailable");
+        check(flexCaps.hasTunerMemories,
+              "Flex explicitly retains radio-side ATU memories");
+        check(!hl2Caps.hasTunerMemories && !simCaps.hasTunerMemories
+                  && !icomCaps.hasTunerMemories,
+              "non-Flex backends explicitly omit Flex-style ATU memories");
         check(uiWouldShow(/*connected=*/false, /*declared=*/false),
               "disconnected: the TX cutoff editor remains permissive");
 

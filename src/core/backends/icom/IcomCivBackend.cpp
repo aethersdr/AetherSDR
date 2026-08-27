@@ -393,7 +393,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // the command; family membership alone is not protocol evidence.
     c.hasRadioDialLock = profile.supports(IcomFeature::DialLock);
 
-    // THE ATU BUTTON IS REACHABLE AGAIN.
+    // THE ATU MATCHING CAPABILITY IS PROFILE-SPECIFIC.
     //
     // `1C 01` drives an EXTERNAL AH-705 and there is no command to ask whether
     // one is attached, so this capability is genuinely unanswerable from the
@@ -403,10 +403,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // its tuner state (1C 01 read) well enough for the button to tell the truth
     // once a cycle has run.
     //
-    // So: offered, and honest about the outcome rather than about the hardware.
-    // A start on a radio with no tuner reports NONE and the button returns to
-    // rest, which is a better answer than a control that is not there.
-    c.hasTuner = m.hasTransmit;
+    // Preserve that established surface for the IC-705 and IC-7300MK2 only:
+    // their exact profiles document supported tuner command paths. The
+    // IC-9700 and unprofiled radios fail closed, while the shared UI keeps the
+    // controls visible and presents them as unavailable.
+    c.hasTuner = m.hasTransmit && profile.hasTunerControl;
+    // The shared MEM control is a separate capability. CI-V 1C 01 exposes
+    // matching state, not Flex's client-selectable memory recall/database.
+    c.hasTunerMemories = false;
 
     // The radio chooses its own modulation input from its own menu (MOD Input
     // > DATA MOD, which must be WLAN for us to be heard at all). A client
@@ -1077,7 +1081,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                              tuneOffset::kXitOnOff})
         queueStartupRead(cmdReadTuneOffset(m_session->civAddress(), sub));
-    queueStartupRead(cmdReadTuner(m_session->civAddress()));
+    queueTunerReadIfSupported(m_session->civAddress(),
+                              IcomCivScheduler::Priority::Maintenance);
 
 }
 
@@ -4309,16 +4314,38 @@ void IcomCivBackend::setVox(bool on, int level, int delayMs)
 // THE ANTENNA TUNER, and it keys.
 //
 // `1C 01 02` starts a matching cycle on an EXTERNAL AH-705; `1C 01 00` bypasses.
-// There is no command to ask whether a tuner is attached, so a start on a radio
-// with none is a request that simply does nothing — which is why
-// capabilities().hasTuner stays operator-driven rather than claiming knowledge
-// the protocol cannot give us.
+// There is no command to ask whether an external tuner is attached, so only an
+// exact model profile with a documented tuner path may send this command. The
+// IC-9700 has no such path.
 void IcomCivBackend::setAtu(bool start)
 {
+    if (!sendTunerCommandIfSupported(start)) {
+        qCWarning(lcIcomTx)
+            << "refusing antenna-tuner command: unsupported by active Icom profile";
+    }
+}
+
+bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
+{
+    if (!m_model || !profileFor(*m_model).hasTunerControl) {
+        return false;
+    }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
                                 start ? 0x02 : 0x00));
     // sendUserCommand queues a readback after the radio has applied the write;
     // that confirmation is also what lets the transient tuning state settle.
+    return true;
+}
+
+bool IcomCivBackend::queueTunerReadIfSupported(
+    std::uint8_t address, IcomCivScheduler::Priority priority)
+{
+    if (!m_model || !profileFor(*m_model).hasTunerControl) {
+        return false;
+    }
+    const std::vector<std::uint8_t> frame = cmdReadTuner(address);
+    queueRead(frame, semanticKey(frame), priority);
+    return true;
 }
 
 void IcomCivBackend::setSliceSquelch(int, bool on, int level)
@@ -5620,6 +5647,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
         // an operator with an AH-705 can reach it without the TUNE button
         // running an ATU that may not be attached.
+        if (!m_model || !profileFor(*m_model).hasTunerControl) {
+            emit extensionError(requestId, QStringLiteral("antenna tuner unsupported"));
+            return;
+        }
         sendUserCommand(buildFrameSub(m_session ? m_session->civAddress() : 0xA4,
                                       cmd::kControl, control::kTuner,
                                       std::array<std::uint8_t, 1>{0x02}));
@@ -6099,7 +6130,7 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadFunction(addr, fn));
         }
         queueControl(cmdReadAttenuator(addr));
-        queueControl(cmdReadTuner(addr));
+        queueTunerReadIfSupported(addr, IcomCivScheduler::Priority::Control);
         for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                                  tuneOffset::kXitOnOff}) {
             queueControl(cmdReadTuneOffset(addr, sub));

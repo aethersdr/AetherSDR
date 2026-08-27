@@ -51,13 +51,31 @@ static QLabel* makeIndicator(const QString& text)
     return lbl;
 }
 
-static void setIndicatorActive(QLabel* lbl, bool active, const QColor& color = QColor(0x00, 0xc0, 0x40))
+enum class IndicatorState {
+    Unavailable,
+    Inactive,
+    Active,
+};
+
+static void setIndicatorState(QLabel* lbl, IndicatorState state,
+                              const QColor& color = QColor(0x00, 0xc0, 0x40))
 {
-    if (active) {
+    lbl->setEnabled(state != IndicatorState::Unavailable);
+    switch (state) {
+    case IndicatorState::Unavailable:
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            lbl,
+            "QLabel { color: {{color.text.disabled}}; font-size: 9px; font-weight: bold; }");
+        break;
+    case IndicatorState::Inactive:
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            lbl,
+            "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
+        break;
+    case IndicatorState::Active:
         lbl->setStyleSheet(
             QString("QLabel { color: %1; font-size: 9px; font-weight: bold; }").arg(color.name()));
-    } else {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
+        break;
     }
 }
 
@@ -241,6 +259,15 @@ void TxApplet::buildUI()
             "QPushButton:hover { background: #204060; }"
             "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
             "border: 1px solid #2a3040; }";
+        // Put :checked before the shared :disabled rule so a checked control
+        // whose capability disappears still renders unavailable, not active.
+        const QString tunerBtnStyle = QStringLiteral(
+                "QPushButton:checked {"
+                " background: {{color.toggle.success.background.checked}};"
+                " color: {{color.toggle.success.foreground.checked}};"
+                " border: 1px solid {{color.toggle.success.border.checked}};"
+                " }")
+            + QString::fromLatin1(btnStyle);
 
         m_tuneBtn = new QPushButton("TUNE");
         markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
@@ -268,7 +295,8 @@ void TxApplet::buildUI()
 
         m_atuBtn = new QPushButton("ATU");
         markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
-        m_atuBtn->setStyleSheet(btnStyle);
+        m_atuBtn->setCheckable(true);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_atuBtn, tunerBtnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setAccessibleName("ATU tune");
@@ -282,7 +310,7 @@ void TxApplet::buildUI()
         row->addWidget(m_atuBtn);
 
         m_memBtn = new QPushButton("MEM");
-        m_memBtn->setStyleSheet(btnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_memBtn, tunerBtnStyle);
         m_memBtn->setCheckable(true);
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_memBtn->setFixedHeight(22);
@@ -408,6 +436,13 @@ void TxApplet::buildUI()
     // Mirrors SmartSDR's per-frequency toggle. (#1993)
     connect(m_atuBtn, &QPushButton::clicked, this, [this]() {
         if (!m_model) return;
+        // A checkable button provides the maintainer-defined active visual, but
+        // radio readback remains authoritative. Undo Qt's optimistic toggle
+        // immediately; syncAtuIndicators() applies the reported atuEnabled.
+        {
+            const QSignalBlocker blocker(m_atuBtn);
+            m_atuBtn->setChecked(m_model->atuEnabled());
+        }
         const auto status = m_model->atuStatus();
         const bool tuned = (status == ATUStatus::Successful || status == ATUStatus::OK);
         const double curFreq = m_model->transmitFreq();
@@ -506,8 +541,15 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     connect(m_model, &TransmitModel::hasTunerChanged, this, [this](bool present) {
         m_radioHasTuner = present;
         updateAtuAvailability();
+        syncAtuIndicators();
     });
     m_radioHasTuner = m_model->hasTuner();
+    connect(m_model, &TransmitModel::hasTunerMemoriesChanged, this, [this](bool present) {
+        m_radioHasTunerMemories = present;
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
+    m_radioHasTunerMemories = m_model->hasTunerMemories();
 
     syncFromModel();
     syncAtuIndicators();
@@ -518,9 +560,15 @@ void TxApplet::updateAtuAvailability()
 {
     if (!m_atuBtn || !m_memBtn)
         return;
-    const bool enabled = m_radioHasTuner && !m_tgxlOperate;
-    m_atuBtn->setEnabled(enabled);
-    m_memBtn->setEnabled(enabled);
+    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate;
+    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate;
+    m_atuBtn->setEnabled(atuEnabled);
+    m_memBtn->setEnabled(memoriesEnabled);
+    // The ATU context menu contains only memory operations. Keep the shared
+    // ATU button visible, but do not expose Flex-only actions on other radios.
+    m_atuBtn->setContextMenuPolicy(m_radioHasTunerMemories
+                                       ? Qt::CustomContextMenu
+                                       : Qt::NoContextMenu);
 
     // The radio-has-no-tuner reason is checked FIRST because it is the more
     // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
@@ -528,11 +576,15 @@ void TxApplet::updateAtuAvailability()
     // looking at the wrong box.
     QString tip;
     if (!m_radioHasTuner)
-        tip = tr("This radio has no antenna tuner");
+        tip = tr("Antenna tuner controls are unavailable for this radio");
     else if (m_tgxlOperate)
         tip = tr("Disabled — TGXL is in OPERATE mode");
     m_atuBtn->setToolTip(tip);
-    m_memBtn->setToolTip(tip);
+    if (!m_radioHasTunerMemories) {
+        m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else {
+        m_memBtn->setToolTip(tip);
+    }
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -597,31 +649,47 @@ void TxApplet::syncAtuIndicators()
         m_atuTunedFreqMhz = -1.0;
     }
 
+    const auto tunerIndicatorState = [this](bool active) {
+        if (!m_radioHasTuner) {
+            return IndicatorState::Unavailable;
+        }
+        return active ? IndicatorState::Active : IndicatorState::Inactive;
+    };
+
     // Success — green when tune was successful
-    setIndicatorActive(m_successInd,
-        status == ATUStatus::Successful || status == ATUStatus::OK);
+    setIndicatorState(m_successInd,
+        tunerIndicatorState(status == ATUStatus::Successful || status == ATUStatus::OK));
 
     // Byp — orange when in bypass
-    setIndicatorActive(m_bypInd,
-        status == ATUStatus::Bypass || status == ATUStatus::ManualBypass,
+    setIndicatorState(m_bypInd,
+        tunerIndicatorState(status == ATUStatus::Bypass
+                            || status == ATUStatus::ManualBypass),
         QColor(0xd0, 0x90, 0x00));
 
     // Mem — green when using memory
-    setIndicatorActive(m_memInd, m_model->usingMemory());
+    const IndicatorState memoryState = !m_radioHasTunerMemories
+        ? IndicatorState::Unavailable
+        : (m_model->usingMemory() ? IndicatorState::Active : IndicatorState::Inactive);
+    setIndicatorState(m_memInd, memoryState);
 
     // APD indicators — mutually exclusive states, all off when APD disabled
     // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
     const bool apdOn  = m_model->apdEnabled();
     const bool eqActv = m_model->apdEqualizerActive();
     const bool config = m_model->apdConfigurable();
-    setIndicatorActive(m_activeInd, apdOn && eqActv);
-    setIndicatorActive(m_availInd,  apdOn && !eqActv && config);
-    setIndicatorActive(m_calInd,    apdOn && !eqActv && !config);
+    setIndicatorState(m_activeInd, apdOn && eqActv
+        ? IndicatorState::Active : IndicatorState::Inactive);
+    setIndicatorState(m_availInd, apdOn && !eqActv && config
+        ? IndicatorState::Active : IndicatorState::Inactive);
+    setIndicatorState(m_calInd, apdOn && !eqActv && !config
+        ? IndicatorState::Active : IndicatorState::Inactive);
 
-    // MEM button — sync checked state
+    // ATU / MEM buttons — active styling follows radio readback only.
     {
         m_updatingFromModel = true;
+        const QSignalBlocker atuBlocker(m_atuBtn);
         const QSignalBlocker blocker(m_memBtn);
+        m_atuBtn->setChecked(m_model->atuEnabled());
         m_memBtn->setChecked(m_model->memoriesEnabled());
         m_updatingFromModel = false;
     }
@@ -727,12 +795,16 @@ void TxApplet::showAtuContextMenu(const QPoint& pos)
 
     auto* preTune = menu.addAction(QString::fromUtf8("Pre-tune bands\xE2\x80\xA6"));
     const bool memOn = m_model && m_model->memoriesEnabled();
-    preTune->setEnabled(memOn);
-    if (!memOn)
+    preTune->setEnabled(m_radioHasTunerMemories && memOn);
+    if (!m_radioHasTunerMemories) {
+        preTune->setToolTip("ATU memory controls are unavailable for this radio.");
+    } else if (!memOn) {
         preTune->setToolTip("Enable MEM before running the pre-tune sweep.");
+    }
     connect(preTune, &QAction::triggered, this, &TxApplet::openPreTuneDialog);
 
     auto* clearMem = menu.addAction(QString::fromUtf8("Clear ATU memories\xE2\x80\xA6"));
+    clearMem->setEnabled(m_radioHasTunerMemories);
     connect(clearMem, &QAction::triggered,
             this, &TxApplet::confirmAndClearAtuMemories);
 

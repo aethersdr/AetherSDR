@@ -184,6 +184,9 @@ private:
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
     void reassertPanPreampWireStep(int step);
+    bool sendTunerCommandIfSupported(bool start);
+    bool queueTunerReadIfSupported(std::uint8_t address,
+                                   IcomCivScheduler::Priority priority);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a
