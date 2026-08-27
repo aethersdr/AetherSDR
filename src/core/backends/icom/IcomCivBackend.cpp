@@ -396,7 +396,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // without sending Flex `spot add` commands into this backend.
     c.alwaysUseClientSideSpots = true;
     c.hasRadioSideWaterfallAutoBlack = false;
-    c.persistsMemories = false;
+    c.persistsMemories = m_model && m_model->civAddress == 0xA2;
+    c.canWriteMemories = false;
+    c.canApplyMemories = false;
+    c.canRefreshMemories = c.persistsMemories;
 
     // A one-way trip over WiFi: 0x18 0x00 powers the radio off, which drops the
     // WLAN interface, so the 0x18 0x01 that would bring it back has no path.
@@ -712,6 +715,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    finishMemoryRefresh(false);
     m_tuneTimer->stop();
     ++m_sessionGeneration;
     m_civRecoveryStartedAtMs = 0;
@@ -970,6 +974,79 @@ void IcomCivBackend::sendConnectReadBurst()
                              tuneOffset::kXitOnOff})
         queueStartupRead(cmdReadTuneOffset(m_session->civAddress(), sub));
     queueStartupRead(cmdReadTuner(m_session->civAddress()));
+
+    // Read-only IC-9700 memory snapshot. Keep this 297-request bulk sweep last
+    // so it cannot delay adoption of live attenuator, RIT/XIT, or tuner state.
+    // All requests share command 1A 00, so their three-byte band/channel
+    // address is also the scheduler's reply discriminator. That prevents a
+    // late answer for one slot from completing the following slot's transaction.
+    queueIc9700MemorySnapshot();
+}
+
+void IcomCivBackend::queueIc9700MemorySnapshot()
+{
+    if (!m_session || !m_model || m_model->civAddress != 0xA2) {
+        return;
+    }
+    for (int band = 1; band <= 3; ++band) {
+        for (int channel = 1; channel <= 99; ++channel) {
+            const std::vector<std::uint8_t> frame =
+                cmdReadIc9700Memory(m_session->civAddress(), band, channel);
+            const std::optional<CivFrame> parsed = parseFrame(frame);
+            if (!parsed || parsed->data.size() != 3) {
+                continue;
+            }
+            queueRead(frame,
+                      "memory." + std::to_string(band) + "." + std::to_string(channel),
+                      IcomCivScheduler::Priority::Maintenance, 0, parsed->data);
+        }
+    }
+}
+
+void IcomCivBackend::refreshMemories()
+{
+    if (m_memoryRefreshActive || !m_session || !m_model
+        || m_model->civAddress != 0xA2) {
+        return;
+    }
+    constexpr int kMemorySlots = 297;
+    m_memoryRefreshActive = true;
+    m_memoryRefreshReplies.clear();
+    const quint64 generation = ++m_memoryRefreshGeneration;
+    emit memoryRefreshStarted(kMemorySlots);
+    queueIc9700MemorySnapshot();
+    QTimer::singleShot(30'000, this, [this, generation]() {
+        if (m_memoryRefreshActive && generation == m_memoryRefreshGeneration) {
+            finishMemoryRefreshWhenDrained(generation);
+        }
+    });
+}
+
+void IcomCivBackend::finishMemoryRefreshWhenDrained(quint64 generation)
+{
+    if (!m_memoryRefreshActive || generation != m_memoryRefreshGeneration) {
+        return;
+    }
+    // A timed-out UI operation must not enable a second sweep while requests
+    // from the first one can still produce replies. Wait through queued,
+    // in-flight, and late-reply-grace entries before declaring it incomplete.
+    if (m_civScheduler.hasPendingKeyPrefix("memory.", nowMs())) {
+        QTimer::singleShot(500, this, [this, generation]() {
+            finishMemoryRefreshWhenDrained(generation);
+        });
+        return;
+    }
+    finishMemoryRefresh(false);
+}
+
+void IcomCivBackend::finishMemoryRefresh(bool success)
+{
+    if (!m_memoryRefreshActive) {
+        return;
+    }
+    constexpr int kMemorySlots = 297;
+    m_memoryRefreshActive = false;
+    emit memoryRefreshFinished(success, m_memoryRefreshReplies.size(), kMemorySlots);
 }
 
 // The radio answered 0x19 0x00. Decide whether to believe it, and where that
@@ -1883,6 +1960,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 return;
             }
             m_repeaterToneHz = *toneHz;
+            if (extendedFmReadbackProfileFor(m_model)) {
+                publishExtendedRepeaterState();
+                return;
+            }
             SliceDelta d;
             d.fmToneValue = *toneHz;
             emit sliceChanged(sliceId(), d);
@@ -1915,6 +1996,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             m_repeaterDtcsTxReverse = value->txReverse;
             m_repeaterDtcsRxReverse = value->rxReverse;
         }
+        publishExtendedRepeaterState();
         return;
     }
 
@@ -2082,11 +2164,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 return;
             }
             m_repeaterAccess = *access;
-            if (ctcssRxProfileFor(m_model)) {
-                SliceDelta d;
-                d.fmToneMode = mode;
-                emit sliceChanged(sliceId(), d);
-            }
+            publishExtendedRepeaterState();
             return;
         }
         // WHICH OF THE THREE TRANSMIT PASSBANDS IS IN CIRCUIT. Not a passband
@@ -2291,6 +2369,90 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     case cmd::kSetting: {
         if (!frame.hasSub)
             return;
+        if (frame.sub == 0x00) {
+            if (!m_model || m_model->civAddress != 0xA2) {
+                return;
+            }
+            const std::optional<IcomMemoryChannel> memory =
+                decodeIc9700Memory(frame.data);
+            if (!memory) {
+                qCWarning(lcIcomScheduler)
+                    << "discarded malformed IC-9700 memory record"
+                    << QByteArray(reinterpret_cast<const char*>(frame.data.data()),
+                                  static_cast<qsizetype>(frame.data.size())).toHex(' ');
+                return;
+            }
+            const int index = ic9700MemoryIndex(memory->band, memory->channel);
+            if (index < 0) {
+                return;
+            }
+            if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
+                m_memoryRefreshReplies.insert(index);
+                emit memoryRefreshProgress(m_memoryRefreshReplies.size(), 297);
+                if (m_memoryRefreshReplies.size() == 297) {
+                    finishMemoryRefresh(true);
+                }
+            }
+            MemoryDelta delta;
+            delta.index = index;
+            if (!memory->occupied) {
+                delta.removed = true;
+                emit memoryChanged(delta);
+                return;
+            }
+
+            static const std::array<const char*, 3> kBandNames{
+                "144 MHz", "430 MHz", "1.2 GHz"};
+            delta.group = QString::fromLatin1(kBandNames[static_cast<std::size_t>(memory->band - 1)]);
+            delta.channel = QStringLiteral("%1").arg(
+                memory->channel, 2, 10, QLatin1Char('0'));
+            delta.freq = static_cast<double>(memory->frequencyHz) / 1.0e6;
+            delta.name = QString::fromLatin1(memory->name);
+            delta.mode = QString::fromStdString(memory->mode);
+            delta.nativeFilter = memory->filter;
+            delta.dataMode = memory->dataMode;
+            switch (memory->duplex) {
+            case 1: delta.offsetDir = QStringLiteral("down"); break;
+            case 2: delta.offsetDir = QStringLiteral("up"); break;
+            default: delta.offsetDir = QStringLiteral("simplex"); break;
+            }
+            delta.repeaterOffset = static_cast<double>(memory->offsetHz) / 1.0e6;
+            // TX and RX tones are independent stored fields. Publish both
+            // regardless of which tone mode currently consumes them.
+            delta.toneValue = memory->txToneHz;
+            delta.rxToneValue = memory->rxToneHz;
+            delta.dtcsCode = memory->dtcsCode;
+            delta.dtcsTxReverse = memory->dtcsTxReverse;
+            delta.dtcsRxReverse = memory->dtcsRxReverse;
+            switch (memory->toneMode) {
+            case 1:
+                delta.toneMode = QStringLiteral("ctcss_tx");
+                break;
+            case 2:
+                delta.toneMode = QStringLiteral("ctcss_rx");
+                break;
+            case 3:
+                delta.toneMode = QStringLiteral("dtcs_txrx");
+                break;
+            case 6:
+                delta.toneMode = QStringLiteral("dtcs_tx");
+                break;
+            case 7:
+                delta.toneMode = QStringLiteral("ctcss_tx_dtcs_rx");
+                break;
+            case 8:
+                delta.toneMode = QStringLiteral("dtcs_tx_ctcss_rx");
+                break;
+            case 9:
+                delta.toneMode = QStringLiteral("ctcss_txrx");
+                break;
+            default:
+                delta.toneMode = QStringLiteral("off");
+                break;
+            }
+            emit memoryChanged(delta);
+            return;
+        }
         // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its
         // meaning depends on the mode: code 40 is 3.6 kHz in SSB, out of range
         // in RTTY, and 8.2 kHz in AM. Decoding it against the mode the radio is
@@ -2882,11 +3044,7 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
     case cmd::kDuplex:
         return cmdReadRepeaterOffsetDirection(addr);
     case cmd::kTone:
-        if (parsed->hasSub && (parsed->sub == repeaterTone::kTxCtcss
-                               || parsed->sub == repeaterTone::kRxCtcss)) {
-            return cmdReadRepeaterToneRegister(addr, parsed->sub);
-        }
-        break;
+        return repeaterToneConfirmationForWrite(addr, *parsed);
     case cmd::kVfoMode:
         return cmdReadVfoMode(addr);
     case cmd::kLevel:
@@ -2923,7 +3081,8 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
 void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
                                const std::string& key,
                                IcomCivScheduler::Priority priority,
-                               qint64 notBeforeMs)
+                               qint64 notBeforeMs,
+                               std::vector<std::uint8_t> replyDataPrefix)
 {
     const std::optional<CivFrame> parsed = parseFrame(frame);
     if (!parsed) {
@@ -2937,6 +3096,7 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
     request.replyCmd = parsed->cmd;
     request.replyHasSub = parsed->hasSub;
     request.replySub = parsed->sub;
+    request.replyDataPrefix = std::move(replyDataPrefix);
     request.notBeforeMs = notBeforeMs;
     m_civScheduler.enqueue(std::move(request), nowMs());
 }
@@ -3936,6 +4096,112 @@ void IcomCivBackend::setSliceFmRepeaterOffset(int, double hz)
     m_repeaterOffsetHz = roundedHz;
     sendUserCommand(cmdSetRepeaterOffset(m_session ? m_session->civAddress() : 0xA4,
                                          roundedHz));
+}
+
+void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details)
+{
+    const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
+    if (!fm || !m_session) {
+        IRadioBackend::applyMemoryRecallDetails(details);
+        return;
+    }
+
+    const QString normalized = details.toneMode.trimmed().toLower();
+    static const std::array<std::pair<std::string_view, std::uint8_t>, 8> kAccessValues{{
+        {"off", 0x00}, {"ctcss_tx", 0x01}, {"ctcss_rx", 0x02},
+        {"dtcs_txrx", 0x03}, {"dtcs_tx", 0x06},
+        {"ctcss_tx_dtcs_rx", 0x07}, {"dtcs_tx_ctcss_rx", 0x08},
+        {"ctcss_txrx", 0x09},
+    }};
+    const auto access = std::ranges::find_if(kAccessValues, [&normalized](const auto& item) {
+        return normalized == QString::fromLatin1(
+            item.first.data(), static_cast<qsizetype>(item.first.size()));
+    });
+    if (access == kAccessValues.end()) {
+        qCWarning(lcIcomCiv) << "refusing unsupported memory tone mode" << details.toneMode;
+        return;
+    }
+
+    const std::uint8_t addr = m_session->civAddress();
+    if (details.filterPreset < 1 || details.filterPreset > 3
+        || !std::isfinite(details.offsetHz) || details.offsetHz < 0.0
+        || details.offsetHz > 99'999'900.0) {
+        qCWarning(lcIcomCiv) << "refusing invalid native memory recall fields";
+        return;
+    }
+    RepeaterOffsetDirection wireDirection = RepeaterOffsetDirection::Simplex;
+    if (details.direction == QLatin1String("up")) {
+        wireDirection = RepeaterOffsetDirection::Up;
+    } else if (details.direction == QLatin1String("down")) {
+        wireDirection = RepeaterOffsetDirection::Down;
+    } else if (details.direction != QLatin1String("simplex")) {
+        qCWarning(lcIcomCiv) << "refusing invalid native memory direction" << details.direction;
+        return;
+    }
+    const auto frames = buildIc9700MemoryRecallFrames(
+        addr, m_mode, details.dataMode, details.filterPreset, wireDirection,
+        static_cast<int>(std::lround(details.offsetHz / 100.0) * 100.0),
+        access->second, details.txToneHz, details.rxToneHz, details.dtcsCode,
+        details.dtcsTxReverse, details.dtcsRxReverse);
+    if (!frames) {
+        qCWarning(lcIcomCiv) << "refusing invalid native memory tone fields";
+        return;
+    }
+    m_filter = details.filterPreset;
+    m_dataMode = details.dataMode;
+    m_repeaterOffsetHz = static_cast<int>(std::lround(details.offsetHz / 100.0) * 100.0);
+    m_repeaterOffsetDirection = wireDirection;
+    m_repeaterAccess = access->second;
+    for (const std::vector<std::uint8_t>& frame : *frames) {
+        sendUserCommand(frame);
+    }
+}
+
+void IcomCivBackend::publishExtendedRepeaterState()
+{
+    if (!extendedFmReadbackProfileFor(m_model) || !m_repeaterAccess) {
+        return;
+    }
+    SliceDelta delta;
+    delta.fmToneMode = QString::fromLatin1(
+        repeaterAccessModeName(*m_repeaterAccess));
+    switch (*m_repeaterAccess) {
+    case 0x02: // RX CTCSS
+        if (m_repeaterRxToneHz) {
+            delta.fmToneRxValue = *m_repeaterRxToneHz;
+        }
+        break;
+    case 0x03: // DTCS TX/RX
+    case 0x06: // DTCS TX
+        if (m_repeaterDtcsCode) {
+            delta.fmToneValueText = QStringLiteral("%1").arg(
+                *m_repeaterDtcsCode, 3, 10, QLatin1Char('0'));
+        }
+        break;
+    case 0x08: // DTCS TX, CTCSS RX
+        if (m_repeaterDtcsCode) {
+            delta.fmToneValueText = QStringLiteral("%1").arg(
+                *m_repeaterDtcsCode, 3, 10, QLatin1Char('0'));
+        }
+        if (m_repeaterRxToneHz) {
+            delta.fmToneRxValue = *m_repeaterRxToneHz;
+        }
+        break;
+    case 0x09: // CTCSS TX/RX
+        if (m_repeaterToneHz) {
+            delta.fmToneValue = *m_repeaterToneHz;
+        }
+        if (m_repeaterRxToneHz) {
+            delta.fmToneRxValue = *m_repeaterRxToneHz;
+        }
+        break;
+    default:
+        if (m_repeaterToneHz) {
+            delta.fmToneValue = *m_repeaterToneHz;
+        }
+        break;
+    }
+    emit sliceChanged(sliceId(), delta);
 }
 
 void IcomCivBackend::setTransmitFrequencyCheck(bool on)

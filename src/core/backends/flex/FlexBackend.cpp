@@ -262,6 +262,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // the client must NOT keep a local bank for a Flex — two stores that both
     // believe they are authoritative would fight over slot indices.
     caps.persistsMemories = true;
+    caps.canWriteMemories = true;
+    caps.canApplyMemories = true;
     // The radio persists its own operating state (frequency, mode, filters,
     // power) and restores it via GUIClientID session restore — the client must
     // never re-assert any of it (Constitution II/III; the #2465/#4126/#4261

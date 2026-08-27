@@ -676,9 +676,12 @@ captures from our own radio.
 ## 9. Explicitly out of scope for phase 1
 
 - **IQ.** It does not exist on this radio. Not deferred — absent.
-- **Memory channels.** The radio stores 99 in 100 groups (`1A 00`) and the decode
-  is large and fiddly. Ship `persistsMemories = false` (client-side bank) and
-  revisit.
+- **Writable memory channels.** Initial IC-9700 support reads the 99 ordinary
+  channels in each of its three RF-band groups with `1A 00`, exposes occupied
+  channels through the shared memory model, and permits tuning to the cached
+  channel state. Writing, adding, deleting, scan-edge, call, and satellite
+  memories remain deferred. Other Icom models continue to use the client-side
+  bank until their own published record layouts are implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.

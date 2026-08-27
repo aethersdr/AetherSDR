@@ -269,8 +269,12 @@ QList<MemoryCsvRecord> currentExportRecords(const QMap<int, MemoryEntry>& memori
     return records;
 }
 
-QString selectionHintText()
+QString selectionHintText(bool writable)
 {
+    if (!writable) {
+        return QStringLiteral("Tip: Double-click tunes. Shift-click selects a range; "
+                              "use the Sync Memories button to refresh channels from the radio.");
+    }
 #if defined(Q_OS_MACOS)
     return "Tip: Double-click tunes. Click a selected cell (or F2) to edit; Tab moves between fields. Shift-click selects a range; Command-click adds or removes rows.";
 #else
@@ -324,7 +328,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
 
     auto* root = new QVBoxLayout(bodyWidget());
 
-    // ── Search + profile filter ──────────────────────────────────────────
+    // ── Search + memory-group filter ─────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
     filterRow->addWidget(new QLabel("Search:"));
     m_searchEdit = new QLineEdit;
@@ -333,7 +337,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_searchEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_searchEdit->installEventFilter(this);
     filterRow->addWidget(m_searchEdit, 1);
-    filterRow->addWidget(new QLabel("Profile:"));
+    filterRow->addWidget(new QLabel("Group:"));
     m_filterCombo = new QComboBox;
     m_filterCombo->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     rebuildFilterCombo();
@@ -382,6 +386,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
         }
         header->setSortIndicatorShown(true);
         header->setSortIndicator(m_sortColumn, m_sortOrder);
+        m_table->setSortingEnabled(true);
         m_table->sortItems(m_sortColumn, m_sortOrder);
     });
 
@@ -421,35 +426,62 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
         staticList(MemoryFields::ctcssTones()), true, Validator::Double, this));
 
     root->addWidget(m_table);
-    root->addWidget(new QLabel(selectionHintText()));
+    m_selectionHintLabel = new QLabel;
+    root->addWidget(m_selectionHintLabel);
+    updateEditingAvailability();
 
     // ── Buttons ───────────────────────────────────────────────────────────
     auto* btnRow = new QHBoxLayout;
-    auto* importBtn = new QPushButton("Import...");
-    auto* exportBtn = new QPushButton("Export...");
-    auto* addBtn = new QPushButton("Add");
+    m_importBtn = new QPushButton("Import...");
+    m_exportBtn = new QPushButton("Export...");
+    m_syncBtn = new QPushButton("Sync Memories");
+    m_syncStatusLabel = new QLabel;
+    m_addBtn = new QPushButton("Add");
     m_selectionLabel = new QLabel("0 selected");
     m_selectBtn = new QPushButton("Tune");
     m_selectAllBtn = new QPushButton("Select All");
     m_removeBtn = new QPushButton("Remove");
-    btnRow->addWidget(addBtn);
+    btnRow->addWidget(m_addBtn);
     btnRow->addWidget(m_selectBtn);
     btnRow->addWidget(m_selectAllBtn);
-    btnRow->addWidget(importBtn);
-    btnRow->addWidget(exportBtn);
+    btnRow->addWidget(m_syncBtn);
+    btnRow->addWidget(m_importBtn);
+    btnRow->addWidget(m_exportBtn);
+    btnRow->addWidget(m_syncStatusLabel);
     btnRow->addStretch();
     btnRow->addWidget(m_selectionLabel);
     btnRow->addWidget(m_removeBtn);
     root->addLayout(btnRow);
 
-    for (QPushButton* button : {addBtn, m_selectBtn, m_selectAllBtn, importBtn, exportBtn, m_removeBtn}) {
+    for (QPushButton* button : {m_addBtn, m_selectBtn, m_selectAllBtn, m_syncBtn,
+                                m_importBtn, m_exportBtn, m_removeBtn}) {
         button->setAutoDefault(false);
         button->setDefault(false);
     }
+    const QString memoryActionStyle = QStringLiteral(
+        "QPushButton {"
+        " background: {{color.background.2}};"
+        " color: {{color.text.primary}};"
+        " border: 1px solid {{color.border.strong}};"
+        " border-radius: 2px; padding: 4px 8px; }"
+        "QPushButton:hover { background: {{color.background.3}}; }"
+        "QPushButton:pressed {"
+        " background: {{color.accent.dim}};"
+        " border-color: {{color.border.accent}}; }"
+        "QPushButton:disabled {"
+        " background: {{color.button.background.disabled}};"
+        " color: {{color.button.foreground.disabled}};"
+        " border: 1px solid {{color.button.border.disabled}}; }");
+    for (QPushButton* button : {m_addBtn, m_selectBtn, m_selectAllBtn, m_syncBtn,
+                                m_importBtn, m_exportBtn, m_removeBtn}) {
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            button, memoryActionStyle);
+    }
 
-    connect(importBtn, &QPushButton::clicked, this, &MemoryDialog::onImport);
-    connect(exportBtn, &QPushButton::clicked, this, &MemoryDialog::onExport);
-    connect(addBtn, &QPushButton::clicked, this, &MemoryDialog::onAdd);
+    connect(m_importBtn, &QPushButton::clicked, this, &MemoryDialog::onImport);
+    connect(m_exportBtn, &QPushButton::clicked, this, &MemoryDialog::onExport);
+    connect(m_syncBtn, &QPushButton::clicked, m_model, &RadioModel::refreshMemories);
+    connect(m_addBtn, &QPushButton::clicked, this, &MemoryDialog::onAdd);
     connect(m_selectBtn, &QPushButton::clicked, this, &MemoryDialog::onSelect);
     connect(m_selectAllBtn, &QPushButton::clicked, this, &MemoryDialog::onSelectAll);
     connect(m_removeBtn, &QPushButton::clicked, this, &MemoryDialog::onRemove);
@@ -472,24 +504,44 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+E")), this, [this]() { editCurrentCell(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")), this, [this]() { onSelectAll(); });
 
-    // Rebuild filter combo when profile lists change
-    connect(model, &RadioModel::globalProfilesChanged,
-            this, &MemoryDialog::rebuildFilterCombo);
-    connect(&model->transmitModel(), &TransmitModel::profileListChanged,
-            this, &MemoryDialog::rebuildFilterCombo);
-
     // Listen for live memory updates while dialog is open
     connect(model, &RadioModel::memoryChanged,
-            this, [this](int) {
-        QTimer::singleShot(50, this, [this]() { populateTable(); });
-    });
+            this, [this](int) { scheduleTableRefresh(); });
     connect(model, &RadioModel::memoryRemoved,
-            this, [this](int) {
-        populateTable();
-    });
+            this, [this](int) { scheduleTableRefresh(); });
     connect(model, &RadioModel::memoriesCleared,
             this, [this]() {
+        rebuildFilterCombo();
         populateTable();
+    });
+    connect(model, &RadioModel::capabilitiesChanged, this,
+            [this](bool, const RadioCapabilities&) {
+        updateEditingAvailability();
+        updateSelectionActions();
+    });
+    connect(model, &RadioModel::memoryRefreshStarted, this, [this](int total) {
+        m_syncInProgress = true;
+        m_syncBtn->setEnabled(false);
+        m_syncStatusLabel->setText(QStringLiteral("Syncing: 0/%1").arg(total));
+    });
+    connect(model, &RadioModel::memoryRefreshProgress, this,
+            [this](int completed, int total) {
+        m_syncStatusLabel->setText(
+            QStringLiteral("Syncing: %1/%2").arg(completed).arg(total));
+    });
+    connect(model, &RadioModel::memoryRefreshFinished, this,
+            [this](bool success, int completed, int total) {
+        m_syncInProgress = false;
+        m_syncBtn->setEnabled(m_model->memoriesRefreshable());
+        const QString finalStatus = success
+            ? QStringLiteral("Synced %1 slots").arg(total)
+            : QStringLiteral("Sync incomplete: %1/%2").arg(completed).arg(total);
+        m_syncStatusLabel->setText(finalStatus);
+        QTimer::singleShot(5000, this, [this, finalStatus]() {
+            if (!m_syncInProgress && m_syncStatusLabel->text() == finalStatus) {
+                m_syncStatusLabel->clear();
+            }
+        });
     });
 
     // Send edits to the radio when any cell changes
@@ -596,8 +648,37 @@ bool MemoryDialog::eventFilter(QObject* watched, QEvent* event)
 void MemoryDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
+    updateEditingAvailability();
     if (m_searchEdit)
         m_searchEdit->setFocus(Qt::OtherFocusReason);
+}
+
+void MemoryDialog::scheduleTableRefresh()
+{
+    if (m_tableRefreshPending) {
+        return;
+    }
+    m_tableRefreshPending = true;
+    QTimer::singleShot(50, this, [this]() {
+        m_tableRefreshPending = false;
+        rebuildFilterCombo();
+        populateTable();
+    });
+}
+
+void MemoryDialog::updateEditingAvailability()
+{
+    const bool writable = m_model->memoriesWritable();
+    if (m_table) {
+        m_table->setEditTriggers(writable
+            ? QAbstractItemView::EditTriggers(QAbstractItemView::SelectedClicked
+                                              | QAbstractItemView::EditKeyPressed
+                                              | QAbstractItemView::AnyKeyPressed)
+            : QAbstractItemView::NoEditTriggers);
+    }
+    if (m_selectionHintLabel) {
+        m_selectionHintLabel->setText(selectionHintText(writable));
+    }
 }
 
 void MemoryDialog::activateMemoryRow(int row)
@@ -620,6 +701,8 @@ void MemoryDialog::activateMemoryRow(int row)
 
 void MemoryDialog::beginEditingMemoryName(int memoryIndex)
 {
+    if (!m_model->memoriesWritable())
+        return;
     if (!m_table)
         return;
 
@@ -657,6 +740,7 @@ void MemoryDialog::focusTableOnCurrentRow()
 
 void MemoryDialog::populateTable()
 {
+    updateEditingAvailability();
     const QSignalBlocker blocker(m_table);
     const QSet<int> previousSelection = selectedMemoryIndices();
     const int currentMemoryIndex = (m_table->currentRow() >= 0 && m_table->item(m_table->currentRow(), 0))
@@ -665,6 +749,25 @@ void MemoryDialog::populateTable()
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);
     const auto& memories = m_model->memories();
+    const RadioCapabilities capabilities = m_model->backendCapabilities();
+    const bool usesNativeMemorySchema = capabilities.family == QLatin1String("icom")
+        && capabilities.persistsMemories;
+    for (int column = 0; column < COLUMNS.size(); ++column) {
+        m_table->horizontalHeaderItem(column)->setText(COLUMNS.at(column));
+        m_table->setColumnHidden(column, false);
+    }
+    if (usesNativeMemorySchema) {
+        const QStringList ic9700Headers{
+            "Band", "Channel", "Frequency", "Name", "Mode", "Filter",
+            "Duplex", "Repeater Offset", "Tone Mode", "TX Tone",
+            "RX Tone", "Data Mode"};
+        for (int column = 0; column < ic9700Headers.size(); ++column) {
+            m_table->horizontalHeaderItem(column)->setText(ic9700Headers.at(column));
+        }
+        for (int column = ic9700Headers.size(); column < COLUMNS.size(); ++column) {
+            m_table->setColumnHidden(column, true);
+        }
+    }
     const QString filterProfile = m_filterCombo->currentData().toString();
     const QString nameFilter = m_searchEdit ? m_searchEdit->text().trimmed() : QString();
     bool hasRows = false;
@@ -685,15 +788,17 @@ void MemoryDialog::populateTable()
 
         int col = 0;
         m_table->setItem(row, col++, new QTableWidgetItem(m.group));
-        m_table->setItem(row, col++, new QTableWidgetItem(m.owner));
+        m_table->setItem(row, col++, new QTableWidgetItem(
+            usesNativeMemorySchema ? m.channel : m.owner));
         // Show the full MHz value so the last 3 digits (Hz) are not lost.
         auto* freqItem = new MemoryTableItem(QString::number(m.freq, 'f', 6));
         freqItem->setData(Qt::UserRole, m.freq);
         m_table->setItem(row, col++, freqItem);
         m_table->setItem(row, col++, new QTableWidgetItem(m.name));
         m_table->setItem(row, col++, new QTableWidgetItem(m.mode));
-        m_table->setItem(row, col++, new QTableWidgetItem(
-            QString::number(m.step)));
+        m_table->setItem(row, col++, new QTableWidgetItem(usesNativeMemorySchema
+            ? QStringLiteral("FIL%1").arg(m.nativeFilter)
+            : QString::number(m.step)));
         m_table->setItem(row, col++, new QTableWidgetItem(
             MemoryFields::offsetDirToDisplay(m.offsetDir)));
         m_table->setItem(row, col++, new QTableWidgetItem(
@@ -703,13 +808,20 @@ void MemoryDialog::populateTable()
         m_table->setItem(row, col++, new QTableWidgetItem(
             QString::number(m.toneValue, 'f', 1)));
 
-        // Squelch checkbox column
-        auto* sqItem = new QTableWidgetItem();
-        sqItem->setCheckState(m.squelch ? Qt::Checked : Qt::Unchecked);
-        m_table->setItem(row, col++, sqItem);
+        if (usesNativeMemorySchema) {
+            m_table->setItem(row, col++, new QTableWidgetItem(
+                QString::number(m.rxToneValue, 'f', 1)));
+        } else {
+            // Squelch checkbox column
+            auto* sqItem = new QTableWidgetItem();
+            sqItem->setCheckState(m.squelch ? Qt::Checked : Qt::Unchecked);
+            m_table->setItem(row, col++, sqItem);
+        }
 
         m_table->setItem(row, col++, new QTableWidgetItem(
-            QString::number(m.squelchLevel)));
+            usesNativeMemorySchema ? (m.dataMode ? QStringLiteral("On")
+                                            : QStringLiteral("Off"))
+                              : QString::number(m.squelchLevel)));
         m_table->setItem(row, col++, new QTableWidgetItem(
             QString::number(m.rxFilterLow)));
         m_table->setItem(row, col++, new QTableWidgetItem(
@@ -726,12 +838,16 @@ void MemoryDialog::populateTable()
         // Store memory index in first column's data for retrieval
         m_table->item(row, 0)->setData(Qt::UserRole, m.index);
 
-        // All columns are editable (double-click to edit).
+        // Radio-backed IC-9700 memories are read-only in the initial support
+        // phase. Flex and the local bank retain their existing edit behavior.
         // Squelch column (10) uses checkbox — keep it user-checkable.
         for (int c = 0; c < m_table->columnCount(); ++c) {
             auto* item = m_table->item(row, c);
-            if (item && c != 10)
+            if (item && c != 10 && m_model->memoriesWritable())
                 item->setFlags(item->flags() | Qt::ItemIsEditable);
+            else if (item && !m_model->memoriesWritable())
+                item->setFlags(item->flags() & ~Qt::ItemIsEditable
+                               & ~Qt::ItemIsUserCheckable);
         }
     }
 
@@ -761,17 +877,29 @@ void MemoryDialog::populateTable()
     floorWidth(2, 110);                                          // Frequency
     floorWidth(3, fm.horizontalAdvance(QString(20, QChar('M')))); // Name
     floorForValues(4, MemoryFields::modes());                    // Mode
-    floorForValues(5, MemoryFields::tuningSteps());              // Step
+    if (!usesNativeMemorySchema)
+        floorForValues(5, MemoryFields::tuningSteps());          // Step
     floorForValues(6, MemoryFields::offsetDirectionsDisplay());  // Offset Dir
     floorForValues(8, MemoryFields::toneModesDisplay());         // Tone Mode
     floorForValues(9, MemoryFields::ctcssTones());               // Tone Value
+    auto* tableHeader = m_table->horizontalHeader();
+    for (int column = 0; column < COLUMNS.size(); ++column) {
+        tableHeader->setSectionResizeMode(column, QHeaderView::Interactive);
+    }
+    tableHeader->setStretchLastSection(!usesNativeMemorySchema);
+    if (usesNativeMemorySchema) {
+        // Data Mode is the last visible IC-9700 field, but it is a tiny flag —
+        // stretching the last section made it consume the entire remainder of
+        // a wide persisted dialog. Let the human-readable Name field absorb
+        // spare width and keep every protocol field content-sized.
+        tableHeader->setSectionResizeMode(3, QHeaderView::Stretch);
+    }
     if (isSortableColumn(m_sortColumn)) {
-        auto* header = m_table->horizontalHeader();
-        header->setSortIndicatorShown(true);
-        header->setSortIndicator(m_sortColumn, m_sortOrder);
+        tableHeader->setSortIndicatorShown(true);
+        tableHeader->setSortIndicator(m_sortColumn, m_sortOrder);
         m_table->sortItems(m_sortColumn, m_sortOrder);
     }
-    m_table->setSortingEnabled(true);
+    m_table->setSortingEnabled(isSortableColumn(m_sortColumn));
 
     if (hasRows) {
         bool restoredSelection = false;
@@ -826,6 +954,8 @@ bool MemoryDialog::isSortableColumn(int column) const
 
 void MemoryDialog::submitCellEdit(int row, int col)
 {
+    if (!m_model->memoriesWritable())
+        return;
     auto* indexItem = m_table->item(row, 0);
     auto* item = m_table->item(row, col);
     if (!indexItem || !item)
@@ -856,6 +986,8 @@ void MemoryDialog::submitCellEdit(int row, int col)
 
 void MemoryDialog::onAdd()
 {
+    if (!m_model->memoriesWritable())
+        return;
     const auto slices = m_model->slices();
     if (slices.isEmpty())
         return;
@@ -885,6 +1017,8 @@ void MemoryDialog::onAdd()
 
 void MemoryDialog::onExport()
 {
+    if (!m_model->memoriesWritable())
+        return;
     const QString filterProfile = m_filterCombo->currentData().toString();
     const QList<MemoryCsvRecord> records =
         currentExportRecords(m_model->memories(), filterProfile);
@@ -944,6 +1078,8 @@ void MemoryDialog::onExport()
 
 void MemoryDialog::onImport()
 {
+    if (!m_model->memoriesWritable())
+        return;
     const QString path = QFileDialog::getOpenFileName(
         this,
         "Import Memories",
@@ -1147,7 +1283,7 @@ void MemoryDialog::onSelect()
 
 void MemoryDialog::editCurrentCell()
 {
-    if (!m_table)
+    if (!m_table || !m_model->memoriesWritable())
         return;
 
     const QModelIndex current = m_table->currentIndex();
@@ -1174,6 +1310,8 @@ void MemoryDialog::onSelectAll()
 
 void MemoryDialog::onRemove()
 {
+    if (!m_model->memoriesWritable())
+        return;
     const QSet<int> selectedIndices = selectedMemoryIndices();
     if (selectedIndices.isEmpty())
         return;
@@ -1317,22 +1455,17 @@ void MemoryDialog::rebuildFilterCombo()
     // "All" shows every memory regardless of group
     m_filterCombo->addItem("All Memories", QString());
 
-    // Collect unique profile names from global and transmit profiles
-    QStringList profileNames;
-    for (const QString& p : m_model->globalProfiles()) {
-        if (!profileNames.contains(p)) {
-            profileNames.append(p);
+    QStringList groups;
+    for (const MemoryEntry& memory : m_model->memories()) {
+        const QString group = memory.group.trimmed();
+        if (!group.isEmpty() && !groups.contains(group, Qt::CaseInsensitive)) {
+            groups.append(group);
         }
     }
-    for (const QString& p : m_model->transmitModel().profileList()) {
-        if (!profileNames.contains(p)) {
-            profileNames.append(p);
-        }
-    }
-    profileNames.sort(Qt::CaseInsensitive);
+    groups.sort(Qt::CaseInsensitive);
 
-    for (const QString& name : profileNames) {
-        m_filterCombo->addItem(name, name);
+    for (const QString& group : groups) {
+        m_filterCombo->addItem(group, group);
     }
 
     // Restore previous selection if still present
@@ -1374,8 +1507,31 @@ void MemoryDialog::updateSelectionActions()
             : QString());
     }
     if (m_removeBtn) {
-        m_removeBtn->setEnabled(selectedCount > 0);
+        m_removeBtn->setEnabled(m_model->memoriesWritable() && selectedCount > 0);
         m_removeBtn->setText(selectedCount > 1 ? "Remove Selected" : "Remove");
+    }
+    const bool writable = m_model->memoriesWritable();
+    if (m_addBtn) {
+        m_addBtn->setEnabled(writable);
+        m_addBtn->setToolTip(writable ? QString()
+                                     : "Radio memories are read-only in this version.");
+    }
+    if (m_importBtn) {
+        m_importBtn->setEnabled(writable);
+        m_importBtn->setToolTip(writable ? QString()
+                                        : "Writing radio memories is not available yet.");
+    }
+    if (m_exportBtn) {
+        m_exportBtn->setEnabled(writable);
+        m_exportBtn->setToolTip(writable ? QString()
+                                        : "Memory management will be enabled in a future update.");
+    }
+    if (m_syncBtn) {
+        const bool refreshable = m_model->memoriesRefreshable();
+        m_syncBtn->setVisible(refreshable);
+        m_syncBtn->setEnabled(refreshable && !m_syncInProgress);
+        m_syncBtn->setToolTip(
+            QStringLiteral("Read the current memory channels from the radio."));
     }
 }
 

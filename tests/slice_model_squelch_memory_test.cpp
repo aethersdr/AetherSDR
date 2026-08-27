@@ -204,6 +204,35 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.manualSquelchLevel(), before);
     }
 
+    // Native radio-memory recall updates the public slice presentation without
+    // emitting the generic grouped command a second time; the backend already
+    // owns the richer IC-9700 write sequence.
+    {
+        SliceModel s(7);
+        QSignalSpy commandSpy(&s, &SliceModel::fmRepeaterRecallCommandIssued);
+        s.applyRecalledFmRepeaterState(
+            QStringLiteral("up"), 0.6, QStringLiteral("dtcs_txrx"),
+            QStringLiteral("023"), QStringLiteral("123.0"));
+        EXPECT_EQ(s.repeaterOffsetDir(), QStringLiteral("up"));
+        EXPECT_EQ(s.fmRepeaterOffsetFreq(), 0.6);
+        EXPECT_EQ(s.fmToneMode(), QStringLiteral("dtcs_txrx"));
+        EXPECT_EQ(s.fmToneValue(), QStringLiteral("023"));
+        EXPECT_EQ(s.fmToneRxValue(), QStringLiteral("123.0"));
+        EXPECT_EQ(commandSpy.count(), 0);
+    }
+
+    // Radio readback wins over an optimistic memory-recall presentation, and
+    // DTCS retains its significant leading zero through the normalized delta.
+    {
+        SliceModel s(8);
+        SliceDelta readback;
+        readback.fmToneMode = QStringLiteral("dtcs_txrx");
+        readback.fmToneValueText = QStringLiteral("023");
+        s.applyChanges(readback);
+        EXPECT_EQ(s.fmToneMode(), QStringLiteral("dtcs_txrx"));
+        EXPECT_EQ(s.fmToneValue(), QStringLiteral("023"));
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_squelch_memory_test: all checks passed\n");
         return 0;

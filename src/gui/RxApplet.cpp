@@ -47,6 +47,7 @@
 #include <QKeyEvent>
 #include <QStyle>
 #include <QStyleOptionSlider>
+#include <QStandardItemModel>
 #include <QPainterPath>
 #include <QDoubleSpinBox>
 #include <QDir>
@@ -55,6 +56,34 @@
 #include <limits>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
+
+namespace {
+
+int selectReportedComboValue(QComboBox* combo, const QString& value,
+                             const QString& label)
+{
+    int index = combo->findData(value);
+    if (index < 0) {
+        combo->addItem(label, value);
+        index = combo->count() - 1;
+        if (auto* model = qobject_cast<QStandardItemModel*>(combo->model())) {
+            if (QStandardItem* item = model->item(index)) {
+                item->setEnabled(false);
+            }
+        }
+    }
+    combo->setCurrentIndex(index);
+    return index;
+}
+
+QString reportedToneModeLabel(const QString& mode)
+{
+    QString label = mode.toUpper();
+    label.replace(QLatin1Char('_'), QLatin1Char(' '));
+    return label;
+}
+
+} // namespace
 
 // Slider that resets to a default value on double-click.
 // Extends GuardedSlider for controls-lock support (#745).
@@ -2537,35 +2566,35 @@ void RxApplet::connectSlice(SliceModel* s)
     // Tone mode
     {
         QSignalBlocker b(m_toneModeCmb);
-        int idx = m_toneModeCmb->findData(s->fmToneMode());
-        if (idx >= 0) m_toneModeCmb->setCurrentIndex(idx);
         configureFmToneControls();
+        const bool represented = m_toneModeCmb->findData(s->fmToneMode()) >= 0;
+        selectReportedComboValue(
+            m_toneModeCmb, s->fmToneMode(), reportedToneModeLabel(s->fmToneMode()));
+        if (!represented) {
+            m_toneValueCmb->setVisible(true);
+            m_toneValueCmb->setEnabled(false);
+        }
     }
     connect(s, &SliceModel::fmToneModeChanged, this, [this](const QString& mode) {
         QSignalBlocker b(m_toneModeCmb);
-        int idx = m_toneModeCmb->findData(mode);
-        if (idx >= 0) m_toneModeCmb->setCurrentIndex(idx);
         configureFmToneControls();
+        const bool represented = m_toneModeCmb->findData(mode) >= 0;
+        selectReportedComboValue(m_toneModeCmb, mode, reportedToneModeLabel(mode));
+        if (!represented) {
+            m_toneValueCmb->setVisible(true);
+            m_toneValueCmb->setEnabled(false);
+        }
     });
 
     // Tone value
     {
         QSignalBlocker b(m_toneValueCmb);
-        for (int i = 0; i < m_toneValueCmb->count(); ++i) {
-            if (m_toneValueCmb->itemData(i).toString() == s->fmToneValue()) {
-                m_toneValueCmb->setCurrentIndex(i);
-                break;
-            }
-        }
+        selectReportedComboValue(
+            m_toneValueCmb, s->fmToneValue(), s->fmToneValue());
     }
     connect(s, &SliceModel::fmToneValueChanged, this, [this](const QString& val) {
         QSignalBlocker b(m_toneValueCmb);
-        for (int i = 0; i < m_toneValueCmb->count(); ++i) {
-            if (m_toneValueCmb->itemData(i).toString() == val) {
-                m_toneValueCmb->setCurrentIndex(i);
-                break;
-            }
-        }
+        selectReportedComboValue(m_toneValueCmb, val, val);
     });
     {
         QSignalBlocker b(m_toneRxValueCmb);

@@ -901,6 +901,32 @@ std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     return buildFrameSub(to, cmd::kTone, which);
 }
 
+std::vector<std::uint8_t> cmdSetRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which, int value,
+    bool txReverse, bool rxReverse)
+{
+    const int bounded = std::clamp(value, 0, 9999);
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte((bounded / 100) % 100),
+        encodeBcdByte(bounded % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::optional<std::vector<std::uint8_t>> repeaterToneConfirmationForWrite(
+    std::uint8_t to, const CivFrame& write)
+{
+    if (write.cmd != cmd::kTone || !write.hasSub || write.data.empty()
+        || (write.sub != repeaterTone::kTxCtcss
+            && write.sub != repeaterTone::kRxCtcss
+            && write.sub != repeaterTone::kDtcs)) {
+        return std::nullopt;
+    }
+    return cmdReadRepeaterToneRegister(to, write.sub);
+}
+
 std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
     std::span<const std::uint8_t> payload)
 {

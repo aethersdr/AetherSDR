@@ -31,6 +31,7 @@
 #include <QPointer>
 #include <QStyle>
 #include <QStyleOptionSlider>
+#include <QStandardItemModel>
 #include <QTimer>
 #include <QLabel>
 #include <QSlider>
@@ -69,6 +70,34 @@
 #include <vector>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
+
+namespace {
+
+int selectReportedFmValue(QComboBox* combo, const QString& value,
+                          const QString& label)
+{
+    int index = combo->findData(value);
+    if (index < 0) {
+        combo->addItem(label, value);
+        index = combo->count() - 1;
+        if (auto* model = qobject_cast<QStandardItemModel*>(combo->model())) {
+            if (QStandardItem* item = model->item(index)) {
+                item->setEnabled(false);
+            }
+        }
+    }
+    combo->setCurrentIndex(index);
+    return index;
+}
+
+QString reportedFmModeLabel(const QString& mode)
+{
+    QString label = mode.toUpper();
+    label.replace(QLatin1Char('_'), QLatin1Char(' '));
+    return label;
+}
+
+} // namespace
 
 // QSlider that always accepts wheel events, preventing propagation to parent
 // (e.g. SpectrumWidget frequency scroll) at min/max boundaries. (#547 BUG-002)
@@ -4740,16 +4769,19 @@ void VfoWidget::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::fmToneModeChanged, this, [this](const QString& mode) {
         m_updatingFromModel = true;
         QSignalBlocker sb(m_fmToneModeCmb);
-        int idx = m_fmToneModeCmb->findData(mode);
-        if (idx >= 0) m_fmToneModeCmb->setCurrentIndex(idx);
         configureFmToneControls();
+        const bool represented = m_fmToneModeCmb->findData(mode) >= 0;
+        selectReportedFmValue(m_fmToneModeCmb, mode, reportedFmModeLabel(mode));
+        if (!represented) {
+            m_fmToneValueCmb->setVisible(true);
+            m_fmToneValueCmb->setEnabled(false);
+        }
         m_updatingFromModel = false;
     });
     connect(m_slice, &SliceModel::fmToneValueChanged, this, [this](const QString& val) {
         m_updatingFromModel = true;
         QSignalBlocker sb(m_fmToneValueCmb);
-        int idx = m_fmToneValueCmb->findData(val);
-        if (idx >= 0) m_fmToneValueCmb->setCurrentIndex(idx);
+        selectReportedFmValue(m_fmToneValueCmb, val, val);
         m_updatingFromModel = false;
     });
     connect(m_slice, &SliceModel::fmToneRxValueChanged, this, [this](const QString& val) {
@@ -5075,11 +5107,16 @@ void VfoWidget::syncFromSlice()
     if (isFm) {
         QSignalBlocker b1(m_fmToneModeCmb), b2(m_fmToneValueCmb), b3(m_fmOffsetSpin),
             toneRxBlocker(m_fmToneRxValueCmb);
-        int tmIdx = m_fmToneModeCmb->findData(m_slice->fmToneMode());
-        if (tmIdx >= 0) m_fmToneModeCmb->setCurrentIndex(tmIdx);
         configureFmToneControls();
-        int tvIdx = m_fmToneValueCmb->findData(m_slice->fmToneValue());
-        if (tvIdx >= 0) m_fmToneValueCmb->setCurrentIndex(tvIdx);
+        const bool represented = m_fmToneModeCmb->findData(m_slice->fmToneMode()) >= 0;
+        selectReportedFmValue(m_fmToneModeCmb, m_slice->fmToneMode(),
+                              reportedFmModeLabel(m_slice->fmToneMode()));
+        if (!represented) {
+            m_fmToneValueCmb->setVisible(true);
+            m_fmToneValueCmb->setEnabled(false);
+        }
+        selectReportedFmValue(
+            m_fmToneValueCmb, m_slice->fmToneValue(), m_slice->fmToneValue());
         const int rxIdx = m_fmToneRxValueCmb->findData(m_slice->fmToneRxValue());
         if (rxIdx >= 0) {
             m_fmToneRxValueCmb->setCurrentIndex(rxIdx);

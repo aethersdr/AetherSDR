@@ -818,6 +818,17 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
     // the model.  Apply the requested snapshot locally as one unit, then emit a
     // grouped backend intent.  This deliberately avoids the four Flex wire
     // strings above: RadioModel calls it only for the local-memory path.
+    applyRecalledFmRepeaterState(
+        direction, offsetMhz, toneMode, QString::number(toneHz, 'f', 1), QString());
+    emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
+                                       toneMode, toneHz);
+}
+
+void SliceModel::applyRecalledFmRepeaterState(
+    const QString& direction, double offsetMhz,
+    const QString& toneMode, const QString& toneValue,
+    const QString& rxToneValue)
+{
     if (m_repeaterOffsetDir != direction) {
         m_repeaterOffsetDir = direction;
         emit repeaterOffsetDirChanged(direction);
@@ -826,16 +837,18 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
         m_fmRepeaterOffsetFreq = offsetMhz;
         emit fmRepeaterOffsetFreqChanged(offsetMhz);
     }
-    if (m_fmToneValue != QString::number(toneHz, 'f', 1)) {
-        m_fmToneValue = QString::number(toneHz, 'f', 1);
+    if (m_fmToneValue != toneValue) {
+        m_fmToneValue = toneValue;
         emit fmToneValueChanged(m_fmToneValue);
+    }
+    if (!rxToneValue.isEmpty() && m_fmToneRxValue != rxToneValue) {
+        m_fmToneRxValue = rxToneValue;
+        emit fmToneRxValueChanged(m_fmToneRxValue);
     }
     if (m_fmToneMode != toneMode) {
         m_fmToneMode = toneMode;
         emit fmToneModeChanged(toneMode);
     }
-    emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
-                                       toneMode, toneHz);
 }
 
 double SliceModel::txOffsetForDirection(const QString& dir, double magnitudeMhz)
@@ -1561,7 +1574,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_fmToneMode = *d.fmToneMode;
         emit fmToneModeChanged(m_fmToneMode);
     }
-    if (d.fmToneValue.has_value()) {
+    if (d.fmToneValueText.has_value()) {
+        m_fmToneValue = *d.fmToneValueText;
+        emit fmToneValueChanged(m_fmToneValue);
+    } else if (d.fmToneValue.has_value()) {
         double v = *d.fmToneValue;
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);

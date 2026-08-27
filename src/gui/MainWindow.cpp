@@ -6856,7 +6856,7 @@ void MainWindow::refreshMemoryBrowsePanel()
         if (!applet)
             continue;
         if (auto* menu = applet->spectrumWidget()->overlayMenu()) {
-            menu->setMemories(m_radioModel.memories());
+            menu->setMemories(m_radioModel.memories(), m_radioModel.memoriesWritable());
         }
     }
 }

@@ -1378,6 +1378,12 @@ void RadioModel::setupBackend(const QString& family)
             [this](const GpsDelta& delta) { applyGpsChanges(delta); });
     connect(m_backend.get(), &IRadioBackend::memoryChanged, this,
             [this](const MemoryDelta& delta) { applyMemoryChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::memoryRefreshStarted, this,
+            &RadioModel::memoryRefreshStarted);
+    connect(m_backend.get(), &IRadioBackend::memoryRefreshProgress, this,
+            &RadioModel::memoryRefreshProgress);
+    connect(m_backend.get(), &IRadioBackend::memoryRefreshFinished, this,
+            &RadioModel::memoryRefreshFinished);
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
 
@@ -7736,13 +7742,60 @@ bool RadioModel::usesLocalMemoryBank() const
     return !backendCapabilities().persistsMemories;
 }
 
-std::optional<quint32> RadioModel::tryLocalMemoryCommand(
+bool RadioModel::memoriesWritable() const
+{
+    return usesLocalMemoryBank() || backendCapabilities().canWriteMemories;
+}
+
+bool RadioModel::memoriesRefreshable() const
+{
+    return isConnected() && backendCapabilities().canRefreshMemories;
+}
+
+void RadioModel::refreshMemories()
+{
+    if (m_backend && memoriesRefreshable()) {
+        m_backend->refreshMemories();
+    }
+}
+
+std::optional<quint32> RadioModel::tryMemoryCommand(
     const QString& command, const RadioConnection::ResponseCallback& cb)
 {
-    if (!usesLocalMemoryBank())
-        return std::nullopt;
     if (!command.startsWith(QLatin1String("memory ")))
         return std::nullopt;
+
+    if (!usesLocalMemoryBank()) {
+        const RadioCapabilities caps = backendCapabilities();
+        if (!caps.persistsMemories) {
+            return std::nullopt;
+        }
+
+        quint32 code = 1;
+        QString body = QStringLiteral("Radio memories are read-only");
+        if (!caps.canApplyMemories
+            && command.startsWith(QLatin1String("memory apply "))) {
+            bool ok = false;
+            const int index = command.mid(13).trimmed().toInt(&ok);
+            if (ok && m_memories.contains(index)) {
+                recallCachedMemory(index);
+                code = 0;
+                body.clear();
+            } else {
+                body = QStringLiteral("Unknown memory slot");
+            }
+        } else if (caps.canWriteMemories || caps.canApplyMemories) {
+            return std::nullopt;
+        }
+
+        const quint32 seq = m_seqCounter.fetch_add(1);
+        if (cb) {
+            QMetaObject::invokeMethod(this, [cb, code, body]() {
+                cb(static_cast<int>(code), body);
+            }, Qt::QueuedConnection);
+        }
+        return seq;
+    }
 
     const LocalMemoryBank::CommandResult result = m_localMemories.handleCommand(command);
     if (!result.handled)
@@ -7763,7 +7816,7 @@ std::optional<quint32> RadioModel::tryLocalMemoryCommand(
     }
 
     if (result.recallIndex >= 0)
-        recallLocalMemory(result.recallIndex);
+        recallCachedMemory(result.recallIndex);
 
     const quint32 seq = m_seqCounter.fetch_add(1);
     if (cb) {
@@ -7821,11 +7874,11 @@ void RadioModel::publishLocalMemories()
         << "RadioModel: published" << stored.size() << "memories from the local bank";
 }
 
-void RadioModel::recallLocalMemory(int index)
+void RadioModel::recallCachedMemory(int index)
 {
     const auto it = m_memories.constFind(index);
     if (it == m_memories.constEnd()) {
-        qCWarning(lcProtocol) << "RadioModel: local memory recall for unknown slot" << index;
+        qCWarning(lcProtocol) << "RadioModel: cached memory recall for unknown slot" << index;
         return;
     }
     // `memory apply` lands on the ACTIVE slice on a Flex, so resolve the same
@@ -7842,7 +7895,7 @@ void RadioModel::recallLocalMemory(int index)
     if (!target && !m_slices.isEmpty())
         target = m_slices.first();
     if (!target) {
-        qCWarning(lcProtocol) << "RadioModel: local memory recall with no slice to apply it to";
+        qCWarning(lcProtocol) << "RadioModel: cached memory recall with no slice to apply it to";
         return;
     }
 
@@ -7853,8 +7906,28 @@ void RadioModel::recallLocalMemory(int index)
     // through the backend seam. Mode goes first because it resets the filter
     // to the mode default; the stored filter follows, and tuning precedes the
     // grouped FM repeater state for the IC-705 quirk documented below.
-    if (!memory.mode.isEmpty())
-        target->setMode(memory.mode);
+    if (!memory.mode.isEmpty()) {
+        QString recalledMode = memory.mode;
+        const QString nativeMode = memory.mode.trimmed().toUpper();
+        if (nativeMode == QLatin1String("CW-R")) {
+            recalledMode = QStringLiteral("CWL");
+        } else if (nativeMode == QLatin1String("RTTY")) {
+            recalledMode = QStringLiteral("DIGL");
+        } else if (nativeMode == QLatin1String("RTTY-R")) {
+            recalledMode = QStringLiteral("DIGU");
+        } else if (nativeMode == QLatin1String("DSTAR")) {
+            recalledMode = QStringLiteral("DSTR");
+        } else if (memory.dataMode != 0) {
+            if (nativeMode == QLatin1String("FM")) {
+                recalledMode = QStringLiteral("DFM");
+            } else if (nativeMode == QLatin1String("USB")) {
+                recalledMode = QStringLiteral("DIGU");
+            } else if (nativeMode == QLatin1String("LSB")) {
+                recalledMode = QStringLiteral("DIGL");
+            }
+        }
+        target->setMode(recalledMode);
+    }
     if (memory.rxFilterLow != 0 || memory.rxFilterHigh != 0)
         target->setFilterWidth(memory.rxFilterLow, memory.rxFilterHigh);
 
@@ -7884,12 +7957,38 @@ void RadioModel::recallLocalMemory(int index)
             ? target->fmToneMode() : memory.toneMode;
         const double toneHz = memory.toneMode.isEmpty()
             ? target->fmToneValue().toDouble() : memory.toneValue;
-        target->applyRecalledFmRepeater(direction, offsetMhz, toneMode, toneHz);
+        if (memory.nativeFilter > 0 && m_backend) {
+            QString txTone = QString::number(memory.toneValue, 'f', 1);
+            if (toneMode == QLatin1String("dtcs_txrx")
+                       || toneMode == QLatin1String("dtcs_tx")
+                       || toneMode == QLatin1String("dtcs_tx_ctcss_rx")) {
+                txTone = QStringLiteral("%1").arg(
+                    memory.dtcsCode, 3, 10, QLatin1Char('0'));
+            }
+            target->applyRecalledFmRepeaterState(
+                direction, offsetMhz, toneMode, txTone,
+                QString::number(memory.rxToneValue, 'f', 1));
+            MemoryRecallDetails details;
+            details.sliceId = target->sliceId();
+            details.filterPreset = memory.nativeFilter;
+            details.dataMode = memory.dataMode != 0;
+            details.direction = direction;
+            details.offsetHz = offsetMhz * 1.0e6;
+            details.toneMode = toneMode;
+            details.txToneHz = memory.toneValue;
+            details.rxToneHz = memory.rxToneValue;
+            details.dtcsCode = memory.dtcsCode;
+            details.dtcsTxReverse = memory.dtcsTxReverse;
+            details.dtcsRxReverse = memory.dtcsRxReverse;
+            m_backend->applyMemoryRecallDetails(details);
+        } else {
+            target->applyRecalledFmRepeater(direction, offsetMhz, toneMode, toneHz);
+        }
     }
     target->setSquelch(memory.squelch, memory.squelchLevel);
 
     qCInfo(lcProtocol).noquote().nospace()
-        << "RadioModel: recalled local memory " << index
+        << "RadioModel: recalled cached memory " << index
         << " onto slice " << target->sliceId()
         << " freq=" << QString::number(memory.freq, 'f', 6)
         << " mode=" << memory.mode;
@@ -7898,8 +7997,9 @@ void RadioModel::recallLocalMemory(int index)
 void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 {
     if (d.removed) {
-        m_memories.remove(d.index);
-        emit memoryRemoved(d.index);
+        if (m_memories.remove(d.index) > 0) {
+            emit memoryRemoved(d.index);
+        }
         return;
     }
 
@@ -7920,6 +8020,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 
     if (d.group)          m.group          = decodeText(*d.group);
     if (d.owner)          m.owner          = decodeText(*d.owner);
+    if (d.channel)        m.channel        = decodeText(*d.channel);
     if (d.name)           m.name           = decodeText(*d.name);
     if (d.mode)           m.mode           = sanitize(*d.mode);
     if (d.offsetDir)      m.offsetDir      = sanitize(*d.offsetDir);
@@ -7927,6 +8028,12 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     if (d.freq)           m.freq           = *d.freq;
     if (d.repeaterOffset) m.repeaterOffset = *d.repeaterOffset;
     if (d.toneValue)      m.toneValue      = *d.toneValue;
+    if (d.rxToneValue)    m.rxToneValue    = *d.rxToneValue;
+    if (d.nativeFilter)   m.nativeFilter   = *d.nativeFilter;
+    if (d.dataMode)       m.dataMode       = *d.dataMode;
+    if (d.dtcsCode)       m.dtcsCode       = *d.dtcsCode;
+    if (d.dtcsTxReverse)  m.dtcsTxReverse  = *d.dtcsTxReverse;
+    if (d.dtcsRxReverse)  m.dtcsRxReverse  = *d.dtcsRxReverse;
     if (d.step)           m.step           = *d.step;
     if (d.squelch)        m.squelch        = *d.squelch;
     if (d.squelchLevel)   m.squelchLevel   = *d.squelchLevel;
@@ -8357,15 +8464,12 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         perf.recordPanCenterCommand();
     }
 
-    // Memory commands against a radio with no memory slots are answered by the
-    // local bank, before anything else looks at them. This is the single seam
-    // that keeps the whole memory feature working off-Flex: the dialog, the
-    // browse panel, CSV import/export, the spot feed and the automation verb
-    // all reach the radio through these four commands, so answering them here
-    // means none of them needed changing. It sits above the profile-load hold
-    // deliberately — a local bank edit is not a radio-state write and has
-    // nothing to reconcile with a profile load.
-    if (const auto seq = tryLocalMemoryCommand(command, cb))
+    // Route memory commands before anything else sees them. The local bank
+    // answers all four verbs; a read-only radio-backed cache answers apply and
+    // rejects mutation. Writable/native stores continue to the backend. This
+    // one seam covers the dialog, browse panel, CSV flow, spot feed, and
+    // automation verb without leaking Flex command text into another family.
+    if (const auto seq = tryMemoryCommand(command, cb))
         return *seq;
 
     const ProfileLoadCommand profileLoad = parseProfileLoadCommand(command);

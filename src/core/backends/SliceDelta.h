@@ -111,6 +111,9 @@ struct SliceDelta {
     std::optional<QString>     fmToneMode;
     std::optional<double>      fmToneValue;
     std::optional<double>      fmToneRxValue;
+    // Tone families such as DTCS are identifiers, not frequencies. Preserve
+    // their exact presentation, including significant leading zeros.
+    std::optional<QString>     fmToneValueText;
     std::optional<QString>     repeaterOffsetDir;
     std::optional<double>      fmRepeaterOffsetFreq;
     std::optional<double>      txOffsetFreq;

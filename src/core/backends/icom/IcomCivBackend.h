@@ -19,6 +19,7 @@
 #include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomCivScheduler.h"
 #include "core/backends/icom/IcomMeters.h"
+#include "core/backends/icom/IcomMemoryCodec.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/IcomScope.h"
@@ -108,6 +109,8 @@ public:
     void setSliceFmToneRxValue(int sliceId, double hz) override;
     void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
     void setSliceFmRepeaterOffset(int sliceId, double hz) override;
+    void applyMemoryRecallDetails(const MemoryRecallDetails& details) override;
+    void refreshMemories() override;
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start) override;
@@ -253,7 +256,8 @@ private:
     bool refuseKeyingInReceiveOnlyMode();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
-                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
+                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
+                   std::vector<std::uint8_t> replyDataPrefix = {});
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true);
@@ -292,6 +296,10 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
+    void queueIc9700MemorySnapshot();
+    void finishMemoryRefresh(bool success);
+    void finishMemoryRefreshWhenDrained(quint64 generation);
+    void publishExtendedRepeaterState();
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     void adoptReportedCivAddress(std::uint8_t reported);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
@@ -321,6 +329,9 @@ private:
     bool m_civAmbiguous = false;
     // Whether sendConnectReadBurst() has already run this session.
     bool m_connectBurstSent = false;
+    bool m_memoryRefreshActive = false;
+    quint64 m_memoryRefreshGeneration = 0;
+    QSet<int> m_memoryRefreshReplies;
     // The model the RS-BA1 handshake NAMED. Kept separately from m_model because
     // it is the third signal that separates "right radio, changed address" from
     // "wrong radio entirely" — see adoptReportedCivAddress().
