@@ -11013,10 +11013,33 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
         return false;
     }
 
+    // Reasons that actually push samples down this stream on their own
+    // (no Windows-DAX2-style external owner to defer to) and therefore need
+    // the radio told "this stream is live" — as opposed to WSPR, which has
+    // its own explicit ownership flag below, or a route-only/recreate probe
+    // that isn't transmitting anything. Closes a real gap reported on a
+    // FLEX-8400 (VARA HF) — see aethersdr/AetherSDR#4554, #4510 — where the
+    // radio never reflects `tx=1` on a freshly created stream without this
+    // assertion. NOT independently confirmed against that report's hardware:
+    // a FLEX-6600 repro of the same *symptom* turned out to have an unrelated
+    // client-side root cause and reproduces the tx flag already defaulting to
+    // 1 on stream creation, so this radio/firmware never exercised the gap.
+    const bool isInteractiveTxRoute = reason == DaxTxRequestReason::HostedDaxBridge
+        || reason == DaxTxRequestReason::TciTxAudio
+        || reason == DaxTxRequestReason::AetherModemAx25Tx;
+
     const bool existingStreamIsOurs = m_daxTxStreamId != 0
         && (m_daxTxClientHandle == 0 || m_daxTxClientHandle == ourHandle);
-    if (existingStreamIsOurs || m_daxTxCreatePending)
+    if (existingStreamIsOurs || m_daxTxCreatePending) {
+        // The radio can silently drop our tx flag (another client claims the
+        // slot, a brief reconnect) without us noticing until the next
+        // transmit goes out over an unflagged stream and produces no RF.
+        // Re-assert whenever status says we're not currently the tx owner.
+        if (existingStreamIsOurs && !m_daxTxActive && isInteractiveTxRoute) {
+            sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(m_daxTxStreamId)));
+        }
         return true;
+    }
 
     m_daxTxCreatePending = true;
     qCInfo(lcDax).noquote()
@@ -11024,7 +11047,7 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
         << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
     sendCmd(
         "stream create type=dax_tx",
-        [this, reason](int code, const QString& body) {
+        [this, reason, isInteractiveTxRoute](int code, const QString& body) {
             m_daxTxCreatePending = false;
             if (code != 0) {
                 qCWarning(lcDax).noquote()
@@ -11062,6 +11085,13 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
             } else if (m_wsprTxReleaseWhenReady) {
                 sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
                 m_wsprTxReleaseWhenReady = false;
+            } else if (isInteractiveTxRoute) {
+                // The stream now exists, but the radio still treats it as
+                // inactive until told otherwise — WSPR always knew this
+                // (above); the interactive routes never did, so audio
+                // reached the radio's dax_tx slot and was silently
+                // discarded on every packet. This is the fix for that.
+                sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(id)));
             }
         });
     return true;
