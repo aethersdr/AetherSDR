@@ -18,6 +18,7 @@
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomSettings.h"
 #include "core/CtcssTones.h"
+#include "core/DtcsCodes.h"
 #include "core/Resampler.h"
 
 namespace AetherSDR::icom {
@@ -216,6 +217,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     const IcomModel& m = *m_model;
     const IcomModelProfile& profile = profileFor(m);
     RadioCapabilities c;
+    c.fmDtcsCodes = {};
     c.family = QStringLiteral("icom");
     c.manufacturer = QStringLiteral("Icom");
     c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
@@ -289,8 +291,19 @@ RadioCapabilities IcomCivBackend::capabilities() const
     }
     if (ctcssRxProfileFor(m_model)) {
         c.fmTonePresentation = FmTonePresentation::Ctcss;
-        c.fmToneModes = {QStringLiteral("off"), QStringLiteral("ctcss_tx"),
-                         QStringLiteral("ctcss_rx"), QStringLiteral("ctcss_txrx")};
+        const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
+        if (fm && fm->hasDtcs) {
+            for (const std::string_view mode : fm->accessModes) {
+                c.fmToneModes << QString::fromUtf8(
+                    mode.data(), static_cast<int>(mode.size()));
+            }
+            for (const int code : kDtcsCodes) {
+                c.fmDtcsCodes << code;
+            }
+        } else {
+            c.fmToneModes = {QStringLiteral("off"), QStringLiteral("ctcss_tx"),
+                             QStringLiteral("ctcss_rx"), QStringLiteral("ctcss_txrx")};
+        }
     }
 
     // The scope scale is OURS, not the radio's: it comes from ScopeCalibration
@@ -1529,6 +1542,14 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
     m_dataOffModRestore.reset();
     m_lastModInputWarning.clear();
 
+    if (extendedFmReadbackProfileFor(m_model)) {
+        SliceDelta d;
+        d.fmDtcsCode = -1;
+        d.fmDtcsTxReverse = false;
+        d.fmDtcsRxReverse = false;
+        emit sliceChanged(sliceId(), d);
+    }
+
     if (was)
         emit disconnected();
     if (!reason.isEmpty())
@@ -1955,6 +1976,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             m_repeaterDtcsCode = value->value;
             m_repeaterDtcsTxReverse = value->txReverse;
             m_repeaterDtcsRxReverse = value->rxReverse;
+            if (ctcssRxProfileFor(m_model)) {
+                SliceDelta d;
+                d.fmDtcsCode = value->value;
+                d.fmDtcsTxReverse = value->txReverse;
+                d.fmDtcsRxReverse = value->rxReverse;
+                emit sliceChanged(sliceId(), d);
+            }
         }
         return;
     }
@@ -2948,7 +2976,8 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         return cmdReadRepeaterOffsetDirection(addr);
     case cmd::kTone:
         if (parsed->hasSub && (parsed->sub == repeaterTone::kTxCtcss
-                               || parsed->sub == repeaterTone::kRxCtcss)) {
+                               || parsed->sub == repeaterTone::kRxCtcss
+                               || parsed->sub == repeaterTone::kDtcs)) {
             return cmdReadRepeaterToneRegister(addr, parsed->sub);
         }
         break;
@@ -4024,16 +4053,21 @@ void IcomCivBackend::setSliceFmToneMode(int, const QString& mode)
     }
     const QString normalized = mode.trimmed().toLower();
     if (ctcssRxProfileFor(m_model)) {
-        static const QHash<QString, int> values{
-            {QStringLiteral("off"), 0x00}, {QStringLiteral("ctcss_tx"), 0x01},
-            {QStringLiteral("ctcss_rx"), 0x02}, {QStringLiteral("ctcss_txrx"), 0x09}};
-        const auto it = values.constFind(normalized);
-        if (it == values.cend()) {
-            qCWarning(lcIcomCiv) << "refusing unsupported CTCSS mode" << mode;
+        const QByteArray normalizedUtf8 = normalized.toUtf8();
+        const auto value = repeaterAccessModeValue(std::string_view(
+            normalizedUtf8.constData(), static_cast<std::size_t>(normalizedUtf8.size())));
+        const FmRepeaterProfile* extended = extendedFmReadbackProfileFor(m_model);
+        const bool offered = extended && std::ranges::any_of(
+            extended->accessModes, [&normalized](std::string_view candidate) {
+                return normalized == QString::fromUtf8(
+                    candidate.data(), static_cast<int>(candidate.size()));
+            });
+        if (!value || !offered) {
+            qCWarning(lcIcomCiv) << "refusing unsupported FM tone mode" << mode;
             return;
         }
         sendUserCommand(cmdSetRepeaterAccess(m_session ? m_session->civAddress() : 0xA4,
-                                             static_cast<std::uint8_t>(*it)));
+                                             *value));
         return;
     }
     if (normalized != QLatin1String("off") && normalized != QLatin1String("ctcss_tx")) {
@@ -4054,6 +4088,19 @@ void IcomCivBackend::setSliceFmToneRxValue(int, double hz)
     }
     sendUserCommand(cmdSetCtcssTone(m_session ? m_session->civAddress() : 0xA4,
                                     repeaterTone::kRxCtcss, hz));
+}
+
+void IcomCivBackend::setSliceFmDtcs(int, int code, bool txReverse,
+                                    bool rxReverse)
+{
+    const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
+    if (!fm || !fm->hasDtcs || !isCanonicalDtcsCode(code)) {
+        qCWarning(lcIcomCiv) << "refusing invalid DTCS code" << code;
+        return;
+    }
+    sendUserCommand(cmdSetDtcsTone(
+        m_session ? m_session->civAddress() : 0xA4,
+        code, txReverse, rxReverse));
 }
 
 void IcomCivBackend::setSliceFmToneValue(int, double hz)

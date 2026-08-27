@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFlags>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -183,11 +184,13 @@ struct RadioCapabilities {
     // reach TransmitModel (#5106 review).
     QStringList receiveOnlyModes;
 
-    // CTCSS presentation is explicit so a vendor-specific model can expose
-    // its proven registers without changing another radio family's controls.
+    // FM tone presentation is explicit so a vendor-specific model can expose
+    // its proven CTCSS/DTCS registers without changing another radio family's
+    // controls. fmToneModes is the authoritative per-model mode vocabulary.
     // Hidden is the safe default; established backends opt into Legacy.
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
+    QList<int> fmDtcsCodes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams

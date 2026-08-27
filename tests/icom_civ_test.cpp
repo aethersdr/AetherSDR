@@ -5,6 +5,7 @@
 // Pure protocol: no sockets, no Qt, no hardware.
 
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
 #include <cmath>
 #include <cstdio>
@@ -196,9 +197,13 @@ static void testFmRepeaterCommands()
     for (const auto& [wireValue, expectedMode] : accessModes) {
         check(repeaterAccessModeName(wireValue) == expectedMode,
               "every documented 16 5D value keeps its radio-authoritative meaning");
+        check(repeaterAccessModeValue(expectedMode) == wireValue,
+              "every selectable repeater access mode round-trips to its wire value");
     }
     check(repeaterAccessModeName(0x04).empty(),
           "reserved 16 5D value has no normalized state token");
+    check(!repeaterAccessModeValue("future_dtcs_mode"),
+          "unknown repeater access intent fails closed");
     check(bytesAre(cmdReadRepeaterToneRegister(0xA2, repeaterTone::kRxCtcss),
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01, 0xFD}),
           "IC-9700 RX CTCSS read is 1B 01");
@@ -206,6 +211,20 @@ static void testFmRepeaterCommands()
         std::array<std::uint8_t, 3>{0x11, 0x00, 0x23});
     check(dtcs && dtcs->value == 23 && dtcs->txReverse && dtcs->rxReverse,
           "DTCS code and independent polarity bits decode");
+    check(bytesAre(cmdSetDtcsTone(0xA2, 23, true, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x02,
+                    0x10, 0x00, 0x23, 0xFD}),
+          "IC-9700 DTCS write preserves the leading zero and TX polarity");
+    check(cmdSetDtcsTone(0xA2, 1000, false, false).empty(),
+          "out-of-range DTCS code is refused before frame construction");
+    check(cmdSetDtcsTone(0xA2, 123, false, false).empty()
+              && cmdSetDtcsTone(0xA2, 888, false, false).empty(),
+          "non-standard and non-octal DTCS intent is refused by the encoder");
+    check(AetherSDR::kDtcsCodes.size() == 104
+              && AetherSDR::isCanonicalDtcsCode(23)
+              && AetherSDR::isCanonicalDtcsCode(754)
+              && !AetherSDR::isCanonicalDtcsCode(123),
+          "DTCS UI and backend share the standard 104-code vocabulary");
     check(!decodeRepeaterToneRegister(
               std::array<std::uint8_t, 3>{0x02, 0x00, 0x23}),
           "reserved DTCS polarity bits are rejected");

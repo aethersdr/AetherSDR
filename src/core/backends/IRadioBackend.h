@@ -560,6 +560,11 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(hz);
     }
+    virtual void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                                bool rxReverse)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(code); Q_UNUSED(txReverse); Q_UNUSED(rxReverse);
+    }
     virtual void setSliceRepeaterOffsetDir(int sliceId, const QString& direction)
     {
         Q_UNUSED(sliceId); Q_UNUSED(direction);

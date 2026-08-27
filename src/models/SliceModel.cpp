@@ -1,5 +1,6 @@
 #include "SliceModel.h"
 #include "core/DigitalVoiceModeRegistry.h"
+#include "core/DtcsCodes.h"
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
 
@@ -792,6 +793,16 @@ void SliceModel::setFmToneRxValue(const QString& value)
     emit fmToneRxValueChanged(value);
 }
 
+void SliceModel::setFmDtcs(int code, bool txReverse, bool rxReverse)
+{
+    if (!isCanonicalDtcsCode(code)) {
+        return;
+    }
+    // Operator intent is not radio state. The IC-9700 echoes 1B 02, and only
+    // that reply reaches applyChanges() and fmDtcsChanged().
+    emit fmDtcsCommandIssued(code, txReverse, rxReverse);
+}
+
 void SliceModel::setRepeaterOffsetDir(const QString& dir)
 {
     if (m_repeaterOffsetDir == dir) return;
@@ -1570,6 +1581,20 @@ void SliceModel::applyChanges(const SliceDelta& d)
         const double v = *d.fmToneRxValue;
         m_fmToneRxValue = QString::number(v, 'f', 1);
         emit fmToneRxValueChanged(m_fmToneRxValue);
+    }
+    if (d.fmDtcsCode.has_value() || d.fmDtcsTxReverse.has_value()
+        || d.fmDtcsRxReverse.has_value()) {
+        const int code = d.fmDtcsCode.value_or(m_fmDtcsCode);
+        const bool txReverse = d.fmDtcsTxReverse.value_or(m_fmDtcsTxReverse);
+        const bool rxReverse = d.fmDtcsRxReverse.value_or(m_fmDtcsRxReverse);
+        if (code != m_fmDtcsCode || txReverse != m_fmDtcsTxReverse
+            || rxReverse != m_fmDtcsRxReverse) {
+            m_fmDtcsCode = code;
+            m_fmDtcsTxReverse = txReverse;
+            m_fmDtcsRxReverse = rxReverse;
+            emit fmDtcsChanged(m_fmDtcsCode, m_fmDtcsTxReverse,
+                               m_fmDtcsRxReverse);
+        }
     }
     if (d.repeaterOffsetDir.has_value()) {
         m_repeaterOffsetDir = *d.repeaterOffsetDir;

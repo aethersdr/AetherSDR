@@ -653,6 +653,8 @@ enum class RepeaterOffsetDirection : std::uint8_t {
 // Empty means reserved/unknown. Kept here with the wire decoder so socket-free
 // protocol tests can pin every value without a fake radio session.
 [[nodiscard]] std::string_view repeaterAccessModeName(std::uint8_t value) noexcept;
+[[nodiscard]] std::optional<std::uint8_t> repeaterAccessModeValue(
+    std::string_view name) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     std::uint8_t to, std::uint8_t which);
 [[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
@@ -661,6 +663,8 @@ enum class RepeaterOffsetDirection : std::uint8_t {
 [[nodiscard]] std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to,
                                                         std::uint8_t which,
                                                         double toneHz);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
                                                              std::uint8_t mode);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;

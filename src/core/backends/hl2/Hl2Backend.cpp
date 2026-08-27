@@ -1378,6 +1378,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
     c.fmTonePresentation = FmTonePresentation::Legacy;
+    c.fmDtcsCodes = {};
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
     // running count would tell the UI the limit was already reached and

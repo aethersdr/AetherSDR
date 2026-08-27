@@ -540,6 +540,9 @@ int main(int argc, char** argv)
             check(caps.speechProcessorLevelMaximum == 100
                       && caps.speechProcessorLabel == QStringLiteral("COMP"),
                   "IC-9700 alone declares the continuous COMP presentation");
+            check(caps.fmDtcsCodes.size() == 104
+                      && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
+                  "IC-9700 declares the complete DTCS operator vocabulary");
         }
 
         for (const char* siblingName : {"IC-705", "IC-7300MK2"}) {
@@ -552,6 +555,8 @@ int main(int argc, char** argv)
                 check(caps.speechProcessorLevelMaximum == 2
                           && caps.speechProcessorLabel == QStringLiteral("PROC"),
                       "non-9700 Icom models retain the legacy PROC presentation");
+                check(caps.fmDtcsCodes.isEmpty(),
+                      "non-9700 Icom models do not activate DTCS controls");
             }
         }
     }
@@ -931,6 +936,10 @@ int main(int argc, char** argv)
               "Sim keeps its existing operator-controlled spot behavior");
         check(icomCaps.alwaysUseClientSideSpots,
               "Icom forces SpotHub spots through the passive client model");
+        check(fresh.fmDtcsCodes.isEmpty() && flexCaps.fmDtcsCodes.isEmpty()
+                  && hl2Caps.fmDtcsCodes.isEmpty() && simCaps.fmDtcsCodes.isEmpty()
+                  && icomCaps.fmDtcsCodes.isEmpty(),
+              "DTCS defaults and every non-IC-9700 backend declaration stay empty");
         check(flexCaps.speechProcessorLevelMaximum == 2
                   && flexCaps.speechProcessorLabel == QStringLiteral("PROC"),
               "Flex retains the legacy PROC presentation");

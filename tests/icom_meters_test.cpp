@@ -526,6 +526,7 @@ static void testCapabilityProfiles()
     const ControlSpec* rxAntenna = spec("rx.antenna");
     const ControlSpec* dataMode = spec("data.mode");
     const ControlSpec* txBandwidth = spec("tx.bandwidth.edges");
+    const ControlSpec* dtcs = spec("repeater.dtcs");
     const IcomModel& model705 = *modelForCivAddress(0xA4);
     const IcomModel& model9700 = *modelForCivAddress(0xA2);
     const IcomModel& modelMk2 = *modelForCivAddress(0xB6);
@@ -540,6 +541,12 @@ static void testCapabilityProfiles()
               && !controlSupported(model9700, p9700, *txBandwidth)
               && controlSupported(modelMk2, pMk2, *txBandwidth),
           "effective registry refuses to borrow TX bandwidth on IC-9700");
+    check(dtcs && dtcs->wiring == Wiring::Both && dtcs->encoding == Encoding::Dtcs
+              && dtcs->seamVerb == "setSliceFmDtcs"
+              && controlSupported(model9700, p9700, *dtcs)
+              && !controlSupported(model705, p705, *dtcs)
+              && !controlSupported(modelMk2, pMk2, *dtcs),
+          "DTCS write/read wiring is effective only for the activated IC-9700 profile");
     const IcomModel& identityOnly = *modelForCivAddress(0x98);
     const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
     const ControlSpec* frequency = spec("freq");

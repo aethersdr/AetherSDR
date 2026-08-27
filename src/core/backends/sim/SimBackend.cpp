@@ -237,6 +237,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
+    caps.fmDtcsCodes = {};
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     // Four receivers since #4887 phase 4 — enough to exercise the workspace
     // canvas's per-pan items and measure the multi-pan render budget in CI

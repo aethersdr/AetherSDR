@@ -1251,7 +1251,7 @@ void RadioModel::setupBackend(const QString& family)
                     [this, s](bool on, int level) {
                 if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
             });
-            // FM repeater controls are four distinct neutral intents.  Flex
+            // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
             // updating only the widgets.
@@ -1271,6 +1271,13 @@ void RadioModel::setupBackend(const QString& family)
                     [this, s](double hz) {
                 if (m_backend) {
                     m_backend->setSliceFmToneRxValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmDtcsCommandIssued, this,
+                    [this, s](int code, bool txReverse, bool rxReverse) {
+                if (m_backend) {
+                    m_backend->setSliceFmDtcs(
+                        s->sliceId(), code, txReverse, rxReverse);
                 }
             });
             connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
