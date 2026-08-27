@@ -416,6 +416,8 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
 
     m_cbCount.store(0, std::memory_order_relaxed);
     m_cbPeakMicro.store(0, std::memory_order_relaxed);
+    m_cbUnderflows.store(0, std::memory_order_relaxed);
+    m_cbOverflows.store(0, std::memory_order_relaxed);
     const PaStreamInfo* streamInfo = Pa_GetStreamInfo(m_stream);
     const PaHostApiInfo* hostApi = Pa_GetHostApiInfo(devInfo->hostApi);
     qCInfo(lcAudio) << "CwSidetonePortAudioSink: started"
@@ -431,11 +433,22 @@ int CwSidetonePortAudioSink::paCallback(const void* /*input*/,
                                         void* output,
                                         unsigned long frameCount,
                                         const PaStreamCallbackTimeInfo* /*timeInfo*/,
-                                        PaStreamCallbackFlags /*statusFlags*/,
+                                        PaStreamCallbackFlags statusFlags,
                                         void* userData)
 {
     auto* self = static_cast<CwSidetonePortAudioSink*>(userData);
     auto* dst = static_cast<float*>(output);
+
+    // Count the host's own deadline misses. Cheap (two predictable branches
+    // on a value already in a register) and it is the only thing that can
+    // tell an underflow apart from wake jitter after the fact: both show up
+    // in the envelope as a displaced element and nothing else distinguishes
+    // them. Relaxed ordering — these are diagnostics read after the stream
+    // stops, never used to make a decision inside the callback.
+    if (statusFlags & paOutputUnderflow)
+        self->m_cbUnderflows.fetch_add(1, std::memory_order_relaxed);
+    if (statusFlags & paOutputOverflow)
+        self->m_cbOverflows.fetch_add(1, std::memory_order_relaxed);
 
     // Always start from silence — PortAudio doesn't guarantee zeroed
     // buffers and the generator mixes additively.
@@ -463,9 +476,21 @@ int CwSidetonePortAudioSink::paCallback(const void* /*input*/,
 void CwSidetonePortAudioSink::stop()
 {
     if (m_stream) {
+        const quint32 under = m_cbUnderflows.load(std::memory_order_relaxed);
+        const quint32 over  = m_cbOverflows.load(std::memory_order_relaxed);
         qCInfo(lcAudio) << "CwSidetonePortAudioSink: stopping —"
                         << "callbacks=" << m_cbCount.load(std::memory_order_relaxed)
-                        << "peak=" << (m_cbPeakMicro.load(std::memory_order_relaxed) / 1e6);
+                        << "peak=" << (m_cbPeakMicro.load(std::memory_order_relaxed) / 1e6)
+                        << "underflows=" << under
+                        << "overflows=" << over;
+        // Warn separately rather than only in the summary line: an underflow
+        // is an audible gap in the sidetone, and a run that produced any is
+        // not a clean timing measurement.
+        if (under > 0 || over > 0)
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: stream reported"
+                               << under << "output underflow(s) and"
+                               << over << "overflow(s) — element timing from"
+                               << "this run is not clean";
         // Halt the callback before clearing the generator pointer so we
         // don't race with paCallback dereferencing a torn-down generator —
         // and before dumping the edge probe, which resets the same members
