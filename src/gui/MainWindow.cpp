@@ -2260,10 +2260,12 @@ MainWindow::MainWindow(QWidget* parent)
         // not yet received a meter definition is still not entitled to print a
         // number. Same separation as the DAX capability and its crash guard.
         const auto& meters = m_radioModel.meterModel();
+        const bool presentPaCurrent =
+            m_paCurrentStatusPreferred && meters.hasPaCurrentMeter();
         m_supplyVoltLabel->setText(
             meters.hasSupplyVoltage()
                 ? QStringLiteral("%1%2 V")
-                      .arg(meters.hasPaCurrentMeter()
+                      .arg(presentPaCurrent
                                ? QStringLiteral("Vd ") : QString(),
                            QString::number(supplyVolts, 'f', 2))
                 : QStringLiteral("—"));
@@ -4438,7 +4440,7 @@ void MainWindow::showQuickAddMemoryDialog(const QString& preferredPanId)
 void MainWindow::updatePaTempLabel()
 {
     const auto& meters = m_radioModel.meterModel();
-    if (meters.hasPaCurrentMeter()) {
+    if (m_paCurrentStatusPreferred && meters.hasPaCurrentMeter()) {
         const bool liveTxCurrent =
             (m_radioModel.transmitModel().isTransmitting()
              || m_radioModel.transmitModel().isTuning())
@@ -7118,6 +7120,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // with the rest of the identity block.
     m_radioManufacturer = connected ? caps.manufacturer : QString();
     refreshRadioIdentityLabels();
+
+    // The compact status stack gives PA temperature priority whenever the
+    // active backend declares it. Flex also publishes a PACURRENT meter, but
+    // that reading clips and must not replace its authoritative PATEMP value.
+    // Radios without temperature retain the established Vd/Id presentation
+    // when their calibrated meter definitions arrive.
+    m_paCurrentStatusPreferred = connected && !caps.hasPaTemperatureTelemetry;
+    updatePaTempLabel();
 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
