@@ -438,7 +438,8 @@ void MainWindow::wireSpotSubsystem()
         if (isDuplicateSpot(spot)) return;
         const int lifetimeSec = spotLifetimeSeconds(spot, source);
         const QString spotColor = spotColorForSource(spot, source);
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(spot, source, spotColor, lifetimeSec);
             return;
         }
@@ -468,7 +469,8 @@ void MainWindow::wireSpotSubsystem()
     spotCmdTimer->start(1000);
     connect(spotCmdTimer, &QTimer::timeout, this, [this] {
         if (m_spotCmdBatch.isEmpty() || !m_radioModel.isConnected()) return;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             m_spotCmdBatch.clear();
             return;
         }
@@ -713,7 +715,8 @@ void MainWindow::wireSpotSubsystem()
             cmd += " comment=" + QString(colored.comment).replace(' ', QChar(0x7f));
         if (!colored.color.isEmpty())
             cmd += " color=" + colored.color;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(colored, "WSJT-X", colored.color,
                                   spotLifetimeSeconds(colored, "WSJT-X"));
             return;

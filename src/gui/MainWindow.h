@@ -21,6 +21,7 @@
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
 #include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
+#include "gui/ConnectSliceEnumerationGuard.h"
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
@@ -415,6 +416,18 @@ private:
                                                        const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
+    // Shared band-selection implementation, used by both the
+    // SpectrumOverlayMenu band buttons and the band_* shortcut/MIDI actions
+    // so they behave identically (#4543):
+    //   - Flex: freqMhz/mode are hints only. selectBand() sends a
+    //     radio-authoritative band-stack recall (display pan set <panId>
+    //     band=<key>) and the radio restores its own saved frequency/mode/
+    //     filters/antenna; freqMhz/mode are ignored.
+    //   - non-Flex: there is no radio-owned band stack, so freqMhz/mode ARE
+    //     the actual local tune target — selectBand() sets mode (if
+    //     non-empty) then frequency directly on the active slice.
+    void selectBand(const QString& panId, const QString& bandName, double freqMhz,
+                    const QString& mode, const QString& stackKeyHint = QString());
     // Lock / SWR-sweep guards shared by every tune source.  Returns true if the
     // tune must be blocked (and, for a locked active slice, restores the VFO
     // readout).  Lets the edge-pan tune path — which bypasses applyTuneRequest
@@ -1338,6 +1351,9 @@ private:
     // write is dropped, and must outlast a slow rebuild. See the header.
     BandRecallSelectionGuard m_bandRecallSelection{
         kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
+    static constexpr int kConnectSliceEnumerationGraceMs = 3000;
+    ConnectSliceEnumerationGuard m_connectSliceEnumeration{
+        kConnectSliceEnumerationGraceMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1415,6 +1431,7 @@ private:
     // Menus
     QMenu*           m_profilesMenu{nullptr};
     QAction*         m_txBandAction{nullptr};
+    QMenu*           m_tuneInhibitMenu{nullptr};  // Flex rear-panel TX outputs — dimmed off-Flex (#5263)
     // Settings ▸ "Autostart DAX with AetherSDR". Held so
     // applyCapabilitiesToUi() can hide it on a radio with no DAX streams.
     // Null on platforms without a DAX bridge, where the entry is never created.

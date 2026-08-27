@@ -793,6 +793,8 @@ void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
     if (pitchHz > 0 && speedWpm > 0)
         m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));
+    else
+        m_cwStatsLabel->clear();   // decoder stopped — don't show a dead estimate (#5213)
 }
 
 void PanadapterApplet::clearCwText()

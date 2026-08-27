@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QMetaObject>
 
 class QPushButton;
 class QLabel;
@@ -164,6 +165,9 @@ private:
     // across an un-key, so stopping the poller alone cannot prevent a late
     // non-zero sample from repainting an idle gauge.
     bool m_transmitting{false};
+    bool m_forwardPowerRequiresSmoothing{true};
+    bool m_forwardPowerScaleFollowsBandRating{false};
+    QMetaObject::Connection m_capabilitiesConnection;
 
     // PEP peak-hold for the FWDPWR gauge — mirrors the SMeterWidget RX
     // peak-hold pattern.  The peak captures the highest pre-smoothed FWDPWR

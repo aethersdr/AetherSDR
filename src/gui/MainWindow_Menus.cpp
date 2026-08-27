@@ -559,6 +559,10 @@ void MainWindow::buildMenuBar()
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
     // Uses QWidgetAction with QCheckBox so the menu stays open for multi-select.
     auto* tuneInhibitMenu = settingsMenu->addMenu("Inhibit during TUNE");
+    // Kept as a member so applyCapabilitiesToUi can dim it (with TX Band
+    // Settings) on backends with no Flex command plane — doctrine (#5263):
+    // dim, never hide.
+    m_tuneInhibitMenu = tuneInhibitMenu;
 
     auto& settings = AppSettings::instance();
     struct InhibitDef { const char* label; const char* key; };

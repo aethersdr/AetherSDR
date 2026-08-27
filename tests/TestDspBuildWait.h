@@ -26,11 +26,11 @@
 namespace AetherSDR::test {
 
 // A BACKSTOP, not a budget: reaching it means something is wrong, not that the
-// machine was slow. Sized from measurement rather than taste — one cold
-// hl2_backend_test spent ~70 s of its 88 s wall time on plan measurement alone,
-// on a 32-core box under load ~26, and `ctest -j8` puts several cold-cache tests
-// through the planner at once. 120 s left too little between "slow host" and
-// "hung".
+// machine was slow. Sized from measurement rather than taste — before that
+// fixture was retired, one cold hl2_backend_test spent ~70 s of its 88 s wall
+// time on plan measurement alone, on a 32-core box under load ~26, and
+// `ctest -j8` puts several cold-cache tests through the planner at once. 120 s
+// left too little between "slow host" and "hung".
 constexpr int kDspBuildTimeoutMs = 240000;
 
 inline bool spinUntil(const std::function<bool()>& done,

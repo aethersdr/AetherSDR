@@ -23,6 +23,7 @@
 class QVBoxLayout;
 class QScreen;
 class QScrollArea;
+class QSpinBox;
 
 namespace AetherSDR {
 
@@ -197,7 +198,8 @@ private:
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
-                           const QHostAddress& lastSuccessfulLocalIp);
+                           const QHostAddress& lastSuccessfulLocalIp,
+                           quint16 icomBasePort = 0);
     void saveLowBandwidthPreference(bool enabled);
     void setManualMessage(const QString& text, bool error = false);
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
@@ -253,6 +255,8 @@ private:
     // orphan labels behind.
     QWidget*     m_manualIcomUserRow{nullptr};
     QWidget*     m_manualIcomPassRow{nullptr};
+    QWidget*     m_manualIcomPortRow{nullptr};
+    QWidget*     m_manualIcomPortCustomRow{nullptr};
     QWidget*     m_manualIcomCivRow{nullptr};
     // The hex entry's own row, shown only for "Custom...". Separate from the
     // combo's row so the two can be hidden independently — the label column is
@@ -261,6 +265,8 @@ private:
     QWidget*     m_manualIcomCivCustomRow{nullptr};
     QLineEdit*   m_manualIcomUserEdit{nullptr};
     QLineEdit*   m_manualIcomPassEdit{nullptr};
+    QComboBox*   m_manualIcomPortCombo{nullptr};
+    QSpinBox*    m_manualIcomBasePortSpin{nullptr};
     // The model chooser. Non-editable: it enumerates a known set with an escape
     // hatch, which is populateSerialPortCombo's job, not m_manualIpCombo's
     // recent-values history.
@@ -268,6 +274,8 @@ private:
     QLineEdit*   m_manualIcomCivEdit{nullptr};
     void         populateIcomCivCombo();
     void         syncIcomCivCustomRow();
+    void         syncIcomPortCustomRow();
+    quint16      selectedIcomBasePort() const;
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.
@@ -278,6 +286,7 @@ private:
     QString      m_pendingIcomPassword;
     QString      m_pendingIcomHost;
     QString      m_pendingIcomResolvedHost;
+    quint16      m_pendingIcomBasePort{0};
     RadioBindSettings m_pendingIcomBindSettings;
     QHostAddress m_pendingIcomSessionBindAddress;
     QLineEdit*   m_manualIpEdit{nullptr};
