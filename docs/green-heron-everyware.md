@@ -140,8 +140,6 @@ declared for the tile.
 | `src/models/GreenHeronModel.{h,cpp}` | the socket, keepalive, reconnect backoff, and the state they produce |
 | `src/gui/GreenHeronApplet.{h,cpp}` | the tile; owns its own model |
 | `tests/green_heron_protocol_test.cpp` | verbatim wire fixtures in, records out |
-| `tests/green_heron_model_test.cpp` | the socket path against a stand-in server on loopback |
-| `tests/green_heron_applet_test.cpp` | the tile, offscreen |
 
 The protocol TU is pure so the parser can be tested against bytes captured off
 the device with no hardware and no network. The applet owns its model rather
@@ -271,8 +269,7 @@ So `GreenHeronModel` keeps two orderings and they are not interchangeable:
 `announcedOrder()` is arrival order, append-only across reconnects, and is the
 index basis for lock slots; `displayOrder()` is sorted and is only for
 presentation. Conflating them mislabels which switch holds an antenna, with no
-crash and nothing logged. `green_heron_model_test` pins the discriminating
-case.
+crash and nothing logged.
 
 Locks propagate one switch per round-robin step, so the full set takes a few
 seconds to converge. Lock state briefly appearing on some switches and not
@@ -328,8 +325,7 @@ That ordering is load-bearing and it is easy to get wrong in a way loopback
 tests do not catch: a handler that writes `announced` onto an existing rotator
 entry writes it onto nothing, every time, because there is no entry yet. The
 model keeps the announced names in a list of their own and `POINT` consults it
-when it creates the rotator. `green_heron_model_test` sends the two records in
-that order and asserts the flag survives.
+when it creates the rotator.
 
 `ADD` is handled as a **generic device announcement, not a rotator one**. Every
 capture of it reads `ADD␟Rotor`, and that field is the device's
