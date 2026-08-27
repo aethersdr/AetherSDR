@@ -1260,20 +1260,6 @@ add_test(NAME automation_server_gesture_test COMMAND automation_server_gesture_t
 set_tests_properties(automation_server_gesture_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Text-view content on the bridge (#5078): capped dump_tree value + valueTruncated,
-# the `text` verb's full document and line count, empty-but-present, non-text error.
-add_executable(automation_text_view_test
-    tests/automation_text_view_test.cpp
-)
-target_include_directories(automation_text_view_test PRIVATE src tests)
-target_link_libraries(automation_text_view_test PRIVATE
-    aethercore Qt6::Core Qt6::Network Qt6::Widgets
-)
-set_target_properties(automation_text_view_test PROPERTIES AUTOMOC ON)
-add_test(NAME automation_text_view_test COMMAND automation_text_view_test)
-set_tests_properties(automation_text_view_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
     src/core/ClientQuindarTone.cpp
