@@ -372,6 +372,76 @@ int main(int argc, char** argv)
                      "applying radio status does not emit mic operator intent");
     }
 
+    // ── CW break-in delay: operator-authoritative against the QSK-floor walk ──
+    //
+    // SmartSDR pins break_in_delay to a WPM-derived QSK floor and walks it down
+    // as speed rises. On an amplifier that can't tolerate QSK that is silent
+    // hot-switching. The model holds the operator's (or the radio's first-known)
+    // delay and re-asserts it when a speed change drags the echoed delay below
+    // it — while still adopting a delay change the operator actually made.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        QObject::connect(&cw, &TransmitModel::commandReady,
+                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        // First delay the model learns (here a radio echo) seeds the held value.
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 20; d.cwDelay = 25; }));
+        ok &= expect(cw.cwDelay() == 25, "first break_in_delay echo is adopted");
+
+        // A speed change the operator didn't point at the delay: the radio
+        // answers by walking the delay down; the model reverts it and re-sends.
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 32; d.cwDelay = 11; }));
+        ok &= expect(cw.cwDelay() == 25,
+                     "speed-coupled break_in_delay drop is reverted to the held value");
+        ok &= expect(cwCmds == QStringList({"cw break_in_delay 25"}),
+                     "the held break_in_delay is re-asserted to the radio");
+
+        // The radio raising the delay on a speed decrease is safe for the amp —
+        // adopt it and let it become the new held value.
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 18; d.cwDelay = 60; }));
+        ok &= expect(cw.cwDelay() == 60 && cwCmds.isEmpty(),
+                     "a speed-coupled break_in_delay increase is adopted, not fought");
+
+        // A delay change with no speed change riding it is a genuine operator
+        // action elsewhere (SmartSDR knob, another client) — adopt it even when
+        // it is lower.
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 8; }));
+        ok &= expect(cw.cwDelay() == 8 && cwCmds.isEmpty(),
+                     "a standalone break_in_delay drop is adopted as operator intent");
+
+        // After that adoption the new floor is 8: a later speed nudge that the
+        // radio answers with something below 8 is reverted to 8.
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 40; d.cwDelay = 4; }));
+        ok &= expect(cw.cwDelay() == 8 && cwCmds == QStringList({"cw break_in_delay 8"}),
+                     "the held value tracks the operator's latest explicit delay");
+
+        // An explicit local setCwDelay is the operator's word: it becomes the
+        // held value and clears any armed guard.
+        cw.setCwSpeed(24);                 // arm the guard
+        cwCmds.clear();
+        cw.setCwDelay(450);
+        ok &= expect(cw.cwDelay() == 450 && cwCmds == QStringList({"cw break_in_delay 450"}),
+                     "setCwDelay adopts and sends the operator value");
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 450; }));
+        ok &= expect(cw.cwDelay() == 450 && cwCmds.isEmpty(),
+                     "the radio echo of the just-set delay is a no-op");
+
+        // A deliberate full-QSK 0 is not something to defend — no guard arms, no
+        // re-assert fires when speed then moves.
+        cw.setCwDelay(0);
+        cw.setCwSpeed(30);
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 35; d.cwDelay = 5; }));
+        ok &= expect(cw.cwDelay() == 5 && cwCmds.isEmpty(),
+                     "a deliberate QSK (delay 0) is left alone across speed changes");
+    }
+
     ClientQuindarTone quindar;
     quindar.prepare(24000.0);
     quindar.setEnabled(true);

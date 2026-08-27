@@ -126,10 +126,36 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
+    if (assign(d.cwSpeed, m_cwSpeed)) {
+        phoneChanged = true;
+        cwSpeedChanged_ = true;
+        // A speed nudge that the operator didn't aim at the break-in delay:
+        // arm the guard so the QSK-floor walk the radio does next (see the
+        // cwDelay handling below) is caught and reverted. Only when there is a
+        // held value to protect — a deliberate full-QSK 0 is left alone.
+        if (m_cwDelayHeld > 0) m_cwSpeedGuardArmed = true;
+    }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
-    phoneChanged |= assign(d.cwDelay, m_cwDelay);
+    // Break-in delay is operator-authoritative once known (#2428 follow-up).
+    // SmartSDR pins break_in_delay to a WPM-derived QSK floor and walks it
+    // down as speed rises; on an amplifier that can't tolerate QSK that is
+    // silent hot-switching. When a delay echo drops below the held value in
+    // the wake of a speed change the operator didn't point at the delay,
+    // re-assert the held value instead of adopting the radio's floor. A delay
+    // change that isn't riding a speed nudge is a genuine operator action
+    // (SmartSDR knob, another client) and becomes the new held value.
+    if (d.cwDelay) {
+        const int echoed = *d.cwDelay;
+        if (m_cwSpeedGuardArmed && m_cwDelayHeld > 0 && echoed < m_cwDelayHeld) {
+            if (m_cwDelay != m_cwDelayHeld) { m_cwDelay = m_cwDelayHeld; phoneChanged = true; }
+            emit commandReady(QString("cw break_in_delay %1").arg(m_cwDelayHeld));
+        } else {
+            if (m_cwDelay != echoed) { m_cwDelay = echoed; phoneChanged = true; }
+            m_cwDelayHeld = echoed;
+        }
+        m_cwSpeedGuardArmed = false;   // evaluated once per speed nudge
+    }
     phoneChanged |= assign(d.cwSidetone, m_cwSidetone);
     phoneChanged |= assign(d.cwIambic, m_cwIambic);
     phoneChanged |= assign(d.cwIambicMode, m_cwIambicMode);
@@ -709,6 +735,10 @@ void TransmitModel::setCwSpeed(int wpm)
     wpm = qBound(5, wpm, 100);
     if (m_cwSpeed != wpm) {
         m_cwSpeed = wpm;
+        // Arm the break-in-delay guard: the radio may answer this speed change
+        // by walking break_in_delay down to its QSK floor (reverted in
+        // applyChanges). Only when there is a held value worth protecting.
+        if (m_cwDelayHeld > 0) m_cwSpeedGuardArmed = true;
         emit phoneStateChanged();
         emit cwSpeedChanged(m_cwSpeed);
     }
@@ -741,6 +771,11 @@ void TransmitModel::setCwBreakIn(bool on)
 void TransmitModel::setCwDelay(int ms)
 {
     ms = qBound(0, ms, 2000);
+    // An explicit delay action is the operator's word on the matter: it becomes
+    // the value applyChanges re-asserts against the radio's QSK-floor walk, and
+    // it clears any guard armed by a prior speed nudge.
+    m_cwDelayHeld = ms;
+    m_cwSpeedGuardArmed = false;
     if (m_cwDelay != ms) {
         m_cwDelay = ms;
         emit phoneStateChanged();

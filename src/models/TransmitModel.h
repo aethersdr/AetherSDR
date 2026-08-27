@@ -465,6 +465,14 @@ private:
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms
+    // Operator-authoritative break-in delay and the "a speed change just
+    // happened" guard. Together they revert SmartSDR's habit of walking
+    // break_in_delay down to a WPM-derived QSK floor on a speed change the
+    // operator never pointed at the delay — silent hot-switching on an
+    // amplifier that can't tolerate QSK. Seeded from the first delay the model
+    // learns (radio or operator); every setCwDelay() overrides it. -1 = unset.
+    int  m_cwDelayHeld{-1};
+    bool m_cwSpeedGuardArmed{false};
     bool m_cwSidetone{true};
     bool m_cwIambic{true};
     int  m_cwIambicMode{0};   // 0=A, 1=B
