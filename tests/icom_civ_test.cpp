@@ -176,6 +176,64 @@ static void testFmRepeaterCommands()
           "100.0 Hz CTCSS decodes");
     check(!decodeRepeaterToneHz(std::array<std::uint8_t, 3>{0x01, 0x10, 0x00}),
           "invalid repeater tone prefix is rejected");
+    check(bytesAre(cmdReadRepeaterAccess(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x16, 0x5D, 0xFD}),
+          "IC-9700 extended access read is 16 5D");
+    check(decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x08}) == 0x08,
+           "documented mixed DTCS/TSQL access value decodes");
+    check(!decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x04}),
+           "reserved repeater access value is rejected");
+    const std::array<std::pair<std::uint8_t, std::string_view>, 8> accessModes{{
+        {0x00, "off"},
+        {0x01, "ctcss_tx"},
+        {0x02, "ctcss_rx"},
+        {0x03, "dtcs_txrx"},
+        {0x06, "dtcs_tx"},
+        {0x07, "ctcss_tx_dtcs_rx"},
+        {0x08, "dtcs_tx_ctcss_rx"},
+        {0x09, "ctcss_txrx"},
+    }};
+    for (const auto& [wireValue, expectedMode] : accessModes) {
+        check(repeaterAccessModeName(wireValue) == expectedMode,
+              "every documented 16 5D value keeps its radio-authoritative meaning");
+    }
+    check(repeaterAccessModeName(0x04).empty(),
+          "reserved 16 5D value has no normalized state token");
+    check(bytesAre(cmdReadRepeaterToneRegister(0xA2, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01, 0xFD}),
+          "IC-9700 RX CTCSS read is 1B 01");
+    const auto dtcs = decodeRepeaterToneRegister(
+        std::array<std::uint8_t, 3>{0x11, 0x00, 0x23});
+    check(dtcs && dtcs->value == 23 && dtcs->txReverse && dtcs->rxReverse,
+          "DTCS code and independent polarity bits decode");
+    check(!decodeRepeaterToneRegister(
+              std::array<std::uint8_t, 3>{0x02, 0x00, 0x23}),
+          "reserved DTCS polarity bits are rejected");
+    check(!decodeRepeaterToneRegister(
+              std::array<std::uint8_t, 3>{0x00, 0x0A, 0x23}),
+          "non-BCD extended tone data is rejected");
+    const std::array<std::uint8_t, 5> txFrequency{
+        0x00, 0x56, 0x42, 0x48, 0x04};
+    check(decodeFreqExact(txFrequency, kFreqBytes) == 448'425'600ULL,
+          "IC-9700 transmit-frequency readback decodes at exact arity");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 4>{0x00, 0x56, 0x42, 0x48}, kFreqBytes),
+          "truncated transmit-frequency readback is rejected");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 6>{0x00, 0x56, 0x42, 0x48, 0x04, 0x00},
+              kFreqBytes),
+          "oversized transmit-frequency readback is rejected");
+    check(bytesAre(cmdSetRepeaterAccess(kIc705, 0x09),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x16, 0x5D, 0x09, 0xFD}),
+          "CTCSS TX/RX access selector write frame");
+    check(bytesAre(cmdReadRepeaterToneRegister(
+                       kIc705, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x1B, 0x01, 0xFD}),
+          "receive CTCSS tone read frame");
+    check(bytesAre(cmdSetCtcssTone(kIc705, repeaterTone::kRxCtcss, 103.5),
+                   {0xFE, 0xFE, kIc705, kControllerAddress,
+                    0x1B, 0x01, 0x00, 0x10, 0x35, 0xFD}),
+          "receive CTCSS tone write frame");
 }
 
 static void testReassembler()
@@ -353,6 +411,9 @@ static void testCommands()
     check(bytesAre(cmdReadTransmitFrequencyCheck(0xA2),
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x02, 0xFD}),
           "IC-9700 XFC read is 1C 02 with no payload");
+    check(bytesAre(cmdReadTransmitFrequency(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x03, 0xFD}),
+          "IC-9700 transmit-frequency read is 1C 03");
     check(bytesAre(cmdReadMeter(kIc705, meter::kSMeter),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x02, 0xFD}),
           "S-meter read is 15 02");
@@ -428,6 +489,13 @@ static void testCommands()
     check(bytesAre(cmdWriteSetting(0xB6, 84, 0x00),
                    {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x00, 0xFD}),
           "IC-7300MK2 PC Audio off restores MIC without touching DATA MOD 0085");
+    check(bytesAre(cmdReadSetting(0xA2, 114),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14, 0xFD}),
+          "IC-9700 LAN MOD level read is SET 0114");
+    check(bytesAre(cmdWriteSettingLevel(0xA2, 114, 26),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14,
+                    0x00, 0x26, 0xFD}),
+          "IC-9700 LAN MOD 10% writes the documented two-byte 0026 level");
 }
 
 // DATA mode — command 26.

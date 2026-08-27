@@ -3,6 +3,8 @@
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
 
+#include <cmath>
+
 namespace AetherSDR {
 
 // Note: antenna-list splitting now lives in FlexBackend::decodeSliceStatus
@@ -780,6 +782,16 @@ void SliceModel::setFmToneValue(const QString& value)
     emit fmToneValueChanged(value);
 }
 
+void SliceModel::setFmToneRxValue(const QString& value)
+{
+    if (m_fmToneRxValue == value) {
+        return;
+    }
+    m_fmToneRxValue = value;
+    emit fmToneRxValueCommandIssued(value.toDouble());
+    emit fmToneRxValueChanged(value);
+}
+
 void SliceModel::setRepeaterOffsetDir(const QString& dir)
 {
     if (m_repeaterOffsetDir == dir) return;
@@ -824,6 +836,14 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
     }
     emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
                                        toneMode, toneHz);
+}
+
+double SliceModel::txOffsetForDirection(const QString& dir, double magnitudeMhz)
+{
+    const double magnitude = std::abs(magnitudeMhz);
+    if (dir == QLatin1String("up"))   return  magnitude;
+    if (dir == QLatin1String("down")) return -magnitude;
+    return 0.0;   // simplex, and anything not a duplex direction
 }
 
 void SliceModel::setTxOffsetFreq(double mhz)
@@ -1545,6 +1565,11 @@ void SliceModel::applyChanges(const SliceDelta& d)
         double v = *d.fmToneValue;
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);
+    }
+    if (d.fmToneRxValue.has_value()) {
+        const double v = *d.fmToneRxValue;
+        m_fmToneRxValue = QString::number(v, 'f', 1);
+        emit fmToneRxValueChanged(m_fmToneRxValue);
     }
     if (d.repeaterOffsetDir.has_value()) {
         m_repeaterOffsetDir = *d.repeaterOffsetDir;

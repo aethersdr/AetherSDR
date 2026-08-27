@@ -21,6 +21,7 @@
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
 #include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
+#include "gui/ConnectSliceEnumerationGuard.h"
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
@@ -789,6 +790,15 @@ private:
     // the finished handler can detect a change and recreate the RX audio stream.
     void wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp);
 
+    // Open (or raise) the persistent RadioSetupDialog and, if given a
+    // non-empty page name, select that page. Collapses the prevComp/wasFresh/
+    // wireRadioSetupDialogSignals dance that used to be copy-pasted at every
+    // call site (Settings → Radio Setup, USB Cables, XVTR overlay,
+    // FlexControl "Settings…") into one place (#4940 follow-up — PR #5157
+    // review). Returns the dialog so a caller needing a page-specific reveal
+    // (e.g. revealFlexControlSettings()) can act on it further.
+    RadioSetupDialog* openRadioSetupPage(const QString& page = {});
+
     // Reorder the main splitter so the applet panel sits on the left or
     // right of the panadapter stack.  Wired from the dock-side icons in
     // the title bar and persisted via "AppletPanelDockedLeft".
@@ -840,6 +850,9 @@ private:
     void publishRadioStateMqtt();
 #endif
     void applyPanLayout(const QString& layoutId);
+    void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
+    void settleCanvasPanLayout(const QString& layoutId, int expectedPanCount,
+                               int attemptsRemaining, quint64 generation);
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
     void showPanadapterSliceCapacityMessage();
@@ -1266,6 +1279,9 @@ private:
     WorkspaceCanvas*     m_workspaceCanvas{nullptr};
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
+    quint64              m_canvasPanLayoutGeneration{0};
+    QString              m_pendingCanvasPanLayoutId;
+    int                  m_pendingCanvasPanLayoutTarget{-1};
     // Additional canvas windows (phase 7), keyed by surface id.  A hidden
     // window stays in the map (hide-and-keep reuses its canvas object);
     // only remove/shutdown deletes.
@@ -1323,6 +1339,9 @@ private:
     // write is dropped, and must outlast a slow rebuild. See the header.
     BandRecallSelectionGuard m_bandRecallSelection{
         kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
+    static constexpr int kConnectSliceEnumerationGraceMs = 3000;
+    ConnectSliceEnumerationGuard m_connectSliceEnumeration{
+        kConnectSliceEnumerationGraceMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1400,6 +1419,7 @@ private:
     // Menus
     QMenu*           m_profilesMenu{nullptr};
     QAction*         m_txBandAction{nullptr};
+    QMenu*           m_tuneInhibitMenu{nullptr};  // Flex rear-panel TX outputs — dimmed off-Flex (#5263)
     // Settings ▸ "Autostart DAX with AetherSDR". Held so
     // applyCapabilitiesToUi() can hide it on a radio with no DAX streams.
     // Null on platforms without a DAX bridge, where the entry is never created.

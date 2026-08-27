@@ -541,7 +541,7 @@
  },
  "core/SpotCommandPolicy.h": {
   "tag": "ui-support",
-  "note": "Settings-backed passive-spots toggle gating whether client emits spot-add cmds; pure AppSettings policy, no radio state",
+  "note": "Passive-spots policy gates spot-add commands from both the operator toggle and a backend-declared client-side fallback; no radio state",
   "split": "",
   "confidence": "medium"
  },

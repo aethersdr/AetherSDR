@@ -14,6 +14,11 @@ namespace AetherSDR {
 class HGauge;
 class TransmitModel;
 
+enum class MicMeterSessionState {
+    Disconnected,
+    Connected,
+};
+
 // P/CW applet — mode-aware panel that shows Phone controls (default) or CW
 // controls when the active slice is in CW/CWL mode.  Both sub-panels live
 // inside a QStackedWidget beneath a shared "P/CW" title bar.
@@ -27,8 +32,9 @@ public:
     // Show or hide the mic-level gauge. False on a radio that defines no
     // microphone-peak meter at all — the face would be permanently at its floor
     // and read as a fault rather than as an absence.
-    void setMicLevelMeterAvailable(bool available);
+    void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setDaxVisible(bool visible);
+    void setSpeechProcessorPresentation(const QString& label, int maximum);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
@@ -70,6 +76,7 @@ private:
     void syncPhoneFromModel();
     void syncCwFromModel();
     void applyLevelMeterReceiveGate();
+    void resetLevelMeter();
 
     TransmitModel* m_model{nullptr};
     QStackedWidget* m_stack{nullptr};
@@ -79,6 +86,7 @@ private:
     // ── Phone sub-panel widgets ──────────────────────────────────────────
 
     HGauge* m_levelGauge{nullptr};
+    MicMeterSessionState m_micLevelMeterSession{MicMeterSessionState::Disconnected};
     bool m_micLevelMeterAvailable{true};
     HGauge* m_compGauge{nullptr};
 
@@ -91,7 +99,10 @@ private:
     QPushButton* m_accBtn{nullptr};
 
     QPushButton* m_procBtn{nullptr};
-    QSlider*     m_procSlider{nullptr};   // 3-position: 0=NOR, 1=DX, 2=DX+
+    QSlider*     m_procSlider{nullptr};   // capability-shaped: presets or 0..100
+    QLabel*      m_procLowLabel{nullptr};
+    QLabel*      m_procMidLabel{nullptr};
+    QLabel*      m_procHighLabel{nullptr};
     QPushButton* m_daxBtn{nullptr};
 
     QPushButton* m_monBtn{nullptr};

@@ -323,6 +323,10 @@ static void testSerialEnvelope()
           "serial open is 0xc0 with magic 0x05");
     auto close = buildSerialOpen(1, 2, 1, false);
     check(close[0x15] == 0x00, "serial close is magic 0x00");
+    const auto restart = buildSerialRestart(1, 2, 2);
+    check(restart.size() == kLenOpenClose && restart[0x10] == 0xc0
+              && restart[0x15] == 0x04,
+          "serial data restart retains the open envelope with magic 0x04");
 }
 
 static void testAudioEnvelope()

@@ -50,6 +50,11 @@ public:
                               VkampConnection* vkamp = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
+    // Like selectTab("Serial & Controllers"), but also scrolls the page so
+    // the FlexControl Tuning Knob group is actually in view instead of just
+    // landing at the top of a long, scroll-wrapped page (#4940 follow-up —
+    // PR #5157 review).
+    void revealFlexControlSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
 
@@ -157,6 +162,7 @@ private:
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};
+    QGroupBox* m_flexControlGroup{nullptr};
     QPushButton* m_flexControlDetectButton{nullptr};
     QPushButton* m_flexControlCloseButton{nullptr};
     QCheckBox* m_flexControlInvertCheck{nullptr};

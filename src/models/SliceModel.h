@@ -185,6 +185,7 @@ public:
     // Getters — FM duplex/repeater
     QString fmToneMode()          const { return m_fmToneMode; }
     QString fmToneValue()         const { return m_fmToneValue; }
+    QString fmToneRxValue()       const { return m_fmToneRxValue; }
     QString repeaterOffsetDir()   const { return m_repeaterOffsetDir; }
     double  fmRepeaterOffsetFreq()const { return m_fmRepeaterOffsetFreq; }
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
@@ -299,11 +300,18 @@ public:
     // Setters — FM duplex/repeater
     void setFmToneMode(const QString& mode);
     void setFmToneValue(const QString& value);
+    void setFmToneRxValue(const QString& value);
     void setRepeaterOffsetDir(const QString& dir);
     void setFmRepeaterOffsetFreq(double mhz);
     void applyRecalledFmRepeater(const QString& direction, double offsetMhz,
                                  const QString& toneMode, double toneHz);
     void setTxOffsetFreq(double mhz);
+    // The signed TX offset a repeater direction + unsigned magnitude imply.
+    // Direction and magnitude each send only their own key, so tx_offset_freq
+    // — the field that actually moves the transmitter — has to be written
+    // alongside them; every caller that sets duplex must send all three.
+    // One copy, because three hand-rolled ones is how this drifted (#5102).
+    static double txOffsetForDirection(const QString& dir, double magnitudeMhz);
     void setFmDeviation(int hz);
 
     // Apply a normalized, typed slice delta from the backend
@@ -455,12 +463,14 @@ signals:
     // FM duplex/repeater signals
     void fmToneModeChanged(const QString& mode);
     void fmToneValueChanged(const QString& value);
+    void fmToneRxValueChanged(const QString& value);
     void repeaterOffsetDirChanged(const QString& dir);
     void fmRepeaterOffsetFreqChanged(double mhz);
     void txOffsetFreqChanged(double mhz);
     void fmDeviationChanged(int hz);
     void fmToneModeCommandIssued(const QString& mode);
     void fmToneValueCommandIssued(double hz);
+    void fmToneRxValueCommandIssued(double hz);
     void repeaterOffsetDirCommandIssued(const QString& direction);
     void fmRepeaterOffsetCommandIssued(double hz);
     void fmRepeaterRecallCommandIssued(const QString& direction, double offsetHz,
@@ -600,6 +610,7 @@ private:
     // FM duplex/repeater state
     QString m_fmToneMode{"off"};
     QString m_fmToneValue{"100.0"};
+    QString m_fmToneRxValue{"100.0"};
     QString m_repeaterOffsetDir{"simplex"};
     double  m_fmRepeaterOffsetFreq{0.0};
     double  m_txOffsetFreq{0.0};

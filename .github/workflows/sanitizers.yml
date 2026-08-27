@@ -27,6 +27,11 @@ jobs:
           - id: asan-ubsan
             label: ASan + UBSan
             build_type: Debug
+            # ON here too, not only under TSan: the churn test's documented
+            # failure class is a heap use-after-free on the receiver vector,
+            # and a sequential UAF produces no TSan report — catching it is
+            # ASan's job. See HERMES §20.15.
+            receiver_churn: "ON"
             # ASan + UBSan applied via CXXFLAGS / LDFLAGS so the flags
             # reach every target the build produces — including the
             # standalone unit-test executables (declared in
@@ -48,6 +53,7 @@ jobs:
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
+            receiver_churn: "ON"
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
             runtime_env: |
@@ -61,8 +67,14 @@ jobs:
           CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: |
+          # The TX loopback flag is compile coverage only: without an hpsdrsim
+          # answering discovery the test exits 77 and ctest reports it Skipped.
+          # Building it weekly keeps the source honest against API drift now
+          # that it is out of the default graph.
           cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }}
+            -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }} \
+            -DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=${{ matrix.sanitizer.receiver_churn }} \
+            -DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON
 
       - name: Build
         run: cmake --build build --parallel

@@ -84,6 +84,14 @@ public:
     void setPanId(const QString& id);
     QString panId() const { return m_panId; }
 
+    // Set the panadapter's stable client-side slot index (SpectrumWidget::panIndex()
+    // — 0, 1, 2, 3 by layout position, distinct from the radio-assigned m_panId
+    // string above). Used to key the persisted collapsed/expanded state of this
+    // menu so each panadapter slot remembers its own preference across restarts
+    // (client-side UI preference, not radio-authoritative — see AGENTS.md
+    // "Settings Authority Policy"). Restores the saved state on first call.
+    void setPanSlotIndex(int idx);
+
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
     void setWnbState(bool on, int level);
@@ -145,7 +153,8 @@ public:
     // gateway presenting non-Flex hardware offers its true band set (e.g.
     // an IC-9700's 2m/440/23cm).  Empty (all real Flex radios): the grid
     // is unchanged.  Triggers a band-panel rebuild on change.
-    void setDeclaredBands(const QStringList& bands);
+    void setDeclaredBands(const QStringList& bands,
+                          const QVector<DeclaredBandRange>& ranges = {});
     void syncDaxIqChannel(int channel);
     // Reflect the real WFM demodulator state onto the DAX-panel WFM toggle
     // WITHOUT re-emitting wfmToggleRequested. Self-gated on this menu's slice,
@@ -254,6 +263,7 @@ signals:
 
 private:
     QString m_panId;
+    int m_panSlotIndex{-1};
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
@@ -324,6 +334,7 @@ private:
     QVector<XvtrBand>  m_lastXvtrBands;
     ModelCapabilities  m_radioCapabilities;
     QStringList        m_declaredBands;   // radio-declared band set (see setDeclaredBands)
+    QVector<DeclaredBandRange> m_declaredBandRanges;
 
     // ANT sub-panel
     QWidget*     m_antPanel{nullptr};

@@ -43,12 +43,21 @@ bring-up profile.
 | RX antenna | None | Selectable; live firmware returns ACK without readback | Not attested |
 | RF decks | Continuous envelope | Continuous envelope | Three discontinuous decks with 100/75/10 W ceilings |
 | FM repeater | Extended registers documented; basic tone/level/offset/XFC live-proved | Tone + TSQL, no DTCS claim | Extended registers official-guide + live-proved |
+| CI-V data restart | Not enabled | Not enabled | `0x04` data-start recovery, three attempts at 1 s; public implementation + physical watchdog evidence |
 
 The FM row deliberately corrects the assumption in the original IC-9700 PR
 that the repeater family must be hidden on IC-705. The IC-705 guide documents
 `16 5D` and `1B 00/01/02`, and live hardware proves the basic tone, tone level,
 offset, and XFC treatment. The IC-7300MK2 guide documents tone and tone-squelch
 but not the DTCS combinations, so its profile is narrower.
+
+Documented command coverage and activated runtime traffic remain separate
+facts. `FmRepeaterExtendedReadback` activates `16 5D`, `1B 01`, `1B 02`, and
+`1C 03` only for the IC-9700, whose preserved live trace covers those reads.
+The IC-705 keeps its live-proven basic poll/write inventory unchanged even
+though its guide documents the wider register family; moving that radio to the
+extended runtime surface requires its own operator proof and an explicit
+profile change.
 
 ## Effective control registry
 

@@ -17,6 +17,7 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QFile>
 #include <QLineEdit>
 #include <QAccessible>
 #include <QFocusEvent>
@@ -107,6 +108,41 @@ int main(int argc, char** argv)
 
     check(low->isEditable(),  "low cut readout is editable (#3627)");
     check(high->isEditable(), "high cut readout is editable (#3627)");
+
+    QWidget* txFilterControls = applet.findChild<QWidget*>(QStringLiteral("txFilterControls"));
+    check(txFilterControls != nullptr, "TX filter controls have one capability-gated container");
+    applet.setTxFilterControlsAvailable(false);
+    check(txFilterControls && txFilterControls->isHidden(),
+          "an unsupported TX cutoff editor is hidden as a complete section");
+    applet.setTxFilterControlsAvailable(true);
+    check(txFilterControls && !txFilterControls->isHidden(),
+          "a supported TX cutoff editor is restored without rebuilding the applet");
+
+    // This target intentionally does not link the whole MainWindow. Inspect
+    // the owning fan-out so deleting the capability-to-widget call still fails
+    // CI instead of leaving the issue's actual behavior to physical-radio
+    // testing alone.
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    check(mainWindowSource.open(QIODevice::ReadOnly),
+          "the capability test can inspect MainWindow's shipping fan-out");
+    const QByteArray wiring = mainWindowSource.readAll();
+    check(wiring.contains(
+              "phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);"),
+          "MainWindow wires hasTxFilterControls to the complete TX cutoff editor");
+    check(wiring.contains(
+              "m_radioModel.isConnected() && !caps.hasTxFilterControls"),
+          "MainWindow rejects TX EQ-canvas cutoff drags for unsupported radios");
+
+    QFile automationSource(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/core/AutomationServer.cpp"));
+    check(automationSource.open(QIODevice::ReadOnly),
+          "the capability test can inspect the automation snapshot wiring");
+    const QByteArray automation = automationSource.readAll();
+    check(automation.contains("if (hasTxFilterControls)"),
+          "automation omits TX cutoff fields when the backend lacks the capability");
+    check(automation.contains(
+              "radio->backendCapabilities().hasTxFilterControls"),
+          "automation obtains TX cutoff availability from the active backend");
 
     // The accepted range comes from the MODEL, never a literal in the widget.
     // AetherSDR is growing backends (HL2, Icom, FT-991, ColibriNANO, RTL-SDR);

@@ -12,10 +12,12 @@
 #include "models/RadioModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
 #include "models/BandDefs.h"
 #include "models/DeclaredBands.h"
+#include "models/SliceModel.h"
 #include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
@@ -36,11 +38,12 @@ static void check(bool ok, const char* what)
     }
 }
 
-static RadioInfo infoFor(const QString& family)
+static RadioInfo infoFor(const QString& family,
+                         const QString& serial = QStringLiteral("ICOM-TEST-1"))
 {
     RadioInfo i;
     i.family  = family;
-    i.serial  = QStringLiteral("ICOM-TEST-1");
+    i.serial  = serial;
     i.address = QHostAddress(QStringLiteral("192.0.2.1"));   // TEST-NET-1, unroutable
     i.port    = 50001;
     return i;
@@ -82,6 +85,126 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
+    check(!caps.hasDownwardExpander,
+          "Icom exposes no DEXP surface without an evidenced command path");
+
+    // The Icom transport reports one stable VFO as slice 0. On reconnect,
+    // RadioModel stages the old SliceModel so the UI can keep its subscriptions
+    // alive while the backend confirms the new session. The non-Flex materializer
+    // used to ignore that staged object and allocate a replacement: the VFO was
+    // wired to the replacement by sliceAdded, while RX Controls remained wired
+    // to the original object and stopped following TCI frequency changes.
+    //
+    // Both the IC-705 and IC-7300MK2 use this same family-neutral materializer;
+    // model-specific CI-V profiles begin below the seam and cannot change this
+    // ownership invariant.
+    {
+        RadioModel reconnectModel;
+        reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
+        auto* icomBackend =
+            dynamic_cast<icom::IcomCivBackend*>(reconnectModel.backend());
+        check(icomBackend != nullptr, "an Icom backend exists for reconnect coverage");
+        if (icomBackend) {
+            int sliceAdds = 0;
+            QObject::connect(&reconnectModel, &RadioModel::sliceAdded,
+                             &reconnectModel,
+                             [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            const bool firstConnected = QMetaObject::invokeMethod(
+                icomBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(firstConnected, "the first Icom session reaches its connected edge");
+
+            SliceDelta initial;
+            initial.panId = QStringLiteral("icom");
+            initial.inUse = true;
+            initial.active = true;
+            initial.txSlice = true;
+            initial.frequency = 14.074;
+            emit icomBackend->sliceChanged(0, initial);
+
+            SliceModel* subscribedSlice = reconnectModel.slice(0);
+            check(subscribedSlice != nullptr,
+                  "the first Icom VFO materializes a SliceModel");
+            check(sliceAdds == 1,
+                  "the first Icom VFO announces one UI slice");
+
+            int subscriberUpdates = 0;
+            if (subscribedSlice) {
+                QObject::connect(subscribedSlice, &SliceModel::frequencyChanged,
+                                 subscribedSlice,
+                                 [&subscriberUpdates](double) { ++subscriberUpdates; });
+            }
+
+            // Re-enter through connectRadio while the old session is live. Icom
+            // synchronously emits disconnected before starting the replacement,
+            // exactly matching an operator reconnect to the selected radio.
+            reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
+            const bool replacementConnected = QMetaObject::invokeMethod(
+                icomBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(replacementConnected,
+                  "the same Icom reaches its replacement connected edge");
+
+            SliceDelta reconnected;
+            reconnected.panId = QStringLiteral("icom");
+            reconnected.inUse = true;
+            reconnected.active = true;
+            reconnected.txSlice = true;
+            reconnected.frequency = 7.074;
+            emit icomBackend->sliceChanged(0, reconnected);
+
+            check(reconnectModel.slice(0) == subscribedSlice,
+                  "Icom reconnect reclaims the subscribed SliceModel");
+            check(sliceAdds == 1,
+                  "reclaim does not announce a duplicate UI slice");
+            check(subscriberUpdates == 1,
+                  "a pre-reconnect frequency subscriber receives fresh Icom state");
+            check(reconnectModel.slice(0)
+                      && reconnectModel.slice(0)->frequency() == 7.074,
+                  "the reclaimed Icom VFO applies the radio-authoritative frequency");
+
+        }
+    }
+
+    // A different physical radio in the same family also reports slice 0.
+    // Reclaim must be identity-shaped, not family/id-shaped: the old object
+    // carries radio A's partially reported state and subscriptions.
+    {
+        RadioModel swapModel;
+        swapModel.connectToRadio(infoFor(QStringLiteral("icom")));
+        auto* swapBackend = dynamic_cast<icom::IcomCivBackend*>(swapModel.backend());
+        check(swapBackend != nullptr, "an Icom backend exists for radio-swap coverage");
+        if (swapBackend) {
+            int sliceAdds = 0;
+            QObject::connect(&swapModel, &RadioModel::sliceAdded,
+                             &swapModel, [&sliceAdds](SliceModel*) { ++sliceAdds; });
+
+            const bool firstConnected = QMetaObject::invokeMethod(
+                swapBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(firstConnected, "radio A reaches its real connected edge");
+            SliceModel* radioASlice = swapModel.slice(0);
+
+            // Select B while A is still connected. connectToRadio overwrites
+            // m_lastInfo with B before IcomCivBackend synchronously tears A down;
+            // this is the ordering that requires the separate connected-session
+            // serial rather than a disconnect-time read of m_lastInfo.
+            swapModel.connectToRadio(infoFor(QStringLiteral("icom"),
+                                             QStringLiteral("ICOM-TEST-2")));
+            const bool connected = QMetaObject::invokeMethod(
+                swapBackend, "onSessionConnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("IC-705")));
+            check(connected, "the second Icom session reaches its real connected edge");
+            check(swapModel.slice(0) != nullptr,
+                  "the second Icom radio materializes its own slice");
+            check(swapModel.slice(0) != radioASlice,
+                  "a different Icom serial does not reclaim the prior radio's slice");
+            check(sliceAdds == 2,
+                  "a different Icom serial announces one replacement UI slice");
+        }
+    }
+
     RadioCapabilities transmittingIcom = caps;
     transmittingIcom.canTransmit = true;
     check(wsprSeamAudioRouteReady(true, transmittingIcom),
@@ -92,6 +215,8 @@ int main(int argc, char** argv)
 
     const auto ic705Mod = icom::modulationProfileFor(
         *icom::modelForCivAddress(0xA4));
+    const auto ic9700Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xA2));
     const auto mk2Mod = icom::modulationProfileFor(
         *icom::modelForCivAddress(0xB6));
     check(ic705Mod && ic705Mod->dataOffInputItem == 118
@@ -102,6 +227,22 @@ int main(int argc, char** argv)
               && mk2Mod->dataInputItem == 85
               && mk2Mod->networkOnlyValue == 0x05,
           "IC-7300MK2 uses SET 0084/0085 and LAN value 05");
+    check(ic9700Mod && ic9700Mod->usbLevelItem == 113
+              && ic9700Mod->accessoryLevelItem == 112
+              && ic9700Mod->networkLevelItem == 114
+              && ic9700Mod->dataOffInputItem == 115
+              && ic9700Mod->dataInputItem == 116
+              && ic9700Mod->networkOnlyValue == 0x05
+              && ic9700Mod->phoneLevelFollowsNetworkInput,
+          "IC-9700 uses its documented SET 0112-0116 modulation map and routes "
+          "the Phone level through LAN only while LAN is selected");
+    check(icom::profileFor(*icom::modelForCivAddress(0xA2))
+              .supports(icom::IcomFeature::ModulationInput),
+          "IC-9700 modulation input diagnostics carry model-owned guide evidence");
+    check(ic705Mod && !ic705Mod->phoneLevelFollowsNetworkInput
+              && mk2Mod && !mk2Mod->phoneLevelFollowsNetworkInput,
+          "IC-705 and IC-7300MK2 retain their established physical-mic Phone "
+          "level behavior");
     // The fallback PC Audio "off" writes when there is nothing captured to put
     // back. It belongs to the model, not to the call site: these two agree at
     // 0x00 today, and a third model whose MIC is elsewhere must not inherit it.
@@ -109,12 +250,49 @@ int main(int argc, char** argv)
               && mk2Mod && mk2Mod->micValue == 0x00,
           "both verified models name MIC in their own profile rather than "
           "leaving the caller to hardcode it");
-    // An IC-9700 has no Wi-Fi and, unlike the two profiles above, no verified
-    // model-specific modulation map. It must therefore remain outside this
-    // read/write path instead of borrowing the IC-705's WLAN table. Pin that
-    // distinction so the old false warning cannot quietly come back.
+    // An IC-9700 has LAN rather than Wi-Fi. Its independently verified profile
+    // above must therefore use value 05 and must not borrow the IC-705's WLAN
+    // value 03.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
-          "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+          "the IC-9700 has no Wi-Fi — its network modulation source is LAN");
+    check(!AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+               .meters.hasPaTemperatureTelemetry,
+          "the IC-9700 profile does not declare PA-temperature telemetry");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .meters.hasPaCurrentTelemetry,
+          "the IC-9700 profile independently declares Radio Vitals PA current");
+    check(!AetherSDR::icom::profileFor(
+               *AetherSDR::icom::modelForCivAddress(0xA4))
+               .meters.hasPaCurrentTelemetry
+              && !AetherSDR::icom::profileFor(
+                      *AetherSDR::icom::modelForCivAddress(0xB6))
+                      .meters.hasPaCurrentTelemetry,
+          "IC-705 and IC-7300MK2 do not inherit the IC-9700 Radio Vitals surface");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .speechProcessorLevelMaximum == 100,
+          "the IC-9700 profile declares its continuous processor range");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .speechProcessorLabel == "COMP",
+          "the IC-9700 profile declares its radio-native COMP label");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA4))
+                  .speechProcessorLevelMaximum == 2
+              && AetherSDR::icom::profileFor(
+                     *AetherSDR::icom::modelForCivAddress(0xB6))
+                     .speechProcessorLevelMaximum == 2,
+          "IC-705 and IC-7300MK2 retain the three-position processor contract");
+    check(icom::speechProcessorRawLevel(100, 0) == 0
+              && icom::speechProcessorRawLevel(100, 50) == 128
+              && icom::speechProcessorRawLevel(100, 100) == 255,
+          "IC-9700 continuous COMP maps 0/50/100 percent to raw 0/128/255");
+    check(icom::speechProcessorRawLevel(2, 0) == 76
+              && icom::speechProcessorRawLevel(2, 1) == 153
+              && icom::speechProcessorRawLevel(2, 2) == 229,
+          "sibling Icom processor presets retain raw 76/153/229 encoding");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
@@ -328,12 +506,31 @@ int main(int argc, char** argv)
         // The tri-bander, whose HF grid was entirely unpressable before.
         const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 is in the table");
+        const std::span<const icom::IcomBand> ic9700Bands =
+            icom::bandsFor(*ic9700);
+        check(ic9700Bands.size() == 3
+                  && ic9700Bands[0].name == "2m"
+                  && ic9700Bands[0].lowHz == 144'000'000ULL
+                  && ic9700Bands[1].name == "440"
+                  && ic9700Bands[1].lowHz == 430'000'000ULL
+                  && ic9700Bands[2].name == "23cm"
+                  && ic9700Bands[2].lowHz == 1'240'000'000ULL,
+              "the IC-9700 publishes canonical names with native deck limits");
+        check(icom::bandsFor(*ic705).empty(),
+              "the IC-705 has no discontinuous native-band range override, so "
+              "its declared buttons keep canonical labels");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))
                   == QStringList({QStringLiteral("2m"), QStringLiteral("440"),
                                   QStringLiteral("23cm")}),
               "the IC-9700 declares exactly its three bands");
+        const auto ic9700Preamp = icom::preampLabelsFor(*ic9700);
+        check(ic9700Preamp.size() == 2
+                  && ic9700Preamp[0] == "OFF"
+                  && ic9700Preamp[1] == "P.AMP INT",
+              "the IC-9700 publishes only its internal preamp through the "
+              "shared front-end control");
 
         // AND THE HF-ONLY ROWS DECLARE NOTHING. Empty is a decision here, not
         // an omission: it keeps the built-in HF grid, which is already right for
