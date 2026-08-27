@@ -312,10 +312,22 @@ static QString radioOptionsText(const RadioModel* model)
     if (!model) {
         return QStringLiteral("—");
     }
-    if (!model->radioOptions().isEmpty()) {
-        return model->radioOptions();
+
+    QStringList options;
+    for (const QString& rawOption : model->radioOptions().split(
+             QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString option = rawOption.trimmed();
+        if (option.compare(QLatin1String("GPS"), Qt::CaseInsensitive) != 0) {
+            options.append(option);
+        }
     }
-    return model->amplifier().present() ? QStringLiteral("GPS, PGXL") : QStringLiteral("GPS");
+    if (model->hasGpsSetupHardware()) {
+        options.prepend(QStringLiteral("GPS"));
+    }
+    if (options.isEmpty() && model->amplifier().present()) {
+        options.append(QStringLiteral("PGXL"));
+    }
+    return options.isEmpty() ? QStringLiteral("—") : options.join(QStringLiteral(", "));
 }
 
 static void showCopiedPopup(QWidget* anchor);
@@ -752,6 +764,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         [this] { return buildNetworkTab(); });
     addPage(radioCategory, QStringLiteral("GPS"),
         QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
+    m_gpsPageIndex = m_pageIndexes.value(QStringLiteral("GPS"));
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
@@ -762,6 +775,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("rx receive calibration rf gain preamp"), [this] { return buildRxTab(); });
     addPage(signalCategory, QStringLiteral("Filters"),
         QStringLiteral("filter bandwidth low high cut mode"), [this] { return buildFiltersTab(); });
+    m_filtersPageIndex = m_pageIndexes.value(QStringLiteral("Filters"));
     // Calibration page (HL2 and any future family that cannot calibrate itself).
     // Gated on the CAPABILITY, not on the family name: "does this radio correct
     // its own oscillator" is the question, and a Flex answers it on the Receive
@@ -800,6 +814,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("themes colors display font vision contrast click wheel ui enhancements"), [this] { return buildUiEnhancementsTab(); });
     addPage(onlineCategory, QStringLiteral("SmartLink"),
         QStringLiteral("remote internet certificate security pin wan"), [this] { return buildSmartLinkTab(); });
+    m_smartLinkPageIndex = m_pageIndexes.value(QStringLiteral("SmartLink"));
     addPage(onlineCategory, QStringLiteral("QRZ & Callsigns"),
         QStringLiteral("qrz callsign lookup spots contact online account"), [this] { return buildQrzTab(); });
 #ifdef HAVE_SERIALPORT
@@ -853,7 +868,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool gated =
-                    (apdRow && !m_model->transmitModel().apdConfigurable())
+                    (isFlexOnlyPage(item) && !isFlexRadio())
+                    || (isGpsPage(item)
+                        && !m_model->hasGpsSetupHardware())
+                    || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
                 if (!gated) {
                     item->setHidden(!matches);
@@ -890,6 +908,19 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     });
     addAction(findAction);
     m_navigation->setCurrentItem(firstItem);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this](bool, const RadioCapabilities&) {
+        updateRadioCapabilityVisibility();
+    });
+    connect(m_model, &RadioModel::oscillatorChanged, this,
+            [this] {
+        updateRadioCapabilityVisibility();
+    });
+    connect(m_model, &RadioModel::gpsStatusChanged, this,
+            [this] {
+        updateRadioCapabilityVisibility();
+    });
+    updateRadioCapabilityVisibility();
     layout->addWidget(content, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
@@ -903,11 +934,123 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
 void RadioSetupDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
+    // This dialog is persistent and may have been hidden while the selected
+    // radio or an optional Flex GPSDO changed. Re-evaluate every gated page and
+    // group before presenting the cached widget tree again.
+    updateRadioCapabilityVisibility();
     // The dialog is a showOrRaisePersistent singleton and pages are built once,
     // so anything that changed the stored calibration while it was closed (a
     // `freqcal` bridge call, a different radio) has to be re-read here.
     if (m_calibrationReseed)
         m_calibrationReseed();
+}
+
+bool RadioSetupDialog::isFlexRadio() const
+{
+    return m_model && m_model->isFlexRadio();
+}
+
+bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
+{
+    if (!item) {
+        return false;
+    }
+    const int index = item->data(0, Qt::UserRole).toInt();
+    return index == m_filtersPageIndex || index == m_smartLinkPageIndex;
+}
+
+bool RadioSetupDialog::isGpsPage(const QTreeWidgetItem* item) const
+{
+    return item && item->data(0, Qt::UserRole).toInt() == m_gpsPageIndex;
+}
+
+void RadioSetupDialog::updateRadioCapabilityVisibility()
+{
+    const bool visible = isFlexRadio();
+    if (m_flexControlInfoField) {
+        m_flexControlInfoField->setVisible(visible);
+    }
+    if (m_multiFlexInfoField) {
+        m_multiFlexInfoField->setVisible(visible);
+    }
+    const RadioCapabilities caps = m_model->backendCapabilities();
+    if (m_remoteOnInfoField) {
+        m_remoteOnInfoField->setVisible(caps.hasRemoteOnControl);
+    }
+    if (m_rebootInfoField) {
+        m_rebootInfoField->setVisible(caps.canReboot);
+    }
+    if (m_licenseInfoGroup) {
+        m_licenseInfoGroup->setVisible(visible);
+    }
+    if (m_firmwareUpdateGroup) {
+        m_firmwareUpdateGroup->setVisible(caps.canUpgradeFirmware);
+    }
+    if (m_firmwareDisclaimer) {
+        m_firmwareDisclaimer->setVisible(caps.canUpgradeFirmware);
+    }
+    if (m_vitaReceiveBufferLabel) {
+        m_vitaReceiveBufferLabel->setVisible(caps.usesVita49Transport);
+    }
+    if (m_vitaReceiveBufferControls) {
+        m_vitaReceiveBufferControls->setVisible(caps.usesVita49Transport);
+    }
+    if (m_vitaReceiveBufferStatus) {
+        m_vitaReceiveBufferStatus->setVisible(caps.usesVita49Transport);
+    }
+    if (m_networkMtuLabel) {
+        m_networkMtuLabel->setVisible(caps.usesVita49Transport);
+    }
+    if (m_networkMtuControl) {
+        m_networkMtuControl->setVisible(caps.usesVita49Transport);
+    }
+    if (m_privateIpPolicyLabel) {
+        m_privateIpPolicyLabel->setVisible(caps.hasPrivateIpConnectionPolicy);
+    }
+    if (m_privateIpPolicyControl) {
+        m_privateIpPolicyControl->setVisible(caps.hasPrivateIpConnectionPolicy);
+    }
+    if (m_audioCompressionGroup) {
+        m_audioCompressionGroup->setVisible(visible);
+    }
+    if (m_flexControlGroup) {
+        m_flexControlGroup->setVisible(visible);
+    }
+    if (m_optionsLabel) {
+        m_optionsLabel->setText(radioOptionsText(m_model));
+    }
+
+    const QLineEdit* search = findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
+    const QString needle = search ? search->text().trimmed() : QString();
+    for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex}) {
+        if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
+            const QString haystack = item->text(0) + QStringLiteral(" ")
+                + item->data(0, Qt::UserRole + 1).toString();
+            item->setHidden(!visible
+                            || (!needle.isEmpty()
+                                && !haystack.contains(needle, Qt::CaseInsensitive)));
+        }
+    }
+
+    if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
+        const QString haystack = gpsItem->text(0) + QStringLiteral(" ")
+            + gpsItem->data(0, Qt::UserRole + 1).toString();
+        gpsItem->setHidden(!m_model->hasGpsSetupHardware()
+                           || (!needle.isEmpty()
+                               && !haystack.contains(needle, Qt::CaseInsensitive)));
+    }
+
+    const bool currentPageUnavailable = m_navigation
+        && ((!visible && isFlexOnlyPage(m_navigation->currentItem()))
+            || (!m_model->hasGpsSetupHardware()
+                && isGpsPage(m_navigation->currentItem())));
+    if (currentPageUnavailable) {
+        if (QLineEdit* mutableSearch = findChild<QLineEdit*>(
+                QStringLiteral("radioSetupSearch"))) {
+            mutableSearch->clear();
+        }
+        selectTab(QStringLiteral("Radio"));
+    }
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
@@ -980,9 +1123,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
             m_remoteOnBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setRemoteOnEnabled(on);
         });
-        grid->addWidget(makeInfoField(QStringLiteral("Remote On:"), m_remoteOnBtn,
-                                      kInfoRightLabelWidth),
-                        1, 1);
+        m_remoteOnInfoField = makeInfoField(QStringLiteral("Remote On:"), m_remoteOnBtn,
+                                            kInfoRightLabelWidth);
+        grid->addWidget(m_remoteOnInfoField, 1, 1);
 
         m_optionsLabel = new QLabel(radioOptionsText(m_model));
         m_optionsLabel->setStyleSheet(kValueStyle);
@@ -1015,18 +1158,18 @@ QWidget* RadioSetupDialog::buildRadioTab()
         updateFcLbl(m_model->isConnected());
         fcLbl->setAlignment(Qt::AlignCenter);
         connect(m_model, &RadioModel::connectionStateChanged, this, updateFcLbl);
-        grid->addWidget(makeInfoField(QStringLiteral("FlexControl:"), fcLbl,
-                                      kInfoRightLabelWidth),
-                        2, 1);
+        m_flexControlInfoField = makeInfoField(QStringLiteral("FlexControl:"), fcLbl,
+                                               kInfoRightLabelWidth);
+        grid->addWidget(m_flexControlInfoField, 2, 1);
 
         auto* mfBtn = makeToggle(m_model->multiFlexEnabled());
         connect(mfBtn, &QPushButton::toggled, this, [this, mfBtn](bool on) {
             mfBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setMultiFlexEnabled(on);
         });
-        grid->addWidget(makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
-                                      kInfoRightLabelWidth),
-                        3, 1);
+        m_multiFlexInfoField = makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
+                                             kInfoRightLabelWidth);
+        grid->addWidget(m_multiFlexInfoField, 3, 1);
 
         auto* rebootBtn = new QPushButton(QStringLiteral("Reboot Radio"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(rebootBtn,
@@ -1067,9 +1210,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 close();
             }
         });
-        grid->addWidget(makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
-                                      kInfoLeftLabelWidth),
-                        3, 0);
+        m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
+                                          kInfoLeftLabelWidth);
+        grid->addWidget(m_rebootInfoField, 3, 0);
 
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_serialLabel) {
@@ -1225,6 +1368,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
     // License Info group (matches SmartSDR Radio Setup → License Info section)
     {
         auto* group = new QGroupBox("License Info");
+        m_licenseInfoGroup = group;
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
@@ -1290,6 +1434,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
     // Firmware Update group
     {
         auto* group = new QGroupBox("Firmware Update");
+        m_firmwareUpdateGroup = group;
         group->setStyleSheet(kGroupStyle);
         auto* vlay = new QVBoxLayout(group);
         vlay->setSpacing(6);
@@ -1479,6 +1624,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         "Use at your own risk. At this time we still recommend updating "
         "via the SmartSDR Windows application.");
     disclaimer->setWordWrap(true);
+    m_firmwareDisclaimer = disclaimer;
     disclaimer->setStyleSheet(
         "QLabel { color: #c08040; font-size: 11px; font-style: italic;"
         " padding: 4px 8px; }");
@@ -1514,25 +1660,44 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->setColumnStretch(1, 1);
         grid->setColumnStretch(3, 1);
 
-        grid->addWidget(new QLabel("IP Address:"), 0, 0);
+        auto* ipNameLabel = new QLabel("IP Address:");
+        ipNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        grid->addWidget(ipNameLabel, 0, 0, Qt::AlignVCenter);
         auto* ipLbl = new QLabel(displayOrDash(m_model->ip()));
         ipLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("IP Address"), ipLbl), 0, 1);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("IP Address"), ipLbl), 0, 1,
+                        Qt::AlignVCenter);
 
-        grid->addWidget(new QLabel("Subnet Mask:"), 0, 2);
+        auto* maskNameLabel = new QLabel("Subnet Mask:");
+        maskNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        grid->addWidget(maskNameLabel, 0, 2, Qt::AlignVCenter);
         auto* maskLbl = new QLabel(displayOrDash(m_model->netmask()));
         maskLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Subnet Mask"), maskLbl), 0, 3);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Subnet Mask"), maskLbl), 0, 3,
+                        Qt::AlignVCenter);
 
-        grid->addWidget(new QLabel("MAC Address:"), 1, 0);
+        auto* macNameLabel = new QLabel("MAC Address:");
+        macNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        grid->addWidget(macNameLabel, 1, 0, Qt::AlignVCenter);
         auto* macLbl = new QLabel(displayOrDash(m_model->mac()));
         macLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1,
+                        Qt::AlignVCenter);
 
-        connect(m_model, &RadioModel::infoChanged, this, [this, ipLbl, maskLbl, macLbl] {
+        auto* gatewayNameLabel = new QLabel("Default Gateway:");
+        gatewayNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        grid->addWidget(gatewayNameLabel, 1, 2, Qt::AlignVCenter);
+        auto* gatewayLbl = new QLabel(displayOrDash(m_model->gateway()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(gatewayLbl, kValueStyle);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Default Gateway"), gatewayLbl), 1, 3,
+                        Qt::AlignVCenter);
+
+        connect(m_model, &RadioModel::infoChanged, this,
+                [this, ipLbl, maskLbl, macLbl, gatewayLbl] {
             ipLbl->setText(displayOrDash(m_model->ip()));
             maskLbl->setText(displayOrDash(m_model->netmask()));
             macLbl->setText(displayOrDash(m_model->mac()));
+            gatewayLbl->setText(displayOrDash(m_model->gateway()));
         });
 
         for (auto* lbl : group->findChildren<QLabel*>())
@@ -1546,9 +1711,11 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         auto* group = new QGroupBox("Advanced");
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
-        grid->setSpacing(6);
+        grid->setHorizontalSpacing(6);
+        grid->setVerticalSpacing(6);
 
-        grid->addWidget(new QLabel("Enforce Private IP Connections:"), 0, 0);
+        m_privateIpPolicyLabel = new QLabel("Enforce Private IP Connections:");
+        grid->addWidget(m_privateIpPolicyLabel, 0, 0);
         auto* enforceBtn = new QPushButton(m_model->enforcePrivateIp() ? "Enabled" : "Disabled");
         enforceBtn->setCheckable(true);
         enforceBtn->setChecked(m_model->enforcePrivateIp());
@@ -1562,22 +1729,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             m_model->sendCommand(
                 QString("radio set enforce_private_ip_connections=%1").arg(on ? 1 : 0));
         });
-        // Doctrine (#5263): dim, never hide. `radio set
-        // enforce_private_ip_connections=` is a Flex command-plane verb; on a
-        // backend without one the button toggled and the command was dropped —
-        // a live-looking dead control. Same refresh shape as the Reboot button
-        // above.
-        auto applyEnforceAvailability = [this, enforceBtn] {
-            const bool ok = m_model->hasCommandPlane();
-            enforceBtn->setEnabled(ok);
-            const QString why = ok ? QString()
-                                   : tr("Not supported by this radio");
-            enforceBtn->setToolTip(why);
-            enforceBtn->setAccessibleDescription(why);
-        };
-        applyEnforceAvailability();
-        connect(m_model, &RadioModel::connectionStateChanged, enforceBtn,
-                [applyEnforceAvailability](bool) { applyEnforceAvailability(); });
+        m_privateIpPolicyControl = enforceBtn;
         grid->addWidget(enforceBtn, 0, 1);
 
         // 128-bit hex token generator — plenty for a local same-user secret.
@@ -1712,6 +1864,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         {
             grid->addWidget(new QLabel("Allow TX via MCP:"), 3, 0);
             auto* txCheck = new QCheckBox("Enable transmit control");
+            txCheck->setMinimumHeight(tokenEdit->sizeHint().height());
             const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
             const bool envBlocksTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
             txCheck->setChecked(!envBlocksTx
@@ -1722,7 +1875,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "Bridge-originated TX is limited by a force-unkey watchdog. You are\n"
                 "responsible for anything transmitted. See docs/automation-bridge.md.");
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
-                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 2px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
             if (envBlocksTx) {
                 txCheck->setEnabled(false);
@@ -1782,6 +1935,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         {
             grid->addWidget(new QLabel("Observe only:"), 4, 0);
             auto* roCheck = new QCheckBox("Read-only (block all driving)");
+            roCheck->setMinimumHeight(tokenEdit->sizeHint().height());
             roCheck->setObjectName(QStringLiteral("automationReadOnlyCheck"));
             const bool envForcesRo = qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY");
             roCheck->setChecked(AutomationBridgeSettings::readOnly() || envForcesRo);
@@ -1793,7 +1947,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "client cannot bypass it. Toggle takes effect immediately on the\n"
                 "running bridge. See docs/automation-bridge.md.");
             AetherSDR::ThemeManager::instance().applyStyleSheet(roCheck,
-                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 2px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
             if (envForcesRo) {
                 roCheck->setEnabled(false);
@@ -1807,7 +1961,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             grid->addWidget(roCheck, 4, 1);
         }
 
-        grid->addWidget(new QLabel("Network MTU:"), 5, 0);
+        m_networkMtuLabel = new QLabel("Network MTU:");
+        grid->addWidget(m_networkMtuLabel, 5, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
         mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
@@ -1819,6 +1974,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
         });
+        m_networkMtuControl = mtuSpin;
         grid->addWidget(mtuSpin, 5, 1);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
@@ -1836,7 +1992,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             return QStringLiteral("%1 KB").arg(b / 1024);
         };
 
-        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 6, 0);
+        m_vitaReceiveBufferLabel = new QLabel("VITA-49 RX buffer:");
+        grid->addWidget(m_vitaReceiveBufferLabel, 6, 0);
         auto* bufRow = new QWidget;
         auto* bufLay = new QHBoxLayout(bufRow);
         bufLay->setContentsMargins(0, 0, 0, 0);
@@ -1864,6 +2021,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         bufValLabel->setMinimumWidth(48);
         bufLay->addWidget(bufSlider, 1);
         bufLay->addWidget(bufValLabel);
+        m_vitaReceiveBufferControls = bufRow;
         grid->addWidget(bufRow, 6, 1);
 
         auto* bufGrantedLabel = new QLabel;
@@ -1872,6 +2030,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
                                            : QStringLiteral("granted: — (applies on connect)"));
         }
+        m_vitaReceiveBufferStatus = bufGrantedLabel;
         grid->addWidget(bufGrantedLabel, 7, 1);
 
         connect(bufSlider, &QSlider::valueChanged, this,
@@ -1902,6 +2061,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         for (auto* lbl : group->findChildren<QLabel*>())
             if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);
 
+        updateRadioCapabilityVisibility();
+
         vbox->addWidget(group);
     }
 
@@ -1929,6 +2090,8 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     auto* dhcpBtn = new QPushButton("DHCP");
     dhcpBtn->setCheckable(true);
     dhcpBtn->setChecked(!isStatic);
+    dhcpBtn->setEnabled(false);
+    dhcpBtn->setToolTip("Changing the radio's IP configuration is not currently available.");
     AetherSDR::ThemeManager::instance().applyStyleSheet(dhcpBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
@@ -1939,6 +2102,8 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     auto* staticBtn = new QPushButton("Static");
     staticBtn->setCheckable(true);
     staticBtn->setChecked(isStatic);
+    staticBtn->setEnabled(false);
+    staticBtn->setToolTip(dhcpBtn->toolTip());
     staticBtn->setStyleSheet(dhcpBtn->styleSheet());
     btnRow->addWidget(staticBtn);
 
@@ -1973,6 +2138,8 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
 
     auto* applyBtn = new QPushButton("Apply");
     applyBtn->setEnabled(false);
+    applyBtn->setToolTip("Changing the radio's IP configuration is not currently available.");
+    applyBtn->setAccessibleDescription(applyBtn->toolTip());
     AetherSDR::ThemeManager::instance().applyStyleSheet(applyBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
@@ -1980,22 +2147,20 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     gvbox->addWidget(applyBtn, 0, Qt::AlignLeft);
 
     connect(dhcpBtn, &QPushButton::clicked, this,
-            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
+            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw] {
         dhcpBtn->setChecked(true);
         staticBtn->setChecked(false);
         staticIp->setEnabled(false);
         staticMask->setEnabled(false);
         staticGw->setEnabled(false);
-        applyBtn->setEnabled(true);
     });
     connect(staticBtn, &QPushButton::clicked, this,
-            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
+            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw] {
         dhcpBtn->setChecked(false);
         staticBtn->setChecked(true);
         staticIp->setEnabled(true);
         staticMask->setEnabled(true);
         staticGw->setEnabled(true);
-        applyBtn->setEnabled(true);
     });
     connect(applyBtn, &QPushButton::clicked, this,
             [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn] {
@@ -2031,8 +2196,7 @@ QWidget* RadioSetupDialog::buildGpsTab()
 
     // GPS installed status
     {
-        const bool installed = (m_model->gpsStatus() != "Not Present"
-                                && !m_model->gpsStatus().isEmpty());
+        const bool installed = m_model->hasGpsSetupHardware();
         auto* statusLbl = new QLabel(installed ? "GPS is installed" : "GPS is not installed");
         statusLbl->setStyleSheet(installed
             ? "QLabel { color: #00c040; font-size: 16px; font-weight: bold; }"
@@ -3308,6 +3472,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
     // ── Audio Compression ────────────────────────────────────────────────
     {
         auto* compGroup = new QGroupBox("Audio Compression (SmartLink)");
+        m_audioCompressionGroup = compGroup;
+        compGroup->setVisible(isFlexRadio());
         compGroup->setStyleSheet(kGroupStyle);
         auto* compLayout = new QHBoxLayout(compGroup);
         compLayout->setSpacing(4);
@@ -6502,6 +6668,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
         m_flexControlGroup = group;
+        group->setVisible(isFlexRadio());
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -8009,6 +8176,12 @@ void RadioSetupDialog::selectTab(const QString& tabName)
     const QString pageName = kLegacyPageNames.value(tabName, tabName);
     const int index = m_pageIndexes.value(pageName, -1);
     if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
+        if (isFlexOnlyPage(item) && !isFlexRadio()) {
+            return;
+        }
+        if (isGpsPage(item) && !m_model->hasGpsSetupHardware()) {
+            return;
+        }
         m_navigation->setCurrentItem(item);
         m_navigation->scrollToItem(item, QAbstractItemView::PositionAtCenter);
     }
@@ -8016,6 +8189,10 @@ void RadioSetupDialog::selectTab(const QString& tabName)
 
 void RadioSetupDialog::revealFlexControlSettings()
 {
+    if (!isFlexRadio()) {
+        return;
+    }
+
     selectTab(QStringLiteral("Serial & Controllers"));
     if (!m_flexControlGroup) {
         return;

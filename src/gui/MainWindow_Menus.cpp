@@ -122,6 +122,8 @@ void MainWindow::buildMenuBar()
     });
 
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
+    m_aetherControlAction = flexControlAction;
+    flexControlAction->setVisible(m_radioModel.isFlexRadio());
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
@@ -135,8 +137,13 @@ void MainWindow::buildMenuBar()
     // (MainWindow_Controllers.cpp) that offers the same deep-link from
     // inside the controller window.
     auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    m_flexControlKnobAction = flexControlKnobAction;
+    flexControlKnobAction->setVisible(m_radioModel.isFlexRadio());
     flexControlKnobAction->setMenuRole(QAction::NoRole);
     connect(flexControlKnobAction, &QAction::triggered, this, [this] {
+        if (!m_radioModel.isFlexRadio()) {
+            return;
+        }
         if (RadioSetupDialog* dlg = openRadioSetupPage())
             dlg->revealFlexControlSettings();
     });
@@ -541,7 +548,7 @@ void MainWindow::buildMenuBar()
     });
     auto* multiFlexAction = settingsMenu->addAction("multiFLEX...");
     m_multiFlexAction = multiFlexAction;   // hidden by applyCapabilitiesToUi()
-                                           // on a single-client backend
+                                           // on every non-Flex family
     connect(multiFlexAction, &QAction::triggered,
             this, &MainWindow::showMultiFlexDialog);
     // m_titleBar connect deferred — see after TitleBar creation (~line 2530)

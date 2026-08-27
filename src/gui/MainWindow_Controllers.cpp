@@ -230,6 +230,10 @@ QString flexControlButtonAction(int button, int action)
 
 void MainWindow::showFlexControlDialog()
 {
+    if (!m_radioModel.isFlexRadio()) {
+        return;
+    }
+
     const bool wasFresh = !m_flexControlDialog;
     showOrRaisePersistent(m_flexControlDialog);
     if (wasFresh && m_flexControlDialog) {
@@ -286,6 +290,9 @@ void MainWindow::showFlexControlDialog()
 #ifdef HAVE_SERIALPORT
         connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
                 this, [this] {
+            if (!m_radioModel.isFlexRadio()) {
+                return;
+            }
             // Same deep-link pattern as Settings → USB Cables… (#4940), but
             // scrolled onto the FlexControl Tuning Knob group itself rather
             // than just landing on top of the page (PR #5157 review).

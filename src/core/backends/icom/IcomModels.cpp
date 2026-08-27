@@ -583,6 +583,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     // from silently becoming a write contract for another transmitter.
     static const IcomModelProfile kIc705Profile{
         .supportedBringup = true,
+        .hasGpsHardware = true,
         .guideRevision = "IC-705 CI-V Reference Guide 2020",
         .features = kIc705Evidence,
         .modulation = ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
@@ -628,6 +629,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         },
         .civRecovery = CivRecoveryProfile{1000, 3},
         .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
+        // IC-9700 CI-V Reference Guide 2019, printed p. 8.
+        .networkConfiguration = NetworkConfigurationProfile{139, 140, 141, 144},
         .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
@@ -652,6 +655,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         },
         .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
                                 "Group"},
+        // IC-7300MK2 CI-V Reference Guide, SET > Network, printed p. 10.
+        .networkConfiguration = NetworkConfigurationProfile{102, 103, 104, 107},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };

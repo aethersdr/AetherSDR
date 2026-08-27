@@ -294,6 +294,16 @@ struct RadioCapabilities {
     // distinct from AetherSDR's local per-slice tuning guard: a radio-side
     // lock may be global and may also follow front-panel changes.
     bool hasRadioDialLock = false;
+    bool hasRemoteOnControl = false; // client can configure wake-on-network
+    bool canUpgradeFirmware = false; // client can upload radio firmware
+    // The radio's streaming data plane uses VITA-49. This currently gates the
+    // receive-socket buffer and network MTU controls; it describes the transport,
+    // not the vendor or only one stream direction.
+    bool usesVita49Transport = false;
+    // The backend can read the radio's own IP configuration rather than only
+    // knowing the address selected by the client.
+    bool hasNetworkConfigurationReadback = false;
+    bool hasPrivateIpConnectionPolicy = false; // SmartSDR private-IP enforcement setting
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
@@ -651,6 +661,13 @@ struct RadioCapabilities {
     // what it is. That distinction is why the flag is named for the receiver
     // rather than for the dashboard it happens to drive today.
     bool hasGpsLocation = false;
+
+    // The radio contains GPS/GNSS hardware and therefore has a meaningful GPS
+    // setup surface. This is deliberately separate from hasGpsLocation: an
+    // IC-705 has an internal GPS receiver, but CI-V does not expose its live
+    // position/time data to this client. The hardware page is still truthful;
+    // a live station-location readout is not.
+    bool hasGpsHardware = false;
 
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile

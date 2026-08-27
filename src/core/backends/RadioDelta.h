@@ -27,6 +27,9 @@ struct RadioDelta {
     std::optional<QString> region;
     std::optional<QString> radioOptions;
     std::optional<QString> bandsRaw;          // optional "bands=" declaration (validated model-side; see RadioModel::declaredBands())
+    std::optional<QString> ip;
+    std::optional<QString> netmask;
+    std::optional<QString> gateway;
 
     // Global flags
     std::optional<bool>    remoteOnEnabled;

@@ -95,6 +95,10 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    bool isFlexRadio() const;
+    bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
+    bool isGpsPage(const QTreeWidgetItem* item) const;
+    void updateRadioCapabilityVisibility();
     QWidget* buildRadioTab();
     QWidget* buildNetworkTab();
     QGroupBox* buildIpConfigGroup();
@@ -159,6 +163,24 @@ private:
     // Stashed by the search filter and committed on Enter, so typing highlights
     // the match without eagerly building deferred, hardware-probing pages.
     QTreeWidgetItem* m_searchFirstMatch{nullptr};
+    int m_filtersPageIndex{-1};
+    int m_smartLinkPageIndex{-1};
+    int m_gpsPageIndex{-1};
+    QWidget* m_flexControlInfoField{nullptr};
+    QWidget* m_multiFlexInfoField{nullptr};
+    QWidget* m_remoteOnInfoField{nullptr};
+    QWidget* m_rebootInfoField{nullptr};
+    QGroupBox* m_licenseInfoGroup{nullptr};
+    QGroupBox* m_firmwareUpdateGroup{nullptr};
+    QLabel* m_firmwareDisclaimer{nullptr};
+    QWidget* m_vitaReceiveBufferLabel{nullptr};
+    QWidget* m_vitaReceiveBufferControls{nullptr};
+    QWidget* m_vitaReceiveBufferStatus{nullptr};
+    QWidget* m_networkMtuLabel{nullptr};
+    QWidget* m_networkMtuControl{nullptr};
+    QWidget* m_privateIpPolicyLabel{nullptr};
+    QWidget* m_privateIpPolicyControl{nullptr};
+    QGroupBox* m_audioCompressionGroup{nullptr};
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};

@@ -505,6 +505,14 @@ public:
                || (!m_gpsStatus.isEmpty()
                    && m_gpsStatus != QLatin1String("Not Present"));
     }
+    // Settings needs a hardware-presence answer across families. Flex's backend
+    // declaration is intentionally coarse (the family can carry an optional
+    // GPSDO), so retain the live per-unit check above there. Other backends use
+    // their model profile for fixed hardware such as the IC-705's internal GPS.
+    bool hasGpsSetupHardware() const {
+        const bool declared = backendCapabilities().hasGpsHardware;
+        return isFlexRadio() ? declared && hasGpsHardware() : declared;
+    }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
     bool    cwxActive()    const { return m_cwxActive; }
@@ -1242,6 +1250,9 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
+    // Family identity for Flex-only presentation and vendor surfaces. This is
+    // intentionally not inferred from an Icom/HL2 model-name table.
+    bool isFlexRadio() const { return m_family == QLatin1String("flex"); }
 
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
     // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit

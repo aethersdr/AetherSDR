@@ -1455,6 +1455,8 @@ private:
     // waveforms / no multi-client sessions.
     QAction*         m_waveformsAction{nullptr};
     QAction*         m_multiFlexAction{nullptr};
+    QAction*         m_aetherControlAction{nullptr};
+    QAction*         m_flexControlKnobAction{nullptr};
 
     // Audio stream re-creation flag (after profile load)
     bool             m_needAudioStream{false};

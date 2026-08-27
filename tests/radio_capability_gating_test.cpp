@@ -292,6 +292,16 @@ int main(int argc, char** argv)
               "Flex declares hasMultiClientSessions (multiFLEX)");
         check(caps.hasGpsLocation,
               "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
+        check(caps.hasGpsHardware,
+              "Flex declares GPS hardware for Radio Setup presentation");
+        check(caps.canReboot && caps.hasRemoteOnControl && caps.canUpgradeFirmware,
+              "Flex preserves reboot, Remote On and firmware-upgrade controls");
+        check(caps.usesVita49Transport,
+              "Flex exposes VITA-49 receive-buffer tuning");
+        check(caps.hasNetworkConfigurationReadback,
+              "Flex preserves radio network-information readback");
+        check(caps.hasPrivateIpConnectionPolicy,
+              "Flex preserves its private-IP connection policy control");
         // The one this field exists to protect: the struct default is false, so
         // adding the field without touching FlexBackend would silently delete a
         // readout that ships and works today.
@@ -356,6 +366,8 @@ int main(int argc, char** argv)
 
         check(!gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
               "connected GPSDO-less Flex hides the GPS stack");
+        check(!model.hasGpsSetupHardware(),
+              "GPSDO-less Flex hides the Settings GPS hardware surface");
 
         const auto applyOscillatorPresence = [&model](const char* key, bool present) {
             const QMap<QString, QString> status{
@@ -373,6 +385,8 @@ int main(int argc, char** argv)
               "GPSDO presence fixture reached RadioModel");
         check(model.hasGpsHardware(),
               "gpsdo_present=1 marks an optional 6000-series GPSDO present");
+        check(model.hasGpsSetupHardware(),
+              "optional Flex GPSDO enables the Settings GPS hardware surface");
         check(gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
               "connected optional-GPSDO Flex shows the GPS stack");
         check(applyOscillatorPresence("gpsdo_present", false),
@@ -396,6 +410,8 @@ int main(int argc, char** argv)
               "disconnect fixture reached RadioModel");
         check(!model.hasGpsHardware(),
               "GPS presence does not leak from the previous radio session");
+        check(!model.hasGpsSetupHardware(),
+              "Settings GPS presence does not leak from the previous Flex session");
     }
 
     // ---- HL2 declares none of them ---------------------------------------
@@ -429,6 +445,17 @@ int main(int argc, char** argv)
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
         check(!caps.hasGpsLocation,
               "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
+        check(!caps.hasGpsHardware,
+              "HL2 declares hasGpsHardware=false");
+        check(!caps.canReboot && !caps.hasRemoteOnControl
+                  && !caps.canUpgradeFirmware,
+              "HL2 hides unsupported radio-management controls");
+        check(!caps.usesVita49Transport,
+              "HL2 hides Flex VITA-49 receive-buffer tuning");
+        check(!caps.hasNetworkConfigurationReadback,
+              "HL2 declares no radio network-configuration readback");
+        check(!caps.hasPrivateIpConnectionPolicy,
+              "HL2 hides the Flex private-IP connection policy");
         // PATEMP yes, "+13.8A" no. The temperature above the volts row is a
         // genuine HL2 reading and must keep working — this flag hides one label,
         // not the stack.
@@ -785,6 +812,16 @@ int main(int argc, char** argv)
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
+        check(!caps.hasGpsHardware, "Sim declares hasGpsHardware=false");
+        check(!caps.canReboot && !caps.hasRemoteOnControl
+                  && !caps.canUpgradeFirmware,
+              "Sim hides unsupported radio-management controls");
+        check(!caps.usesVita49Transport,
+              "Sim hides Flex VITA-49 receive-buffer tuning");
+        check(!caps.hasNetworkConfigurationReadback,
+              "Sim declares no radio network-configuration readback");
+        check(!caps.hasPrivateIpConnectionPolicy,
+              "Sim hides the Flex private-IP connection policy");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
         check(!caps.hasPaTemperatureTelemetry,

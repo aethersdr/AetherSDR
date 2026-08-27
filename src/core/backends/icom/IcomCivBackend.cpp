@@ -106,6 +106,15 @@ QString completionName(IcomCivScheduler::Completion completion)
     return QStringLiteral("unknown");
 }
 
+QString formatNetworkAddress(const std::array<std::uint8_t, 4>& octets)
+{
+    return QStringLiteral("%1.%2.%3.%4")
+        .arg(static_cast<int>(octets[0]))
+        .arg(static_cast<int>(octets[1]))
+        .arg(static_cast<int>(octets[2]))
+        .arg(static_cast<int>(octets[3]));
+}
+
 QByteArray floatBytes(const std::vector<float>& v)
 {
     return {reinterpret_cast<const char*>(v.data()),
@@ -354,8 +363,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;
 
-    // The radio HAS a GPS and the protocol will not carry its data.
+    // CI-V does not carry live GPS position/time, even on the IC-705. Keep the
+    // data capability false while separately declaring the model's hardware.
     c.hasGpsLocation = false;
+    c.hasGpsHardware = profile.hasGpsHardware;
+    c.hasNetworkConfigurationReadback = profile.networkConfiguration.has_value();
+    c.hasPrivateIpConnectionPolicy = false;
 
     c.hasSupplyVoltageTelemetry =
         hasVoltageCalibration(profile.meters.calibration);
@@ -462,6 +475,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // A one-way trip over WiFi: 0x18 0x00 powers the radio off, which drops the
     // WLAN interface, so the 0x18 0x01 that would bring it back has no path.
     c.canReboot = false;
+    c.hasRemoteOnControl = false;
+    c.canUpgradeFirmware = false;
+    c.usesVita49Transport = false;
 
     // EMPTY, and load-bearing. An Icom remembers its own frequency, mode and
     // filter across power cycles and reports them on request, so Constitution
@@ -937,6 +953,17 @@ void IcomCivBackend::sendConnectReadBurst()
             if (item >= 0) {
                 queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
             }
+        }
+    }
+
+    // IC-9700 CI-V Reference Guide (2019), printed p. 8. These are the
+    // radio-authoritative effective address, subnet prefix and default gateway.
+    // Other Icom profiles do not inherit the register map merely because they
+    // share the 1A 05 envelope.
+    if (const auto network = profileFor(*m_model).networkConfiguration) {
+        for (int item : {network->effectiveIpItem, network->subnetMaskItem,
+                         network->gatewayItem, network->networkNameItem}) {
+            queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
         }
     }
 
@@ -2585,6 +2612,52 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (frame.sub != settingSub::kMenu || frame.data.size() < 3)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
+
+        if (const auto networkProfile = profileFor(*m_model).networkConfiguration) {
+            RadioDelta network;
+            if (item == networkProfile->effectiveIpItem) {
+                const auto address = decodeNetworkAddress(
+                    std::span<const std::uint8_t>(frame.data).subspan(2));
+                if (!address) {
+                    return;
+                }
+                network.ip = formatNetworkAddress(*address);
+            } else if (item == networkProfile->subnetMaskItem) {
+                if (frame.data.size() != 3) {
+                    return;
+                }
+                const auto mask = subnetMaskFromBcdPrefix(frame.data[2]);
+                if (!mask) {
+                    return;
+                }
+                network.netmask = formatNetworkAddress(*mask);
+            } else if (item == networkProfile->gatewayItem) {
+                if (frame.data.size() == 3 && frame.data[2] == 0xff) {
+                    network.gateway = QString();
+                } else {
+                    const auto address = decodeNetworkAddress(
+                        std::span<const std::uint8_t>(frame.data).subspan(2));
+                    if (!address) {
+                        return;
+                    }
+                    network.gateway = formatNetworkAddress(*address);
+                }
+            } else if (item == networkProfile->networkNameItem) {
+                const auto name = decodeNetworkName(
+                    std::span<const std::uint8_t>(frame.data).subspan(2));
+                if (!name) {
+                    return;
+                }
+                network.nickname = QString::fromLatin1(
+                    name->data(), static_cast<qsizetype>(name->size()));
+            } else {
+                network = {};
+            }
+            if (network.ip || network.netmask || network.gateway || network.nickname) {
+                emit radioChanged(network);
+                return;
+            }
+        }
 
         // TRANSMIT PASSBAND EDGES, which are a different shape from every other
         // SET item: one packed BCD byte whose high digit indexes this model's

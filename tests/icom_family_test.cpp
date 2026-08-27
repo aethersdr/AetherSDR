@@ -105,6 +105,13 @@ int main(int argc, char** argv)
           "an Icom remembers its own state, so the client restores NOTHING");
     check(!caps.hasDownwardExpander,
           "Icom exposes no DEXP surface without an evidenced command path");
+    check(!caps.canReboot && !caps.hasRemoteOnControl
+              && !caps.canUpgradeFirmware,
+          "Icom hides unsupported remote radio-management controls");
+    check(!caps.usesVita49Transport,
+          "Icom hides Flex VITA-49 receive-buffer tuning");
+    check(!caps.hasPrivateIpConnectionPolicy,
+          "Icom hides the Flex private-IP connection policy");
 
     auto* selectedBackend = dynamic_cast<icom::IcomCivBackend*>(model.backend());
     check(selectedBackend != nullptr,
@@ -193,6 +200,10 @@ int main(int argc, char** argv)
                 icomBackend, "onSessionConnected", Qt::DirectConnection,
                 Q_ARG(QString, QStringLiteral("IC-705")));
             check(firstConnected, "the first Icom session reaches its connected edge");
+            check(icomBackend->capabilities().hasGpsHardware,
+                  "IC-705 backend publishes its profile's GPS hardware capability");
+            check(reconnectModel.hasGpsSetupHardware(),
+                  "IC-705 profile enables the Settings GPS hardware surface");
 
             SliceDelta initial;
             initial.panId = QStringLiteral("icom");
@@ -298,6 +309,30 @@ int main(int argc, char** argv)
         *icom::modelForCivAddress(0xA2));
     const auto mk2Mod = icom::modulationProfileFor(
         *icom::modelForCivAddress(0xB6));
+    check(icom::profileFor(*icom::modelForCivAddress(0xA4)).hasGpsHardware,
+          "IC-705 profile declares its internal GPS receiver");
+    check(!icom::profileFor(*icom::modelForCivAddress(0xA2)).hasGpsHardware,
+          "IC-9700 profile does not declare GPS hardware");
+    check(!icom::profileFor(*icom::modelForCivAddress(0xB6)).hasGpsHardware,
+          "IC-7300MK2 profile does not declare GPS hardware");
+    const auto ic9700Network = icom::profileFor(
+        *icom::modelForCivAddress(0xA2)).networkConfiguration;
+    const auto ic705Network = icom::profileFor(
+        *icom::modelForCivAddress(0xA4)).networkConfiguration;
+    const auto mk2Network = icom::profileFor(
+        *icom::modelForCivAddress(0xB6)).networkConfiguration;
+    check(ic9700Network && ic9700Network->effectiveIpItem == 139
+              && ic9700Network->subnetMaskItem == 140
+              && ic9700Network->gatewayItem == 141
+              && ic9700Network->networkNameItem == 144,
+          "IC-9700 profile maps its documented SET 0139-0144 network fields");
+    check(!ic705Network,
+          "IC-705 does not claim network registers absent from its CI-V guide");
+    check(mk2Network && mk2Network->effectiveIpItem == 102
+              && mk2Network->subnetMaskItem == 103
+              && mk2Network->gatewayItem == 104
+              && mk2Network->networkNameItem == 107,
+          "IC-7300MK2 profile maps its documented SET 0102-0107 network fields");
     check(ic705Mod && ic705Mod->dataOffInputItem == 118
               && ic705Mod->dataInputItem == 119
               && ic705Mod->networkOnlyValue == 0x03,

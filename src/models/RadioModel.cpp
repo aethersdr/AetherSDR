@@ -3391,6 +3391,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // flag we are about to set.
     m_connectAttemptActive = true;
 
+    // Network identity is session-owned. Seed only the endpoint we actually
+    // selected; radio-authoritative CI-V/SmartSDR replies replace it and fill
+    // the remaining fields after connection. Clearing here prevents a radio
+    // without readback (notably the IC-705) inheriting another radio's mask,
+    // gateway or MAC while a new connection is in flight.
+    m_ip = info.address.isNull() ? QString() : info.address.toString();
+    m_netmask.clear();
+    m_gateway.clear();
+    m_mac.clear();
+    emit infoChanged();
+
     clearAutomationSliceFixtures();
     m_automationGpsNtpServerAddress.clear();
 
@@ -5905,6 +5916,14 @@ void RadioModel::onConnected()
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
+    // Automatic reconnect enters through the backend and bypasses
+    // connectToRadio(), so restore the selected endpoint after disconnect
+    // cleared the previous session's radio-authoritative network identity.
+    if (m_ip.isEmpty() && !m_lastInfo.address.isNull()) {
+        m_ip = m_lastInfo.address.toString();
+        emit infoChanged();
+    }
+
     // Inhibit system sleep while connected if the user has opted in (#1420)
     if (AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True")
         m_sleepInhibitor.acquire("AetherSDR connected to radio");
@@ -7011,6 +7030,10 @@ void RadioModel::onDisconnected()
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
     m_region.clear();
+    m_ip.clear();
+    m_netmask.clear();
+    m_gateway.clear();
+    m_mac.clear();
     m_declaredBands.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
@@ -7082,6 +7105,7 @@ void RadioModel::onDisconnected()
     if (m_panStream)
         m_panStream->resetDaxChannelsForDisconnect();
     emit otherClientsChanged(0, {});
+    emit infoChanged();
     emit connectionStateChanged(false);
     m_forcedDisconnectInProgress = false;
 
@@ -10341,6 +10365,9 @@ QString RadioModel::licenseFeatureReason(const QString& name) const
 
 void RadioModel::setRemoteOnEnabled(bool on)
 {
+    if (!backendCapabilities().hasRemoteOnControl) {
+        return;
+    }
     m_remoteOnEnabled = on;
     sendCmd(QString("radio set remote_on_enabled=%1").arg(on ? 1 : 0));
     emit infoChanged();
@@ -10412,6 +10439,9 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.nickname) { m_nickname = *d.nickname; changed = true; }
     if (d.region)   { m_region = *d.region; changed = true; }
     if (d.radioOptions) { m_radioOptions = *d.radioOptions; changed = true; }
+    if (d.ip) { m_ip = *d.ip; changed = true; }
+    if (d.netmask) { m_netmask = *d.netmask; changed = true; }
+    if (d.gateway) { m_gateway = *d.gateway; changed = true; }
     if (d.remoteOnEnabled) { m_remoteOnEnabled = *d.remoteOnEnabled; changed = true; }
     if (d.multiFlexEnabled) { m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
     if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }
