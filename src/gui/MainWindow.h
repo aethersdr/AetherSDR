@@ -242,6 +242,17 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // injectKeyEventForAutomation result codes (plain ints, same reason as
+    // above). Delivers a real KeyPress/KeyRelease through the application
+    // event filter so the momentary family (PTT hold, CW momentary keys),
+    // which registers no direct handler, can be exercised by the bridge (#5079).
+    static constexpr int KeyInjectOk          = 0;  // delivered and consumed (non-TX)
+    static constexpr int KeyInjectUnknownKey  = 1;  // neither an action id nor a parseable sequence
+    static constexpr int KeyInjectTxBlocked   = 2;  // keysTx PRESS with allowTx false (releases are never blocked)
+    static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
+    static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
+    static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
+    Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
     // disable / place, driven by the `workspace` automation verb.  Returns
     // an error key instead of throwing, like the other automation hooks.

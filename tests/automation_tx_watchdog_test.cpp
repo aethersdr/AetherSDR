@@ -52,6 +52,10 @@ public:
     {
         return server.m_txBridgeInitiated;
     }
+    static void releaseEdge(AutomationServer& server)
+    {
+        server.releaseEdgeHandsBackPolicing();
+    }
 };
 
 } // namespace AetherSDR
@@ -181,10 +185,41 @@ void testBridgeActionOnIdleRadioIsPoliced()
 
 } // namespace
 
+// keyevent (#5079): a release edge hands policing back only when the
+// transmitter is actually down. A release that did not un-key (handler
+// declined it, or TX is up from another source) must leave the watchdog armed.
+void testReleaseEdgeKeepsWatchdogArmedWhileKeyed()
+{
+    RadioModel radio;
+    AutomationServer server;
+    server.setRadioModel(&radio);
+    server.setTxAllowed(true);
+
+    // Bridge press keyed the radio and armed the watchdog.
+    radio.transmitModel().setTransmitting(false);
+    AetherSDR::AutomationServerTestAccess::setKeyedAtRequestStart(server, false);
+    AetherSDR::AutomationServerTestAccess::markTxBridgeInitiated(server);
+    radio.transmitModel().setTransmitting(true);
+    check(AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
+          "a bridge press that keyed the radio arms the watchdog");
+
+    // A release that did NOT un-key (still transmitting): stay armed.
+    AetherSDR::AutomationServerTestAccess::releaseEdge(server);
+    check(AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
+          "a release edge while the transmitter is still keyed does not disarm the watchdog");
+
+    // The release that actually dropped TX: hand policing back.
+    radio.transmitModel().setTransmitting(false);
+    AetherSDR::AutomationServerTestAccess::releaseEdge(server);
+    check(!AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
+          "a release edge with the transmitter down hands policing back");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testEnabledBridgeDoesNotUnkeyManualTransmit();
+    testReleaseEdgeKeepsWatchdogArmedWhileKeyed();
     testBridgeActionDoesNotAdoptPreExistingTransmit();
     testBridgeActionOnIdleRadioIsPoliced();
     if (failures == 0) {

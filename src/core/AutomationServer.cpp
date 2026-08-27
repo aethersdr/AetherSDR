@@ -3502,6 +3502,21 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doShortcut(a.target.isEmpty() ? a.id : a.target);
             });
 
+        add("keyevent", {},
+            "keyevent <press|release> <action-id|key-seq> — inject a real key edge through "
+            "the app event filter (momentary shortcuts only — PTT hold, and the CW keys "
+            "once bound: their ids ship unbound, so KeyInjectUnbound until the operator "
+            "binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab "
+            "moves focus yet reports consumed)",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                a.value = vtok(p, 2);
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doKeyEvent(a.action, a.value);
+            });
+
         add("midi", {}, "midi cc <0-127> — inject a learned VFO Tune Knob CC event",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) {
@@ -8524,6 +8539,94 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
         {QStringLiteral("ok"), true},
         {QStringLiteral("shortcut"), id},
         {QStringLiteral("fired"), true},
+    };
+}
+
+// A release edge hands TX policing back ONLY if the transmitter is actually
+// down. A release that did not un-key — the momentary handler declined it
+// (text entry focused, radio dropped) or TX is up from another source — must
+// leave the watchdog armed, or a leaked press would sit keyed with its only
+// backstop disarmed (Constitution VI: fail closed). onTxWatchdog() clears the
+// flag itself on the next poll that finds nothing keyed, so keeping it armed
+// here never over-polices.
+void AutomationServer::releaseEdgeHandsBackPolicing()
+{
+    if (txBridgeOwnsCurrentTransmit())
+        return;
+    clearTxBridgeInitiated();
+}
+
+QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& spec)
+{
+    const QString act = action.trimmed().toLower();
+    const bool press = act == QLatin1String("press") || act == QLatin1String("down");
+    if (!press && act != QLatin1String("release") && act != QLatin1String("up"))
+        return err(QStringLiteral("keyevent needs press|release"));
+    if (spec.isEmpty())
+        return err(QStringLiteral("keyevent requires an action id or key sequence, "
+                                  "e.g. 'ptt_hold' or 'Ctrl+T'"));
+
+    QWidget* mw = primaryTopLevelWindow();
+    if (!mw)
+        return err(QStringLiteral("no main window to deliver key event"));
+
+    int result = -1;
+    const bool invoked = QMetaObject::invokeMethod(
+        mw, "injectKeyEventForAutomation", Qt::DirectConnection,
+        Q_RETURN_ARG(int, result), Q_ARG(QString, spec), Q_ARG(bool, press),
+        Q_ARG(bool, m_txAllowed));
+    if (!invoked)
+        return err(QStringLiteral("injectKeyEventForAutomation not invokable on main window"));
+
+    bool consumed = false;
+    switch (result) {
+    case 0:  // MainWindow::KeyInjectOk
+        consumed = true;
+        break;
+    case 4:  // MainWindow::KeyInjectTxOk — a keysTx press the filter claimed
+        consumed = true;
+        // Arm the watchdog: a leaked press is policed by m_txMaxKeyMs /
+        // forceUnkey(). failSafeMomentaryKeyingToRx() fires only on
+        // deactivation, which a headless bridge session may never trigger,
+        // so the watchdog is the actual backstop for an unmatched press.
+        // Known over-arming: "the filter claimed it" can be broader than "we
+        // keyed something" — with keyboard shortcuts disabled the momentary
+        // handler still consumes, and the SWR-sweep guard swallows every
+        // key. Harmless in both directions: onTxWatchdog() clears the flag
+        // on the next poll that finds nothing keyed, and
+        // m_txKeyedAtRequestStart keeps it from claiming a transmission that
+        // was already up before the press.
+        markTxBridgeInitiated();
+        break;
+    case 1:  // KeyInjectUnknownKey
+        return err(QStringLiteral("not a known action id or key sequence: ") + spec);
+    case 5:  // KeyInjectUnbound
+        return err(QStringLiteral("action '") + spec
+                   + QStringLiteral("' exists but has no key binding; bind it in "
+                                    "Settings or pass a literal key sequence"));
+    case 2:  // KeyInjectTxBlocked
+        qCWarning(lcAutomation).noquote() << "BLOCKED transmit-keying key press" << spec;
+        return err(QStringLiteral("blocked: '") + spec
+                   + QStringLiteral("' keys the transmitter (TX-safety guard). "
+                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    case 3:  // KeyInjectNotConsumed — delivered, but the momentary handler's own
+             // gates (shortcuts disabled, text entry focused, radio disconnected)
+             // declined it. A real result, not an error: report it.
+        break;
+    default:
+        return err(QStringLiteral("unexpected key injection result for '") + spec
+                   + QLatin1Char('\''));
+    }
+    if (!press)
+        releaseEdgeHandsBackPolicing();
+
+    qCInfo(lcAutomation).noquote() << "keyevent" << (press ? "press" : "release")
+                                   << spec << "consumed=" << consumed;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("keyevent"), press ? QStringLiteral("press") : QStringLiteral("release")},
+        {QStringLiteral("key"), spec},
+        {QStringLiteral("consumed"), consumed},
     };
 }
 

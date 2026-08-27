@@ -15,6 +15,9 @@
 
 #include "MainWindow.h"
 
+#include <QApplication>
+#include <QKeyEvent>
+
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "AppletPanel.h"
@@ -1303,6 +1306,65 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
     }
     a->handler();
     return a->keysTx ? ShortcutFireTxOk : ShortcutFireOk;
+}
+
+int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx)
+{
+    // Resolve an action id to its CURRENT binding first, so a rebind moves the
+    // injected key with it (#3879); fall back to a literal sequence such as
+    // "Ctrl+T" so a test can drive the modifier-tolerant release branch on
+    // purpose. (#5079)
+    QKeySequence seq;
+    const ShortcutManager::Action* a = m_shortcutManager.action(spec);
+    if (a && !a->currentKey.isEmpty()) {
+        seq = a->currentKey;
+    } else if (a) {
+        // The id exists but has no binding (the CW momentary ids ship
+        // unbound): say so, rather than "not a known action id".
+        return KeyInjectUnbound;
+    } else {
+        seq = QKeySequence::fromString(spec, QKeySequence::PortableText);
+        // fromString() parses unrecognised text into a non-empty sequence whose
+        // key is Qt::Key_unknown, so isEmpty() alone would let garbage through.
+        if (seq.isEmpty() || seq[0].key() == Qt::Key_unknown)
+            return KeyInjectUnknownKey;
+        a = m_shortcutManager.actionForKey(seq);
+    }
+
+    // A multi-chord sequence ("Ctrl+K, Ctrl+B") would be silently truncated
+    // to its first chord by the seq[0] injection below — reject it instead,
+    // so the verb never reports ok/consumed for chords it did not deliver.
+    // The momentary family is single-chord by construction. (#5079)
+    if (seq.count() > 1)
+        return KeyInjectUnknownKey;
+
+    // TX gate on the PRESS only. Blocking a release would leave the transmitter
+    // keyed with no way to drop it — the failure failSafeMomentaryKeyingToRx
+    // exists to prevent. A release is always safe to deliver.
+    const bool keysTx = a && a->keysTx;
+    if (press && keysTx && !allowTx)
+        return KeyInjectTxBlocked;
+
+    const QKeyCombination kc = seq[0];
+    QKeyEvent ev(press ? QEvent::KeyPress : QEvent::KeyRelease,
+                 kc.key(), kc.keyboardModifiers(), QString(), /*autorep=*/false);
+
+    // Send (not post) to the main window itself, never to the focus widget.
+    // Filters installed on qApp run for events delivered to any object, so
+    // this still walks the same eventFilter path a real key takes —
+    // synchronously, so isAccepted() is meaningful on return — and the
+    // momentary handlers do not look at the receiver. Delivering to the
+    // focus widget instead would let an unbound key reach a widget that keys
+    // TX on its own (a focused ATU/CWX/APRS button clicks on Space; a
+    // dialog's default button on Return), bypassing the action-level gate
+    // above — the widget-marker guard `invoke` honours (aetherTxKeying) would
+    // be skipped. A synthesized edge that only the filter can see cannot
+    // click anything. Nothing goes through the window manager, so
+    // focus-stealing prevention cannot defeat it. (Constitution VI)
+    QApplication::sendEvent(this, &ev);
+    if (!ev.isAccepted())
+        return KeyInjectNotConsumed;
+    return (press && keysTx) ? KeyInjectTxOk : KeyInjectOk;
 }
 
 void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
