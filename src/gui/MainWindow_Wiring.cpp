@@ -6393,6 +6393,29 @@ void MainWindow::wireMeters()
         connect(spe, &SpeApplet::driveUpClicked, this, [this]() {
             m_speConn.sendKey(AetherSDR::Spe::Key::RightArrow);
         });
+        // FRONT PANEL group (floating layout): manual band, the amp-menu SET
+        // key, and manual ATU L/C stepping — each a literal keystroke.
+        connect(spe, &SpeApplet::bandDownClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandDown);
+        });
+        connect(spe, &SpeApplet::bandUpClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandUp);
+        });
+        connect(spe, &SpeApplet::setKeyClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::Set);
+        });
+        connect(spe, &SpeApplet::lMinusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LMinus);
+        });
+        connect(spe, &SpeApplet::lPlusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LPlus);
+        });
+        connect(spe, &SpeApplet::cMinusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::CMinus);
+        });
+        connect(spe, &SpeApplet::cPlusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::CPlus);
+        });
     }
 
     // Startup auto-connect from saved Peripherals settings — deliberately

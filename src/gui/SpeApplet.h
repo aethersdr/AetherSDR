@@ -7,6 +7,7 @@
 #include <QTimer>
 
 class QLabel;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -76,6 +77,13 @@ public:
     // can't tell this apart.
     void setResponding(bool responding);
 
+    // Docked (panel rail) vs floating (own window) presentation. Docked is
+    // the compact layout; floating relaxes margins and type sizes and
+    // reveals the FRONT PANEL key group (BAND±, L±/C±, SET) that the rail
+    // has no room for — mirroring the reference application's expanded
+    // window. Driven by the container's dockModeChanged (see AppletPanel).
+    void setFloating(bool floating);
+
 signals:
     void powerOnClicked();     // hardware power-ON pulse (works while the amp is silent)
     void operateClicked();     // OPERATE key — toggles STANDBY <-> OPERATE
@@ -86,11 +94,22 @@ signals:
     void antennaClicked();     // ANTENNA key
     void driveUpClicked();     // ▲ (RIGHT-arrow key) — raise requested drive power
     void driveDownClicked();   // ▼ (LEFT-arrow key) — lower requested drive power
+    // FRONT PANEL group (floating layout only — see setFloating):
+    void bandDownClicked();    // BAND− key — manual band override
+    void bandUpClicked();      // BAND+ key
+    void setKeyClicked();      // SET key — confirm/enter on the amp's own menu
+    void lMinusClicked();      // L− key — manual ATU inductance step
+    void lPlusClicked();       // L+ key
+    void cMinusClicked();      // C− key — manual ATU capacitance step
+    void cPlusClicked();       // C+ key
 
 private:
     void updateValueLabels();  // 10 Hz throttled label text refresh
     void updateCommandsEnabled();
     void applyModePill();
+    // Re-applies every mode-dependent style/metric (margins, type sizes,
+    // gauge heights, FRONT PANEL visibility) for the current m_floating.
+    void applyDensity();
     // Blanks every reading back to its not-yet-known state. Shared by the
     // disconnect path and the stopped-answering path — both mean "what is on
     // screen is no longer telemetry", and a frozen-but-plausible panel is the
@@ -128,6 +147,22 @@ private:
     QPushButton* m_antBtn{nullptr};
     QPushButton* m_driveDownBtn{nullptr};
     QPushButton* m_driveUpBtn{nullptr};
+
+    // FRONT PANEL group — floating layout only.
+    QWidget*     m_frontPanel{nullptr};
+    QPushButton* m_bandDownBtn{nullptr};
+    QPushButton* m_bandUpBtn{nullptr};
+    QPushButton* m_setBtn{nullptr};
+    QPushButton* m_lMinusBtn{nullptr};
+    QPushButton* m_lPlusBtn{nullptr};
+    QPushButton* m_cMinusBtn{nullptr};
+    QPushButton* m_cPlusBtn{nullptr};
+
+    QVBoxLayout* m_vbox{nullptr};
+    bool m_floating{false};
+    // applyModePill's no-op key: mode text + density, so a dock<->float
+    // switch restyles the pill even when the mode itself is unchanged.
+    QString m_lastPillKey;
 
     QTimer m_labelTimer;
     QTimer* m_peakTimer{nullptr};
