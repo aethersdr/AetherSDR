@@ -636,7 +636,12 @@ void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
         return;
     }
     m_smoothedPower = fwdPower;
-    static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
+    HGauge* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (m_forwardPowerRequiresSmoothing) {
+        powerGauge->setValue(fwdPower);
+    } else {
+        powerGauge->setValueImmediate(fwdPower);
+    }
     // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
     // read as an off-scale value, and holding the last ratio is exactly the
     // stale display #4533 removed.
@@ -678,7 +683,37 @@ void TxApplet::setTransmitting(bool tx)
 
 void TxApplet::setRadioModel(RadioModel* radio)
 {
+    if (m_radioModel == radio) {
+        return;
+    }
+    if (m_capabilitiesConnection) {
+        disconnect(m_capabilitiesConnection);
+        m_capabilitiesConnection = {};
+    }
     m_radioModel = radio;
+    m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
+        || radio->backendCapabilities().forwardPowerRequiresSmoothing;
+    m_forwardPowerScaleFollowsBandRating = radio && radio->isConnected()
+        && !radio->backendCapabilities().txPowerBands.isEmpty();
+    if (radio) {
+        m_capabilitiesConnection = connect(
+            radio, &RadioModel::capabilitiesChanged, this,
+            [this](bool connected, const RadioCapabilities& caps) {
+                m_forwardPowerRequiresSmoothing = !connected
+                    || caps.forwardPowerRequiresSmoothing;
+                const bool followsBandRating = connected
+                    && !caps.txPowerBands.isEmpty();
+                if (followsBandRating != m_forwardPowerScaleFollowsBandRating) {
+                    m_forwardPowerScaleFollowsBandRating = followsBandRating;
+                    if (m_havePowerScale) {
+                        const int maxWatts = m_lastMaxWatts;
+                        const bool hasAmplifier = m_lastHasAmplifier;
+                        m_havePowerScale = false;
+                        setPowerScale(maxWatts, hasAmplifier);
+                    }
+                }
+            });
+    }
 }
 
 void TxApplet::setBandPlanManager(BandPlanManager* bandPlan)
@@ -795,11 +830,28 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
             {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
              {400, "400"}, {500, "500"}, {600, "600"}});
         gaugeFullScaleW = 600.0f;
-    } else {
-        // Barefoot: 0–120 W, red > 100 W
+    } else if (!m_forwardPowerScaleFollowsBandRating
+               || maxWatts <= 0 || maxWatts == 100) {
+        // Preserve the established 100 W barefoot face exactly. In particular,
+        // this is the ordinary FlexRadio path. A lower-power face is an
+        // explicit per-band capability, not something inferred from one number.
         gauge->setRange(0.0f, 120.0f, 100.0f,
             {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
         gaugeFullScaleW = 120.0f;
+    } else {
+        // A capability may declare a lower active-band PA ceiling (the
+        // IC-9700 publishes 75 W on 430 MHz and 10 W on 1240 MHz). Honour the
+        // supplied ceiling instead of silently replacing every <=100 W radio
+        // with the 100 W face. Keep the established 20% headroom and the same
+        // 0/40/80/100/120-percent tick rhythm as the barefoot scale.
+        const float ratedW = static_cast<float>(maxWatts);
+        gaugeFullScaleW = ratedW * 1.2f;
+        const auto tick = [](float watts) {
+            return HGauge::Tick{watts, QString::number(watts, 'g', 3)};
+        };
+        gauge->setRange(0.0f, gaugeFullScaleW, ratedW,
+            {tick(0.0f), tick(ratedW * 0.4f), tick(ratedW * 0.8f),
+             tick(ratedW), tick(gaugeFullScaleW)});
     }
     // Scale peak-hold decay to the gauge full-scale (~2.5 s from full to
     // zero) so the visual feel is the same whether the rig is barefoot

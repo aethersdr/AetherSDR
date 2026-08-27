@@ -438,10 +438,26 @@ add_executable(icom_meters_test
     tests/icom_meters_test.cpp
     src/core/backends/icom/IcomMeters.cpp
     src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/IcomControls.cpp
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
 
+# Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
+# per-deck watt derivation, sibling-model isolation, and unkey clearing.
+add_executable(icom_power_derivation_test
+    tests/icom_power_derivation_test.cpp)
+target_include_directories(icom_power_derivation_test PRIVATE src)
+target_link_libraries(icom_power_derivation_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
+
+# Retired fake-radio fixtures. Positive session and backend convergence is
+# certified against real firmware through the automation bridge and radiocert;
+# deterministic protocol/model policy stays in socket-free tests. Keep these
+# declarations as source history, but do not configure, compile, or register
+# them: they add network-fixture compile and wait cost to every default build.
+#[==[
 # IcomCIV phases 0-3 end to end — the session against a fake IC-705 on
 # localhost. This is what proves the ORDER of the RS-BA1 handshake, which is the
 # part of the protocol Icom documents nowhere.
@@ -463,6 +479,7 @@ add_executable(icom_backend_test tests/icom_backend_test.cpp)
 target_include_directories(icom_backend_test PRIVATE src tests)
 target_link_libraries(icom_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME icom_backend_test COMMAND icom_backend_test)
+]==]
 
 # IcomCIV live probe — REQUIRES A REAL RADIO, so deliberately NOT registered
 # with add_test(). Receive-only: it never sends a PTT command.
@@ -501,6 +518,10 @@ add_executable(hl2_live_band_filter_probe EXCLUDE_FROM_ALL
 target_include_directories(hl2_live_band_filter_probe PRIVATE src)
 target_link_libraries(hl2_live_band_filter_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
+# Retired fake-radio fixtures. Positive HL2 lifecycle and transport convergence
+# moves to the automation bridge; socket-free protocol and policy tests remain.
+# Keep the declarations for history without making them build or test targets.
+#[==[
 # A killed AetherSDR must still release the radio. A child process runs a real
 # MetisClient against a fake radio; the Python driver kills it and requires a
 # metis-stop datagram to arrive. End-to-end on purpose — see the .py header.
@@ -520,9 +541,12 @@ add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
 target_include_directories(hl2_metis_client_test PRIVATE src)
 target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+]==]
 
 # HL2 receiver-count restart — a fake radio that "loses" a metis-start, proving
 # the restart retries it and that the recovery is not mistaken for a reconnect.
+# Retained until the same dropped-packet assertion has a socket-free injected
+# transport/state-machine replacement; radiocert cannot prove this non-event.
 add_executable(hl2_receiver_count_restart_test tests/hl2_receiver_count_restart_test.cpp)
 target_include_directories(hl2_receiver_count_restart_test PRIVATE src)
 target_link_libraries(hl2_receiver_count_restart_test
@@ -620,6 +644,11 @@ add_test(NAME hl2_trim_autorepeat_test COMMAND hl2_trim_autorepeat_test)
 set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Retired fake-radio fixtures. Positive backend and telemetry convergence is
+# certified against real hardware; deterministic assertions that survive are
+# extracted into socket-free tests rather than keeping a localhost peer in the
+# default compile and CTest graph.
+#[==[
 # HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
@@ -643,6 +672,7 @@ add_executable(hl2_link_stats_model_test tests/hl2_link_stats_model_test.cpp)
 target_include_directories(hl2_link_stats_model_test PRIVATE src tests)
 target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
+]==]
 
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
@@ -651,10 +681,18 @@ add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 # path its own copy (m_ioDsps) and blocks until the I/O thread has taken it, so
 # the reshape never mutates a container a fan-out is walking. (There is no
 # fenceIo() — an earlier draft named one and this comment outlived it.)
-add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
-target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
-target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
+# It stays out of the default graph and is enabled explicitly by both weekly
+# sanitizer lanes — TSan for the race, ASan for the sequential use-after-free
+# — until a socket-free concurrency harness replaces the fake EP6 peer.
+option(AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST
+       "Build the fake-EP6 receiver churn test for sanitizer runs" OFF)
+if(AETHER_ENABLE_HL2_RECEIVER_CHURN_TEST)
+    add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
+    target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
+    target_link_libraries(hl2_receiver_churn_test
+        PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+    add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
+endif()
 
 # HL2 connect re-entrancy — a connect or a disconnect landing while the WDSP
 # chains are still opening. Needs no radio; see the file header.
@@ -706,6 +744,13 @@ target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 
+add_executable(slice_tone_cues_test
+    tests/slice_tone_cues_test.cpp
+)
+target_include_directories(slice_tone_cues_test PRIVATE src)
+target_link_libraries(slice_tone_cues_test PRIVATE Qt6::Core)
+add_test(NAME slice_tone_cues_test COMMAND slice_tone_cues_test)
+
 add_executable(mac_cursor_compat_test
     tests/mac_cursor_compat_test.cpp
 )
@@ -745,6 +790,7 @@ add_executable(theme_manager_test
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(theme_manager_test PRIVATE src)
@@ -843,6 +889,7 @@ foreach(APP_SETTINGS_SCENARIO
         newer-schema-readonly
         dirty-row-save
         display-slice-depth-default
+        display-pan-menu-state
         nickname-key-roundtrip
         browser-api)
     add_test(
@@ -1166,6 +1213,12 @@ target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
 
+# In-use radio share gate (#4448), single-sourced for both connect paths — header-only.
+add_executable(connection_sharing_policy_test tests/connection_sharing_policy_test.cpp)
+target_include_directories(connection_sharing_policy_test PRIVATE src)
+target_link_libraries(connection_sharing_policy_test PRIVATE Qt6::Core)
+add_test(NAME connection_sharing_policy_test COMMAND connection_sharing_policy_test)
+
 # Last-session DAX restore window + quit-time key prune (#4558) — header-only.
 add_executable(dax_restore_policy_test tests/dax_restore_policy_test.cpp)
 target_include_directories(dax_restore_policy_test PRIVATE src)
@@ -1177,8 +1230,18 @@ add_executable(band_recall_slice_selection_policy_test
     tests/band_recall_slice_selection_policy_test.cpp
 )
 target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
+target_link_libraries(band_recall_slice_selection_policy_test PRIVATE Qt6::Core)
 add_test(NAME band_recall_slice_selection_policy_test
     COMMAND band_recall_slice_selection_policy_test)
+
+# Pins RadioModel slice status connect-enumeration adoption and ensures zero active=1 commands are sent.
+add_executable(radiomodel_slice_connect_enumeration_test
+    tests/radiomodel_slice_connect_enumeration_test.cpp
+)
+target_include_directories(radiomodel_slice_connect_enumeration_test PRIVATE src)
+target_link_libraries(radiomodel_slice_connect_enumeration_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_slice_connect_enumeration_test
+    COMMAND radiomodel_slice_connect_enumeration_test)
 
 # When that policy applies — the window opened by an actually-dispatched
 # `display pan set <pan> band=` write. Header-only.
@@ -1245,6 +1308,8 @@ add_test(NAME radio_discovery_test COMMAND radio_discovery_test)
 # Agent automation bridge phaseful-gesture lifecycle (#4353). Uses two real
 # QLocalSocket clients so the regression proves an independent request can run
 # while a QSlider remains genuinely down, plus auth/read-only/TX cleanup rails.
+# Retained until its refusal and TX-cleanup assertions have a socket-free
+# injected replacement; live automation cannot prove that a non-event occurred.
 add_executable(automation_server_gesture_test
     tests/automation_server_gesture_test.cpp
 )
@@ -1626,6 +1691,15 @@ target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
+add_executable(rf_gain_presentation_test
+    tests/rf_gain_presentation_test.cpp
+)
+target_include_directories(rf_gain_presentation_test PRIVATE src)
+target_link_libraries(rf_gain_presentation_test PRIVATE Qt6::Core)
+target_compile_definitions(rf_gain_presentation_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME rf_gain_presentation_test COMMAND rf_gain_presentation_test)
+
 # Floating-panadapter crash-loop guard (#4617) — pins that a session which died
 # inside floatPanadapter() comes up docked instead of replaying the crash.
 add_executable(floating_restore_policy_test
@@ -1743,7 +1817,10 @@ add_executable(passive_spots_policy_test
     src/core/SpotCommandPolicy.cpp
 )
 target_include_directories(passive_spots_policy_test PRIVATE src)
+target_compile_definitions(passive_spots_policy_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(passive_spots_policy_test PRIVATE Qt6::Core)
+add_test(NAME passive_spots_policy_test COMMAND passive_spots_policy_test)
 
 add_executable(spot_mode_resolver_test
     tests/spot_mode_resolver_test.cpp
@@ -1892,6 +1969,8 @@ add_test(NAME vkamp_protocol_test COMMAND vkamp_protocol_test)
 # hostname resolution for the UDP telemetry port, and TX-gated telemetry
 # expiry. Isolated settings dir per the CMake contract: LogManager pulls in
 # AppSettings.
+# Retained until the refusal/interlock assertions have a socket-free injected
+# replacement; radiocert certifies positive effects, not refused commands.
 add_executable(vkamp_connection_test
     tests/vkamp_connection_test.cpp
     src/core/VkampConnection.cpp
@@ -2256,6 +2335,13 @@ set_tests_properties(relay_bar_a11y_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
+add_executable(fm_tone_presentation_test
+    tests/fm_tone_presentation_test.cpp
+)
+target_include_directories(fm_tone_presentation_test PRIVATE src)
+target_link_libraries(fm_tone_presentation_test PRIVATE Qt6::Core)
+add_test(NAME fm_tone_presentation_test COMMAND fm_tone_presentation_test)
+
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
 add_executable(native_widget_topology_test
@@ -2282,6 +2368,13 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
+    # RxApplet/VfoWidget are full-desktop translation units with no practical
+    # unit-test link seam. Pin their radio-backed presentation wiring; label
+    # behavior itself is covered by fm_tone_presentation_test above.
+    add_test(NAME fm_tone_presentation_contract
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fm_tone_presentation_contract_test.py
+                     ${CMAKE_CURRENT_SOURCE_DIR})
     # Argument parsing for the logwatch helper (#4912) — blind rest[0]/rest[1]
     # indexing turned a typo into an IndexError traceback.
     add_test(NAME automation_logwatch_arguments
@@ -2294,6 +2387,9 @@ if(PYTHON3_EXECUTABLE)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
 endif()
 
+# Retired local-listener fixture. Positive behavior is covered through the live
+# bridge; deterministic boundary behavior belongs in socket-free tests.
+#[==[
 # JSON boundary regression for shared bridge `id` normalization. Exercises the
 # real QLocalSocket request path and tune dispatcher without touching a radio.
 add_executable(automation_json_id_test
@@ -2304,6 +2400,20 @@ target_link_libraries(automation_json_id_test PRIVATE
     aethercore Qt6::Core Qt6::Network
 )
 add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
+]==]
+
+# Read-only external-device diagnostic registry and provider dispatch. The
+# platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
+# this test pins the bridge contract without requiring physical hardware.
+add_executable(automation_device_diagnostics_test
+    tests/automation_device_diagnostics_test.cpp
+)
+target_include_directories(automation_device_diagnostics_test PRIVATE src)
+target_link_libraries(automation_device_diagnostics_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_device_diagnostics_test
+         COMMAND automation_device_diagnostics_test)
 
 # `connect ip` family resolution + the `family` field on `connect list` (#4912).
 # Pure verb-level test against a fake IConnectionAutomation — no socket, no radio.
@@ -2316,6 +2426,9 @@ target_link_libraries(automation_connect_family_test PRIVATE
 )
 add_test(NAME automation_connect_family_test COMMAND automation_connect_family_test)
 
+# Retired local-listener fixture. Positive behavior is covered through the live
+# bridge; deterministic boundary behavior belongs in socket-free tests.
+#[==[
 # `connect wait` phase reporting + deferred connect-failure delivery (#4912).
 add_executable(automation_connect_wait_phase_test
     tests/automation_connect_wait_phase_test.cpp
@@ -2326,6 +2439,7 @@ target_link_libraries(automation_connect_wait_phase_test PRIVATE
 )
 add_test(NAME automation_connect_wait_phase_test
          COMMAND automation_connect_wait_phase_test)
+]==]
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp
@@ -2459,6 +2573,14 @@ add_executable(cw_sidetone_start_policy_test
 )
 target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
 add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
+
+# The explicit-selection name rule (#5123): pure QString predicate, no
+# PortAudio, so the captured Linux/Windows device names are checked on every
+# runner regardless of which audio backends it has.
+add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test.cpp)
+target_include_directories(cw_sidetone_device_match_test PRIVATE src)
+target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
 
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
@@ -2696,6 +2818,54 @@ add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(meter_applet_capability_test
+    tests/meter_applet_capability_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(meter_applet_capability_test PRIVATE src)
+target_compile_definitions(meter_applet_capability_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(meter_applet_capability_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+if(UNIX)
+    target_link_libraries(meter_applet_capability_test PRIVATE pthread)
+endif()
+set_target_properties(meter_applet_capability_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_applet_capability_test COMMAND meter_applet_capability_test)
+set_tests_properties(meter_applet_capability_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(meter_applet_voltage_state_test
+    tests/meter_applet_voltage_state_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(meter_applet_voltage_state_test PRIVATE src)
+target_link_libraries(meter_applet_voltage_state_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+if(UNIX)
+    target_link_libraries(meter_applet_voltage_state_test PRIVATE pthread)
+endif()
+set_target_properties(meter_applet_voltage_state_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_applet_voltage_state_test COMMAND meter_applet_voltage_state_test)
+set_tests_properties(meter_applet_voltage_state_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). SimBackend was once
 # wire-free, but Path B (RFC #4288) had it own a RadioConnection + PanadapterStream,
 # so it no longer links against a hand-picked subset of sources: those pull in
@@ -2769,6 +2939,9 @@ target_include_directories(owned_single_shot_timer_test PRIVATE src)
 target_link_libraries(owned_single_shot_timer_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
 
+# Retired local-listener fixtures. Their positive verb behavior is covered by
+# the live bridge; deterministic boundary behavior belongs in socket-free tests.
+#[==[
 # The bridge preserves dragAt, target-tune, memory-recall, and authenticated
 # positional requests across its bare and JSON protocol forms.
 # doubleClick / doubleClickAt verbs (#5068) — asserts the real Qt sequence
@@ -2784,6 +2957,16 @@ add_test(NAME automation_double_click_test COMMAND automation_double_click_test)
 set_tests_properties(automation_double_click_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(automation_fm_repeater_verbs_test tests/automation_fm_repeater_verbs_test.cpp)
+target_include_directories(automation_fm_repeater_verbs_test PRIVATE src)
+target_link_libraries(automation_fm_repeater_verbs_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_fm_repeater_verbs_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_fm_repeater_verbs_test COMMAND automation_fm_repeater_verbs_test)
+set_tests_properties(automation_fm_repeater_verbs_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
 target_include_directories(automation_drag_at_test PRIVATE src)
 target_link_libraries(automation_drag_at_test PRIVATE
@@ -2793,6 +2976,7 @@ set_target_properties(automation_drag_at_test PROPERTIES AUTOMOC ON)
 add_test(NAME automation_drag_at_test COMMAND automation_drag_at_test)
 set_tests_properties(automation_drag_at_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+]==]
 
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
@@ -2840,16 +3024,27 @@ add_executable(radio_certification_math_test tests/radio_certification_math_test
 target_include_directories(radio_certification_math_test PRIVATE src)
 add_test(NAME radio_certification_math_test COMMAND radio_certification_math_test)
 
-add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
-target_include_directories(hl2_tx_loopback_test PRIVATE src)
-target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
-add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
-# This test is a no-op without an hpsdrsim answering discovery, which is the
-# normal state of every machine that has not deliberately started one. Without
-# this property that no-op reports as Passed, which is indistinguishable from a
-# run that actually keyed and measured — the exact silent-green this test was
-# fixed to stop. Same convention as crdv_quarantined_test above.
-set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
+# Explicit opt-in hpsdrsim TX proof. It is excluded from the default graph
+# because it requires the external GPL simulator and intentionally keys its
+# simulated transmitter. Enable only after starting `./hpsdrsim -hermeslite2
+# -P1`; the source fingerprints the simulator before allowing keying.
+#
+# An option() rather than the EXCLUDE_FROM_ALL convention the live probes
+# above use, on purpose: when enabled this must stay a REGISTERED test so the
+# SKIP_RETURN_CODE 77 accounting below keeps a missing simulator visibly
+# Skipped rather than silently green. The weekly sanitizer lanes enable it for
+# compile coverage; without a simulator it skips honestly there.
+option(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST
+       "Build and register the opt-in hpsdrsim HL2 TX loopback test" OFF)
+if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)
+    add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
+    target_include_directories(hl2_tx_loopback_test PRIVATE src)
+    target_link_libraries(hl2_tx_loopback_test
+        PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+    # A missing simulator is an honest skip, never a passing TX proof.
+    set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
@@ -3710,6 +3905,8 @@ add_executable(phone_tx_filter_numeric_entry_test
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
 target_include_directories(phone_tx_filter_numeric_entry_test PRIVATE src)
+target_compile_definitions(phone_tx_filter_numeric_entry_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(phone_tx_filter_numeric_entry_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test
 )
@@ -3719,12 +3916,32 @@ add_test(NAME phone_tx_filter_numeric_entry_test
 set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_applet_dexp_visibility_test
+    tests/phone_applet_dexp_visibility_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_applet_dexp_visibility_test PRIVATE src)
+target_compile_definitions(phone_applet_dexp_visibility_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(phone_applet_dexp_visibility_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_applet_dexp_visibility_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_applet_dexp_visibility_test
+         COMMAND phone_applet_dexp_visibility_test)
+set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
+target_compile_definitions(phone_cw_mic_gain_authority_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(phone_cw_mic_gain_authority_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test
 )
@@ -3732,6 +3949,21 @@ set_target_properties(phone_cw_mic_gain_authority_test PROPERTIES AUTOMOC ON)
 add_test(NAME phone_cw_mic_gain_authority_test
          COMMAND phone_cw_mic_gain_authority_test)
 set_tests_properties(phone_cw_mic_gain_authority_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(phone_cw_level_meter_state_test
+    tests/phone_cw_level_meter_state_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_level_meter_state_test PRIVATE src)
+target_link_libraries(phone_cw_level_meter_state_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets
+)
+set_target_properties(phone_cw_level_meter_state_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_level_meter_state_test
+         COMMAND phone_cw_level_meter_state_test)
+set_tests_properties(phone_cw_level_meter_state_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(container_manager_test
@@ -3837,6 +4069,8 @@ set(AETHER_SETTINGS_CONSUMERS
     cwx_panel_test
     meter_model_test
     health_applet_test
+    meter_applet_capability_test
+    meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
     transmit_model_apd_test
@@ -3912,9 +4146,10 @@ set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 # That failure is invisible to the isolation re-check documented above: the
 # wisdom REDIRECT still works with the bound dead, so no file appears under
 # $HOME/.cache/aethersdr and the check passes. It is also invisible to the test
-# suite, which still passes — just slowly. Measured cold on macOS/arm64,
-# hl2_backend_test: 124.8 s with the variable undefined, 22.5 s with it set
-# here, of which only 2.4 s is CPU. The rest is socket and timer waits.
+# suite, which still passes — just slowly. A cold macOS/arm64 measurement of the
+# now-retired hl2_backend_test was 124.8 s with the variable undefined and
+# 22.5 s with it set here, of which only 2.4 s was CPU. The rest was socket and
+# timer waits.
 #
 # 0.001 s per plan, not per process — FFTW cannot interrupt a measurement in
 # progress, so the total still scales with the number of distinct plans.
@@ -3970,5 +4205,33 @@ foreach(_aether_target IN LISTS _aether_test_targets)
     get_target_property(_aether_type ${_aether_target} TYPE)
     if(_aether_type STREQUAL "EXECUTABLE")
         target_link_libraries(${_aether_target} PRIVATE aether_test_wisdom_isolation)
+    endif()
+endforeach()
+
+# ── Default test timeout — every test gets a ceiling ────────────────────────
+#
+# No suite-wide timeout existed before this: `enable_testing()` without
+# `include(CTest)` configures none, so a hung test blocked its CI gate
+# indefinitely — map_live_update_test ran 35 minutes producing nothing before
+# it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
+# failure: ctest counts it as failed, so --output-on-failure finally prints
+# the captured output that a hang withholds.
+#
+# 300s is data-derived, not a guess: across the last 10 gate-lane runs and
+# the 4 most recent full-suite sanitizer runs, 90% of tests average under
+# ~3s and the slowest legitimate completion ever recorded is spectral_nr_test
+# at 276.6s under the sanitizer lane (#5271 has the tables). If a test
+# legitimately outgrows 300s, give IT a bigger explicit TIMEOUT below its
+# add_test — never raise this default for one test's sake.
+#
+# The loop only fills the gap: a test that already declares its own TIMEOUT
+# (vkamp_connection_test, asr_gpu_probe_test) keeps it. A CMake TIMEOUT
+# property always beats a `ctest --timeout` flag, so this is authoritative
+# in every lane — gate steps, sanitizers, and local dev alike.
+get_directory_property(_aether_registered_tests TESTS)
+foreach(_aether_test IN LISTS _aether_registered_tests)
+    get_test_property(${_aether_test} TIMEOUT _aether_existing_timeout)
+    if(NOT _aether_existing_timeout)
+        set_tests_properties(${_aether_test} PROPERTIES TIMEOUT 300)
     endif()
 endforeach()

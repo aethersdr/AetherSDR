@@ -264,11 +264,13 @@ private:
     QWidget*        m_fmContainer{nullptr};
     QComboBox*      m_toneModeCmb{nullptr};
     QComboBox*      m_toneValueCmb{nullptr};
+    QComboBox*      m_toneRxValueCmb{nullptr};
     QDoubleSpinBox* m_offsetSpin{nullptr};
     QPushButton*    m_offsetDown{nullptr};
     QPushButton*    m_simplexBtn{nullptr};
     QPushButton*    m_offsetUp{nullptr};
     QPushButton*    m_revBtn{nullptr};
+    bool            m_xfcHeldByThisControl{false};
 
     // Containers for show/hide on mode change
     QWidget*     m_agcContainer{nullptr};
@@ -315,6 +317,10 @@ private:
     int agcThresholdMinimum() const;
     int agcThresholdMaximum() const;
     void syncAgcSliderFromSlice();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void configureFmToneControls();
+    void releaseTransmitFrequencyCheck();
 
 
     // RIT

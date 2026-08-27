@@ -125,7 +125,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SpeProtocol.h` | 1 | — | unconverted |
 | `core/SpectrogramBuffer.h` | 1 | universal — Ring buffer of FFT frames per panadapter feeding CNN classifier patches; pure spectrum data, radio-agnostic. | unconverted |
 | `core/SpotCollectorClient.h` | 2 | ui-support — UDP listener for DXLab SpotCollector desktop app; external integration feeding DxSpot, not radio state | unconverted |
-| `core/SpotCommandPolicy.h` | 4 | ui-support — Settings-backed passive-spots toggle gating whether client emits spot-add cmds; pure AppSettings policy, no radio state | unconverted |
+| `core/SpotCommandPolicy.h` | 4 | ui-support — Passive-spots policy gates spot-add commands from both the operator toggle and a backend-declared client-side fallback; no radio state | unconverted |
 | `core/SpotModeResolver.h` | 4 | universal — Maps DX-cluster spot mode/comment/band-plan to canonical radio mode; pure spot-to-state logic, no vendor ties. | unconverted |
 | `core/StreamStatus.h` | 1 | vendor(flex) — SmartSDR stream-status parsing: client_handle ownership, DAX RX/TX orphan-stream firmware quirks — pure Flex wire logic | unconverted |
 | `core/SupportBundle.h` | 1 | ui-support — Diagnostics bundle: archives logs/sysinfo and opens email client; client-side support tooling, not radio state | unconverted |

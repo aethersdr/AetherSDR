@@ -20,6 +20,7 @@
 // original constructor position, so construction order is unchanged.
 
 #include "MainWindow.h"
+#include "MeterApplet.h"
 
 #include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
@@ -30,6 +31,8 @@
 #include "FramelessMessageBox.h"
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
+#include "RfGainPresentation.h"
+#include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwTrace.h"
@@ -38,6 +41,7 @@
 #include "core/IambicKeyer.h"
 #include "core/PerfTelemetry.h"
 #if defined(Q_OS_MAC)
+#include "core/UlanziDialMacOSManager.h"
 #include "core/VirtualAudioBridge.h"
 #elif defined(HAVE_PIPEWIRE)
 #include "core/PipeWireAudioBridge.h"
@@ -502,12 +506,12 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
     if (m_autoConnectAttempts.value(info.serial) >= kMaxAutoConnectAttempts)
         return;
 
-    // Fail closed on a busy non-Flex radio, matching the manual connect gate in
-    // ConnectionPanel (#4448): HPSDR Protocol 1 is single-client, so connecting to
-    // an HL2 that is already streaming wedges both clients. Say so instead of
-    // silently doing nothing — this is the startup path, and the operator is
-    // staring at "Looking for your radio…".
-    if (info.inUse && info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) != 0) {
+    // Fail closed on a busy single-client radio, matching the manual connect
+    // gate in ConnectionPanel (#4448) — the rule is shared via
+    // ConnectionSharingPolicy.h so the two gates cannot drift. Say so instead
+    // of silently doing nothing — this is the startup path, and the operator
+    // is staring at "Looking for your radio…".
+    if (info.inUse && !AetherSDR::familySupportsSharedInUseConnect(info.family)) {
         m_connPanel->setStatusText(
             QStringLiteral("%1 is already in use by another client and can't be shared.")
                 .arg(info.model));
@@ -840,6 +844,14 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
+            this, [this]() {
+        m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());
+    });
+    connect(&m_radioModel, &RadioModel::sliceConnectEnumerationFinished,
+            this, [this]() {
+        m_connectSliceEnumeration.cancelArm();
+    });
     // Start the reconstruction window at actual dispatch, not at UI intent:
     // requestPanBand() can defer behind a profile-load hold.
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
@@ -1292,6 +1304,11 @@ void MainWindow::wireRadioModel()
         // S-Meter: use raw interlock state so Level/Compression modes work
         // during VOX/hardware CW without the effectiveTx power threshold (#877)
         m_appletPanel->setMeterTransmitting(tx);
+        // PA drain current is meaningful only while the radio is physically
+        // transmitting. Do not drive it from the optimistic MOX fan-out: an
+        // operator unkey precedes the authoritative interlock edge, and direct
+        // amplifier state also shares that generic meter fan-out.
+        m_appletPanel->meterApplet()->setTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
@@ -1688,7 +1705,9 @@ void MainWindow::wirePanLifecycle()
                 menu->setPanId(pan->panId());
                 menu->setRadioModel(&m_radioModel);
                 menu->setRadioCapabilities(m_radioModel.capabilities());
-                menu->setDeclaredBands(m_radioModel.declaredBands());
+                menu->setDeclaredBands(
+                    m_radioModel.declaredBands(),
+                    m_radioModel.backendCapabilities().declaredBandRanges);
                 applyTuningRangeToOverlayMenu(menu);
                 applyNotchCapabilities(sw);
                 applyRadioSideDspToPanDisplay(sw);
@@ -1780,6 +1799,12 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::rfGainInfoChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setRfGainRange);
+        connect(pan, &PanadapterModel::rfGainInfoChanged,
+                this, [applet](int, int high, int, const QString& unitSuffix) {
+            const int neutral = normalizedRfGainUnitSuffix(unitSuffix)
+                                    == QLatin1String("%") ? high : 0;
+            applet->spectrumWidget()->setRfGainPresentation(unitSuffix, neutral);
+        });
         connect(pan, &PanadapterModel::rfGainChanged,
                 this, [applet](int gain) {
             applet->spectrumWidget()->setRfGain(gain);
@@ -1794,6 +1819,18 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::preampStepChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setPreampStep);
+        const auto syncPreampIndicator = [pan, applet]() {
+            applet->spectrumWidget()->setPreampIndicator(
+                formatPreampIndicator(pan->preampLabels(), pan->preampStep()));
+        };
+        connect(pan, &PanadapterModel::preampLabelsChanged,
+                this, [syncPreampIndicator](const QStringList&) {
+            syncPreampIndicator();
+        });
+        connect(pan, &PanadapterModel::preampStepChanged,
+                this, [syncPreampIndicator](int) {
+            syncPreampIndicator();
+        });
         connect(pan, &PanadapterModel::attenuatorLabelsChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setAttenuatorLabels);
@@ -1816,8 +1853,14 @@ void MainWindow::wirePanLifecycle()
         applet->spectrumWidget()->overlayMenu()->setRfGainRange(
             pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
             pan->rfGainUnitSuffix());
+        const int rfGainNeutral = normalizedRfGainUnitSuffix(pan->rfGainUnitSuffix())
+                                      == QLatin1String("%")
+                                    ? pan->rfGainHigh() : 0;
+        applet->spectrumWidget()->setRfGainPresentation(
+            pan->rfGainUnitSuffix(), rfGainNeutral);
         applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
         applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
+        syncPreampIndicator();
         applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
         applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
 
@@ -2551,6 +2594,46 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             };
         }
         return tciServer()->routingSnapshot();
+    });
+    m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
+        if (diagnostic != QLatin1String("ulanzi")
+            && diagnostic != QLatin1String("ulanzi-start")
+            && diagnostic != QLatin1String("ulanzi-stop")) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("unknown device diagnostic")},
+            };
+        }
+#ifdef Q_OS_MAC
+        if (!m_dialBackend) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable")},
+            };
+        }
+        if (diagnostic == QLatin1String("ulanzi-start")) {
+            m_dialBackend->start();
+        } else if (diagnostic == QLatin1String("ulanzi-stop")) {
+            m_dialBackend->stop();
+        }
+        QJsonObject snapshot = m_dialBackend->diagnostics();
+        snapshot[QStringLiteral("operation")] = diagnostic;
+        snapshot[QStringLiteral("enabled")] =
+            AppSettings::instance()
+                    .value(QStringLiteral("UlanziDialEnabled"),
+                           QStringLiteral("False"))
+                    .toString()
+            == QLatin1String("True");
+        return snapshot;
+#else
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
+            {QStringLiteral("supported"), false},
+            {QStringLiteral("message"),
+             QStringLiteral("Ulanzi HID diagnostics are currently macOS-only")},
+        };
+#endif
     });
 
     // The access token lives in the OS secret store (QtKeychain), which reads

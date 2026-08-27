@@ -63,6 +63,7 @@ bool commandHasSubcommand(std::uint8_t command)
     case cmd::kPower:
     case cmd::kReadId:
     case cmd::kSetting:
+    case cmd::kTone:
     case cmd::kControl:
     case cmd::kScope:
     // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
@@ -225,6 +226,15 @@ std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd)
         scale *= 10;
     }
     return hz;
+}
+
+std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes)
+{
+    if (bcd.size() != expectedBytes) {
+        return std::nullopt;
+    }
+    return decodeFreq(bcd);
 }
 
 std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd)
@@ -734,6 +744,185 @@ std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
     return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
+std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kDuplex);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffsetDirection(
+    std::uint8_t to, RepeaterOffsetDirection direction)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(direction)};
+    return buildFrame(to, cmd::kDuplex, body);
+}
+
+std::optional<RepeaterOffsetDirection> decodeRepeaterOffsetDirection(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload.front()) {
+    case 0x10: return RepeaterOffsetDirection::Simplex;
+    case 0x11: return RepeaterOffsetDirection::Down;
+    case 0x12: return RepeaterOffsetDirection::Up;
+    default: return std::nullopt;
+    }
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kReadRepeaterOffset);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to, int offsetHz)
+{
+    // Three little-endian BCD bytes in 100 Hz units.  600 kHz is 6000 units,
+    // and therefore 00 60 00 on the wire — the same pair ordering as a
+    // frequency, with two fewer bytes and coarser resolution.
+    const int units = std::clamp(static_cast<int>(std::lround(offsetHz / 100.0)),
+                                 0, 999999);
+    const std::array<std::uint8_t, 3> body{
+        encodeBcdByte(units % 100),
+        encodeBcdByte((units / 100) % 100),
+        encodeBcdByte((units / 10000) % 100),
+    };
+    return buildFrame(to, cmd::kSetRepeaterOffset, body);
+}
+
+std::optional<int> decodeRepeaterOffsetHz(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload) {
+        if ((byte & 0x0F) > 9 || ((byte >> 4) & 0x0F) > 9) {
+            return std::nullopt;
+        }
+    }
+    const int units = decodeBcdByte(payload[0])
+        + decodeBcdByte(payload[1]) * 100
+        + decodeBcdByte(payload[2]) * 10000;
+    return units * 100;
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to)
+{
+    return cmdReadRepeaterToneRegister(to, repeaterTone::kTxCtcss);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
+{
+    return cmdSetCtcssTone(to, repeaterTone::kTxCtcss, toneHz);
+}
+
+std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
+                                          double toneHz)
+{
+    // The guide fixes the first two digits at zero and allows 000.0..299.9 Hz.
+    // Carry tenths of a hertz as six big-endian BCD digits: 88.5 -> 00 08 85.
+    const int tenths = std::clamp(static_cast<int>(std::lround(toneHz * 10.0)),
+                                  0, 2999);
+    const std::array<std::uint8_t, 3> body{
+        0x00,
+        encodeBcdByte((tenths / 100) % 100),
+        encodeBcdByte(tenths % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return cmdReadFunction(to, func::kRepeaterAccess);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to, std::uint8_t mode)
+{
+    return cmdSetFunction(to, func::kRepeaterAccess, mode);
+}
+
+std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3 || payload[0] != 0x00) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload.subspan(1)) {
+        if ((byte & 0x0F) > 9 || ((byte >> 4) & 0x0F) > 9) {
+            return std::nullopt;
+        }
+    }
+    const int tenths = decodeBcdByte(payload[1]) * 100
+        + decodeBcdByte(payload[2]);
+    if (tenths > 2999) {
+        return std::nullopt;
+    }
+    return static_cast<double>(tenths) / 10.0;
+}
+
+std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload[0]) {
+    case 0x00:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x09:
+        return payload[0];
+    default:
+        return std::nullopt;
+    }
+}
+
+std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
+{
+    switch (value) {
+    case 0x00: return "off";
+    case 0x01: return "ctcss_tx";
+    case 0x02: return "ctcss_rx";
+    case 0x03: return "dtcs_txrx";
+    case 0x06: return "dtcs_tx";
+    case 0x07: return "ctcss_tx_dtcs_rx";
+    case 0x08: return "dtcs_tx_ctcss_rx";
+    case 0x09: return "ctcss_txrx";
+    default:   return {};
+    }
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload)
+{
+    const auto validBcd = [](std::uint8_t byte) {
+        return (byte & 0x0F) <= 9 && ((byte >> 4) & 0x0F) <= 9;
+    };
+    if (payload.size() != 3 || (payload[0] & 0xEE) != 0
+        || !validBcd(payload[1]) || !validBcd(payload[2])) {
+        return std::nullopt;
+    }
+    return RepeaterToneRegister{
+        decodeBcdByte(payload[1]) * 100 + decodeBcdByte(payload[2]),
+        (payload[0] & 0x10) != 0,
+        (payload[0] & 0x01) != 0,
+    };
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kReadTxFreq);
+}
+
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
 {
     return buildFrameSub(to, cmd::kTuneOffset, sub);
@@ -756,6 +945,17 @@ std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit)
 {
     const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(transmit ? 0x01 : 0x00)};
     return buildFrameSub(to, cmd::kControl, control::kPtt, body);
+}
+
+std::vector<std::uint8_t> cmdSetTransmitFrequencyCheck(std::uint8_t to, bool on)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(on ? 0x01 : 0x00)};
+    return buildFrameSub(to, cmd::kControl, control::kXfc, body);
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequencyCheck(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kXfc);
 }
 
 std::vector<std::uint8_t> cmdReadId(std::uint8_t to)
@@ -862,6 +1062,15 @@ std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item, std::uint8_
 {
     const auto bcd = settingItemBcd(item);
     const std::array<std::uint8_t, 3> body{bcd[0], bcd[1], value};
+    return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
+std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int value)
+{
+    const auto itemBcd = settingItemBcd(item);
+    const auto levelBcd = encodeLevel(std::clamp(value, 0, 255));
+    const std::array<std::uint8_t, 4> body{
+        itemBcd[0], itemBcd[1], levelBcd[0], levelBcd[1]};
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
 }
 

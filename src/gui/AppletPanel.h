@@ -37,6 +37,7 @@ class SpeApplet;
 class VkampApplet;
 class TxApplet;
 class PhoneCwApplet;
+enum class MicMeterSessionState;
 class PhoneApplet;
 class EqApplet;
 class WaveApplet;
@@ -201,7 +202,7 @@ public:
     void setProfilesVisible(bool visible);
     // Capability passthrough to the Phone/CW applet — same shape as above.
     void setSelectableMicInputs(bool selectable);
-    void setMicLevelMeterAvailable(bool available);
+    void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setRadioFilterWidths(const QList<int>& widthsHz);
 
     // Show/hide the DAX and DAX-IQ buttons and applets based on whether the

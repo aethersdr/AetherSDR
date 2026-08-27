@@ -214,6 +214,8 @@ void PhoneApplet::buildUI()
     // ── DEXP row: toggle + level slider ────────────────────────────────
     {
         auto* rowW = new QWidget;
+        m_dexpRow = rowW;
+        m_dexpRow->setObjectName(QStringLiteral("phoneDexpRow"));
         rowW->setFixedHeight(24);
         auto* row = new QHBoxLayout(rowW);
         row->setContentsMargins(0, 0, 0, 0);
@@ -260,7 +262,10 @@ void PhoneApplet::buildUI()
     // Two columns: Low Cut (left) and High Cut (right), each with header
     // centered over < value > step buttons.
     {
-        auto* grid = new QHBoxLayout;
+        m_txFilterWidget = new QWidget;
+        m_txFilterWidget->setObjectName(QStringLiteral("txFilterControls"));
+        auto* grid = new QHBoxLayout(m_txFilterWidget);
+        grid->setContentsMargins(0, 0, 0, 0);
         grid->setSpacing(0);
 
         // ── Left column: Low Cut ─────────────────────────────────────────
@@ -461,12 +466,17 @@ void PhoneApplet::buildUI()
         highCol->addLayout(highRow);
         grid->addLayout(highCol);
 
-        vbox->addLayout(grid);
+        vbox->addWidget(m_txFilterWidget);
     }
 
 }
 
 // ── Model binding ────────────────────────────────────────────────────────────
+
+void PhoneApplet::setDexpVisible(bool visible)
+{
+    m_dexpRow->setVisible(visible);
+}
 
 int PhoneApplet::steppedEdgeHz(const QList<int>& edges, int currentHz, int dir)
 {
@@ -498,6 +508,13 @@ void PhoneApplet::setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int
 {
     m_txLowEdgesHz  = lowEdgesHz;
     m_txHighEdgesHz = highEdgesHz;
+}
+
+void PhoneApplet::setTxFilterControlsAvailable(bool available)
+{
+    if (m_txFilterWidget) {
+        m_txFilterWidget->setVisible(available);
+    }
 }
 
 void PhoneApplet::setTransmitModel(TransmitModel* model)

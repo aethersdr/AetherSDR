@@ -1,5 +1,9 @@
 # Icom CI-V Backend — Design Note
 
+Model-specific command capability and evidence are defined in
+[`icom-capability-profiles.md`](icom-capability-profiles.md), implementing the
+profile foundation from RFC issue #4984 without widening `IRadioBackend`.
+
 Bring-up plan for `IcomCivBackend`, an `IRadioBackend` implementor for Icom
 networked radios. First targets: **IC-705 over WiFi** and **IC-7300MK2 over
 Ethernet**.
@@ -9,6 +13,56 @@ primary sources under `~/oracles/icom/sources/`. This note does not restate the
 wire format; it covers what AetherSDR has to build and in what order.
 
 Companion to `aetherd-hl2-backend-design.md`, and deliberately shaped like it.
+
+---
+
+## 0. Current bring-up status (2026-08-21)
+
+The backend is no longer a phase-1 sketch. It is an operating CI-V/RS-BA1
+implementation, but its evidence is deliberately recorded at three different
+levels: a model-specific guide can prove a command exists, automated fake-radio
+tests can prove AetherSDR sends and adopts the right frames, and only a live
+radio can prove the operator experience.
+
+| Model | Current evidence | Boundary |
+|---|---|---|
+| **IC-705 (`A4`)** | Model profile checked against its CI-V guide; live RX, scope, TX, FT8/WSPR, controls and meters. The FM repeater/TONE controls, local-memory recall and momentary XFC path in this increment were all exercised successfully by the operator on 2026-08-21. | Primary fully brought-up model. Regional tuning gaps still cannot be represented by the seam's single min/max range. |
+| **IC-7300MK2 (`B6`)** | Model profile checked against its own CI-V guide; live Ethernet RX/scope, control surface, meters, ATU, WSPR, PC Audio routing and CW decoder. Its guide attests the basic repeater and XFC families. | The basic tone/offset/XFC surface is profile-enabled from guide evidence but has not had the IC-705 operator workflow repeated on this model. |
+| **IC-9700 (`A2`)** | Live RS-BA1 scope geometry and `26 00` VFO/mode replies have been observed. Its profile records official-guide plus PR #5149 live-wire evidence for the basic/extended repeater and XFC command families. | This increment's selected-receiver UX still needs an IC-9700 operator pass; AetherSDR does not yet independently model MAIN and SUB repeater state. |
+| **Other/unknown Icom** | Identity may be discovered, and conservative common controls can be read. | Fail closed: absent profile facets mean no repeater reads/writes or XFC capability, with no fallback by CI-V address. |
+
+### FM repeater and XFC state contract
+
+The controls added in this increment use the model-neutral slice/radio seam; no
+GUI code knows a CI-V byte. The mapping is:
+
+| Operator state | CI-V | Convergence |
+|---|---|---|
+| Repeater TONE off/on | `16 42 00/01` | Read at connect, adopted from replies/front-panel traffic, and written only from operator intent. |
+| Repeater tone frequency | `1B 00` + three BCD bytes | Read at connect and adopted as one-decimal-hertz radio state. This is the TONE frequency; `16 43` TSQL remains separate and unmapped. |
+| Duplex simplex/down/up | `0F 10/11/12` | Read at connect and reflected as simplex, `-`, or `+`. |
+| Repeater offset magnitude | read `0C`, write `0D`, 100 Hz units | Kept unsigned on the wire; the duplex direction determines the signed TX offset shown by the slice model. |
+| Transmit-frequency check | `1C 02 00/01` | Gated by the active model's `TxFrequencyCheck` evidence and FM repeater facet. XFC is momentary: press sends ON; release, window deactivation, control hide, and disconnect send OFF. A 250 ms readback poll catches front-panel changes without requiring CI-V Transceive. |
+
+The IC-9700 additionally activates a read-only extended snapshot (`16 5D`,
+`1B 01`, `1B 02`, and `1C 03`) through the model-specific
+`FmRepeaterExtendedReadback` facet. These values are retained in the Icom
+backend and available through its `repeater.state` extension; they do not
+change the shared FM applet, VFO controls, memory vocabulary, or the existing
+IC-705/IC-7300MK2 poll and write paths. The sanitized source trace and exact
+field provenance live in
+`docs/data/icom-ic9700-fm-repeater-{evidence.json,live-trace.txt}`.
+
+The radio remains authoritative. Connect performs a snapshot of all four FM
+repeater fields plus XFC where supported; replies update the models without
+being reflected back as commands. Local-memory recall is an explicit operator
+intent, so it writes tone enable/frequency, duplex direction and offset, then
+the normal CI-V readback path converges the UX. The full recall sequence was
+confirmed on a live IC-705, including TONE off/on and duplex `+`, `-`, and
+simplex/off.
+
+XFC is intentionally not stored in a memory. It describes a held front-panel
+action, not an operating-state setting that should survive release or recall.
 
 ---
 
@@ -116,8 +170,19 @@ comment, not a silent drop.
 feature.** `1C 01` is the *antenna tuner* status (`00`=OFF, `01`=ON, `02`=Tune) —
 it starts an ATU matching cycle, not a tune carrier. AetherSDR's `setTune(on,
 tunePowerPercent)` means "raise a steady carrier at the operator's tune power",
-which on an Icom is composed rather than commanded: save the mode, set RTTY or
-CW, apply the tune power via `14 0A`, key with `1C 00`, and restore on release.
+which on an Icom is composed rather than commanded: preserve the operator's
+mode, save and apply the temporary tune power via `14 0A`, queue a 1.5 kHz PCM
+carrier into the RS-BA1 audio stream, key with `1C 00`, and restore the power on
+release. The carrier is generated by a backend-owned 20 ms timer at the radio's
+48 kHz rate. It does not borrow microphone-capture callbacks: PC Audio can be
+disabled without turning TUNE into a keyed transmitter carrying silence. While
+TUNE owns the stream, ordinary `submitTxAudio` callbacks are ignored so two
+producers cannot overrun the bounded transmit queue.
+
+The radio's modulation-source selection still applies. In a data mode the
+model-specific `DATA MOD` source must be WLAN on IC-705 or LAN on IC-7300MK2;
+the backend reads and reports that radio-owned setting rather than silently
+overwriting it.
 
 Those are two genuinely different operations and they must not be conflated —
 `1C 01 02` belongs on the tuner extension path (`TunerModel`'s autotune intent),
@@ -191,7 +256,8 @@ caps.txPowerMaxWatts        = 10.0;
 caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
 caps.hasTuner               = false;           // no INTERNAL ATU; see note
-caps.hasSupplyVoltageTelemetry = true;         // 15 15 Vd
+caps.hasSupplyVoltageTelemetry =
+    hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
 caps.hasGpsLocation         = false;           // GPS exists, protocol won't carry it
 caps.hasProfiles            = false;
@@ -453,10 +519,13 @@ load-bearing**:
 | Channel duplication | `TciServer` divides by `2 * sizeof(float)` and sees half the frames it has. |
 
 Both failures are **silent** — audio flows, meters move, the session is healthy.
-That is why `icom_backend_test` asserts the ratio (4800 mono samples in at 48 kHz
-→ ~2400 stereo frames out at 24 kHz) rather than merely asserting that audio
-arrived, and why it also asserts the *negative*: a passthrough would emit ~4800
-frames, so the test fails a backend that skipped the conversion.
+The retired `icom_backend_test` fake-radio fixture asserted the ratio (4800 mono
+samples in at 48 kHz → ~2400 stereo frames out at 24 kHz) rather than merely
+asserting that audio arrived. The resampler half stays covered by the retained
+`tx_mic_channel_normalizer_test`; the backend-level negative passthrough
+assertion (a backend that skips the conversion emits ~4800 frames) awaits a
+socket-free injected replacement (#5254) — live validation cannot prove that
+non-event.
 
 `Resampler::processMonoToStereo` does both halves in one call. It is stateful
 (r8brain), so the instance is built once at connect — a fresh one per callback
@@ -656,6 +725,33 @@ MK2, which is a different radio from the one the rest of this targets.
 Not built, deliberately. Each is recorded here with what it needs so the
 decision is not re-litigated from scratch.
 
+### Complete the IC-9700 bring-up
+
+The IC-9700 is not an unknown radio: its network session, 475-bin scope geometry
+and `26 00` VFO/mode reply have been observed live, its three disjoint RF decks
+and PA ceilings are modeled, and its profile carries official-guide plus PR
+#5149 live-wire evidence for the repeater and XFC command families. That does
+not make the remaining selected-receiver UX and transmit bring-up complete.
+
+The next bench pass should, in order:
+
+1. repeat this increment's complete TONE enable/frequency,
+   duplex `+`/`-`/simplex, offset and held-XFC operator workflow from both
+   AetherSDR and the front panel;
+2. recall a local memory and confirm the final radio state, not only the UX;
+3. establish whether CI-V addresses repeater state per selected receiver or can
+   independently name MAIN and SUB, then keep the current selected-receiver
+   model or add a neutral receiver selector from evidence;
+4. verify the model-specific mode/filter, preamp/attenuator and meter tables
+   against the guide and hardware; and
+5. run the ordinary transmit safety sweep separately on 144, 430 and 1200 MHz,
+   with the correct dummy-load path and per-band power ceiling.
+
+Do not infer dual-receiver ownership from `maxSlices = 2`. The radio can receive
+on MAIN and SUB simultaneously; the current backend publishes a selected-radio
+state surface, and converting that into two independently authoritative slices
+is a separate seam and routing decision.
+
 ### Read the radio's UDP ports over CI-V (IC-7300MK2 and later)
 
 Today the backend assumes 50001 / 50002 / 50003 and, when the operator has
@@ -721,13 +817,19 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Seven constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, `1C 02`
-XFC, `27 1E` scope fixed edges. Not all of them should be wired: the notch width
+**Six constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, and
+`27 1E` scope fixed edges. Not all of them should be wired: the notch width
 is deliberately left to the operator's own choice, and the fixed edges are three
 saved presets per band that a pan drag must never overwrite. CW pitch is the one
 that costs something today — it decides where a CW filter sits, so the passband
 drawn in CW assumes the radio's default rather than reading it.
+
+`1C 02` XFC is no longer in that list for profiles that attest it. The IC-705,
+IC-7300MK2 and IC-9700 profiles expose it as a momentary transmit-frequency
+check, so both repeater-control surfaces send ON while held and OFF on release,
+follow radio readback, and poll the state when CI-V Transceive does not announce
+a front-panel edge.
 
 **RIT and XIT are send-only.** `21 00/01/02` are written and never read, so the
 controls open at our defaults rather than the radio's. Unlike the above this is
@@ -891,7 +993,7 @@ screen; certification has to inspect the consumer, not stop at the seam.
 | `15 11` | Po, 0=0% / 143=50% / 213=100% | ✅ | `TX:FWDPWR` **Watts** | **working** — model-specific curve; visible only while keyed |
 | `15 12` | SWR, 0=1.0 / 48=1.5 / 80=2.0 / 120=3.0 | ✅ | `TX:SWR` SWR | **working** — transmit-only; clears on unkey |
 | `15 13` | ALC, 0=min / 120=max | ✅ | `TX:ALC` **Percent** | **working** — consumer honours Percent |
-| `15 14` | COMP, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | contract correct; reads 0 while PROC is unmapped |
+| `15 14` | COMP meter, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | working while transmitting; independent of the `16 44` / `14 0E` compressor controls |
 | `15 15` | Vd, 0=0 V / 75=5 V / 241=16 V | ✅ | `RAD:+13.8A` Volts | **working** |
 | `15 16` | Id, 0=0 A / 121=2 A / 241=4 A | ✅ | `RAD:PACURRENT` Amps | published, no consumer |
 
@@ -909,8 +1011,9 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 22` | Noise blanker | ✅ | ✗ constant only |
 | `16 40` | Noise reduction | ✅ | ✗ constant only |
 | `16 41` | Auto notch | ✅ | ✗ constant only |
-| `16 43` | Tone squelch | ✗ | ✗ |
-| `16 44` | **Speech compressor (PROC)** | ✅ | ✗ **not wired — the PROC state disagrees with the radio** |
+| `16 42` | Repeater tone (TONE) | ✅ | ✅ live-verified on IC-705; connect readback + front-panel adoption |
+| `16 43` | Tone squelch (TSQL) | ✗ | ✗ — separate from the mapped repeater TONE control |
+| `16 44` | **Speech compressor enable** | ✅ | ✅ via `setSpeechProcessor`; connect readback and confirmation adopt radio state |
 | `16 45` | Monitor | ✅ | ✗ constant only |
 | `16 46` | VOX | ✅ | ✗ constant only |
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
@@ -929,9 +1032,12 @@ mic gain `0B`, key speed `0C`, COMP level `0E`, NB level `12`, monitor `15`.
 Unmapped: notch position `0D`, break-in delay `0F`, VOX gain `16`, anti-VOX
 gain `17`.
 
-**`14 0E` is the missing half of PROC.** AetherSDR's processor control is a Flex
-shape — OFF / NOR / DX / DX+ — and on an Icom that is two commands, not one:
-`16 44` for the on/off and `14 0E` (0000–0255 ⇒ 0–10) for which of the three.
+**`14 0E` is the missing half of speech compression.** The enable and level are
+two commands on Icom, not one. Legacy profiles retain the shared PROC preset
+surface; a model profile may expose an evidenced continuous COMP level:
+`16 44` controls on/off and `14 0E` (0000–0255 ⇒ 0–10) is the level register.
+Legacy profiles map that register to the three shared PROC presets; the IC-9700
+profile maps it bidirectionally to the continuous 0–100 COMP percentage.
 
 ### C.4 RIT / XIT (`21 xx`) — entirely unmapped
 
@@ -1025,13 +1131,16 @@ their own right (CERTIFICATION.md §1.29):
 | | ANF | ✅ **verified** — `16 41 01` |
 | | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control and off is zero |
 | | manual notch | ✅ `setSliceManualNotch` (`16 48` + `14 0D`); state is polled |
+| | FM repeater TONE + frequency | ✅ **live-verified on IC-705** — `16 42` + `1B 00`; radio readback owns the control |
+| | FM duplex + offset | ✅ **live-verified on IC-705** — `0F 10/11/12` + `0C`/`0D`; local-memory recall verified for `+`, `-`, and simplex/off |
+| | REV / XFC | ✅ momentary XFC via `1C 02` when the active model profile attests it; live-verified on IC-705, guide-attested on IC-7300MK2, and guide + PR #5149 live-wire verified on IC-9700 |
 | | AF gain / mute / pan | ❌ seam verbs exist, backend does not implement |
 | **TX Controls** | MOX / PTT | ✅ `setKeying` |
 | | TUNE | ✅ `setTune` |
 | | RF power | ✅ `setTxPower` |
 | | power / SWR gauges | ✅ (units fixed; unverified on hardware) |
 | | TX filter | ❌ `setTxFilter` not implemented (`16 58` unmapped) |
-| **Phone / CW** | PROC enable + NOR/DX/DX+ | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
+| **Phone / CW** | profile-shaped PROC/COMP enable + level | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
 | | ALC / Compression gauges | ✅ (ALC scale fixed; unverified) |
 | | Level gauge | ⛔ hidden — this radio publishes no mic meter |
 | | mic source | ✅ collapsed to PC by capability |
@@ -1041,8 +1150,8 @@ their own right (CERTIFICATION.md §1.29):
 | | CW speed / pitch / break-in | ❌ no seam verb (`14 0C`, `14 09` mapped; `16 47` unmapped) |
 | **Status bar** | voltage | ✅ `RAD:+13.8A` |
 | | temperature / current | IC-705: no temperature; IC-7300MK2: `Id` from `15 16` while transmitting |
-| | radio name / model | ✅ from the handshake + `19 00` |
-| | hostname / alias | ⚠️ shows the connect address; the radio's own name is in the capabilities packet and unused |
+| | radio nickname / model | ✅ **verified on IC-705** — Network Radio Name from the RS-BA1 handshake; canonical model from `19 00` |
+| | network hostname | ⚠️ shows the connect address; no separate host alias is published |
 
 ### D.3 One control, two registers
 
@@ -1070,21 +1179,25 @@ CERTIFICATION.md §1.31 because it generalises to any fanned-out control.
 4. **AGC threshold** is accepted and discarded; the radio has no threshold
    register. Better to advertise it as unavailable than keep a live slider that
    does nothing.
-5. **The radio's own name** arrives in the capabilities packet and is unused;
-   the status bar shows the connect address instead.
 
 **Implemented and NOT proven on hardware** — the distinction this appendix
 exists to keep visible:
 
-6. **The TUNE carrier.** Synthesised, built, never keyed into a tuner.
-7. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
+5. **The backend-owned TUNE cadence.** Synthesised and built, with fresh
+   IC-705 and IC-7300MK2 hardware revalidation pending; it never invokes the
+   antenna tuner command.
+6. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
    IC-7300MK2; an IC-705 UI/effect pass is still outstanding.
-8. **The three filter buttons**, on screen with the applet open.
-9. **Connect-time state adoption**, beyond confirming the values arrive: whether
+7. **The three filter buttons**, on screen with the applet open.
+8. **Connect-time state adoption**, beyond confirming the values arrive: whether
    each one lands on the control an operator is looking at is a separate
    question, and it is the §1.27 gap in a different costume.
-10. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
-    register and was not.
+9. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
+   register and was not.
+10. **IC-9700 selected-receiver repeater/XFC UX.** The shared command families
+    have official and live-wire evidence through PR #5149; this increment's
+    basic control surface and MAIN/SUB ownership still need a complete operator
+    pass on that radio.
 
 **Open defects**
 

@@ -326,9 +326,7 @@ void MainWindow::selectSliceFromRadioState(
             << "MainWindow: band recall suppressing slice reveal"
             << "pan=" << slice->panId()
             << "slice=" << slice->sliceId()
-            << "source="
-            << (source == RadioSliceSelectionSource::ActiveStatus
-                    ? "active-status" : "topology-fallback");
+            << "source=" << radioSliceSelectionSourceName(source);
     }
 
     const bool wasUpdatingFromModel = m_updatingFromModel;
@@ -1656,8 +1654,25 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // First slice — wire everything up
     if (firstSlice) {
-        selectSliceFromRadioState(
-            s, RadioSliceSelectionSource::TopologyFallback);
+        // Bootstrap only: give the UI a selection. Do NOT write active=1 during
+        // initial connect enumeration — this is the first slice ENUMERATED, not
+        // the slice that should own the UI. A FLEX does not persist the operator's
+        // active-slice choice across a restart; during connect the status burst /
+        // enumeration order may end with a different slice active (often last-created),
+        // and that slice may not exist client-side yet (it arrives in a later
+        // status frame). Asserting here would clobber that live status and
+        // make first-enumerated always win. The adoption check later in
+        // onSliceAdded() reads s->isActive() as subsequent slices arrive, so the
+        // client converges on the radio-authoritative active slice.
+        // Mid-session creation into an empty list (after initial enumeration window has passed)
+        // routes through TopologyFallback to assert the selection as needed.
+        const auto nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (m_connectSliceEnumeration.expiredUnused(nowMs)) {
+            qCWarning(lcProtocol) << "MainWindow: connect slice enumeration window expired unused; falling back to TopologyFallback";
+        }
+        const RadioSliceSelectionSource source =
+            firstSliceSelectionSource(m_connectSliceEnumeration.isActive(nowMs));
+        selectSliceFromRadioState(s, source);
 
         // Detect initial band from radio's frequency
         if (m_bandSettings.currentBand().isEmpty())
@@ -3752,7 +3767,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setRadioModel(&m_radioModel);
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
-    menu->setDeclaredBands(m_radioModel.declaredBands());
+    menu->setDeclaredBands(m_radioModel.declaredBands(),
+                           m_radioModel.backendCapabilities().declaredBandRanges);
     applyTuningRangeToOverlayMenu(menu);
     applyNotchCapabilities(sw);
     applyRadioSideDspToPanDisplay(sw);
@@ -5094,7 +5110,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         QString spotColor = as.value("ManualSpotColor", "#00FF00").toString();
         if (spotColor.length() == 7) spotColor = "#FF" + spotColor.mid(1);
         cmd += " color=" + spotColor;
-        if (SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             m_radioModel.sendCommand(cmd);
         } else {
             QMap<QString, QString> kvs;
@@ -5251,16 +5268,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // XVTR button → open Radio Setup XVTR tab (#571)
     connect(menu, &SpectrumOverlayMenu::xvtrSetupRequested,
             this, [this]() {
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
-        if (m_radioSetupDialog)
-            m_radioSetupDialog->selectTab(QStringLiteral("XVTR"));
+        openRadioSetupPage(QStringLiteral("XVTR"));
     });
 
     // ── WNB / RF Gain ────────────────────────────────────────────────────
@@ -5734,7 +5742,16 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         float detected = m_cwDecoder.estimatedPitch();
         if (detected <= 0.0f) return;
         int configured = m_radioModel.transmitModel().cwPitch();
-        double offsetMhz = (detected - configured) / 1.0e6;
+        // The beat note sits above the carrier on CWU but below it on CWL,
+        // so the correction is mirrored — adding unconditionally doubles a
+        // CWL operator's error instead of removing it (#5213).  Same sign
+        // convention as the Kiwi CW BFO (KiwiSdrProtocol.cpp).  Flex radios
+        // express CWL as mode "CW" plus the transmit flag; Icom/HL2/sim
+        // express it as slice mode "CWL" and never set the flag — honor both.
+        const bool cwl = slice->mode() == QLatin1String("CWL")
+                      || m_radioModel.transmitModel().cwlEnabled();
+        const int sign = cwl ? -1 : 1;
+        double offsetMhz = sign * (detected - configured) / 1.0e6;
         applyTuneRequest(slice, slice->frequency() + offsetMhz,
                          TuneIntent::IncrementalTune, "zero-beat");
     });

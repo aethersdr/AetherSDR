@@ -15,9 +15,9 @@ bool passiveSpotsModeEnabled()
         AppSettings::instance().value(kPassiveSpotsModeKey, "False"));
 }
 
-bool shouldSendSpotAddCommands()
+bool shouldSendSpotAddCommands(bool backendAlwaysUsesClientSideSpots)
 {
-    return !passiveSpotsModeEnabled();
+    return !backendAlwaysUsesClientSideSpots && !passiveSpotsModeEnabled();
 }
 
 } // namespace AetherSDR::SpotCommandPolicy
