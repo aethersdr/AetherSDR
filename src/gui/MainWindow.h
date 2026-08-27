@@ -1552,6 +1552,7 @@ private:
     bool m_hasPaTempTelemetry{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
     // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
     //
     // The slot is driven by radioUpdated as well as radioDiscovered, and

@@ -1156,6 +1156,12 @@ signals:
     void txFilterBlockingAudio(const QString& title,
                                const QString& detail,
                                const QString& panId);
+    // A Flex-syntax command was dropped because this backend has no command
+    // plane (HL2, Icom): the control that emitted it moved and nothing reached
+    // the radio — the HERMES §17 shape, made visible (M0, #5263). Emitted on
+    // EVERY drop; the UI's one-shot-per-session throttling is the consumer's
+    // job, so logs and any non-UI consumers can observe each occurrence.
+    void commandDropped(const QString& command);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);

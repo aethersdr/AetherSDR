@@ -669,6 +669,27 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+
+    // Loud drop (M0, #5263): RadioModel emits commandDropped on every
+    // Flex-syntax command it discards for lack of a command plane (HL2, Icom).
+    // The qCWarning in RadioModel carries each occurrence; the operator gets
+    // ONE status-bar notice per connect session, so a single unconverted
+    // surface cannot spam the bar while still never failing silently.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (connected)
+            m_commandDroppedNoticeShown = false;
+    });
+    connect(&m_radioModel, &RadioModel::commandDropped,
+            this, [this](const QString&) {
+        if (m_commandDroppedNoticeShown)
+            return;
+        m_commandDroppedNoticeShown = true;
+        statusBar()->showMessage(
+            tr("This radio doesn't support that control — nothing was sent to "
+               "the radio. Further unsupported controls are logged."),
+            8000);
+    });
     // Slice Link: disconnect teardown never emits sliceRemoved (stale slices
     // are staged for reconnect reclaim), so dissolve the link explicitly.
     // Both transitions dissolve — a link never crosses a session boundary
