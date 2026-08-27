@@ -187,6 +187,13 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
             wasapiCandidates.append(c);
     }
     if (wasapiCandidates.size() == 1) {
+        // Still a PARTIAL match: the host-API preference picked which of
+        // several partial rows to open, not whether the name matched. The
+        // operator did not choose this device, so it must be reported as a
+        // substitution exactly like the single-partial path above (#5123) —
+        // otherwise the summary and support bundle call it a clean match.
+        if (partialMatchName)
+            *partialMatchName = wasapiCandidates[0].rawName;
         qCInfo(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                         << device.description()
                         << "resolved to WASAPI output"
