@@ -1622,24 +1622,29 @@ QString TciProtocol::cmdSpotClear()
 
 // ── CW macros ──────────────────────────────────────────────────────────────
 
-// See the contract on cwMacrosTextFromArgs() in TciProtocol.h for why the
-// receiver index is stripped conditionally rather than unconditionally.
-QString cwMacrosTextFromArgs(const QStringList& args, int trxCount)
+// See the contract on cwMacrosTextFromArgs() in TciProtocol.h for why numeric
+// first arguments fail closed while non-numeric ones retain compatibility.
+QString TciProtocol::cwMacrosTextFromArgs(const QStringList& args, int trxCount)
 {
-    if (args.isEmpty()) return {};
-    if (trxCount < 1) trxCount = 1;
+    if (args.isEmpty()) {
+        return {};
+    }
+    if (trxCount < 1) {
+        trxCount = 1;
+    }
 
-    // One uniform rule: if args[0] names a receiver this radio has, it is an
-    // INDEX; otherwise the whole argument list is TEXT. Deliberately not
-    // gated on args.size() >= 2 — a lone `cw_macros:0;` is an index with an
-    // empty message, and returning "0" there would key the index on the air,
-    // which is this very defect in its single-argument form.
+    // A base-10 integer in the receiver slot is always an address. If it no
+    // longer names a live advertised receiver, fail closed rather than
+    // reinterpreting it as text and putting the stale index on the air.
     //
     // args.join(',') on the TAIL, not on everything: the join is what lets a
     // message legitimately CONTAIN commas (`cw_macros:0,CQ,CQ` keys "CQ,CQ"),
     // which is why the original code joined at all. Only the index was wrong.
     int trx = 0;
-    if (argToInt(args, 0, trx) && trx >= 0 && trx < trxCount) {
+    if (argToInt(args, 0, trx)) {
+        if (trx < 0 || trx >= trxCount) {
+            return {};
+        }
         return args.mid(1).join(',');
     }
     return args.join(',');
@@ -1647,21 +1652,29 @@ QString cwMacrosTextFromArgs(const QStringList& args, int trxCount)
 
 QString TciProtocol::cmdCwMacros(const QStringList& args)
 {
-    if (!m_model || args.isEmpty()) return {};
-    // Resolution happens INSIDE the lambda, on the model's thread:
-    // TciTrxMap::trxCount() reads RadioModel, and this method is driven by
-    // the TCI client socket, where model state is not ours to read. That is
-    // the same rule the capability check below already follows.
-    QMetaObject::invokeMethod(m_model, [model = m_model, trxMap = m_trxMap, args]() {
+    if (!m_model || args.isEmpty()) {
+        return {};
+    }
+
+    // TciServer and RadioModel share the GUI thread. Resolve against the
+    // receiver map now, while handling the command, so slice churn cannot
+    // change how the same wire message is interpreted one event-loop turn
+    // later. Only validated text crosses the queued boundary.
+    const int trxCount = m_trxMap ? m_trxMap->trxCount(m_model)
+                                  : static_cast<int>(m_model->slices().size());
+    const QString text = cwMacrosTextFromArgs(args, trxCount);
+    if (text.isEmpty()) {
+        qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 empty text or "
+                            "invalid receiver index";
+        return {};
+    }
+
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         if (!model->hasRadioSideCwKeyer()) {
             qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 radio has no "
                                 "radio-side CW keyer";
             return;
         }
-        const int trxCount = trxMap ? trxMap->trxCount(model)
-                                    : static_cast<int>(model->slices().size());
-        const QString text = cwMacrosTextFromArgs(args, trxCount);
-        if (text.isEmpty()) return;
         const QString rejection = model->cwTextValidationError(text);
         if (!rejection.isEmpty()) {
             qCWarning(lcCat) << "TCI: cw_macros ignored:" << rejection;

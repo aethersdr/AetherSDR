@@ -221,6 +221,15 @@ public:
     // still holds the model placeholder (#3910, #3913 review).
     static long long ddsCenterHz(RadioModel* model, const SliceModel* slice);
 
+    // Extract the text from `cw_macros:<trx>,<text>` (#4997). A base-10
+    // integer first argument is always a receiver address: an in-range value
+    // is stripped and an out-of-range/stale value fails closed. A nonnumeric
+    // first argument is retained for compatibility with index-less clients.
+    // Public and pure so the boundary rule can be tested without a radio-side
+    // CW keyer; trxCount is the same dynamic count advertised to TCI clients.
+    [[nodiscard]] static QString cwMacrosTextFromArgs(const QStringList& args,
+                                                      int trxCount);
+
 private:
 
     RadioModel* m_model;
@@ -238,42 +247,6 @@ private:
     QString     m_activeLetter;              // focused slice's display letter (#4160)
     bool        m_started{false};  // client sent START
 };
-
-// The CW text payload carried by a `cw_macros` command (#4997).
-//
-// TCI spells this verb `cw_macros:<trx>,<text>;` — args[0] is the RECEIVER
-// INDEX, exactly as handleCommand()'s own GET/SET derivation assumes ("0-1
-// args = GET (no args, or trx index only), 2+ args = SET (trx index +
-// value(s))"). cmdCwMacros used to join EVERY argument, so the index was
-// keyed on the air as part of the message: `cw_macros:0,TEST` transmitted
-// "0,TEST" rather than "TEST".
-//
-// Pulled out as a pure function so the decision is unit-testable without a
-// RadioModel, a connected radio, or a radio-side CW keyer — none of which
-// the demo backend provides (SimBackend sets hasRadioSideCwKeyer=false), so
-// the end-to-end path cannot be driven in a test at all.
-//
-// The index is stripped ONLY when args[0] parses as a receiver index that
-// this radio actually has. That is not defensiveness for its own sake — it
-// keeps two populations working that a bare args.mid(1) would break:
-//
-//   * a client that omits the index entirely (`cw_macros:TEST`) still sends
-//     TEST, rather than sending nothing at all;
-//   * a message whose text genuinely starts with a number — a contest
-//     exchange like `cw_macros:599,TU` — keeps its 599, because 599 is not a
-//     receiver this radio has. Silently keying "TU" and eating the report
-//     would be a worse bug than the one being fixed.
-//
-// The rule is uniform in the number of arguments, not just their content: a
-// lone `cw_macros:0;` is an index with an empty message and returns empty
-// (the caller then keys nothing), because returning "0" would put the index
-// on the air — this same defect in its single-argument form. A lone
-// non-index argument (`cw_macros:TEST;`) is still a message.
-//
-// `trxCount` must come from the model's own thread (TciTrxMap::trxCount()
-// reads RadioModel), which is why cmdCwMacros resolves it inside its queued
-// lambda rather than on the TCI socket thread.
-[[nodiscard]] QString cwMacrosTextFromArgs(const QStringList& args, int trxCount);
 
 } // namespace AetherSDR
 
