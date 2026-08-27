@@ -25,7 +25,7 @@ namespace {
 PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
                                         QString* partialMatchName = nullptr)
 {
-    if (normalizedDeviceName(device.description()).isEmpty())
+    if (device.description().trimmed().isEmpty())
         return paNoDevice;
 
     const PaDeviceIndex count = Pa_GetDeviceCount();
@@ -227,9 +227,18 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         return false;
     }
     if (!device.isNull()) {
-        qCWarning(lcAudio) << "CwSidetonePortAudioSink: matched selected Qt output"
-                           << device.description()
-                           << "to PortAudio output" << devInfo->name;
+        if (partialMatchName.isEmpty()) {
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: matched selected Qt output"
+                               << device.description()
+                               << "to PortAudio output" << devInfo->name;
+        } else {
+            // Not "matched": the operator did not pick this device (#5123).
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: opening PortAudio output"
+                               << devInfo->name
+                               << "in place of selected Qt output"
+                               << device.description()
+                               << "(partial name match)";
+        }
     }
     if (!partialMatchName.isEmpty()) {
         // A partial name match is a substitution the operator did not make;
