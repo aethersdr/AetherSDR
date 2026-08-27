@@ -87,10 +87,15 @@ private:
 
     QVector<OpenDevice> m_devices;
     QString m_deviceName;
-    // m_variantSeen is written by rescan()/stop() on the owning (Ext
-    // Controllers) thread and read by unsupportedVariantName() from the GUI
-    // thread, so every access goes through m_variantMutex.  m_variantNotified
-    // is touched only on the owning thread and needs no guard.
+    // Both members go through m_variantMutex.  m_variantSeen is written by
+    // rescan()/stop() on the owning (Ext Controllers) thread and read by
+    // unsupportedVariantName() from the GUI thread.  m_variantNotified is
+    // only reached from the owning thread on Windows today — the one GUI
+    // caller of stop(), the automation bridge's ulanzi-stop diagnostic at
+    // MainWindow_Session.cpp, is inside #ifdef Q_OS_MAC and does not compile
+    // here — but guarding it costs nothing (publishVariantState() already
+    // holds the lock to read m_variantSeen) and stops the invariant from
+    // depending on a call site in another platform's branch. (#3485)
     mutable QMutex m_variantMutex;
     QString m_variantSeen;          // OEM-variant display name from the last rescan
     QString m_variantNotified;      // last state we emitted, to emit on transitions only

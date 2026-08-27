@@ -97,12 +97,17 @@ void UlanziDialWindowsManager::publishVariantState()
     // dial that has been unplugged is still present. (#3485)
     QString current;
     {
+        // One lock covers the read of m_variantSeen and the transition test
+        // against m_variantNotified, so the pair cannot be observed
+        // half-updated and neither QString is assigned concurrently.
         QMutexLocker lock(&m_variantMutex);
         current = m_variantSeen;
+        if (!UlanziVariant::shouldPublish(m_variantNotified, current))
+            return;
+        m_variantNotified = current;
     }
-    if (!UlanziVariant::shouldPublish(m_variantNotified, current))
-        return;
-    m_variantNotified = current;
+    // Emit outside the lock: consumers run on the GUI thread and must not
+    // re-enter the manager while it is held.
     emit unsupportedVariantChanged(current);
 }
 
