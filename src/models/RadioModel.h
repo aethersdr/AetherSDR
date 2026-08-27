@@ -777,6 +777,13 @@ public:
     // reconstruction input carries the intended rhythm rather than
     // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
     // schedule; send-time stamping is unchanged.
+    // Note the deliberate asymmetry with sendCwKey: this entry point does
+    // NOT emit cwKeyDownChanged.  It is the local iambic keyer's path, and
+    // that producer already drove the sidetone gate at the element's
+    // scheduled instant, so publishing here would queue a second,
+    // wall-clock-stamped edge for the same element (#4976).  m_cwKeyActive
+    // is tracked on both paths either way — it feeds the TX-ownership
+    // interlock.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
@@ -961,8 +968,15 @@ signals:
     // Emitted whenever the backend instance is (re)built — including the
     // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
     // m_backend is already destroyed and m_backend now points at the new one.
-    // Emitted whenever the local CW key transitions on/off — funnel for
-    // serial CTS/DSR, MIDI Gate, TCI key, CWX, and HID encoder sources.
+    // Emitted whenever a straight-key-shaped local CW source transitions
+    // on/off — the funnel for the serial CW-key line, the TCI `keyer:trx`
+    // command, and the MIDI Gate / keyboard / HID straight-key actions.
+    // All of them reach it through RadioModel::sendCwKey.
+    // NOT the local iambic keyer: sendCwKeyEdge deliberately does not
+    // publish here (#4976), because that producer already drove the
+    // sidetone gate at the element's own scheduled instant.  NOT CWX
+    // either — CwxLocalKeyer calls AudioEngine::setCwKeyDown directly and
+    // never touches RadioModel.
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
     // sidetone independent of the radio's own DAX-fed sidetone.
     void cwKeyDownChanged(bool down);

@@ -75,21 +75,28 @@ void CwSidetoneGenerator::setKeyDown(bool down,
     // Several threads legitimately produce edges — the iambic and CWX
     // workers call in directly, and the GUI thread delivers straight-key
     // sources via RadioModel::cwKeyDownChanged — so slot write and head
-    // publish must be exclusive among producers.  A short spin
-    // is cheaper than any blocking primitive at tens of edges per
-    // second; process() only consumes the tail and never takes this
-    // lock, so the audio thread stays wait-free.  The stamp is resolved
-    // inside the lock so queue order equals timestamp order — process()
-    // relies on that for its edges-are-time-ordered early-out.  A caller-
-    // supplied scheduled instant lies slightly in the past (wake latency),
-    // so it is clamped against the newest queued stamp: without this, a
+    // publish must be exclusive among producers.  A short spin is cheaper
+    // than any blocking primitive at tens of edges per second; process()
+    // only consumes the tail and never takes this lock, so the audio
+    // thread stays wait-free.  The stamp is resolved inside the lock so
+    // queue order equals timestamp order — process() relies on that for
+    // its edges-are-time-ordered early-out.  A caller-supplied scheduled
+    // instant lies slightly in the past (wake latency), so it is clamped
+    // against the newest queued stamp: without this, a
     // wall-clock edge from another producer could sit ahead of it in the
     // queue with a later stamp.  The clamp preserves the schedule's exact
     // spacing whenever edges from one producer arrive back-to-back, which
-    // is the #4890 case that matters.  Keyer edges reach here exactly once
-    // since #4976 (the GUI cwKeyDownChanged echo no longer fires for
-    // RadioModel::sendCwKeyEdge), so the floor between two scheduled
-    // edges is the previous scheduled edge, not a wall-clock echo.
+    // is the #4890 case that matters.  Since #4976 a keyer element reaches
+    // here exactly once — RadioModel::sendCwKeyEdge no longer echoes back
+    // through the GUI cwKeyDownChanged handler — so back-to-back keyer
+    // edges clamp against the previous *scheduled* edge rather than against
+    // that echo's wall-clock stamp.  The floor itself is still one value
+    // shared by every producer: a wall-clock edge from another one (a CWX
+    // macro draining through the 1-arg setCwKeyDown, a straight key, a
+    // stop/abort key-up) can still raise it past a keyer element's
+    // scheduled instant and clamp that element up to wall clock.  Removing
+    // the echo narrowed the coupling to genuinely concurrent producers; it
+    // did not make the floor per-producer.
     // Worst case among producers: the GUI thread descheduled inside the
     // section leaves a keying worker spinning until the holder resumes.
     // The section is ~20 instructions, so the window is vanishingly
@@ -146,10 +153,10 @@ void CwSidetoneGenerator::reset() noexcept
     // monotonicity — a scheduled instant lies a few ms in the past, so an
     // edge CAN carry a stamp below a floor that a wall-clock edge from
     // another producer (straight key, stop/abort key-up) raised.  The cost
-    // of the retained floor is
-    // bounded and one-sided: the first edge queued after this drain clamps
-    // up to it rather than to its own scheduled instant, then the grid
-    // re-establishes itself within an element or two.
+    // of the retained floor is bounded and one-sided: the first edge queued
+    // after this drain clamps up to it rather than to its own scheduled
+    // instant, then the grid re-establishes itself within an element or
+    // two.
 }
 
 void CwSidetoneGenerator::setSampleRateHz(int hz) noexcept

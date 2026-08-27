@@ -41,14 +41,13 @@ public:
     // Key state — called from any thread, and concurrently from several
     // in practice (iambic worker, CWX worker, the GUI-thread handler of
     // RadioModel::cwKeyDownChanged for straight-key sources); producers
-    // serialize on a short
-    // spinlock the audio thread never touches.  Each call is timestamped
-    // inside the lock and queued; process() applies the transition at
-    // the exact sample offset the timestamp maps to, so key edges are no
-    // longer quantized to audio block boundaries (#4809 — up to one
-    // whole block of jitter per edge, and far more on the push-model
-    // QAudioSink sink).  On queue overflow the last-known state still
-    // lands at the next block start (the pre-#4809 behavior) via
+    // serialize on a short spinlock the audio thread never touches.  Each
+    // call is timestamped inside the lock and queued; process() applies
+    // the transition at the exact sample offset the timestamp maps to, so
+    // key edges are no longer quantized to audio block boundaries (#4809
+    // — up to one whole block of jitter per edge, and far more on the
+    // push-model QAudioSink sink).  On queue overflow the last-known state
+    // still lands at the next block start (the pre-#4809 behavior) via
     // m_keyDown.
     // `when` (#4890): producers with an exact element schedule (the iambic
     // keyer's grid) pass the edge's scheduled instant so the rendered

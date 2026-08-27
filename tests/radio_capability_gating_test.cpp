@@ -479,11 +479,34 @@ int main(int argc, char** argv)
                   "an accepted iambic up does not publish a key-active echo");
             // Straight-key sources still publish: a following sendCwKey down
             // emits even though the keyer edges touched the shared state.
+            // Note this holds because the two keyer edges above are
+            // BALANCED, leaving m_cwKeyActive false again — see the
+            // unbalanced case pinned below.
             model.sendCwKey(true);
             check(keyEdgeSpy.count() == 1
                       && keyEdgeSpy.last().value(0).toBool(),
-                  "a straight-key down after keyer edges still publishes");
+                  "a straight-key down after balanced keyer edges publishes");
             model.sendCwKey(false);
+
+            // Known limitation, pinned deliberately.  NOT a regression:
+            // `main` behaves identically, because sendCwKeyEdge set the
+            // same latch before #4976.  m_cwKeyActive is one bool shared by
+            // both entry points, so an UNBALANCED keyer edge leaves it set
+            // and the next straight-key down of the same polarity publishes
+            // nothing — the radio is keyed while the sidetone gate never
+            // hears the edge.  The interleave is reachable because
+            // straight-key sources are not gated on the iambic keyer
+            // running (TciProtocol's keyer:trx handler,
+            // MainWindow::setCwStraightKeyState) while paddle sources are.
+            // Giving sendCwKeyEdge its own edge-tracking bool is out of
+            // scope for #4976; this assertion is what flips when that
+            // decoupling lands.
+            const int publishedBeforeLatch = keyEdgeSpy.count();
+            model.sendCwKeyEdge(true);   // latches m_cwKeyActive, no echo
+            model.sendCwKey(true);       // prev == true, so nothing emits
+            check(keyEdgeSpy.count() == publishedBeforeLatch,
+                  "KNOWN LATCH: a straight-key down after an unbalanced "
+                  "keyer edge publishes nothing");
         }
     }
 
