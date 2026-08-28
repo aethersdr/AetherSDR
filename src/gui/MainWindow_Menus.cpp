@@ -1280,6 +1280,10 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
+    // Beside the other two diagnostic surfaces: Radio Health is the radio's
+    // own state, Slice Troubleshooting is one slice's path, System Info is this
+    // application's runtime (#2554).
+    helpMenu->addAction("System Info...", this, [this]() { showSystemInfoDialog(); });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
             &m_radioModel, m_audio, this,

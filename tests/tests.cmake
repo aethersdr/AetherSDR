@@ -3364,6 +3364,31 @@ endif()
 set_target_properties(transmit_model_apd_test PROPERTIES AUTOMOC ON)
 add_test(NAME transmit_model_apd_test COMMAND transmit_model_apd_test)
 
+# Runtime Monitor dialog (#2554): construct/show/hide, synthetic samples driven into
+# the thread table, the threshold alert, the Logs filters and the tail across a reset.
+# Needs QApplication + Widgets; offscreen.
+add_executable(system_info_dialog_test
+    tests/system_info_dialog_test.cpp
+    src/gui/SystemInfoDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/SystemInfo.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/ThreadName.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(system_info_dialog_test PRIVATE src tests)
+target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
+set_target_properties(system_info_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME system_info_dialog_test COMMAND system_info_dialog_test)
+set_tests_properties(system_info_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Help guide search tests - needs QApplication + Widgets.
 add_executable(help_dialog_test
     tests/help_dialog_test.cpp
@@ -3982,6 +4007,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandplan_voice_labels_test
     vkamp_connection_test
     radio_capability_gating_test
+    system_info_dialog_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

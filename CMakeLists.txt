@@ -917,6 +917,7 @@ set(GUI_SOURCES
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
+    src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp

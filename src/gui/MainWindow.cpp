@@ -102,6 +102,7 @@
 #include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
+#include "SystemInfoDialog.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -4149,6 +4150,11 @@ void MainWindow::showNetworkDiagnosticsDialog()
     showOrRaisePersistent(m_networkDiagnosticsDialog,
                           &m_radioModel, m_audio, m_networkDiagnosticsHistory);
 #endif
+}
+
+void MainWindow::showSystemInfoDialog()
+{
+    showOrRaisePersistent(m_systemInfoDialog);
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
