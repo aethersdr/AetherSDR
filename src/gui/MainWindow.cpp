@@ -2283,12 +2283,17 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool) { updatePaTempLabel(); });
     connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
             this, [this](bool) { updatePaTempLabel(); });
-    // moxChanged too, now that the gate above reads isMox(): a radio-initiated
-    // key raises moxChanged without transmittingChanged, so without this the
-    // label would only refresh when a paCurrent sample happened to arrive --
-    // correct by luck rather than by wiring.
-    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            this, [this](bool) { updatePaTempLabel(); });
+    // stateChanged() too, now that the gate above reads isMox(). Backend MOX
+    // is assigned with a bare `changed |= assign(d.mox, m_mox)`
+    // (TransmitModel.cpp:84) and deliberately does NOT raise moxChanged --
+    // routing it through setTransmitting() would open this client's
+    // mic/DAX/serial-PTT paths when the radio is keyed by someone else. It
+    // folds into the catch-all stateChanged() instead, so that is the only
+    // signal a radio-initiated key actually raises. Without this the label
+    // would refresh only when a paCurrent sample happened to arrive -- correct
+    // by luck rather than by wiring.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::stateChanged,
+            this, [this]() { updatePaTempLabel(); });
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -4466,6 +4471,14 @@ void MainWindow::updatePaTempLabel()
         // key-downs mox was true with real forward power and hasPaCurrent()
         // was true with paCurrent tracking 3.30-3.47 A, while isTransmitting()
         // was false in every sample. The sample path was never the problem.
+        //
+        // That supersedes #5306's second root cause, which reported
+        // paCurrent=ABSENT and blamed the !m_keyed guard suppressing Id
+        // samples. Both readings were honest; the backend moved between them.
+        // onMeterTick() now polls the radio's own PTT every kPttPollMs and
+        // sets m_keyed from the 1C 00 readback, so m_keyed tracks a
+        // radio-initiated key and the Id samples do arrive. Only this GUI
+        // gate was still dropping them.
         //
         // Seven other keyed-state checks in this tree already read
         // isTransmitting() || isTuning() || isMox(); this one had drifted.
