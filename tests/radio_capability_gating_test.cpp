@@ -103,7 +103,6 @@
 // with the automation bridge.
 
 #include "models/RadioModel.h"
-#include "IcomFakeRadio.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "models/ModelCapabilities.h"
@@ -114,8 +113,6 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
-#include "core/backends/icom/IcomCredentials.h"
-#include "core/backends/icom/IcomSettings.h"
 
 #include "TestEventLoop.h"
 
@@ -125,6 +122,20 @@
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+// Select model-table data without opening an IcomSession or any socket. The
+// backend already grants this focused test accessor for deterministic state
+// injection; each test binary supplies only the operations it needs.
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+};
+
+}  // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -268,6 +279,9 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
         check(!caps.hasTransmitFrequencyCheck,
               "Flex declares hasTransmitFrequencyCheck=false (REV is local state)");
+        check(caps.fmTonePresentation == FmTonePresentation::Legacy
+                  && caps.fmToneModes.isEmpty(),
+              "Flex retains its legacy FM-tone presentation and labels");
         // The three status-bar toggles. Same regression shape as the supply-rail
         // field above and worse in kind: these are shipping SmartSDR features
         // whose only implementation is a command-plane verb, so a field added
@@ -497,56 +511,49 @@ int main(int argc, char** argv)
         }
     }
 
-    // ---- Icom drives the model's actual per-band power consumer -----------
+    // ---- Icom publishes the IC-9700 power clamp without a socket ----------
     {
-        using AetherSDR::icom::test::FakeIc705;
+        using namespace AetherSDR::icom;
+        const IcomModel* ic9700 = modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
+        // Guarded as a block: without the guard a failed lookup would run the
+        // six checks below against the constructor's unknownModel() seed and
+        // report six misleading capability failures for one missing table row.
+        if (ic9700) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 3,
+                  "Icom declares the three IC-9700 per-band TX power limits");
+            check(caps.txPowerMaxWattsAt(146'000'000.0) == 100.0,
+                  "the IC-9700 2 m capability clamps TX power to 100 W");
+            check(caps.txPowerMaxWattsAt(432'000'000.0) == 75.0,
+                  "the IC-9700 70 cm capability clamps TX power to 75 W");
+            check(caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+                  "the IC-9700 23 cm capability clamps TX power to 10 W");
+            check(caps.hasTransmitFrequencyCheck,
+                  "Icom declares the profiled IC-9700 momentary XFC command");
+            check(caps.hasSupplyVoltageTelemetry,
+                  "Icom declares the profiled IC-9700 supply-voltage telemetry");
+            check(!caps.hasMainFanTelemetry,
+                  "Icom declares no Main Fan telemetry family-wide");
+            check(caps.speechProcessorLevelMaximum == 100
+                      && caps.speechProcessorLabel == QStringLiteral("COMP"),
+                  "IC-9700 alone declares the continuous COMP presentation");
+        }
 
-        FakeIc705 radio;
-        radio.setCivAddress(0xA2);
-        radio.setDeviceName("IC-9700");
-        IcomSettings::reset();
-        IcomSettings::setUsername(QStringLiteral("beer"));
-        IcomSettings::setPorts(radio.controlPort(), radio.serialPort(), radio.audioPort());
-        IcomSettings::setCivAddressAuto();
-        IcomCredentials::setSessionPassword(QStringLiteral("beerbeer"));
-
-        RadioInfo info;
-        info.family = QStringLiteral("icom");
-        info.model = QStringLiteral("IC-9700");
-        info.serial = QStringLiteral("capability-gating-ic9700");
-        info.address = QHostAddress::LocalHost;
-        info.port = radio.controlPort();
-        model.connectToRadio(info);
-        check(AetherTest::waitFor([&] { return model.isConnected(); }),
-              "IC-9700 model-level fixture connects through the real backend seam");
-
-        const RadioCapabilities caps = model.backendCapabilities();
-        check(caps.txPowerBands.size() == 3,
-              "Icom declares the three IC-9700 per-band TX power limits");
-        check(caps.hasTransmitFrequencyCheck,
-              "Icom declares the profiled IC-9700 momentary XFC command");
-        check(caps.hasSupplyVoltageTelemetry,
-              "Icom declares the profiled IC-9700 supply-voltage telemetry");
-        check(!caps.hasMainFanTelemetry,
-              "Icom declares no Main Fan telemetry family-wide");
-
-        const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
-                                          const char* description) {
-            radio.frontPanelFrequency(hz);
-            check(AetherTest::waitFor([&] {
-                      return model.transmitModel().maxPowerLevel() == watts;
-                  }), description);
-        };
-        expectPowerLimit(146'000'000ULL, 100,
-                         "RadioModel applies the IC-9700 2 m 100 W ceiling");
-        expectPowerLimit(432'000'000ULL, 75,
-                         "RadioModel applies the IC-9700 70 cm 75 W ceiling");
-        expectPowerLimit(1'296'000'000ULL, 10,
-                         "RadioModel applies the IC-9700 23 cm 10 W ceiling");
-
-        model.disconnectFromRadio();
-        IcomCredentials::setSessionPassword(QString{});
-        IcomSettings::reset();
+        for (const char* siblingName : {"IC-705", "IC-7300MK2"}) {
+            const IcomModel* sibling = modelForName(siblingName);
+            check(sibling != nullptr, "the protected sibling Icom model resolves");
+            if (sibling) {
+                IcomCivBackend backend;
+                IcomCivBackendTestAccess::selectModel(backend, *sibling);
+                const RadioCapabilities caps = backend.capabilities();
+                check(caps.speechProcessorLevelMaximum == 2
+                          && caps.speechProcessorLabel == QStringLiteral("PROC"),
+                      "non-9700 Icom models retain the legacy PROC presentation");
+            }
+        }
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -899,6 +906,11 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults PA temperature telemetry to absent");
         check(!fresh.hasMainFanTelemetry,
               "RadioCapabilities defaults Main Fan telemetry to absent");
+        check(!fresh.alwaysUseClientSideSpots,
+              "RadioCapabilities defaults to the existing operator spot policy");
+        check(fresh.speechProcessorLevelMaximum == 2
+                  && fresh.speechProcessorLabel == QStringLiteral("PROC"),
+              "RadioCapabilities defaults to the legacy PROC presentation");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
@@ -910,6 +922,27 @@ int main(int argc, char** argv)
         const RadioCapabilities hl2Caps = hl2.capabilities();
         const RadioCapabilities simCaps = sim.capabilities();
         const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(!flexCaps.alwaysUseClientSideSpots,
+              "Flex keeps its radio-side spot publication behavior");
+        check(!hl2Caps.alwaysUseClientSideSpots,
+              "HL2 keeps its existing operator-controlled spot behavior");
+        check(!simCaps.alwaysUseClientSideSpots,
+              "Sim keeps its existing operator-controlled spot behavior");
+        check(icomCaps.alwaysUseClientSideSpots,
+              "Icom forces SpotHub spots through the passive client model");
+        check(flexCaps.speechProcessorLevelMaximum == 2
+                  && flexCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "Flex retains the legacy PROC presentation");
+        check(hl2Caps.speechProcessorLevelMaximum == 2
+                  && hl2Caps.speechProcessorLabel == QStringLiteral("PROC"),
+              "HL2 retains the legacy PROC presentation");
+        check(simCaps.speechProcessorLevelMaximum == 2
+                  && simCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "Sim retains the legacy PROC presentation");
+        check(icomCaps.speechProcessorLevelMaximum == 2
+                  && icomCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "an unidentified Icom retains the legacy PROC presentation");
 
         check(!fresh.hasTxFilterControls,
               "RadioCapabilities defaults TX cutoff controls to absent");

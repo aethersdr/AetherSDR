@@ -136,6 +136,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.family = QStringLiteral("flex");
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
+    caps.fmTonePresentation = FmTonePresentation::Legacy;
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
@@ -162,6 +163,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // in later. Sample rates and TX power range are refined as their touchpoints
     // convert (they are not part of this skeleton).
     caps.canTransmit = true;
+    // Flex meter samples retain the established client-side PEP response.
+    caps.forwardPowerRequiresSmoothing = true;
     // A Flex transmits in every mode it demodulates, so there is nothing for the
     // receive-only mode guard to refuse. Stated rather than defaulted, per the
     // "adding a field" rule in RadioCapabilities.h.
@@ -220,6 +223,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
+    caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs
     // keeps an unbounded list — so this is a UI-side sanity limit rather than a
     // radio-reported one, and it is set high enough never to be the thing that
@@ -267,6 +271,11 @@ RadioCapabilities FlexBackend::capabilities() const
     // before the fuse), which the status bar renders under the PA temperature.
     caps.hasSupplyVoltageTelemetry = true;
     caps.hasPaTemperatureTelemetry = true;
+    // FLEX PACURRENT is known to clip below real full-power draw, so it is not
+    // an honest substitute for the calibrated PA-temperature instrument.
+    caps.hasPaCurrentTelemetry = false;
+    caps.speechProcessorLevelMaximum = 2;
+    caps.speechProcessorLabel = QStringLiteral("PROC");
     caps.hasMainFanTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/

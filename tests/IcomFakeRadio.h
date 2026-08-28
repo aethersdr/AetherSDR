@@ -22,6 +22,7 @@
 #include <QUdpSocket>
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <map>
@@ -644,6 +645,12 @@ private:
         // A read is the command with NO payload byte. The set form carries one,
         // and answering that with a value would be a radio talking back to its
         // own command.
+        if (frame->cmd == cmd::kFunction && frame->hasSub
+            && frame->sub == repeaterAccess::kFunction && frame->data.empty()) {
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kFunction,
+                     repeaterAccess::kFunction, m_repeaterAccess, kCivEom});
+            return;
+        }
         if (frame->cmd == cmd::kFunction && frame->hasSub && frame->data.empty()) {
             auto it = m_functions.find(frame->sub);
             if (it != m_functions.end()) {
@@ -723,6 +730,22 @@ private:
             }
             m_repeaterToneHz = *toneHz;
             pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kTone && frame->hasSub && frame->data.empty()
+            && (frame->sub == repeaterTone::kRxCtcss
+                || frame->sub == repeaterTone::kDtcs)) {
+            const int value = frame->sub == repeaterTone::kRxCtcss
+                ? static_cast<int>(std::lround(m_repeaterRxToneHz * 10.0))
+                : m_repeaterDtcsCode;
+            const std::uint8_t polarity = frame->sub == repeaterTone::kDtcs
+                ? static_cast<std::uint8_t>((m_repeaterDtcsTxReverse ? 0x10 : 0x00)
+                                            | (m_repeaterDtcsRxReverse ? 0x01 : 0x00))
+                : 0x00;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kTone,
+                     frame->sub, polarity,
+                     encodeBcdByte((value / 100) % 100),
+                     encodeBcdByte(value % 100), kCivEom});
             return;
         }
         // ---- 1A 03 IF FILTER WIDTH ---------------------------------------
@@ -880,6 +903,17 @@ private:
             pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kReadTxFreq && frame->data.empty()) {
+            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress,
+                                            m_addr, cmd::kControl,
+                                            control::kReadTxFreq};
+            const std::vector<std::uint8_t> encoded = encodeFreq(m_txFrequencyHz);
+            reply.insert(reply.end(), encoded.begin(), encoded.end());
+            reply.push_back(kCivEom);
+            pushCiv(reply);
+            return;
+        }
 
         // Everything else is acknowledged.
         pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
@@ -979,6 +1013,12 @@ public:
     RepeaterOffsetDirection m_repeaterOffsetDirection = RepeaterOffsetDirection::Down;
     int m_repeaterOffsetHz = 600'000;
     double m_repeaterToneHz = 88.5;
+    std::uint8_t m_repeaterAccess = 0x03;
+    double m_repeaterRxToneHz = 67.0;
+    int m_repeaterDtcsCode = 23;
+    bool m_repeaterDtcsTxReverse = false;
+    bool m_repeaterDtcsRxReverse = true;
+    std::uint64_t m_txFrequencyHz = 448'425'600;
 
     // Simulate the operator turning the MODE knob: the radio pushes an
     // unsolicited 01 (which cannot carry DATA) and nothing else. Following the

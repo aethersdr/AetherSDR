@@ -8,6 +8,8 @@
 #include "core/AppSettings.h"
 
 #include <QPushButton>
+#include <QAccessible>
+#include <QStyle>
 #include <QLabel>
 #include <QLineEdit>
 #include <QIntValidator>
@@ -74,6 +76,7 @@ static const QString kGreenActive =
 static constexpr const char* kButtonBase =
     "QPushButton { background: #1a3a5a; border: 1px solid #205070; "
     "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; }"
+    "QPushButton[continuousCompressor=\"true\"] { font-size: 11px; font-weight: normal; }"
     "QPushButton:hover { background: #204060; }";
 
 static const QString kStepBtnStyle =
@@ -375,19 +378,19 @@ void PhoneCwApplet::buildPhonePanel()
 
         auto* labelsRow = new QHBoxLayout;
         labelsRow->setContentsMargins(0, 0, 0, 0);
-        auto* norLbl = new QLabel("NOR");
-        auto* dxLbl = new QLabel("DX");
-        auto* dxPlusLbl = new QLabel("DX+");
+        m_procLowLabel = new QLabel("NOR");
+        m_procMidLabel = new QLabel("DX");
+        m_procHighLabel = new QLabel("DX+");
         const QString tickLabelStyle = "QLabel { color: #c8d8e8; font-size: 8px; }";
-        norLbl->setStyleSheet(tickLabelStyle);
-        dxLbl->setStyleSheet(tickLabelStyle);
-        dxPlusLbl->setStyleSheet(tickLabelStyle);
-        norLbl->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
-        dxLbl->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
-        dxPlusLbl->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-        labelsRow->addWidget(norLbl);
-        labelsRow->addWidget(dxLbl);
-        labelsRow->addWidget(dxPlusLbl);
+        m_procLowLabel->setStyleSheet(tickLabelStyle);
+        m_procMidLabel->setStyleSheet(tickLabelStyle);
+        m_procHighLabel->setStyleSheet(tickLabelStyle);
+        m_procLowLabel->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
+        m_procMidLabel->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
+        m_procHighLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
+        labelsRow->addWidget(m_procLowLabel);
+        labelsRow->addWidget(m_procMidLabel);
+        labelsRow->addWidget(m_procHighLabel);
         procVbox->addLayout(labelsRow);
 
         m_procSlider = new GuardedSlider(Qt::Horizontal);
@@ -419,8 +422,7 @@ void PhoneCwApplet::buildPhonePanel()
 
         connect(m_procSlider, &QSlider::valueChanged, this, [this](int pos) {
             if (!m_updatingFromModel && m_model) {
-                static constexpr int kLevels[] = {0, 1, 2};
-                m_model->setSpeechProcessorLevel(kLevels[qBound(0, pos, 2)]);
+                m_model->setSpeechProcessorLevel(pos);
             }
         });
 
@@ -471,6 +473,63 @@ void PhoneCwApplet::buildPhonePanel()
         });
 
         vbox->addLayout(row);
+    }
+}
+
+void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int maximum)
+{
+    maximum = qBound(2, maximum, 100);
+    const bool continuousCompressor = maximum > 2;
+    const QString accessibleName = continuousCompressor
+        ? tr("Speech compressor") : tr("Speech processor");
+    m_procBtn->setText(label.isEmpty()
+                           ? (continuousCompressor ? QStringLiteral("COMP")
+                                                   : QStringLiteral("PROC"))
+                           : label);
+    // The four bold glyphs are ambiguous at the legacy button's 48 px width
+    // on macOS (the final P renders like F). Give only the continuous IC-9700
+    // presentation enough room and a clearer weight; preserve every legacy
+    // backend's established PROC geometry and typography exactly.
+    m_procBtn->setFixedWidth(continuousCompressor ? 54 : 48);
+    m_procBtn->setProperty("continuousCompressor", continuousCompressor);
+    m_procBtn->style()->unpolish(m_procBtn);
+    m_procBtn->style()->polish(m_procBtn);
+    if (m_procBtn->accessibleName() != accessibleName) {
+        m_procBtn->setAccessibleName(accessibleName);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_procBtn, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    const QString buttonDescription = continuousCompressor
+        ? tr("Toggle the radio speech compressor")
+        : tr("Toggle speech processor for compression");
+    if (m_procBtn->accessibleDescription() != buttonDescription) {
+        m_procBtn->setAccessibleDescription(buttonDescription);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_procBtn, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    const QSignalBlocker blocker(m_procSlider);
+    m_procSlider->setRange(0, maximum);
+    m_procSlider->setPageStep(maximum == 2 ? 1 : 10);
+    m_procSlider->setTickInterval(maximum == 2 ? 1 : 10);
+    m_procLowLabel->setText(maximum == 2 ? QStringLiteral("NOR") : QStringLiteral("0"));
+    m_procMidLabel->setText(maximum == 2 ? QStringLiteral("DX") : QStringLiteral("50"));
+    m_procHighLabel->setText(maximum == 2 ? QStringLiteral("DX+") : QStringLiteral("100"));
+    const QString sliderDescription = maximum == 2
+        ? tr("Speech processor level: Normal, DX, or DX+")
+        : tr("Speech compressor level from 0 to 100 percent");
+    if (m_procSlider->accessibleDescription() != sliderDescription) {
+        m_procSlider->setAccessibleDescription(sliderDescription);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_procSlider, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    if (m_model) {
+        m_procSlider->setValue(m_model->speechProcessorLevel());
     }
 }
 
@@ -875,7 +934,7 @@ void PhoneCwApplet::syncPhoneFromModel()
 
     {
         int level = m_model->speechProcessorLevel();
-        int pos = qBound(0, level, 2);
+        int pos = qBound(m_procSlider->minimum(), level, m_procSlider->maximum());
         m_procSlider->setValue(pos);
     }
 

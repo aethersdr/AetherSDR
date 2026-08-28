@@ -125,7 +125,7 @@ public:
     ~SpectrumWidget() override;
 
     // Per-pan settings persistence
-    void setPanIndex(int idx) { m_panIndex = idx; }
+    void setPanIndex(int idx);
     int panIndex() const { return m_panIndex; }
     QString settingsKey(const QString& base) const;
     void loadSettings();

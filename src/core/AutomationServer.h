@@ -60,7 +60,9 @@ class AetherClockModel;
 //   invoke <target> <action> [v]   -> drive a control deterministically:
 //                                     click / toggle / setChecked / setValue /
 //                                     setText / setCurrentText / setCurrentIndex /
-//                                     selectRow. SAFETY: refuses any control
+//                                     selectRow / showPopup / hidePopup (combo
+//                                     drop-down held open; container named
+//                                     aetherComboPopup). SAFETY: refuses any control
 //                                     marked as transmit-keying (markTxKeying() /
 //                                     the "aetherTxKeying" property — MOX/PTT,
 //                                     TUNE, ATU, CWX send, packet/APRS send)
@@ -400,6 +402,8 @@ private:
     QJsonObject doDeviceDiagnostics(const QString& action) const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
+    // Full plain text of one QTextEdit/QPlainTextEdit view (#5078). Read-only.
+    QJsonObject doGetText(const QString& target) const;
     // grab pan <index> [path]: capture the raw SpectrumWidget framebuffer for a
     // specific pan (by SpectrumWidget::panIndex) in a multi-pan layout — plain
     // `grab SpectrumWidget` only ever resolves the first one (#3646).
@@ -691,6 +695,12 @@ private:
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
     QJsonObject doShortcut(const QString& id);
+    // keyevent <press|release> <action-id|key-seq>: a real key edge through the
+    // app event filter for the momentary shortcut family (#5079). Press is
+    // TX-gated like shortcut; a release is never blocked.
+    QJsonObject doKeyEvent(const QString& action, const QString& spec);
+    // Release-edge policing hand-back, gated on the transmitter being down.
+    void releaseEdgeHandsBackPolicing();
     // Inject a learned VFO Tune Knob MIDI CC value through the controller
     // decoder. Automation-only, RX-only, and never persists a binding.
     QJsonObject doMidi(const QString& action, const QString& value) const;

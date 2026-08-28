@@ -2,6 +2,7 @@
 #include "core/backends/TransmitDelta.h"
 #include "gui/HGauge.h"
 #include "gui/TxApplet.h"
+#include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
 #include <QApplication>
@@ -9,6 +10,7 @@
 #include <QPushButton>
 #include <QSlider>
 
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -126,6 +128,74 @@ void testTxMetersAreLiveOnly()
            powerGauge->value() == 0.0f);
 }
 
+void testCapabilityPowerScaleHonoursBandCeiling()
+{
+    RadioModel radio;
+    TxApplet applet;
+    applet.setRadioModel(&radio);
+    auto* powerGauge = static_cast<HGauge*>(
+        namedWidget(applet, QStringLiteral("Forward power gauge")));
+    report("forward-power gauge exists for scale test", powerGauge != nullptr);
+    if (!powerGauge) {
+        return;
+    }
+
+    applet.setPowerScale(75, false);
+    report("unverified lower-power radio preserves established face",
+           powerGauge->property("gaugeMax").toFloat() == 120.0f
+               && powerGauge->property("gaugeRedStart").toFloat() == 100.0f);
+
+    RadioCapabilities caps;
+    caps.txPowerBands.append(TxPowerBand{430'000'000.0, 450'000'000.0, 75.0});
+    emit radio.capabilitiesChanged(true, caps);
+    applet.setPowerScale(75, false);
+    report("75 W capability sets 90 W face",
+           powerGauge->property("gaugeMax").toFloat() == 90.0f);
+    report("75 W capability sets red threshold at rating",
+           powerGauge->property("gaugeRedStart").toFloat() == 75.0f);
+
+    applet.setPowerScale(10, false);
+    report("10 W capability sets 12 W face",
+           powerGauge->property("gaugeMax").toFloat() == 12.0f);
+    report("10 W capability sets red threshold at rating",
+           powerGauge->property("gaugeRedStart").toFloat() == 10.0f);
+
+    applet.setPowerScale(100, false);
+    report("100 W capability preserves established Flex face",
+           powerGauge->property("gaugeMax").toFloat() == 120.0f
+               && powerGauge->property("gaugeRedStart").toFloat() == 100.0f);
+
+    applet.setPowerScale(0, false);
+    report("unknown power ceiling preserves safe established face",
+           powerGauge->property("gaugeMax").toFloat() == 120.0f
+               && powerGauge->property("gaugeRedStart").toFloat() == 100.0f);
+}
+
+void testForwardPowerResponseCapabilityIsConsumed()
+{
+    report("default capability preserves established power smoothing",
+           !RadioCapabilities{}.forwardPowerRequiresSmoothing
+               && RadioCapabilities{}.txPowerBands.isEmpty());
+
+    RadioModel radio;
+    TxApplet applet;
+    applet.setRadioModel(&radio);
+    auto* powerGauge = static_cast<HGauge*>(
+        namedWidget(applet, QStringLiteral("Forward power gauge")));
+    report("forward-power gauge exists for response test", powerGauge != nullptr);
+    if (!powerGauge) {
+        return;
+    }
+
+    RadioCapabilities caps;
+    caps.forwardPowerRequiresSmoothing = false;
+    emit radio.capabilitiesChanged(true, caps);
+    applet.setTransmitting(true);
+    applet.updateMeters(60.0f, 1.0f, true);
+    report("backend response capability snaps the displayed power sample",
+           std::fabs(powerGauge->filledFraction() - 0.5f) < 0.001f);
+}
+
 void testAtuSuccessTogglesToBypass()
 {
     TransmitModel model;
@@ -172,6 +242,7 @@ int main(int argc, char** argv)
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
+    qputenv("AETHER_AUTOMATION", "1");
 
     QApplication app(argc, argv);
 
@@ -180,6 +251,8 @@ int main(int argc, char** argv)
     testReleaseReconcilesAuthoritativePower(QStringLiteral("RF power"), true);
     testReleaseReconcilesAuthoritativePower(QStringLiteral("Tune power"), false);
     testTxMetersAreLiveOnly();
+    testCapabilityPowerScaleHonoursBandCeiling();
+    testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
 
     std::printf("\n%s\n",

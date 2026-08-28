@@ -1622,11 +1622,53 @@ QString TciProtocol::cmdSpotClear()
 
 // ── CW macros ──────────────────────────────────────────────────────────────
 
+// See the contract on cwMacrosTextFromArgs() in TciProtocol.h for why numeric
+// first arguments fail closed while non-numeric ones retain compatibility.
+QString TciProtocol::cwMacrosTextFromArgs(const QStringList& args, int trxCount)
+{
+    if (args.isEmpty()) {
+        return {};
+    }
+    if (trxCount < 1) {
+        trxCount = 1;
+    }
+
+    // A base-10 integer in the receiver slot is always an address. If it no
+    // longer names a live advertised receiver, fail closed rather than
+    // reinterpreting it as text and putting the stale index on the air.
+    //
+    // args.join(',') on the TAIL, not on everything: the join is what lets a
+    // message legitimately CONTAIN commas (`cw_macros:0,CQ,CQ` keys "CQ,CQ"),
+    // which is why the original code joined at all. Only the index was wrong.
+    int trx = 0;
+    if (argToInt(args, 0, trx)) {
+        if (trx < 0 || trx >= trxCount) {
+            return {};
+        }
+        return args.mid(1).join(',');
+    }
+    return args.join(',');
+}
+
 QString TciProtocol::cmdCwMacros(const QStringList& args)
 {
-    if (!m_model || args.isEmpty()) return {};
-    QString text = args.join(',');
-    if (text.isEmpty()) return {};
+    if (!m_model || args.isEmpty()) {
+        return {};
+    }
+
+    // TciServer and RadioModel share the GUI thread. Resolve against the
+    // receiver map now, while handling the command, so slice churn cannot
+    // change how the same wire message is interpreted one event-loop turn
+    // later. Only validated text crosses the queued boundary.
+    const int trxCount = m_trxMap ? m_trxMap->trxCount(m_model)
+                                  : static_cast<int>(m_model->slices().size());
+    const QString text = cwMacrosTextFromArgs(args, trxCount);
+    if (text.isEmpty()) {
+        qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 empty text or "
+                            "invalid receiver index";
+        return {};
+    }
+
     QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         if (!model->hasRadioSideCwKeyer()) {
             qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 radio has no "

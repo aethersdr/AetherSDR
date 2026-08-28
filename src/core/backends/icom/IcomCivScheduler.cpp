@@ -5,6 +5,41 @@
 
 namespace AetherSDR::icom {
 
+void IcomCivScheduler::recordTransaction(const Queued& request,
+                                         Completion completion,
+                                         std::int64_t completedAtMs,
+                                         std::int64_t responseMs)
+{
+    TransactionEvent event;
+    event.key = request.request.key;
+    event.priority = request.request.priority;
+    event.generation = request.generation;
+    event.completion = completion;
+    event.completedAtMs = completedAtMs;
+    event.queueWaitMs = request.dispatchedAtMs >= 0
+        ? std::max<std::int64_t>(0, request.dispatchedAtMs - request.enqueuedAtMs)
+        : -1;
+    event.responseMs = responseMs;
+    m_recentTransactions.push_back(std::move(event));
+    while (m_recentTransactions.size() > kTransactionHistoryMax) {
+        m_recentTransactions.pop_front();
+    }
+}
+
+void IcomCivScheduler::noteResponse(const Queued& request, std::int64_t nowMs)
+{
+    if (request.dispatchedAtMs < 0) {
+        return;
+    }
+    const std::int64_t responseMs = std::max<std::int64_t>(0, nowMs - request.dispatchedAtMs);
+    ++m_stats.responseSamples;
+    m_stats.totalResponseMs += responseMs;
+    m_stats.lastResponseMs = responseMs;
+    m_stats.maxResponseMs = std::max(m_stats.maxResponseMs, responseMs);
+    m_stats.lastResponseAtMs = nowMs;
+    m_stats.lastCompletedKey = request.request.key;
+}
+
 // Two requests are duplicates only if they ask the SAME register the same way.
 //
 // The semantic key is deliberately coarse — 04, 06, 26 and the transceive
@@ -115,7 +150,12 @@ void IcomCivScheduler::expireRead(std::int64_t nowMs)
     // unmatched-therefore-authoritative at 351 ms, which let an obsolete read
     // overwrite a newer operator write on every register except PTT (which the
     // backend's separate intent window happens to cover).
-    m_expired.push_back(Expired{*m_inFlight, nowMs + kLateReplyGraceMs});
+    const Queued expired = *m_inFlight;
+    const std::int64_t responseMs = std::max<std::int64_t>(0, nowMs - m_inFlightAtMs);
+    recordTransaction(expired, Completion::Timeout, nowMs, responseMs);
+    m_stats.lastCompletedKey = expired.request.key;
+    m_stats.lastTimeoutKey = expired.request.key;
+    m_expired.push_back(Expired{expired, nowMs + kLateReplyGraceMs});
     while (m_expired.size() > kMaxExpiredTracked) {
         m_expired.pop_front();
     }
@@ -166,6 +206,7 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
     Queued selected = std::move(*best);
     m_queue.erase(best);
     m_lastDispatchMs = nowMs;
+    selected.dispatchedAtMs = nowMs;
     if (selected.request.expectsReply) {
         // A fail-safe unkey is the sole command allowed to interrupt an
         // unanswered transaction.  Displacing that transaction is safe, but it
@@ -174,6 +215,10 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         // observe() keeps generation-guarding it instead of treating a late
         // pre-unkey reading as fresh radio truth.
         if (selected.request.priority == Priority::Emergency && m_inFlight) {
+            const Queued displaced = *m_inFlight;
+            recordTransaction(displaced, Completion::Displaced, nowMs,
+                              std::max<std::int64_t>(0, nowMs - m_inFlightAtMs));
+            m_stats.lastCompletedKey = displaced.request.key;
             m_expired.push_back(Expired{*m_inFlight, nowMs + kLateReplyGraceMs});
             while (m_expired.size() > kMaxExpiredTracked) {
                 m_expired.pop_front();
@@ -181,6 +226,9 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         }
         m_inFlight = selected;
         m_inFlightAtMs = nowMs;
+    } else {
+        recordTransaction(selected, Completion::NoReply, nowMs);
+        m_stats.lastCompletedKey = selected.request.key;
     }
     ++m_stats.dispatched;
     m_stats.queueDepth = m_queue.size();
@@ -250,6 +298,7 @@ IcomCivScheduler::Observation IcomCivScheduler::observe(const CivFrame& frame,
 
     if (!m_inFlight || !matches(frame, *m_inFlight)) {
         if (generic) {
+            ++m_stats.unmatchedFrames;
             return Observation::Unmatched;
         }
         // Late answer to a transaction we stopped waiting for.  It is only
@@ -262,27 +311,43 @@ IcomCivScheduler::Observation IcomCivScheduler::observe(const CivFrame& frame,
             const auto generation = m_generations.find(it->request.request.key);
             const bool superseded = generation != m_generations.end()
                 && it->request.generation < generation->second;
+            const Queued completed = it->request;
             m_expired.erase(it);
+            ++m_stats.lateReplies;
+            noteResponse(completed, nowMs);
+            recordTransaction(completed,
+                              superseded ? Completion::LateStaleReply
+                                         : Completion::LateReply,
+                              nowMs,
+                              std::max<std::int64_t>(0,
+                                  nowMs - completed.dispatchedAtMs));
             if (superseded) {
                 ++m_stats.staleReplies;
                 return Observation::Stale;
             }
             return Observation::Unmatched;
         }
+        ++m_stats.unmatchedFrames;
         return Observation::Unmatched;
     }
 
     const Queued completed = *m_inFlight;
     m_inFlight.reset();
     ++m_stats.replies;
+    noteResponse(completed, nowMs);
     m_stats.readInFlight = false;
     m_stats.inFlightKey.clear();
 
     const auto generation = m_generations.find(completed.request.key);
     if (generation != m_generations.end() && completed.generation < generation->second) {
         ++m_stats.staleReplies;
+        recordTransaction(completed, Completion::StaleReply, nowMs,
+                          std::max<std::int64_t>(0,
+                              nowMs - completed.dispatchedAtMs));
         return Observation::Stale;
     }
+    recordTransaction(completed, Completion::Reply, nowMs,
+                      std::max<std::int64_t>(0, nowMs - completed.dispatchedAtMs));
     return Observation::Accepted;
 }
 

@@ -228,6 +228,15 @@ std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd)
     return hz;
 }
 
+std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes)
+{
+    if (bcd.size() != expectedBytes) {
+        return std::nullopt;
+    }
+    return decodeFreq(bcd);
+}
+
 std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd)
 {
     if (bcd.empty() || bcd.size() > 8)
@@ -799,10 +808,16 @@ std::optional<int> decodeRepeaterOffsetHz(std::span<const std::uint8_t> payload)
 
 std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to)
 {
-    return buildFrameSub(to, cmd::kTone, 0x00);
+    return cmdReadRepeaterToneRegister(to, repeaterTone::kTxCtcss);
 }
 
 std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
+{
+    return cmdSetCtcssTone(to, repeaterTone::kTxCtcss, toneHz);
+}
+
+std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
+                                          double toneHz)
 {
     // The guide fixes the first two digits at zero and allows 000.0..299.9 Hz.
     // Carry tenths of a hertz as six big-endian BCD digits: 88.5 -> 00 08 85.
@@ -813,7 +828,17 @@ std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
         encodeBcdByte((tenths / 100) % 100),
         encodeBcdByte(tenths % 100),
     };
-    return buildFrameSub(to, cmd::kTone, 0x00, body);
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return cmdReadFunction(to, func::kRepeaterAccess);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to, std::uint8_t mode)
+{
+    return cmdSetFunction(to, func::kRepeaterAccess, mode);
 }
 
 std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload)
@@ -832,6 +857,70 @@ std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload
         return std::nullopt;
     }
     return static_cast<double>(tenths) / 10.0;
+}
+
+std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload[0]) {
+    case 0x00:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x09:
+        return payload[0];
+    default:
+        return std::nullopt;
+    }
+}
+
+std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
+{
+    switch (value) {
+    case 0x00: return "off";
+    case 0x01: return "ctcss_tx";
+    case 0x02: return "ctcss_rx";
+    case 0x03: return "dtcs_txrx";
+    case 0x06: return "dtcs_tx";
+    case 0x07: return "ctcss_tx_dtcs_rx";
+    case 0x08: return "dtcs_tx_ctcss_rx";
+    case 0x09: return "ctcss_txrx";
+    default:   return {};
+    }
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload)
+{
+    const auto validBcd = [](std::uint8_t byte) {
+        return (byte & 0x0F) <= 9 && ((byte >> 4) & 0x0F) <= 9;
+    };
+    if (payload.size() != 3 || (payload[0] & 0xEE) != 0
+        || !validBcd(payload[1]) || !validBcd(payload[2])) {
+        return std::nullopt;
+    }
+    return RepeaterToneRegister{
+        decodeBcdByte(payload[1]) * 100 + decodeBcdByte(payload[2]),
+        (payload[0] & 0x10) != 0,
+        (payload[0] & 0x01) != 0,
+    };
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kReadTxFreq);
 }
 
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
@@ -973,6 +1062,15 @@ std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item, std::uint8_
 {
     const auto bcd = settingItemBcd(item);
     const std::array<std::uint8_t, 3> body{bcd[0], bcd[1], value};
+    return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
+std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int value)
+{
+    const auto itemBcd = settingItemBcd(item);
+    const auto levelBcd = encodeLevel(std::clamp(value, 0, 255));
+    const std::array<std::uint8_t, 4> body{
+        itemBcd[0], itemBcd[1], levelBcd[0], levelBcd[1]};
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
 }
 

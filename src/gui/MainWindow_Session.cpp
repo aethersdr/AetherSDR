@@ -20,6 +20,7 @@
 // original constructor position, so construction order is unchanged.
 
 #include "MainWindow.h"
+#include "MeterApplet.h"
 
 #include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
@@ -31,6 +32,7 @@
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwTrace.h"
@@ -504,12 +506,12 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
     if (m_autoConnectAttempts.value(info.serial) >= kMaxAutoConnectAttempts)
         return;
 
-    // Fail closed on a busy non-Flex radio, matching the manual connect gate in
-    // ConnectionPanel (#4448): HPSDR Protocol 1 is single-client, so connecting to
-    // an HL2 that is already streaming wedges both clients. Say so instead of
-    // silently doing nothing — this is the startup path, and the operator is
-    // staring at "Looking for your radio…".
-    if (info.inUse && info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) != 0) {
+    // Fail closed on a busy single-client radio, matching the manual connect
+    // gate in ConnectionPanel (#4448) — the rule is shared via
+    // ConnectionSharingPolicy.h so the two gates cannot drift. Say so instead
+    // of silently doing nothing — this is the startup path, and the operator
+    // is staring at "Looking for your radio…".
+    if (info.inUse && !AetherSDR::familySupportsSharedInUseConnect(info.family)) {
         m_connPanel->setStatusText(
             QStringLiteral("%1 is already in use by another client and can't be shared.")
                 .arg(info.model));
@@ -667,6 +669,27 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+
+    // Loud drop (M0, #5263): RadioModel emits commandDropped on every
+    // Flex-syntax command it discards for lack of a command plane (HL2, Icom).
+    // The qCWarning in RadioModel carries each occurrence; the operator gets
+    // ONE status-bar notice per connect session, so a single unconverted
+    // surface cannot spam the bar while still never failing silently.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (connected)
+            m_commandDroppedNoticeShown = false;
+    });
+    connect(&m_radioModel, &RadioModel::commandDropped,
+            this, [this](const QString&) {
+        if (m_commandDroppedNoticeShown)
+            return;
+        m_commandDroppedNoticeShown = true;
+        statusBar()->showMessage(
+            tr("This radio doesn't support that control — nothing was sent to "
+               "the radio. Further unsupported controls are logged."),
+            8000);
+    });
     // Slice Link: disconnect teardown never emits sliceRemoved (stale slices
     // are staged for reconnect reclaim), so dissolve the link explicitly.
     // Both transitions dissolve — a link never crosses a session boundary
@@ -842,6 +865,14 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
+            this, [this]() {
+        m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());
+    });
+    connect(&m_radioModel, &RadioModel::sliceConnectEnumerationFinished,
+            this, [this]() {
+        m_connectSliceEnumeration.cancelArm();
+    });
     // Start the reconstruction window at actual dispatch, not at UI intent:
     // requestPanBand() can defer behind a profile-load hold.
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
@@ -1294,6 +1325,11 @@ void MainWindow::wireRadioModel()
         // S-Meter: use raw interlock state so Level/Compression modes work
         // during VOX/hardware CW without the effectiveTx power threshold (#877)
         m_appletPanel->setMeterTransmitting(tx);
+        // PA drain current is meaningful only while the radio is physically
+        // transmitting. Do not drive it from the optimistic MOX fan-out: an
+        // operator unkey precedes the authoritative interlock edge, and direct
+        // amplifier state also shares that generic meter fan-out.
+        m_appletPanel->meterApplet()->setTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
