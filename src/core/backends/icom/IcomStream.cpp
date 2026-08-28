@@ -102,6 +102,23 @@ bool IcomStream::bindOnly(const Config& config)
     return true;
 }
 
+namespace {
+
+// The three RS-BA1 streams fail independently and for different reasons, so a
+// failure that does not say which one failed sends the operator to the wrong
+// setting. Logged as a bare int() elsewhere in this file; a name costs nothing.
+const char* roleName(IcomStream::Role r)
+{
+    switch (r) {
+    case IcomStream::Role::Control: return "control";
+    case IcomStream::Role::Serial:  return "CI-V";
+    case IcomStream::Role::Audio:   return "audio";
+    }
+    return "?";
+}
+
+}  // namespace
+
 void IcomStream::beginHandshake()
 {
     if (!m_socket)
@@ -136,14 +153,36 @@ void IcomStream::beginHandshake()
                 // simply says nothing. A deadline is the only way to report it,
                 // and now it is a deadline the radio has been asked repeatedly
                 // to beat.
+                //
+                // Port mismatch leads the causes because custom port triplets
+                // shipped in #5230: the radio and this client can now disagree
+                // about the port while both are configured and reachable, and it
+                // is the one cause the old message never suggested. A raw probe
+                // to the default port can even answer while the radio listens for
+                // RS-BA1 somewhere else, which reads as proof the port is right.
                 emit failed(QStringLiteral(
-                    "no answer from the radio after %1 attempts — check Network "
-                    "control is ON, the user/password are set, and no other "
-                    "client holds the session").arg(kHandshakeAttempts));
+                    "no answer from %1:%2 (%3 stream) after %4 attempts — the "
+                    "radio is not answering RS-BA1 on that port. Check the "
+                    "radio's Network menu: that its port for this stream matches "
+                    "the one above, that Network Control is ON, that the "
+                    "user/password are set, and that no other client holds the "
+                    "session")
+                        .arg(m_config.host.toString())
+                        .arg(m_config.remotePort)
+                        .arg(QString::fromLatin1(roleName(m_config.role)))
+                        .arg(kHandshakeAttempts));
                 return;
             }
-            qCInfo(lcIcomStream) << "no IAmHere yet — retrying AreYouThere, attempt"
-                                 << (m_handshakeAttempts + 1) << "of" << kHandshakeAttempts;
+            // Name the target on every line. Six identical lines that do not say
+            // where they were sent read as an AetherSDR networking fault; the
+            // address and port are what turn them into a radio-side check.
+            qCWarning(lcIcomStream)
+                << "no IAmHere from"
+                << QStringLiteral("%1:%2").arg(m_config.host.toString())
+                                          .arg(m_config.remotePort)
+                << "on the" << roleName(m_config.role) << "stream — retrying"
+                << "AreYouThere, attempt" << (m_handshakeAttempts + 1)
+                << "of" << kHandshakeAttempts;
             sendRawTwice(buildAreYouThere(m_localSid));
         });
     }
