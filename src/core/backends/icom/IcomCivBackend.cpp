@@ -963,11 +963,11 @@ void IcomCivBackend::sendConnectReadBurst()
     if (supportsTransmitFrequencyCheck(m_model)) {
         queueStartupRead(cmdReadTransmitFrequencyCheck(m_session->civAddress()));
     }
-    // The IC-9700's extended access selector, receive tone, DTCS polarity and
-    // transmit-frequency readback are a separate capability from the shared
-    // basic surface above.  In particular, guide-only IC-705 metadata must not
-    // start new traffic on its live-proven path merely because the bytes look
-    // similar.  The model profile is the sole activation gate.
+    // Extended access, receive tone, DTCS polarity and transmit-frequency
+    // readback are a separate capability from the shared basic surface above.
+    // The IC-705 and IC-9700 each activate it from their own official CI-V
+    // guide; other Icom models must not inherit the traffic merely because the
+    // bytes look similar. The model profile is the sole activation gate.
     if (extendedFmReadbackProfileFor(m_model)) {
         queueStartupRead(cmdReadRepeaterAccess(m_session->civAddress()));
         queueStartupRead(cmdReadRepeaterToneRegister(

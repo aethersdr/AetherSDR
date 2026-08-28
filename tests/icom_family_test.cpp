@@ -117,10 +117,11 @@ int main(int argc, char** argv)
         if (ic705 && ic9700) {
             icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic705);
             const RadioCapabilities ic705Caps = selectedBackend->capabilities();
-            check(ic705Caps.fmDtcsCodes.isEmpty()
-                      && !ic705Caps.fmToneModes.contains(
-                          QStringLiteral("dtcs_txrx")),
-                  "IC-705 does not advertise the IC-9700 DTCS controls");
+            check(ic705Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic705Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic705Caps.fmDtcsCodes.size() == 104,
+                  "IC-705 advertises its documented complete DTCS UI vocabulary");
 
             icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic9700);
             const RadioCapabilities ic9700Caps = selectedBackend->capabilities();
@@ -128,7 +129,7 @@ int main(int argc, char** argv)
                       && ic9700Caps.fmToneModes.contains(
                           QStringLiteral("ctcss_tx_dtcs_rx"))
                       && ic9700Caps.fmDtcsCodes.size() == 104,
-                  "IC-9700 advertises the complete DTCS UI vocabulary");
+                  "IC-9700 advertises its documented complete DTCS UI vocabulary");
         }
         icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, initialModel);
     }

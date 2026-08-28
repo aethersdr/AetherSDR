@@ -509,6 +509,10 @@ static void testCapabilityProfiles()
     const FeatureEvidence* live705 = p705.evidenceFor(IcomFeature::FmRepeaterBasic);
     check(live705 && live705->evidence == EvidenceKind::OfficialGuideAndLiveHardware,
           "IC-705 tone, level, offset and XFC carry guide plus live evidence");
+    const FeatureEvidence* extended705 =
+        p705.evidenceFor(IcomFeature::FmRepeaterExtendedReadback);
+    check(extended705 && extended705->evidence == EvidenceKind::OfficialGuide,
+          "IC-705 DTCS and extended readback carry model-specific guide evidence");
 
     check(p705.scope.center && !p705.scope.fixed,
           "IC-705 scope profile exposes only its attested center mode");
@@ -544,9 +548,9 @@ static void testCapabilityProfiles()
     check(dtcs && dtcs->wiring == Wiring::Both && dtcs->encoding == Encoding::Dtcs
               && dtcs->seamVerb == "setSliceFmDtcs"
               && controlSupported(model9700, p9700, *dtcs)
-              && !controlSupported(model705, p705, *dtcs)
+              && controlSupported(model705, p705, *dtcs)
               && !controlSupported(modelMk2, pMk2, *dtcs),
-          "DTCS write/read wiring is effective only for the activated IC-9700 profile");
+          "DTCS write/read wiring is effective only for documented model profiles");
     const IcomModel& identityOnly = *modelForCivAddress(0x98);
     const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
     const ControlSpec* frequency = spec("freq");
