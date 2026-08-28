@@ -111,6 +111,9 @@ public:
     [[nodiscard]] Stats stats() const;
     // Credential-free RS-BA1 lease state for health and automation diagnostics.
     [[nodiscard]] QVariantMap leaseDiagnostics() const;
+    // Per-stream packet activity and socket health. Contains no endpoint,
+    // session id, credential, or payload data, so it is safe in support logs.
+    [[nodiscard]] QVariantMap transportDiagnostics() const;
 
 signals:
     void connected(const QString& deviceName);

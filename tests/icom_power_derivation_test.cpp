@@ -97,6 +97,20 @@ void testIc9700DerivedForwardPowerAcrossBands()
     check(!backend.capabilities().txPowerBands.isEmpty(),
           "IC-9700 declares the per-band ratings consumed by its power face");
 
+    CivFrame current;
+    current.to = kControllerAddress;
+    current.from = 0xA2;
+    current.cmd = cmd::kMeter;
+    current.hasSub = true;
+    current.sub = meter::kId;
+    current.data = {0x01, 0x21};
+    const int beforeCurrent = updateSpy.count();
+    IcomCivBackendTestAccess::deliver(backend, current, 1);
+    check(updateSpy.count() == beforeCurrent + 1
+              && updateSpy.last().at(0).toString() == QStringLiteral("RAD:PACURRENT")
+              && std::fabs(updateSpy.last().at(1).toDouble() - 10.0) < 0.001,
+          "IC-9700 raw Id 121 crosses the backend seam as 10 A");
+
     CivFrame po;
     po.to = kControllerAddress;
     po.from = 0xA2;
@@ -204,6 +218,9 @@ void testIc9700DerivedForwardPowerAcrossBands()
     IcomCivBackendTestAccess::deliver(backend, po, 1);
     check(updateSpy.count() == beforeLatePower,
           "late TX-only meter reply cannot repopulate power while unkeyed");
+    IcomCivBackendTestAccess::deliver(backend, current, 1);
+    check(updateSpy.count() == beforeLatePower,
+          "late Id reply cannot repopulate PA current while unkeyed");
 
     if (ic705) {
         IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic705, 14'100'000ULL);
@@ -224,6 +241,12 @@ void testIc9700DerivedForwardPowerAcrossBands()
     check(updateSpy.count() == beforeNextTxPower + 1
               && std::fabs(updateSpy.last().at(1).toDouble() - 37.5) < 0.01,
           "the next authoritative PTT-ON accepts a fresh IC-9700 power sample");
+    const int beforeNextCurrent = updateSpy.count();
+    IcomCivBackendTestAccess::deliver(backend, current, 1);
+    check(updateSpy.count() == beforeNextCurrent + 1
+              && updateSpy.last().at(0).toString() == QStringLiteral("RAD:PACURRENT")
+              && std::fabs(updateSpy.last().at(1).toDouble() - 10.0) < 0.001,
+          "the next authoritative PTT-ON accepts a fresh IC-9700 Id sample");
 }
 
 } // namespace

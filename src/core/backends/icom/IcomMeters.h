@@ -136,7 +136,7 @@ struct MeterSpec {
 enum class MeterCalibration : std::uint8_t {
     Uncalibrated,
     Ic705,
-    Ic9700Voltage,
+    Ic9700,
     Ic7300Mk2,
 };
 

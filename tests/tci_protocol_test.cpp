@@ -1122,6 +1122,127 @@ bool testGlobalVerbsAndBooleansEndToEnd()
 
 } // namespace
 
+// #4997: `cw_macros:0,TEST` keyed "0,TEST" on the air — the TCI receiver
+// index was joined into the message text and transmitted. Reported against a
+// FLEX-8400 with two independent TCI clients (SDC and Log4OM), both of which
+// send the spec form.
+//
+// Driven through the pure helper rather than handleCommand(): cmdCwMacros'
+// work happens inside a queued lambda that first requires
+// hasRadioSideCwKeyer(), and the in-process demo backend sets that false
+// (SimBackend), so the end-to-end path cannot be reached from a test at all.
+// The helper is where the defect lived, so it is where the regression is
+// pinned.
+bool testCwMacrosStripsTheReceiverIndex()
+{
+    constexpr int kTrxCount = 2;   // two receivers currently advertised
+
+    // The reporter's exact repro.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0", "TEST"}, kTrxCount)
+                   == QStringLiteral("TEST"),
+            "cw_macros:0,TEST must key TEST, not 0,TEST")) {
+        return false;
+    }
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0", "CQ DE OH6NEQ"}, kTrxCount)
+                   == QStringLiteral("CQ DE OH6NEQ"),
+            "the issue's own example must lose its 0, prefix")) {
+        return false;
+    }
+    // The second receiver is just as valid an index.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"1", "TEST"}, kTrxCount)
+                   == QStringLiteral("TEST"),
+            "trx 1 is a real receiver and must be stripped too")) {
+        return false;
+    }
+    // The join is load-bearing: a message may legitimately contain commas,
+    // which is why the original code joined at all. Only the index was wrong.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0", "CQ", "CQ", "DE OH6NEQ"}, kTrxCount)
+                   == QStringLiteral("CQ,CQ,DE OH6NEQ"),
+            "commas inside the message text must survive")) {
+        return false;
+    }
+
+    // ── The two populations a bare args.mid(1) would have broken ──────────
+    //
+    // A client that omits the index still sends its text, rather than
+    // silently keying nothing.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"TEST"}, kTrxCount)
+                   == QStringLiteral("TEST"),
+            "an index-less cw_macros:TEST must still send TEST")) {
+        return false;
+    }
+    // A numeric first argument is always a receiver address. Unknown or stale
+    // addresses fail closed rather than being reinterpreted as on-air text.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"599", "TU"}, kTrxCount)
+                   .isEmpty(),
+            "an out-of-range numeric receiver must fail closed")) {
+        return false;
+    }
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"2", "TU"}, kTrxCount)
+                   .isEmpty(),
+            "the first receiver above the advertised range must fail closed")) {
+        return false;
+    }
+    // The regression boundary: receiver 1 was advertised, then released, so
+    // the dynamic count fell to 1 while the client still had the old index.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"1", "TEST"}, 1).isEmpty(),
+            "a stale receiver index must never become CW payload")) {
+        return false;
+    }
+    // Non-numeric first arg is plainly text.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"CQ", "DE OH6NEQ"}, kTrxCount)
+                   == QStringLiteral("CQ,DE OH6NEQ"),
+            "a non-numeric first argument is message text")) {
+        return false;
+    }
+    // Base 10 only, matching argToInt's documented contract — "0x1" must not
+    // resolve to receiver 1 and get stripped.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0x1", "TU"}, kTrxCount)
+                   == QStringLiteral("0x1,TU"),
+            "a hex-looking first argument is text, not receiver 1")) {
+        return false;
+    }
+    // A negative base-10 integer is still a malformed receiver address.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"-1", "TU"}, kTrxCount)
+                   .isEmpty(),
+            "a negative receiver index must fail closed")) {
+        return false;
+    }
+
+    // ── Degenerate inputs must not crash or invent text ───────────────────
+    if (!check(TciProtocol::cwMacrosTextFromArgs({}, kTrxCount).isEmpty(),
+            "no arguments must yield no text")) {
+        return false;
+    }
+    // A lone index with no message: nothing to key. The rule is uniform —
+    // args[0] naming a real receiver is an INDEX whether or not text
+    // follows, so this must be empty, not "0". Returning "0" here would key
+    // the index on the air, which is this very defect in its
+    // single-argument form.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0"}, kTrxCount).isEmpty(),
+            "a lone receiver index must key nothing, not the index itself")) {
+        return false;
+    }
+    // A lone numeric address has no message and must not become text.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"599"}, kTrxCount).isEmpty(),
+            "a lone out-of-range numeric receiver must fail closed")) {
+        return false;
+    }
+    // An index with an explicitly empty message (`cw_macros:0,`) is also
+    // nothing to key — handleCommand() splits with KeepEmptyParts.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0", ""}, kTrxCount).isEmpty(),
+            "an index with an empty message must key nothing")) {
+        return false;
+    }
+    // A degenerate trxCount must not make every numeric first arg text.
+    if (!check(TciProtocol::cwMacrosTextFromArgs({"0", "TEST"}, 0)
+                   == QStringLiteral("TEST"),
+            "receiver 0 is valid even when trxCount is reported as 0")) {
+        return false;
+    }
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     // Must be constructed before QCoreApplication (see TestSettingsProfile.h)
@@ -1198,7 +1319,8 @@ int main(int argc, char** argv)
         || !testModulationEndToEndRejectsUnknownName()
         || !testMalformedValueArgsAreDropped()
         || !testMalformedTrxDoesNotLandOnSliceZero()
-        || !testGlobalVerbsAndBooleansEndToEnd()) {
+        || !testGlobalVerbsAndBooleansEndToEnd()
+        || !testCwMacrosStripsTheReceiverIndex()) {
         return 1;
     }
 

@@ -72,6 +72,15 @@ constexpr std::array<CurvePoint, 3> kId{{
     {0, 0.0}, {121, 2.0}, {241, 4.0},
 }};
 
+// IC-9700 Id calibration. wfview independently publishes these exact
+// model-specific points in rigs/IC-9700.rig (commit cd18ea55, lines 1743-1753):
+// raw 0/121/241 = 0/10/20 A. Keep this separate from the generic 4 A curve;
+// the identical raw breakpoints have different model-specific amp values.
+// https://gitlab.com/eliggett/wfview/-/blob/cd18ea55fe479eb4526d1732b443cbfc3969c540/rigs/IC-9700.rig#L1743-1754
+constexpr std::array<CurvePoint, 3> kIdIc9700{{
+    {0, 0.0}, {121, 10.0}, {241, 20.0},
+}};
+
 // IC-7300MK2 desktop-radio calibration from its own CI-V guide.
 constexpr std::array<CurvePoint, 3> kVdIc7300Mk2{{
     {0, 0.0}, {13, 10.0}, {241, 16.0},
@@ -171,7 +180,7 @@ powerCurveForCalibration(MeterCalibration calibration)
     case MeterCalibration::Ic7300Mk2:
         return kPowerIc7300Mk2;
     case MeterCalibration::Uncalibrated:
-    case MeterCalibration::Ic9700Voltage:
+    case MeterCalibration::Ic9700:
         return {};
     }
     return {};
@@ -180,13 +189,14 @@ powerCurveForCalibration(MeterCalibration calibration)
 bool hasVoltageCalibration(MeterCalibration calibration) noexcept
 {
     return calibration == MeterCalibration::Ic705
-        || calibration == MeterCalibration::Ic9700Voltage
+        || calibration == MeterCalibration::Ic9700
         || calibration == MeterCalibration::Ic7300Mk2;
 }
 
 bool hasCurrentCalibration(MeterCalibration calibration) noexcept
 {
     return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic9700
         || calibration == MeterCalibration::Ic7300Mk2;
 }
 
@@ -231,7 +241,6 @@ const MeterSpec* meterSpecForSub(std::uint8_t sub)
 
 double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibration)
 {
-    const bool desktop = calibration == MeterCalibration::Ic7300Mk2;
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
     case MeterId::Power:
@@ -250,7 +259,7 @@ double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibratio
         switch (calibration) {
         case MeterCalibration::Ic705:
             return interpolateCurve(kVd, raw);
-        case MeterCalibration::Ic9700Voltage:
+        case MeterCalibration::Ic9700:
             return interpolateCurve(kVdIc9700, raw);
         case MeterCalibration::Ic7300Mk2:
             return interpolateCurve(kVdIc7300Mk2, raw);
@@ -262,10 +271,17 @@ double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibratio
         if (!hasCurrentCalibration(calibration)) {
             return 0.0;
         }
-        return interpolateCurve(
-                                desktop
-                                    ? std::span<const CurvePoint>(kIdIc7300Mk2)
-                                    : std::span<const CurvePoint>(kId), raw);
+        switch (calibration) {
+        case MeterCalibration::Ic705:
+            return interpolateCurve(kId, raw);
+        case MeterCalibration::Ic9700:
+            return interpolateCurve(kIdIc9700, raw);
+        case MeterCalibration::Ic7300Mk2:
+            return interpolateCurve(kIdIc7300Mk2, raw);
+        case MeterCalibration::Uncalibrated:
+            return 0.0;
+        }
+        return 0.0;
     // OVF is 00/01 from the radio, not a scaled reading.
     case MeterId::Overflow: return raw != 0 ? 1.0 : 0.0;
     }

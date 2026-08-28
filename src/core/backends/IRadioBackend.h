@@ -448,11 +448,12 @@ public:
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
 
-    // The speech processor, as the operator sees it: an enable plus one of
-    // three presets (0 = NOR, 1 = DX, 2 = DX+).
+    // The speech processor, as the operator sees it: an enable plus a
+    // normalized level. RadioCapabilities publishes whether the presentation
+    // is Flex's three presets (0..2) or an evidenced continuous range.
     //
     // That shape is FlexRadio's, and it is not universal. On a radio with its
-    // own compressor the two halves are SEPARATE registers — the IC-705 wants
+    // own compressor the two halves are SEPARATE registers — an Icom wants
     // 16 44 for the enable and 14 0E for how hard — so a backend receives both
     // together and decides how to spend them. Default no-op: Flex takes this as
     // text from TransmitModel, and a host-modulating backend runs its own
@@ -817,6 +818,11 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    // An explicit radio readback confirmed the keyed state. This is distinct
+    // from transmitChanged because optimistic state may already equal the
+    // answer and therefore produce no delta. Backends without a separate
+    // command/readback plane need not emit it.
+    void keyingStateConfirmed(bool keyed);
 
     // Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode
     // split, #4094). Typed + present-only; the backend translates the SmartSDR

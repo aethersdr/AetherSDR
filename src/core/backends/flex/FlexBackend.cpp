@@ -272,6 +272,11 @@ RadioCapabilities FlexBackend::capabilities() const
     // before the fuse), which the status bar renders under the PA temperature.
     caps.hasSupplyVoltageTelemetry = true;
     caps.hasPaTemperatureTelemetry = true;
+    // FLEX PACURRENT is known to clip below real full-power draw, so it is not
+    // an honest substitute for the calibrated PA-temperature instrument.
+    caps.hasPaCurrentTelemetry = false;
+    caps.speechProcessorLevelMaximum = 2;
+    caps.speechProcessorLabel = QStringLiteral("PROC");
     caps.hasMainFanTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/

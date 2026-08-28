@@ -1,8 +1,21 @@
 #include "core/backends/icom/IcomControls.h"
 
+#include <algorithm>
 #include <array>
 
 namespace AetherSDR::icom {
+
+int speechProcessorRawLevel(int maximum, int level) noexcept
+{
+    const int bounded = std::clamp(level, 0, maximum);
+    if (maximum > 2) {
+        return (bounded * 255 + 99) / 100;
+    }
+    static constexpr std::array<int, 3> kProcLevels{3, 6, 9};
+    return kProcLevels[static_cast<std::size_t>(
+        std::clamp(bounded, 0, 2))] * 255 / 10;
+}
+
 namespace {
 
 // EVERY CI-V MESSAGE THIS BACKEND NAMES, wired or not.

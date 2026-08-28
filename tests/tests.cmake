@@ -418,6 +418,20 @@ add_executable(icom_civ_scheduler_test
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
+# Socket-free backend incident-state transition. Positive session convergence
+# is certified against real firmware through the automation bridge.
+add_executable(icom_incident_telemetry_test
+    tests/icom_incident_telemetry_test.cpp)
+target_include_directories(icom_incident_telemetry_test PRIVATE src)
+target_link_libraries(icom_incident_telemetry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_incident_telemetry_test COMMAND icom_incident_telemetry_test)
+
+# Pure state-machine coverage: no WebSocket, network socket, or radio fixture.
+add_executable(icom_tci_unkey_settle_test
+    tests/icom_tci_unkey_settle_test.cpp)
+target_include_directories(icom_tci_unkey_settle_test PRIVATE src)
+add_test(NAME icom_tci_unkey_settle_test COMMAND icom_tci_unkey_settle_test)
+
 add_executable(icom_scope_test
     tests/icom_scope_test.cpp
     src/core/backends/icom/IcomScope.cpp
@@ -1230,8 +1244,18 @@ add_executable(band_recall_slice_selection_policy_test
     tests/band_recall_slice_selection_policy_test.cpp
 )
 target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
+target_link_libraries(band_recall_slice_selection_policy_test PRIVATE Qt6::Core)
 add_test(NAME band_recall_slice_selection_policy_test
     COMMAND band_recall_slice_selection_policy_test)
+
+# Pins RadioModel slice status connect-enumeration adoption and ensures zero active=1 commands are sent.
+add_executable(radiomodel_slice_connect_enumeration_test
+    tests/radiomodel_slice_connect_enumeration_test.cpp
+)
+target_include_directories(radiomodel_slice_connect_enumeration_test PRIVATE src)
+target_link_libraries(radiomodel_slice_connect_enumeration_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_slice_connect_enumeration_test
+    COMMAND radiomodel_slice_connect_enumeration_test)
 
 # When that policy applies — the window opened by an actually-dispatched
 # `display pan set <pan> band=` write. Header-only.
@@ -1262,6 +1286,12 @@ add_executable(band_edges_test
 target_include_directories(band_edges_test PRIVATE src)
 target_link_libraries(band_edges_test PRIVATE Qt6::Core)
 add_test(NAME band_edges_test COMMAND band_edges_test)
+
+add_executable(band_shortcut_data_test
+    tests/band_shortcut_data_test.cpp
+)
+target_include_directories(band_shortcut_data_test PRIVATE src)
+add_test(NAME band_shortcut_data_test COMMAND band_shortcut_data_test)
 
 # Band-plan segment labels feed isVoiceSegmentLabel(), which gates S-History /
 # QRM voice detection — a label carrying no recognised emission token silently
@@ -2520,6 +2550,17 @@ target_include_directories(mqtt_antenna_alias_test PRIVATE src)
 target_link_libraries(mqtt_antenna_alias_test PRIVATE Qt6::Core)
 add_test(NAME mqtt_antenna_alias_test COMMAND mqtt_antenna_alias_test)
 
+# Green Heron Everyware antenna switch. The protocol test is pure — verbatim
+# wire fixtures in, records out, no socket — which is why GreenHeronProtocol.cpp
+# has no I/O in it.
+add_executable(green_heron_protocol_test
+    tests/green_heron_protocol_test.cpp
+    src/core/GreenHeronProtocol.cpp
+)
+target_include_directories(green_heron_protocol_test PRIVATE src)
+target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
+add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
 add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
@@ -2557,6 +2598,14 @@ add_executable(cw_sidetone_start_policy_test
 )
 target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
 add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
+
+# The explicit-selection name rule (#5123): pure QString predicate, no
+# PortAudio, so the captured Linux/Windows device names are checked on every
+# runner regardless of which audio backends it has.
+add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test.cpp)
+target_include_directories(cw_sidetone_device_match_test PRIVATE src)
+target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
 
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
@@ -2806,6 +2855,8 @@ add_executable(meter_applet_capability_test
     src/core/AsyncLogWriter.cpp
 )
 target_include_directories(meter_applet_capability_test PRIVATE src)
+target_compile_definitions(meter_applet_capability_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(meter_applet_capability_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
 )
@@ -3914,6 +3965,8 @@ add_executable(phone_cw_mic_gain_authority_test
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
+target_compile_definitions(phone_cw_mic_gain_authority_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(phone_cw_mic_gain_authority_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test
 )

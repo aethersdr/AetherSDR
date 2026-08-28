@@ -1370,6 +1370,8 @@ void RadioModel::setupBackend(const QString& family)
                     m_cwxModel.adoptSpeed(*delta.cwSpeed);
                 }
             });
+    connect(m_backend.get(), &IRadioBackend::keyingStateConfirmed,
+            this, &RadioModel::radioTransmitConfirmed);
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
@@ -3956,6 +3958,8 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    m_transmitModel.setSpeechProcessorLevelMaximum(
+        connected ? caps.speechProcessorLevelMaximum : 2);
     refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
@@ -6367,6 +6371,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("client low_bw_connect");
 
     m_guiClientRegistrationState.begin();
+    // The radio dumps slice status in response to GUI-client registration,
+    // which lands BEFORE the "client gui" reply that dispatches the sub batch.
+    // Arming at "sub slice all" opens the window after onSliceAdded has already
+    // chosen its source, so the guard is never consulted (#4759).
+    emit sliceConnectEnumerationStarted();
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
         if (code != 0) {
@@ -6624,6 +6633,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                 sendCmd("slice list",
                     [this](int code3, const QString& body) {
+                        emit sliceConnectEnumerationFinished();
                         const quint64 restoreGeneration = m_sessionModelGeneration;
                         QTimer::singleShot(kSessionRestorePruneDelayMs, this, [this, restoreGeneration]() {
                             pruneStaleSessionModels(restoreGeneration);
@@ -8470,8 +8480,13 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
     // with a `slice tune`, and the tune is Flex wire text), so fail the way the
     // rest of sendCmd's drops do: sequence 0, meaning "not dispatched".
     if (!hasCommandPlane()) {
-        qCDebug(lcProtocol).noquote()
+        // qCWarning, not qCDebug: a dropped command means a control moved and
+        // nothing reached the radio. Silent at default log levels, that is the
+        // HERMES §17 dead-control shape; loud, it is a reportable defect and
+        // the M4 conversion backlog finds its sites from these lines (#5263).
+        qCWarning(lcProtocol).noquote()
             << "RadioModel: no command plane for this backend, dropping" << command;
+        emit commandDropped(command);
         if (cb)
             cb(kNoCommandPlaneCode, QStringLiteral("this radio has no command plane"));
         return 0;

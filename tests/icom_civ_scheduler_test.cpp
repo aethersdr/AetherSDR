@@ -72,6 +72,16 @@ int main()
         check(scheduler.observe(reply(0x15, 0x02, 0), 1110)
                   == IcomCivScheduler::Observation::Accepted,
               "matching reply completes the outstanding read");
+        const auto& history = scheduler.recentTransactions();
+        check(history.size() == 1 && history.back().key == "meter.s"
+                  && history.back().completion == IcomCivScheduler::Completion::Reply
+                  && history.back().queueWaitMs == 0
+                  && history.back().responseMs == 110,
+              "completed reads retain payload-free queue and response timing");
+        check(scheduler.stats().responseSamples == 1
+                  && scheduler.stats().lastResponseMs == 110
+                  && scheduler.stats().maxResponseMs == 110,
+              "reply timing contributes to bounded scheduler aggregates");
     }
 
     {
@@ -123,6 +133,11 @@ int main()
         const auto recovered = scheduler.takeNext(4350);
         check(recovered && recovered->key == "meter.s", "scheduler recovers after lost reply");
         check(scheduler.stats().timeouts == 1, "lost reply is counted");
+        const auto& history = scheduler.recentTransactions();
+        check(!history.empty() && history.front().key == "control.nr"
+                  && history.front().completion == IcomCivScheduler::Completion::Timeout
+                  && history.front().responseMs == IcomCivScheduler::kReadTimeoutMs,
+              "a lost reply leaves a timed transaction lifecycle record");
     }
 
     {
@@ -218,6 +233,11 @@ int main()
                   == IcomCivScheduler::Observation::Stale,
               "a reply that misses the timeout is still rejected against a "
               "newer write generation");
+        check(scheduler.recentTransactions().size() == 2
+                  && scheduler.recentTransactions().back().completion
+                      == IcomCivScheduler::Completion::LateStaleReply
+                  && scheduler.stats().lateReplies == 1,
+              "a superseded late reply is distinguished from its timeout");
     }
     {
         // ...but a merely slow reply with nothing newer behind it is not
@@ -228,6 +248,27 @@ int main()
         check(scheduler.observe(reply(0x14, 0x02, 0x50), 360)
                   == IcomCivScheduler::Observation::Unmatched,
               "a late reply with no newer intent behind it is not marked stale");
+        check(scheduler.recentTransactions().size() == 2
+                  && scheduler.recentTransactions().back().completion
+                      == IcomCivScheduler::Completion::LateReply,
+              "an authoritative slow reply remains visible as late, not stale");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        IcomCivScheduler::Request noReply;
+        noReply.frame = buildFrameSub(0xB6, 0x1C, 0x00, std::array<std::uint8_t, 1>{0});
+        noReply.key = "ptt";
+        noReply.priority = Priority::Emergency;
+        noReply.expectsReply = false;
+        scheduler.enqueue(std::move(noReply), 8000);
+        check(scheduler.takeNext(8000).has_value(),
+              "response-free fail-safe command dispatches");
+        check(scheduler.recentTransactions().size() == 1
+                  && scheduler.recentTransactions().back().completion
+                      == IcomCivScheduler::Completion::NoReply
+                  && scheduler.recentTransactions().back().responseMs == -1,
+              "response-free commands have an explicit terminal outcome");
     }
 
     {

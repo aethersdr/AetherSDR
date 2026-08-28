@@ -993,7 +993,7 @@ screen; certification has to inspect the consumer, not stop at the seam.
 | `15 11` | Po, 0=0% / 143=50% / 213=100% | ✅ | `TX:FWDPWR` **Watts** | **working** — model-specific curve; visible only while keyed |
 | `15 12` | SWR, 0=1.0 / 48=1.5 / 80=2.0 / 120=3.0 | ✅ | `TX:SWR` SWR | **working** — transmit-only; clears on unkey |
 | `15 13` | ALC, 0=min / 120=max | ✅ | `TX:ALC` **Percent** | **working** — consumer honours Percent |
-| `15 14` | COMP, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | contract correct; reads 0 while PROC is unmapped |
+| `15 14` | COMP meter, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | working while transmitting; independent of the `16 44` / `14 0E` compressor controls |
 | `15 15` | Vd, 0=0 V / 75=5 V / 241=16 V | ✅ | `RAD:+13.8A` Volts | **working** |
 | `15 16` | Id, 0=0 A / 121=2 A / 241=4 A | ✅ | `RAD:PACURRENT` Amps | published, no consumer |
 
@@ -1013,7 +1013,7 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 41` | Auto notch | ✅ | ✗ constant only |
 | `16 42` | Repeater tone (TONE) | ✅ | ✅ live-verified on IC-705; connect readback + front-panel adoption |
 | `16 43` | Tone squelch (TSQL) | ✗ | ✗ — separate from the mapped repeater TONE control |
-| `16 44` | **Speech compressor (PROC)** | ✅ | ✗ **not wired — the PROC state disagrees with the radio** |
+| `16 44` | **Speech compressor enable** | ✅ | ✅ via `setSpeechProcessor`; connect readback and confirmation adopt radio state |
 | `16 45` | Monitor | ✅ | ✗ constant only |
 | `16 46` | VOX | ✅ | ✗ constant only |
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
@@ -1032,9 +1032,12 @@ mic gain `0B`, key speed `0C`, COMP level `0E`, NB level `12`, monitor `15`.
 Unmapped: notch position `0D`, break-in delay `0F`, VOX gain `16`, anti-VOX
 gain `17`.
 
-**`14 0E` is the missing half of PROC.** AetherSDR's processor control is a Flex
-shape — OFF / NOR / DX / DX+ — and on an Icom that is two commands, not one:
-`16 44` for the on/off and `14 0E` (0000–0255 ⇒ 0–10) for which of the three.
+**`14 0E` is the missing half of speech compression.** The enable and level are
+two commands on Icom, not one. Legacy profiles retain the shared PROC preset
+surface; a model profile may expose an evidenced continuous COMP level:
+`16 44` controls on/off and `14 0E` (0000–0255 ⇒ 0–10) is the level register.
+Legacy profiles map that register to the three shared PROC presets; the IC-9700
+profile maps it bidirectionally to the continuous 0–100 COMP percentage.
 
 ### C.4 RIT / XIT (`21 xx`) — entirely unmapped
 
@@ -1137,7 +1140,7 @@ their own right (CERTIFICATION.md §1.29):
 | | RF power | ✅ `setTxPower` |
 | | power / SWR gauges | ✅ (units fixed; unverified on hardware) |
 | | TX filter | ❌ `setTxFilter` not implemented (`16 58` unmapped) |
-| **Phone / CW** | PROC enable + NOR/DX/DX+ | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
+| **Phone / CW** | profile-shaped PROC/COMP enable + level | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
 | | ALC / Compression gauges | ✅ (ALC scale fixed; unverified) |
 | | Level gauge | ⛔ hidden — this radio publishes no mic meter |
 | | mic source | ✅ collapsed to PC by capability |
