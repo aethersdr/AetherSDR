@@ -11,6 +11,7 @@
 #include "core/ThreadCpuRing.h"
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QHash>
 #include <QSet>
 #include <QThread>
@@ -48,6 +49,30 @@ double percentFor(const QVector<ThreadCpuSample>& samples, quint64 tid)
         }
     }
     return -1.0;
+}
+
+// Runs body on a freshly started QThread and blocks until it returns. The
+// checks that name a thread and then look for that name in the kernel's
+// thread table must run OFF the main thread: on Linux the main thread is the
+// thread-group leader, whose kernel name is the process name that ps, top and
+// pgrep -x match on, and setCurrentThreadName() deliberately leaves it alone
+// (ThreadName.cpp). A worker is also the path the helper's real users take —
+// IambicKeyer, CwxLocalKeyer, SystemInfoCollector, the RtMidi callback.
+//
+// quit() before exec() is fine: QThread::exec() returns at once when exit()
+// has already been called, so the thread ends as soon as body does.
+template <typename Body>
+void runOnWorkerThread(Body body)
+{
+    QThread thread;
+    QObject context;
+    context.moveToThread(&thread);
+    QObject::connect(&thread, &QThread::started, &context, [&body]() {
+        body();
+        QThread::currentThread()->quit();
+    });
+    thread.start();
+    thread.wait(5000);
 }
 
 void testPercentMaths()
@@ -176,23 +201,26 @@ void testRunState()
                !samples.isEmpty() && samples.first().state == ThreadRunState::Running);
     }
 
-    // The live check: this thread is executing enumerateThreads(), so on a
-    // platform that can answer it cannot be anything but Running. Windows has
-    // no per-thread state to read, and asserting Unknown there is the point —
-    // it pins that the column stays honest rather than acquiring a derived
-    // value later.
+    // The live check: the thread executing enumerateThreads() cannot, on a
+    // platform that can answer, be anything but Running. Windows has no
+    // per-thread state to read, and asserting Unknown there is the point — it
+    // pins that the column stays honest rather than acquiring a derived value
+    // later. Runs on a worker because the row is found by name, and naming
+    // the main thread does not reach the kernel on Linux (runOnWorkerThread).
     ThreadRunState own = ThreadRunState::Unknown;
     bool foundOwn = false;
-    // Named so the row can be identified; there is no portable "which row am
-    // I" other than the name this very file already proves round-trips.
-    SystemInfo::setCurrentThreadName("aether-state");
-    for (const ThreadTimes& times : SystemInfo::enumerateThreads()) {
-        if (times.name.startsWith(QLatin1String("aether-state"))) {
-            own = times.state;
-            foundOwn = true;
+    runOnWorkerThread([&own, &foundOwn]() {
+        // Named so the row can be identified; there is no portable "which row
+        // am I" other than the name this very file already proves round-trips.
+        SystemInfo::setCurrentThreadName("aether-state");
+        for (const ThreadTimes& times : SystemInfo::enumerateThreads()) {
+            if (times.name.startsWith(QLatin1String("aether-state"))) {
+                own = times.state;
+                foundOwn = true;
+            }
         }
-    }
-    std::printf("[info] this thread's own reported run state: %s\n", stateName(own));
+    });
+    std::printf("[info] the worker's own reported run state: %s\n", stateName(own));
     report("the calling thread finds its own row", foundOwn);
 #if defined(Q_OS_WIN)
     report("Windows reports Unknown rather than a derived value",
@@ -380,6 +408,8 @@ void testEnumeration()
 
 void testNaming()
 {
+    // The Qt half does not depend on which thread asks, so it is checked on
+    // the main thread, where the kernel half is platform-dependent (below).
     SystemInfo::setCurrentThreadName("aether-sysinfo");
     report("naming sets Qt's objectName too",
            QThread::currentThread()->objectName() == QLatin1String("aether-sysinfo"));
@@ -387,13 +417,16 @@ void testNaming()
     // The kernel name is what the Threads tab shows, so prove it round-trips
     // rather than trusting that the syscall was issued.
     bool foundNamed = false;
-    for (const ThreadTimes& times : SystemInfo::enumerateThreads()) {
-        // Linux truncates to 15 characters, so compare on the prefix that
-        // survives on every platform.
-        if (times.name.startsWith(QLatin1String("aether-sysinfo"))) {
-            foundNamed = true;
+    runOnWorkerThread([&foundNamed]() {
+        SystemInfo::setCurrentThreadName("aether-worker");
+        for (const ThreadTimes& times : SystemInfo::enumerateThreads()) {
+            // Linux truncates to 15 characters, so compare on the prefix that
+            // survives on every platform.
+            if (times.name.startsWith(QLatin1String("aether-worker"))) {
+                foundNamed = true;
+            }
         }
-    }
+    });
     report("the kernel-visible name round-trips through enumerateThreads()", foundNamed);
 
     // An empty or null name is a no-op rather than a crash or a cleared name.
@@ -401,6 +434,25 @@ void testNaming()
     SystemInfo::setCurrentThreadName("");
     report("a null or empty name leaves the existing name alone",
            QThread::currentThread()->objectName() == QLatin1String("aether-sysinfo"));
+
+#if defined(Q_OS_LINUX)
+    // The main thread is the thread-group leader, and its comm IS the process
+    // name: renaming it renamed the whole process for ps, top, pgrep -x and
+    // killall (measured on this branch before the guard: `pgrep -x AetherSDR`
+    // found nothing once main.cpp named its thread AetherSDR-GUI). Naming the
+    // leader must therefore reach Qt and stop short of the kernel.
+    const auto readComm = []() {
+        QFile comm(QStringLiteral("/proc/self/comm"));
+        return comm.open(QIODevice::ReadOnly) ? QString::fromUtf8(comm.readAll()).trimmed()
+                                              : QString();
+    };
+    const QString before = readComm();
+    SystemInfo::setCurrentThreadName("aether-leader");
+    report("naming the thread-group leader leaves /proc/self/comm alone",
+           !before.isEmpty() && readComm() == before);
+    report("naming the thread-group leader still sets Qt's objectName",
+           QThread::currentThread()->objectName() == QLatin1String("aether-leader"));
+#endif
 }
 
 void testQtNamesItsOwnThreads()

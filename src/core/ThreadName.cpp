@@ -12,6 +12,7 @@
 #include <pthread.h>
 #elif defined(__linux__)
 #include <sys/prctl.h>
+#include <unistd.h>
 #endif
 
 #include <cstring>
@@ -25,6 +26,14 @@ void setCurrentThreadName(const char* name)
     }
 
 #if defined(__linux__)
+    // On the thread-group leader, PR_SET_NAME renames the *process* comm as
+    // seen by ps/top/pgrep -x/killall (measured: "AetherSDR-GUI" replaced
+    // "AetherSDR"). Skip the kernel rename there: the Threads tab then lists
+    // the main thread under the process name, as it always did on Linux, and
+    // SystemInfo::setCurrentThreadName() still sets the Qt objectName.
+    if (getpid() == gettid()) {
+        return;
+    }
     // 16 bytes including the terminator is a kernel limit, not a convention:
     // prctl fails outright rather than truncating on our behalf.
     char truncated[16];
