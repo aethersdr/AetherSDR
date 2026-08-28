@@ -230,7 +230,8 @@ QString flexControlButtonAction(int button, int action)
 
 void MainWindow::showFlexControlDialog()
 {
-    if (!m_radioModel.isFlexRadio()) {
+    if (m_radioModel.isConnected()
+        && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
         return;
     }
 
@@ -290,7 +291,8 @@ void MainWindow::showFlexControlDialog()
 #ifdef HAVE_SERIALPORT
         connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
                 this, [this] {
-            if (!m_radioModel.isFlexRadio()) {
+            if (m_radioModel.isConnected()
+                && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
                 return;
             }
             // Same deep-link pattern as Settings → USB Cables… (#4940), but

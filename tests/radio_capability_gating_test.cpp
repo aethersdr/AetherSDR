@@ -296,6 +296,11 @@ int main(int argc, char** argv)
               "Flex declares GPS hardware for Radio Setup presentation");
         check(caps.canReboot && caps.hasRemoteOnControl && caps.canUpgradeFirmware,
               "Flex preserves reboot, Remote On and firmware-upgrade controls");
+        check(caps.hasSmartLink && caps.hasLicenseInfo
+                  && caps.hasClientNetworkConfig
+                  && caps.hasFlexControlIntegration
+                  && caps.hasAudioCompression && caps.hasSharpFilters,
+              "Flex preserves every capability-gated Settings surface");
         check(caps.usesVita49Transport,
               "Flex exposes VITA-49 receive-buffer tuning");
         check(caps.hasNetworkConfigurationReadback,
@@ -450,6 +455,11 @@ int main(int argc, char** argv)
         check(!caps.canReboot && !caps.hasRemoteOnControl
                   && !caps.canUpgradeFirmware,
               "HL2 hides unsupported radio-management controls");
+        check(!caps.hasSmartLink && !caps.hasLicenseInfo
+                  && !caps.hasClientNetworkConfig
+                  && !caps.hasFlexControlIntegration
+                  && !caps.hasAudioCompression && !caps.hasSharpFilters,
+              "HL2 hides unsupported Flex Settings surfaces");
         check(!caps.usesVita49Transport,
               "HL2 hides Flex VITA-49 receive-buffer tuning");
         check(!caps.hasNetworkConfigurationReadback,
@@ -816,6 +826,11 @@ int main(int argc, char** argv)
         check(!caps.canReboot && !caps.hasRemoteOnControl
                   && !caps.canUpgradeFirmware,
               "Sim hides unsupported radio-management controls");
+        check(!caps.hasSmartLink && !caps.hasLicenseInfo
+                  && !caps.hasClientNetworkConfig
+                  && !caps.hasFlexControlIntegration
+                  && !caps.hasAudioCompression && !caps.hasSharpFilters,
+              "Sim hides unsupported Flex Settings surfaces");
         check(!caps.usesVita49Transport,
               "Sim hides Flex VITA-49 receive-buffer tuning");
         check(!caps.hasNetworkConfigurationReadback,

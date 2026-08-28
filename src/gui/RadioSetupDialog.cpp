@@ -868,9 +868,9 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool gated =
-                    (isFlexOnlyPage(item) && !isFlexRadio())
+                    (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
-                        && !m_model->hasGpsSetupHardware())
+                        && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
                 if (!gated) {
@@ -912,6 +912,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
             [this](bool, const RadioCapabilities&) {
         updateRadioCapabilityVisibility();
     });
+    connect(m_model, &RadioModel::connectionStateChanged, this,
+            [this](bool) {
+        updateRadioCapabilityVisibility();
+    });
     connect(m_model, &RadioModel::oscillatorChanged, this,
             [this] {
         updateRadioCapabilityVisibility();
@@ -945,11 +949,6 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
         m_calibrationReseed();
 }
 
-bool RadioSetupDialog::isFlexRadio() const
-{
-    return m_model && m_model->isFlexRadio();
-}
-
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
 {
     if (!item) {
@@ -959,6 +958,27 @@ bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
     return index == m_filtersPageIndex || index == m_smartLinkPageIndex;
 }
 
+bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) const
+{
+    if (!m_model || !item || !m_model->isConnected()) {
+        return true;
+    }
+    const int index = item->data(0, Qt::UserRole).toInt();
+    const RadioCapabilities caps = m_model->backendCapabilities();
+    if (index == m_filtersPageIndex) {
+        return caps.hasSharpFilters;
+    }
+    if (index == m_smartLinkPageIndex) {
+        return caps.hasSmartLink;
+    }
+    return true;
+}
+
+bool RadioSetupDialog::isGpsSetupAvailable() const
+{
+    return m_model && (!m_model->isConnected() || m_model->hasGpsSetupHardware());
+}
+
 bool RadioSetupDialog::isGpsPage(const QTreeWidgetItem* item) const
 {
     return item && item->data(0, Qt::UserRole).toInt() == m_gpsPageIndex;
@@ -966,14 +986,14 @@ bool RadioSetupDialog::isGpsPage(const QTreeWidgetItem* item) const
 
 void RadioSetupDialog::updateRadioCapabilityVisibility()
 {
-    const bool visible = isFlexRadio();
+    const bool connected = m_model->isConnected();
+    const RadioCapabilities caps = m_model->backendCapabilities();
     if (m_flexControlInfoField) {
-        m_flexControlInfoField->setVisible(visible);
+        m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
     }
     if (m_multiFlexInfoField) {
-        m_multiFlexInfoField->setVisible(visible);
+        m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
     }
-    const RadioCapabilities caps = m_model->backendCapabilities();
     if (m_remoteOnInfoField) {
         m_remoteOnInfoField->setVisible(caps.hasRemoteOnControl);
     }
@@ -981,7 +1001,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         m_rebootInfoField->setVisible(caps.canReboot);
     }
     if (m_licenseInfoGroup) {
-        m_licenseInfoGroup->setVisible(visible);
+        m_licenseInfoGroup->setVisible(!connected || caps.hasLicenseInfo);
     }
     if (m_firmwareUpdateGroup) {
         m_firmwareUpdateGroup->setVisible(caps.canUpgradeFirmware);
@@ -1010,11 +1030,28 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_privateIpPolicyControl) {
         m_privateIpPolicyControl->setVisible(caps.hasPrivateIpConnectionPolicy);
     }
+    if (m_ipDhcpButton) {
+        const bool canConfigure = caps.hasClientNetworkConfig;
+        const QString sessionKey = connected
+            ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
+            : QString();
+        const QString tip = canConfigure
+            ? QString()
+            : tr("Changing the radio's IP configuration is not supported by this radio.");
+        const bool isStatic = m_model->hasStaticIp();
+        applyIpConfigPresentation(
+            m_ipConfigPresentation, sessionKey, canConfigure, isStatic,
+            isStatic ? m_model->staticIp() : m_model->ip(),
+            isStatic ? m_model->staticNetmask() : m_model->netmask(),
+            isStatic ? m_model->staticGateway() : m_model->gateway(),
+            m_ipDhcpButton, m_ipStaticButton, m_staticIpEdit,
+            m_staticMaskEdit, m_staticGatewayEdit, m_ipApplyButton, tip);
+    }
     if (m_audioCompressionGroup) {
-        m_audioCompressionGroup->setVisible(visible);
+        m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
     }
     if (m_flexControlGroup) {
-        m_flexControlGroup->setVisible(visible);
+        m_flexControlGroup->setVisible(!connected || caps.hasFlexControlIntegration);
     }
     if (m_optionsLabel) {
         m_optionsLabel->setText(radioOptionsText(m_model));
@@ -1026,7 +1063,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
             const QString haystack = item->text(0) + QStringLiteral(" ")
                 + item->data(0, Qt::UserRole + 1).toString();
-            item->setHidden(!visible
+            item->setHidden(!isCapabilityPageAvailable(item)
                             || (!needle.isEmpty()
                                 && !haystack.contains(needle, Qt::CaseInsensitive)));
         }
@@ -1035,14 +1072,15 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
         const QString haystack = gpsItem->text(0) + QStringLiteral(" ")
             + gpsItem->data(0, Qt::UserRole + 1).toString();
-        gpsItem->setHidden(!m_model->hasGpsSetupHardware()
+        gpsItem->setHidden(!isGpsSetupAvailable()
                            || (!needle.isEmpty()
                                && !haystack.contains(needle, Qt::CaseInsensitive)));
     }
 
     const bool currentPageUnavailable = m_navigation
-        && ((!visible && isFlexOnlyPage(m_navigation->currentItem()))
-            || (!m_model->hasGpsSetupHardware()
+        && ((!isCapabilityPageAvailable(m_navigation->currentItem())
+             && isFlexOnlyPage(m_navigation->currentItem()))
+            || (!isGpsSetupAvailable()
                 && isGpsPage(m_navigation->currentItem())));
     if (currentPageUnavailable) {
         if (QLineEdit* mutableSearch = findChild<QLineEdit*>(
@@ -2086,12 +2124,15 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->setSpacing(4);
 
     const bool isStatic = m_model->hasStaticIp();
+    const bool canConfigure = m_model->backendCapabilities().hasClientNetworkConfig;
+    const QString unavailableTip = tr("Changing the radio's IP configuration is not supported by this radio.");
 
     auto* dhcpBtn = new QPushButton("DHCP");
+    m_ipDhcpButton = dhcpBtn;
     dhcpBtn->setCheckable(true);
     dhcpBtn->setChecked(!isStatic);
-    dhcpBtn->setEnabled(false);
-    dhcpBtn->setToolTip("Changing the radio's IP configuration is not currently available.");
+    dhcpBtn->setEnabled(canConfigure);
+    dhcpBtn->setToolTip(canConfigure ? QString() : unavailableTip);
     AetherSDR::ThemeManager::instance().applyStyleSheet(dhcpBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
@@ -2100,9 +2141,10 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->addWidget(dhcpBtn);
 
     auto* staticBtn = new QPushButton("Static");
+    m_ipStaticButton = staticBtn;
     staticBtn->setCheckable(true);
     staticBtn->setChecked(isStatic);
-    staticBtn->setEnabled(false);
+    staticBtn->setEnabled(canConfigure);
     staticBtn->setToolTip(dhcpBtn->toolTip());
     staticBtn->setStyleSheet(dhcpBtn->styleSheet());
     btnRow->addWidget(staticBtn);
@@ -2115,20 +2157,23 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
 
     fieldsGrid->addWidget(new QLabel("IP Address:"), 0, 0);
     auto* staticIp = new QLineEdit(isStatic ? m_model->staticIp() : m_model->ip());
+    m_staticIpEdit = staticIp;
     staticIp->setStyleSheet(kEditStyle);
-    staticIp->setEnabled(isStatic);
+    staticIp->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticIp, 0, 1);
 
     fieldsGrid->addWidget(new QLabel("Mask:"), 1, 0);
     auto* staticMask = new QLineEdit(isStatic ? m_model->staticNetmask() : m_model->netmask());
+    m_staticMaskEdit = staticMask;
     staticMask->setStyleSheet(kEditStyle);
-    staticMask->setEnabled(isStatic);
+    staticMask->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticMask, 1, 1);
 
     fieldsGrid->addWidget(new QLabel("Gateway:"), 2, 0);
     auto* staticGw = new QLineEdit(isStatic ? m_model->staticGateway() : m_model->gateway());
+    m_staticGatewayEdit = staticGw;
     staticGw->setStyleSheet(kEditStyle);
-    staticGw->setEnabled(isStatic);
+    staticGw->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticGw, 2, 1);
 
     for (auto* lbl : group->findChildren<QLabel*>())
@@ -2137,8 +2182,13 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     gvbox->addLayout(fieldsGrid);
 
     auto* applyBtn = new QPushButton("Apply");
+    m_ipApplyButton = applyBtn;
+    m_ipConfigPresentation.sessionKey = m_model->isConnected()
+        ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
+        : QString();
+    m_ipConfigPresentation.canConfigure = canConfigure;
     applyBtn->setEnabled(false);
-    applyBtn->setToolTip("Changing the radio's IP configuration is not currently available.");
+    applyBtn->setToolTip(canConfigure ? QString() : unavailableTip);
     applyBtn->setAccessibleDescription(applyBtn->toolTip());
     AetherSDR::ThemeManager::instance().applyStyleSheet(applyBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
@@ -2147,20 +2197,22 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     gvbox->addWidget(applyBtn, 0, Qt::AlignLeft);
 
     connect(dhcpBtn, &QPushButton::clicked, this,
-            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw] {
+            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
         dhcpBtn->setChecked(true);
         staticBtn->setChecked(false);
         staticIp->setEnabled(false);
         staticMask->setEnabled(false);
         staticGw->setEnabled(false);
+        applyBtn->setEnabled(true);
     });
     connect(staticBtn, &QPushButton::clicked, this,
-            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw] {
+            [dhcpBtn, staticBtn, staticIp, staticMask, staticGw, applyBtn] {
         dhcpBtn->setChecked(false);
         staticBtn->setChecked(true);
         staticIp->setEnabled(true);
         staticMask->setEnabled(true);
         staticGw->setEnabled(true);
+        applyBtn->setEnabled(true);
     });
     connect(applyBtn, &QPushButton::clicked, this,
             [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn] {
@@ -3473,7 +3525,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
     {
         auto* compGroup = new QGroupBox("Audio Compression (SmartLink)");
         m_audioCompressionGroup = compGroup;
-        compGroup->setVisible(isFlexRadio());
+        compGroup->setVisible(!m_model->isConnected()
+                              || m_model->backendCapabilities().hasAudioCompression);
         compGroup->setStyleSheet(kGroupStyle);
         auto* compLayout = new QHBoxLayout(compGroup);
         compLayout->setSpacing(4);
@@ -6668,7 +6721,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
         m_flexControlGroup = group;
-        group->setVisible(isFlexRadio());
+        group->setVisible(!m_model->isConnected()
+                          || m_model->backendCapabilities().hasFlexControlIntegration);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -8176,10 +8230,10 @@ void RadioSetupDialog::selectTab(const QString& tabName)
     const QString pageName = kLegacyPageNames.value(tabName, tabName);
     const int index = m_pageIndexes.value(pageName, -1);
     if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
-        if (isFlexOnlyPage(item) && !isFlexRadio()) {
+        if (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item)) {
             return;
         }
-        if (isGpsPage(item) && !m_model->hasGpsSetupHardware()) {
+        if (isGpsPage(item) && !isGpsSetupAvailable()) {
             return;
         }
         m_navigation->setCurrentItem(item);
@@ -8189,7 +8243,8 @@ void RadioSetupDialog::selectTab(const QString& tabName)
 
 void RadioSetupDialog::revealFlexControlSettings()
 {
-    if (!isFlexRadio()) {
+    if (m_model->isConnected()
+        && !m_model->backendCapabilities().hasFlexControlIntegration) {
         return;
     }
 

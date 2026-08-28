@@ -1375,6 +1375,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.canReboot = false;
     c.hasRemoteOnControl = false;
     c.canUpgradeFirmware = false;
+    c.hasSmartLink = false;
+    c.hasLicenseInfo = false;
+    c.hasClientNetworkConfig = false;
+    c.hasFlexControlIntegration = false;
+    c.hasAudioCompression = false;
+    c.hasSharpFilters = false;
     c.usesVita49Transport = false;
     c.hasNetworkConfigurationReadback = false;
     c.hasPrivateIpConnectionPolicy = false;
@@ -1507,6 +1513,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.notchMaxWidthHz = 6000.0;
     c.hasGpsLocation = false;           // no GNSS receiver on the board
     c.hasGpsHardware = false;
+    c.gpsHardwareRequiresPresence = false;
     // The HL2 declares PATEMP but no "+13.8A": PA temperature is a real reading
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.

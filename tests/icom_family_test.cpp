@@ -108,6 +108,11 @@ int main(int argc, char** argv)
     check(!caps.canReboot && !caps.hasRemoteOnControl
               && !caps.canUpgradeFirmware,
           "Icom hides unsupported remote radio-management controls");
+    check(!caps.hasSmartLink && !caps.hasLicenseInfo
+              && !caps.hasClientNetworkConfig
+              && !caps.hasFlexControlIntegration
+              && !caps.hasAudioCompression && !caps.hasSharpFilters,
+          "Icom hides unsupported Flex Settings surfaces");
     check(!caps.usesVita49Transport,
           "Icom hides Flex VITA-49 receive-buffer tuning");
     check(!caps.hasPrivateIpConnectionPolicy,

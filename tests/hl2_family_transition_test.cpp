@@ -51,7 +51,7 @@ int main(int argc, char** argv)
 
     // ---- Default is Flex: transmits, reboots ----
     RadioModel model;
-    check(model.isFlexRadio(),
+    check(model.backendCapabilities().family == QLatin1String("flex"),
           "isFlexRadio identifies the default Flex backend");
     check(model.backendCapabilities().canTransmit,
           "Flex default advertises canTransmit");
@@ -77,7 +77,7 @@ int main(int argc, char** argv)
     // advertises canTransmit=true, matching Flex. Headless automation stays
     // gated behind AETHER_AUTOMATION_ALLOW_TX inside the backend (m_txAllowed).
     model.connectToRadio(hl2Info());
-    check(!model.isFlexRadio(),
+    check(model.backendCapabilities().family != QLatin1String("flex"),
           "isFlexRadio rejects the HL2 family without a model-name table");
     check(model.backendCapabilities().canTransmit,
           "HL2 advertises canTransmit (transmit landed post-#4448)");
@@ -195,7 +195,7 @@ int main(int argc, char** argv)
     check(model.prepareWsprTransmit(), "WSPR: armed on HL2 for the switch test");
     check(model.hasWsprTxStream(), "WSPR: armed claim is live before the switch");
     model.connectToRadio(flexInfo());
-    check(model.isFlexRadio(),
+    check(model.backendCapabilities().family == QLatin1String("flex"),
           "round-trip: isFlexRadio restores on the Flex family");
     check(!model.hasWsprTxStream(),
           "WSPR: an armed host-modulated claim does NOT survive onto a Flex");

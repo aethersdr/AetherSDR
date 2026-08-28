@@ -175,6 +175,12 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     caps.hasRemoteOnControl = true;
     caps.canUpgradeFirmware = true;
+    caps.hasSmartLink = true;
+    caps.hasLicenseInfo = true;
+    caps.hasClientNetworkConfig = true;
+    caps.hasFlexControlIntegration = true;
+    caps.hasAudioCompression = true;
+    caps.hasSharpFilters = true;
     caps.usesVita49Transport = true;
     caps.hasNetworkConfigurationReadback = true;
     caps.hasPrivateIpConnectionPolicy = true;
@@ -266,6 +272,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // RadioModel::hasGpsHardware() while connected.
     caps.hasGpsLocation = true;
     caps.hasGpsHardware = true;
+    caps.gpsHardwareRequiresPresence = true;
     // The radio owns the memory slots and re-dumps them on every connect, so
     // the client must NOT keep a local bank for a Flex — two stores that both
     // believe they are authoritative would fight over slot indices.

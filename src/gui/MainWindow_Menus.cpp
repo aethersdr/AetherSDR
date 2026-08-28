@@ -123,7 +123,7 @@ void MainWindow::buildMenuBar()
 
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
     m_aetherControlAction = flexControlAction;
-    flexControlAction->setVisible(m_radioModel.isFlexRadio());
+    flexControlAction->setVisible(true); // capability-gated after connection
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
@@ -138,10 +138,11 @@ void MainWindow::buildMenuBar()
     // inside the controller window.
     auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
     m_flexControlKnobAction = flexControlKnobAction;
-    flexControlKnobAction->setVisible(m_radioModel.isFlexRadio());
+    flexControlKnobAction->setVisible(true); // capability-gated after connection
     flexControlKnobAction->setMenuRole(QAction::NoRole);
     connect(flexControlKnobAction, &QAction::triggered, this, [this] {
-        if (!m_radioModel.isFlexRadio()) {
+        if (m_radioModel.isConnected()
+            && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
             return;
         }
         if (RadioSetupDialog* dlg = openRadioSetupPage())

@@ -3192,6 +3192,18 @@ target_include_directories(radio_capability_gating_test PRIVATE src tests)
 target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
 
+# Radio Setup owns a persistent widget tree. Capability/session transitions must
+# refresh DHCP/static presentation without unrelated GPS/oscillator updates
+# cancelling an operator's pending Apply action. Socket-free Qt widget test.
+add_executable(radio_setup_ip_config_presentation_test
+    tests/radio_setup_ip_config_presentation_test.cpp)
+target_include_directories(radio_setup_ip_config_presentation_test PRIVATE src)
+target_link_libraries(radio_setup_ip_config_presentation_test PRIVATE Qt6::Core Qt6::Widgets)
+add_test(NAME radio_setup_ip_config_presentation_test
+    COMMAND radio_setup_ip_config_presentation_test)
+set_tests_properties(radio_setup_ip_config_presentation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
 # capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
 # load AND store, per-radio isolation, family-wide fallback, schema tolerance.

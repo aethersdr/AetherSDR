@@ -296,6 +296,12 @@ struct RadioCapabilities {
     bool hasRadioDialLock = false;
     bool hasRemoteOnControl = false; // client can configure wake-on-network
     bool canUpgradeFirmware = false; // client can upload radio firmware
+    bool hasSmartLink = false;       // client has the SmartLink/WAN service and pin store
+    bool hasLicenseInfo = false;     // radio exposes SmartSDR entitlement details
+    bool hasClientNetworkConfig = false; // client may write the radio's IP configuration
+    bool hasFlexControlIntegration = false; // FlexControl/AetherControl verbs are supported
+    bool hasAudioCompression = false; // selectable compressed radio-audio transport
+    bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,
     // not the vendor or only one stream direction.
@@ -668,6 +674,7 @@ struct RadioCapabilities {
     // position/time data to this client. The hardware page is still truthful;
     // a live station-location readout is not.
     bool hasGpsHardware = false;
+    bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile

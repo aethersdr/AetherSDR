@@ -257,6 +257,12 @@ RadioCapabilities SimBackend::capabilities() const
     caps.canReboot = false;
     caps.hasRemoteOnControl = false;
     caps.canUpgradeFirmware = false;
+    caps.hasSmartLink = false;
+    caps.hasLicenseInfo = false;
+    caps.hasClientNetworkConfig = false;
+    caps.hasFlexControlIntegration = false;
+    caps.hasAudioCompression = false;
+    caps.hasSharpFilters = false;
     caps.usesVita49Transport = false;
     caps.hasNetworkConfigurationReadback = false;
     caps.hasPrivateIpConnectionPolicy = false;
@@ -330,6 +336,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasGpsHardware = false;
+    caps.gpsHardwareRequiresPresence = false;
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
     caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
     caps.hasPaCurrentTelemetry = false;       // synthetic scene; no PA current

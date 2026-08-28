@@ -831,7 +831,8 @@ void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
 
 void MainWindow::showMultiFlexDialog()
 {
-    if (!m_radioModel.isFlexRadio()) {
+    if (m_radioModel.isConnected()
+        && !m_radioModel.backendCapabilities().hasMultiClientSessions) {
         return;
     }
 
@@ -7451,15 +7452,15 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_waveformsAction->setVisible(!connected || caps.hasWaveforms);
     }
     if (m_multiFlexAction) {
-        m_multiFlexAction->setVisible(m_radioModel.isFlexRadio());
+        m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
     if (m_aetherControlAction) {
-        m_aetherControlAction->setVisible(m_radioModel.isFlexRadio());
+        m_aetherControlAction->setVisible(!connected || caps.hasFlexControlIntegration);
     }
     if (m_flexControlKnobAction) {
-        m_flexControlKnobAction->setVisible(m_radioModel.isFlexRadio());
+        m_flexControlKnobAction->setVisible(!connected || caps.hasFlexControlIntegration);
     }
-    if (!m_radioModel.isFlexRadio() && m_flexControlDialog) {
+    if (connected && !caps.hasFlexControlIntegration && m_flexControlDialog) {
         m_flexControlDialog->close();
     }
 

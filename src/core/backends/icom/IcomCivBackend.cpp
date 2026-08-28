@@ -367,6 +367,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // data capability false while separately declaring the model's hardware.
     c.hasGpsLocation = false;
     c.hasGpsHardware = profile.hasGpsHardware;
+    c.gpsHardwareRequiresPresence = false;
     c.hasNetworkConfigurationReadback = profile.networkConfiguration.has_value();
     c.hasPrivateIpConnectionPolicy = false;
 
@@ -477,6 +478,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.canReboot = false;
     c.hasRemoteOnControl = false;
     c.canUpgradeFirmware = false;
+    c.hasSmartLink = false;
+    c.hasLicenseInfo = false;
+    c.hasClientNetworkConfig = false;
+    c.hasFlexControlIntegration = false;
+    c.hasAudioCompression = false;
+    c.hasSharpFilters = false;
     c.usesVita49Transport = false;
 
     // EMPTY, and load-bearing. An Icom remembers its own frequency, mode and

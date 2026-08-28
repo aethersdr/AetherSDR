@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
 #include <QVector>
@@ -95,8 +96,9 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
-    bool isFlexRadio() const;
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
+    bool isCapabilityPageAvailable(const QTreeWidgetItem* item) const;
+    bool isGpsSetupAvailable() const;
     bool isGpsPage(const QTreeWidgetItem* item) const;
     void updateRadioCapabilityVisibility();
     QWidget* buildRadioTab();
@@ -180,6 +182,13 @@ private:
     QWidget* m_networkMtuControl{nullptr};
     QWidget* m_privateIpPolicyLabel{nullptr};
     QWidget* m_privateIpPolicyControl{nullptr};
+    QPushButton* m_ipDhcpButton{nullptr};
+    QPushButton* m_ipStaticButton{nullptr};
+    QLineEdit* m_staticIpEdit{nullptr};
+    QLineEdit* m_staticMaskEdit{nullptr};
+    QLineEdit* m_staticGatewayEdit{nullptr};
+    QPushButton* m_ipApplyButton{nullptr};
+    IpConfigPresentationState m_ipConfigPresentation;
     QGroupBox* m_audioCompressionGroup{nullptr};
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
