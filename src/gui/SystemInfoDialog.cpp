@@ -3,6 +3,7 @@
 #include "LogSyntaxHighlighter.h"
 #include "SparklineDelegate.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #include "core/SystemInfoCollector.h"
 
 #include <QCheckBox>
@@ -40,8 +41,26 @@ QString displayName(const ThreadCpuSample& sample)
 }
 
 // Column order follows the issue's own list for the Threads tab.
-enum Column { ColName = 0, ColTid, ColCpu, ColPeak, ColTotal, ColSpark, ColSpacer,
-              ColumnCount };
+enum Column { ColName = 0, ColTid, ColState, ColCpu, ColPeak, ColTotal, ColSpark,
+              ColSpacer, ColumnCount };
+
+// One vocabulary for a column two kernels describe differently. macOS reports
+// TH_STATE_* and Linux a single character in /proc; Windows reports nothing at
+// all, which is a dash rather than a guess — there is no documented per-thread
+// state on THREADENTRY32 or GetThreadTimes.
+QString stateText(ThreadRunState state)
+{
+    switch (state) {
+    case ThreadRunState::Running:         return QStringLiteral("Running");
+    case ThreadRunState::Waiting:         return QStringLiteral("Waiting");
+    case ThreadRunState::Uninterruptible: return QStringLiteral("Uninterruptible");
+    case ThreadRunState::Stopped:         return QStringLiteral("Stopped");
+    case ThreadRunState::Halted:          return QStringLiteral("Halted");
+    case ThreadRunState::Zombie:          return QStringLiteral("Zombie");
+    case ThreadRunState::Unknown:         break;
+    }
+    return QStringLiteral("—");
+}
 
 }  // namespace
 
@@ -71,13 +90,24 @@ QWidget* SystemInfoDialog::buildThreadsTab()
     auto* layout = new QVBoxLayout(page);
 
     m_threadSummary = new QLabel(QStringLiteral("Sampling…"), page);
+    // Named so the automation bridge and the tests can address it directly
+    // rather than by guessing which QLabel in the dialog this is.
+    m_threadSummary->setObjectName(QStringLiteral("systemInfoThreadSummary"));
     layout->addWidget(m_threadSummary);
 
     m_threadTable = new QTableWidget(0, ColumnCount, page);
     m_threadTable->setHorizontalHeaderLabels(
         {QStringLiteral("Thread"), QStringLiteral("TID"),
-         QStringLiteral("CPU %"), QStringLiteral("Peak 60 s"),
+         QStringLiteral("State"), QStringLiteral("CPU %"), QStringLiteral("Peak 60 s"),
          QStringLiteral("Total CPU (s)"), QStringLiteral("Last 60 s"), QString()});
+    m_threadTable->horizontalHeaderItem(ColState)->setToolTip(
+        QStringLiteral("What the thread is doing at the instant of the sample. "
+                       "Running means on a core; Waiting means asleep, which is "
+                       "what a healthy idle worker looks like.\n\nA dash means "
+                       "the platform does not report it. Windows exposes no "
+                       "per-thread state, and a value derived from something "
+                       "else would not be the same measurement as the other "
+                       "two platforms'."));
     m_threadTable->horizontalHeaderItem(ColCpu)->setToolTip(
         QStringLiteral("Share of ONE core, 0-100. Not a share of the machine: a "
                        "single thread pinning one core reads 100 % here however "
@@ -111,11 +141,13 @@ QWidget* SystemInfoDialog::buildThreadsTab()
     m_threadTable->horizontalHeader()->setStretchLastSection(true);   // the spacer
     m_threadTable->horizontalHeader()->setSectionResizeMode(ColName, QHeaderView::Interactive);
     m_threadTable->horizontalHeader()->setSectionResizeMode(ColTid, QHeaderView::Interactive);
+    m_threadTable->horizontalHeader()->setSectionResizeMode(ColState, QHeaderView::Interactive);
     m_threadTable->horizontalHeader()->setSectionResizeMode(ColCpu, QHeaderView::Interactive);
     m_threadTable->horizontalHeader()->setSectionResizeMode(ColPeak, QHeaderView::Interactive);
     m_threadTable->horizontalHeader()->setSectionResizeMode(ColTotal, QHeaderView::Interactive);
     m_threadTable->setColumnWidth(ColName, 280);
     m_threadTable->setColumnWidth(ColTid, 90);
+    m_threadTable->setColumnWidth(ColState, 110);
     m_threadTable->setColumnWidth(ColCpu, 80);
     m_threadTable->setColumnWidth(ColPeak, 90);
     m_threadTable->setColumnWidth(ColTotal, 110);
@@ -154,6 +186,7 @@ void SystemInfoDialog::applySample(const QVector<ThreadCpuSample>& threads)
         // sorts lexicographically, which puts 9 % above 80 %.
         auto* tidItem = new QTableWidgetItem;
         tidItem->setData(Qt::DisplayRole, static_cast<qulonglong>(sample.tid));
+        auto* stateItem = new QTableWidgetItem(stateText(sample.state));
         auto* cpuItem = new QTableWidgetItem;
         cpuItem->setData(Qt::DisplayRole, QString::number(sample.cpuPercentOfCore, 'f', 1).toDouble());
         auto* peakItem = new QTableWidgetItem;
@@ -178,6 +211,7 @@ void SystemInfoDialog::applySample(const QVector<ThreadCpuSample>& threads)
 
         m_threadTable->setItem(row, ColName, nameItem);
         m_threadTable->setItem(row, ColTid, tidItem);
+        m_threadTable->setItem(row, ColState, stateItem);
         m_threadTable->setItem(row, ColCpu, cpuItem);
         m_threadTable->setItem(row, ColPeak, peakItem);
         m_threadTable->setItem(row, ColTotal, totalItem);
@@ -187,12 +221,21 @@ void SystemInfoDialog::applySample(const QVector<ThreadCpuSample>& threads)
     m_threadTable->setSortingEnabled(true);
     m_threadTable->sortItems(sortColumn, sortOrder);
 
+    // The shared helper rather than a second inline scan, so the summary line
+    // and thresholdExceeded can never disagree about which thread is busiest.
+    // It also names an all-idle table's busiest thread instead of falling back
+    // to a dash: at 0.0 % that is a reading, not an absence.
+    const int busiest = SystemInfo::busiestThreadIndex(threads);
+    const double busiestPercent = busiest < 0 ? 0.0 : threads.at(busiest).cpuPercentOfCore;
+
+    // Clearing the alert is this function's job because the crossing signal is
+    // edge-triggered: the collector announces going ABOVE the line and says
+    // nothing about coming back down.
+    if (m_thresholdAlert && busiestPercent <= SystemInfoCollector::kMaxThreadPercentOfCore) {
+        m_thresholdAlert = false;
+    }
+
     if (m_threadSummary != nullptr) {
-        // The shared helper rather than a second inline scan, so the summary
-        // line and thresholdExceeded can never disagree about which thread is
-        // busiest. It also names an all-idle table's busiest thread instead of
-        // falling back to a dash: at 0.0 % that is a reading, not an absence.
-        const int busiest = SystemInfo::busiestThreadIndex(threads);
         const QString busiestName = busiest < 0
             ? QStringLiteral("—")
             : displayName(threads.at(busiest));
@@ -200,8 +243,44 @@ void SystemInfoDialog::applySample(const QVector<ThreadCpuSample>& threads)
             QStringLiteral("%1 threads · busiest %2 at %3 % of one core")
                 .arg(threads.size())
                 .arg(busiestName)
-                .arg(busiest < 0 ? 0.0 : threads.at(busiest).cpuPercentOfCore, 0, 'f', 1));
+                .arg(busiestPercent, 0, 'f', 1));
+        applyAlertStyle();
     }
+}
+
+void SystemInfoDialog::onThresholdExceeded(const QString& threadName, double percentOfCore)
+{
+    // Acceptance criterion 3 in its minimal form: the summary line goes red.
+    // What a louder alert should be — a status-bar badge, a toast — is still an
+    // open question on the issue, and the collector's signal is the seam for
+    // whichever answer it gets. Nothing is written to the log: this dialog
+    // reads the log stream, and having it also produce the events it displays
+    // would put its own output into the stream being diagnosed.
+    m_thresholdAlert = true;
+    m_alertThreadName = threadName.isEmpty() ? QStringLiteral("(unnamed)") : threadName;
+    m_alertPercent = percentOfCore;
+    applyAlertStyle();
+}
+
+void SystemInfoDialog::applyAlertStyle()
+{
+    if (m_threadSummary == nullptr) {
+        return;
+    }
+    ThemeManager::instance().applyStyleSheet(
+        m_threadSummary,
+        m_thresholdAlert
+            ? QStringLiteral("QLabel { color: {{color.accent.danger}}; font-weight: bold; }")
+            : QStringLiteral("QLabel { color: {{color.text.primary}}; }"));
+    m_threadSummary->setToolTip(
+        m_thresholdAlert
+            ? QStringLiteral("%1 crossed %2 %% of one core. One thread saturating "
+                             "one core while the others idle is this app's "
+                             "characteristic stall, and the status bar's "
+                             "system-wide figure cannot show it.")
+                  .arg(m_alertThreadName)
+                  .arg(SystemInfoCollector::kMaxThreadPercentOfCore, 0, 'f', 0)
+            : QString());
 }
 
 void SystemInfoDialog::startSampling()
@@ -214,8 +293,21 @@ void SystemInfoDialog::startSampling()
     m_collector = new SystemInfoCollector;   // no parent — moved to the thread
     m_collector->moveToThread(m_collectorThread);
     connect(m_collectorThread, &QThread::started, m_collector, &SystemInfoCollector::init);
-    connect(m_collector, &SystemInfoCollector::sampleReady,
-            this, &SystemInfoDialog::applySample);
+    // Queued to this thread; see m_samplingGeneration for why each delivery
+    // checks it still belongs to the run that produced it.
+    const quint64 generation = ++m_samplingGeneration;
+    connect(m_collector, &SystemInfoCollector::sampleReady, this,
+            [this, generation](const QVector<ThreadCpuSample>& threads) {
+                if (generation == m_samplingGeneration) {
+                    applySample(threads);
+                }
+            });
+    connect(m_collector, &SystemInfoCollector::thresholdExceeded, this,
+            [this, generation](const QString& threadName, double percentOfCore) {
+                if (generation == m_samplingGeneration) {
+                    onThresholdExceeded(threadName, percentOfCore);
+                }
+            });
     m_collectorThread->start();
 }
 
@@ -224,6 +316,8 @@ void SystemInfoDialog::stopSampling()
     if (m_collectorThread == nullptr) {
         return;
     }
+    // Anything the collector has already queued to us is now stale.
+    ++m_samplingGeneration;
     // Tear the timer down on the worker thread FIRST. It was created there, and
     // a QTimer destroyed from another thread is undefined behaviour — Qt reports
     // it as "Timers cannot be stopped from another thread".
@@ -245,6 +339,14 @@ void SystemInfoDialog::stopSampling()
     // hidden, so a ring carried across that gap would describe a minute nobody
     // observed.
     m_ring.clear();
+
+    // The alert goes with it. A red summary line left standing over a table
+    // that stopped updating claims a thread is saturating a core right now,
+    // when in fact nothing is being measured at all.
+    m_thresholdAlert = false;
+    m_alertThreadName.clear();
+    m_alertPercent = 0.0;
+    applyAlertStyle();
 }
 
 // ── Logs ────────────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@
 #include "gui/SystemInfoDialog.h"
 
 #include <QApplication>
+#include <QLabel>
 #include <QPainter>
 #include <QPixmap>
 #include <QTabWidget>
@@ -62,23 +63,25 @@ int main(int argc, char** argv)
         // Four data columns plus a trailing spacer that absorbs slack on a wide
         // window — assert the shape, not a magic number, so a future column is a
         // deliberate edit here rather than a silent count change.
-        report("the table has six data columns plus a spacer", table->columnCount() == 7);
+        report("the table has seven data columns plus a spacer", table->columnCount() == 8);
         report("column 0 is Thread",
                table->horizontalHeaderItem(0)->text() == QLatin1String("Thread"));
         report("column 1 is TID",
                table->horizontalHeaderItem(1)->text() == QLatin1String("TID"));
-        report("column 2 is CPU %",
-               table->horizontalHeaderItem(2)->text() == QLatin1String("CPU %"));
-        report("column 3 is Peak 60 s",
-               table->horizontalHeaderItem(3)->text() == QLatin1String("Peak 60 s"));
-        report("column 4 is Total CPU (s)",
-               table->horizontalHeaderItem(4)->text() == QLatin1String("Total CPU (s)"));
-        report("column 5 is the sparkline",
-               table->horizontalHeaderItem(5)->text() == QLatin1String("Last 60 s"));
+        report("column 2 is State",
+               table->horizontalHeaderItem(2)->text() == QLatin1String("State"));
+        report("column 3 is CPU %",
+               table->horizontalHeaderItem(3)->text() == QLatin1String("CPU %"));
+        report("column 4 is Peak 60 s",
+               table->horizontalHeaderItem(4)->text() == QLatin1String("Peak 60 s"));
+        report("column 5 is Total CPU (s)",
+               table->horizontalHeaderItem(5)->text() == QLatin1String("Total CPU (s)"));
+        report("column 6 is the sparkline",
+               table->horizontalHeaderItem(6)->text() == QLatin1String("Last 60 s"));
         report("the last column is an unlabelled spacer",
-               table->horizontalHeaderItem(6)->text().isEmpty());
+               table->horizontalHeaderItem(7)->text().isEmpty());
         report("the sparkline column has its own delegate",
-               dynamic_cast<SparklineDelegate*>(table->itemDelegateForColumn(5)) != nullptr);
+               dynamic_cast<SparklineDelegate*>(table->itemDelegateForColumn(6)) != nullptr);
         report("the table is sortable", table->isSortingEnabled());
     }
 
@@ -113,10 +116,12 @@ int main(int argc, char** argv)
     hot.name = QStringLiteral("AudioEngine");
     hot.cpuUsecs = 2500000;
     hot.cpuPercentOfCore = 91.5;
+    hot.state = ThreadRunState::Running;
 
     ThreadCpuSample idle;
     idle.tid = 4243;                 // deliberately unnamed: the "(unnamed)" rule
     idle.cpuPercentOfCore = 0.0;
+    idle.state = ThreadRunState::Unknown;   // what every Windows row will read
 
     report("a sample can be driven into the dialog", drive({hot, idle}));
 
@@ -133,33 +138,41 @@ int main(int argc, char** argv)
         report("an unnamed thread reads as (unnamed), not as a blank cell",
                table->item(1, 0) != nullptr
                    && table->item(1, 0)->text() == QLatin1String("(unnamed)"));
-        report("CPU % lands in its column",
+        report("a known state reads as a word",
                table->item(0, 2) != nullptr
-                   && qAbs(table->item(0, 2)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
-        report("Peak matches the only reading so far",
+                   && table->item(0, 2)->text() == QLatin1String("Running"));
+        // The Windows cell, in effect: a platform that cannot report state
+        // shows a dash rather than a value derived from something else.
+        report("an unknown state reads as a dash, not a guess",
+               table->item(1, 2) != nullptr
+                   && table->item(1, 2)->text() == QString::fromUtf8("—"));
+        report("CPU % lands in its column",
                table->item(0, 3) != nullptr
                    && qAbs(table->item(0, 3)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
+        report("Peak matches the only reading so far",
+               table->item(0, 4) != nullptr
+                   && qAbs(table->item(0, 4)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
 
         // Peak is a HIGH-water mark: the falling CPU % must not drag it down.
         ThreadCpuSample cooled = hot;
         cooled.cpuPercentOfCore = 3.0;
         drive({cooled, idle});
         report("CPU % follows the newest reading down",
-               table->item(0, 2) != nullptr
-                   && qAbs(table->item(0, 2)->data(Qt::DisplayRole).toDouble() - 3.0) < 0.05);
-        report("Peak holds the earlier spike after CPU % falls",
                table->item(0, 3) != nullptr
-                   && qAbs(table->item(0, 3)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
+                   && qAbs(table->item(0, 3)->data(Qt::DisplayRole).toDouble() - 3.0) < 0.05);
+        report("Peak holds the earlier spike after CPU % falls",
+               table->item(0, 4) != nullptr
+                   && qAbs(table->item(0, 4)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
 
         // The delegate draws from this role, so it has to survive the trip
         // through QVariant intact and in order — oldest first.
         const QList<double> series =
-            table->item(0, 5)->data(SparklineDelegate::kSeriesRole).value<QList<double>>();
+            table->item(0, 6)->data(SparklineDelegate::kSeriesRole).value<QList<double>>();
         report("the sparkline series round-trips through the item role",
                series.size() == 2 && qAbs(series.first() - 91.5) < 0.05
                    && qAbs(series.last() - 3.0) < 0.05);
         report("the sparkline column sorts by peak",
-               qAbs(table->item(0, 5)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
+               qAbs(table->item(0, 6)->data(Qt::DisplayRole).toDouble() - 91.5) < 0.05);
 
         // Painting is where a delegate crashes, and the two cases that reach
         // the awkward code are the ones a live dialog hits first: a thread seen
@@ -172,8 +185,8 @@ int main(int argc, char** argv)
         option.rect = QRect(0, 0, 140, 20);
         {
             QPainter painter(&canvas);
-            delegate.paint(&painter, option, table->model()->index(0, 5));
-            delegate.paint(&painter, option, table->model()->index(1, 5));
+            delegate.paint(&painter, option, table->model()->index(0, 6));
+            delegate.paint(&painter, option, table->model()->index(1, 6));
         }
         report("painting a populated and an empty series does not crash", true);
 
@@ -183,9 +196,56 @@ int main(int argc, char** argv)
             QPainter painter(&canvas);
             QStyleOptionViewItem collapsed;
             collapsed.rect = QRect(0, 0, 0, 0);
-            delegate.paint(&painter, collapsed, table->model()->index(0, 5));
+            delegate.paint(&painter, collapsed, table->model()->index(0, 6));
         }
         report("painting into a collapsed cell does not crash", true);
+    }
+
+    // ── The threshold alert ──────────────────────────────────────────────────
+    //
+    // Acceptance criterion 3, minimal form. Driven directly rather than by
+    // saturating a core, which is neither reproducible nor kind to a CI box.
+    if (auto* summary = dialog.findChild<QLabel*>(
+            QStringLiteral("systemInfoThreadSummary"))) {
+        report("no alert while the busiest thread is below the line",
+               summary->toolTip().isEmpty());
+
+        QMetaObject::invokeMethod(&dialog, "onThresholdExceeded", Qt::DirectConnection,
+                                  Q_ARG(QString, QStringLiteral("AudioEngine")),
+                                  Q_ARG(double, 95.0));
+        report("crossing the threshold raises the alert",
+               summary->toolTip().contains(QLatin1String("AudioEngine")));
+
+        // The crossing signal is edge-triggered, so a thread that stays hot
+        // sends nothing further — the alert must survive the samples that
+        // arrive while it is still above the line.
+        ThreadCpuSample stillHot = hot;
+        stillHot.cpuPercentOfCore = 93.0;
+        drive({stillHot, idle});
+        report("the alert survives a sample that is still above the line",
+               !summary->toolTip().isEmpty());
+
+        // And nothing announces coming back down, so clearing is the dialog's
+        // job. This is the half an edge-triggered signal cannot do for it.
+        ThreadCpuSample cooled = hot;
+        cooled.cpuPercentOfCore = 4.0;
+        drive({cooled, idle});
+        report("the alert clears once the busiest thread drops below the line",
+               summary->toolTip().isEmpty());
+
+        // A red line over a table that has stopped updating would claim a
+        // thread is saturating a core right now, when nothing is being measured.
+        QMetaObject::invokeMethod(&dialog, "onThresholdExceeded", Qt::DirectConnection,
+                                  Q_ARG(QString, QStringLiteral("AudioEngine")),
+                                  Q_ARG(double, 99.0));
+        dialog.show();
+        QCoreApplication::processEvents();
+        dialog.hide();
+        QCoreApplication::processEvents();
+        report("hiding the dialog clears a standing alert",
+               summary->toolTip().isEmpty());
+    } else {
+        report("the thread summary label is addressable by name", false);
     }
 
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"
