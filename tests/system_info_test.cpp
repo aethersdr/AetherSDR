@@ -290,6 +290,57 @@ void testThreadCpuRing()
     }
 }
 
+void testBusiestAndThreshold()
+{
+    // -1 means "there was nothing to read", and it is the only thing that does.
+    report("no samples has no busiest thread",
+           SystemInfo::busiestThreadIndex({}) == -1);
+
+    // All idle still HAS a busiest thread. "Nothing is busy" is a reading; the
+    // summary line should name a thread at 0 % rather than fall back to a dash.
+    {
+        const QVector<ThreadCpuSample> samples{makeSample(1, 0.0), makeSample(2, 0.0)};
+        report("an all-idle table still has a busiest thread",
+               SystemInfo::busiestThreadIndex(samples) == 0);
+    }
+
+    {
+        const QVector<ThreadCpuSample> samples{
+            makeSample(1, 3.0), makeSample(2, 91.5), makeSample(3, 12.0)};
+        report("the busiest thread is found wherever it sits",
+               SystemInfo::busiestThreadIndex(samples) == 1);
+    }
+
+    // Ties keep the first. The table redraws every 1.5 s, and alternating
+    // between two equally idle threads would make the summary line flicker.
+    {
+        const QVector<ThreadCpuSample> samples{
+            makeSample(1, 42.0), makeSample(2, 42.0)};
+        report("a tie resolves to the lower index",
+               SystemInfo::busiestThreadIndex(samples) == 0);
+    }
+
+    // The crossing latch. A thread pinned above the line is one event, not one
+    // per sample — this is what separates thresholdExceeded from sampleReady.
+    const double t = 90.0;
+    report("rising through the threshold is a crossing",
+           SystemInfo::crossedThreshold(50.0, 95.0, t));
+    report("staying above it is not another crossing",
+           !SystemInfo::crossedThreshold(95.0, 97.0, t));
+    report("falling back below it is not a crossing",
+           !SystemInfo::crossedThreshold(95.0, 20.0, t));
+    report("rising again after coming back down is a fresh crossing",
+           SystemInfo::crossedThreshold(20.0, 95.0, t));
+
+    // "Exceeds 90%" is the criterion's own wording, so exactly 90 is not
+    // across the line. Pinned because it is the kind of boundary a later edit
+    // would flip without noticing.
+    report("exactly at the threshold has not exceeded it",
+           !SystemInfo::crossedThreshold(50.0, 90.0, t));
+    report("a hair above it has",
+           SystemInfo::crossedThreshold(50.0, 90.001, t));
+}
+
 void testEnumeration()
 {
     const QVector<ThreadTimes> threads = SystemInfo::enumerateThreads();
@@ -396,6 +447,7 @@ int main(int argc, char** argv)
     testPercentMaths();
     testRunState();
     testThreadCpuRing();
+    testBusiestAndThreshold();
     testEnumeration();
     testNaming();
     testQtNamesItsOwnThreads();

@@ -269,6 +269,28 @@ void SystemInfo::setCurrentThreadName(const char* name)
     }
 }
 
+int SystemInfo::busiestThreadIndex(const QVector<ThreadCpuSample>& samples)
+{
+    if (samples.isEmpty()) {
+        return -1;
+    }
+    int busiest = 0;
+    for (int i = 1; i < samples.size(); ++i) {
+        // Strictly greater keeps the FIRST of equal readings, which is what
+        // stops the summary line flickering between two idle threads.
+        if (samples.at(i).cpuPercentOfCore > samples.at(busiest).cpuPercentOfCore) {
+            busiest = i;
+        }
+    }
+    return busiest;
+}
+
+bool SystemInfo::crossedThreshold(double previousPercent, double currentPercent,
+                                  double threshold)
+{
+    return currentPercent > threshold && !(previousPercent > threshold);
+}
+
 ThreadRunState SystemInfo::runStateFromProcChar(char state)
 {
     switch (state) {

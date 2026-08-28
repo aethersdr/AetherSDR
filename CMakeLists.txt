@@ -771,6 +771,7 @@ set(CORE_SOURCES
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
     src/core/SystemInfo.cpp
+    src/core/SystemInfoCollector.cpp
     src/core/ThreadName.cpp
     src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp

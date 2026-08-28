@@ -87,6 +87,26 @@ public:
     // Truncated to 15 characters on Linux, which is the kernel's limit.
     static void setCurrentThreadName(const char* name);
 
+    // Index of the thread using the most of one core, or -1 when there are no
+    // samples. Ties resolve to the lowest index so a table that redraws every
+    // 1.5 s does not flicker between two equally idle threads.
+    //
+    // A vector of all-zero samples still has a busiest thread: it returns 0
+    // rather than -1, because "nothing is busy" is a reading, not an absence of
+    // one. -1 means only that there was nothing to read.
+    static int busiestThreadIndex(const QVector<ThreadCpuSample>& samples);
+
+    // Did this reading cross UP through the threshold? Acceptance criterion 3
+    // asks for an alert when a thread "exceeds 90% of one core", and a crossing
+    // is the event — a thread that sits at 95 % for a minute crossed once, not
+    // forty times.
+    //
+    // Strictly greater, which is what "exceeds" says: exactly at the threshold
+    // is not across it. Pure and separate from the collector so the latch is
+    // testable without a running thread.
+    static bool crossedThreshold(double previousPercent, double currentPercent,
+                                 double threshold);
+
     // The state character in /proc/<pid>/task/<tid>/stat mapped to the shared
     // vocabulary. Pure and platform-free so it is testable on every host, not
     // only the one whose kernel writes the character. Anything unrecognised —
