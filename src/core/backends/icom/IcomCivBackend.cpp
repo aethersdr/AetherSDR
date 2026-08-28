@@ -2142,11 +2142,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 return;
             }
             const QString mode = QString::fromLatin1(repeaterAccessModeName(*access));
-            const bool offered = std::ranges::any_of(
-                fm->accessModes, [&mode](std::string_view candidate) {
-                    return mode == QString::fromUtf8(
-                        candidate.data(), static_cast<int>(candidate.size()));
-                });
+            const bool offered = capabilities().fmToneModes.contains(mode);
             if (!offered) {
                 return;
             }
@@ -4056,12 +4052,7 @@ void IcomCivBackend::setSliceFmToneMode(int, const QString& mode)
         const QByteArray normalizedUtf8 = normalized.toUtf8();
         const auto value = repeaterAccessModeValue(std::string_view(
             normalizedUtf8.constData(), static_cast<std::size_t>(normalizedUtf8.size())));
-        const FmRepeaterProfile* extended = extendedFmReadbackProfileFor(m_model);
-        const bool offered = extended && std::ranges::any_of(
-            extended->accessModes, [&normalized](std::string_view candidate) {
-                return normalized == QString::fromUtf8(
-                    candidate.data(), static_cast<int>(candidate.size()));
-            });
+        const bool offered = capabilities().fmToneModes.contains(normalized);
         if (!value || !offered) {
             qCWarning(lcIcomCiv) << "refusing unsupported FM tone mode" << mode;
             return;
