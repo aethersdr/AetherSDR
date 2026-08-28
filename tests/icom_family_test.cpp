@@ -459,22 +459,26 @@ int main(int argc, char** argv)
               && icom::speechProcessorRawLevel(2, 1) == 153
               && icom::speechProcessorRawLevel(2, 2) == 229,
           "sibling Icom processor presets retain raw 76/153/229 encoding");
-    check(!icom::profileFor(*icom::modelForCivAddress(0xA2)).hasTunerControl,
+    check(!icom::profileFor(*icom::modelForCivAddress(0xA2))
+               .supports(icom::IcomFeature::AntennaTuner),
           "the IC-9700 profile declares no antenna-tuner control");
-    check(icom::profileFor(*icom::modelForCivAddress(0xA4)).hasTunerControl,
+    check(icom::profileFor(*icom::modelForCivAddress(0xA4))
+              .supports(icom::IcomFeature::AntennaTuner),
           "the IC-705 retains its established external-tuner control");
-    check(icom::profileFor(*icom::modelForCivAddress(0xB6)).hasTunerControl,
+    check(icom::profileFor(*icom::modelForCivAddress(0xB6))
+              .supports(icom::IcomFeature::AntennaTuner),
           "the IC-7300MK2 retains its established tuner control");
-    check(!icom::profileFor(*icom::modelForCivAddress(0x98)).hasTunerControl,
-          "an unprofiled Icom fails closed for antenna-tuner control");
+    check(icom::profileFor(*icom::modelForCivAddress(0x98))
+              .supports(icom::IcomFeature::AntennaTuner),
+          "the IC-7610 retains its documented internal tuner control");
     std::vector<std::uint8_t> tunerModels;
     for (const icom::IcomModel& model : icom::knownModels()) {
-        if (icom::profileFor(model).hasTunerControl) {
+        if (icom::profileFor(model).supports(icom::IcomFeature::AntennaTuner)) {
             tunerModels.push_back(model.civAddress);
         }
     }
-    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0xB6},
-          "only the evidenced IC-705 and IC-7300MK2 profiles opt into tuner control");
+    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0x8E, 0x94, 0xB6},
+          "each evidenced internal/external-tuner model opts into tuner control");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {

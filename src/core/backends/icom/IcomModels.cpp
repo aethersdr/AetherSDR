@@ -241,7 +241,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 14> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 15> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -269,9 +269,11 @@ constexpr std::array<FeatureEvidence, 14> kIc705Evidence{{
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, command 1A 00 memory-channel records"},
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, command 1C 01"},
 }};
 
-constexpr std::array<FeatureEvidence, 14> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 15> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -300,9 +302,11 @@ constexpr std::array<FeatureEvidence, 14> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 16 50"},
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, command 1A 00 memory-channel records"},
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7300MK2 CI-V Reference Guide, command 1C 01"},
 }};
 
-constexpr std::array<FeatureEvidence, 13> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 14> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -330,6 +334,21 @@ constexpr std::array<FeatureEvidence, 13> kIc9700Evidence{{
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-9700 CI-V Reference Guide 2019, command 1A 00 memory-channel records"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not attested"},
+    {IcomFeature::AntennaTuner, EvidenceKind::None,
+     "IC-9700 CI-V Reference Guide does not declare an antenna tuner"},
+}};
+
+constexpr std::array<FeatureEvidence, 1> kIc7300Evidence{{
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7300 CI-V Reference Guide, command 1C 01"},
+}};
+constexpr std::array<FeatureEvidence, 1> kIc7610Evidence{{
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7610 CI-V Reference Guide, command 1C 01"},
+}};
+constexpr std::array<FeatureEvidence, 1> kIc785xEvidence{{
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7850/IC-7851 CI-V Reference Guide, command 1C 01"},
 }};
 
 }  // namespace
@@ -584,7 +603,6 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     static const IcomModelProfile kIc705Profile{
         .supportedBringup = true,
         .hasGpsHardware = true,
-        .hasTunerControl = true,
         .guideRevision = "IC-705 CI-V Reference Guide 2020",
         .features = kIc705Evidence,
         .modulation = ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
@@ -637,7 +655,6 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
-        .hasTunerControl = true,
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,
         .modulation = ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
@@ -664,6 +681,9 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .attenuatorSteps = kHfAttenuatorSteps,
     };
     static const IcomModelProfile kUnprofiled{};
+    static const IcomModelProfile kIc7300Profile{.features = kIc7300Evidence};
+    static const IcomModelProfile kIc7610Profile{.features = kIc7610Evidence};
+    static const IcomModelProfile kIc785xProfile{.features = kIc785xEvidence};
 
     switch (model.civAddress) {
     case 0xA4:
@@ -672,6 +692,12 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         return kIc9700Profile;
     case 0xB6:
         return kIc7300Mk2Profile;
+    case 0x94:
+        return kIc7300Profile;
+    case 0x98:
+        return kIc7610Profile;
+    case 0x8E:
+        return kIc785xProfile;
     default:
         return kUnprofiled;
     }
@@ -696,6 +722,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::DialLock:            return "dial-lock";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
     case IcomFeature::MemoryChannels:      return "memory-channels";
+    case IcomFeature::AntennaTuner:        return "antenna-tuner";
     }
     return "unknown";
 }

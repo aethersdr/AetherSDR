@@ -295,8 +295,7 @@ void TxApplet::buildUI()
 
         m_atuBtn = new QPushButton("ATU");
         markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
-        m_atuBtn->setCheckable(true);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_atuBtn, tunerBtnStyle);
+        m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
         m_atuBtn->setAccessibleName("ATU tune");
@@ -436,13 +435,6 @@ void TxApplet::buildUI()
     // Mirrors SmartSDR's per-frequency toggle. (#1993)
     connect(m_atuBtn, &QPushButton::clicked, this, [this]() {
         if (!m_model) return;
-        // A checkable button provides the maintainer-defined active visual, but
-        // radio readback remains authoritative. Undo Qt's optimistic toggle
-        // immediately; syncAtuIndicators() applies the reported atuEnabled.
-        {
-            const QSignalBlocker blocker(m_atuBtn);
-            m_atuBtn->setChecked(m_model->atuEnabled());
-        }
         const auto status = m_model->atuStatus();
         const bool tuned = (status == ATUStatus::Successful || status == ATUStatus::OK);
         const double curFreq = m_model->transmitFreq();
@@ -687,9 +679,7 @@ void TxApplet::syncAtuIndicators()
     // ATU / MEM buttons — active styling follows radio readback only.
     {
         m_updatingFromModel = true;
-        const QSignalBlocker atuBlocker(m_atuBtn);
         const QSignalBlocker blocker(m_memBtn);
-        m_atuBtn->setChecked(m_model->atuEnabled());
         m_memBtn->setChecked(m_model->memoriesEnabled());
         m_updatingFromModel = false;
     }

@@ -260,7 +260,7 @@ caps.canTransmit            = true;
 caps.txPowerMaxWatts        = 10.0;
 caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
-caps.hasTuner               = profile.hasTunerControl; // exact-model evidence
+caps.hasTuner               = profile.supports(IcomFeature::AntennaTuner); // exact-model evidence
 caps.hasTunerMemories       = false;           // 1C 01 has no Flex-style memory API
 caps.hasSupplyVoltageTelemetry =
     hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd

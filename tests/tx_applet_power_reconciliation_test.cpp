@@ -265,8 +265,8 @@ void testAtuCapabilityUsesThreeVisibleStates()
 
     report("available inactive ATU controls remain enabled",
            atu->isEnabled() && mem->isEnabled()
-               && atu->isCheckable() && mem->isCheckable()
-               && !atu->isChecked() && !mem->isChecked());
+               && !atu->isCheckable() && mem->isCheckable()
+               && !mem->isChecked());
     report("available inactive indicators are greyed",
            success->isEnabled() && bypass->isEnabled() && memory->isEnabled()
                && !inactiveSuccessStyle.isEmpty()
@@ -301,7 +301,7 @@ void testAtuCapabilityUsesThreeVisibleStates()
     QApplication::processEvents();
     report("available tuner controls return to inactive state",
            atu->isEnabled() && mem->isEnabled()
-               && !atu->isChecked() && !mem->isChecked()
+               && !mem->isChecked()
                && success->styleSheet() == inactiveSuccessStyle
                && bypass->styleSheet() == inactiveBypassStyle
                && memory->styleSheet() == inactiveMemoryStyle);
@@ -333,8 +333,8 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && success->styleSheet() != inactiveSuccessStyle
                && memory->styleSheet() != inactiveMemoryStyle
                && bypass->styleSheet() == inactiveBypassStyle);
-    report("available active tuner controls follow radio readback",
-           atu->isChecked() && mem->isChecked());
+    report("available active tuner memory control follows radio readback",
+           !atu->isCheckable() && mem->isChecked());
     const QString activeSuccessStyle = success->styleSheet();
     const QString activeMemoryStyle = memory->styleSheet();
 
@@ -342,16 +342,13 @@ void testAtuCapabilityUsesThreeVisibleStates()
     model.setHasTunerMemories(false);
     QApplication::processEvents();
     report("active tuner controls dim when capability disappears",
-           atu->isChecked() && mem->isChecked()
+           mem->isChecked()
                && !atu->isEnabled() && !mem->isEnabled()
                && !success->isEnabled() && !memory->isEnabled()
                && success->styleSheet() != inactiveSuccessStyle
                && memory->styleSheet() != inactiveMemoryStyle
                && success->styleSheet() != activeSuccessStyle
                && memory->styleSheet() != activeMemoryStyle);
-    report("unavailable style overrides active style",
-           atu->styleSheet().indexOf(QStringLiteral("QPushButton:checked"))
-               < atu->styleSheet().indexOf(QStringLiteral("QPushButton:disabled")));
 }
 
 } // namespace

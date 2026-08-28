@@ -407,7 +407,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // their exact profiles document supported tuner command paths. The
     // IC-9700 and unprofiled radios fail closed, while the shared UI keeps the
     // controls visible and presents them as unavailable.
-    c.hasTuner = m.hasTransmit && profile.hasTunerControl;
+    c.hasTuner = m.hasTransmit && profile.supports(IcomFeature::AntennaTuner);
     // The shared MEM control is a separate capability. CI-V 1C 01 exposes
     // matching state, not Flex's client-selectable memory recall/database.
     c.hasTunerMemories = false;
@@ -4327,7 +4327,7 @@ void IcomCivBackend::setAtu(bool start)
 
 bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
 {
-    if (!m_model || !profileFor(*m_model).hasTunerControl) {
+    if (!m_model || !profileFor(*m_model).supports(IcomFeature::AntennaTuner)) {
         return false;
     }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
@@ -4340,7 +4340,7 @@ bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
 bool IcomCivBackend::queueTunerReadIfSupported(
     std::uint8_t address, IcomCivScheduler::Priority priority)
 {
-    if (!m_model || !profileFor(*m_model).hasTunerControl) {
+    if (!m_model || !profileFor(*m_model).supports(IcomFeature::AntennaTuner)) {
         return false;
     }
     const std::vector<std::uint8_t> frame = cmdReadTuner(address);
@@ -5647,7 +5647,7 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
         // an operator with an AH-705 can reach it without the TUNE button
         // running an ATU that may not be attached.
-        if (!m_model || !profileFor(*m_model).hasTunerControl) {
+        if (!m_model || !profileFor(*m_model).supports(IcomFeature::AntennaTuner)) {
             emit extensionError(requestId, QStringLiteral("antenna tuner unsupported"));
             return;
         }

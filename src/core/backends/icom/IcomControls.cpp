@@ -355,7 +355,8 @@ constexpr std::array kSpecs = {
                 "antenna-tuner matching cycle and it KEYS. There is no universal "
                 "attachment query, so only exact model profiles with documented tuner "
                 "paths publish capabilities().hasTuner and send this command. The "
-                "shared button remains visible but unavailable otherwise."},
+                "shared button remains visible but unavailable otherwise.",
+                IcomFeature::AntennaTuner},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
                 Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
