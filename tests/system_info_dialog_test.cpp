@@ -11,12 +11,20 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 #include "core/ThreadCpuRing.h"
 #include "gui/SparklineDelegate.h"
 #include "gui/SystemInfoDialog.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QLabel>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QDir>
+#include <QFile>
+#include <QScrollBar>
+#include <QTemporaryDir>
 #include <QPainter>
 #include <QPixmap>
 #include <QTabWidget>
@@ -246,6 +254,187 @@ int main(int argc, char** argv)
                summary->toolTip().isEmpty());
     } else {
         report("the thread summary label is addressable by name", false);
+    }
+
+    // ── Logs tab: the two classes of line the filter used to hide ────────────
+    //
+    // Both were found by re-reading LogManager rather than by running the
+    // dialog, which is why they are pinned here: neither shows up as a crash or
+    // a failing build, only as a line that quietly never appears.
+    {
+        auto* viewer = dialog.findChild<QPlainTextEdit*>(
+            QStringLiteral("systemInfoLogViewer"));
+        report("the log viewer is addressable by name", viewer != nullptr);
+
+        const auto box = [&dialog](const char* id) {
+            return dialog.findChild<QCheckBox*>(
+                QStringLiteral("logFilter_%1").arg(QLatin1String(id)));
+        };
+        const auto feed = [&dialog](const QString& line) {
+            QMetaObject::invokeMethod(&dialog, "appendLogLine", Qt::DirectConnection,
+                                      Q_ARG(QString, line));
+        };
+
+        // Scope: the three categories the issue names for this tab, and no
+        // others. Threads enumerates every thread; the log answers what the
+        // perf subsystem was doing. Offering the whole registry here would make
+        // the tab a duplicate of the network dialog's log viewer.
+        report("aether.perf is offered", box("aether.perf") != nullptr);
+        report("aether.render is offered", box("aether.render") != nullptr);
+        report("aether.audio is offered", box("aether.audio") != nullptr);
+        report("a category outside the perf set is NOT offered here",
+               box("aether.cw") == nullptr && box("aether.dax") == nullptr);
+        report("all three start ticked",
+               box("aether.perf")->isChecked() && box("aether.render")->isChecked()
+                   && box("aether.audio")->isChecked());
+
+        // The defect this tab shipped with, on the categories it actually
+        // offers: a category switched OFF still writes warnings and criticals
+        // (LogManager.h:58). The row used to skip those categories entirely, so
+        // the most important lines in the file had no box that could show them
+        // — and aether.perf is switched off by default, so this is the common
+        // case rather than an edge one.
+        const bool perfOff = !LogManager::instance().isEnabled(QStringLiteral("aether.perf"));
+        report("aether.perf is switched off by default, so this case is real", perfOff);
+        if (viewer != nullptr) {
+            feed(QStringLiteral("[00:00:01.000] WRN aether.perf: frame budget exceeded"));
+            report("a warnings-only category's warning is shown, not filtered away",
+                   viewer->toPlainText().contains(QLatin1String("frame budget")));
+            box("aether.perf")->setChecked(false);
+            report("unticking it hides the line again",
+                   !viewer->toPlainText().contains(QLatin1String("frame budget")));
+            box("aether.perf")->setChecked(true);
+        }
+
+        // Out of scope by design, and asserted so the decision is visible in
+        // the suite rather than only in a commit message: uncategorized output
+        // has no box here, so it does not appear.
+        report("uncategorized output is not offered on this tab",
+               box("default") == nullptr);
+        if (viewer != nullptr) {
+            feed(QStringLiteral("[00:00:02.000] WRN default: uncategorized warning"));
+            report("and does not reach the view",
+                   !viewer->toPlainText().contains(QLatin1String("uncategorized warning")));
+        }
+
+        // ── Follow-live ──────────────────────────────────────────────────────
+        //
+        // Promised on the issue on 2026-08-25 and not built: the view scrolled
+        // itself to the newest line on every append, so a stall could not be
+        // read without the log yanking itself away every 500 ms.
+        auto* live = dialog.findChild<QPushButton*>(
+            QStringLiteral("systemInfoLogLiveToggle"));
+        report("the Logs tab has a Live toggle", live != nullptr);
+        if (live != nullptr && viewer != nullptr) {
+            report("it starts following", live->isChecked()
+                       && live->text() == QLatin1String("Live"));
+
+            live->setChecked(false);
+            report("turning it off reads as Paused",
+                   live->text() == QLatin1String("Paused"));
+
+            feed(QStringLiteral("[00:00:03.000] WRN aether.perf: arrived while paused"));
+            report("a line arriving while paused stays out of the view",
+                   !viewer->toPlainText().contains(QLatin1String("while paused")));
+
+            // Retained, not dropped: resuming must show what was missed rather
+            // than picking up from wherever the file has reached.
+            live->setChecked(true);
+            report("resuming catches up on what arrived while paused",
+                   viewer->toPlainText().contains(QLatin1String("while paused")));
+
+            // Scrolling up is the pause gesture, so it has to disengage
+            // following without the button being touched.
+            dialog.show();
+            QCoreApplication::processEvents();
+            viewer->setFixedHeight(40);
+            for (int i = 0; i < 200; ++i) {
+                feed(QStringLiteral("[00:00:04.%1] WRN aether.perf: filler line %2")
+                         .arg(i, 3, 10, QLatin1Char('0')).arg(i));
+            }
+            QCoreApplication::processEvents();
+            if (viewer->verticalScrollBar()->maximum() > 0) {
+                viewer->verticalScrollBar()->setValue(0);
+                QCoreApplication::processEvents();
+                report("scrolling up turns following off by itself",
+                       !live->isChecked() && live->text() == QLatin1String("Paused"));
+            } else {
+                report("the viewer became scrollable so the gesture can be tested",
+                       false);
+            }
+
+            // And our OWN jump to the bottom must not read as that gesture, or
+            // the first appended line would switch following off.
+            live->setChecked(true);
+            feed(QStringLiteral("[00:00:05.000] WRN aether.perf: still following"));
+            QCoreApplication::processEvents();
+            report("appending while live does not switch following off",
+                   live->isChecked());
+            dialog.hide();
+            QCoreApplication::processEvents();
+        }
+    }
+
+    // ── The tail survives the file moving underneath it ──────────────────────
+    //
+    // A tail running for hours outlives log rotation. Reading on from a stale
+    // handle looks exactly like a log that stopped: the pane goes quiet and
+    // nothing says why, which during an investigation reads as "the app stopped
+    // logging" rather than "this view is stuck".
+    {
+        QTemporaryDir tempDir;
+        report("a temporary log directory is available", tempDir.isValid());
+        const QString logPath = tempDir.filePath(QStringLiteral("aethersdr.log"));
+        // Seeded AFTER startLogging, which opens the file for writing and
+        // truncates it — a line written before that call does not survive to be
+        // tailed.
+        LogManager::instance().startLogging(logPath, false);
+        {
+            QFile seed(logPath);
+            seed.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+            seed.write("[00:00:00.000] WRN aether.perf: before the reset\n");
+        }
+
+        SystemInfoDialog tailing;
+        tailing.show();
+        QCoreApplication::processEvents();
+
+        auto* path = tailing.findChild<QLabel*>(QStringLiteral("systemInfoLogPath"));
+        report("the Logs tab names the file it is following",
+               path != nullptr && path->text().contains(logPath));
+
+        auto* view = tailing.findChild<QPlainTextEdit*>(
+            QStringLiteral("systemInfoLogViewer"));
+        report("the seeded line is tailed",
+               view != nullptr
+                   && view->toPlainText().contains(QLatin1String("before the reset")));
+
+        // Rotation: the file is replaced by a shorter one at the same path, so
+        // the handle's position is now past its end.
+        {
+            QFile rotated(logPath);
+            rotated.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+            rotated.write("[00:00:01.000] WRN aether.perf: after the reset\n");
+        }
+        QMetaObject::invokeMethod(&tailing, "pollLog", Qt::DirectConnection);
+        QCoreApplication::processEvents();
+
+        if (view != nullptr) {
+            report("lines written after a reset are picked up",
+                   view->toPlainText().contains(QLatin1String("after the reset")));
+            // The notice rides a reserved category with no checkbox, so it is
+            // visible even though "default" is unticked by default.
+            report("the reset is announced rather than passing silently",
+                   view->toPlainText().contains(QLatin1String("Log file was reset")));
+        }
+
+        report("the dialog has a Close button",
+               tailing.findChild<QPushButton*>(
+                   QStringLiteral("systemInfoCloseButton")) != nullptr);
+
+        tailing.hide();
+        QCoreApplication::processEvents();
+        LogManager::instance().shutdownLogging();
     }
 
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"

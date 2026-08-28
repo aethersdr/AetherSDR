@@ -11,10 +11,10 @@
 #include <QVector>
 
 class QCheckBox;
+class QPushButton;
 class QHBoxLayout;
 class QLabel;
 class QPlainTextEdit;
-class QScrollArea;
 class QTableWidget;
 class QThread;
 class QTimer;
@@ -58,6 +58,15 @@ private slots:
     // can actually saturate a core on demand.
     void onThresholdExceeded(const QString& threadName, double percentOfCore);
 
+    // A slot for the same reason as applySample: the two defects this tab
+    // shipped with were both about which lines reach the view, and a test can
+    // only pin that if it can hand the tab a line.
+    void appendLogLine(const QString& line);
+
+    // A slot so a test can step the tail deterministically instead of waiting
+    // on the 500 ms timer — which is how the rotation path gets exercised.
+    void pollLog();
+
 private:
     QWidget* buildThreadsTab();
     QWidget* buildLogsTab();
@@ -70,9 +79,14 @@ private:
     void rebuildCategoryFilters();
     void openLogTail();
     void closeLogTail();
-    void pollLog();
-    void appendLogLine(const QString& line);
+    // Reopen after the file underneath us was rotated, restarted or replaced.
+    // Returns false when there is nothing to follow.
+    bool reopenLogTail(const QString& path);
     void rebuildLogView();
+    // One place that owns the follow state, its button's text and tooltip, and
+    // the jump to the newest line — so the button, the scrollbar and the
+    // append path cannot end up disagreeing about whether we are following.
+    void setLogFollowLive(bool on);
     static QString categoryFromLine(const QString& line);
 
     // Threads tab
@@ -102,9 +116,20 @@ private:
     QWidget*        m_logsPage{nullptr};   // parent for dynamically rebuilt filters
     QPlainTextEdit* m_logViewer{nullptr};
     QHBoxLayout*    m_filterRow{nullptr};
-    QScrollArea*    m_filterScroll{nullptr};
+    QPushButton*    m_logLiveToggle{nullptr};
+    bool            m_logFollowLive{true};
+    // Guards the scrollbar handler against our OWN scrolling: every jump to the
+    // bottom fires valueChanged, and without this the first appended line would
+    // look like the operator scrolling and switch following off.
+    bool            m_handlingLogScroll{false};
+    QLabel*         m_logPathLabel{nullptr};
     QTimer*         m_logTimer{nullptr};
     QFile           m_logFile;
+    // Bytes after the last newline read so far. The writer flushes whole
+    // lines, but a poll can still land between two writes of one batch; the
+    // fragment waits here for its newline rather than being shown as a line
+    // and its remainder filed under "default", which has no box.
+    QByteArray      m_logPartialLine;
     QVector<QPair<QString, QString>> m_logLines;  // category, text
     QSet<QString>   m_enabledCategories;
     QHash<QString, QCheckBox*> m_categoryBoxes;

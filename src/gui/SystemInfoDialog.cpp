@@ -11,9 +11,11 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSignalBlocker>
 #include <QRegularExpression>
+#include <QFileInfo>
 #include <QFrame>
-#include <QScrollArea>
 #include <QScrollBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -26,6 +28,25 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kLogPollMs = 500;
+
+// The categories the issue names for this tab: "Live tail of perf-related
+// logging categories: lcPerf, lcRender, lcAudio."
+//
+// Three, and not the whole registry. The two tabs are deliberately scoped
+// differently: Threads enumerates EVERY thread in the process because the
+// failure it exists to catch is one of them saturating a core (#2545), while
+// the log answers what the perf subsystem was doing. Widening this to all
+// twenty-eight categories would make the tab a duplicate of the log viewer in
+// NetworkDiagnosticsDialog, which is the doubt the issue's own analysis raised
+// about it.
+const char* const kPerfCategories[] = {"aether.perf", "aether.render", "aether.audio"};
+
+// The tab's own notices — currently just "the log was reset" — ride the same
+// path as real log lines so that replaying the buffer keeps them in place. They
+// get no checkbox and are permanently visible: a notice explaining why the pane
+// just emptied is useless if it lands behind a filter the operator has not
+// ticked, and after this commit "default" is unticked by default.
+const char* const kNoticeCategory = "systeminfo";
 constexpr qint64 kInitialTailBytes = 64 * 1024;
 constexpr qsizetype kMaxStoredLines = 5000;
 
@@ -73,6 +94,15 @@ SystemInfoDialog::SystemInfoDialog(QWidget* parent)
     tabs->addTab(buildThreadsTab(), QStringLiteral("Threads"));
     tabs->addTab(buildLogsTab(), QStringLiteral("Logs"));
     layout->addWidget(tabs);
+
+    auto* buttonRow = new QHBoxLayout;
+    buttonRow->addStretch(1);
+    auto* closeButton = new QPushButton(QStringLiteral("Close"), bodyWidget());
+    closeButton->setObjectName(QStringLiteral("systemInfoCloseButton"));
+    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    buttonRow->addWidget(closeButton);
+    layout->addLayout(buttonRow);
+
     resize(900, 600);
 }
 
@@ -357,18 +387,11 @@ QWidget* SystemInfoDialog::buildLogsTab()
     m_logsPage = page;
     auto* layout = new QVBoxLayout(page);
 
-    // Every enabled category gets a checkbox, and an operator with a dozen
-    // categories on overflows any window. Scroll the row rather than clipping
-    // it — a filter you cannot reach is the same as one that does not exist.
-    auto* filterHost = new QWidget(page);
-    m_filterRow = new QHBoxLayout(filterHost);
-    m_filterRow->setContentsMargins(0, 0, 0, 0);
-    m_filterScroll = new QScrollArea(page);
-    m_filterScroll->setWidget(filterHost);
-    m_filterScroll->setWidgetResizable(true);
-    m_filterScroll->setFrameShape(QFrame::NoFrame);
-    m_filterScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    layout->addWidget(m_filterScroll);
+    // Three checkboxes fit a row with room to spare. The scroll area this used
+    // to need, and the legend that had scrolled out of reach inside it, went
+    // with the twenty-five categories that are no longer offered here.
+    m_filterRow = new QHBoxLayout;
+    layout->addLayout(m_filterRow);
 
     // Follow the categories that are actually switched on, live. A fixed list
     // would go stale as categories are added, and — worse — would offer a
@@ -380,12 +403,52 @@ QWidget* SystemInfoDialog::buildLogsTab()
                 rebuildCategoryFilters();
                 rebuildLogView();
             });
+    auto* infoRow = new QHBoxLayout;
+    // Which file this is. Without it an empty pane is ambiguous between "no
+    // matching lines" and "following something other than what you think".
+    m_logPathLabel = new QLabel(page);
+    m_logPathLabel->setObjectName(QStringLiteral("systemInfoLogPath"));
+    m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    ThemeManager::instance().applyStyleSheet(
+        m_logPathLabel,
+        QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    infoRow->addWidget(m_logPathLabel, 1);
+    m_logLiveToggle = new QPushButton(QStringLiteral("Live"), page);
+    m_logLiveToggle->setObjectName(QStringLiteral("systemInfoLogLiveToggle"));
+    m_logLiveToggle->setCheckable(true);
+    m_logLiveToggle->setChecked(true);
+    m_logLiveToggle->setFixedWidth(92);
+    connect(m_logLiveToggle, &QPushButton::toggled,
+            this, [this](bool live) { setLogFollowLive(live); });
+    infoRow->addWidget(m_logLiveToggle);
+    layout->addLayout(infoRow);
+
     m_logViewer = new QPlainTextEdit(page);
+    m_logViewer->setObjectName(QStringLiteral("systemInfoLogViewer"));
     m_logViewer->setReadOnly(true);
     m_logViewer->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_logViewer->setMaximumBlockCount(static_cast<int>(kMaxStoredLines));
     new LogSyntaxHighlighter(m_logViewer->document());
     layout->addWidget(m_logViewer, 1);
+
+    // Scrolling up IS the pause gesture. Reading a stall means holding still on
+    // the lines around it, and a view that yanks itself back to the bottom
+    // every 500 ms cannot be read at all — the operator would have to find the
+    // button before the log became legible.
+    connect(m_logViewer->verticalScrollBar(), &QScrollBar::valueChanged,
+            this, [this](int value) {
+                if (m_handlingLogScroll || m_logViewer == nullptr) {
+                    return;
+                }
+                if (value < m_logViewer->verticalScrollBar()->maximum()) {
+                    setLogFollowLive(false);
+                }
+            });
+
+    setLogFollowLive(true);   // establishes the button's text and tooltip
+
+    // No checkbox, never removed — see kNoticeCategory.
+    m_enabledCategories.insert(QString::fromLatin1(kNoticeCategory));
 
     rebuildCategoryFilters();
     return page;
@@ -398,7 +461,7 @@ void SystemInfoDialog::rebuildCategoryFilters()
     }
 
     // Snapshot which categories we already had boxes for BEFORE clearing them:
-    // it is the only way to tell "new category, show it" from "the operator
+    // it is the only way to tell "new box, start it on" from "the operator
     // unticked this one, leave it unticked".
     QSet<QString> previouslyKnown;
     for (auto it = m_categoryBoxes.constBegin(); it != m_categoryBoxes.constEnd(); ++it) {
@@ -411,58 +474,79 @@ void SystemInfoDialog::rebuildCategoryFilters()
     }
     m_categoryBoxes.clear();
 
-    const QList<LogManager::Category> categories = LogManager::instance().categories();
-    QSet<QString> stillEnabled;
     m_filterRow->addWidget(new QLabel(QStringLiteral("Show:"), m_logsPage));
 
-    for (const LogManager::Category& category : categories) {
-        if (!category.enabled) {
-            continue;   // not being logged, so there is nothing to offer
-        }
-        stillEnabled.insert(category.id);
+    QHash<QString, LogManager::Category> byId;
+    for (const LogManager::Category& category : LogManager::instance().categories()) {
+        byId.insert(category.id, category);
+    }
 
-        auto* box = new QCheckBox(category.label, m_logsPage);
-        box->setToolTip(QStringLiteral("%1 — %2").arg(category.id, category.description));
-        // A category newly switched on starts visible; one the operator has
-        // deliberately unticked here stays hidden across rebuilds.
-        box->setChecked(previouslyKnown.contains(category.id)
-                            ? m_enabledCategories.contains(category.id)
+    bool anyWarningsOnly = false;
+    for (const char* const id : kPerfCategories) {
+        const QString key = QString::fromLatin1(id);
+        const auto found = byId.constFind(key);
+        if (found == byId.constEnd()) {
+            continue;   // registry changed under us; better a missing box than a crash
+        }
+
+        auto* box = new QCheckBox(found->label, m_logsPage);
+        box->setObjectName(QStringLiteral("logFilter_%1").arg(key));
+
+        // A category switched OFF in LogManager still writes warnings and
+        // criticals — "Default state: all debug logging DISABLED.
+        // Warnings/criticals always pass" (LogManager.h:58). Skipping it, as
+        // this row used to, made those lines undisplayable: the most important
+        // lines in the file, hidden by the filter meant to reveal them. It gets
+        // a box, dimmed, saying what it will and will not show — which also
+        // answers the ticked-box-over-an-empty-pane problem honestly rather
+        // than by hiding the box.
+        if (found->enabled) {
+            box->setToolTip(QStringLiteral("%1 — %2").arg(key, found->description));
+        } else {
+            anyWarningsOnly = true;
+            ThemeManager::instance().applyStyleSheet(
+                box, QStringLiteral("QCheckBox { color: {{color.text.disabled}}; }"));
+            box->setToolTip(
+                QStringLiteral("%1 — %2\n\nWarnings and criticals only: this "
+                               "category's full logging is switched off. Turn it "
+                               "on in Help \u2192 Support & Diagnostics.")
+                    .arg(key, found->description));
+        }
+
+        box->setChecked(previouslyKnown.contains(key)
+                            ? m_enabledCategories.contains(key)
                             : true);
         if (box->isChecked()) {
-            m_enabledCategories.insert(category.id);
+            m_enabledCategories.insert(key);
+        } else {
+            m_enabledCategories.remove(key);
         }
-        const QString id = category.id;
-        connect(box, &QCheckBox::toggled, this, [this, id](bool on) {
+        connect(box, &QCheckBox::toggled, this, [this, key](bool on) {
             if (on) {
-                m_enabledCategories.insert(id);
+                m_enabledCategories.insert(key);
             } else {
-                m_enabledCategories.remove(id);
+                m_enabledCategories.remove(key);
             }
             rebuildLogView();
         });
-        m_categoryBoxes.insert(category.id, box);
+        m_categoryBoxes.insert(key, box);
         m_filterRow->addWidget(box);
     }
 
-    if (m_categoryBoxes.isEmpty()) {
-        auto* hint = new QLabel(
-            QStringLiteral("No log categories are switched on — enable them in "
-                           "Help \u2192 Support."),
-            m_logsPage);
-        m_filterRow->addWidget(hint);
-    }
-
-    // Drop view-filter state for categories that are no longer logged at all.
-    m_enabledCategories.intersect(stillEnabled);
     m_filterRow->addStretch(1);
 
-    // Size the viewport only now the row has widgets in it. Measuring the host
-    // at construction time — before this function has ever run — reports the
-    // height of an empty widget, and the scroll area collapses to nothing but
-    // its own scrollbar.
-    if (m_filterScroll != nullptr) {
-        const QWidget* host = m_filterScroll->widget();
-        m_filterScroll->setFixedHeight(host->sizeHint().height() + 18);
+    // Only when it has something to explain. A permanent legend beside three
+    // bright boxes is noise.
+    if (anyWarningsOnly) {
+        auto* legend = new QLabel(QStringLiteral("dimmed = warnings only"), m_logsPage);
+        legend->setObjectName(QStringLiteral("systemInfoFilterLegend"));
+        ThemeManager::instance().applyStyleSheet(
+            legend, QStringLiteral("QLabel { color: {{color.text.disabled}}; }"));
+        legend->setToolTip(
+            QStringLiteral("A dimmed category is switched off in Help \u2192 "
+                           "Support & Diagnostics, so only its warnings and criticals reach the "
+                           "log at all. Ticking it here shows those."));
+        m_filterRow->addWidget(legend);
     }
 }
 
@@ -485,22 +569,13 @@ void SystemInfoDialog::openLogTail()
     if (m_logFile.isOpen()) {
         return;
     }
-    const QString path = LogManager::instance().logFilePath();
-    if (path.isEmpty()) {
-        return;
+    // The poll runs whether or not the first open succeeded: logFilePath()
+    // always names a file, and one that does not exist yet — logging switched
+    // on after the dialog opened, or a rotation in flight — is retried by
+    // pollLog() rather than left dead until the dialog is hidden and shown.
+    if (reopenLogTail(LogManager::instance().logFilePath())) {
+        pollLog();
     }
-    m_logFile.setFileName(path);
-    if (!m_logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return;
-    }
-    // Start from the tail, not the beginning: a long session's log is tens of
-    // megabytes and none of it is the stall being investigated right now.
-    const qint64 size = m_logFile.size();
-    if (size > kInitialTailBytes) {
-        m_logFile.seek(size - kInitialTailBytes);
-        m_logFile.readLine();  // discard the partial line the seek landed in
-    }
-    pollLog();
 
     if (m_logTimer == nullptr) {
         m_logTimer = new QTimer(this);
@@ -508,6 +583,34 @@ void SystemInfoDialog::openLogTail()
         connect(m_logTimer, &QTimer::timeout, this, &SystemInfoDialog::pollLog);
     }
     m_logTimer->start();
+}
+
+bool SystemInfoDialog::reopenLogTail(const QString& path)
+{
+    if (m_logPathLabel != nullptr) {
+        m_logPathLabel->setText(path.isEmpty()
+                                    ? QStringLiteral("Log: (not writing to a file)")
+                                    : QStringLiteral("Log: %1").arg(path));
+    }
+    if (path.isEmpty()) {
+        return false;
+    }
+    m_logFile.close();
+    m_logPartialLine.clear();
+    m_logFile.setFileName(path);
+    if (!m_logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+    // Start from the tail, not the beginning: a long session's log is tens of
+    // megabytes and none of it is the stall being investigated right now. A
+    // file shorter than the window is read whole, which is also what a
+    // just-rotated log wants.
+    const qint64 size = m_logFile.size();
+    if (size > kInitialTailBytes) {
+        m_logFile.seek(size - kInitialTailBytes);
+        m_logFile.readLine();  // discard the partial line the seek landed in
+    }
+    return true;
 }
 
 void SystemInfoDialog::closeLogTail()
@@ -523,10 +626,42 @@ void SystemInfoDialog::closeLogTail()
 void SystemInfoDialog::pollLog()
 {
     if (!m_logFile.isOpen()) {
-        return;
+        // Not open yet — see openLogTail(). Keep trying at the poll cadence.
+        reopenLogTail(LogManager::instance().logFilePath());
+        if (!m_logFile.isOpen()) {
+            return;
+        }
     }
-    while (!m_logFile.atEnd()) {
-        const QString line = QString::fromUtf8(m_logFile.readLine()).trimmed();
+
+    // The file can move out from under a tail that has been running for hours:
+    // rotated, restarted by LogManager, or replaced at the same path. Reading
+    // from a stale handle looks exactly like a log that simply stopped — the
+    // pane goes quiet and nothing says why, which during an investigation reads
+    // as "the app stopped logging" rather than "this view is stuck".
+    const QString currentPath = LogManager::instance().logFilePath();
+    const QFileInfo info(currentPath);
+    const bool pathChanged = m_logFile.fileName() != currentPath;
+    const bool truncated = info.exists() && info.size() < m_logFile.pos();
+    if (pathChanged || truncated) {
+        if (!reopenLogTail(currentPath)) {
+            return;
+        }
+        appendLogLine(QStringLiteral("[--:--:--.---] INF %1: Log file was %2; "
+                                     "following the current one from here")
+                          .arg(QLatin1String(kNoticeCategory),
+                               pathChanged ? QStringLiteral("replaced")
+                                           : QStringLiteral("reset")));
+    }
+
+    // Whole lines only. Whatever follows the last newline stays in
+    // m_logPartialLine until the writer completes it; the network dialog's
+    // tail does the same, and without it a line caught mid-write would be
+    // shown truncated and its tail dropped as an uncategorised fragment.
+    m_logPartialLine += m_logFile.readAll();
+    int newline = -1;
+    while ((newline = m_logPartialLine.indexOf('\n')) >= 0) {
+        const QString line = QString::fromUtf8(m_logPartialLine.left(newline)).trimmed();
+        m_logPartialLine.remove(0, newline + 1);
         if (!line.isEmpty()) {
             appendLogLine(line);
         }
@@ -540,12 +675,17 @@ void SystemInfoDialog::appendLogLine(const QString& line)
     while (m_logLines.size() > kMaxStoredLines) {
         m_logLines.removeFirst();
     }
-    if (m_logViewer == nullptr || !m_enabledCategories.contains(category)) {
+    // Retained either way: pausing must not lose the lines that arrive while
+    // the operator is reading, or turning Live back on would show a gap.
+    if (m_logViewer == nullptr || !m_logFollowLive
+        || !m_enabledCategories.contains(category)) {
         return;
     }
     m_logViewer->appendPlainText(line);
+    m_handlingLogScroll = true;
     m_logViewer->verticalScrollBar()->setValue(
         m_logViewer->verticalScrollBar()->maximum());
+    m_handlingLogScroll = false;
     // appendPlainText leaves the cursor at the end of the line, which scrolls a
     // no-wrap viewport right and hides the timestamp and category — the two
     // fields you read first. Pin the view back to the left margin.
@@ -559,14 +699,44 @@ void SystemInfoDialog::rebuildLogView()
     }
     // Re-filtering replays what was kept rather than re-reading the file, so
     // toggling a category cannot lose lines that have already rolled past.
+    m_handlingLogScroll = true;
     m_logViewer->clear();
     for (const auto& entry : m_logLines) {
         if (m_enabledCategories.contains(entry.first)) {
             m_logViewer->appendPlainText(entry.second);
         }
     }
-    m_logViewer->verticalScrollBar()->setValue(
-        m_logViewer->verticalScrollBar()->maximum());
+    // Only jump to the newest line if we are following it. Ticking a category
+    // while paused would otherwise throw the operator back to the bottom,
+    // which is precisely what pausing was for.
+    if (m_logFollowLive) {
+        m_logViewer->verticalScrollBar()->setValue(
+            m_logViewer->verticalScrollBar()->maximum());
+    }
+    m_logViewer->horizontalScrollBar()->setValue(0);
+    m_handlingLogScroll = false;
+}
+
+void SystemInfoDialog::setLogFollowLive(bool on)
+{
+    m_logFollowLive = on;
+    if (m_logLiveToggle != nullptr) {
+        // Blocked: this is also called BY the button, and re-entering its
+        // toggled signal would fight the scrollbar handler.
+        const QSignalBlocker blocker(m_logLiveToggle);
+        m_logLiveToggle->setChecked(on);
+        m_logLiveToggle->setText(on ? QStringLiteral("Live") : QStringLiteral("Paused"));
+        m_logLiveToggle->setToolTip(
+            on ? QStringLiteral("Following the newest output. Scroll up, or turn "
+                                "this off, to hold still on older lines.")
+               : QStringLiteral("Paused. Lines are still being collected — turn "
+                                "Live back on to catch up to the newest."));
+    }
+    // Catching up replays everything retained while paused, so resuming shows
+    // the lines that arrived rather than resuming from wherever the file is now.
+    if (on) {
+        rebuildLogView();
+    }
 }
 
 // ── Visibility ──────────────────────────────────────────────────────────────
