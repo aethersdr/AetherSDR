@@ -13,7 +13,9 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QLocale>
 #include <QRegularExpression>
+#include <QStyledItemDelegate>
 #include <QFileInfo>
 #include <QFrame>
 #include <QScrollBar>
@@ -53,6 +55,29 @@ constexpr qsizetype kMaxStoredLines = 5000;
 // A trailing spacer column soaks up slack on a wide window. Without it the
 // stretch has to land on a real column, and the thread name — the only one
 // that varies — ends up several hundred pixels wider than the longest name.
+// One decimal on every numeric column, always.
+//
+// The items store real doubles, because that is what makes the table sort
+// numerically — 9 % must not sort above 80 %, which it would as text. But a
+// double displays through its own default formatting, so a value that rounds to
+// 16.0 renders as "16" while 3.2 renders as "3.2", and a right-aligned column
+// ends up with ragged decimals.
+//
+// displayText() is the hook for exactly this: it changes what is drawn without
+// touching the value underneath, so sorting still compares numbers.
+class OneDecimalDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QString displayText(const QVariant& value, const QLocale& locale) const override
+    {
+        if (value.typeId() == QMetaType::Double || value.typeId() == QMetaType::Float) {
+            return locale.toString(value.toDouble(), 'f', 1);
+        }
+        return QStyledItemDelegate::displayText(value, locale);
+    }
+};
+
 // An unnamed row is a raw std::thread Qt never saw — say so rather than leaving
 // a blank cell that reads as a rendering fault. Shared so the table cell and the
 // summary line cannot describe the same thread differently.
@@ -158,6 +183,12 @@ QWidget* SystemInfoDialog::buildThreadsTab()
                        "own quiet range happened to be scaled up.\n\nSorting "
                        "this column sorts by peak."));
     m_threadTable->setItemDelegateForColumn(ColSpark, new SparklineDelegate(m_threadTable));
+
+    auto* oneDecimal = new OneDecimalDelegate(m_threadTable);
+    m_threadTable->setItemDelegateForColumn(ColCpu, oneDecimal);
+    m_threadTable->setItemDelegateForColumn(ColPeak, oneDecimal);
+    m_threadTable->setItemDelegateForColumn(ColTotal, oneDecimal);
+    // Not TID: it is a count, not a measurement, and "243838.0" would be absurd.
     m_threadTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_threadTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_threadTable->setSortingEnabled(true);
@@ -217,14 +248,15 @@ void SystemInfoDialog::applySample(const QVector<ThreadCpuSample>& threads)
         auto* tidItem = new QTableWidgetItem;
         tidItem->setData(Qt::DisplayRole, static_cast<qulonglong>(sample.tid));
         auto* stateItem = new QTableWidgetItem(stateText(sample.state));
+        // Full precision goes in; OneDecimalDelegate does the rounding for
+        // display. Rounding here as well would throw away precision the sort
+        // can use to separate two threads that differ in the second decimal.
         auto* cpuItem = new QTableWidgetItem;
-        cpuItem->setData(Qt::DisplayRole, QString::number(sample.cpuPercentOfCore, 'f', 1).toDouble());
+        cpuItem->setData(Qt::DisplayRole, sample.cpuPercentOfCore);
         auto* peakItem = new QTableWidgetItem;
-        peakItem->setData(Qt::DisplayRole,
-                          QString::number(m_ring.peakFor(sample.tid), 'f', 1).toDouble());
+        peakItem->setData(Qt::DisplayRole, m_ring.peakFor(sample.tid));
         auto* totalItem = new QTableWidgetItem;
-        totalItem->setData(Qt::DisplayRole,
-                           QString::number(static_cast<double>(sample.cpuUsecs) / 1e6, 'f', 1).toDouble());
+        totalItem->setData(Qt::DisplayRole, static_cast<double>(sample.cpuUsecs) / 1e6);
 
         // The delegate draws the series; the display value exists only so the
         // column has something to sort by, and peak is the reading a sorted

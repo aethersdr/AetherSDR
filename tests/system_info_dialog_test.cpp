@@ -23,7 +23,9 @@
 #include <QPushButton>
 #include <QDir>
 #include <QFile>
+#include <QLocale>
 #include <QScrollBar>
+#include <QStyledItemDelegate>
 #include <QTemporaryDir>
 #include <QPainter>
 #include <QPixmap>
@@ -88,6 +90,34 @@ int main(int argc, char** argv)
                table->horizontalHeaderItem(6)->text() == QLatin1String("Last 60 s"));
         report("the last column is an unlabelled spacer",
                table->horizontalHeaderItem(7)->text().isEmpty());
+        // Ragged decimals: the items hold real doubles so the column sorts
+        // numerically, but a double that rounds to 16.0 renders as "16" next to
+        // a neighbour's "3.2". displayText() formats without touching the value
+        // the sort compares.
+        for (const int column : {3, 4, 5}) {
+            auto* styled = dynamic_cast<QStyledItemDelegate*>(
+                table->itemDelegateForColumn(column));
+            // 16.0 is the case that motivated this: stored as a double it
+            // renders as "16" beside a neighbour's "3.2". 3.24 pins that a
+            // value is rounded rather than truncated to its first digit.
+            // Deliberately NOT a .x5 half-way value — which way that rounds is
+            // the C++ library's business, not this code's, and asserting it
+            // would be testing the platform.
+            const bool formats = styled != nullptr
+                && styled->displayText(QVariant(16.0), QLocale::c()) == QLatin1String("16.0")
+                && styled->displayText(QVariant(3.24), QLocale::c()) == QLatin1String("3.2")
+                && styled->displayText(QVariant(0.0), QLocale::c()) == QLatin1String("0.0");
+            report(column == 3 ? "CPU % always shows one decimal"
+                   : column == 4 ? "Peak always shows one decimal"
+                                 : "Total CPU always shows one decimal", formats);
+        }
+        // TID is a count, not a measurement — it must NOT gain a decimal.
+        report("TID keeps no decimal",
+               dynamic_cast<QStyledItemDelegate*>(table->itemDelegateForColumn(1)) == nullptr
+                   || dynamic_cast<QStyledItemDelegate*>(table->itemDelegateForColumn(1))
+                          ->displayText(QVariant(qulonglong(243838)), QLocale::c())
+                      != QLatin1String("243838.0"));
+
         report("the sparkline column has its own delegate",
                dynamic_cast<SparklineDelegate*>(table->itemDelegateForColumn(6)) != nullptr);
         report("the table is sortable", table->isSortingEnabled());
