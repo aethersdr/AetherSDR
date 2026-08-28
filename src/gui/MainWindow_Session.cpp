@@ -46,6 +46,11 @@
 #elif defined(HAVE_PIPEWIRE)
 #include "core/PipeWireAudioBridge.h"
 #endif
+// MainWindow.h only forward-declares the dial backend; the device lifecycle
+// handler below needs the complete type and the UlanziDialBackend alias on
+// every platform. This header does the per-platform selection itself, which
+// is what it exists for.
+#include "core/UlanziDialBackend.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -2625,35 +2630,78 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                 {QStringLiteral("error"), QStringLiteral("unknown device diagnostic")},
             };
         }
-#ifdef Q_OS_MAC
         if (!m_dialBackend) {
             return QJsonObject{
                 {QStringLiteral("ok"), false},
                 {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable")},
             };
         }
+
+        // LIFECYCLE IS CROSS-PLATFORM; ONLY THE SNAPSHOT IS NOT.
+        //
+        // start()/stop() exist identically on all three backends
+        // (EvdevEncoderManager, UlanziDialWindowsManager,
+        // UlanziDialMacOSManager), so gating them on Q_OS_MAC withheld working
+        // control from the two platforms the dial is most used on. The verb
+        // advertises itself as "diagnostics and lifecycle control" on every
+        // platform; only diagnostics() is macOS-only.
+        // QUEUED, NOT DIRECT. On Linux and Windows the backend is moved to the
+        // ExtControllers thread (MainWindow_Controllers.cpp), so calling
+        // start()/stop() straight from the bridge's thread would drive hidapi
+        // and evdev from the wrong one. Every other call site in the app uses
+        // this form; the macOS-only original could call directly only because
+        // macOS keeps the backend on the main thread for its CFRunLoop.
         if (diagnostic == QLatin1String("ulanzi-start")) {
-            m_dialBackend->start();
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                      Qt::QueuedConnection);
         } else if (diagnostic == QLatin1String("ulanzi-stop")) {
-            m_dialBackend->stop();
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
+                                      Qt::QueuedConnection);
         }
-        QJsonObject snapshot = m_dialBackend->diagnostics();
-        snapshot[QStringLiteral("operation")] = diagnostic;
-        snapshot[QStringLiteral("enabled")] =
+
+        const bool enabled =
             AppSettings::instance()
                     .value(QStringLiteral("UlanziDialEnabled"),
                            QStringLiteral("False"))
                     .toString()
             == QLatin1String("True");
+
+#ifdef Q_OS_MAC
+        QJsonObject snapshot = m_dialBackend->diagnostics();
+        snapshot[QStringLiteral("operation")] = diagnostic;
+        snapshot[QStringLiteral("enabled")] = enabled;
         return snapshot;
 #else
-        return QJsonObject{
-            {QStringLiteral("ok"), true},
-            {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
-            {QStringLiteral("supported"), false},
-            {QStringLiteral("message"),
-             QStringLiteral("Ulanzi HID diagnostics are currently macOS-only")},
-        };
+        // No diagnostics() on the Linux/Windows backends yet, so a bare
+        // `devices ulanzi` query still cannot be answered here. Report that as
+        // a REFUSAL rather than ok:true — a caller checking ok (the obvious
+        // field) previously read success from a call that did nothing at all,
+        // and only the separate supported:false said otherwise.
+        //
+        // A lifecycle call is different: it really did run, so it reports
+        // ok:true and carries what these backends can honestly answer.
+        if (diagnostic == QLatin1String("ulanzi")) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
+                {QStringLiteral("supported"), false},
+                {QStringLiteral("error"),
+                 QStringLiteral("Ulanzi HID diagnostics are currently macOS-only; "
+                                "ulanzi-start and ulanzi-stop are supported here")},
+            };
+        }
+        QJsonObject result;
+        result[QStringLiteral("ok")] = true;
+        result[QStringLiteral("diagnostic")] = QStringLiteral("ulanzi");
+        result[QStringLiteral("operation")] = diagnostic;
+        result[QStringLiteral("supported")] = false;  // the SNAPSHOT, not the operation
+        // "accepted", not "done": the call above is queued onto the backend's
+        // thread and has not run yet. Reporting isConnected() here would
+        // describe the state BEFORE the request and read as a failed command --
+        // the same ok-means-nothing confusion this change exists to remove.
+        result[QStringLiteral("queued")] = true;
+        result[QStringLiteral("enabled")] = enabled;
+        return result;
 #endif
     });
 
