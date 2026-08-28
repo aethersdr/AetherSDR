@@ -19,10 +19,34 @@ namespace AetherSDR {
 // user/system time, and mixing the two would make the three platforms disagree
 // about what the same number means. Everything here reports cumulative
 // microseconds; percentages are derived by cpuPercentBetween().
+// A thread's run state, as the kernel reports it.
+//
+// An enum handed up from the platform layer, with the display wording owned by
+// the GUI, because the two platforms that can answer use different vocabularies
+// — mach's TH_STATE_* constants against the single character in
+// /proc/<tid>/stat — and letting each hand back its own words would make one
+// column mean different things on different machines.
+//
+// Windows reports Unknown. THREADENTRY32 carries no state field and
+// GetThreadTimes returns times only, so there is nothing documented to read.
+// Deriving one from "the counter did not advance this interval" was considered
+// and rejected: that is a computed guess wearing a kernel state's name, and it
+// would make the column mean a third thing on a third platform.
+enum class ThreadRunState {
+    Unknown = 0,      // the platform cannot say
+    Running,          // on a core now
+    Waiting,          // sleeping, interruptibly
+    Uninterruptible,  // blocked in the kernel, not interruptible
+    Stopped,          // suspended or traced
+    Halted,           // stopped at a clean point (macOS TH_STATE_HALTED)
+    Zombie,           // exited, not yet reaped (Linux 'Z')
+};
+
 struct ThreadTimes {
     quint64 tid{0};
     QString name;      // kernel-visible name, empty when the thread has none
     quint64 cpuUsecs{0};  // cumulative user + system time since thread start
+    ThreadRunState state{ThreadRunState::Unknown};
 };
 
 // One thread's share of one core over a sampling interval.
@@ -31,6 +55,7 @@ struct ThreadCpuSample {
     QString name;
     quint64 cpuUsecs{0};       // cumulative, carried through for a "total" column
     double  cpuPercentOfCore{0.0};  // 0..100 per core; >100 is not possible per thread
+    ThreadRunState state{ThreadRunState::Unknown};
 };
 
 class SystemInfo {
@@ -61,6 +86,13 @@ public:
     // otherwise read as unnamed rows in the Threads tab.
     // Truncated to 15 characters on Linux, which is the kernel's limit.
     static void setCurrentThreadName(const char* name);
+
+    // The state character in /proc/<pid>/task/<tid>/stat mapped to the shared
+    // vocabulary. Pure and platform-free so it is testable on every host, not
+    // only the one whose kernel writes the character. Anything unrecognised —
+    // including 'X' (dead), which is not the same claim as Halted — is Unknown
+    // rather than a nearest guess.
+    static ThreadRunState runStateFromProcChar(char state);
 
     // Percentage of one core each thread used between two snapshots. Pure:
     // no syscalls, no clock reads, so the sampling maths is testable without a

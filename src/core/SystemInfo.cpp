@@ -31,6 +31,21 @@ namespace AetherSDR {
 namespace {
 
 #if defined(Q_OS_MAC)
+// thread_extended_info's pth_run_state, in the shared vocabulary. The constants
+// are TH_STATE_* from <mach/thread_info.h>; anything outside that set is Unknown
+// rather than mapped to whichever neighbour looks closest.
+ThreadRunState runStateFromMach(int machRunState)
+{
+    switch (machRunState) {
+    case TH_STATE_RUNNING:         return ThreadRunState::Running;
+    case TH_STATE_STOPPED:         return ThreadRunState::Stopped;
+    case TH_STATE_WAITING:         return ThreadRunState::Waiting;
+    case TH_STATE_UNINTERRUPTIBLE: return ThreadRunState::Uninterruptible;
+    case TH_STATE_HALTED:          return ThreadRunState::Halted;
+    default:                       return ThreadRunState::Unknown;
+    }
+}
+
 // Owns what task_threads() hands back. Each element is a send right this
 // process now holds, and the array itself is vm_allocate()d memory: both must
 // be released or a function that runs every 1.5 s leaks the port table shut.
@@ -71,8 +86,10 @@ private:
 // the whole line is wrong. Everything after the LAST ')' is fixed-width:
 // state(3) ppid(4) pgrp(5) session(6) tty_nr(7) tpgid(8) flags(9) minflt(10)
 // cminflt(11) majflt(12) cmajflt(13) utime(14) stime(15) — i.e. indices 11 and
-// 12 counting from the token after ')'.
-bool parseProcStatCpuTicks(const QByteArray& stat, quint64* ticks)
+// 12 counting from the token after ')'. The state character is field 3, which
+// is index 0 of that same list, so it comes out of the parse already done
+// rather than needing a second read of the file.
+bool parseProcStatFields(const QByteArray& stat, quint64* ticks, char* state)
 {
     const int close = stat.lastIndexOf(')');
     if (close < 0) {
@@ -91,6 +108,7 @@ bool parseProcStatCpuTicks(const QByteArray& stat, quint64* ticks)
         return false;
     }
     *ticks = utime + stime;
+    *state = fields.at(0).isEmpty() ? '\0' : fields.at(0).at(0);
     return true;
 }
 #endif
@@ -124,6 +142,7 @@ QVector<ThreadTimes> SystemInfo::enumerateThreads()
         times.cpuUsecs = (static_cast<quint64>(extended.pth_user_time)
                           + static_cast<quint64>(extended.pth_system_time)) / 1000ull;
         times.name = QString::fromUtf8(extended.pth_name);
+        times.state = runStateFromMach(extended.pth_run_state);
 
         // The mach port is not a thread id and is not stable across calls; the
         // 64-bit id from THREAD_IDENTIFIER_INFO is what pthread_threadid_np and
@@ -162,13 +181,15 @@ QVector<ThreadTimes> SystemInfo::enumerateThreads()
             continue;  // the thread exited between listing and reading
         }
         quint64 ticks = 0;
-        if (!parseProcStatCpuTicks(statFile.readAll(), &ticks)) {
+        char stateChar = '\0';
+        if (!parseProcStatFields(statFile.readAll(), &ticks, &stateChar)) {
             continue;
         }
 
         ThreadTimes times;
         times.tid = numericTid;
         times.cpuUsecs = (ticks * 1000000ull) / static_cast<quint64>(ticksPerSecond);
+        times.state = SystemInfo::runStateFromProcChar(stateChar);
 
         QFile commFile(taskDir.filePath(tid + QStringLiteral("/comm")));
         if (commFile.open(QIODevice::ReadOnly)) {
@@ -248,6 +269,25 @@ void SystemInfo::setCurrentThreadName(const char* name)
     }
 }
 
+ThreadRunState SystemInfo::runStateFromProcChar(char state)
+{
+    switch (state) {
+    case 'R': return ThreadRunState::Running;
+    // 'S' is an interruptible sleep and 'I' the idle variant the kernel uses
+    // for threads it does not want counted toward load. Both are waiting.
+    case 'S':
+    case 'I': return ThreadRunState::Waiting;
+    case 'D': return ThreadRunState::Uninterruptible;
+    // 'T' is stopped by a signal, 't' stopped by a tracer. Same thing to read.
+    case 'T':
+    case 't': return ThreadRunState::Stopped;
+    case 'Z': return ThreadRunState::Zombie;
+    // 'X'/'x' (dead) deliberately fall through to Unknown: a dead thread is not
+    // halted at a clean point, and saying Halted would be a different claim.
+    default:  return ThreadRunState::Unknown;
+    }
+}
+
 QVector<ThreadCpuSample> SystemInfo::cpuPercentBetween(const QVector<ThreadTimes>& previous,
                                                        const QVector<ThreadTimes>& current,
                                                        quint64 elapsedUsecs)
@@ -265,6 +305,9 @@ QVector<ThreadCpuSample> SystemInfo::cpuPercentBetween(const QVector<ThreadTimes
         sample.tid = times.tid;
         sample.name = times.name;
         sample.cpuUsecs = times.cpuUsecs;
+        // From `current`: the state is what the thread is doing now, not an
+        // average over the interval.
+        sample.state = times.state;
 
         const auto found = previousByTid.constFind(times.tid);
         if (found != previousByTid.constEnd() && elapsedUsecs > 0) {
