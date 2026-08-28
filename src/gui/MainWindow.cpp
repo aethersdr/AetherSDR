@@ -2283,6 +2283,12 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool) { updatePaTempLabel(); });
     connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
             this, [this](bool) { updatePaTempLabel(); });
+    // moxChanged too, now that the gate above reads isMox(): a radio-initiated
+    // key raises moxChanged without transmittingChanged, so without this the
+    // label would only refresh when a paCurrent sample happened to arrive --
+    // correct by luck rather than by wiring.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            this, [this](bool) { updatePaTempLabel(); });
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -4447,9 +4453,26 @@ void MainWindow::updatePaTempLabel()
 {
     const auto& meters = m_radioModel.meterModel();
     if (m_paCurrentStatusPreferred && meters.hasPaCurrentMeter()) {
+        // isMox() BELONGS HERE, and its absence was the whole of #5306.
+        //
+        // isTransmitting() and isMox() are separate members: m_transmitting is
+        // written only by the client-initiated setMox()/setTransmitting()
+        // paths, while m_mox is assigned from the radio's own status payload
+        // (TransmitModel.cpp:84). Key an Icom AT THE RADIO and only m_mox goes
+        // true — so this gate stayed false for the whole transmission and the
+        // label showed "Id —" while a live 3.4 A sample sat in the model.
+        //
+        // Measured on an IC-9700 (dummy load, 145.050 FM): across eight
+        // key-downs mox was true with real forward power and hasPaCurrent()
+        // was true with paCurrent tracking 3.30-3.47 A, while isTransmitting()
+        // was false in every sample. The sample path was never the problem.
+        //
+        // Seven other keyed-state checks in this tree already read
+        // isTransmitting() || isTuning() || isMox(); this one had drifted.
         const bool liveTxCurrent =
             (m_radioModel.transmitModel().isTransmitting()
-             || m_radioModel.transmitModel().isTuning())
+             || m_radioModel.transmitModel().isTuning()
+             || m_radioModel.transmitModel().isMox())
             && meters.hasPaCurrent();
         m_paTempLabel->setText(liveTxCurrent
             ? QString("Id %1 A").arg(meters.paCurrent(), 0, 'f', 1)
