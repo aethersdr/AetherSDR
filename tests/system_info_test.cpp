@@ -182,6 +182,42 @@ void testNaming()
            QThread::currentThread()->objectName() == QLatin1String("aether-sysinfo"));
 }
 
+void testQtNamesItsOwnThreads()
+{
+    // Does Qt already give a started QThread a KERNEL-visible name from its
+    // objectName? AetherSDR sets objectName on its worker threads
+    // (FlexBackend.cpp:46 "PanadapterStream", MainWindow.cpp:1230 "AudioEngine"),
+    // so if Qt propagates that to the OS, the Threads tab has real names with no
+    // work from us — and a naming survey would be redundant. Measured rather
+    // than assumed, because the answer decides a whole commit's worth of scope.
+    QThread thread;
+    thread.setObjectName(QStringLiteral("aether-qtprobe"));
+
+    QString observed;
+    QObject context;
+    context.moveToThread(&thread);
+    QObject::connect(&thread, &QThread::started, &context, [&observed]() {
+        for (const ThreadTimes& times : SystemInfo::enumerateThreads()) {
+            if (times.tid == 0) {
+                continue;
+            }
+            // Identify our own row by naming nothing and matching the name Qt
+            // may have set.
+            if (times.name.startsWith(QLatin1String("aether-qtprobe"))) {
+                observed = times.name;
+            }
+        }
+        QThread::currentThread()->quit();
+    });
+    thread.start();
+    thread.wait(5000);
+
+    std::printf("[info] Qt-assigned kernel thread name: \"%s\"\n",
+                observed.toUtf8().constData());
+    report("Qt propagates QThread::objectName to the kernel thread name",
+           !observed.isEmpty());
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -190,6 +226,7 @@ int main(int argc, char** argv)
     testPercentMaths();
     testEnumeration();
     testNaming();
+    testQtNamesItsOwnThreads();
     std::printf("%s\n", g_failures == 0 ? "system_info_test: all passed"
                                         : "system_info_test: FAILURES");
     return g_failures == 0 ? 0 : 1;

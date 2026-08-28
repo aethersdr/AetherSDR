@@ -55,8 +55,10 @@ public:
     // Windows Performance Analyzer) and Qt (QThread::objectName()), so every
     // tool agrees. Call once at the top of a worker's entry point.
     //
-    // Without this the Threads tab is useless: nothing in AetherSDR sets a
-    // kernel thread name today, so every row would read as a bare tid.
+    // Qt already names the QThreads it starts from their objectName. This is
+    // for the threads that never pass through QThread::start() — the main
+    // thread, raw std::thread workers, framework callback threads — which
+    // otherwise read as unnamed rows in the Threads tab.
     // Truncated to 15 characters on Linux, which is the kernel's limit.
     static void setCurrentThreadName(const char* name);
 

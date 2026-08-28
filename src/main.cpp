@@ -3,6 +3,7 @@
 #include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/SystemInfo.h"
 #include "core/SettingsBootstrap.h"
 #include "core/SettingsCredentialPolicy.h"
 #include "core/SettingsDatabase.h"
@@ -401,6 +402,14 @@ int main(int argc, char* argv[])
     }
 #endif
     QApplication app(argc, argv);
+
+    // Name the GUI thread. Qt names the threads it starts, propagating
+    // QThread::objectName() in QThreadPrivate::start(), but the main thread was
+    // never started that way — so it is the one thread with no name, in the
+    // System Info table (#2554) and in Instruments, perf and ps alike. It is
+    // also usually the busiest, which made "busiest: (unnamed)" the first thing
+    // the Threads tab reported.
+    AetherSDR::SystemInfo::setCurrentThreadName("AetherSDR-GUI");
 
 #ifdef Q_OS_MAC
     if (!startupAbortGuard.disarm()) {

@@ -1,5 +1,7 @@
 #include "SystemInfo.h"
 
+#include "ThreadName.h"
+
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
@@ -236,19 +238,8 @@ void SystemInfo::setCurrentThreadName(const char* name)
         return;
     }
 
-#if defined(Q_OS_LINUX)
-    // 16 bytes including the terminator is a kernel limit, not a convention:
-    // prctl fails rather than truncating for us.
-    char truncated[16];
-    qstrncpy(truncated, name, sizeof(truncated));
-    prctl(PR_SET_NAME, truncated, 0, 0, 0);
-#elif defined(Q_OS_MAC)
-    pthread_setname_np(name);  // current thread only, by design
-#elif defined(Q_OS_WIN)
-    const QString wide = QString::fromUtf8(name);
-    SetThreadDescription(GetCurrentThread(),
-                         reinterpret_cast<PCWSTR>(wide.utf16()));
-#endif
+    // The kernel-visible half, shared with the Qt-free callers.
+    AetherSDR::setCurrentThreadName(name);
 
     // Qt's own name too, so QThread::objectName() and the kernel agree rather
     // than offering two different answers to "which thread is this".

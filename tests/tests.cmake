@@ -1743,6 +1743,7 @@ target_include_directories(client_reverb_test PRIVATE src)
 add_executable(iambic_keyer_test
     tests/iambic_keyer_test.cpp
     src/core/IambicKeyer.cpp
+    src/core/ThreadName.cpp
 )
 target_include_directories(iambic_keyer_test PRIVATE src)
 if(UNIX)
@@ -2493,6 +2494,7 @@ add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
     src/core/CwxLocalKeyer.h
+    src/core/ThreadName.cpp
 )
 target_include_directories(cwx_local_keyer_drift_test PRIVATE src)
 target_link_libraries(cwx_local_keyer_drift_test PRIVATE Qt6::Core)
@@ -4049,6 +4051,7 @@ set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
 add_executable(system_info_test
     tests/system_info_test.cpp
     src/core/SystemInfo.cpp
+    src/core/ThreadName.cpp
 )
 target_include_directories(system_info_test PRIVATE src)
 target_link_libraries(system_info_test PRIVATE Qt6::Core)
