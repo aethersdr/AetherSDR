@@ -770,6 +770,7 @@ set(CORE_SOURCES
     src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
+    src/core/SystemInfo.cpp
     src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp

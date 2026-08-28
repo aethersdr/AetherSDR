@@ -4043,6 +4043,18 @@ set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
     "Seconds FFTW may spend measuring each plan under test (empty = unbounded)")
 
+# Per-thread CPU accounting behind the Runtime Monitor (#2554): percent maths,
+# /proc state mapping, ring eviction and peak, the threshold latch, and the
+# kernel-name round-trip on the host platform.
+add_executable(system_info_test
+    tests/system_info_test.cpp
+    src/core/SystemInfo.cpp
+)
+target_include_directories(system_info_test PRIVATE src)
+target_link_libraries(system_info_test PRIVATE Qt6::Core)
+set_target_properties(system_info_test PROPERTIES AUTOMOC ON)
+add_test(NAME system_info_test COMMAND system_info_test)
+
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host
 # self-consistency of the detection. Compiled with the same baseline define as
