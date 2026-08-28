@@ -7906,28 +7906,8 @@ void RadioModel::recallCachedMemory(int index)
     // through the backend seam. Mode goes first because it resets the filter
     // to the mode default; the stored filter follows, and tuning precedes the
     // grouped FM repeater state for the IC-705 quirk documented below.
-    if (!memory.mode.isEmpty()) {
-        QString recalledMode = memory.mode;
-        const QString nativeMode = memory.mode.trimmed().toUpper();
-        if (nativeMode == QLatin1String("CW-R")) {
-            recalledMode = QStringLiteral("CWL");
-        } else if (nativeMode == QLatin1String("RTTY")) {
-            recalledMode = QStringLiteral("DIGL");
-        } else if (nativeMode == QLatin1String("RTTY-R")) {
-            recalledMode = QStringLiteral("DIGU");
-        } else if (nativeMode == QLatin1String("DSTAR")) {
-            recalledMode = QStringLiteral("DSTR");
-        } else if (memory.dataMode != 0) {
-            if (nativeMode == QLatin1String("FM")) {
-                recalledMode = QStringLiteral("DFM");
-            } else if (nativeMode == QLatin1String("USB")) {
-                recalledMode = QStringLiteral("DIGU");
-            } else if (nativeMode == QLatin1String("LSB")) {
-                recalledMode = QStringLiteral("DIGL");
-            }
-        }
-        target->setMode(recalledMode);
-    }
+    if (!memory.mode.isEmpty())
+        target->setMode(memory.mode);
     if (memory.rxFilterLow != 0 || memory.rxFilterHigh != 0)
         target->setFilterWidth(memory.rxFilterLow, memory.rxFilterHigh);
 
@@ -7965,9 +7945,6 @@ void RadioModel::recallCachedMemory(int index)
                 txTone = QStringLiteral("%1").arg(
                     memory.dtcsCode, 3, 10, QLatin1Char('0'));
             }
-            target->applyRecalledFmRepeaterState(
-                direction, offsetMhz, toneMode, txTone,
-                QString::number(memory.rxToneValue, 'f', 1));
             MemoryRecallDetails details;
             details.sliceId = target->sliceId();
             details.filterPreset = memory.nativeFilter;
@@ -7980,7 +7957,17 @@ void RadioModel::recallCachedMemory(int index)
             details.dtcsCode = memory.dtcsCode;
             details.dtcsTxReverse = memory.dtcsTxReverse;
             details.dtcsRxReverse = memory.dtcsRxReverse;
-            m_backend->applyMemoryRecallDetails(details);
+            if (!m_backend->applyMemoryRecallDetails(details)) {
+                qCWarning(lcProtocol)
+                    << "RadioModel: native memory recall validation failed for slot"
+                    << index;
+                return;
+            }
+            // Publish the optimistic repeater state only after the backend has
+            // accepted and queued the complete command plan.
+            target->applyRecalledFmRepeaterState(
+                direction, offsetMhz, toneMode, txTone,
+                QString::number(memory.rxToneValue, 'f', 1));
         } else {
             target->applyRecalledFmRepeater(direction, offsetMhz, toneMode, toneHz);
         }

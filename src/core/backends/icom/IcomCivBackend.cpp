@@ -396,7 +396,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // without sending Flex `spot add` commands into this backend.
     c.alwaysUseClientSideSpots = true;
     c.hasRadioSideWaterfallAutoBlack = false;
-    c.persistsMemories = m_model && m_model->civAddress == 0xA2;
+    c.persistsMemories = m_model
+        && profileFor(*m_model).supports(IcomFeature::MemoryChannels);
     c.canWriteMemories = false;
     c.canApplyMemories = false;
     c.canRefreshMemories = c.persistsMemories;
@@ -985,7 +986,8 @@ void IcomCivBackend::sendConnectReadBurst()
 
 void IcomCivBackend::queueIc9700MemorySnapshot()
 {
-    if (!m_session || !m_model || m_model->civAddress != 0xA2) {
+    if (!m_session || !m_model
+        || !profileFor(*m_model).supports(IcomFeature::MemoryChannels)) {
         return;
     }
     for (int band = 1; band <= 3; ++band) {
@@ -1006,7 +1008,7 @@ void IcomCivBackend::queueIc9700MemorySnapshot()
 void IcomCivBackend::refreshMemories()
 {
     if (m_memoryRefreshActive || !m_session || !m_model
-        || m_model->civAddress != 0xA2) {
+        || !profileFor(*m_model).supports(IcomFeature::MemoryChannels)) {
         return;
     }
     constexpr int kMemorySlots = 297;
@@ -2370,7 +2372,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (!frame.hasSub)
             return;
         if (frame.sub == 0x00) {
-            if (!m_model || m_model->civAddress != 0xA2) {
+            if (!m_model
+                || !profileFor(*m_model).supports(IcomFeature::MemoryChannels)) {
                 return;
             }
             const std::optional<IcomMemoryChannel> memory =
@@ -4098,12 +4101,11 @@ void IcomCivBackend::setSliceFmRepeaterOffset(int, double hz)
                                          roundedHz));
 }
 
-void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details)
+bool IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details)
 {
     const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
     if (!fm || !m_session) {
-        IRadioBackend::applyMemoryRecallDetails(details);
-        return;
+        return IRadioBackend::applyMemoryRecallDetails(details);
     }
 
     const QString normalized = details.toneMode.trimmed().toLower();
@@ -4119,7 +4121,7 @@ void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details
     });
     if (access == kAccessValues.end()) {
         qCWarning(lcIcomCiv) << "refusing unsupported memory tone mode" << details.toneMode;
-        return;
+        return false;
     }
 
     const std::uint8_t addr = m_session->civAddress();
@@ -4127,7 +4129,7 @@ void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details
         || !std::isfinite(details.offsetHz) || details.offsetHz < 0.0
         || details.offsetHz > 99'999'900.0) {
         qCWarning(lcIcomCiv) << "refusing invalid native memory recall fields";
-        return;
+        return false;
     }
     RepeaterOffsetDirection wireDirection = RepeaterOffsetDirection::Simplex;
     if (details.direction == QLatin1String("up")) {
@@ -4136,7 +4138,7 @@ void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details
         wireDirection = RepeaterOffsetDirection::Down;
     } else if (details.direction != QLatin1String("simplex")) {
         qCWarning(lcIcomCiv) << "refusing invalid native memory direction" << details.direction;
-        return;
+        return false;
     }
     const auto frames = buildIc9700MemoryRecallFrames(
         addr, m_mode, details.dataMode, details.filterPreset, wireDirection,
@@ -4145,7 +4147,7 @@ void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details
         details.dtcsTxReverse, details.dtcsRxReverse);
     if (!frames) {
         qCWarning(lcIcomCiv) << "refusing invalid native memory tone fields";
-        return;
+        return false;
     }
     m_filter = details.filterPreset;
     m_dataMode = details.dataMode;
@@ -4155,6 +4157,7 @@ void IcomCivBackend::applyMemoryRecallDetails(const MemoryRecallDetails& details
     for (const std::vector<std::uint8_t>& frame : *frames) {
         sendUserCommand(frame);
     }
+    return true;
 }
 
 void IcomCivBackend::publishExtendedRepeaterState()

@@ -66,18 +66,9 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
         "color: #d2dbe4; selection-background-color: #2060a0; selection-color: {{color.text.primary}}; }"
         "QHeaderView::section { background: #101b26; color: #70879b; border: none; "
         "border-bottom: 1px solid {{color.background.1}}; font-size: 11px; font-weight: bold; padding: 4px 3px; }"
-        // Match the CTCSS tone popup's high-contrast scrollbar. The memory
-        // panel remains AsNeeded, but once it overflows the affordance should
-        // be just as obvious and usable as the other long radio-data list.
-        "QScrollBar:vertical { background: {{color.background.0}};"
-        " width: 12px; margin: 2px; }"
-        "QScrollBar::handle:vertical { background: {{color.background.3}};"
-        " border-radius: 4px; min-height: 28px; }"
-        "QScrollBar::handle:vertical:hover { background: {{color.accent.bright}}; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        "QToolTip { background: {{color.background.2}};"
-        " color: {{color.text.primary}}; border: 1px solid {{color.border.strong}};"
-        " padding: 3px 5px; }");
+        "QScrollBar:vertical { background: {{color.background.0}}; width: 6px; }"
+        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
     root->addWidget(m_table, 1);
     m_table->hide();
 

@@ -328,7 +328,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
 
     auto* root = new QVBoxLayout(bodyWidget());
 
-    // ── Search + memory-group filter ─────────────────────────────────────
+    // ── Search + profile filter ──────────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
     filterRow->addWidget(new QLabel("Search:"));
     m_searchEdit = new QLineEdit;
@@ -337,7 +337,8 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_searchEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_searchEdit->installEventFilter(this);
     filterRow->addWidget(m_searchEdit, 1);
-    filterRow->addWidget(new QLabel("Group:"));
+    m_filterLabel = new QLabel("Profile:");
+    filterRow->addWidget(m_filterLabel);
     m_filterCombo = new QComboBox;
     m_filterCombo->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     rebuildFilterCombo();
@@ -386,7 +387,6 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
         }
         header->setSortIndicatorShown(true);
         header->setSortIndicator(m_sortColumn, m_sortOrder);
-        m_table->setSortingEnabled(true);
         m_table->sortItems(m_sortColumn, m_sortOrder);
     });
 
@@ -458,26 +458,6 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
         button->setAutoDefault(false);
         button->setDefault(false);
     }
-    const QString memoryActionStyle = QStringLiteral(
-        "QPushButton {"
-        " background: {{color.background.2}};"
-        " color: {{color.text.primary}};"
-        " border: 1px solid {{color.border.strong}};"
-        " border-radius: 2px; padding: 4px 8px; }"
-        "QPushButton:hover { background: {{color.background.3}}; }"
-        "QPushButton:pressed {"
-        " background: {{color.accent.dim}};"
-        " border-color: {{color.border.accent}}; }"
-        "QPushButton:disabled {"
-        " background: {{color.button.background.disabled}};"
-        " color: {{color.button.foreground.disabled}};"
-        " border: 1px solid {{color.button.border.disabled}}; }");
-    for (QPushButton* button : {m_addBtn, m_selectBtn, m_selectAllBtn, m_syncBtn,
-                                m_importBtn, m_exportBtn, m_removeBtn}) {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(
-            button, memoryActionStyle);
-    }
-
     connect(m_importBtn, &QPushButton::clicked, this, &MemoryDialog::onImport);
     connect(m_exportBtn, &QPushButton::clicked, this, &MemoryDialog::onExport);
     connect(m_syncBtn, &QPushButton::clicked, m_model, &RadioModel::refreshMemories);
@@ -503,6 +483,13 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     new QShortcut(QKeySequence(Qt::Key_F2), this, [this]() { editCurrentCell(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+E")), this, [this]() { editCurrentCell(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")), this, [this]() { onSelectAll(); });
+
+    // Existing local/Flex profile lists still drive their filter. Native
+    // radio memories rebuild from their model-owned groups instead.
+    connect(model, &RadioModel::globalProfilesChanged,
+            this, &MemoryDialog::rebuildFilterCombo);
+    connect(&model->transmitModel(), &TransmitModel::profileListChanged,
+            this, &MemoryDialog::rebuildFilterCombo);
 
     // Listen for live memory updates while dialog is open
     connect(model, &RadioModel::memoryChanged,
@@ -1017,8 +1004,6 @@ void MemoryDialog::onAdd()
 
 void MemoryDialog::onExport()
 {
-    if (!m_model->memoriesWritable())
-        return;
     const QString filterProfile = m_filterCombo->currentData().toString();
     const QList<MemoryCsvRecord> records =
         currentExportRecords(m_model->memories(), filterProfile);
@@ -1455,17 +1440,36 @@ void MemoryDialog::rebuildFilterCombo()
     // "All" shows every memory regardless of group
     m_filterCombo->addItem("All Memories", QString());
 
-    QStringList groups;
-    for (const MemoryEntry& memory : m_model->memories()) {
-        const QString group = memory.group.trimmed();
-        if (!group.isEmpty() && !groups.contains(group, Qt::CaseInsensitive)) {
-            groups.append(group);
+    const RadioCapabilities capabilities = m_model->backendCapabilities();
+    const bool usesNativeMemorySchema = capabilities.family == QLatin1String("icom")
+        && capabilities.persistsMemories;
+    m_filterLabel->setText(usesNativeMemorySchema ? QStringLiteral("Group:")
+                                                  : QStringLiteral("Profile:"));
+    QStringList filterNames;
+    if (usesNativeMemorySchema) {
+        for (const MemoryEntry& memory : m_model->memories()) {
+            const QString group = memory.group.trimmed();
+            if (!group.isEmpty()
+                && !filterNames.contains(group, Qt::CaseInsensitive)) {
+                filterNames.append(group);
+            }
+        }
+    } else {
+        for (const QString& profile : m_model->globalProfiles()) {
+            if (!filterNames.contains(profile)) {
+                filterNames.append(profile);
+            }
+        }
+        for (const QString& profile : m_model->transmitModel().profileList()) {
+            if (!filterNames.contains(profile)) {
+                filterNames.append(profile);
+            }
         }
     }
-    groups.sort(Qt::CaseInsensitive);
+    filterNames.sort(Qt::CaseInsensitive);
 
-    for (const QString& group : groups) {
-        m_filterCombo->addItem(group, group);
+    for (const QString& name : filterNames) {
+        m_filterCombo->addItem(name, name);
     }
 
     // Restore previous selection if still present
@@ -1522,9 +1526,8 @@ void MemoryDialog::updateSelectionActions()
                                         : "Writing radio memories is not available yet.");
     }
     if (m_exportBtn) {
-        m_exportBtn->setEnabled(writable);
-        m_exportBtn->setToolTip(writable ? QString()
-                                        : "Memory management will be enabled in a future update.");
+        m_exportBtn->setEnabled(!m_model->memories().isEmpty());
+        m_exportBtn->setToolTip(QStringLiteral("Export the displayed memories to CSV."));
     }
     if (m_syncBtn) {
         const bool refreshable = m_model->memoriesRefreshable();

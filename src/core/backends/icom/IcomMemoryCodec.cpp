@@ -14,6 +14,16 @@ namespace {
 constexpr std::size_t kEmptyRecordBytes = 4;
 constexpr std::size_t kSingleRecordBytes = 67;
 constexpr std::size_t kSplitRecordBytes = 114;
+constexpr std::array<int, 104> kDtcsCodes{{
+    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74,
+    114, 115, 116, 122, 125, 131, 132, 134, 143, 145, 152, 155, 156, 162,
+    165, 172, 174, 205, 212, 223, 225, 226, 243, 244, 245, 246, 251, 252,
+    255, 261, 263, 265, 266, 271, 274, 306, 311, 315, 325, 331, 332, 343,
+    346, 351, 356, 364, 365, 371, 411, 412, 413, 423, 431, 432, 445, 446,
+    452, 454, 455, 462, 464, 465, 466, 503, 506, 516, 523, 526, 532, 546,
+    565, 606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712, 723, 731,
+    732, 734, 743, 754,
+}};
 
 bool validBcd(std::uint8_t value) noexcept
 {
@@ -62,23 +72,6 @@ std::optional<CivMode> decodeMode(std::uint8_t value)
     }
 }
 
-std::string nativeModeName(CivMode mode)
-{
-    switch (mode) {
-    case CivMode::Lsb:   return "LSB";
-    case CivMode::Usb:   return "USB";
-    case CivMode::Am:    return "AM";
-    case CivMode::Cw:    return "CW";
-    case CivMode::Rtty:  return "RTTY";
-    case CivMode::Fm:    return "FM";
-    case CivMode::CwR:   return "CW-R";
-    case CivMode::RttyR: return "RTTY-R";
-    case CivMode::Dv:    return "DSTAR";
-    case CivMode::Wfm:   return "WFM";
-    }
-    return {};
-}
-
 }  // namespace
 
 std::vector<std::uint8_t> cmdReadIc9700Memory(
@@ -111,11 +104,10 @@ std::optional<IcomMemoryChannel> decodeIc9700Memory(
     memory.band = band;
     memory.channel = *channel;
 
-    // An unused channel is returned in the same short shape the guide defines
-    // for clearing it: address plus FF. Accept the address-only form as well;
-    // older firmware has been observed to omit the marker on reads.
-    if (payload.size() == 3
-        || (payload.size() == kEmptyRecordBytes && payload[3] == 0xff)) {
+    // The guide defines an unused channel as the address followed by FF. A
+    // bare address is indistinguishable from a truncated reply and must not
+    // evict a populated cache entry.
+    if (payload.size() == kEmptyRecordBytes && payload[3] == 0xff) {
         return memory;
     }
     if (payload.size() != kSingleRecordBytes
@@ -146,17 +138,17 @@ std::optional<IcomMemoryChannel> decodeIc9700Memory(
         decodeRepeaterToneRegister(payload.subspan(20, 3));
     const std::optional<int> offset =
         decodeRepeaterOffsetHz(payload.subspan(24, 3));
-    if (!txTone || !rxTone || !dtcs || !offset) {
+    if (!txTone || !rxTone || !dtcs || !offset
+        || std::ranges::find(kDtcsCodes, dtcs->value) == kDtcsCodes.end()) {
         return std::nullopt;
     }
 
     memory.occupied = true;
     memory.frequencyHz = *frequency;
-    // Preserve the two fields the radio stores. Combining DATA with MODE here
-    // (DFM/DIGU/DIGL) makes the Memory Channels table cease to represent the
-    // native record and duplicates the separate Data Mode column. Recall
-    // derives the neutral operating mode at the point where it is applied.
-    memory.mode = nativeModeName(*mode);
+    // Cross the vendor boundary once, while the typed CI-V mode and DATA flag
+    // are still available. Models must only receive AetherSDR's neutral mode
+    // vocabulary; otherwise local-bank RTTY recalls are accidentally remapped.
+    memory.mode = modeToNeutral(*mode, payload[11] != 0);
     if (memory.mode.empty()) {
         return std::nullopt;
     }
@@ -189,16 +181,6 @@ std::optional<std::vector<std::vector<std::uint8_t>>> buildIc9700MemoryRecallFra
     double txToneHz, double rxToneHz, int dtcsCode,
     bool dtcsTxReverse, bool dtcsRxReverse)
 {
-    static constexpr std::array<int, 104> kDtcsCodes{{
-        23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74,
-        114, 115, 116, 122, 125, 131, 132, 134, 143, 145, 152, 155, 156, 162,
-        165, 172, 174, 205, 212, 223, 225, 226, 243, 244, 245, 246, 251, 252,
-        255, 261, 263, 265, 266, 271, 274, 306, 311, 315, 325, 331, 332, 343,
-        346, 351, 356, 364, 365, 371, 411, 412, 413, 423, 431, 432, 445, 446,
-        452, 454, 455, 462, 464, 465, 466, 503, 506, 516, 523, 526, 532, 546,
-        565, 606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712, 723, 731,
-        732, 734, 743, 754,
-    }};
     static constexpr std::array<std::uint8_t, 8> kAccessModes{{0, 1, 2, 3, 6, 7, 8, 9}};
     if (filter < 1 || filter > 3 || offsetHz < 0 || offsetHz > 99'999'900
         || !std::isfinite(txToneHz) || txToneHz < 0.0 || txToneHz > 299.9

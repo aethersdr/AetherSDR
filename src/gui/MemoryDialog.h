@@ -56,6 +56,7 @@ private:
     QTableWidget* m_table;
     QLineEdit* m_searchEdit;
     QComboBox* m_filterCombo;
+    QLabel* m_filterLabel{nullptr};
     QLabel* m_selectionLabel{nullptr};
     QLabel* m_selectionHintLabel{nullptr};
     QLabel* m_syncStatusLabel{nullptr};

@@ -109,7 +109,7 @@ public:
     void setSliceFmToneRxValue(int sliceId, double hz) override;
     void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
     void setSliceFmRepeaterOffset(int sliceId, double hz) override;
-    void applyMemoryRecallDetails(const MemoryRecallDetails& details) override;
+    bool applyMemoryRecallDetails(const MemoryRecallDetails& details) override;
     void refreshMemories() override;
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;

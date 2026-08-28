@@ -596,13 +596,14 @@ public:
         setSliceFmToneValue(sliceId, toneHz);
         setSliceFmToneMode(sliceId, toneMode);
     }
-    virtual void applyMemoryRecallDetails(const MemoryRecallDetails& details)
+    virtual bool applyMemoryRecallDetails(const MemoryRecallDetails& details)
     {
         Q_UNUSED(details.filterPreset); Q_UNUSED(details.dataMode);
         Q_UNUSED(details.rxToneHz); Q_UNUSED(details.dtcsCode);
         Q_UNUSED(details.dtcsTxReverse); Q_UNUSED(details.dtcsRxReverse);
         setSliceFmRepeater(details.sliceId, details.direction, details.offsetHz,
                            details.toneMode, details.txToneHz);
+        return true;
     }
 
     // Request a fresh snapshot from a radio-owned memory store. Backends that

@@ -76,10 +76,19 @@ namespace {
 int selectReportedFmValue(QComboBox* combo, const QString& value,
                           const QString& label)
 {
+    const QString previous = combo->property("aetherReportedValue").toString();
+    if (!previous.isEmpty() && previous != value) {
+        const int previousIndex = combo->findData(previous);
+        if (previousIndex >= 0) {
+            combo->removeItem(previousIndex);
+        }
+        combo->setProperty("aetherReportedValue", QString());
+    }
     int index = combo->findData(value);
     if (index < 0) {
         combo->addItem(label, value);
         index = combo->count() - 1;
+        combo->setProperty("aetherReportedValue", value);
         if (auto* model = qobject_cast<QStandardItemModel*>(combo->model())) {
             if (QStandardItem* item = model->item(index)) {
                 item->setEnabled(false);

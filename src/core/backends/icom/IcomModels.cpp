@@ -294,7 +294,7 @@ constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
 }};
 
-constexpr std::array<FeatureEvidence, 11> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 12> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -317,6 +317,8 @@ constexpr std::array<FeatureEvidence, 11> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide 2019, 1C 02/03; PR #5149 live trace"},
     {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
      "wfview RS-BA1 data-start implementation and published physical IC-9700 watchdog log"},
+    {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
+     "IC-9700 CI-V Reference Guide 2019, command 1A 00 memory-channel records"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not attested"},
 }};
 
@@ -670,6 +672,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::FmRepeaterCtcssRx:   return "fm-repeater-ctcss-rx";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
+    case IcomFeature::MemoryChannels:      return "memory-channels";
     }
     return "unknown";
 }

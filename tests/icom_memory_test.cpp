@@ -57,14 +57,16 @@ int main()
     const auto empty = decodeIc9700Memory(std::vector<std::uint8_t>{0x01, 0x00, 0x07, 0xFF});
     check(empty && !empty->occupied && empty->band == 1 && empty->channel == 7,
           "short FF record removes an unused channel");
+    check(!decodeIc9700Memory(std::vector<std::uint8_t>{0x01, 0x00, 0x07}),
+          "bare address is rejected as a truncated reply");
 
     for (const std::size_t size : {std::size_t{67}, std::size_t{114}}) {
         const auto decoded = decodeIc9700Memory(occupiedRecord(size));
         check(decoded && decoded->occupied, "occupied record decodes");
         check(decoded && decoded->band == 2 && decoded->channel == 42,
               "native group and channel survive decode");
-        check(decoded && decoded->frequencyHz == 446'125'000 && decoded->mode == "FM",
-              "native frequency and mode decode without folding in data mode");
+        check(decoded && decoded->frequencyHz == 446'125'000 && decoded->mode == "DFM",
+              "native frequency and DATA flag decode to the neutral mode");
         check(decoded && decoded->dataMode == 1,
               "data mode remains an independent native memory field");
         check(decoded && decoded->duplex == 2 && decoded->offsetHz == 5'000'000,
@@ -88,6 +90,12 @@ int main()
     reservedToneMode[12] = 0x24;
     check(!decodeIc9700Memory(reservedToneMode),
           "reserved IC-9700 memory access mode is rejected");
+    std::vector<std::uint8_t> rttyRecord = occupiedRecord(67);
+    rttyRecord[9] = 0x04;
+    rttyRecord[11] = 0x00;
+    const auto rtty = decodeIc9700Memory(rttyRecord);
+    check(rtty && rtty->mode == "DIGL",
+          "RTTY is neutralized below the backend seam instead of in RadioModel");
 
     const auto recall = buildIc9700MemoryRecallFrames(
         0xA2, CivMode::Am, true, 3, RepeaterOffsetDirection::Up,
@@ -138,6 +146,10 @@ int main()
     corrupt = occupiedRecord(67);
     corrupt.resize(68);
     check(!decodeIc9700Memory(corrupt), "unknown record length is rejected");
+    corrupt = occupiedRecord(67);
+    corrupt[20] = 0x00; corrupt[21] = 0x00; corrupt[22] = 0x00;
+    check(!decodeIc9700Memory(corrupt),
+          "decoder and recall builder reject the same non-standard DTCS code");
     check(ic9700MemoryIndex(1, 1) == 0 && ic9700MemoryIndex(3, 99) == 296,
           "three native groups map to stable neutral indices");
 

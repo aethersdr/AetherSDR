@@ -345,6 +345,7 @@ enum class IcomFeature : std::uint8_t {
     FmRepeaterCtcssRx,
     TxFrequencyCheck,
     CivDataRestart,
+    MemoryChannels,
 };
 
 enum class EvidenceKind : std::uint8_t {
