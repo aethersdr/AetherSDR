@@ -902,6 +902,15 @@ void TciServer::noteClientTextTx(QWebSocket* socket, const QString& message)
     client->lastTxCommand = tciCommandName(message);
 }
 
+void TciServer::sendClientText(QWebSocket* socket, const QString& message)
+{
+    if (!socket) {
+        return;
+    }
+    noteClientTextTx(socket, message);
+    socket->sendTextMessage(message);
+}
+
 void TciServer::noteClientSocketError(QWebSocket* socket, int error)
 {
     ClientState* client = clientStateFor(socket);
@@ -921,21 +930,18 @@ QJsonObject TciServer::disconnectSnapshot(
     const auto age = [now](qint64 atMs) {
         return atMs >= 0 ? std::max<qint64>(0, now - atMs) : -1;
     };
-    const QString closeReason = socket
-        ? socket->closeReason().simplified().left(160) : QString();
-    const QString socketError = !client.lastSocketErrorString.isEmpty()
-        ? client.lastSocketErrorString
-        : (socket ? socket->errorString().simplified().left(160) : QString());
+    const bool socketErrorObserved = client.lastSocketErrorAtMs >= 0;
 
     return QJsonObject{
         {QStringLiteral("contractVersion"), 1},
         {QStringLiteral("closeCode"), socket
             ? static_cast<int>(socket->closeCode()) : -1},
-        {QStringLiteral("closeReason"), closeReason},
         {QStringLiteral("socketState"), socket
             ? static_cast<int>(socket->state()) : -1},
-        {QStringLiteral("socketError"), client.lastSocketError},
-        {QStringLiteral("socketErrorString"), socketError},
+        {QStringLiteral("socketError"), socketErrorObserved
+            ? client.lastSocketError : -1},
+        {QStringLiteral("socketErrorString"), socketErrorObserved
+            ? client.lastSocketErrorString : QString()},
         {QStringLiteral("connectionAgeMs"), age(client.connectedAtMs)},
         {QStringLiteral("lastTextRxAgeMs"), age(client.lastTextRxAtMs)},
         {QStringLiteral("lastTextTxAgeMs"), age(client.lastTextTxAtMs)},
@@ -1324,8 +1330,7 @@ void TciServer::onTextMessage(const QString& msg)
         if (!notification.isEmpty()) {
             for (auto& cs : m_clients) {
                 if (cs.socket != ws) {
-                    noteClientTextTx(cs.socket, notification);
-                    cs.socket->sendTextMessage(notification);
+                    sendClientText(cs.socket, notification);
                 }
             }
         }
@@ -3201,8 +3206,7 @@ void TciServer::sendInitBurst(QWebSocket* client)
         // "TCI failed set rxfreq" some users hit right at WSJT-X startup.
         qCDebug(lcCat).noquote() << "TCI tx→init:" << (cmd + QLatin1Char(';'));
         const QString message = cmd + QLatin1Char(';');
-        noteClientTextTx(client, message);
-        client->sendTextMessage(message);
+        sendClientText(client, message);
     }
     qCDebug(lcCat) << "TCI: sent init burst," << commands.size() << "commands";
 }
@@ -3214,8 +3218,7 @@ void TciServer::replyText(QWebSocket* ws, const QString& msg)
     // at the top of onTextMessage via their early `continue`; log them here so
     // every command's response is visible when chasing CAT timeouts (#tci-diag).
     qCDebug(lcCat).noquote() << "TCI tx→client:" << msg.trimmed();
-    noteClientTextTx(ws, msg);
-    ws->sendTextMessage(msg);
+    sendClientText(ws, msg);
 }
 
 void TciServer::broadcast(const QString& msg)
@@ -3225,8 +3228,7 @@ void TciServer::broadcast(const QString& msg)
     // before it throws "TCI failed set rxfreq" and drops the socket.
     qCDebug(lcCat).noquote() << "TCI tx→all:" << msg.trimmed();
     for (auto& cs : m_clients) {
-        noteClientTextTx(cs.socket, msg);
-        cs.socket->sendTextMessage(msg);
+        sendClientText(cs.socket, msg);
     }
     emit tciMessage(QStringLiteral("tx"), msg);
 }
@@ -3572,19 +3574,15 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
 
 void TciServer::onRadioTransmitConfirmed(bool transmitting)
 {
-    if (transmitting) {
-        return;
-    }
-
     const IcomTciUnkeySettle::Confirmation confirmation =
-        m_icomUnkeySettle.confirmOff();
+        m_icomUnkeySettle.confirm(transmitting);
     if (confirmation == IcomTciUnkeySettle::Confirmation::Ignored) {
         return;
     }
     if (confirmation == IcomTciUnkeySettle::Confirmation::PendingExpiry) {
-        // Preserve the field-tested 500 ms presentation barrier. The timer now
-        // has authoritative proof to consume instead of inferring success from
-        // the optimistic local false edge.
+        // Preserve the field-tested 500 ms presentation barrier. An accepted
+        // off readback confirms the generation, while a later accepted keyed
+        // readback revokes that proof so expiry fails safe and republishes true.
         return;
     }
 
@@ -3657,10 +3655,12 @@ void TciServer::broadcastStatus()
                 const int meterIndex = s->sliceId();
                 if (trx >= 0 && meterIndex >= 0 && meterIndex < 8) {
                     float dbm = m_cachedSLevel[meterIndex];
-                    if (dbm > -200.0f)
-                        cs.socket->sendTextMessage(
+                    if (dbm > -200.0f) {
+                        const QString message =
                             QStringLiteral("rx_channel_sensors:%1,0,%2;")
-                                .arg(trx).arg(dbm, 0, 'f', 1));
+                                .arg(trx).arg(dbm, 0, 'f', 1);
+                        sendClientText(cs.socket, message);
+                    }
                 }
             }
         }
@@ -3668,13 +3668,14 @@ void TciServer::broadcastStatus()
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
-            cs.socket->sendTextMessage(
+            const QString message =
                 QStringLiteral("tx_sensors:0,%1,%2,%3,%4,%5;")
                     .arg(m_cachedMicLevel, 0, 'f', 1)
                     .arg(m_cachedFwdPower, 0, 'f', 1)
                     .arg(m_cachedFwdPower, 0, 'f', 1)  // peak ≈ avg for now
                     .arg(m_cachedSwr, 0, 'f', 1)
-                    .arg(m_cachedAlc, 0, 'f', 1));
+                    .arg(m_cachedAlc, 0, 'f', 1);
+            sendClientText(cs.socket, message);
         }
     }
 }

@@ -220,6 +220,37 @@ public:
                 == QStringLiteral("capacity test");
     }
 
+    static bool disconnectSnapshotIsPayloadFreeAndUsesUnsetError()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket socket;
+        TciServer::ClientState client;
+        client.socket = &socket;
+
+        const QJsonObject snapshot = server.disconnectSnapshot(client, &socket);
+        return !snapshot.contains(QStringLiteral("closeReason"))
+            && snapshot.value(QStringLiteral("socketError")).toInt() == -1
+            && snapshot.value(QStringLiteral("socketErrorString")).toString().isEmpty()
+            && snapshot.value(QStringLiteral("lastSocketErrorAgeMs")).toInt() == -1;
+    }
+
+    static bool outboundTextAccountingIsCentralized()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket socket;
+        TciServer::ClientState client;
+        client.socket = &socket;
+        server.m_clients.append(client);
+
+        server.sendClientText(
+            &socket, QStringLiteral("rx_channel_sensors:0,0,-73.0;"));
+        return server.m_clients.first().lastTextTxAtMs >= 0
+            && server.m_clients.first().lastTxCommand
+                == QStringLiteral("rx_channel_sensors");
+    }
+
     // ── #4547 PTT routing diagnostic ────────────────────────────────────────
 
     // Two slices, slice 1 holding transmit, and a routing cache still pointing
@@ -1324,6 +1355,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::deferredAbortIsClientScoped();
     const bool observableFailure
         = AetherSDR::TciServerReviewTest::routeFailureIsObservable();
+    const bool payloadFreeDisconnect
+        = AetherSDR::TciServerReviewTest::disconnectSnapshotIsPayloadFreeAndUsesUnsetError();
+    const bool outboundTextAccounting
+        = AetherSDR::TciServerReviewTest::outboundTextAccountingIsCentralized();
     const bool pttBindsReceiver
         = AetherSDR::TciServerReviewTest::pttBindsToTheDeclaredAudioReceiver();
     const bool pttUsesStableMap
@@ -1373,6 +1408,10 @@ int main(int argc, char** argv)
                 deferredAbort ? "PASS" : "FAIL");
     std::printf("%s  VFO-B route failure is observable\n",
                 observableFailure ? "PASS" : "FAIL");
+    std::printf("%s  disconnect snapshot omits peer text and uses unset error\n",
+                payloadFreeDisconnect ? "PASS" : "FAIL");
+    std::printf("%s  outbound TCI text accounting is centralized\n",
+                outboundTextAccounting ? "PASS" : "FAIL");
     std::printf("%s  PTT binds to the declared audio receiver (#4547)\n",
                 pttBindsReceiver ? "PASS" : "FAIL");
     std::printf("%s  PTT resolves through the stable trx map (#4547/#4567)\n",
@@ -1421,7 +1460,8 @@ int main(int argc, char** argv)
     std::printf("%s  native 24 kHz TCI RX retains accumulated payload (#4744)\n",
                 native24kPayload ? "PASS" : "FAIL");
 
-    return validProfile && deferredAbort && observableFailure && pttBindsReceiver
+    return validProfile && deferredAbort && observableFailure
+        && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets

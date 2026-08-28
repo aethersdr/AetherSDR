@@ -6,7 +6,7 @@ namespace AetherSDR {
 
 // Tracks the proof behind TCI's bounded Icom unkey presentation barrier.
 // Local optimistic state never enters this object: only an accepted CI-V
-// PTT-off readback may confirm the active generation.
+// PTT readback may confirm or revoke confirmation of the active generation.
 class IcomTciUnkeySettle {
 public:
     enum class Confirmation {
@@ -29,10 +29,17 @@ public:
         return m_activeGeneration;
     }
 
-    Confirmation confirmOff() noexcept
+    Confirmation confirm(bool transmitting) noexcept
     {
         if (m_awaitingGeneration == 0) {
             return Confirmation::Ignored;
+        }
+        if (transmitting) {
+            // The latest accepted radio state is authoritative. A keyed
+            // readback revokes any earlier off confirmation but keeps waiting
+            // for a later off readback, even after the settle timer expires.
+            m_confirmedGeneration = 0;
+            return Confirmation::PendingExpiry;
         }
         if (m_activeGeneration == m_awaitingGeneration) {
             m_confirmedGeneration = m_awaitingGeneration;

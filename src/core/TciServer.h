@@ -231,6 +231,7 @@ private:
     void logTxAudioSummary(const char* reason);
     ClientState* clientStateFor(QWebSocket* socket);
     void noteClientTextTx(QWebSocket* socket, const QString& message);
+    void sendClientText(QWebSocket* socket, const QString& message);
     void noteClientSocketError(QWebSocket* socket, int error);
     QJsonObject disconnectSnapshot(const ClientState& client,
                                    const QWebSocket* socket) const;
@@ -275,7 +276,7 @@ private:
         qint64       lastSocketErrorAtMs{-1};
         QString      lastRxCommand;
         QString      lastTxCommand;
-        int          lastSocketError{0};
+        int          lastSocketError{-1};
         QString      lastSocketErrorString;
     };
 

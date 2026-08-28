@@ -2581,7 +2581,7 @@ needed).
           "lastConfirmedAgeMs":16243,"lastOutcome":"confirmation-timeout",
           "lastOutcomeAgeMs":20},
    "lastDisconnect":{"contractVersion":1,"ageMs":520,
-      "closeCode":1006,"closeReason":"","socketState":0,
+      "closeCode":1006,"socketState":0,
       "socketError":1,"socketErrorString":"The remote host closed the connection",
       "connectionAgeMs":2577940,"lastTextRxAgeMs":53,"lastTextTxAgeMs":28,
       "lastSocketErrorAgeMs":0,"lastRxCommand":"trx","lastTxCommand":"trx",
