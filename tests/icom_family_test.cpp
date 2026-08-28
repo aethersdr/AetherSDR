@@ -156,6 +156,9 @@ int main(int argc, char** argv)
             const auto confirmation =
                 icom::IcomCivBackendTestAccess::confirmationFor(
                     backend, icom::cmdSetDtcsTone(0xA2, 23, true, false));
+            // With no live session, confirmationFor() uses the documented
+            // disconnected fallback address; this assertion proves the 1B 02
+            // write schedules the matching authoritative register readback.
             check(confirmation
                       && *confirmation
                           == icom::cmdReadRepeaterToneRegister(
