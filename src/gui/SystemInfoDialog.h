@@ -2,6 +2,7 @@
 
 #include "PersistentDialog.h"
 #include "core/SystemInfo.h"
+#include "core/ThreadCpuRing.h"
 
 #include <QFile>
 #include <QHash>
@@ -43,13 +44,20 @@ protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
 
+private slots:
+    // A slot, and named in the meta-object, so a test can drive a synthetic
+    // sample all the way into the table with QMetaObject::invokeMethod. Every
+    // defect this dialog shipped with was found by opening it rather than by
+    // the suite, and the table's contents were the largest thing no test could
+    // reach.
+    void applySample(const QVector<AetherSDR::ThreadCpuSample>& threads);
+
 private:
     QWidget* buildThreadsTab();
     QWidget* buildLogsTab();
 
     void startSampling();
     void stopSampling();
-    void applySample(const QVector<ThreadCpuSample>& threads);
 
     void rebuildCategoryFilters();
     void openLogTail();
@@ -62,6 +70,9 @@ private:
     // Threads tab
     QTableWidget* m_threadTable{nullptr};
     QLabel*       m_threadSummary{nullptr};
+    // Recent readings per thread, for the Peak column. Cleared when sampling
+    // stops — see stopSampling().
+    ThreadCpuRing m_ring;
     QThread*      m_collectorThread{nullptr};
     SystemInfoCollector* m_collector{nullptr};
 
