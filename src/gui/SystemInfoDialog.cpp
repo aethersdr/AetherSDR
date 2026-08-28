@@ -111,7 +111,12 @@ QString stateText(ThreadRunState state)
 }  // namespace
 
 SystemInfoDialog::SystemInfoDialog(QWidget* parent)
-    : PersistentDialog(QStringLiteral("System Info"),
+    // Title tracks the menu entry — see MainWindow_Menus.cpp for why it is not
+    // "System Info". The geometry KEY deliberately does not follow: it is a
+    // settings id, and changing it would silently discard the saved window
+    // position of anyone who has already used this dialog. Same rule LogManager
+    // applies to category ids.
+    : PersistentDialog(QStringLiteral("Runtime Monitor"),
                        QStringLiteral("SystemInfoDialogGeometry"), parent)
 {
     auto* layout = new QVBoxLayout(bodyWidget());
