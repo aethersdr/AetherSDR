@@ -10116,11 +10116,25 @@ void RadioModel::onStatusReceived(const QString& object,
     }
 
     // TNF status: "tnf <id> freq=14.100000 width=100 depth=1 permanent=0"
-    static const QRegularExpression tnfRe(R"(^tnf\s+(\d+)$)");
+    //
+    // Removal arrives as "tnf <id> removed" (bare token, whole string lands in
+    // `object`) or "tnf <id> removed=1" (kv form, `object` == "tnf <id>").
+    // SmartSDR DOES send one on `tnf remove` — contrary to the long-standing
+    // assumption that it sends nothing — and feeding it through
+    // applyTnfStatus() re-creates the entry via QMap::operator[], so a
+    // just-removed notch reappears on the panadapter a beat after the click.
+    // Route the removal form to removeTnf() instead (a no-op if the optimistic
+    // removal in requestRemoveTnf() already dropped it).
+    static const QRegularExpression tnfRe(R"(^tnf\s+(\d+)(?:\s+removed)?$)");
     auto tnfMatch = tnfRe.match(object);
     if (tnfMatch.hasMatch()) {
-        int tnfId = tnfMatch.captured(1).toInt();
-        m_tnfModel.applyTnfStatus(tnfId, kvs);
+        const int tnfId = tnfMatch.captured(1).toInt();
+        if (kvs.contains(QStringLiteral("removed"))
+            || object.endsWith(QLatin1String("removed"))) {
+            m_tnfModel.removeTnf(tnfId);
+        } else {
+            m_tnfModel.applyTnfStatus(tnfId, kvs);
+        }
         return;
     }
 

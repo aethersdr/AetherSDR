@@ -3061,6 +3061,11 @@ target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
 target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
 
+add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
+target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
+target_link_libraries(radiomodel_tnf_removal_status_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_tnf_removal_status_test COMMAND radiomodel_tnf_removal_status_test)
+
 # CAT/rigctld retune policy (#4497). The pan recenter is radio-side and the only
 # lever is the autopan=0 flag on "slice tune", which the CAT integration suites
 # cannot observe — reverting the recenter arm leaves all three of them green. So

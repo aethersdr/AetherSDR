@@ -1545,6 +1545,13 @@ public:
     {
         handleSliceStatus(id, kvs, removed);
     }
+    // Feed a decoded status line straight into the router. Used to pin the TNF
+    // removal-status handling — the wire says the notch is gone, and the router
+    // must not upsert it back into TnfModel.
+    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
+    {
+        onStatusReceived(object, kvs);
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
