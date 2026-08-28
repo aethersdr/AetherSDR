@@ -170,9 +170,16 @@ Record parse(const QByteArray& record)
         // wrong for this record, so surface it as Unknown rather than
         // inventing a position for an antenna. toDouble() is the C-locale
         // parse, which is what the wire carries.
+        //
+        // toDouble() also succeeds on "inf" and "nan", and says nothing about
+        // range, so the same bounds the encoder refuses to send are applied to
+        // what we accept: a non-finite heading would reach RotorCompass's
+        // trigonometry, and one outside 0-360 is a field model we do not have.
         bool ok = false;
         const double heading = decode(parts.at(2)).toDouble(&ok);
-        if (ok) {
+        if (ok && std::isfinite(heading)
+            && heading >= kMinHeadingDegrees
+            && heading <= kMaxHeadingDegrees) {
             out.type        = RecordType::Point;
             out.deviceName  = decode(parts.at(1));
             out.heading     = heading;

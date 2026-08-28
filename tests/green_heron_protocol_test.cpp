@@ -399,6 +399,44 @@ void testPointWithAnUnparseableHeadingIsNotAPosition()
            bad.fields.join(QLatin1Char(',')).toStdString());
 }
 
+void testPointRefusesHeadingsThatAreNotPositions()
+{
+    // toDouble() reports success for "inf", "nan", and for any magnitude, so
+    // ok alone is not proof of a heading. A non-finite value would reach
+    // RotorCompass's trigonometry; an out-of-range one means the field model
+    // is wrong for the record. Both fail closed, exactly as encodeTurn does.
+    const auto pointWith = [](const char* heading) {
+        return parse(QByteArray("POINT\x1f" "Rotor\x1f") + heading
+                     + QByteArray("\x1f" "0\x1f" "0"));
+    };
+
+    report("a POINT heading of inf is Unknown, not a heading",
+           pointWith("inf").type == RecordType::Unknown
+               && pointWith("inf").heading == 0.0);
+    report("a POINT heading of nan is Unknown, not a heading",
+           pointWith("nan").type == RecordType::Unknown
+               && pointWith("nan").heading == 0.0);
+    report("a negative POINT heading is Unknown, not a heading",
+           pointWith("-1").type == RecordType::Unknown
+               && pointWith("-1").heading == 0.0);
+    report("a POINT heading past 360 is Unknown, not a heading",
+           pointWith("361").type == RecordType::Unknown
+               && pointWith("361").heading == 0.0);
+
+    // The rejected record is still surfaced whole, so the log shows what the
+    // controller actually said rather than nothing at all.
+    report("a rejected POINT still carries its fields",
+           pointWith("nan").fields.value(1) == QLatin1String("nan"),
+           pointWith("nan").fields.join(QLatin1Char(',')).toStdString());
+
+    // The endpoints are real headings and must survive: the RT-21 reports
+    // both due north and a full 360 depending on where the stop sits.
+    report("the endpoints remain positions",
+           pointWith("0").type == RecordType::Point
+               && pointWith("360").type == RecordType::Point
+               && pointWith("360").heading == 360.0);
+}
+
 void testEncodeTurnMatchesTheWire()
 {
     const QByteArray turn = encodeTurn(QStringLiteral("Rotor"), 89.0);
@@ -509,6 +547,7 @@ int main()
     testEncodeRefusesFramingBytes();
     testParseDeviceAddAndPoint();
     testPointWithAnUnparseableHeadingIsNotAPosition();
+    testPointRefusesHeadingsThatAreNotPositions();
     testEncodeTurnMatchesTheWire();
     testEncodeTurnIsLocaleIndependent();
     testEncodeTurnRefusesWhatCannotBeRecalled();

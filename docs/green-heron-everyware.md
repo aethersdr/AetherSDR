@@ -421,6 +421,23 @@ This is exactly why the tile shows `asked X · ΔY` and refuses to say
 heading and never the commanded one, and `POINT` field 3 held `0` throughout —
 a fourth independent session confirming it does not mean "in motion".
 
+### What counts as a heading
+
+`parse()` accepts a `POINT` heading only if it is finite and inside 0–360 —
+the same bounds `encodeTurn` refuses to exceed. This is not defensiveness
+about a device that has never misbehaved: `QString::toDouble()` reports
+success for `inf`, `nan`, `-1`, and `361` alike, so "the field parsed as a
+number" is not by itself evidence of a position. A non-finite heading would
+reach the compass's trigonometry; an out-of-range one means the field model
+is wrong for that record. Both surface as `Unknown` with their fields intact,
+so the log shows what the controller actually said.
+
+Nothing in any capture has ever needed this gate. Replaying 2856 bytes taken
+live from the Everyware server through the parser gives 71 records, 21
+`POINT`, 0 `Unknown`. The rotator was parked at 57.9 throughout, so that
+measures only that the gate does not reject real traffic — not that the wire
+exercises the range.
+
 ### Heading resolution — tenths the device does not have
 
 `POINT` reports one decimal place and **does not resolve it**. 120 consecutive

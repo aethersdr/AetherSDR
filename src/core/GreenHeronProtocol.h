@@ -239,6 +239,12 @@ QVector<QByteArray> splitRecords(QByteArray& buffer, bool* bytesDropped = nullpt
 // with its fields intact. A month of captures on one idle installation would
 // be a thin basis for claiming the whole vocabulary, so unknown verbs are
 // surfaced rather than treated as errors.
+//
+// Unknown also covers a record that is well formed but carries a value we
+// will not act on: a POINT whose heading is non-finite or outside
+// [kMinHeadingDegrees, kMaxHeadingDegrees] is not a position, and is refused
+// at the boundary rather than passed inward (Principle VII). The bounds are
+// the ones encodeTurn refuses to send.
 Record parse(const QByteArray& record);
 
 // ── Commands (client → device) ──────────────────────────────────────────────
