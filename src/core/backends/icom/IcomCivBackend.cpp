@@ -353,10 +353,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // this family-wide and fail closed until the backend implements a real
     // CI-V fan meter; do not add speculative per-model profile surface.
     c.hasMainFanTelemetry = false;
-    // Verified IC-9700 CI-V 16 50 dial lock. Keep other Icom profiles dark
-    // until their model-specific behavior is reviewed; this radio-global
-    // capability must not be inferred from family membership.
-    c.hasRadioDialLock = m.name == std::string_view{"IC-9700"};
+    // CI-V 16 50 is model-profiled even though the wire shape is shared. The
+    // capability stays dark for every radio whose own guide has not attested
+    // the command; family membership alone is not protocol evidence.
+    c.hasRadioDialLock = profile.supports(IcomFeature::DialLock);
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -3834,10 +3834,10 @@ void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
 
 void IcomCivBackend::setRadioDialLock(bool locked)
 {
-    if (!capabilities().hasRadioDialLock) {
+    if (!capabilities().hasRadioDialLock || !m_session) {
         return;
     }
-    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA2,
+    sendUserCommand(cmdSetFunction(m_session->civAddress(),
                                    func::kDialLock, locked ? 1 : 0));
 }
 

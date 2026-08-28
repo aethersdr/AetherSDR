@@ -344,6 +344,7 @@ enum class IcomFeature : std::uint8_t {
     FmRepeaterExtendedReadback,
     FmRepeaterCtcssRx,
     TxFrequencyCheck,
+    DialLock,
     CivDataRestart,
 };
 

@@ -1019,7 +1019,7 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
 | `16 48` | Manual notch | ✅ | ✗ constant only |
 | `16 4F` | Twin peak filter (RTTY) | ✗ | ✗ |
-| `16 50` | Dial lock | ✅ | ✅ IC-9700 capability-gated read/write + polling |
+| `16 50` | Dial lock | ✅ | ✅ IC-705/IC-7300MK2/IC-9700 profile-gated read/write + polling |
 | `16 56` | DSP IF filter SHARP/SOFT | ✗ | ✗ |
 | `16 57` | Manual notch width W/M/N | ✗ | ✗ |
 | `16 58` | SSB TX bandwidth W/M/N | ✗ | ✗ |

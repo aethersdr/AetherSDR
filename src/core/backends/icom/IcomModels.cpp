@@ -241,7 +241,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 12> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 13> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -264,10 +264,12 @@ constexpr std::array<FeatureEvidence, 12> kIc705Evidence{{
      "not activated: preserve the proven IC-705 basic repeater path"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020, 1C 02"},
+    {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, 16 50"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
 }};
 
-constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 13> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -292,9 +294,11 @@ constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
      "not activated: preserve the proven IC-7300MK2 basic repeater path"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
+    {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
+     "IC-7300MK2 CI-V Reference Guide, 16 50"},
 }};
 
-constexpr std::array<FeatureEvidence, 11> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 12> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -315,6 +319,8 @@ constexpr std::array<FeatureEvidence, 11> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide 2019, 16 5D and 1B 00/01; live IC-9700"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019, 1C 02/03; PR #5149 live trace"},
+    {IcomFeature::DialLock, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-9700 CI-V Reference Guide 2019, 16 50; PR #5261 live proof"},
     {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
      "wfview RS-BA1 data-start implementation and published physical IC-9700 watchdog log"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not attested"},
@@ -669,6 +675,7 @@ std::string_view featureName(IcomFeature feature) noexcept
         return "fm-repeater-extended-readback";
     case IcomFeature::FmRepeaterCtcssRx:   return "fm-repeater-ctcss-rx";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
+    case IcomFeature::DialLock:            return "dial-lock";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
     }
     return "unknown";

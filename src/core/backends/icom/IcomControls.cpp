@@ -309,8 +309,9 @@ constexpr std::array kSpecs = {
                 Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
                 "setRadioDialLock", "sliceLockButtons", true,
-                "IC-9700 capability-gated; radio-global readback is mirrored "
-                "to every slice lock surface."},
+                "IC-705, IC-7300MK2, and IC-9700 profile-gated; radio-global "
+                "readback is mirrored to every slice lock surface.",
+                IcomFeature::DialLock},
     ControlSpec{"notch.width", 0x16, 0x57, true, "Manual notch width",
                 Plane::Slice, Encoding::Enum, Wiring::Declared,
                 0, 2, "step", 0, 2,

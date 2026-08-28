@@ -160,6 +160,11 @@ struct IcomCivBackendTestAccess {
     {
         return backend.m_lastOutboundCiv;
     }
+
+    static std::uint8_t activeCivAddress(const IcomCivBackend& backend)
+    {
+        return backend.m_session ? backend.m_session->civAddress() : 0;
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -538,7 +543,7 @@ int main(int argc, char** argv)
         }
     }
 
-    // ---- Icom publishes the IC-9700 power clamp without a socket ----------
+    // ---- Icom model capabilities and CI-V dial lock without a socket -------
     {
         using namespace AetherSDR::icom;
         const IcomModel* ic9700 = modelForName("IC-9700");
@@ -562,32 +567,6 @@ int main(int argc, char** argv)
                   "Icom declares the profiled IC-9700 momentary XFC command");
             check(caps.hasSupplyVoltageTelemetry,
                   "Icom declares the profiled IC-9700 supply-voltage telemetry");
-            check(caps.hasRadioDialLock,
-                  "Icom declares the IC-9700 radio-authoritative dial lock");
-
-            IcomCivBackend lockWriter;
-            IcomCivBackendTestAccess::prepareDialLockWrite(lockWriter, *ic9700);
-            lockWriter.setRadioDialLock(true);
-            check(IcomCivBackendTestAccess::lastOutboundCiv(lockWriter)
-                      == QStringLiteral("16 50 01"),
-                  "IC-9700 dial lock sends CI-V 16 50 01");
-            IcomCivBackend unlockWriter;
-            IcomCivBackendTestAccess::prepareDialLockWrite(unlockWriter, *ic9700);
-            unlockWriter.setRadioDialLock(false);
-            check(IcomCivBackendTestAccess::lastOutboundCiv(unlockWriter)
-                      == QStringLiteral("16 50 00"),
-                  "IC-9700 dial unlock sends CI-V 16 50 00");
-
-            QSignalSpy lockSpy(&backend, &IRadioBackend::radioDialLockChanged);
-            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
-            check(lockSpy.count() == 1 && lockSpy.takeFirst().at(0).toBool(),
-                  "IC-9700 dial-lock readback publishes the locked state");
-            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
-            check(lockSpy.isEmpty(),
-                  "unchanged IC-9700 dial-lock polling does not republish state");
-            IcomCivBackendTestAccess::deliverDialLock(backend, 0);
-            check(lockSpy.count() == 1 && !lockSpy.takeFirst().at(0).toBool(),
-                  "IC-9700 front-panel unlock readback publishes the unlocked state");
             check(!caps.hasMainFanTelemetry,
                   "Icom declares no Main Fan telemetry family-wide");
             check(caps.speechProcessorLevelMaximum == 100
@@ -606,6 +585,74 @@ int main(int argc, char** argv)
                           && caps.speechProcessorLabel == QStringLiteral("PROC"),
                       "non-9700 Icom models retain the legacy PROC presentation");
             }
+        }
+
+        struct DialLockCase {
+            const char* modelName;
+            std::uint8_t civAddress;
+        };
+        constexpr DialLockCase dialLockCases[] = {
+            {"IC-705", 0xA4},
+            {"IC-7300MK2", 0xB6},
+            {"IC-9700", 0xA2},
+        };
+        for (const DialLockCase& lockCase : dialLockCases) {
+            const IcomModel* lockModel = modelForName(lockCase.modelName);
+            check(lockModel != nullptr,
+                  "the profiled dial-lock Icom model resolves");
+            if (!lockModel) {
+                continue;
+            }
+            check(lockModel->civAddress == lockCase.civAddress,
+                  "the dial-lock model retains its official CI-V address");
+            check(profileFor(*lockModel).supports(IcomFeature::DialLock),
+                  "the model profile attests CI-V dial-lock support");
+
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *lockModel);
+            check(backend.capabilities().hasRadioDialLock,
+                  "the profiled model publishes radio-authoritative dial lock");
+
+            IcomCivBackend lockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(lockWriter, *lockModel);
+            check(IcomCivBackendTestAccess::activeCivAddress(lockWriter)
+                      == lockCase.civAddress,
+                  "dial lock targets the selected model's CI-V address");
+            lockWriter.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(lockWriter)
+                      == QStringLiteral("16 50 01"),
+                  "dial lock sends CI-V 16 50 01");
+
+            IcomCivBackend unlockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(unlockWriter, *lockModel);
+            unlockWriter.setRadioDialLock(false);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(unlockWriter)
+                      == QStringLiteral("16 50 00"),
+                  "dial unlock sends CI-V 16 50 00");
+
+            QSignalSpy lockSpy(&backend, &IRadioBackend::radioDialLockChanged);
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.count() == 1 && lockSpy.takeFirst().at(0).toBool(),
+                  "dial-lock readback publishes the locked state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.isEmpty(),
+                  "unchanged dial-lock polling does not republish state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 0);
+            check(lockSpy.count() == 1 && !lockSpy.takeFirst().at(0).toBool(),
+                  "front-panel unlock readback publishes the unlocked state");
+        }
+
+        const IcomModel* unprofiled = modelForName("IC-7610");
+        check(unprofiled != nullptr, "the unprofiled Icom model resolves");
+        if (unprofiled) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *unprofiled);
+            check(!backend.capabilities().hasRadioDialLock,
+                  "an unattested Icom model does not inherit dial lock");
+            IcomCivBackendTestAccess::prepareDialLockWrite(backend, *unprofiled);
+            backend.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
+                  "an unattested Icom model emits no dial-lock command");
         }
     }
 
