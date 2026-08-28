@@ -9,28 +9,28 @@ namespace AetherSDR {
 class MeterModel;
 class HGauge;
 
-// Radio hardware telemetry applet — shows PA temperature, supply voltage,
-// and fan speed. Uses hwTelemetryChanged for cached meters (PATEMP, +13.8A)
-// and meterUpdated for additional RAD meters resolved by index (MAINFAN).
-//
-// Note: PACURRENT is intentionally omitted — on FLEX-8000 series the meter
-// range is capped at 10A (declared max) while real PA draw exceeds this at
-// full power, causing the reading to clip. See FlexRadio community thread
-// "PA Current Meter for 6xxx" and bug SMART-11281.
+// Radio hardware telemetry applet — shows the available PA instrument
+// (temperature, or drain current when temperature is unavailable), supply
+// voltage, and fan speed. Uses MeterModel's normalized telemetry rather than
+// reaching into a family backend.
 class MeterApplet : public QWidget {
     Q_OBJECT
 public:
     explicit MeterApplet(QWidget* parent = nullptr);
 
     void setMeterModel(MeterModel* model);
-    void setPaTemperatureTelemetryState(bool connected, bool available);
+    void setPaInstrumentTelemetryState(bool connected,
+                                       bool temperatureAvailable,
+                                       bool currentAvailable);
     void setSupplyVoltageTelemetryState(bool connected);
     void setMainFanTelemetryState(bool connected, bool available);
+    void setTransmitting(bool transmitting);
 
 private:
     void resolveIndices();
     void onMeterUpdated(int index, float value);
     void updatePaTempDisplay();
+    void updatePaInstrumentState();
     void resetSupplyVoltageDisplay();
 
     MeterModel* m_model{nullptr};
@@ -44,6 +44,10 @@ private:
     float m_paTemp{0.0f};
     bool  m_hasPaTemp{false};
     bool  m_tempFahrenheit{false};
+    bool  m_paInstrumentConnected{false};
+    bool  m_paTemperatureAvailable{false};
+    bool  m_paCurrentAvailable{false};
+    bool  m_transmitting{false};
 
     // Lazy-resolved meter index (-1 = not yet found)
     int m_fanIdx{-1};

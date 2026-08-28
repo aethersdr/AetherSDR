@@ -89,7 +89,13 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     micChanged |= assign(d.micLevel, m_micLevel);
     micChanged |= assign(d.micAcc, m_micAcc);
     micChanged |= assign(d.speechProcEnable, m_speechProcEnable);
-    micChanged |= assign(d.speechProcLevel, m_speechProcLevel);
+    if (d.speechProcLevel) {
+        const int level = qBound(0, *d.speechProcLevel, m_speechProcLevelMaximum);
+        if (m_speechProcLevel != level) {
+            m_speechProcLevel = level;
+            micChanged = true;
+        }
+    }
     // compander/dexp are aliased: one wire value drives BOTH member pairs (the
     // compander → mic side and the dexp → phone side). Bespoke — one optional,
     // two members, two flags.
@@ -497,18 +503,34 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
 
 void TransmitModel::setSpeechProcessorLevel(int level)
 {
-    // NOR=0, DX=1, DX+=2 (pcap confirmed: speech_processor_level, not compander_level).
-    // Optimistic update: radio does not echo in incremental status.
-    level = qBound(0, level, 2);
+    // Flex uses NOR=0, DX=1, DX+=2 (pcap confirmed:
+    // speech_processor_level, not compander_level). A backend capability may
+    // widen the normalized domain for an evidenced continuous control.
+    // Optimistic update: Flex does not echo in incremental status.
+    level = qBound(0, level, m_speechProcLevelMaximum);
     m_speechProcLevel = level;
     emit micStateChanged();
     emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_level=%1").arg(level));
 }
 
+void TransmitModel::setSpeechProcessorLevelMaximum(int maximum)
+{
+    maximum = qBound(2, maximum, 100);
+    if (m_speechProcLevelMaximum == maximum) {
+        return;
+    }
+    m_speechProcLevelMaximum = maximum;
+    const int bounded = qBound(0, m_speechProcLevel, maximum);
+    if (bounded != m_speechProcLevel) {
+        m_speechProcLevel = bounded;
+        emit micStateChanged();
+    }
+}
+
 bool TransmitModel::applySpeechProcessorState(bool on, int level)
 {
-    level = qBound(0, level, 2);
+    level = qBound(0, level, m_speechProcLevelMaximum);
     if (m_speechProcEnable == on && m_speechProcLevel == level) {
         return false;
     }

@@ -110,6 +110,7 @@ struct SliceDelta {
     // FM duplex/repeater
     std::optional<QString>     fmToneMode;
     std::optional<double>      fmToneValue;
+    std::optional<double>      fmToneRxValue;
     std::optional<QString>     repeaterOffsetDir;
     std::optional<double>      fmRepeaterOffsetFreq;
     std::optional<double>      txOffsetFreq;

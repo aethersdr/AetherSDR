@@ -25,6 +25,21 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+enum class FmTonePresentation {
+    Legacy,
+    Hidden,
+    Ctcss,
+};
+
+[[nodiscard]] inline const QStringList& legacyFmToneModes()
+{
+    static const QStringList modes{
+        QStringLiteral("off"),
+        QStringLiteral("ctcss_tx"),
+    };
+    return modes;
+}
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -42,9 +57,12 @@ struct DeclaredBandRange {
 // surfaced to clients. A FlexBackend may seed this FROM ModelCapabilities, but
 // the two are distinct concepts (derived-from-name vs reported-by-backend).
 //
-// ADDING A FIELD: every field below defaults to false/0/empty, so a backend
-// that omits one silently declares the feature ABSENT — set it explicitly in
-// FlexBackend, Hl2Backend AND SimBackend. Then record it in
+// ADDING A FIELD: feature-presence fields default to false/0/empty, so a
+// backend that omits one silently declares the feature ABSENT. Shape fields
+// that describe an already-established control instead default to the legacy
+// shape (for example PROC's 0..2 domain), avoiding a disconnected or older
+// backend briefly losing an existing surface. In both cases, set the field
+// explicitly in FlexBackend, Hl2Backend AND SimBackend. Then record it in
 // docs/architecture/radio-capabilities-map.md, which maps every field to the
 // code that reads it (and lists the ones nothing reads yet). A capability no
 // consumer reads looks identical, from here, to one that works.
@@ -132,6 +150,12 @@ struct RadioCapabilities {
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
 
+    // Whether forward-power telemetry needs client-side attack/decay
+    // ballistics. True preserves the established Flex presentation. A backend
+    // whose telemetry already carries a stable indicated value can disable the
+    // second response layer so consumers reflect each authoritative sample.
+    bool forwardPowerRequiresSmoothing = false;
+
     [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
     {
         for (const TxPowerBand& band : txPowerBands) {
@@ -158,6 +182,12 @@ struct RadioCapabilities {
     // rollback a backend cannot perform for itself, because a backend cannot
     // reach TransmitModel (#5106 review).
     QStringList receiveOnlyModes;
+
+    // CTCSS presentation is explicit so a vendor-specific model can expose
+    // its proven registers without changing another radio family's controls.
+    // Hidden is the safe default; established backends opt into Legacy.
+    FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
+    QStringList fmToneModes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
@@ -300,6 +330,13 @@ struct RadioCapabilities {
     // tone. A radio can have either, both or neither.
     bool hasManualNotch = false;
 
+    // Inclusive upper bound of the radio's speech-processor level control.
+    // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
+    // continuous control publishes a maximum greater than 2. The minimum is
+    // always zero. The legacy-shape default is intentional; see ADDING A FIELD.
+    int speechProcessorLevelMaximum = 2;
+    QString speechProcessorLabel = QStringLiteral("PROC");
+
     // The radio can temporarily monitor the transmit frequency while the
     // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
     // persistent repeater-reverse setting: releasing it returns reception to
@@ -331,6 +368,12 @@ struct RadioCapabilities {
     // This is independent of supply voltage: a backend may support either,
     // both, or neither telemetry source.
     bool hasPaTemperatureTelemetry = false;
+
+    // The radio reports PA drain current as calibrated live telemetry. The
+    // Radio Vitals applet may reuse its PA-instrument row for this only when
+    // PA temperature is unavailable; the capability is deliberately separate
+    // because some radios define PACURRENT with an unusable/clipped range.
+    bool hasPaCurrentTelemetry = false;
 
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an

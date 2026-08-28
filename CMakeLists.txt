@@ -687,6 +687,7 @@ set(CORE_SOURCES
     src/core/AetherClockEngine.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -856,6 +857,7 @@ set(MODEL_SOURCES
     src/models/BandPlanManager.cpp
     src/models/XvtrPolicy.cpp
     src/models/AntennaGeniusModel.cpp
+    src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
 )
 
@@ -1064,6 +1066,7 @@ set(GUI_SOURCES
     src/gui/PhaseKnob.cpp
     src/gui/AntennaGeniusApplet.cpp
     src/gui/ShackSwitchApplet.cpp
+    src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp

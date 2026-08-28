@@ -1377,6 +1377,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
+    c.fmTonePresentation = FmTonePresentation::Legacy;
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
     // running count would tell the UI the limit was already reached and
@@ -1415,6 +1416,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
+    // HL2 publishes an instantaneous directional estimate; preserve the
+    // established client-side PEP response above the backend seam.
+    c.forwardPowerRequiresSmoothing = true;
     c.hasTuner = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
@@ -1499,6 +1503,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
+    c.hasPaCurrentTelemetry = false;
+    c.speechProcessorLevelMaximum = 2;
+    c.speechProcessorLabel = QStringLiteral("PROC");
     c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).

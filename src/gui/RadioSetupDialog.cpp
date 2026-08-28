@@ -1562,6 +1562,22 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             m_model->sendCommand(
                 QString("radio set enforce_private_ip_connections=%1").arg(on ? 1 : 0));
         });
+        // Doctrine (#5263): dim, never hide. `radio set
+        // enforce_private_ip_connections=` is a Flex command-plane verb; on a
+        // backend without one the button toggled and the command was dropped —
+        // a live-looking dead control. Same refresh shape as the Reboot button
+        // above.
+        auto applyEnforceAvailability = [this, enforceBtn] {
+            const bool ok = m_model->hasCommandPlane();
+            enforceBtn->setEnabled(ok);
+            const QString why = ok ? QString()
+                                   : tr("Not supported by this radio");
+            enforceBtn->setToolTip(why);
+            enforceBtn->setAccessibleDescription(why);
+        };
+        applyEnforceAvailability();
+        connect(m_model, &RadioModel::connectionStateChanged, enforceBtn,
+                [applyEnforceAvailability](bool) { applyEnforceAvailability(); });
         grid->addWidget(enforceBtn, 0, 1);
 
         // 128-bit hex token generator — plenty for a local same-user secret.

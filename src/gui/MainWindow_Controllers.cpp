@@ -500,6 +500,15 @@ void MainWindow::handleFlexControlButton(int button, int action)
         setFlexControlHardwareIndicator(button);
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
+            // Same gate the CwxF* macros carry below: split creates its TX
+            // slice with Flex wire text, which a backend with no command plane
+            // drops — a hardware button that silently does nothing. Refuse and
+            // log; the binding stays assignable (M0, #5263).
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "SplitActiveSlice ignored:"
+                                   << "this backend takes no Flex slice-create command";
+                return;
+            }
             if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
             auto* s = activeSlice();
             if (!s) return;
@@ -1020,6 +1029,14 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         applyMasterVolume(next);
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
+            // Same refusal as the FlexControl split above: no command plane,
+            // no Flex slice-create — refuse loudly instead of a dead hardware
+            // button (M0, #5263).
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
+                                   << "this backend takes no Flex slice-create command";
+                return;
+            }
             auto* s = activeSlice();
             if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
                 QString panId = s->panId().isEmpty()
@@ -2067,12 +2084,32 @@ void MainWindow::registerMidiParams()
     }
 
     // ── Global ──────────────────────────────────────────────────────────
+    // The mixer verbs drive the RADIO's lineout/headphone hardware outputs, a
+    // Flex command-plane feature — on a backend without one the command is
+    // dropped, which made a mapped MIDI volume knob silently dead. Refuse and
+    // log instead (M0, #5263). Rerouting these to the client-side master
+    // volume would change what the knob MEANS on Flex, so that stays an M4
+    // conversion decision, not a gate.
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v))); },
+        [this](float v) {
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.masterVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
+                return;
+            }
+            m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+        },
         [this]() -> float { return m_radioModel.lineoutGain(); });
 
     reg("global.hpVolume", "Headphone Volume", "Global", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v))); },
+        [this](float v) {
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.hpVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
+                return;
+            }
+            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
+        },
         [this]() -> float { return m_radioModel.headphoneGain(); });
 
     reg("global.masterMute", "Master Mute", "Global", P::Toggle, 0, 1,

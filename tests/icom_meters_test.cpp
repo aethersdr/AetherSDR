@@ -125,15 +125,18 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Id, 97, 0, MeterCalibration::Ic7300Mk2), 10.0),
           "IC-7300MK2 Id uses its 25 A face");
     check(near(meterValue(MeterId::Vd, 185, 0,
-                          MeterCalibration::Ic9700Voltage), 13.8),
+                          MeterCalibration::Ic9700), 13.8),
           "IC-9700 Vd uses its model-specific calibration");
     check(near(meterValue(MeterId::Id, 121, 0,
-                          MeterCalibration::Ic9700Voltage), 0.0),
-          "IC-9700 voltage capability does not also claim PA current");
+                          MeterCalibration::Ic9700), 10.0),
+          "IC-9700 Id midpoint is 10 A");
+    check(near(meterValue(MeterId::Id, 241, 0,
+                          MeterCalibration::Ic9700), 20.0),
+          "IC-9700 Id full scale is 20 A");
     check(near(meterValue(MeterId::Power, 213, 0,
-                          MeterCalibration::Ic9700Voltage),
+                          MeterCalibration::Ic9700),
                213.0 * 100.0 / 255.0),
-          "IC-9700 voltage capability does not borrow another model's watt curve");
+          "IC-9700 meter calibration does not borrow another model's watt curve");
 
     // ALC full scale is 120, NOT 255 — the guide says so. Scaling by 255 makes
     // a fully-driven ALC read 47%.
@@ -387,6 +390,16 @@ static void testModelTable()
             check(band.maxWatts > 0.0,
                   "every declared IC-9700 band carries a PA rating");
         }
+        check(bandRatedPowerWatts(*ic9700, 144'000'000ULL) == 100.0
+                  && bandRatedPowerWatts(*ic9700, 148'000'000ULL) == 100.0
+                  && bandRatedPowerWatts(*ic9700, 430'000'000ULL) == 75.0
+                  && bandRatedPowerWatts(*ic9700, 450'000'000ULL) == 75.0
+                  && bandRatedPowerWatts(*ic9700, 1'240'000'000ULL) == 10.0
+                  && bandRatedPowerWatts(*ic9700, 1'300'000'000ULL) == 10.0,
+              "IC-9700 band edges select the correct 100/75/10 W rating");
+        check(!bandRatedPowerWatts(*ic9700, 200'000'000ULL)
+                  && !bandRatedPowerWatts(*ic9700, 900'000'000ULL),
+              "a frequency between IC-9700 RF decks borrows no rating");
         // The other half of the same claim: a continuous model has no table,
         // and that emptiness is what keeps its tune path untouched. #5116
         // names both of these as non-goals.
@@ -478,7 +491,10 @@ static void testCapabilityProfiles()
           "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");
     check(pMk2.setMenu.voxDelayItem == 267 && pMk2.setMenu.civTransceiveItem == 89,
           "IC-7300MK2 owns the distinct VOX delay 0267 and Transceive 0089");
-    check(!p9700.modulation && !p9700.txBandwidth,
+    check(p9700.modulation && p9700.modulation->phoneLevelFollowsNetworkInput,
+          "IC-9700 owns its verified LAN modulation-level profile");
+    check(p9700.setMenu.voxDelayItem < 0 && p9700.setMenu.civTransceiveItem < 0
+              && !p9700.txBandwidth,
           "IC-9700 borrows no unverified SET-menu or TX-bandwidth map");
 
     check(p705.fmRepeater && p705.fmRepeater->dialect == FmRepeaterDialect::Extended
@@ -556,18 +572,49 @@ static void testPowerCurveIsNotShared()
 {
     const IcomModel* ic705 = modelForCivAddress(0xA4);
     const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* ic7300mk2 = modelForCivAddress(0xB6);
     check(ic705 && !powerCurveFor(*ic705).empty(), "the IC-705 has a measured watts curve");
     // Handing back the IC-705's curve for another radio would produce a watts
-    // figure an operator would act on, derived from a different PA. Empty means
-    // "report percent", which is honest.
-    check(ic9700 && powerCurveFor(*ic9700).empty(),
-          "another model gets NO curve rather than the IC-705's");
+    // figure an operator would act on, derived from a different PA. The 9700
+    // instead owns a relative-percent curve from its own Po scale.
+    check(ic9700 && !powerCurveFor(*ic9700).empty(),
+          "the IC-9700 gets its own relative Po curve, not the IC-705 watts curve");
+    if (ic9700) {
+        check(profileFor(*ic9700).meters.calibration
+                      == MeterCalibration::Ic9700
+                  && profileFor(*ic9700).meters.powerConversion
+                      == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
+              "the IC-9700 retains voltage calibration alongside relative Po conversion");
+        const auto curve = powerCurveFor(*ic9700);
+        const auto bands = bandsFor(*ic9700);
+        check(bands.size() == 3, "the IC-9700 exposes three rated RF decks");
+        for (const IcomBand& band : bands) {
+            check(near(derivedPowerWatts(interpolateCurve(curve, 0),
+                                         band.maxWatts), 0.0),
+                  "zero Po maps to zero derived watts on every IC-9700 band");
+            check(near(derivedPowerWatts(interpolateCurve(curve, 143),
+                                         band.maxWatts), band.maxWatts * 0.5),
+                  "50 percent Po maps to half the active IC-9700 deck rating");
+            check(near(derivedPowerWatts(interpolateCurve(curve, 213),
+                                         band.maxWatts), band.maxWatts),
+                  "100 percent Po maps to the active IC-9700 deck rating");
+        }
+    }
+    check(near(interpolateCurve(powerCurveFor(*ic705), 143), 5.0)
+              && near(interpolateCurve(powerCurveFor(*ic705), 213), 10.0),
+          "the IC-705 retains its native measured-watts curve");
+    check(ic7300mk2
+              && near(interpolateCurve(powerCurveFor(*ic7300mk2), 143), 50.0)
+              && near(interpolateCurve(powerCurveFor(*ic7300mk2), 213), 100.0)
+              && profileFor(*ic7300mk2).meters.powerConversion
+                  == MeterCalibrationProfile::PowerConversion::NativeWatts,
+          "the IC-7300MK2 retains its native watts profile");
     check(powerCurveFor(unknownModel()).empty(), "and nor does an unknown radio");
     check(powerCurveForCalibration(MeterCalibration::Ic7300Mk2).data()
               == powerCurveIc7300Mk2().data(),
           "power presentation and conversion share the IC-7300MK2 curve selector");
-    check(powerCurveForCalibration(MeterCalibration::Ic9700Voltage).empty(),
-          "the voltage-only IC-9700 calibration fails closed to relative power");
+    check(powerCurveForCalibration(MeterCalibration::Ic9700).empty(),
+          "the IC-9700 meter calibration fails closed to relative power");
 }
 
 // The mode vocabulary this backend publishes onto the slice (#5040).

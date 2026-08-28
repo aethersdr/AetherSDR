@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -298,6 +299,7 @@ inline constexpr std::uint8_t kNoiseBlanker  = 0x22;
 inline constexpr std::uint8_t kNoiseReduce   = 0x40;
 inline constexpr std::uint8_t kAutoNotch     = 0x41;
 inline constexpr std::uint8_t kRepeaterTone  = 0x42;
+inline constexpr std::uint8_t kRepeaterAccess = 0x5D;
 inline constexpr std::uint8_t kCompressor    = 0x44;
 inline constexpr std::uint8_t kMonitorFn     = 0x45;
 inline constexpr std::uint8_t kVox           = 0x46;
@@ -342,6 +344,10 @@ inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET
 [[nodiscard]] std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item);
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item,
                                                         std::uint8_t value);
+// SET-menu levels use the same two-byte 0000..0255 BCD payload as command 14,
+// unlike the one-byte enums written by cmdWriteSetting().
+[[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
+                                                             int value);
 
 // Command 0x21 — RIT and dTX (which is what Icom calls XIT).
 namespace tuneOffset {
@@ -643,11 +649,20 @@ enum class RepeaterOffsetDirection : std::uint8_t {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
 [[nodiscard]] std::optional<std::uint8_t> decodeRepeaterAccess(
     std::span<const std::uint8_t> payload);
+// Normalized radio-state token for each documented IC-9700 16 5D value.
+// Empty means reserved/unknown. Kept here with the wire decoder so socket-free
+// protocol tests can pin every value without a fake radio session.
+[[nodiscard]] std::string_view repeaterAccessModeName(std::uint8_t value) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     std::uint8_t to, std::uint8_t which);
 [[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
     std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to,
+                                                        std::uint8_t which,
+                                                        double toneHz);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
+                                                             std::uint8_t mode);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);

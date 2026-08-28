@@ -418,6 +418,20 @@ add_executable(icom_civ_scheduler_test
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
+# Socket-free backend incident-state transition. Positive session convergence
+# is certified against real firmware through the automation bridge.
+add_executable(icom_incident_telemetry_test
+    tests/icom_incident_telemetry_test.cpp)
+target_include_directories(icom_incident_telemetry_test PRIVATE src)
+target_link_libraries(icom_incident_telemetry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_incident_telemetry_test COMMAND icom_incident_telemetry_test)
+
+# Pure state-machine coverage: no WebSocket, network socket, or radio fixture.
+add_executable(icom_tci_unkey_settle_test
+    tests/icom_tci_unkey_settle_test.cpp)
+target_include_directories(icom_tci_unkey_settle_test PRIVATE src)
+add_test(NAME icom_tci_unkey_settle_test COMMAND icom_tci_unkey_settle_test)
+
 add_executable(icom_scope_test
     tests/icom_scope_test.cpp
     src/core/backends/icom/IcomScope.cpp
@@ -442,6 +456,15 @@ add_executable(icom_meters_test
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
+
+# Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
+# per-deck watt derivation, sibling-model isolation, and unkey clearing.
+add_executable(icom_power_derivation_test
+    tests/icom_power_derivation_test.cpp)
+target_include_directories(icom_power_derivation_test PRIVATE src)
+target_link_libraries(icom_power_derivation_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
 
 # Retired fake-radio fixtures. Positive session and backend convergence is
 # certified against real firmware through the automation bridge and radiocert;
@@ -1204,6 +1227,12 @@ target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
 
+# In-use radio share gate (#4448), single-sourced for both connect paths — header-only.
+add_executable(connection_sharing_policy_test tests/connection_sharing_policy_test.cpp)
+target_include_directories(connection_sharing_policy_test PRIVATE src)
+target_link_libraries(connection_sharing_policy_test PRIVATE Qt6::Core)
+add_test(NAME connection_sharing_policy_test COMMAND connection_sharing_policy_test)
+
 # Last-session DAX restore window + quit-time key prune (#4558) — header-only.
 add_executable(dax_restore_policy_test tests/dax_restore_policy_test.cpp)
 target_include_directories(dax_restore_policy_test PRIVATE src)
@@ -1215,8 +1244,18 @@ add_executable(band_recall_slice_selection_policy_test
     tests/band_recall_slice_selection_policy_test.cpp
 )
 target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
+target_link_libraries(band_recall_slice_selection_policy_test PRIVATE Qt6::Core)
 add_test(NAME band_recall_slice_selection_policy_test
     COMMAND band_recall_slice_selection_policy_test)
+
+# Pins RadioModel slice status connect-enumeration adoption and ensures zero active=1 commands are sent.
+add_executable(radiomodel_slice_connect_enumeration_test
+    tests/radiomodel_slice_connect_enumeration_test.cpp
+)
+target_include_directories(radiomodel_slice_connect_enumeration_test PRIVATE src)
+target_link_libraries(radiomodel_slice_connect_enumeration_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_slice_connect_enumeration_test
+    COMMAND radiomodel_slice_connect_enumeration_test)
 
 # When that policy applies — the window opened by an actually-dispatched
 # `display pan set <pan> band=` write. Header-only.
@@ -1247,6 +1286,12 @@ add_executable(band_edges_test
 target_include_directories(band_edges_test PRIVATE src)
 target_link_libraries(band_edges_test PRIVATE Qt6::Core)
 add_test(NAME band_edges_test COMMAND band_edges_test)
+
+add_executable(band_shortcut_data_test
+    tests/band_shortcut_data_test.cpp
+)
+target_include_directories(band_shortcut_data_test PRIVATE src)
+add_test(NAME band_shortcut_data_test COMMAND band_shortcut_data_test)
 
 # Band-plan segment labels feed isVoiceSegmentLabel(), which gates S-History /
 # QRM voice detection — a label carrying no recognised emission token silently
@@ -2304,6 +2349,13 @@ set_tests_properties(relay_bar_a11y_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
+add_executable(fm_tone_presentation_test
+    tests/fm_tone_presentation_test.cpp
+)
+target_include_directories(fm_tone_presentation_test PRIVATE src)
+target_link_libraries(fm_tone_presentation_test PRIVATE Qt6::Core)
+add_test(NAME fm_tone_presentation_test COMMAND fm_tone_presentation_test)
+
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
 add_executable(native_widget_topology_test
@@ -2330,6 +2382,13 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
+    # RxApplet/VfoWidget are full-desktop translation units with no practical
+    # unit-test link seam. Pin their radio-backed presentation wiring; label
+    # behavior itself is covered by fm_tone_presentation_test above.
+    add_test(NAME fm_tone_presentation_contract
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fm_tone_presentation_contract_test.py
+                     ${CMAKE_CURRENT_SOURCE_DIR})
     # Argument parsing for the logwatch helper (#4912) — blind rest[0]/rest[1]
     # indexing turned a typo into an IndexError traceback.
     add_test(NAME automation_logwatch_arguments
@@ -2491,6 +2550,17 @@ target_include_directories(mqtt_antenna_alias_test PRIVATE src)
 target_link_libraries(mqtt_antenna_alias_test PRIVATE Qt6::Core)
 add_test(NAME mqtt_antenna_alias_test COMMAND mqtt_antenna_alias_test)
 
+# Green Heron Everyware antenna switch. The protocol test is pure — verbatim
+# wire fixtures in, records out, no socket — which is why GreenHeronProtocol.cpp
+# has no I/O in it.
+add_executable(green_heron_protocol_test
+    tests/green_heron_protocol_test.cpp
+    src/core/GreenHeronProtocol.cpp
+)
+target_include_directories(green_heron_protocol_test PRIVATE src)
+target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
+add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
 add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
@@ -2528,6 +2598,14 @@ add_executable(cw_sidetone_start_policy_test
 )
 target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
 add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
+
+# The explicit-selection name rule (#5123): pure QString predicate, no
+# PortAudio, so the captured Linux/Windows device names are checked on every
+# runner regardless of which audio backends it has.
+add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test.cpp)
+target_include_directories(cw_sidetone_device_match_test PRIVATE src)
+target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
 
 # #4281 — who owns the Client-Side QSO recorder's TX slot. Pure, header-only,
 # so the truth table is a compile-time assertion; the run-time rows carry the
@@ -2788,6 +2866,8 @@ add_executable(meter_applet_capability_test
     src/core/AsyncLogWriter.cpp
 )
 target_include_directories(meter_applet_capability_test PRIVATE src)
+target_compile_definitions(meter_applet_capability_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(meter_applet_capability_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
 )
@@ -3896,6 +3976,8 @@ add_executable(phone_cw_mic_gain_authority_test
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
+target_compile_definitions(phone_cw_mic_gain_authority_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(phone_cw_mic_gain_authority_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test
 )
@@ -4159,5 +4241,33 @@ foreach(_aether_target IN LISTS _aether_test_targets)
     get_target_property(_aether_type ${_aether_target} TYPE)
     if(_aether_type STREQUAL "EXECUTABLE")
         target_link_libraries(${_aether_target} PRIVATE aether_test_wisdom_isolation)
+    endif()
+endforeach()
+
+# ── Default test timeout — every test gets a ceiling ────────────────────────
+#
+# No suite-wide timeout existed before this: `enable_testing()` without
+# `include(CTest)` configures none, so a hung test blocked its CI gate
+# indefinitely — map_live_update_test ran 35 minutes producing nothing before
+# it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
+# failure: ctest counts it as failed, so --output-on-failure finally prints
+# the captured output that a hang withholds.
+#
+# 300s is data-derived, not a guess: across the last 10 gate-lane runs and
+# the 4 most recent full-suite sanitizer runs, 90% of tests average under
+# ~3s and the slowest legitimate completion ever recorded is spectral_nr_test
+# at 276.6s under the sanitizer lane (#5271 has the tables). If a test
+# legitimately outgrows 300s, give IT a bigger explicit TIMEOUT below its
+# add_test — never raise this default for one test's sake.
+#
+# The loop only fills the gap: a test that already declares its own TIMEOUT
+# (vkamp_connection_test, asr_gpu_probe_test) keeps it. A CMake TIMEOUT
+# property always beats a `ctest --timeout` flag, so this is authoritative
+# in every lane — gate steps, sanitizers, and local dev alike.
+get_directory_property(_aether_registered_tests TESTS)
+foreach(_aether_test IN LISTS _aether_registered_tests)
+    get_test_property(${_aether_test} TIMEOUT _aether_existing_timeout)
+    if(NOT _aether_existing_timeout)
+        set_tests_properties(${_aether_test} PROPERTIES TIMEOUT 300)
     endif()
 endforeach()
