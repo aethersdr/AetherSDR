@@ -42,6 +42,23 @@ bool IcomStream::start(const Config& config)
     return true;
 }
 
+namespace {
+
+// The three RS-BA1 streams fail independently and for different reasons, so a
+// failure that does not say which one failed sends the operator to the wrong
+// setting. Logged as a bare int() elsewhere in this file; a name costs nothing.
+const char* roleName(IcomStream::Role r)
+{
+    switch (r) {
+    case IcomStream::Role::Control: return "control";
+    case IcomStream::Role::Serial:  return "CI-V";
+    case IcomStream::Role::Audio:   return "audio";
+    }
+    return "?";
+}
+
+}  // namespace
+
 bool IcomStream::bindOnly(const Config& config)
 {
     stop();
@@ -59,8 +76,8 @@ bool IcomStream::bindOnly(const Config& config)
                 ++m_counters.socketErrors;
                 m_counters.lastSocketError = m_socket
                     ? m_socket->errorString() : QStringLiteral("socket unavailable");
-                qCWarning(lcIcomStream) << "UDP socket error on role"
-                                        << int(m_config.role) << ':'
+                qCWarning(lcIcomStream) << "UDP socket error on the"
+                                        << roleName(m_config.role) << "stream:"
                                         << m_counters.lastSocketError;
             });
     if (!m_socket->bind(QHostAddress::AnyIPv4, config.localPort)) {
@@ -101,23 +118,6 @@ bool IcomStream::bindOnly(const Config& config)
     m_idleSince.start();
     return true;
 }
-
-namespace {
-
-// The three RS-BA1 streams fail independently and for different reasons, so a
-// failure that does not say which one failed sends the operator to the wrong
-// setting. Logged as a bare int() elsewhere in this file; a name costs nothing.
-const char* roleName(IcomStream::Role r)
-{
-    switch (r) {
-    case IcomStream::Role::Control: return "control";
-    case IcomStream::Role::Serial:  return "CI-V";
-    case IcomStream::Role::Audio:   return "audio";
-    }
-    return "?";
-}
-
-}  // namespace
 
 void IcomStream::beginHandshake()
 {
@@ -160,23 +160,46 @@ void IcomStream::beginHandshake()
                 // is the one cause the old message never suggested. A raw probe
                 // to the default port can even answer while the radio listens for
                 // RS-BA1 somewhere else, which reads as proof the port is right.
+                // The control stream is the one that proves the session-wide
+                // conditions. Media streams only handshake from
+                // openMediaStreams(), which is reached after m_authOk AND a
+                // granted stream request -- so by then Network Control is
+                // demonstrably on, the credentials are demonstrably good, and
+                // nobody else holds the session. Repeating those causes for a
+                // CI-V or audio timeout would point the operator at three
+                // settings that are provably fine, which is the misdirection
+                // this message exists to remove.
+                const QString causes = (m_config.role == Role::Control)
+                    ? QStringLiteral(
+                        "Check the radio's Network menu: that its port for this "
+                        "stream matches the one above, that Network Control is "
+                        "ON, that the user/password are set, and that no other "
+                        "client holds the session")
+                    : QStringLiteral(
+                        "The control stream connected, so Network Control and "
+                        "the credentials are good — check that this stream's "
+                        "port on the radio matches the one above");
                 emit failed(QStringLiteral(
                     "no answer from %1:%2 (%3 stream) after %4 attempts — the "
-                    "radio is not answering RS-BA1 on that port. Check the "
-                    "radio's Network menu: that its port for this stream matches "
-                    "the one above, that Network Control is ON, that the "
-                    "user/password are set, and that no other client holds the "
-                    "session")
+                    "radio is not answering RS-BA1 on that port. %5")
                         .arg(m_config.host.toString())
                         .arg(m_config.remotePort)
                         .arg(QString::fromLatin1(roleName(m_config.role)))
-                        .arg(kHandshakeAttempts));
+                        .arg(kHandshakeAttempts)
+                        .arg(causes));
                 return;
             }
             // Name the target on every line. Six identical lines that do not say
             // where they were sent read as an AetherSDR networking fault; the
             // address and port are what turn them into a radio-side check.
-            qCWarning(lcIcomStream)
+            //
+            // Deliberately still INF. A retry is not yet a failure -- a connect
+            // that succeeds on attempt 2 is a normal connect, and warning on
+            // each one would put up to 18 warnings on the log for a single
+            // failed connect across three streams. The terminal failure is the
+            // event worth the level, and IcomSession::fail already logs that at
+            // qCWarning. What was missing here was the TARGET, not the severity.
+            qCInfo(lcIcomStream)
                 << "no IAmHere from"
                 << QStringLiteral("%1:%2").arg(m_config.host.toString())
                                           .arg(m_config.remotePort)
@@ -313,7 +336,7 @@ void IcomStream::onReadyRead()
         // and no amount of logging at the dispatch sites can distinguish "the
         // radio said nothing" from "we ignored what it said".
         if (!isPing(asSpan(buf))) {
-            qCDebug(lcIcomStream) << "role" << int(m_config.role) << "RX" << buf.size()
+            qCDebug(lcIcomStream) << "role" << roleName(m_config.role) << "RX" << buf.size()
                                   << "bytes:" << buf.left(64).toHex(' ');
         }
         handleDatagram(buf);
@@ -351,7 +374,7 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
         if (parseIAmHere(pkt, remote)) {
             m_remoteSid = remote;
             m_gotRemoteSid = true;
-            qCInfo(lcIcomStream) << int(m_config.role) << "got i-am-here, remote sid"
+            qCInfo(lcIcomStream) << roleName(m_config.role) << "got i-am-here, remote sid"
                                  << Qt::hex << remote;
             sendRawTwice(buildAreYouReady(m_localSid, m_remoteSid));
         }
@@ -363,7 +386,7 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
             m_ready = true;
             if (m_handshakeTimer)
                 m_handshakeTimer->stop();
-            qCInfo(lcIcomStream) << int(m_config.role) << "handshake complete on local port"
+            qCInfo(lcIcomStream) << roleName(m_config.role) << "handshake complete on local port"
                                  << m_boundPort;
 
             // NO PERIODIC IDLES ON THE AUDIO STREAM.
