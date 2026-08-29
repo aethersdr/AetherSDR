@@ -2042,7 +2042,7 @@ RadioModel::RadioModel(QObject* parent)
             // setTransmit(), so the raw-TX edge has to be published on this path
             // too — otherwise a TCI client watching an operator-initiated
             // transmit sees nothing. See publishBackendTransmitEdge().
-            publishBackendTransmitEdge(on);
+            publishCommandedBackendTransmitEdge(on);
         }
     });
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
@@ -2070,7 +2070,7 @@ RadioModel::RadioModel(QObject* parent)
             // carrier, and that client's unkey then dropped the key while tune
             // still believed it owned it. A TCI-driven amplifier also never saw
             // trx:true for the carrier operators most often tune INTO an amp.
-            publishBackendTransmitEdge(on);
+            publishCommandedBackendTransmitEdge(on);
         }
     });
 
@@ -4183,6 +4183,19 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     if (m_backend)
         m_backend->setKeying(tx);
 
+    publishCommandedBackendTransmitEdge(tx);
+}
+
+void RadioModel::publishCommandedBackendTransmitEdge(bool tx)
+{
+    // Icom has a real CI-V PTT readback. Its command is intent, not proof: a
+    // queued/ACKed write can still be delayed, refused, or overtaken by an
+    // older poll. Let IcomCivBackend::transmitChanged publish the decoded radio
+    // state. HL2 has no equivalent status plane, so it retains the established
+    // command-edge fallback used by TCI and the TX indicators.
+    if (m_family == QLatin1String("icom")) {
+        return;
+    }
     publishBackendTransmitEdge(tx);
 }
 

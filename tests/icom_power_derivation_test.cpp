@@ -184,14 +184,14 @@ void testIc9700DerivedForwardPowerAcrossBands()
     IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic9700, 430'000'000ULL);
     const int beforeClientUnkey = updateSpy.count();
     backend.setKeying(false);
-    bool clientUnkeyReset = false;
+    bool sawClientUnkeyReset = false;
     for (int i = beforeClientUnkey; i < updateSpy.count(); ++i) {
         const QList<QVariant> args = updateSpy.at(i);
-        clientUnkeyReset |= args.at(0).toString() == QStringLiteral("TX:FWDPWR")
+        sawClientUnkeyReset |= args.at(0).toString() == QStringLiteral("TX:FWDPWR")
             && args.at(1).toDouble() == 0.0;
     }
-    check(clientUnkeyReset,
-          "client-requested Icom unkey immediately clears derived forward power");
+    check(!sawClientUnkeyReset,
+          "client-requested Icom unkey retains power until radio confirmation");
 
     CivFrame ptt;
     ptt.to = kControllerAddress;

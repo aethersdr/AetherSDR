@@ -1801,6 +1801,9 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Command-edge fallback for a backend with no radio TX readback. Icom has
+    // CI-V PTT state and therefore waits for the decoded backend edge.
+    void publishCommandedBackendTransmitEdge(bool tx);
     // Key-on guard for the MOX/TUNE seam paths, which do not run through
     // setTransmit() and therefore missed its canTransmit test. Returns true when
     // keying may proceed; on refusal it rolls back the optimistic transmit state

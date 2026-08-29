@@ -172,6 +172,7 @@ private:
     void startTransmit(const QString& text);
     void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
     void beginTransmitWhenReady();
+    void startTransmitAudioAfterPtt();
     void paceTransmitAudio();
     void finishTransmit(bool aborted, const QString& reason);
 
@@ -305,10 +306,13 @@ private:
     int m_txChunkCount{0};
     // TX pacing health: detects GUI-thread stalls starving the 20 ms pacer.
     QElapsedTimer m_txPaceClock;
+    QElapsedTimer m_txPttClock;
     qint64 m_txPaceLastChunkMs{-1};
     qint64 m_txPaceMaxGapMs{0};
     int m_txPaceLateChunks{0};
     bool m_txActive{false};
+    bool m_txAudioStartArmed{false};
+    bool m_txAwaitingAudioFinish{false};
     bool m_txPendingStream{false};
     bool m_txRestoreAudioDaxMode{false};
     bool m_txRestoreTransmitDax{false};
@@ -318,6 +322,7 @@ private:
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
+    QMetaObject::Connection m_txPttConfirmConnection;
 
     // KISS TNC server (TCP) and its controls.
     KissTncServer* m_kissServer{nullptr};

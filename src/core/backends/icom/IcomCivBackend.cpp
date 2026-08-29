@@ -240,6 +240,18 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+    // AetherModem finishes PRODUCING before both host and radio have finished
+    // PLAYING. Publish a conservative vendor-specific drain budget so the UI
+    // can hold its scheduled packet PTT without delaying an operator's manual
+    // unkey. TxPacketizer's cap is 250 ms at our negotiated 48 kHz mono s16;
+    // the conninfo request asks the radio for another 300 ms of TX buffering.
+    QVariantMap icomExtensions;
+    constexpr int kPacketizerMaxMs = static_cast<int>(
+        TxPacketizer::kMaxPendingBytes * 1000
+        / (kRadioAudioRateHz * static_cast<int>(sizeof(qint16))));
+    icomExtensions.insert(QStringLiteral("txAudioDrainBudgetMs"),
+                          kPacketizerMaxMs + IcomSession::kDefaultTxBufferMs);
+    c.extensions.insert(QStringLiteral("icom"), icomExtensions);
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
@@ -4570,25 +4582,16 @@ void IcomCivBackend::setKeying(bool key)
     m_pendingPttUntilMs = nowMs() + 1000;
     m_pttIncidentReported = false;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
-    // PUBLISH IT. Setting m_keyed silently here and leaving the announcement to
-    // the poll does not work now that the poll only speaks on change: our own
-    // keying moved the variable, so the poll's answer matched it and nothing
-    // was ever emitted. The model then read mox=false through an entire live
-    // transmission — with the radio plainly on the air and its own meters
-    // moving — which silently mis-gates everything downstream that asks
-    // "are we transmitting".
-    if (m_keyed != key) {
-        m_keyed = key;
-        if (!m_keyed) {
-            clearDerivedForwardPower();
-        }
-        TransmitDelta t;
-        t.mox = key;
-        emit transmitChanged(t);
-    }
-    m_meters.setTransmitting(key);
+    // DO NOT publish intent as radio state. The scheduler sends a confirming
+    // 1C 00 read and the normal 250 ms fallback poll keeps asking. Only that
+    // decoded reply moves m_keyed, the meters, and transmitChanged. Publishing
+    // here made AetherModem release sample zero while the IC-705 still reported
+    // RX, truncating the AX.25 preamble and header on air.
     if (!key && m_session) {
         m_session->flushTxAudio();   // queued audio belongs to the transmission that ended
+    }
+    if (!key && m_txResampler) {
+        m_txResampler->reset();
     }
     if (restoreTunePower >= 0) {
         setTxPower(restoreTunePower);

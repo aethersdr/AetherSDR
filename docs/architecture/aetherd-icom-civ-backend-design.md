@@ -384,6 +384,13 @@ operator they are still on the air. RFC #4983 states the rule directly
 transition guard") and Constitution VI requires every path that can transmit to
 fail closed. Radio truth wins again as soon as the bounded window expires.
 
+The command edge is therefore **intent only**. `setKeying(true)` neither moves
+the backend's keyed state nor publishes `transmitChanged`; only a decoded
+`1C 00 01` reply does that. A waveform client such as AetherModem waits for the
+radio-confirmed edge before releasing sample zero, with a bounded timeout. This
+is load-bearing for short AX.25 frames: the earlier optimistic edge let their
+entire preamble run while an IC-705 was still completing its CI-V PTT transition.
+
 | group | interval | condition |
 |---|---:|---|
 | PTT fallback | 250 ms | always connected; Transceive is only a hint |
@@ -885,6 +892,22 @@ whatever buffer it is handed into 1364-byte pieces in a loop; the famous pair is
 just what a 1920-byte frame becomes. kappanhang hardcodes the same two offsets.
 Either way the invariant is the frame's **duration**, and the byte count follows
 from the rate and the sample width.
+
+The transmit queue is clocked at **one 20 ms frame pair per 20 ms**. A producer
+may front-load audio to absorb GUI scheduling jitter, but queue depth never
+turns into a wire burst. At scheduled packet completion AetherModem adds the
+packetizer's 250 ms maximum plus the negotiated 300 ms radio buffer before its
+ordinary tail; an operator/manual unkey remains immediate and never takes that
+delay.
+
+Finite modem audio has an additional completion barrier. The engine posts it
+behind the final PCM block, and `IcomCivBackend` then drains the 24-to-48 kHz
+resampler before AetherModem starts the unkey timer. r8brain's prewarm removes
+its no-output startup interval, not its linear-phase group delay; without the
+drain, a captured packet kept roughly 70 ms of silence at its front and lost
+roughly 70 ms from its end — enough to remove AX.25 FCS plus postamble. The
+drained samples are queued while PTT is still radio-confirmed, and the remaining
+partial 20 ms transport frame is padded with codec-correct silence.
 
 **THE RATE CANNOT MOVE ON ITS OWN.** `kAudioFrameBytes` was the constant 1920,
 which is 20 ms only at 48 kHz s16. Lowering the rate to 16 kHz while leaving it

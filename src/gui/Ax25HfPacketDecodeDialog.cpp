@@ -143,6 +143,7 @@ constexpr int kTerminalDefaultPaclen = kTerminalAutoTiming;
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
+constexpr int kIcomPttConfirmTimeoutMs = 2000;
 // Default TX tail: how long PTT stays up after the audio is queued, to flush the
 // DAX/radio buffer before unkey. On a half-duplex link this is also dead air the
 // peer can't talk over, so it's operator-tunable (Terminal tab, "TX Tail"); the
@@ -2113,6 +2114,8 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     m_txPcm = tx.stereoFloat32Pcm;
     m_txOffsetBytes = 0;
     m_txChunkIndex = 0;
+    m_txAudioStartArmed = false;
+    m_txAwaitingAudioFinish = false;
     const qsizetype chunkBytes = static_cast<qsizetype>(tx.sampleRate)
         * kTxChunkMs / 1000
         * 2
@@ -2323,29 +2326,83 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             return;
         }
         auto& txModel = m_radio->transmitModel();
+        const bool waitsForRadioPtt =
+            m_radio->backendCapabilities().family == QLatin1String("icom");
+        const quint64 generation = m_txGeneration;
+
+        if (m_txPttConfirmConnection) {
+            disconnect(m_txPttConfirmConnection);
+            m_txPttConfirmConnection = {};
+        }
+        if (waitsForRadioPtt) {
+            m_txPttConfirmConnection = connect(
+                m_radio, &RadioModel::radioTransmittingChanged, this,
+                [this, generation](bool transmitting) {
+                    if (!transmitting || !m_txActive || generation != m_txGeneration) {
+                        return;
+                    }
+                    if (m_txPttConfirmConnection) {
+                        disconnect(m_txPttConfirmConnection);
+                        m_txPttConfirmConnection = {};
+                    }
+                    const qint64 confirmMs = m_txPttClock.isValid()
+                        ? m_txPttClock.elapsed() : -1;
+                    qCInfo(lcAx25) << "AX.25 Icom PTT confirmed by radio after"
+                                   << confirmMs << "ms";
+                    appendSystemLine(QStringLiteral(
+                        "Icom PTT confirmed by radio after %1 ms.").arg(confirmMs));
+                    startTransmitAudioAfterPtt();
+                });
+        }
+
+        m_txPttClock.restart();
         txModel.requestPttOn(TransmitModel::PttSource::Dax);
         if (!m_txActive)
             return;
+        if (waitsForRadioPtt) {
+            appendSystemLine(QStringLiteral("Waiting for radio-confirmed Icom PTT."));
+            QTimer::singleShot(kIcomPttConfirmTimeoutMs, this, [this, generation] {
+                if (!m_txActive || m_txAudioStartArmed
+                    || generation != m_txGeneration) {
+                    return;
+                }
+                finishTransmit(true, QStringLiteral(
+                    "Icom PTT was not confirmed within %1 ms")
+                    .arg(kIcomPttConfirmTimeoutMs));
+            });
+            return;
+        }
         if (!txModel.isTransmitting()) {
             finishTransmit(true, QStringLiteral("PTT did not engage"));
             return;
         }
+        startTransmitAudioAfterPtt();
+    });
+}
 
-        appendTransmitLine(m_pendingTx.frame);
-        QTimer::singleShot(kTxLeadMs, this, [this] {
-            if (!m_txActive)
-                return;
-            appendSystemLine(QStringLiteral("Sending AX.25 AFSK audio: %1 chunks at %2 ms.")
-                .arg(m_txChunkCount)
-                .arg(kTxChunkMs));
-            m_txPaceClock.restart();
-            m_txPaceLastChunkMs = -1;
-            m_txPaceMaxGapMs = 0;
-            m_txPaceLateChunks = 0;
-            paceTransmitAudio();
-            if (m_txActive && m_txPaceTimer)
-                m_txPaceTimer->start();
-        });
+void Ax25HfPacketDecodeDialog::startTransmitAudioAfterPtt()
+{
+    if (!m_txActive || m_txAudioStartArmed) {
+        return;
+    }
+    m_txAudioStartArmed = true;
+    const quint64 generation = m_txGeneration;
+    appendTransmitLine(m_pendingTx.frame);
+    QTimer::singleShot(kTxLeadMs, this, [this, generation] {
+        if (!m_txActive || generation != m_txGeneration) {
+            return;
+        }
+        appendSystemLine(QStringLiteral("Sending AX.25 AFSK audio: %1 chunks at %2 ms.")
+            .arg(m_txChunkCount)
+            .arg(kTxChunkMs));
+        m_txPaceClock.restart();
+        m_txPaceLastChunkMs = -1;
+        m_txPaceMaxGapMs = 0;
+        m_txPaceLateChunks = 0;
+        paceTransmitAudio();
+        if (m_txActive && m_txPaceTimer) {
+            m_txPaceTimer->start();
+        }
     });
 }
 
@@ -2453,10 +2510,16 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
 {
     if (m_txPaceTimer)
         m_txPaceTimer->stop();
+    if (m_txPttConfirmConnection) {
+        disconnect(m_txPttConfirmConnection);
+        m_txPttConfirmConnection = {};
+    }
 
     const bool hadTx = m_txActive || m_txPendingStream || !m_txPcm.isEmpty();
     finishIcomPostResampleCapture();
     m_txActive = false;
+    m_txAudioStartArmed = false;
+    m_txAwaitingAudioFinish = false;
     m_txPendingStream = false;
 
     if (m_radio) {

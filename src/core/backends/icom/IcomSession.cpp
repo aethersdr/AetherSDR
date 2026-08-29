@@ -20,9 +20,10 @@ Q_LOGGING_CATEGORY(lcIcom, "aether.icom.session")
 
 namespace {
 
-// How often the transmit packetiser is drained. A 20 ms frame is produced every
-// 20 ms, so pumping at 10 ms keeps latency below one frame without spinning.
-constexpr int kTxPumpMs = 10;
+// The radio consumes one 20 ms frame at a time. Keep this timer as the sole
+// wire clock: draining multiple queued frames in one callback turns a useful
+// host-side lead buffer into a burst on the RS-BA1 audio stream.
+constexpr int kTxPumpMs = 20;
 
 // A partial CI-V frame older than this is abandoned. Without it, one truncated
 // frame swallows every subsequent byte and the radio appears to stop answering
@@ -710,6 +711,7 @@ void IcomSession::onAudioReady()
     qCInfo(lcIcom) << "audio stream ready";
     if (!m_txTimer && m_params.enableTx) {
         m_txTimer = new QTimer(this);
+        m_txTimer->setTimerType(Qt::PreciseTimer);
         connect(m_txTimer, &QTimer::timeout, this, &IcomSession::onTxPump);
         m_txTimer->start(kTxPumpMs);
     }
@@ -729,15 +731,14 @@ void IcomSession::onTxPump()
 {
     if (!m_audio || !m_audio->isReady())
         return;
-    // Drain every frame that is ready, not just one: a host audio callback can
-    // deliver several frames' worth in one block, and pacing them out one per
-    // 10 ms tick would fall permanently behind.
-    for (auto chunks = m_tx.takeFrame(); !chunks.empty(); chunks = m_tx.takeFrame()) {
-        for (const auto& c : chunks) {
-            m_audio->sendTracked(buildAudio(m_audio->localSessionId(),
-                                            m_audio->remoteSessionId(), 0, m_audioSendSeq++,
-                                            c.bytes));
-        }
+    // One callback is one 20 ms wire frame. AudioEngine and AetherModem may
+    // submit larger blocks to build a jitter cushion, but that queue depth must
+    // never change the radio-facing cadence.
+    const auto chunks = m_tx.takeFrame();
+    for (const auto& c : chunks) {
+        m_audio->sendTracked(buildAudio(m_audio->localSessionId(),
+                                        m_audio->remoteSessionId(), 0, m_audioSendSeq++,
+                                        c.bytes));
     }
 }
 

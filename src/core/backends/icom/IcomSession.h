@@ -34,6 +34,10 @@ class IcomSession : public QObject {
     Q_OBJECT
 
 public:
+    // Live IC-705 validation in #4799 matched kappanhang at 300 ms. Keep the
+    // session default and every drain calculation on this one source.
+    static constexpr quint16 kDefaultTxBufferMs = 300;
+
     struct Params {
         QHostAddress host;
         quint16 controlPort = kControlPort;
@@ -47,7 +51,7 @@ public:
         // radio with no TX codec, which is a stronger guarantee than simply
         // not sending audio — a receive-only session cannot key by accident.
         bool enableTx = true;
-        quint16 txBufferMs = 200;
+        quint16 txBufferMs = kDefaultTxBufferMs;
         // Production lease timing. Tests override these values to exercise the
         // renewal watchdog without waiting more than a minute.
         int tokenRenewalMs = 60000;
