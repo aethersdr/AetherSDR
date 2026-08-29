@@ -816,4 +816,40 @@ QVariantMap IcomSession::leaseDiagnostics() const
     return out;
 }
 
+QVariantMap IcomSession::transportDiagnostics() const
+{
+    const Stats snapshot = stats();
+    const auto streamMap = [](const IcomStream::Counters& counters) {
+        QVariantMap out;
+        out.insert(QStringLiteral("rxBytes"),
+                   QVariant::fromValue<qulonglong>(counters.rxBytes));
+        out.insert(QStringLiteral("txBytes"),
+                   QVariant::fromValue<qulonglong>(counters.txBytes));
+        out.insert(QStringLiteral("rxPackets"),
+                   QVariant::fromValue<qulonglong>(counters.rxPackets));
+        out.insert(QStringLiteral("txPackets"),
+                   QVariant::fromValue<qulonglong>(counters.txPackets));
+        out.insert(QStringLiteral("rxLost"),
+                   QVariant::fromValue<qulonglong>(counters.rxLost));
+        out.insert(QStringLiteral("retransmitsAsked"),
+                   QVariant::fromValue<qulonglong>(counters.retransmitsAsked));
+        out.insert(QStringLiteral("retransmitsServed"),
+                   QVariant::fromValue<qulonglong>(counters.retransmitsServed));
+        out.insert(QStringLiteral("rttMs"), counters.rttMs);
+        out.insert(QStringLiteral("lastRxAgeMs"), counters.lastRxAgeMs);
+        out.insert(QStringLiteral("lastTxAgeMs"), counters.lastTxAgeMs);
+        out.insert(QStringLiteral("lastPayloadAgeMs"), counters.lastPayloadAgeMs);
+        out.insert(QStringLiteral("lastPingReplyAgeMs"), counters.lastPingReplyAgeMs);
+        out.insert(QStringLiteral("socketErrors"),
+                   QVariant::fromValue<qulonglong>(counters.socketErrors));
+        out.insert(QStringLiteral("lastSocketError"), counters.lastSocketError);
+        return out;
+    };
+    QVariantMap out;
+    out.insert(QStringLiteral("control"), streamMap(snapshot.control));
+    out.insert(QStringLiteral("serial"), streamMap(snapshot.serial));
+    out.insert(QStringLiteral("audio"), streamMap(snapshot.audio));
+    return out;
+}
+
 }  // namespace AetherSDR::icom

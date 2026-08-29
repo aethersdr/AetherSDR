@@ -36,6 +36,7 @@ struct MemoryDelta {
     std::optional<int>     dtcsCode;
     std::optional<bool>    dtcsTxReverse;
     std::optional<bool>    dtcsRxReverse;
+    std::optional<bool>    recallable;
     std::optional<int>     step;
     std::optional<bool>    squelch;
     std::optional<int>     squelchLevel;

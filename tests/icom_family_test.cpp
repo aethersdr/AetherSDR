@@ -24,10 +24,28 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <utility>
 #include <vector>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static std::optional<std::vector<std::uint8_t>> confirmationFor(
+        const IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        return backend.confirmationFor(frame);
+    }
+};
+
+} // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -87,6 +105,67 @@ int main(int argc, char** argv)
           "an Icom remembers its own state, so the client restores NOTHING");
     check(!caps.hasDownwardExpander,
           "Icom exposes no DEXP surface without an evidenced command path");
+
+    auto* selectedBackend = dynamic_cast<icom::IcomCivBackend*>(model.backend());
+    check(selectedBackend != nullptr,
+          "the selected Icom backend is available for model capability checks");
+    if (selectedBackend) {
+        const icom::IcomModel& initialModel = selectedBackend->model();
+        const auto* ic705 = icom::modelForCivAddress(0xA4);
+        const auto* ic9700 = icom::modelForCivAddress(0xA2);
+        check(ic705 && ic9700, "the IC-705 and IC-9700 model profiles exist");
+        if (ic705 && ic9700) {
+            icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic705);
+            const RadioCapabilities ic705Caps = selectedBackend->capabilities();
+            check(ic705Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic705Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic705Caps.fmDtcsCodes.size() == 104,
+                  "IC-705 advertises its documented complete DTCS UI vocabulary");
+
+            icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic9700);
+            const RadioCapabilities ic9700Caps = selectedBackend->capabilities();
+            check(ic9700Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic9700Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic9700Caps.fmDtcsCodes.size() == 104,
+                  "IC-9700 advertises its documented complete DTCS UI vocabulary");
+        }
+        icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, initialModel);
+    }
+
+    {
+        icom::IcomCivBackend backend;
+        const auto* ic9700 = icom::modelForCivAddress(0xA2);
+        check(ic9700 != nullptr, "the IC-9700 exists for disconnect-state coverage");
+        if (ic9700) {
+            icom::IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            bool resetPublished = false;
+            QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                             [&resetPublished](int, const SliceDelta& delta) {
+                resetPublished = delta.fmDtcsCode == -1
+                    && delta.fmDtcsTxReverse == false
+                    && delta.fmDtcsRxReverse == false;
+            });
+            const bool invoked = QMetaObject::invokeMethod(
+                &backend, "onSessionDisconnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("test disconnect")));
+            check(invoked && resetPublished,
+                  "IC-9700 disconnect withdraws established DTCS state");
+
+            const auto confirmation =
+                icom::IcomCivBackendTestAccess::confirmationFor(
+                    backend, icom::cmdSetDtcsTone(0xA2, 23, true, false));
+            // With no live session, confirmationFor() uses the documented
+            // disconnected fallback address; this assertion proves the 1B 02
+            // write schedules the matching authoritative register readback.
+            check(confirmation
+                      && *confirmation
+                          == icom::cmdReadRepeaterToneRegister(
+                              0xA4, icom::repeaterTone::kDtcs),
+                  "DTCS operator writes schedule an immediate authoritative readback");
+        }
+    }
 
     // The Icom transport reports one stable VFO as slice 0. On reconnect,
     // RadioModel stages the old SliceModel so the UI can keep its subscriptions

@@ -344,8 +344,25 @@ enum class IcomFeature : std::uint8_t {
     FmRepeaterExtendedReadback,
     FmRepeaterCtcssRx,
     TxFrequencyCheck,
+    DialLock,
     CivDataRestart,
     MemoryChannels,
+};
+
+enum class MemoryDialect : std::uint8_t {
+    Ic705,
+    Ic7300Mk2,
+    Ic9700,
+};
+
+struct MemoryProfile {
+    MemoryDialect dialect;
+    int firstGroup = -1;
+    int lastGroup = -1;
+    int firstChannel = 1;
+    int lastChannel = 99;
+    bool requiresGroupSelection = false;
+    std::string_view groupColumnTitle = "Group";
 };
 
 enum class EvidenceKind : std::uint8_t {
@@ -439,6 +456,7 @@ struct IcomModelProfile {
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;
     std::optional<CivRecoveryProfile> civRecovery;
+    std::optional<MemoryProfile> memory;
     std::span<const std::string_view> preampLabels;
     std::span<const AttenStep> attenuatorSteps;
     std::span<const std::string_view> modes;

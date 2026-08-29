@@ -567,7 +567,7 @@ public:
     // Apply a stored channel to the active slice. This is what `memory apply`
     // does on a Flex; with no radio to do it, the model drives SliceModel's
     // operator-issue setters so the change routes through the backend seam.
-    void recallCachedMemory(int index);
+    bool recallCachedMemory(int index);
     void createAudioStream();
     // An operator CLICK on the PC Audio button. On an Icom this asks the radio
     // to switch its voice-mode modulation input, which Principle II permits
@@ -622,11 +622,11 @@ public:
     // by default rather than writing channels into a radio that drops them.
     bool usesLocalMemoryBank() const;
     // True when the active store accepts create/edit/remove. A radio-backed
-    // read-only snapshot (IC-9700 initial support) returns false while the
+    // read-only snapshot (initial Icom support) returns false while the
     // existing host bank and Flex radio return true.
     bool memoriesWritable() const;
     bool memoriesRefreshable() const;
-    void refreshMemories();
+    void refreshMemories(const QString& group = QString());
     // The bank itself, for the automation bridge and tests. Empty and unread
     // until the first local memory command or connect.
     LocalMemoryBank& localMemoryBank() { return m_localMemories; }
@@ -1145,6 +1145,9 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // A backend's explicit keyed-state readback, including unchanged answers
+    // hidden by the change-gated radioTransmittingChanged signal.
+    void radioTransmitConfirmed(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
     // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX)
     // and false otherwise. Deliberately excludes TUNE/two-tone/ATU carriers,
@@ -1165,6 +1168,12 @@ signals:
     void txFilterBlockingAudio(const QString& title,
                                const QString& detail,
                                const QString& panId);
+    // A Flex-syntax command was dropped because this backend has no command
+    // plane (HL2, Icom): the control that emitted it moved and nothing reached
+    // the radio — the HERMES §17 shape, made visible (M0, #5263). Emitted on
+    // EVERY drop; the UI's one-shot-per-session throttling is the consumer's
+    // job, so logs and any non-UI consumers can observe each occurrence.
+    void commandDropped(const QString& command);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);
@@ -1946,6 +1955,7 @@ private:
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
     bool               m_transmitFrequencyCheck{false};
+    std::optional<bool> m_radioDialLocked;
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};

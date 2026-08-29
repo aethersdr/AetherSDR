@@ -23,6 +23,7 @@ struct MemoryEntry {
     int     dtcsCode{23};
     bool    dtcsTxReverse{false};
     bool    dtcsRxReverse{false};
+    bool    recallable{true};
     bool    squelch{false};
     int     squelchLevel{0};
     int     rxFilterLow{0};

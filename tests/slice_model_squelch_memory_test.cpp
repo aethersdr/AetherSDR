@@ -204,33 +204,41 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.manualSquelchLevel(), before);
     }
 
-    // Native radio-memory recall updates the public slice presentation without
-    // emitting the generic grouped command a second time; the backend already
-    // owns the richer IC-9700 write sequence.
+    // DTCS is one radio register: a three-digit code plus independent TX/RX
+    // polarity. The normalized model must move and publish that tuple intact.
     {
         SliceModel s(7);
-        QSignalSpy commandSpy(&s, &SliceModel::fmRepeaterRecallCommandIssued);
-        s.applyRecalledFmRepeaterState(
-            QStringLiteral("up"), 0.6, QStringLiteral("dtcs_txrx"),
-            QStringLiteral("023"), QStringLiteral("123.0"));
-        EXPECT_EQ(s.repeaterOffsetDir(), QStringLiteral("up"));
-        EXPECT_EQ(s.fmRepeaterOffsetFreq(), 0.6);
-        EXPECT_EQ(s.fmToneMode(), QStringLiteral("dtcs_txrx"));
-        EXPECT_EQ(s.fmToneValue(), QStringLiteral("023"));
-        EXPECT_EQ(s.fmToneRxValue(), QStringLiteral("123.0"));
-        EXPECT_EQ(commandSpy.count(), 0);
-    }
+        QSignalSpy commandSpy(&s, &SliceModel::fmDtcsCommandIssued);
+        QSignalSpy stateSpy(&s, &SliceModel::fmDtcsChanged);
+        EXPECT_EQ(s.fmDtcsCode(), -1);
+        s.setFmDtcs(23, true, false);
+        EXPECT_EQ(commandSpy.count(), 1);
+        EXPECT_EQ(stateSpy.count(), 0);
+        EXPECT_EQ(s.fmDtcsCode(), -1);
+        EXPECT_EQ(s.fmDtcsTxReverse(), false);
+        EXPECT_EQ(s.fmDtcsRxReverse(), false);
 
-    // Radio readback wins over an optimistic memory-recall presentation, and
-    // DTCS retains its significant leading zero through the normalized delta.
-    {
-        SliceModel s(8);
-        SliceDelta readback;
-        readback.fmToneMode = QStringLiteral("dtcs_txrx");
-        readback.fmToneValueText = QStringLiteral("023");
-        s.applyChanges(readback);
-        EXPECT_EQ(s.fmToneMode(), QStringLiteral("dtcs_txrx"));
-        EXPECT_EQ(s.fmToneValue(), QStringLiteral("023"));
+        s.setFmDtcs(123, false, false);
+        EXPECT_EQ(commandSpy.count(), 1); // non-standard operator intent is refused
+
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.fmDtcsCode = 754;
+            d.fmDtcsTxReverse = false;
+            d.fmDtcsRxReverse = true;
+        }));
+        EXPECT_EQ(commandSpy.count(), 1); // radio echo is state, not new intent
+        EXPECT_EQ(stateSpy.count(), 1);
+        EXPECT_EQ(s.fmDtcsCode(), 754);
+        EXPECT_EQ(s.fmDtcsTxReverse(), false);
+        EXPECT_EQ(s.fmDtcsRxReverse(), true);
+
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.fmDtcsCode = 754;
+            d.fmDtcsTxReverse = false;
+            d.fmDtcsRxReverse = true;
+        }));
+        EXPECT_EQ(commandSpy.count(), 1);
+        EXPECT_EQ(stateSpy.count(), 1); // repeated radio truth is a no-op
     }
 
     if (g_failures == 0) {

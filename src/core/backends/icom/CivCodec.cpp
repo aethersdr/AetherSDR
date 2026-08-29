@@ -1,4 +1,5 @@
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
 #include <algorithm>
 #include <cctype>
@@ -831,6 +832,21 @@ std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
     return buildFrameSub(to, cmd::kTone, which, body);
 }
 
+std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse)
+{
+    if (!isCanonicalDtcsCode(code)) {
+        return {};
+    }
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte(code / 100),
+        encodeBcdByte(code % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, repeaterTone::kDtcs, body);
+}
+
 std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
 {
     return cmdReadFunction(to, func::kRepeaterAccess);
@@ -893,6 +909,18 @@ std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
     case 0x09: return "ctcss_txrx";
     default:   return {};
     }
+}
+
+std::optional<std::uint8_t> repeaterAccessModeValue(std::string_view name) noexcept
+{
+    constexpr std::array<std::uint8_t, 8> kValues{
+        0x00, 0x01, 0x02, 0x03, 0x06, 0x07, 0x08, 0x09};
+    for (const std::uint8_t value : kValues) {
+        if (repeaterAccessModeName(value) == name) {
+            return value;
+        }
+    }
+    return std::nullopt;
 }
 
 std::vector<std::uint8_t> cmdReadRepeaterToneRegister(

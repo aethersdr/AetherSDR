@@ -238,6 +238,7 @@ public:
         Q_UNUSED(sliceId);
         Q_UNUSED(antenna);
     }
+    virtual void setRadioDialLock(bool locked) { Q_UNUSED(locked); }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -577,6 +578,11 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(hz);
     }
+    virtual void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                                bool rxReverse)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(code); Q_UNUSED(txReverse); Q_UNUSED(rxReverse);
+    }
     virtual void setSliceRepeaterOffsetDir(int sliceId, const QString& direction)
     {
         Q_UNUSED(sliceId); Q_UNUSED(direction);
@@ -608,7 +614,7 @@ public:
 
     // Request a fresh snapshot from a radio-owned memory store. Backends that
     // only push changes, or whose memories live on the host, leave this a no-op.
-    virtual void refreshMemories() {}
+    virtual void refreshMemories(const QString& group) { Q_UNUSED(group); }
 
     // Momentary receive-on-transmit-frequency state (Icom XFC). This is
     // radio-wide selected-VFO state, not a memory/slice parameter.
@@ -809,6 +815,9 @@ signals:
 
     // Radio-authoritative state for the momentary transmit-frequency monitor.
     void transmitFrequencyCheckChanged(bool on);
+    // Radio-authoritative global dial-lock state. RadioModel fans this out to
+    // every slice because a radio-global control must not look per-slice.
+    void radioDialLockChanged(bool locked);
 
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,
     // not when traffic arrives — the tick has to keep coming after the radio
@@ -844,6 +853,11 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    // An explicit radio readback confirmed the keyed state. This is distinct
+    // from transmitChanged because optimistic state may already equal the
+    // answer and therefore produce no delta. Backends without a separate
+    // command/readback plane need not emit it.
+    void keyingStateConfirmed(bool keyed);
 
     // Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode
     // split, #4094). Typed + present-only; the backend translates the SmartSDR

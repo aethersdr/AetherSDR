@@ -714,6 +714,7 @@ void RadioModel::setupBackend(const QString& family)
     // and dropAllSessionModelsForFamilySwitch() deletes every slice before the
     // swap. What the rule is really about is a sender that lives as long as the
     // RadioModel: `this`, or a value member such as m_transmitModel.
+    m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
 
     {
@@ -1114,6 +1115,17 @@ void RadioModel::setupBackend(const QString& family)
         m_transmitFrequencyCheck = on;
         emit transmitFrequencyCheckChanged(on);
     });
+    connect(m_backend.get(), &IRadioBackend::radioDialLockChanged, this,
+            [this](bool locked) {
+        m_radioDialLocked = locked;
+        SliceDelta delta;
+        delta.locked = locked;
+        for (SliceModel* slice : std::as_const(m_slices)) {
+            if (slice) {
+                slice->applyChanges(delta);
+            }
+        }
+    });
 
     // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend that
     // declares client-owned settings domains reports state movement; one
@@ -1251,7 +1263,7 @@ void RadioModel::setupBackend(const QString& family)
                     [this, s](bool on, int level) {
                 if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
             });
-            // FM repeater controls are four distinct neutral intents.  Flex
+            // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
             // updating only the widgets.
@@ -1271,6 +1283,13 @@ void RadioModel::setupBackend(const QString& family)
                     [this, s](double hz) {
                 if (m_backend) {
                     m_backend->setSliceFmToneRxValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmDtcsCommandIssued, this,
+                    [this, s](int code, bool txReverse, bool rxReverse) {
+                if (m_backend) {
+                    m_backend->setSliceFmDtcs(
+                        s->sliceId(), code, txReverse, rxReverse);
                 }
             });
             connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
@@ -1358,6 +1377,8 @@ void RadioModel::setupBackend(const QString& family)
                     m_cwxModel.adoptSpeed(*delta.cwSpeed);
                 }
             });
+    connect(m_backend.get(), &IRadioBackend::keyingStateConfirmed,
+            this, &RadioModel::radioTransmitConfirmed);
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
@@ -6919,6 +6940,7 @@ void RadioModel::onDisconnected()
         m_transmitFrequencyCheck = false;
         emit transmitFrequencyCheckChanged(false);
     }
+    m_radioDialLocked.reset();
     // Reset to false so the next connect's skip-peek fast path requires the
     // radio's mf_enable status to actually arrive before treating multiFLEX
     // as enabled. Default-true would silently bypass the conflict check if
@@ -7752,10 +7774,10 @@ bool RadioModel::memoriesRefreshable() const
     return isConnected() && backendCapabilities().canRefreshMemories;
 }
 
-void RadioModel::refreshMemories()
+void RadioModel::refreshMemories(const QString& group)
 {
     if (m_backend && memoriesRefreshable()) {
-        m_backend->refreshMemories();
+        m_backend->refreshMemories(group);
     }
 }
 
@@ -7778,9 +7800,12 @@ std::optional<quint32> RadioModel::tryMemoryCommand(
             bool ok = false;
             const int index = command.mid(13).trimmed().toInt(&ok);
             if (ok && m_memories.contains(index)) {
-                recallCachedMemory(index);
-                code = 0;
-                body.clear();
+                if (recallCachedMemory(index)) {
+                    code = 0;
+                    body.clear();
+                } else {
+                    body = QStringLiteral("Memory slot is display-only or invalid");
+                }
             } else {
                 body = QStringLiteral("Unknown memory slot");
             }
@@ -7874,12 +7899,12 @@ void RadioModel::publishLocalMemories()
         << "RadioModel: published" << stored.size() << "memories from the local bank";
 }
 
-void RadioModel::recallCachedMemory(int index)
+bool RadioModel::recallCachedMemory(int index)
 {
     const auto it = m_memories.constFind(index);
     if (it == m_memories.constEnd()) {
         qCWarning(lcProtocol) << "RadioModel: cached memory recall for unknown slot" << index;
-        return;
+        return false;
     }
     // `memory apply` lands on the ACTIVE slice on a Flex, so resolve the same
     // one here. MainWindow has already made its recall target active by the
@@ -7896,10 +7921,14 @@ void RadioModel::recallCachedMemory(int index)
         target = m_slices.first();
     if (!target) {
         qCWarning(lcProtocol) << "RadioModel: cached memory recall with no slice to apply it to";
-        return;
+        return false;
     }
 
     const MemoryEntry& memory = it.value();
+    if (!memory.recallable) {
+        qCWarning(lcProtocol) << "RadioModel: memory slot is display-only" << index;
+        return false;
+    }
 
     // These are the operator-issue setters, the same ones the panel controls
     // call, so each emits its *CommandIssued signal and reaches the radio
@@ -7938,13 +7967,6 @@ void RadioModel::recallCachedMemory(int index)
         const double toneHz = memory.toneMode.isEmpty()
             ? target->fmToneValue().toDouble() : memory.toneValue;
         if (memory.nativeFilter > 0 && m_backend) {
-            QString txTone = QString::number(memory.toneValue, 'f', 1);
-            if (toneMode == QLatin1String("dtcs_txrx")
-                       || toneMode == QLatin1String("dtcs_tx")
-                       || toneMode == QLatin1String("dtcs_tx_ctcss_rx")) {
-                txTone = QStringLiteral("%1").arg(
-                    memory.dtcsCode, 3, 10, QLatin1Char('0'));
-            }
             MemoryRecallDetails details;
             details.sliceId = target->sliceId();
             details.filterPreset = memory.nativeFilter;
@@ -7961,13 +7983,14 @@ void RadioModel::recallCachedMemory(int index)
                 qCWarning(lcProtocol)
                     << "RadioModel: native memory recall validation failed for slot"
                     << index;
-                return;
+                return false;
             }
             // Publish the optimistic repeater state only after the backend has
             // accepted and queued the complete command plan.
             target->applyRecalledFmRepeaterState(
-                direction, offsetMhz, toneMode, txTone,
-                QString::number(memory.rxToneValue, 'f', 1));
+                direction, offsetMhz, toneMode, memory.toneValue,
+                memory.rxToneValue, memory.dtcsCode,
+                memory.dtcsTxReverse, memory.dtcsRxReverse);
         } else {
             target->applyRecalledFmRepeater(direction, offsetMhz, toneMode, toneHz);
         }
@@ -7979,6 +8002,7 @@ void RadioModel::recallCachedMemory(int index)
         << " onto slice " << target->sliceId()
         << " freq=" << QString::number(memory.freq, 'f', 6)
         << " mode=" << memory.mode;
+    return true;
 }
 
 void RadioModel::applyMemoryChanges(const MemoryDelta& d)
@@ -8021,6 +8045,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     if (d.dtcsCode)       m.dtcsCode       = *d.dtcsCode;
     if (d.dtcsTxReverse)  m.dtcsTxReverse  = *d.dtcsTxReverse;
     if (d.dtcsRxReverse)  m.dtcsRxReverse  = *d.dtcsRxReverse;
+    if (d.recallable)     m.recallable     = *d.recallable;
     if (d.step)           m.step           = *d.step;
     if (d.squelch)        m.squelch        = *d.squelch;
     if (d.squelchLevel)   m.squelchLevel   = *d.squelchLevel;
@@ -8556,8 +8581,13 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
     // with a `slice tune`, and the tune is Flex wire text), so fail the way the
     // rest of sendCmd's drops do: sequence 0, meaning "not dispatched".
     if (!hasCommandPlane()) {
-        qCDebug(lcProtocol).noquote()
+        // qCWarning, not qCDebug: a dropped command means a control moved and
+        // nothing reached the radio. Silent at default log levels, that is the
+        // HERMES §17 dead-control shape; loud, it is a reportable defect and
+        // the M4 conversion backlog finds its sites from these lines (#5263).
+        qCWarning(lcProtocol).noquote()
             << "RadioModel: no command plane for this backend, dropping" << command;
+        emit commandDropped(command);
         if (cb)
             cb(kNoCommandPlaneCode, QStringLiteral("this radio has no command plane"));
         return 0;
@@ -8620,6 +8650,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
     if (!s)
         return;
 
+    if (m_radioDialLocked && backendCapabilities().hasRadioDialLock) {
+        SliceDelta delta;
+        delta.locked = *m_radioDialLocked;
+        s->applyChanges(delta);
+    }
+
     // ONE place, called from EVERY site that constructs a SliceModel.
     //
     // These were originally written inline in the backend's slice-materialising
@@ -8650,6 +8686,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
             [this, s](const QString& antenna) {
         if (m_backend && !usesFlexCommandPlane())
             m_backend->setSliceRxAntenna(s->sliceId(), antenna);
+    });
+    connect(s, &SliceModel::lockCommandIssued, this,
+            [this](bool locked) {
+        if (m_backend && backendCapabilities().hasRadioDialLock) {
+            m_backend->setRadioDialLock(locked);
+        }
     });
     // "Make this the transmit slice." On a radio with one transmitter the
     // backend MOVES transmit rather than setting a flag, and republishes both

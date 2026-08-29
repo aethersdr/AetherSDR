@@ -241,7 +241,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 12> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 14> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -258,16 +258,20 @@ constexpr std::array<FeatureEvidence, 12> kIc705Evidence{{
      "IC-705 CI-V Reference Guide 2020; live tone/level/offset/XFC proof"},
     {IcomFeature::FmRepeaterExtended, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, 16 5D and 1B 00/01/02"},
-    {IcomFeature::FmRepeaterExtendedReadback, EvidenceKind::None,
-     "not activated; preserve the live-proven basic IC-705 path"},
-    {IcomFeature::FmRepeaterCtcssRx, EvidenceKind::None,
-     "not activated: preserve the proven IC-705 basic repeater path"},
+    {IcomFeature::FmRepeaterExtendedReadback, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, 16 5D and 1B 01/02"},
+    {IcomFeature::FmRepeaterCtcssRx, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, 16 5D and 1B 00/01"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020, 1C 02"},
+    {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, 16 50"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
+    {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, command 1A 00 memory-channel records"},
 }};
 
-constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 14> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -292,9 +296,13 @@ constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
      "not activated: preserve the proven IC-7300MK2 basic repeater path"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
+    {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
+     "IC-7300MK2 CI-V Reference Guide, 16 50"},
+    {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
+     "IC-7300MK2 CI-V Reference Guide, command 1A 00 memory-channel records"},
 }};
 
-constexpr std::array<FeatureEvidence, 12> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 13> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -315,6 +323,8 @@ constexpr std::array<FeatureEvidence, 12> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide 2019, 16 5D and 1B 00/01; live IC-9700"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019, 1C 02/03; PR #5149 live trace"},
+    {IcomFeature::DialLock, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-9700 CI-V Reference Guide 2019, 16 50; PR #5261 live proof"},
     {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
      "wfview RS-BA1 data-start implementation and published physical IC-9700 watchdog log"},
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
@@ -589,6 +599,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 4.0,
             .holdIsolatedTxMinimums = true,
         },
+        .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
@@ -616,6 +627,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .hasPaCurrentTelemetry = true,
         },
         .civRecovery = CivRecoveryProfile{1000, 3},
+        .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
         .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
@@ -638,6 +650,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 25.0,
             .holdIsolatedTxMinimums = true,
         },
+        .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
+                                "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };
@@ -671,6 +685,7 @@ std::string_view featureName(IcomFeature feature) noexcept
         return "fm-repeater-extended-readback";
     case IcomFeature::FmRepeaterCtcssRx:   return "fm-repeater-ctcss-rx";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
+    case IcomFeature::DialLock:            return "dial-lock";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
     case IcomFeature::MemoryChannels:      return "memory-channels";
     }

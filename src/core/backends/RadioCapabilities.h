@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFlags>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -183,11 +184,13 @@ struct RadioCapabilities {
     // reach TransmitModel (#5106 review).
     QStringList receiveOnlyModes;
 
-    // CTCSS presentation is explicit so a vendor-specific model can expose
-    // its proven registers without changing another radio family's controls.
+    // FM tone presentation is explicit so a vendor-specific model can expose
+    // its proven CTCSS/DTCS registers without changing another radio family's
+    // controls. fmToneModes is the authoritative per-model mode vocabulary.
     // Hidden is the safe default; established backends opt into Legacy.
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
+    QList<int> fmDtcsCodes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
@@ -239,6 +242,9 @@ struct RadioCapabilities {
     bool canWriteMemories = false;
     bool canApplyMemories = false;
     bool canRefreshMemories = false;
+    QStringList memoryGroups;
+    QString memoryGroupColumnTitle = QStringLiteral("Group");
+    bool memoryRefreshRequiresGroup = false;
 
     // Domains of OPERATING STATE this client persists and restores because the
     // radio cannot (RFC #4603 proposal B). Constitution Principle III assigns
@@ -284,6 +290,10 @@ struct RadioCapabilities {
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
+    // The radio exposes an authoritative, client-settable dial lock. This is
+    // distinct from AetherSDR's local per-slice tuning guard: a radio-side
+    // lock may be global and may also follow front-panel changes.
+    bool hasRadioDialLock = false;
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)

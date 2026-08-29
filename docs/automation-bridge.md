@@ -479,6 +479,7 @@ for common controls so you can assert without a screenshot:
 | `QSpinBox` / `QDoubleSpinBox` | numeric value |
 | `QProgressBar` | numeric value |
 | `QLabel` | its text |
+| `QTextEdit` / `QPlainTextEdit` (transcripts, decode logs, consoles) | plain text, capped at 2048 characters with a trailing `…<truncated>` marker; the `dump_tree` node also carries `valueTruncated: true` when cut (the cap itself applies wherever `value` is reported, including `invoke`'s `newValue` echo, which carries only the in-band marker) — use [`text`](#text) for the full document |
 | `QAction` inside a `QMenu` | label text, or `"checked"` / `"unchecked"` for checkable actions |
 | containers / custom-painted surfaces | omitted |
 
@@ -620,6 +621,7 @@ the no-op is an explicit, assertable signal.
 | `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
 | `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
 | `selectRow` | `QAbstractItemView` (`QTableWidget`/`QTreeWidget`/`QListWidget`) | integer row index |
+| `showPopup` / `hidePopup` | `QComboBox` — holds the drop-down open under bridge control (deferred to a clean main-loop turn, like `showMenu`); the open container is named `aetherComboPopup` so a follow-up `grab_widget aetherComboPopup` / `dump_tree` lands on it instead of a hidden sibling. The name is valid **only while the popup is open** — it is cleared on `hidePopup` and when the list closes on its own (item pick, Esc, click-away) — so grab before hiding; a stale name is never left behind | — |
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 
@@ -642,6 +644,22 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 → {"cmd":"invoke","target":"Scheduled nets","action":"selectRow","value":"0"}
 ← {"ok":true,"target":"Scheduled nets","class":"QTableWidget","action":"selectRow",
    "selectedRow":0,"selectedRowText":"✓"}
+```
+
+**`showPopup` → grab → `hidePopup`** is the intended sequence for reading an
+open drop-down (#5080). `showPopup` defers to a clean main-loop turn (reply is
+`ok` + `deferred`), then names the open container `aetherComboPopup`; grab or
+dump it under that name, then close. The name is held by exactly one open
+popup at a time and only while it is open; an empty combo is refused up front
+(`showPopup` would be a no-op and nothing would ever open).
+
+```json
+→ {"cmd":"invoke","target":"computeDeviceCombo","action":"showPopup"}
+← {"ok":true,"target":"computeDeviceCombo","class":"QComboBox","action":"showPopup","deferred":true}
+→ {"cmd":"grab","target":"aetherComboPopup"}
+← {"ok":true,"class":"QComboBoxPrivateContainer","path":"…/grab.png", …}
+→ {"cmd":"invoke","target":"computeDeviceCombo","action":"hidePopup"}
+← {"ok":true,"target":"computeDeviceCombo","class":"QComboBox","action":"hidePopup","deferred":true}
 ```
 
 <a name="tx-safety"></a>
@@ -1726,6 +1744,32 @@ menu headers since `QMenu::addSection` text doesn't render under the app styling
 serialize with `"type":"header"` and the label's text, so titles are assertable
 instead of blank rows.
 
+### `text`
+Full plain text of one `QTextEdit` / `QPlainTextEdit` view (alias `getText`). Read-only; refused in
+observe-only mode like every non-allow-listed verb is — except that `text` *is* allow-listed, since it
+sets nothing and keys nothing.
+
+```json
+→ {"cmd":"text","target":"cwDecodeText"}
+← {"ok":true,"target":"cwDecodeText","class":"QPlainTextEdit",
+   "length":5102,"lines":48,"text":"CQ CQ DE ..."}
+```
+
+- `dump_tree` carries only a 2048-character prefix of these views (see the `value` table above; the
+  node also carries `valueTruncated: true` when cut); this verb returns the whole document, so a
+  transcript assertion is not truncated. The response is unbounded — a long console goes into one
+  JSON line; whether it should take a newest-`n`/`path` form like `log tail` / `grab` is an open
+  design question.
+- `lines` counts lines as the pane shows them: a trailing newline ends the last line rather than
+  starting another.
+- `length` is UTF-16 code units (`QString::size()`), not Unicode code points: a driver comparing it
+  to Python's `len(resp["text"])` will disagree on any document containing astral characters
+  (emoji in a chat or cluster pane is the realistic case).
+- A non-text target answers `not a text view: <target> (<class>)`.
+- The view is read through its `plainText` property (Qt's `QTextEdit`/`QPlainTextEdit` both export it),
+  so `QTextBrowser` and read-only views are covered; `QLineEdit` has no such property and keeps its
+  echo-mode `<hidden>` guard.
+
 ### `hitTest`
 Read-only Qt hit-test probe for overlay/input-mask regressions. The point is
 target-local; omit `x y` to test the target center. `childAt` is the target's
@@ -2526,6 +2570,24 @@ needed).
 ← {"ok":true,"contractVersion":1,"routeOwner":"external",
    "splitRequested":false,"rxSliceId":4,"txSliceId":7,"ownsRoute":false,
    "routeTransitionInFlight":false,"pendingRoutes":[],
+   "ptt":{"owned":false,"requestedOn":false,"confirmedOn":false,
+          "unkeySettling":false,
+          "requestCount":84,"onRequestCount":42,"offRequestCount":42,
+          "acceptedOnCount":42,"confirmedOnCount":41,
+          "confirmationTimeoutCount":1,"lastRequestedOn":true,
+          "unkeySettleCount":6,"suppressedRekeyCount":2,
+          "unkeySettleTimeoutCount":0,
+          "lastRequestAgeMs":1270,"lastAcceptedAgeMs":1268,
+          "lastConfirmedAgeMs":16243,"lastOutcome":"confirmation-timeout",
+          "lastOutcomeAgeMs":20},
+   "lastDisconnect":{"contractVersion":1,"ageMs":520,
+      "closeCode":1006,"socketState":0,
+      "socketError":1,"socketErrorString":"The remote host closed the connection",
+      "connectionAgeMs":2577940,"lastTextRxAgeMs":53,"lastTextTxAgeMs":28,
+      "lastSocketErrorAgeMs":0,"lastRxCommand":"trx","lastTxCommand":"trx",
+      "ptt":{"owned":true,"requestedOn":false,"confirmedOn":true,
+             "unkeySettling":true,"generation":141,
+             "lastOutcome":"icom-unkey-transient-keyed"}},
    "endpoints":[
      {"trx":0,"sliceId":4,"panId":"0x40000000","frequencyHz":14074000,"tx":false},
      {"trx":1,"sliceId":7,"panId":"0x40000001","frequencyHz":14076000,"tx":true}
@@ -2546,6 +2608,29 @@ tci trace clear
 tci trace export /tmp/tci-trace.json
 tci routes
 ```
+
+The `ptt` counters and ages are payload-free and remain available without TCI
+wire tracing. If `onRequestCount` advances but `acceptedOnCount` does not, the
+request stopped in TCI routing or transmit preflight. If both advance but
+`confirmedOnCount` does not and `confirmationTimeoutCount` advances, TCI handed
+the request to the radio path but radio-authoritative keyed state never returned.
+Read that snapshot beside `civ incident`: together they distinguish WebSocket
+ingress, TCI routing, CI-V scheduling, the serial data pipe, the RS-BA1 lease,
+and broad UDP/socket loss.
+
+For Icom, `unkeySettleCount` counts the bounded TCI presentation barriers used
+after an owned unkey. A growing `suppressedRekeyCount` means delayed CI-V
+readback briefly said the radio was still keyed; AetherSDR kept that truth in
+the model/UI while withholding the transient TCI re-key. If no accepted CI-V
+PTT-off readback arrives within 500 ms, `unkeySettleTimeoutCount` advances,
+ownership is retained, and `trx:true` is published again. The optimistic local
+unkey edge never counts as radio confirmation.
+
+`lastDisconnect` survives after `clientCount` reaches zero. It retains the
+WebSocket close code/reason, socket error, session age, last text-message ages,
+and command names only (arguments and binary payloads are not retained). The
+nested PTT snapshot is taken before fail-closed disconnect cleanup, preserving
+whether the departing client owned a pending or confirmed transmit session.
 
 ### Multiple simulated clients
 
@@ -3104,7 +3189,7 @@ Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
 observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
 key or retune the radio.
 
-**`civ session`** reports the media lease independently of UDP link liveness:
+**`civ session`** reports the media lease and each independent UDP stream:
 
 ```json
 → {"cmd":"civ","action":"session"}
@@ -3117,13 +3202,23 @@ key or retune the radio.
    "acceptedRenewals":14,"reissuedTokens":1,"rejectedRenewals":0,
    "ignoredAuthReplies":0,"ignoredControlPackets":1,
    "initialMaintenanceMs":30000,"initialMaintenancePending":false,
-   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000}}
+   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000,
+   "transport":{
+     "control":{"rxPackets":921,"txPackets":460,"rttMs":21,
+                "lastRxAgeMs":14,"lastPayloadAgeMs":8123,"socketErrors":0},
+     "serial":{"rxPackets":4821,"txPackets":3370,"rttMs":24,
+               "lastRxAgeMs":11,"lastPayloadAgeMs":11,"socketErrors":0},
+     "audio":{"rxPackets":186402,"txPackets":92160,"rttMs":26,
+              "lastRxAgeMs":3,"lastPayloadAgeMs":3,"socketErrors":0}}}}
 ```
 
-Use this first when the panadapter, CI-V controls, and audio stop together while
-the outer UDP packet counters still move. A healthy result has a recent accepted
-token, response `0x00000000`, and no growing pending/rejected count. The health
-verb shows the same essentials under **RS-BA1 session**.
+Use this first when the panadapter, CI-V controls, and audio stop together. A
+healthy result has a recent accepted token, response `0x00000000`, no growing
+pending/rejected count, recent activity on all three streams, and no growing
+socket-error count. A live control stream beside a stale serial
+`lastPayloadAgeMs` isolates the CI-V data pipe from authentication and broad
+network loss. The health verb shows the lease essentials under **RS-BA1
+session**.
 
 The token-request ID is freshly randomized for each login. On an immediate
 reconnect the radio can answer the initial token request with `0xffffffff` and
@@ -3145,7 +3240,11 @@ producer in isolation:
    "idle":false,"slotMs":25,"readTimeoutMs":350,
    "queueDepth":3,"readInFlight":true,"inFlightKey":"meter.s",
    "queued":812,"dispatched":799,"coalesced":96,
-   "replies":796,"staleReplies":1,"timeouts":2,
+   "replies":796,"staleReplies":1,"lateReplies":1,"unmatchedFrames":3,
+   "timeouts":2,"responseSamples":797,"lastResponseMs":42,
+   "averageResponseMs":38.7,"maxResponseMs":361,
+   "lastResponseAgeMs":18,"lastCompletedKey":"meter.s",
+   "lastTimeoutKey":"control.nr",
    "pendingPttIntent":false}}
 ```
 
@@ -3167,6 +3266,31 @@ operator moves controls, means replies are routinely arriving after their
 transaction expired: read it alongside `queueDepth` and treat the pair, not
 `staleReplies` alone, as the congestion signal. Poll this read-only verb until
 `idle:true` when a test needs deterministic write/readback convergence.
+
+**`civ incident`** returns the last structured Icom incident captured during
+the current session, or a live snapshot if no incident has occurred. The same
+snapshot is written automatically as one `aether.icom.incident` warning when:
+
+- a key-on transaction times out, or the radio still reports unkeyed after its
+  confirmation window;
+- a CI-V timeout occurs with at least eight transactions queued;
+- no CI-V frame arrives for five seconds while the UDP transport remains up;
+- an established RS-BA1 session closes unexpectedly.
+
+The dossier joins the evidence needed to locate the failed layer: correlated
+lease renewal state, independent control/serial/audio packet activity and
+socket errors, scheduler latency aggregates, the last 32 payload-free
+transaction outcomes, and requested versus radio-published PTT. It deliberately
+contains no credentials, network endpoints, session IDs, raw CI-V payloads,
+frequencies, or operator text. This means ordinary support logs can retain it;
+turning on every-frame CI-V or RS-BA1 datagram logging is not required for the
+first reproduction.
+
+Each transaction row reports a semantic `key`, `priority`, `completion`,
+`queueWaitMs`, and `responseMs`. Completions distinguish normal, stale, late,
+late-stale, timed-out, emergency-displaced, and response-free commands. Use the
+per-stream ages to separate socket/transport silence from a live RS-BA1 outer
+session whose CI-V payload pipe alone stopped responding.
 
 **`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
 omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects
@@ -3638,7 +3762,7 @@ receiver capacity. It never enables transmit and remains available without
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 69 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 71 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3646,6 +3770,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |
+| `text` | `getText` | text <target> — full plain text of a QTextEdit/QPlainTextEdit view |
 | `grab` | — | grab <target\|pan\|pan-visible [index]> [path] — PNG capture |
 | `close` | — | close <target> — close the target's top-level window |
 | `hover` | — | hover <target> [leave] — synthetic mouse hover |
@@ -3704,6 +3829,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
+| `keyevent` | — | keyevent <press\|release> <action-id\|key-seq> — inject a real key edge through the app event filter (momentary shortcuts only — PTT hold, and the CW keys once bound: their ids ship unbound, so KeyInjectUnbound until the operator binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab moves focus yet reports consumed) |
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |

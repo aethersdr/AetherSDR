@@ -3290,6 +3290,190 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
     return cloned;
 }
 
+void MainWindow::selectBand(const QString& panId, const QString& bandName, double freqMhz,
+                            const QString& mode, const QString& stackKeyHint)
+{
+    qDebug() << "MainWindow: switching to band" << bandName
+             << "freq:" << freqMhz << "mode:" << mode;
+
+    // Maintainer note: keep band changes radio-authoritative.
+    //
+    // The Flex band stack owns the state users expect to survive a band
+    // jump: frequency, mode, filters, pan center, bandwidth/zoom, and
+    // built-in antenna selection. Aether should therefore send exactly one
+    // `display pan set <panId> band=<key>` command when it can form a
+    // spec-correct key. Do not use the `freqMhz` / `mode` arguments as a
+    // local fallback; those are static UI defaults, and the old fallback
+    // reset users to band-center SSB instead of restoring their saved stack
+    // state (#1876, #1852, #1856, #1849).
+    //
+    // UI band names are not always protocol keys:
+    //   - Native bands are displayed as "20m", "630m", etc., but Flex
+    //     expects bare keys such as "20" and "630".
+    //   - XVTR names are user labels such as "2m" or "70cm"; do not strip
+    //     those into native-band keys. Flex expects `X<index>`, where
+    //     `index` is the xvtr status-object number from `xvtr <n>` messages
+    //     (0-based), not the radio's 1-based setup-order field (#2342).
+    //   - WWV / GEN use numeric band-stack slots 33 / 34 from SmartSDR
+    //     capture history (#1540/#1211).
+    //   - Built-in 4m / 2m hardware bands use bare keys "4" / "2" only
+    //     when the connected model reports those capabilities.
+    //   - Configured XVTR buttons also pass explicit X<n> keys so a
+    //     user XVTR named "4m" can still be selected on a radio that
+    //     also has native 4m hardware.
+    //
+    // If no supported mapping exists, refuse the band change and leave the
+    // current slice/pan state untouched. Guessing is worse than failing
+    // visibly because a wrong tune destroys the very band-stack state this
+    // path exists to preserve.
+    // ── Radios with no band stack of their own ────────────────────────
+    //
+    // Everything below this branch is Flex band-stack machinery: it resolves
+    // a protocol band key and sends "display pan set … band=", and the radio
+    // restores frequency, mode, filters and antenna from state IT owns. A
+    // Hermes-Lite 2 owns none of that — it has no VFO to read back and no
+    // stack to restore — so that command reached nothing and the band
+    // buttons did precisely nothing on this family.
+    //
+    // Here the APP is authoritative, so the freqMhz/mode the button carries
+    // are used directly. That is the exact opposite of the rule stated above
+    // for Flex, and deliberately so: those arguments are "static UI
+    // defaults" only when something better exists, and on this family
+    // nothing does. Tuning to band centre in the band's usual mode is what
+    // every radio without a stack does.
+    if (!m_radioModel.usesFlexCommandPlane()) {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        // Refuse rather than tune somewhere the receiver cannot hear. Only
+        // when the backend actually reported a range — a backend that
+        // reports none keeps the previous unconditional behaviour.
+        //
+        // Through evaluateBandTune() rather than an inline comparison, so
+        // this button and the typed-tune gate cannot drift apart in either
+        // the decision or the sentence the operator reads (#5041) — above
+        // 54 MHz, which is as far as the shared answer reaches: the typed
+        // path returns before any range check when both frequencies are
+        // below that, so a 50.150 typed on an HL2 still tunes out of range
+        // silently while this button for the same band is disabled. We are
+        // inside the non-Flex branch, so the XVTR/band-stack half of that
+        // function is unreachable from here and its Flex arguments are the
+        // empty defaults.
+        const auto admissibility =
+            XvtrPolicy::evaluateBandTune(false, bandName, freqMhz,
+                                         caps.tuningMinHz, caps.tuningMaxHz,
+                                         {}, {});
+        if (!admissibility.supported) {
+            qCWarning(lcProtocol).noquote()
+                << "MainWindow: band button refused:" << admissibility.reason;
+            statusBar()->showMessage(
+                bandTuneRefusalText(admissibility, bandName), 5000);
+            return;
+        }
+
+        SliceModel* s = activeSlice();
+        if (!s) {
+            statusBar()->showMessage(tr("No active slice to tune"), 4000);
+            return;
+        }
+        clearSwrSweepForBandChange(s->sliceId(), panId, bandName);
+        m_bandSettings.setCurrentBand(bandName);
+        // MODE FIRST, then frequency. The backend adopts a mode-appropriate
+        // passband on a mode CHANGE (Hl2Backend::setSliceMode), and the
+        // frequency move is what re-selects the companion filter board — so
+        // this order leaves both the passband and the band filter settled
+        // for the band being arrived at, not the one being left.
+        if (!mode.isEmpty())
+            s->setMode(mode);
+        s->setFrequency(freqMhz);
+        // Centre the window on the new band. Without this the panadapter
+        // keeps the old band's NCO until the tune happens to fall outside
+        // the usable passband, so a band change could leave the trace
+        // centred a whole band away from the slice that just moved.
+        m_radioModel.requestPanCenter(panId, freqMhz);
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: band switch (no radio band stack) band=" << bandName
+            << " pan=" << panId
+            << " freq_mhz=" << QString::number(freqMhz, 'f', 6)
+            << " mode=" << mode;
+        return;
+    }
+
+    const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
+    QString stackKey = stackKeyHint;
+    QString unsupportedBandReason;
+    if (stackKey.isEmpty()) {
+        const auto stackKeyResult =
+            XvtrPolicy::resolveBandStackKey(bandName, xvtrs, m_radioModel.capabilities());
+        stackKey = stackKeyResult.key;
+        unsupportedBandReason = stackKeyResult.unsupportedReason;
+    }
+
+    if (stackKey.isEmpty()
+        && m_radioModel.declaredBands().contains(bandName, Qt::CaseInsensitive)) {
+        // Radio-declared band (see RadioModel::declaredBands): the radio
+        // told us it tunes this natively, so pass the declared name
+        // through as the band-stack key — the declaring radio defines
+        // and honours these keys (e.g. band=440 on an IC-9700 gateway).
+        // Real Flex radios never declare bands, so their unsupported-band
+        // refusal below is unchanged.
+        //
+        // NB the resolveBandStackKey() attempt above runs FIRST, so a
+        // declared band that ALSO matches the impersonated model's native
+        // capability resolves natively and never reaches here — e.g. a
+        // gateway advertising FLEX-6700 (has2Meters) + bands=2m,440,23cm
+        // sends the bare native key `2` for 2m, but the declared tokens
+        // `440`/`23cm` for the bands the model has no native slot for. A
+        // declaring bridge must therefore honour both the bare Flex keys
+        // and its declared tokens, per band.
+        //
+        // The same FIRST-wins rule means a user XVTR labelled e.g. "2m"
+        // out-ranks a gateway's declared "2m": resolveBandStackKey()
+        // resolves the XVTR to its X<n> key above and this fallthrough
+        // never runs. That is intentional and consistent with the
+        // XVTR-priority precedent already codified for native bands
+        // (#2342, above) — declared tokens do not override a same-named
+        // user XVTR (#4191, follow-up #2 from the #4027 review).
+        //
+        // The contains() match is CaseInsensitive so a declared-band
+        // selection arriving from a non-UI path (memory-channel recall,
+        // CAT) with off-canonical casing like "23CM" still matches the
+        // canonical BandDefs spelling parseDeclaredBands() stored; UI band
+        // buttons already emit canonical names (#4191, follow-up #3).
+        stackKey = bandName;
+    }
+
+    if (stackKey.isEmpty()) {
+        qCWarning(lcProtocol).noquote().nospace()
+            << "MainWindow: refusing unsupported band change band=" << bandName
+            << " reason=" << unsupportedBandReason
+            << " available_xvtrs=" << xvtrListSummary(xvtrs);
+        statusBar()->showMessage(unsupportedBandReason, 5000);
+        return;
+    } else {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: band switch band=" << bandName
+            << " pan=" << panId
+            << " key=" << stackKey
+            << " freq_hint_mhz=" << QString::number(freqMhz, 'f', 6)
+            << " mode_hint=" << mode
+            << " xvtr=" << xvtrForBandSummary(bandName, xvtrs);
+        // A band stack restore is radio-authoritative and may carry a dBm
+        // range different from a just-released scale drag. Abandon that
+        // client request before the band command so the restored range
+        // cannot be rejected as a stale echo and wedge FFT decoding.
+        emit bandStackRestoreStarting(panId);
+        clearSwrSweepForBandChange(-1, panId, bandName);
+        m_bandSettings.setCurrentBand(bandName);
+        // #4142: during the profile-load hold a bare sendCommand() band=
+        // write is silently destroyed. requestPanBand defers it instead;
+        // panBandAboutToDispatch starts every slice/Center Lock/Kiwi recall
+        // guard immediately before the command actually reaches the wire.
+        m_radioModel.requestPanBand(panId, stackKey);
+        QTimer::singleShot(300, this, [this, panId]() {
+            reassertUnmutedSliceAudioForPan(panId);
+        });
+    }
+}
+
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
@@ -5078,185 +5262,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet]
                   (const QString& bandName, double freqMhz, const QString& mode,
                    const QString& stackKeyHint) {
-        qDebug() << "MainWindow: switching to band" << bandName
-                 << "freq:" << freqMhz << "mode:" << mode;
-
-        // Maintainer note: keep band changes radio-authoritative.
-        //
-        // The Flex band stack owns the state users expect to survive a band
-        // jump: frequency, mode, filters, pan center, bandwidth/zoom, and
-        // built-in antenna selection. Aether should therefore send exactly one
-        // `display pan set <panId> band=<key>` command when it can form a
-        // spec-correct key. Do not use the `freqMhz` / `mode` arguments as a
-        // local fallback; those are static UI defaults, and the old fallback
-        // reset users to band-center SSB instead of restoring their saved stack
-        // state (#1876, #1852, #1856, #1849).
-        //
-        // UI band names are not always protocol keys:
-        //   - Native bands are displayed as "20m", "630m", etc., but Flex
-        //     expects bare keys such as "20" and "630".
-        //   - XVTR names are user labels such as "2m" or "70cm"; do not strip
-        //     those into native-band keys. Flex expects `X<index>`, where
-        //     `index` is the xvtr status-object number from `xvtr <n>` messages
-        //     (0-based), not the radio's 1-based setup-order field (#2342).
-        //   - WWV / GEN use numeric band-stack slots 33 / 34 from SmartSDR
-        //     capture history (#1540/#1211).
-        //   - Built-in 4m / 2m hardware bands use bare keys "4" / "2" only
-        //     when the connected model reports those capabilities.
-        //   - Configured XVTR buttons also pass explicit X<n> keys so a
-        //     user XVTR named "4m" can still be selected on a radio that
-        //     also has native 4m hardware.
-        //
-        // If no supported mapping exists, refuse the band change and leave the
-        // current slice/pan state untouched. Guessing is worse than failing
-        // visibly because a wrong tune destroys the very band-stack state this
-        // path exists to preserve.
-        // ── Radios with no band stack of their own ────────────────────────
-        //
-        // Everything below this branch is Flex band-stack machinery: it resolves
-        // a protocol band key and sends "display pan set … band=", and the radio
-        // restores frequency, mode, filters and antenna from state IT owns. A
-        // Hermes-Lite 2 owns none of that — it has no VFO to read back and no
-        // stack to restore — so that command reached nothing and the band
-        // buttons did precisely nothing on this family.
-        //
-        // Here the APP is authoritative, so the freqMhz/mode the button carries
-        // are used directly. That is the exact opposite of the rule stated above
-        // for Flex, and deliberately so: those arguments are "static UI
-        // defaults" only when something better exists, and on this family
-        // nothing does. Tuning to band centre in the band's usual mode is what
-        // every radio without a stack does.
-        if (!m_radioModel.usesFlexCommandPlane()) {
-            const RadioCapabilities caps = m_radioModel.backendCapabilities();
-            // Refuse rather than tune somewhere the receiver cannot hear. Only
-            // when the backend actually reported a range — a backend that
-            // reports none keeps the previous unconditional behaviour.
-            //
-            // Through evaluateBandTune() rather than an inline comparison, so
-            // this button and the typed-tune gate cannot drift apart in either
-            // the decision or the sentence the operator reads (#5041) — above
-            // 54 MHz, which is as far as the shared answer reaches: the typed
-            // path returns before any range check when both frequencies are
-            // below that, so a 50.150 typed on an HL2 still tunes out of range
-            // silently while this button for the same band is disabled. We are
-            // inside the non-Flex branch, so the XVTR/band-stack half of that
-            // function is unreachable from here and its Flex arguments are the
-            // empty defaults.
-            const auto admissibility =
-                XvtrPolicy::evaluateBandTune(false, bandName, freqMhz,
-                                             caps.tuningMinHz, caps.tuningMaxHz,
-                                             {}, {});
-            if (!admissibility.supported) {
-                qCWarning(lcProtocol).noquote()
-                    << "MainWindow: band button refused:" << admissibility.reason;
-                statusBar()->showMessage(
-                    bandTuneRefusalText(admissibility, bandName), 5000);
-                return;
-            }
-
-            SliceModel* s = activeSlice();
-            if (!s) {
-                statusBar()->showMessage(tr("No active slice to tune"), 4000);
-                return;
-            }
-            clearSwrSweepForBandChange(s->sliceId(), applet->panId(), bandName);
-            m_bandSettings.setCurrentBand(bandName);
-            // MODE FIRST, then frequency. The backend adopts a mode-appropriate
-            // passband on a mode CHANGE (Hl2Backend::setSliceMode), and the
-            // frequency move is what re-selects the companion filter board — so
-            // this order leaves both the passband and the band filter settled
-            // for the band being arrived at, not the one being left.
-            if (!mode.isEmpty())
-                s->setMode(mode);
-            s->setFrequency(freqMhz);
-            // Centre the window on the new band. Without this the panadapter
-            // keeps the old band's NCO until the tune happens to fall outside
-            // the usable passband, so a band change could leave the trace
-            // centred a whole band away from the slice that just moved.
-            m_radioModel.requestPanCenter(applet->panId(), freqMhz);
-            qCDebug(lcProtocol).noquote().nospace()
-                << "MainWindow: band switch (no radio band stack) band=" << bandName
-                << " pan=" << applet->panId()
-                << " freq_mhz=" << QString::number(freqMhz, 'f', 6)
-                << " mode=" << mode;
-            return;
-        }
-
-        const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-        QString stackKey = stackKeyHint;
-        QString unsupportedBandReason;
-        if (stackKey.isEmpty()) {
-            const auto stackKeyResult =
-                XvtrPolicy::resolveBandStackKey(bandName, xvtrs, m_radioModel.capabilities());
-            stackKey = stackKeyResult.key;
-            unsupportedBandReason = stackKeyResult.unsupportedReason;
-        }
-
-        if (stackKey.isEmpty()
-            && m_radioModel.declaredBands().contains(bandName, Qt::CaseInsensitive)) {
-            // Radio-declared band (see RadioModel::declaredBands): the radio
-            // told us it tunes this natively, so pass the declared name
-            // through as the band-stack key — the declaring radio defines
-            // and honours these keys (e.g. band=440 on an IC-9700 gateway).
-            // Real Flex radios never declare bands, so their unsupported-band
-            // refusal below is unchanged.
-            //
-            // NB the resolveBandStackKey() attempt above runs FIRST, so a
-            // declared band that ALSO matches the impersonated model's native
-            // capability resolves natively and never reaches here — e.g. a
-            // gateway advertising FLEX-6700 (has2Meters) + bands=2m,440,23cm
-            // sends the bare native key `2` for 2m, but the declared tokens
-            // `440`/`23cm` for the bands the model has no native slot for. A
-            // declaring bridge must therefore honour both the bare Flex keys
-            // and its declared tokens, per band.
-            //
-            // The same FIRST-wins rule means a user XVTR labelled e.g. "2m"
-            // out-ranks a gateway's declared "2m": resolveBandStackKey()
-            // resolves the XVTR to its X<n> key above and this fallthrough
-            // never runs. That is intentional and consistent with the
-            // XVTR-priority precedent already codified for native bands
-            // (#2342, above) — declared tokens do not override a same-named
-            // user XVTR (#4191, follow-up #2 from the #4027 review).
-            //
-            // The contains() match is CaseInsensitive so a declared-band
-            // selection arriving from a non-UI path (memory-channel recall,
-            // CAT) with off-canonical casing like "23CM" still matches the
-            // canonical BandDefs spelling parseDeclaredBands() stored; UI band
-            // buttons already emit canonical names (#4191, follow-up #3).
-            stackKey = bandName;
-        }
-
-        if (stackKey.isEmpty()) {
-            qCWarning(lcProtocol).noquote().nospace()
-                << "MainWindow: refusing unsupported band change band=" << bandName
-                << " reason=" << unsupportedBandReason
-                << " available_xvtrs=" << xvtrListSummary(xvtrs);
-            statusBar()->showMessage(unsupportedBandReason, 5000);
-            return;
-        } else {
-            qCDebug(lcProtocol).noquote().nospace()
-                << "MainWindow: band switch band=" << bandName
-                << " pan=" << applet->panId()
-                << " key=" << stackKey
-                << " freq_hint_mhz=" << QString::number(freqMhz, 'f', 6)
-                << " mode_hint=" << mode
-                << " xvtr=" << xvtrForBandSummary(bandName, xvtrs);
-            // A band stack restore is radio-authoritative and may carry a dBm
-            // range different from a just-released scale drag. Abandon that
-            // client request before the band command so the restored range
-            // cannot be rejected as a stale echo and wedge FFT decoding.
-            emit bandStackRestoreStarting(applet->panId());
-            clearSwrSweepForBandChange(-1, applet->panId(), bandName);
-            m_bandSettings.setCurrentBand(bandName);
-            // #4142: during the profile-load hold a bare sendCommand() band=
-            // write is silently destroyed. requestPanBand defers it instead;
-            // panBandAboutToDispatch starts every slice/Center Lock/Kiwi recall
-            // guard immediately before the command actually reaches the wire.
-            m_radioModel.requestPanBand(applet->panId(), stackKey);
-            QTimer::singleShot(300, this, [this, panId = applet->panId()]() {
-                reassertUnmutedSliceAudioForPan(panId);
-            });
-        }
+        selectBand(applet->panId(), bandName, freqMhz, mode, stackKeyHint);
     });
 
     // XVTR button → open Radio Setup XVTR tab (#571)

@@ -7,17 +7,16 @@
 #include <vector>
 
 #include "core/backends/icom/CivCodec.h"
+#include "core/backends/icom/IcomModels.h"
 
 namespace AetherSDR::icom {
 
-// IC-9700 CI-V Reference Guide, command 1A 00. This first implementation is
-// intentionally read-only and covers the 99 ordinary channels in each of the
-// radio's three RF-band groups. Scan-edge, call and satellite memories are a
-// separate product surface and are not inferred from this record.
 struct IcomMemoryChannel {
-    int band = 0;       // 1=144 MHz, 2=430 MHz, 3=1.2 GHz
-    int channel = 0;    // 1..99
+    int group = -1;
+    int channel = 0;
     bool occupied = false;
+    bool recallable = true;
+    bool split = false;
     std::uint64_t frequencyHz = 0;
     std::string mode;
     int filter = 0;
@@ -33,18 +32,15 @@ struct IcomMemoryChannel {
     std::string name;
 };
 
-[[nodiscard]] std::vector<std::uint8_t> cmdReadIc9700Memory(
-    std::uint8_t to, int band, int channel);
-
-// Returns nullopt for malformed or out-of-scope records. Empty channels are a
-// successful decode with occupied=false so a refresh can remove stale cache.
-[[nodiscard]] std::optional<IcomMemoryChannel> decodeIc9700Memory(
-    std::span<const std::uint8_t> payload);
-
-[[nodiscard]] int ic9700MemoryIndex(int band, int channel) noexcept;
+[[nodiscard]] std::vector<std::uint8_t> cmdReadMemory(
+    std::uint8_t to, MemoryDialect dialect, int group, int channel);
+[[nodiscard]] std::optional<IcomMemoryChannel> decodeMemory(
+    MemoryDialect dialect, std::span<const std::uint8_t> payload);
+[[nodiscard]] int memoryIndex(MemoryDialect dialect, int group, int channel) noexcept;
+[[nodiscard]] std::string memoryGroupName(MemoryDialect dialect, int group);
 
 [[nodiscard]] std::optional<std::vector<std::vector<std::uint8_t>>>
-buildIc9700MemoryRecallFrames(
+buildExtendedMemoryRecallFrames(
     std::uint8_t to, CivMode mode, bool dataMode, int filter,
     RepeaterOffsetDirection direction, int offsetHz, std::uint8_t accessMode,
     double txToneHz, double rxToneHz, int dtcsCode,

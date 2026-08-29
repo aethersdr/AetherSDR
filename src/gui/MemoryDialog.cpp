@@ -350,7 +350,10 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     connect(m_searchEdit, &QLineEdit::returnPressed,
             this, [this]() { activateMemoryRow(m_table ? m_table->currentRow() : -1); });
     connect(m_filterCombo, &QComboBox::currentIndexChanged,
-            this, [this](int) { populateTable(); });
+            this, [this](int) {
+        populateTable();
+        updateSelectionActions();
+    });
 
     // ── Table ─────────────────────────────────────────────────────────────
     m_table = new QTableWidget(0, COLUMNS.size());
@@ -460,7 +463,9 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     }
     connect(m_importBtn, &QPushButton::clicked, this, &MemoryDialog::onImport);
     connect(m_exportBtn, &QPushButton::clicked, this, &MemoryDialog::onExport);
-    connect(m_syncBtn, &QPushButton::clicked, m_model, &RadioModel::refreshMemories);
+    connect(m_syncBtn, &QPushButton::clicked, this, [this]() {
+        m_model->refreshMemories(m_filterCombo->currentData().toString());
+    });
     connect(m_addBtn, &QPushButton::clicked, this, &MemoryDialog::onAdd);
     connect(m_selectBtn, &QPushButton::clicked, this, &MemoryDialog::onSelect);
     connect(m_selectAllBtn, &QPushButton::clicked, this, &MemoryDialog::onSelectAll);
@@ -503,6 +508,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     });
     connect(model, &RadioModel::capabilitiesChanged, this,
             [this](bool, const RadioCapabilities&) {
+        rebuildFilterCombo();
         updateEditingAvailability();
         updateSelectionActions();
     });
@@ -519,7 +525,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     connect(model, &RadioModel::memoryRefreshFinished, this,
             [this](bool success, int completed, int total) {
         m_syncInProgress = false;
-        m_syncBtn->setEnabled(m_model->memoriesRefreshable());
+        updateSelectionActions();
         const QString finalStatus = success
             ? QStringLiteral("Synced %1 slots").arg(total)
             : QStringLiteral("Sync incomplete: %1/%2").arg(completed).arg(total);
@@ -744,14 +750,14 @@ void MemoryDialog::populateTable()
         m_table->setColumnHidden(column, false);
     }
     if (usesNativeMemorySchema) {
-        const QStringList ic9700Headers{
-            "Band", "Channel", "Frequency", "Name", "Mode", "Filter",
+        const QStringList nativeHeaders{
+            capabilities.memoryGroupColumnTitle, "Channel", "Frequency", "Name", "Mode", "Filter",
             "Duplex", "Repeater Offset", "Tone Mode", "TX Tone",
             "RX Tone", "Data Mode"};
-        for (int column = 0; column < ic9700Headers.size(); ++column) {
-            m_table->horizontalHeaderItem(column)->setText(ic9700Headers.at(column));
+        for (int column = 0; column < nativeHeaders.size(); ++column) {
+            m_table->horizontalHeaderItem(column)->setText(nativeHeaders.at(column));
         }
-        for (int column = ic9700Headers.size(); column < COLUMNS.size(); ++column) {
+        for (int column = nativeHeaders.size(); column < COLUMNS.size(); ++column) {
             m_table->setColumnHidden(column, true);
         }
     }
@@ -825,8 +831,11 @@ void MemoryDialog::populateTable()
         // Store memory index in first column's data for retrieval
         m_table->item(row, 0)->setData(Qt::UserRole, m.index);
 
-        // Radio-backed IC-9700 memories are read-only in the initial support
+        // Radio-backed Icom memories are read-only in the initial support
         // phase. Flex and the local bank retain their existing edit behavior.
+        // The native schema deliberately reuses columns 5, 10, and 11 for
+        // Filter, RX Tone, and Data Mode. Replace these numeric roles before
+        // any Icom profile ever enables canWriteMemories.
         // Squelch column (10) uses checkbox — keep it user-checkable.
         for (int c = 0; c < m_table->columnCount(); ++c) {
             auto* item = m_table->item(row, c);
@@ -1447,6 +1456,7 @@ void MemoryDialog::rebuildFilterCombo()
                                                   : QStringLiteral("Profile:"));
     QStringList filterNames;
     if (usesNativeMemorySchema) {
+        filterNames = capabilities.memoryGroups;
         for (const MemoryEntry& memory : m_model->memories()) {
             const QString group = memory.group.trimmed();
             if (!group.isEmpty()
@@ -1499,10 +1509,17 @@ void MemoryDialog::updateSelectionActions()
         m_selectionLabel->setText(QString("%1 of %2 selected").arg(selectedCount).arg(visibleCount));
     }
     if (m_selectBtn) {
-        m_selectBtn->setEnabled(selectedCount == 1);
-        m_selectBtn->setToolTip(selectedCount == 1
-            ? QString()
-            : "Tune is available when exactly one memory is highlighted.");
+        bool recallable = false;
+        if (selectedCount == 1) {
+            const int index = *selectedMemoryIndices().constBegin();
+            const auto memory = m_model->memories().constFind(index);
+            recallable = memory != m_model->memories().constEnd() && memory->recallable;
+        }
+        m_selectBtn->setEnabled(selectedCount == 1 && recallable);
+        m_selectBtn->setToolTip(selectedCount == 1 && !recallable
+            ? "Split, reverse-split, DV, and DD memories are display-only."
+            : (selectedCount == 1 ? QString()
+                                  : "Tune is available when exactly one memory is highlighted."));
     }
     if (m_selectAllBtn) {
         m_selectAllBtn->setEnabled(visibleCount > 0 && selectedCount < visibleCount);
@@ -1531,10 +1548,14 @@ void MemoryDialog::updateSelectionActions()
     }
     if (m_syncBtn) {
         const bool refreshable = m_model->memoriesRefreshable();
+        const RadioCapabilities capabilities = m_model->backendCapabilities();
+        const bool hasRequiredGroup = !capabilities.memoryRefreshRequiresGroup
+            || !m_filterCombo->currentData().toString().isEmpty();
         m_syncBtn->setVisible(refreshable);
-        m_syncBtn->setEnabled(refreshable && !m_syncInProgress);
-        m_syncBtn->setToolTip(
-            QStringLiteral("Read the current memory channels from the radio."));
+        m_syncBtn->setEnabled(refreshable && hasRequiredGroup && !m_syncInProgress);
+        m_syncBtn->setToolTip(hasRequiredGroup
+            ? QStringLiteral("Read the current memory channels from the radio.")
+            : QStringLiteral("Choose an IC-705 memory group before reading."));
     }
 }
 
