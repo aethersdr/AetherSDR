@@ -78,7 +78,7 @@ private:
 
     void rebuildCategoryFilters();
     void openLogTail();
-    void closeLogTail();
+    void pauseLogTail();
     // Reopen after the file underneath us was rotated, restarted or replaced.
     // Returns false when there is nothing to follow.
     bool reopenLogTail(const QString& path);

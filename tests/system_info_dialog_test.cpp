@@ -439,6 +439,18 @@ int main(int argc, char** argv)
                view != nullptr
                    && view->toPlainText().contains(QLatin1String("before the reset")));
 
+        // A temporary hide pauses observation but does not start a new tail.
+        // Reopening from the last 64 KiB while retaining the existing model
+        // duplicated every recent line on each frameless-mode toggle.
+        tailing.hide();
+        QCoreApplication::processEvents();
+        tailing.show();
+        QCoreApplication::processEvents();
+        report("hide/show does not duplicate the retained log tail",
+               view != nullptr
+                   && view->toPlainText().count(
+                          QLatin1String("before the reset")) == 1);
+
         // Rotation: the file is replaced by a shorter one at the same path, so
         // the handle's position is now past its end.
         {

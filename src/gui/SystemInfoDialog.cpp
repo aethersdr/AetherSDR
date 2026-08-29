@@ -139,7 +139,7 @@ SystemInfoDialog::SystemInfoDialog(QWidget* parent)
 SystemInfoDialog::~SystemInfoDialog()
 {
     stopSampling();
-    closeLogTail();
+    pauseLogTail();
 }
 
 // ── Threads ─────────────────────────────────────────────────────────────────
@@ -359,6 +359,10 @@ void SystemInfoDialog::startSampling()
     m_collectorThread->setObjectName(QStringLiteral("SystemInfoCollector"));
     m_collector = new SystemInfoCollector;   // no parent — moved to the thread
     m_collector->moveToThread(m_collectorThread);
+    // QThread processes deferred deletions after its event loop stops. Keep the
+    // worker's destruction on the thread that owns it instead of deleting a
+    // foreign-thread QObject from the GUI thread after wait().
+    connect(m_collectorThread, &QThread::finished, m_collector, &QObject::deleteLater);
     connect(m_collectorThread, &QThread::started, m_collector, &SystemInfoCollector::init);
     // Queued to this thread; see m_samplingGeneration for why each delivery
     // checks it still belongs to the run that produced it.
@@ -394,10 +398,6 @@ void SystemInfoDialog::stopSampling()
 
     m_collectorThread->quit();
     m_collectorThread->wait();
-    // Deleted outright rather than via the usual finished→deleteLater: once
-    // wait() returns, the worker's event loop is gone, so a deferred delete has
-    // nothing left to run it. The collector owns no timer by this point.
-    delete m_collector;
     m_collector = nullptr;
     delete m_collectorThread;
     m_collectorThread = nullptr;
@@ -603,14 +603,16 @@ QString SystemInfoDialog::categoryFromLine(const QString& line)
 
 void SystemInfoDialog::openLogTail()
 {
-    if (m_logFile.isOpen()) {
-        return;
-    }
     // The poll runs whether or not the first open succeeded: logFilePath()
     // always names a file, and one that does not exist yet — logging switched
     // on after the dialog opened, or a rotation in flight — is retried by
     // pollLog() rather than left dead until the dialog is hidden and shown.
-    if (reopenLogTail(LogManager::instance().logFilePath())) {
+    // A temporary hide leaves an open handle at its current offset, so showing
+    // the dialog again catches up without replaying the initial 64 KiB tail.
+    if (!m_logFile.isOpen()) {
+        reopenLogTail(LogManager::instance().logFilePath());
+    }
+    if (m_logFile.isOpen()) {
         pollLog();
     }
 
@@ -650,13 +652,10 @@ bool SystemInfoDialog::reopenLogTail(const QString& path)
     return true;
 }
 
-void SystemInfoDialog::closeLogTail()
+void SystemInfoDialog::pauseLogTail()
 {
     if (m_logTimer != nullptr) {
         m_logTimer->stop();
-    }
-    if (m_logFile.isOpen()) {
-        m_logFile.close();
     }
 }
 
@@ -788,7 +787,7 @@ void SystemInfoDialog::showEvent(QShowEvent* event)
 void SystemInfoDialog::hideEvent(QHideEvent* event)
 {
     stopSampling();
-    closeLogTail();
+    pauseLogTail();
     PersistentDialog::hideEvent(event);
 }
 
