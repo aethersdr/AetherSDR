@@ -44,13 +44,17 @@ GUI code knows a CI-V byte. The mapping is:
 | Repeater offset magnitude | read `0C`, write `0D`, 100 Hz units | Kept unsigned on the wire; the duplex direction determines the signed TX offset shown by the slice model. |
 | Transmit-frequency check | `1C 02 00/01` | Gated by the active model's `TxFrequencyCheck` evidence and FM repeater facet. XFC is momentary: press sends ON; release, window deactivation, control hide, and disconnect send OFF. A 250 ms readback poll catches front-panel changes without requiring CI-V Transceive. |
 
-The IC-9700 additionally activates a read-only extended snapshot (`16 5D`,
-`1B 01`, `1B 02`, and `1C 03`) through the model-specific
-`FmRepeaterExtendedReadback` facet. These values are retained in the Icom
-backend and available through its `repeater.state` extension; they do not
-change the shared FM applet, VFO controls, memory vocabulary, or the existing
-IC-705/IC-7300MK2 poll and write paths. The sanitized source trace and exact
-field provenance live in
+The IC-705 and IC-9700 additionally activate the extended snapshot (`16 5D`,
+`1B 01`, `1B 02`, and `1C 03`) through their model-specific
+`FmRepeaterExtendedReadback` facets. Both official CI-V guides define the same
+access-mode values and DTCS code/polarity register; IC-9700 also has preserved
+live-wire evidence. `16 5D`, receive CTCSS, and DTCS code/polarity are
+normalized into `SliceModel`; the shared FM applet and VFO consume the model
+profile's access-mode and DTCS-code capabilities without a radio-name check.
+Operator DTCS intent writes `1B 02`, while only the radio's confirmation
+updates model and diagnostic state. The IC-7300MK2 keeps its existing narrower
+activated path, and memory write vocabulary remains outside this phase. The
+sanitized IC-9700 source trace and exact field provenance live in
 `docs/data/icom-ic9700-fm-repeater-{evidence.json,live-trace.txt}`.
 
 The radio remains authoritative. Connect performs a snapshot of all four FM
@@ -519,10 +523,13 @@ load-bearing**:
 | Channel duplication | `TciServer` divides by `2 * sizeof(float)` and sees half the frames it has. |
 
 Both failures are **silent** — audio flows, meters move, the session is healthy.
-That is why `icom_backend_test` asserts the ratio (4800 mono samples in at 48 kHz
-→ ~2400 stereo frames out at 24 kHz) rather than merely asserting that audio
-arrived, and why it also asserts the *negative*: a passthrough would emit ~4800
-frames, so the test fails a backend that skipped the conversion.
+The retired `icom_backend_test` fake-radio fixture asserted the ratio (4800 mono
+samples in at 48 kHz → ~2400 stereo frames out at 24 kHz) rather than merely
+asserting that audio arrived. The resampler half stays covered by the retained
+`tx_mic_channel_normalizer_test`; the backend-level negative passthrough
+assertion (a backend that skips the conversion emits ~4800 frames) awaits a
+socket-free injected replacement (#5254) — live validation cannot prove that
+non-event.
 
 `Resampler::processMonoToStereo` does both halves in one call. It is stateful
 (r8brain), so the instance is built once at connect — a fresh one per callback
@@ -673,9 +680,14 @@ captures from our own radio.
 ## 9. Explicitly out of scope for phase 1
 
 - **IQ.** It does not exist on this radio. Not deferred — absent.
-- **Memory channels.** The radio stores 99 in 100 groups (`1A 00`) and the decode
-  is large and fiddly. Ship `persistsMemories = false` (client-side bank) and
-  revisit.
+- **Writable memory channels.** Initial IC-705, IC-7300MK2, and IC-9700 support
+  reads their model-specific ordinary-channel records with `1A 00`, exposes occupied
+  channels through the shared memory model, and permits tuning to the cached
+  channel state. Reads are button-only; IC-705 requires a selected group so a
+  click queues 100 requests rather than scanning its 10,000-address space.
+  Writing, adding, deleting, scan-edge, call, and satellite
+  memories remain deferred. Other Icom models continue to use the client-side
+  bank until their own published record layouts are implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.
@@ -814,8 +826,8 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Six constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, and
+**Five constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 57` manual-notch width, and
 `27 1E` scope fixed edges. Not all of them should be wired: the notch width
 is deliberately left to the operator's own choice, and the fixed edges are three
 saved presets per band that a pan drag must never overwrite. CW pitch is the one
@@ -990,7 +1002,7 @@ screen; certification has to inspect the consumer, not stop at the seam.
 | `15 11` | Po, 0=0% / 143=50% / 213=100% | ✅ | `TX:FWDPWR` **Watts** | **working** — model-specific curve; visible only while keyed |
 | `15 12` | SWR, 0=1.0 / 48=1.5 / 80=2.0 / 120=3.0 | ✅ | `TX:SWR` SWR | **working** — transmit-only; clears on unkey |
 | `15 13` | ALC, 0=min / 120=max | ✅ | `TX:ALC` **Percent** | **working** — consumer honours Percent |
-| `15 14` | COMP, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | contract correct; reads 0 while PROC is unmapped |
+| `15 14` | COMP meter, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | working while transmitting; independent of the `16 44` / `14 0E` compressor controls |
 | `15 15` | Vd, 0=0 V / 75=5 V / 241=16 V | ✅ | `RAD:+13.8A` Volts | **working** |
 | `15 16` | Id, 0=0 A / 121=2 A / 241=4 A | ✅ | `RAD:PACURRENT` Amps | published, no consumer |
 
@@ -1010,13 +1022,13 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 41` | Auto notch | ✅ | ✗ constant only |
 | `16 42` | Repeater tone (TONE) | ✅ | ✅ live-verified on IC-705; connect readback + front-panel adoption |
 | `16 43` | Tone squelch (TSQL) | ✗ | ✗ — separate from the mapped repeater TONE control |
-| `16 44` | **Speech compressor (PROC)** | ✅ | ✗ **not wired — the PROC state disagrees with the radio** |
+| `16 44` | **Speech compressor enable** | ✅ | ✅ via `setSpeechProcessor`; connect readback and confirmation adopt radio state |
 | `16 45` | Monitor | ✅ | ✗ constant only |
 | `16 46` | VOX | ✅ | ✗ constant only |
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
 | `16 48` | Manual notch | ✅ | ✗ constant only |
 | `16 4F` | Twin peak filter (RTTY) | ✗ | ✗ |
-| `16 50` | Dial lock | ✅ | ✗ constant only |
+| `16 50` | Dial lock | ✅ | ✅ IC-705/IC-7300MK2/IC-9700 profile-gated read/write + polling |
 | `16 56` | DSP IF filter SHARP/SOFT | ✗ | ✗ |
 | `16 57` | Manual notch width W/M/N | ✗ | ✗ |
 | `16 58` | SSB TX bandwidth W/M/N | ✗ | ✗ |
@@ -1029,9 +1041,12 @@ mic gain `0B`, key speed `0C`, COMP level `0E`, NB level `12`, monitor `15`.
 Unmapped: notch position `0D`, break-in delay `0F`, VOX gain `16`, anti-VOX
 gain `17`.
 
-**`14 0E` is the missing half of PROC.** AetherSDR's processor control is a Flex
-shape — OFF / NOR / DX / DX+ — and on an Icom that is two commands, not one:
-`16 44` for the on/off and `14 0E` (0000–0255 ⇒ 0–10) for which of the three.
+**`14 0E` is the missing half of speech compression.** The enable and level are
+two commands on Icom, not one. Legacy profiles retain the shared PROC preset
+surface; a model profile may expose an evidenced continuous COMP level:
+`16 44` controls on/off and `14 0E` (0000–0255 ⇒ 0–10) is the level register.
+Legacy profiles map that register to the three shared PROC presets; the IC-9700
+profile maps it bidirectionally to the continuous 0–100 COMP percentage.
 
 ### C.4 RIT / XIT (`21 xx`) — entirely unmapped
 
@@ -1134,7 +1149,7 @@ their own right (CERTIFICATION.md §1.29):
 | | RF power | ✅ `setTxPower` |
 | | power / SWR gauges | ✅ (units fixed; unverified on hardware) |
 | | TX filter | ❌ `setTxFilter` not implemented (`16 58` unmapped) |
-| **Phone / CW** | PROC enable + NOR/DX/DX+ | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
+| **Phone / CW** | profile-shaped PROC/COMP enable + level | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
 | | ALC / Compression gauges | ✅ (ALC scale fixed; unverified) |
 | | Level gauge | ⛔ hidden — this radio publishes no mic meter |
 | | mic source | ✅ collapsed to PC by capability |

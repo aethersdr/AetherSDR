@@ -449,10 +449,12 @@ void SpectrumOverlayMenu::raiseAll()
     if (m_memoryPanel)  m_memoryPanel->raise();
 }
 
-void SpectrumOverlayMenu::setMemories(const QMap<int, MemoryEntry>& memories)
+void SpectrumOverlayMenu::setMemories(const QMap<int, MemoryEntry>& memories, bool writable)
 {
-    if (m_memoryPanel)
+    if (m_memoryPanel) {
         m_memoryPanel->setMemories(memories);
+        m_memoryPanel->setWritable(writable);
+    }
 }
 
 // ── Band sub-panel ────────────────────────────────────────────────────────────

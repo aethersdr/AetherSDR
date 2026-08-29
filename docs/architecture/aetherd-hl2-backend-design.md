@@ -199,7 +199,7 @@ Three pieces, and one seam:
   cannot silently delete fields it does not understand.
 - **`LocalMemoryBank`** — owns the slots, allocates the lowest free index,
   answers `memory create` / `set` / `remove` / `apply`, and debounces saves.
-- **`RadioModel::tryLocalMemoryCommand()`** — the seam, in `sendCmd()`. Every
+- **`RadioModel::tryMemoryCommand()`** — the seam, in `sendCmd()`. Every
   memory path in the app funnels through those four commands, so answering them
   there is what let all of the UX above keep working with **no changes to the
   memory dialog, the browse panel, the CSV codec, or the spot feed**.

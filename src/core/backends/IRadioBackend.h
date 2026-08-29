@@ -33,6 +33,23 @@ struct RadioConnectRequest {
     QVariantMap params;     // family-specific extras (namespaced by the backend)
 };
 
+// Complete radio-owned memory state applied after the common frequency/mode
+// fields. Keeping this as one value object prevents positional call sites from
+// silently swapping the independent TX/RX tone and DTCS fields.
+struct MemoryRecallDetails {
+    int sliceId = -1;
+    int filterPreset = 0;
+    bool dataMode = false;
+    QString direction;
+    double offsetHz = 0.0;
+    QString toneMode;
+    double txToneHz = 0.0;
+    double rxToneHz = 0.0;
+    int dtcsCode = 23;
+    bool dtcsTxReverse = false;
+    bool dtcsRxReverse = false;
+};
+
 // The radio-facing seam of the engine (aetherd RFC §5.5). Everything that
 // speaks a vendor wire protocol lives *behind* this interface, inside
 // libaethercore; RadioModel and the (future) protocol see only this. The
@@ -221,6 +238,7 @@ public:
         Q_UNUSED(sliceId);
         Q_UNUSED(antenna);
     }
+    virtual void setRadioDialLock(bool locked) { Q_UNUSED(locked); }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -447,11 +465,12 @@ public:
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
 
-    // The speech processor, as the operator sees it: an enable plus one of
-    // three presets (0 = NOR, 1 = DX, 2 = DX+).
+    // The speech processor, as the operator sees it: an enable plus a
+    // normalized level. RadioCapabilities publishes whether the presentation
+    // is Flex's three presets (0..2) or an evidenced continuous range.
     //
     // That shape is FlexRadio's, and it is not universal. On a radio with its
-    // own compressor the two halves are SEPARATE registers — the IC-705 wants
+    // own compressor the two halves are SEPARATE registers — an Icom wants
     // 16 44 for the enable and 14 0E for how hard — so a backend receives both
     // together and decides how to spend them. Default no-op: Flex takes this as
     // text from TransmitModel, and a host-modulating backend runs its own
@@ -555,6 +574,15 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(hz);
     }
+    virtual void setSliceFmToneRxValue(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
+    virtual void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                                bool rxReverse)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(code); Q_UNUSED(txReverse); Q_UNUSED(rxReverse);
+    }
     virtual void setSliceRepeaterOffsetDir(int sliceId, const QString& direction)
     {
         Q_UNUSED(sliceId); Q_UNUSED(direction);
@@ -574,6 +602,19 @@ public:
         setSliceFmToneValue(sliceId, toneHz);
         setSliceFmToneMode(sliceId, toneMode);
     }
+    virtual bool applyMemoryRecallDetails(const MemoryRecallDetails& details)
+    {
+        Q_UNUSED(details.filterPreset); Q_UNUSED(details.dataMode);
+        Q_UNUSED(details.rxToneHz); Q_UNUSED(details.dtcsCode);
+        Q_UNUSED(details.dtcsTxReverse); Q_UNUSED(details.dtcsRxReverse);
+        setSliceFmRepeater(details.sliceId, details.direction, details.offsetHz,
+                           details.toneMode, details.txToneHz);
+        return true;
+    }
+
+    // Request a fresh snapshot from a radio-owned memory store. Backends that
+    // only push changes, or whose memories live on the host, leave this a no-op.
+    virtual void refreshMemories(const QString& group) { Q_UNUSED(group); }
 
     // Momentary receive-on-transmit-frequency state (Icom XFC). This is
     // radio-wide selected-VFO state, not a memory/slice parameter.
@@ -774,6 +815,9 @@ signals:
 
     // Radio-authoritative state for the momentary transmit-frequency monitor.
     void transmitFrequencyCheckChanged(bool on);
+    // Radio-authoritative global dial-lock state. RadioModel fans this out to
+    // every slice because a radio-global control must not look per-slice.
+    void radioDialLockChanged(bool locked);
 
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,
     // not when traffic arrives — the tick has to keep coming after the radio
@@ -809,6 +853,11 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    // An explicit radio readback confirmed the keyed state. This is distinct
+    // from transmitChanged because optimistic state may already equal the
+    // answer and therefore produce no delta. Backends without a separate
+    // command/readback plane need not emit it.
+    void keyingStateConfirmed(bool keyed);
 
     // Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode
     // split, #4094). Typed + present-only; the backend translates the SmartSDR
@@ -839,6 +888,9 @@ signals:
     // RadioModel applies it to MemoryEntry (text sanitisation is a model
     // concern) or drops the slot when delta.removed is set.
     void memoryChanged(const MemoryDelta& delta);
+    void memoryRefreshStarted(int total);
+    void memoryRefreshProgress(int completed, int total);
+    void memoryRefreshFinished(bool success, int completed, int total);
 
     // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The
     // backend parses the vendor "profile <type> …" status (list/current + the

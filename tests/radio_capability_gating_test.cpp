@@ -103,7 +103,6 @@
 // with the automation bridge.
 
 #include "models/RadioModel.h"
-#include "IcomFakeRadio.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "models/ModelCapabilities.h"
@@ -114,8 +113,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
-#include "core/backends/icom/IcomCredentials.h"
-#include "core/backends/icom/IcomSettings.h"
+#include "core/backends/icom/IcomSession.h"
 
 #include "TestEventLoop.h"
 
@@ -125,6 +123,51 @@
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+// Select model-table data without opening an IcomSession or any socket. The
+// backend already grants this focused test accessor for deterministic state
+// injection; each test binary supplies only the operations it needs.
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static void deliverDialLock(IcomCivBackend& backend, int value)
+    {
+        backend.m_connected = true;
+        backend.m_sessionGeneration = 1;
+        CivFrame frame;
+        frame.cmd = cmd::kFunction;
+        frame.hasSub = true;
+        frame.sub = func::kDialLock;
+        frame.data = {static_cast<std::uint8_t>(value)};
+        backend.onCivFrame(frame, 1);
+    }
+
+    static void prepareDialLockWrite(IcomCivBackend& backend,
+                                     const IcomModel& model)
+    {
+        backend.m_model = &model;
+        backend.m_connected = true;
+        backend.m_session = std::make_unique<IcomSession>();
+        backend.m_session->setCivAddress(model.civAddress);
+    }
+
+    static QString lastOutboundCiv(const IcomCivBackend& backend)
+    {
+        return backend.m_lastOutboundCiv;
+    }
+
+    static std::uint8_t activeCivAddress(const IcomCivBackend& backend)
+    {
+        return backend.m_session ? backend.m_session->civAddress() : 0;
+    }
+};
+
+}  // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -268,6 +311,9 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
         check(!caps.hasTransmitFrequencyCheck,
               "Flex declares hasTransmitFrequencyCheck=false (REV is local state)");
+        check(caps.fmTonePresentation == FmTonePresentation::Legacy
+                  && caps.fmToneModes.isEmpty(),
+              "Flex retains its legacy FM-tone presentation and labels");
         // The three status-bar toggles. Same regression shape as the supply-rail
         // field above and worse in kind: these are shipping SmartSDR features
         // whose only implementation is a command-plane verb, so a field added
@@ -497,56 +543,163 @@ int main(int argc, char** argv)
         }
     }
 
-    // ---- Icom drives the model's actual per-band power consumer -----------
+    // ---- Icom model capabilities and CI-V dial lock without a socket -------
     {
-        using AetherSDR::icom::test::FakeIc705;
+        using namespace AetherSDR::icom;
+        const IcomModel* ic9700 = modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
+        // Guarded as a block: without the guard a failed lookup would run the
+        // six checks below against the constructor's unknownModel() seed and
+        // report six misleading capability failures for one missing table row.
+        if (ic9700) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 3,
+                  "Icom declares the three IC-9700 per-band TX power limits");
+            check(caps.txPowerMaxWattsAt(146'000'000.0) == 100.0,
+                  "the IC-9700 2 m capability clamps TX power to 100 W");
+            check(caps.txPowerMaxWattsAt(432'000'000.0) == 75.0,
+                  "the IC-9700 70 cm capability clamps TX power to 75 W");
+            check(caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+                  "the IC-9700 23 cm capability clamps TX power to 10 W");
+            check(caps.hasTransmitFrequencyCheck,
+                  "Icom declares the profiled IC-9700 momentary XFC command");
+            check(caps.hasSupplyVoltageTelemetry,
+                  "Icom declares the profiled IC-9700 supply-voltage telemetry");
+            check(!caps.hasMainFanTelemetry,
+                  "Icom declares no Main Fan telemetry family-wide");
+            check(caps.speechProcessorLevelMaximum == 100
+                      && caps.speechProcessorLabel == QStringLiteral("COMP"),
+                  "IC-9700 alone declares the continuous COMP presentation");
+            check(caps.fmDtcsCodes.size() == 104
+                      && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
+                  "IC-9700 declares the complete DTCS operator vocabulary");
+        }
 
-        FakeIc705 radio;
-        radio.setCivAddress(0xA2);
-        radio.setDeviceName("IC-9700");
-        IcomSettings::reset();
-        IcomSettings::setUsername(QStringLiteral("beer"));
-        IcomSettings::setPorts(radio.controlPort(), radio.serialPort(), radio.audioPort());
-        IcomSettings::setCivAddressAuto();
-        IcomCredentials::setSessionPassword(QStringLiteral("beerbeer"));
+        {
+            const IcomModel* ic705 = modelForName("IC-705");
+            check(ic705 != nullptr, "the IC-705 model resolves");
+            if (ic705) {
+                IcomCivBackend backend;
+                IcomCivBackendTestAccess::selectModel(backend, *ic705);
+                const RadioCapabilities caps = backend.capabilities();
+                check(caps.speechProcessorLevelMaximum == 2
+                          && caps.speechProcessorLabel == QStringLiteral("PROC"),
+                      "IC-705 retains the legacy PROC presentation");
+                check(caps.fmDtcsCodes.size() == 104
+                          && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
+                      "IC-705 declares its documented DTCS operator vocabulary");
+            }
+        }
 
-        RadioInfo info;
-        info.family = QStringLiteral("icom");
-        info.model = QStringLiteral("IC-9700");
-        info.serial = QStringLiteral("capability-gating-ic9700");
-        info.address = QHostAddress::LocalHost;
-        info.port = radio.controlPort();
-        model.connectToRadio(info);
-        check(AetherTest::waitFor([&] { return model.isConnected(); }),
-              "IC-9700 model-level fixture connects through the real backend seam");
+        {
+            const IcomModel* sibling = modelForName("IC-7300MK2");
+            check(sibling != nullptr, "the protected IC-7300MK2 model resolves");
+            if (sibling) {
+                IcomCivBackend backend;
+                IcomCivBackendTestAccess::selectModel(backend, *sibling);
+                const RadioCapabilities caps = backend.capabilities();
+                check(caps.speechProcessorLevelMaximum == 2
+                          && caps.speechProcessorLabel == QStringLiteral("PROC"),
+                      "IC-7300MK2 retains the legacy PROC presentation");
+                check(caps.fmDtcsCodes.isEmpty(),
+                      "Icom models without documented DTCS do not activate controls");
+            }
+        }
 
-        const RadioCapabilities caps = model.backendCapabilities();
-        check(caps.txPowerBands.size() == 3,
-              "Icom declares the three IC-9700 per-band TX power limits");
-        check(caps.hasTransmitFrequencyCheck,
-              "Icom declares the profiled IC-9700 momentary XFC command");
-        check(caps.hasSupplyVoltageTelemetry,
-              "Icom declares the profiled IC-9700 supply-voltage telemetry");
-        check(!caps.hasMainFanTelemetry,
-              "Icom declares no Main Fan telemetry family-wide");
-
-        const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
-                                          const char* description) {
-            radio.frontPanelFrequency(hz);
-            check(AetherTest::waitFor([&] {
-                      return model.transmitModel().maxPowerLevel() == watts;
-                  }), description);
+        struct DialLockCase {
+            const char* modelName;
+            std::uint8_t civAddress;
         };
-        expectPowerLimit(146'000'000ULL, 100,
-                         "RadioModel applies the IC-9700 2 m 100 W ceiling");
-        expectPowerLimit(432'000'000ULL, 75,
-                         "RadioModel applies the IC-9700 70 cm 75 W ceiling");
-        expectPowerLimit(1'296'000'000ULL, 10,
-                         "RadioModel applies the IC-9700 23 cm 10 W ceiling");
+        constexpr DialLockCase dialLockCases[] = {
+            {"IC-705", 0xA4},
+            {"IC-7300MK2", 0xB6},
+            {"IC-9700", 0xA2},
+        };
+        for (const DialLockCase& lockCase : dialLockCases) {
+            const IcomModel* lockModel = modelForName(lockCase.modelName);
+            check(lockModel != nullptr,
+                  "the profiled dial-lock Icom model resolves");
+            if (!lockModel) {
+                continue;
+            }
+            check(lockModel->civAddress == lockCase.civAddress,
+                  "the dial-lock model retains its official CI-V address");
+            check(profileFor(*lockModel).supports(IcomFeature::DialLock),
+                  "the model profile attests CI-V dial-lock support");
 
-        model.disconnectFromRadio();
-        IcomCredentials::setSessionPassword(QString{});
-        IcomSettings::reset();
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *lockModel);
+            check(backend.capabilities().hasRadioDialLock,
+                  "the profiled model publishes radio-authoritative dial lock");
+
+            IcomCivBackend lockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(lockWriter, *lockModel);
+            check(IcomCivBackendTestAccess::activeCivAddress(lockWriter)
+                      == lockCase.civAddress,
+                  "dial lock targets the selected model's CI-V address");
+            lockWriter.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(lockWriter)
+                      == QStringLiteral("16 50 01"),
+                  "dial lock sends CI-V 16 50 01");
+
+            IcomCivBackend unlockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(unlockWriter, *lockModel);
+            unlockWriter.setRadioDialLock(false);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(unlockWriter)
+                      == QStringLiteral("16 50 00"),
+                  "dial unlock sends CI-V 16 50 00");
+
+            QSignalSpy lockSpy(&backend, &IRadioBackend::radioDialLockChanged);
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.count() == 1 && lockSpy.takeFirst().at(0).toBool(),
+                  "dial-lock readback publishes the locked state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.isEmpty(),
+                  "unchanged dial-lock polling does not republish state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 0);
+            check(lockSpy.count() == 1 && !lockSpy.takeFirst().at(0).toBool(),
+                  "front-panel unlock readback publishes the unlocked state");
+        }
+
+        const IcomModel* unprofiled = modelForName("IC-7610");
+        check(unprofiled != nullptr, "the unprofiled Icom model resolves");
+        if (unprofiled) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *unprofiled);
+            check(!backend.capabilities().hasRadioDialLock,
+                  "an unattested Icom model does not inherit dial lock");
+            IcomCivBackendTestAccess::prepareDialLockWrite(backend, *unprofiled);
+            backend.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
+                  "an unattested Icom model emits no dial-lock command");
+        }
+    }
+
+    // ---- A radio-global dial lock reaches every slice surface ------------
+    {
+        RadioModel fanoutModel;
+        QString fixtureError;
+        check(fanoutModel.automationApplySliceFixture(0, QString(), &fixtureError),
+              "dial-lock fan-out fixture creates slice 0");
+        check(fanoutModel.automationApplySliceFixture(1, QString(), &fixtureError),
+              "dial-lock fan-out fixture creates slice 1");
+        SliceModel* first = fanoutModel.slice(0);
+        SliceModel* second = fanoutModel.slice(1);
+        check(first && second, "dial-lock fan-out fixture resolves both slices");
+        if (first && second) {
+            const bool invoked = QMetaObject::invokeMethod(
+                fanoutModel.backend(), "radioDialLockChanged",
+                Qt::DirectConnection, Q_ARG(bool, true));
+            check(invoked, "backend dial-lock signal is invokable through the seam");
+            check(first->isLocked() && second->isLocked(),
+                  "radio-authoritative lock fans out to every slice surface");
+            QMetaObject::invokeMethod(fanoutModel.backend(), "radioDialLockChanged",
+                                      Qt::DirectConnection, Q_ARG(bool, false));
+            check(!first->isLocked() && !second->isLocked(),
+                  "radio-authoritative unlock clears every slice surface");
+        }
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -607,6 +760,49 @@ int main(int argc, char** argv)
               "Sim declares the 'sim' extension namespace — the Demo Noise "
               "tile gates on this handshake, not on the backend type "
               "(M0, #5263)");
+
+        IRadioBackend* simBackend = model.backend();
+        QSignalSpy extensionResultSpy(simBackend, &IRadioBackend::extensionResult);
+        QSignalSpy extensionErrorSpy(simBackend, &IRadioBackend::extensionError);
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.enable"), 101,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("pink")},
+                        {QStringLiteral("on"), true}});
+        check(extensionResultSpy.count() == 1
+                  && extensionResultSpy.takeFirst().value(0).toULongLong() == 101,
+              "valid Demo Noise extension request returns its correlated result");
+        check(extensionErrorSpy.isEmpty(),
+              "valid Demo Noise extension request returns no error");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.preset"), 102,
+            QStringLiteral("not-a-preset"));
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 102,
+              "unknown Demo Noise preset returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise preset does not falsely report applied=true");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.level"), 103,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("not-a-channel")},
+                        {QStringLiteral("db"), -20.0}});
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 103,
+              "unknown Demo Noise channel returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise channel does not report applied=true");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.knob"), 104,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("birdie")},
+                        {QStringLiteral("knob"), QStringLiteral("unknown")},
+                        {QStringLiteral("v"), 700.0}});
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 104,
+              "unknown Demo Noise knob returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise knob does not report applied=true");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
@@ -905,6 +1101,9 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults Main Fan telemetry to absent");
         check(!fresh.alwaysUseClientSideSpots,
               "RadioCapabilities defaults to the existing operator spot policy");
+        check(fresh.speechProcessorLevelMaximum == 2
+                  && fresh.speechProcessorLabel == QStringLiteral("PROC"),
+              "RadioCapabilities defaults to the legacy PROC presentation");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
@@ -925,6 +1124,22 @@ int main(int argc, char** argv)
               "Sim keeps its existing operator-controlled spot behavior");
         check(icomCaps.alwaysUseClientSideSpots,
               "Icom forces SpotHub spots through the passive client model");
+        check(fresh.fmDtcsCodes.isEmpty() && flexCaps.fmDtcsCodes.isEmpty()
+                  && hl2Caps.fmDtcsCodes.isEmpty() && simCaps.fmDtcsCodes.isEmpty()
+                  && icomCaps.fmDtcsCodes.isEmpty(),
+              "DTCS defaults and backends without an active Icom profile stay empty");
+        check(flexCaps.speechProcessorLevelMaximum == 2
+                  && flexCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "Flex retains the legacy PROC presentation");
+        check(hl2Caps.speechProcessorLevelMaximum == 2
+                  && hl2Caps.speechProcessorLabel == QStringLiteral("PROC"),
+              "HL2 retains the legacy PROC presentation");
+        check(simCaps.speechProcessorLevelMaximum == 2
+                  && simCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "Sim retains the legacy PROC presentation");
+        check(icomCaps.speechProcessorLevelMaximum == 2
+                  && icomCaps.speechProcessorLabel == QStringLiteral("PROC"),
+              "an unidentified Icom retains the legacy PROC presentation");
 
         check(!fresh.hasTxFilterControls,
               "RadioCapabilities defaults TX cutoff controls to absent");

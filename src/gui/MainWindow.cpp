@@ -2271,10 +2271,12 @@ MainWindow::MainWindow(QWidget* parent)
         // not yet received a meter definition is still not entitled to print a
         // number. Same separation as the DAX capability and its crash guard.
         const auto& meters = m_radioModel.meterModel();
+        const bool presentPaCurrent =
+            m_paCurrentStatusPreferred && meters.hasPaCurrentMeter();
         m_supplyVoltLabel->setText(
             meters.hasSupplyVoltage()
                 ? QStringLiteral("%1%2 V")
-                      .arg(meters.hasPaCurrentMeter()
+                      .arg(presentPaCurrent
                                ? QStringLiteral("Vd ") : QString(),
                            QString::number(supplyVolts, 'f', 2))
                 : QStringLiteral("—"));
@@ -4449,7 +4451,7 @@ void MainWindow::showQuickAddMemoryDialog(const QString& preferredPanId)
 void MainWindow::updatePaTempLabel()
 {
     const auto& meters = m_radioModel.meterModel();
-    if (meters.hasPaCurrentMeter()) {
+    if (m_paCurrentStatusPreferred && meters.hasPaCurrentMeter()) {
         const bool liveTxCurrent =
             (m_radioModel.transmitModel().isTransmitting()
              || m_radioModel.transmitModel().isTuning())
@@ -5865,6 +5867,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // one place so the count cannot leak across sessions.
     noteAutoConnectFinished(connected);
 
+    if (!connected) {
+        m_connectSliceEnumeration.cancelArm();
+    }
+
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
@@ -5877,8 +5883,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (m_appletPanel && connected
         && m_radioModel.backendCapabilities().extensionNamespaces.contains(
                QStringLiteral("sim"))) {
-        if (auto* applet = m_appletPanel->demoApplet())
+        if (auto* applet = m_appletPanel->demoApplet()) {
             applet->pushSceneToEngine();
+        }
     }
 
     // Pause/resume the discovery re-bind loop in step with the connection
@@ -6830,7 +6837,7 @@ void MainWindow::refreshMemoryBrowsePanel()
         if (!applet)
             continue;
         if (auto* menu = applet->spectrumWidget()->overlayMenu()) {
-            menu->setMemories(m_radioModel.memories());
+            menu->setMemories(m_radioModel.memories(), m_radioModel.memoriesWritable());
         }
     }
 }
@@ -7093,14 +7100,26 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     m_radioManufacturer = connected ? caps.manufacturer : QString();
     refreshRadioIdentityLabels();
 
+    // The compact status stack gives PA temperature priority whenever the
+    // active backend declares it. Flex also publishes a PACURRENT meter, but
+    // that reading clips and must not replace its authoritative PATEMP value.
+    // Radios without temperature retain the established Vd/Id presentation
+    // when their calibrated meter definitions arrive.
+    m_paCurrentStatusPreferred = connected && !caps.hasPaTemperatureTelemetry;
+    updatePaTempLabel();
+
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
+            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
+            connected ? caps.speechProcessorLevelMaximum : 2);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
-        m_appletPanel->meterApplet()->setPaTemperatureTelemetryState(
-            connected, caps.hasPaTemperatureTelemetry);
+        m_appletPanel->meterApplet()->setPaInstrumentTelemetryState(
+            connected, caps.hasPaTemperatureTelemetry,
+            caps.hasPaCurrentTelemetry);
         // The mic-level gauge follows the METER, not the capability: a Flex
         // does not let a client pick its input either and still publishes
         // MICPEAK. Absence of the meter is the only thing that means the face
@@ -7393,6 +7412,25 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->setDemoVisible(
             connected
             && caps.extensionNamespaces.contains(QStringLiteral("sim")));
+    }
+
+    // TX Band Settings and Inhibit-during-TUNE drive Flex interlock/band
+    // verbs that a backend with no command plane drops. Doctrine (#5263):
+    // dim, never hide — the entries stay visible on every family, disabled
+    // with a reason where the backend cannot honor them. Permissive on
+    // disconnect like every gate in this function.
+    {
+        const bool cmdPlane = !connected || m_radioModel.hasCommandPlane();
+        const QString why =
+            cmdPlane ? QString() : tr("Not supported by this radio");
+        if (m_txBandAction) {
+            m_txBandAction->setEnabled(cmdPlane);
+            m_txBandAction->setToolTip(why);
+        }
+        if (m_tuneInhibitMenu) {
+            m_tuneInhibitMenu->menuAction()->setEnabled(cmdPlane);
+            m_tuneInhibitMenu->menuAction()->setToolTip(why);
+        }
     }
 
     // ── GPS: the status-bar position readout and the dialog it opens ────────

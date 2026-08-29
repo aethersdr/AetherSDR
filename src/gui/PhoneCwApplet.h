@@ -34,6 +34,7 @@ public:
     // and read as a fault rather than as an absence.
     void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setDaxVisible(bool visible);
+    void setSpeechProcessorPresentation(const QString& label, int maximum);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
@@ -98,7 +99,10 @@ private:
     QPushButton* m_accBtn{nullptr};
 
     QPushButton* m_procBtn{nullptr};
-    QSlider*     m_procSlider{nullptr};   // 3-position: 0=NOR, 1=DX, 2=DX+
+    QSlider*     m_procSlider{nullptr};   // capability-shaped: presets or 0..100
+    QLabel*      m_procLowLabel{nullptr};
+    QLabel*      m_procMidLabel{nullptr};
+    QLabel*      m_procHighLabel{nullptr};
     QPushButton* m_daxBtn{nullptr};
 
     QPushButton* m_monBtn{nullptr};

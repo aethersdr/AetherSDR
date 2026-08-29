@@ -547,15 +547,15 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
-    // ── Local memory bank (radios with no memory slots of their own) ─────────
+    // ── Memory command routing ──────────────────────────────────────────────
     //
-    // Answer a `memory …` command out of the local bank. Returns the sequence
-    // number sendCmd() would have returned (non-zero — sendCommand() reads that
-    // as "dispatched"), or nullopt when the command is not one the bank owns
-    // and must take its normal path.
+    // Answer a `memory …` command from the local bank or the cached read-only
+    // radio view. Returns the sequence number sendCmd() would have returned
+    // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
+    // writable/native radio backend must take its normal path.
     // (spelled out rather than the ResponseCallback alias — that is declared
     // further down this class.)
-    std::optional<quint32> tryLocalMemoryCommand(
+    std::optional<quint32> tryMemoryCommand(
         const QString& command, const RadioConnection::ResponseCallback& cb);
     // Settle which store owns the memory cache for the session being started:
     // the local bank, or the radio's own slots.
@@ -567,7 +567,7 @@ public:
     // Apply a stored channel to the active slice. This is what `memory apply`
     // does on a Flex; with no radio to do it, the model drives SliceModel's
     // operator-issue setters so the change routes through the backend seam.
-    void recallLocalMemory(int index);
+    bool recallCachedMemory(int index);
     void createAudioStream();
     // An operator CLICK on the PC Audio button. On an Icom this asks the radio
     // to switch its voice-mode modulation input, which Principle II permits
@@ -621,6 +621,12 @@ public:
     // RadioCapabilities::persistsMemories, so a new backend gets the local bank
     // by default rather than writing channels into a radio that drops them.
     bool usesLocalMemoryBank() const;
+    // True when the active store accepts create/edit/remove. A radio-backed
+    // read-only snapshot (initial Icom support) returns false while the
+    // existing host bank and Flex radio return true.
+    bool memoriesWritable() const;
+    bool memoriesRefreshable() const;
+    void refreshMemories(const QString& group = QString());
     // The bank itself, for the automation bridge and tests. Empty and unread
     // until the first local memory command or connect.
     LocalMemoryBank& localMemoryBank() { return m_localMemories; }
@@ -975,6 +981,12 @@ signals:
     void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
+    // Emitted immediately before "sub slice all" is dispatched during connect
+    // handshake, opening the connect-time slice enumeration window.
+    void sliceConnectEnumerationStarted();
+    // Emitted when the "slice list" reply arrives during connect handshake,
+    // closing the connect-time slice enumeration window.
+    void sliceConnectEnumerationFinished();
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
@@ -1089,6 +1101,9 @@ signals:
     void memoryChanged(int index);
     void memoryRemoved(int index);
     void memoriesCleared();
+    void memoryRefreshStarted(int total);
+    void memoryRefreshProgress(int completed, int total);
+    void memoryRefreshFinished(bool success, int completed, int total);
     void audioOutputChanged();
     // Emitted when multiFLEX is disabled and another client is already connected,
     // detected post-TCP-connect before client gui is sent. MainWindow should show
@@ -1130,6 +1145,9 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // A backend's explicit keyed-state readback, including unchanged answers
+    // hidden by the change-gated radioTransmittingChanged signal.
+    void radioTransmitConfirmed(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
     // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX)
     // and false otherwise. Deliberately excludes TUNE/two-tone/ATU carriers,
@@ -1150,6 +1168,12 @@ signals:
     void txFilterBlockingAudio(const QString& title,
                                const QString& detail,
                                const QString& panId);
+    // A Flex-syntax command was dropped because this backend has no command
+    // plane (HL2, Icom): the control that emitted it moved and nothing reached
+    // the radio — the HERMES §17 shape, made visible (M0, #5263). Emitted on
+    // EVERY drop; the UI's one-shot-per-session throttling is the consumer's
+    // job, so logs and any non-UI consumers can observe each occurrence.
+    void commandDropped(const QString& command);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);
@@ -1535,6 +1559,10 @@ public:
         return backendPanIdFor(modelPanId);
     }
     static QString neutralPanIdStringForTest(int panIdx);
+    void handleSliceStatusForTest(int id, const QMap<QString, QString>& kvs, bool removed = false)
+    {
+        handleSliceStatus(id, kvs, removed);
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
@@ -1927,6 +1955,7 @@ private:
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
     bool               m_transmitFrequencyCheck{false};
+    std::optional<bool> m_radioDialLocked;
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};

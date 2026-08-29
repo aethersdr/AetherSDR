@@ -12,6 +12,7 @@
 #include "models/RadioModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
 #include "models/BandDefs.h"
@@ -23,10 +24,28 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <utility>
 #include <vector>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static std::optional<std::vector<std::uint8_t>> confirmationFor(
+        const IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        return backend.confirmationFor(frame);
+    }
+};
+
+} // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -86,6 +105,67 @@ int main(int argc, char** argv)
           "an Icom remembers its own state, so the client restores NOTHING");
     check(!caps.hasDownwardExpander,
           "Icom exposes no DEXP surface without an evidenced command path");
+
+    auto* selectedBackend = dynamic_cast<icom::IcomCivBackend*>(model.backend());
+    check(selectedBackend != nullptr,
+          "the selected Icom backend is available for model capability checks");
+    if (selectedBackend) {
+        const icom::IcomModel& initialModel = selectedBackend->model();
+        const auto* ic705 = icom::modelForCivAddress(0xA4);
+        const auto* ic9700 = icom::modelForCivAddress(0xA2);
+        check(ic705 && ic9700, "the IC-705 and IC-9700 model profiles exist");
+        if (ic705 && ic9700) {
+            icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic705);
+            const RadioCapabilities ic705Caps = selectedBackend->capabilities();
+            check(ic705Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic705Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic705Caps.fmDtcsCodes.size() == 104,
+                  "IC-705 advertises its documented complete DTCS UI vocabulary");
+
+            icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic9700);
+            const RadioCapabilities ic9700Caps = selectedBackend->capabilities();
+            check(ic9700Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic9700Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic9700Caps.fmDtcsCodes.size() == 104,
+                  "IC-9700 advertises its documented complete DTCS UI vocabulary");
+        }
+        icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, initialModel);
+    }
+
+    {
+        icom::IcomCivBackend backend;
+        const auto* ic9700 = icom::modelForCivAddress(0xA2);
+        check(ic9700 != nullptr, "the IC-9700 exists for disconnect-state coverage");
+        if (ic9700) {
+            icom::IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            bool resetPublished = false;
+            QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                             [&resetPublished](int, const SliceDelta& delta) {
+                resetPublished = delta.fmDtcsCode == -1
+                    && delta.fmDtcsTxReverse == false
+                    && delta.fmDtcsRxReverse == false;
+            });
+            const bool invoked = QMetaObject::invokeMethod(
+                &backend, "onSessionDisconnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("test disconnect")));
+            check(invoked && resetPublished,
+                  "IC-9700 disconnect withdraws established DTCS state");
+
+            const auto confirmation =
+                icom::IcomCivBackendTestAccess::confirmationFor(
+                    backend, icom::cmdSetDtcsTone(0xA2, 23, true, false));
+            // With no live session, confirmationFor() uses the documented
+            // disconnected fallback address; this assertion proves the 1B 02
+            // write schedules the matching authoritative register readback.
+            check(confirmation
+                      && *confirmation
+                          == icom::cmdReadRepeaterToneRegister(
+                              0xA4, icom::repeaterTone::kDtcs),
+                  "DTCS operator writes schedule an immediate authoritative readback");
+        }
+    }
 
     // The Icom transport reports one stable VFO as slice 0. On reconnect,
     // RadioModel stages the old SliceModel so the UI can keep its subscriptions
@@ -214,6 +294,8 @@ int main(int argc, char** argv)
 
     const auto ic705Mod = icom::modulationProfileFor(
         *icom::modelForCivAddress(0xA4));
+    const auto ic9700Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xA2));
     const auto mk2Mod = icom::modulationProfileFor(
         *icom::modelForCivAddress(0xB6));
     check(ic705Mod && ic705Mod->dataOffInputItem == 118
@@ -224,6 +306,22 @@ int main(int argc, char** argv)
               && mk2Mod->dataInputItem == 85
               && mk2Mod->networkOnlyValue == 0x05,
           "IC-7300MK2 uses SET 0084/0085 and LAN value 05");
+    check(ic9700Mod && ic9700Mod->usbLevelItem == 113
+              && ic9700Mod->accessoryLevelItem == 112
+              && ic9700Mod->networkLevelItem == 114
+              && ic9700Mod->dataOffInputItem == 115
+              && ic9700Mod->dataInputItem == 116
+              && ic9700Mod->networkOnlyValue == 0x05
+              && ic9700Mod->phoneLevelFollowsNetworkInput,
+          "IC-9700 uses its documented SET 0112-0116 modulation map and routes "
+          "the Phone level through LAN only while LAN is selected");
+    check(icom::profileFor(*icom::modelForCivAddress(0xA2))
+              .supports(icom::IcomFeature::ModulationInput),
+          "IC-9700 modulation input diagnostics carry model-owned guide evidence");
+    check(ic705Mod && !ic705Mod->phoneLevelFollowsNetworkInput
+              && mk2Mod && !mk2Mod->phoneLevelFollowsNetworkInput,
+          "IC-705 and IC-7300MK2 retain their established physical-mic Phone "
+          "level behavior");
     // The fallback PC Audio "off" writes when there is nothing captured to put
     // back. It belongs to the model, not to the call site: these two agree at
     // 0x00 today, and a third model whose MIC is elsewhere must not inherit it.
@@ -231,16 +329,49 @@ int main(int argc, char** argv)
               && mk2Mod && mk2Mod->micValue == 0x00,
           "both verified models name MIC in their own profile rather than "
           "leaving the caller to hardcode it");
-    // An IC-9700 has no Wi-Fi and, unlike the two profiles above, no verified
-    // model-specific modulation map. It must therefore remain outside this
-    // read/write path instead of borrowing the IC-705's WLAN table. Pin that
-    // distinction so the old false warning cannot quietly come back.
+    // An IC-9700 has LAN rather than Wi-Fi. Its independently verified profile
+    // above must therefore use value 05 and must not borrow the IC-705's WLAN
+    // value 03.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
-          "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+          "the IC-9700 has no Wi-Fi — its network modulation source is LAN");
     check(!AetherSDR::icom::profileFor(
               *AetherSDR::icom::modelForCivAddress(0xA2))
                .meters.hasPaTemperatureTelemetry,
           "the IC-9700 profile does not declare PA-temperature telemetry");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .meters.hasPaCurrentTelemetry,
+          "the IC-9700 profile independently declares Radio Vitals PA current");
+    check(!AetherSDR::icom::profileFor(
+               *AetherSDR::icom::modelForCivAddress(0xA4))
+               .meters.hasPaCurrentTelemetry
+              && !AetherSDR::icom::profileFor(
+                      *AetherSDR::icom::modelForCivAddress(0xB6))
+                      .meters.hasPaCurrentTelemetry,
+          "IC-705 and IC-7300MK2 do not inherit the IC-9700 Radio Vitals surface");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .speechProcessorLevelMaximum == 100,
+          "the IC-9700 profile declares its continuous processor range");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+              .speechProcessorLabel == "COMP",
+          "the IC-9700 profile declares its radio-native COMP label");
+    check(AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA4))
+                  .speechProcessorLevelMaximum == 2
+              && AetherSDR::icom::profileFor(
+                     *AetherSDR::icom::modelForCivAddress(0xB6))
+                     .speechProcessorLevelMaximum == 2,
+          "IC-705 and IC-7300MK2 retain the three-position processor contract");
+    check(icom::speechProcessorRawLevel(100, 0) == 0
+              && icom::speechProcessorRawLevel(100, 50) == 128
+              && icom::speechProcessorRawLevel(100, 100) == 255,
+          "IC-9700 continuous COMP maps 0/50/100 percent to raw 0/128/255");
+    check(icom::speechProcessorRawLevel(2, 0) == 76
+              && icom::speechProcessorRawLevel(2, 1) == 153
+              && icom::speechProcessorRawLevel(2, 2) == 229,
+          "sibling Icom processor presets retain raw 76/153/229 encoding");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {

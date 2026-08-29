@@ -4,6 +4,7 @@
 #include "TciProtocol.h"
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
+#include "IcomTciUnkeySettle.h"
 
 #include <QObject>
 #include <QPointer>
@@ -160,6 +161,8 @@ private slots:
     void broadcastStatus();
 
 private:
+    struct ClientState;
+
     // Rate-limited drive:/tune_drive: relay (#4161). queue* is the signal
     // entry point; broadcast* does the de-duped send.
     void queuePowerBroadcast();
@@ -210,6 +213,10 @@ private:
     bool hostModulatingBackend() const;
     void prepareTxAudio();
     void startTxChrono(QWebSocket* client, int trx);
+    void notePttRequest(const TciProtocol::TrxRequest& request);
+    void notePttOutcome(const QString& outcome);
+    void beginIcomUnkeySettle();
+    void finishIcomUnkeySettle(quint64 generation);
     void stopTxChrono();
     void requestTciPttOff();
     void abortTciPtt();
@@ -217,10 +224,17 @@ private:
     void finishRouteTransition(quint64 generation);
     void drainDeferredRoutingAndPtt();
     void onRadioTransmittingChanged(bool transmitting);
+    void onRadioTransmitConfirmed(bool transmitting);
     void broadcastActualTxState(bool transmitting);
     void teardownTciRoute();
     void sendTxChronoFrame(QWebSocket* client);
     void logTxAudioSummary(const char* reason);
+    ClientState* clientStateFor(QWebSocket* socket);
+    void noteClientTextTx(QWebSocket* socket, const QString& message);
+    void sendClientText(QWebSocket* socket, const QString& message);
+    void noteClientSocketError(QWebSocket* socket, int error);
+    QJsonObject disconnectSnapshot(const ClientState& client,
+                                   const QWebSocket* socket) const;
 
     // Build a TCI binary audio frame (64-byte header + float32 samples)
     static QByteArray buildAudioFrame(int receiver, int type,
@@ -253,6 +267,17 @@ private:
         bool         iqEnabled{false};       // client sent IQ_START
         int          iqChannel{0};           // TCI TRX → DAX IQ channel (0-based)
         bool         spectrumEnabled{false}; // client sent spectrum_event:on;
+        // Payload-free lifecycle telemetry retained across disconnect. Command
+        // names are stored without their arguments, so diagnostics can identify
+        // the failing TCI layer without retaining frequencies or operator text.
+        qint64       connectedAtMs{-1};
+        qint64       lastTextRxAtMs{-1};
+        qint64       lastTextTxAtMs{-1};
+        qint64       lastSocketErrorAtMs{-1};
+        QString      lastRxCommand;
+        QString      lastTxCommand;
+        int          lastSocketError{-1};
+        QString      lastSocketErrorString;
     };
 
     // Minimum frames to accumulate before flushing to r8brain.
@@ -338,6 +363,34 @@ private:
     bool m_tciPttConfirmedOn { false };
     bool m_tciPttCancelPending { false };
     quint64 m_tciPttGeneration { 0 };
+    // Icom publishes an optimistic local unkey edge before CI-V readback. Hold
+    // the TCI presentation in a short bounded settle window, but complete it
+    // only from the backend's accepted CI-V PTT-off confirmation. No reply
+    // retains ownership and republishes keyed at expiry.
+    bool m_tciPttUnkeyReported { false };
+    IcomTciUnkeySettle m_icomUnkeySettle;
+    quint64 m_tciPttUnkeySettleCount { 0 };
+    quint64 m_tciPttSuppressedRekeyCount { 0 };
+    quint64 m_tciPttUnkeySettleTimeoutCount { 0 };
+    // Payload-free TCI ingress/confirmation telemetry. These counters make
+    // `tci routes` answer whether a WSJT-X key request reached this process,
+    // survived routing/preflight, and was confirmed by radio-authoritative
+    // state without enabling the full TCI wire trace.
+    QElapsedTimer m_tciPttTelemetryClock;
+    quint64 m_tciPttRequestCount { 0 };
+    quint64 m_tciPttOnRequestCount { 0 };
+    quint64 m_tciPttOffRequestCount { 0 };
+    quint64 m_tciPttAcceptedOnCount { 0 };
+    quint64 m_tciPttConfirmedOnCount { 0 };
+    quint64 m_tciPttConfirmationTimeoutCount { 0 };
+    qint64 m_tciPttLastRequestAtMs { -1 };
+    qint64 m_tciPttLastAcceptedAtMs { -1 };
+    qint64 m_tciPttLastConfirmedAtMs { -1 };
+    qint64 m_tciPttLastOutcomeAtMs { -1 };
+    bool m_tciPttLastRequestedOn { false };
+    QString m_tciPttLastOutcome { QStringLiteral("none") };
+    QJsonObject m_lastDisconnect;
+    qint64 m_lastDisconnectAtMs { -1 };
     bool m_txAudioPrepared { false };
     int               m_txChronoTrx{0};
     std::unique_ptr<Resampler> m_txResampler; // 48kHz→24kHz TX downsampler

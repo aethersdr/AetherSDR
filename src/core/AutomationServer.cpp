@@ -236,7 +236,35 @@ QJsonObject describeAction(const QAction* action, const QMenu* owner)
 // Human-meaningful "value" for a control, so an assertion can read state
 // without a screenshot. Returns a null QString for widgets that have no
 // natural scalar/text value (containers, custom-painted surfaces).
-QString widgetValue(const QWidget* w)
+// Text views (QTextEdit / QPlainTextEdit) serialize a bounded prefix wherever
+// `value` is reported — dump_tree and invoke's newValue echo alike (#5078).
+constexpr int kTextViewValueCap = 2048;
+
+// `truncated` (optional) reports whether the text-view cap cut the value —
+// set in the same pass that builds the string, so the document is
+// materialized once, not re-read for the flag (a 5k-line log would
+// otherwise be built twice per dump_tree node).
+
+// Clears the aetherComboPopup name when the named container hides, then
+// removes itself. Keeps "aetherComboPopup" true only of an open drop-down so a
+// grab after the popup closed cannot resolve stale geometry under a name the
+// driver was told to trust (#5080). QObject-only: no QtWidgets include.
+class ComboPopupNameReset : public QObject {
+public:
+    explicit ComboPopupNameReset(QObject* container) : QObject(container) {}
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::Hide) {
+            if (watched->objectName() == QLatin1String("aetherComboPopup"))
+                watched->setObjectName(QString());
+            watched->removeEventFilter(this);
+            deleteLater();
+        }
+        return false;
+    }
+};
+
+QString widgetValue(const QWidget* w, bool* truncated = nullptr)
 {
     if (auto* s = qobject_cast<const QAbstractSlider*>(w))
         return QString::number(s->value());
@@ -256,6 +284,34 @@ QString widgetValue(const QWidget* w)
         if (le->echoMode() != QLineEdit::Normal)
             return le->text().isEmpty() ? QString() : QStringLiteral("<hidden>");
         return le->text();
+    }
+    // Text views (transcripts, decode logs, terminals) are documents, not
+    // scalars, so the tree carries a bounded prefix: enough for an assertion
+    // without turning a 5k-line AX.25 log into the snapshot. The `text` verb
+    // returns the full document. No echo-mode concern here — these views have
+    // none — and this sits below the QLineEdit guard so #3646 is untouched.
+    // Read through the meta-object: QTextEdit and QPlainTextEdit both export
+    // Q_PROPERTY(QString plainText ...), so no QtWidgets include is needed
+    // (engine-boundary rule EB2 — this file's QtWidgets count may only
+    // shrink). QTextBrowser inherits QTextEdit and is covered. A present
+    // view yields a valid QVariant even when empty, so "the transcript is
+    // empty" serializes as "" and is a real assertion. (#5078)
+    {
+        const QVariant plain = w->property("plainText");
+        if (plain.isValid()) {
+            const QString doc = plain.toString();
+            if (doc.size() <= kTextViewValueCap)
+                return doc;
+            // Cut on a code-point boundary: a cap landing between the halves
+            // of a surrogate pair would leave a lone surrogate that the JSON
+            // encoder replaces with U+FFFD.
+            int cut = kTextViewValueCap;
+            if (doc.at(cut - 1).isHighSurrogate())
+                --cut;
+            if (truncated)
+                *truncated = true;
+            return doc.left(cut) + QStringLiteral("…<truncated>");
+        }
     }
     if (auto* sb = qobject_cast<const QSpinBox*>(w))
         return QString::number(sb->value());
@@ -370,9 +426,15 @@ QJsonObject describeWidget(const QWidget* w)
         o[QStringLiteral("windowState")] = QLatin1String(ws);
     }
 
-    const QString val = widgetValue(w);
-    if (!val.isNull())
+    bool valTruncated = false;
+    const QString val = widgetValue(w, &valTruncated);
+    if (!val.isNull()) {
         o[QStringLiteral("value")] = val;
+        // Machine-readable truncation signal: the "…<truncated>" marker is
+        // in-band and a transcript could contain it itself. (#5078)
+        if (valTruncated)
+            o[QStringLiteral("valueTruncated")] = true;
+    }
 
     // A checkable button reports its value as "checked"/"unchecked", which hides
     // the label that says *which* control it is (the six DSP method buttons —
@@ -2587,6 +2649,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         QStringLiteral("ping"),     QStringLiteral("verbs"),
         QStringLiteral("whoami"),   QStringLiteral("dumpTree"),
         QStringLiteral("grab"),     QStringLiteral("get"),
+        QStringLiteral("text"),
         QStringLiteral("floors"),   QStringLiteral("hitTest"),
         // Reads backend telemetry; keys nothing and sets nothing.
         QStringLiteral("health"),   QStringLiteral("devices"),
@@ -2791,6 +2854,15 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doFloors(); });
+
+        add("text", {QStringLiteral("getText")},
+            "text <target> — full plain text of a QTextEdit/QPlainTextEdit view",
+            parseTargetOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.target.isEmpty())
+                    return err(QStringLiteral("text requires a target widget"));
+                return s.doGetText(a.target);
+            });
 
         add("grab", {}, "grab <target|pan|pan-visible [index]> [path] — PNG capture",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
@@ -3374,9 +3446,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]|session|scheduler> — CI-V inject, frame "
-            "trace, RS-BA1 lease health, or command-scheduler health (Icom; send "
-            "is TX-gated)",
+            "civ <send <hex>|trace [all]|session|scheduler|incident> — CI-V "
+            "inject, frame trace, lease/scheduler health, or last incident "
+            "(Icom; send is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doCiv(a.action, a.value);
@@ -3448,6 +3520,21 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseTargetOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doShortcut(a.target.isEmpty() ? a.id : a.target);
+            });
+
+        add("keyevent", {},
+            "keyevent <press|release> <action-id|key-seq> — inject a real key edge through "
+            "the app event filter (momentary shortcuts only — PTT hold, and the CW keys "
+            "once bound: their ids ship unbound, so KeyInjectUnbound until the operator "
+            "binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab "
+            "moves focus yet reports consumed)",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                a.value = vtok(p, 2);
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doKeyEvent(a.action, a.value);
             });
 
         add("midi", {}, "midi cc <0-127> — inject a learned VFO Tune Knob CC event",
@@ -3778,6 +3865,36 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
                             QStringLiteral("widget not found: ") + target}};
     }
     return saveWidgetGrab(w, target, path);
+}
+
+// Full document for one resolved text view. dumpTree carries only a capped
+// prefix (see widgetValue); this is the full-fidelity read a transcript
+// assertion needs. Read-only: nothing is set and nothing is keyed. (#5078)
+QJsonObject AutomationServer::doGetText(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget not found: ") + target);
+
+    // Same meta-object read as widgetValue(): the plainText property exists
+    // only on QTextEdit/QPlainTextEdit (and subclasses), so validity is the
+    // text-view test and no QtWidgets include is needed (EB2).
+    const QVariant plain = w->property("plainText");
+    if (!plain.isValid())
+        return err(QStringLiteral("not a text view: ") + target
+                   + QStringLiteral(" (") + shortClassName(w) + QLatin1Char(')'));
+    const QString doc = plain.toString();
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("target"), target},
+                       {QStringLiteral("class"), shortClassName(w)},
+                       {QStringLiteral("length"), doc.size()},
+                       // Count lines the way the pane shows them: a trailing
+                       // newline ends the last line, it does not start another.
+                       {QStringLiteral("lines"), doc.isEmpty() ? 0
+                            : doc.count(QLatin1Char('\n'))
+                              + (doc.endsWith(QLatin1Char('\n')) ? 0 : 1)},
+                       {QStringLiteral("text"), doc}};
 }
 
 // Capture a specific pan's spectrum surface by SpectrumWidget::panIndex, so a
@@ -4300,6 +4417,68 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             selectedRow = row;
             selectedRowText = m->data(first, Qt::DisplayRole).toString();
             done = true;
+        }
+    } else if (action == QLatin1String("showPopup")
+               || action == QLatin1String("hidePopup")) {
+        // Hold a combo's drop-down open under bridge control so a follow-up
+        // grab_widget can land on it. clickAt opens the popup but it is gone
+        // before the next call arrives, and the never-shown sibling
+        // QComboBoxPrivateContainers all tie at hidden rank, so a grab by
+        // class picks an arbitrary sliver. Deferred to a clean main-loop turn
+        // for the same reason as showMenu: showing a native popup window from
+        // inside the socket-read callback re-enters the platform event loop.
+        // The container is named so grab_widget has an unambiguous target —
+        // objectName is stage 1 of resolution, ahead of class matching. (#5080)
+        if (auto* cb = qobject_cast<QComboBox*>(w)) {
+            const bool show = (action == QLatin1String("showPopup"));
+            // QComboBox::showPopup() is a no-op on an empty combo: nothing
+            // would open, no Hide would ever fire, and a name set anyway
+            // would stick to a hidden container for good. Refuse up front so
+            // the caller gets an error instead of ok/deferred + a stale grab.
+            if (show && cb->count() == 0)
+                return err(QStringLiteral("combo '") + target
+                           + QStringLiteral("' has no items: showPopup would be a no-op"));
+            QPointer<QComboBox> cbg = cb;
+            QPointer<QWidget> win = cb->window();
+            QTimer::singleShot(0, qApp, [cbg, win, show]() {
+                if (!cbg) return;
+                if (!show) {
+                    // The name is dropped by ComboPopupNameReset on the
+                    // container's Hide (installed when the popup was named),
+                    // so no explicit clear here — and deliberately no
+                    // cbg->view() either: view() lazily CREATES the container
+                    // for a combo whose popup never existed. (#5080)
+                    cbg->hidePopup();
+                    return;
+                }
+                if (win && win->isVisible()) {   // give the popup a realized anchor
+                    win->raise();
+                    win->activateWindow();
+                }
+                cbg->showPopup();
+                if (QWidget* v = cbg->view()) {
+                    // Name it only if it actually opened: the name must be
+                    // true of an OPEN list and nothing else (#5080).
+                    if (QWidget* c = v->window(); c && c->isVisible()) {
+                        // Exactly one holder: a second showPopup while
+                        // another combo's list is still up would otherwise
+                        // leave two widgets answering to the name, and
+                        // resolution would return whichever it finds first.
+                        for (QWidget* old : QApplication::allWidgets())
+                            if (old != c && old->objectName()
+                                                == QLatin1String("aetherComboPopup"))
+                                old->setObjectName(QString());
+                        c->setObjectName(QStringLiteral("aetherComboPopup"));
+                        // The popup also closes on its own (item pick, Esc,
+                        // click-away, focus loss). Clear the name on that hide
+                        // too, so the name is only ever true of an OPEN list.
+                        // One-shot: the filter removes itself after firing.
+                        c->installEventFilter(new ComboPopupNameReset(c));
+                    }
+                }
+            });
+            done = true;
+            deferred = true;
         }
     } else {
         return err(QStringLiteral("unknown action: ") + action);
@@ -5653,6 +5832,12 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
         if (!m_radioModel || !m_radioModel->isConnected()) {
             return err(QStringLiteral("no connected radio available"));
         }
+        // `sub slice all` is Flex wire text; on a backend with no command
+        // plane it is dropped, and an ok for work that never happens is the
+        // same defect as a permanently dim button (M0, #5263).
+        if (!m_radioModel->hasCommandPlane()) {
+            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
+        }
         m_radioModel->sendCommand(QStringLiteral("sub slice all"));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("pending"), true}};
@@ -5661,6 +5846,11 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
     if (normalizedAction == QLatin1String("unregister")) {
         if (!m_radioModel || !m_radioModel->isConnected()) {
             return err(QStringLiteral("no connected radio available"));
+        }
+        // `client unregister` is a Flex multiFLEX verb — same drop class as
+        // resync above (M0, #5263).
+        if (!m_radioModel->hasCommandPlane()) {
+            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
         }
         const QString name = value.trimmed();
         static const QRegularExpression safeName(
@@ -6741,6 +6931,11 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(QStringLiteral("refused: cannot remove the last slice"));
         if (!radio->slice(id))
             return err(QStringLiteral("no slice with id ") + arg);
+        // `slice remove` is Flex wire text and no seam verb exists for it yet
+        // — refuse rather than report ok for a command the model will drop
+        // (M0, #5263).
+        if (!radio->hasCommandPlane())
+            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
         radio->sendCommand(QStringLiteral("slice remove %1").arg(id));
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("remove")},
                            {QStringLiteral("id"), id}};
@@ -7770,8 +7965,10 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     const QString a = action.trimmed().toLower();
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("session")
+                        && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
-        return err(QStringLiteral("civ requires an action (send|trace|session|scheduler)"));
+        return err(QStringLiteral(
+            "civ requires an action (send|trace|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -7805,6 +8002,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
+                       : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
                        : a == QLatin1String("scheduler")
                            ? QStringLiteral("civ.scheduler.status")
                                                      : QStringLiteral("civ.session");
@@ -8205,6 +8403,11 @@ void AutomationServer::applyAgentStation(const QString& name)
 {
     if (!m_radioModel || !m_radioModel->isConnected() || name.isEmpty())
         return;
+    // Defense in depth behind doStation's refusal: `client station` is Flex
+    // wire text, and this can also run from the reconnect re-apply path
+    // (M0, #5263).
+    if (!m_radioModel->hasCommandPlane())
+        return;
     if (!m_stationApplied) {
         // Capture the user's real station name once, to restore it later. Same
         // fallback the connect handshake uses (AppSettings StationName → host).
@@ -8222,7 +8425,7 @@ void AutomationServer::restoreStation()
 {
     if (!m_stationApplied || m_priorStationName.isEmpty())
         return;
-    if (m_radioModel && m_radioModel->isConnected())
+    if (m_radioModel && m_radioModel->isConnected() && m_radioModel->hasCommandPlane())
         m_radioModel->sendCommand(QStringLiteral("client station %1").arg(m_priorStationName));
     m_stationApplied = false;
 }
@@ -8238,6 +8441,10 @@ QJsonObject AutomationServer::doStation(const QString& name)
         return err(QStringLiteral("station name must be a single token (no spaces)"));
     if (!m_radioModel->isConnected())
         return err(QStringLiteral("not connected — connect to a radio before setting the station name"));
+    // `client station` is a Flex multiFLEX identity verb; refuse where the
+    // backend would drop it (M0, #5263).
+    if (!m_radioModel->hasCommandPlane())
+        return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
     m_agentStation = n;
     applyAgentStation(n);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
@@ -8442,6 +8649,94 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
         {QStringLiteral("ok"), true},
         {QStringLiteral("shortcut"), id},
         {QStringLiteral("fired"), true},
+    };
+}
+
+// A release edge hands TX policing back ONLY if the transmitter is actually
+// down. A release that did not un-key — the momentary handler declined it
+// (text entry focused, radio dropped) or TX is up from another source — must
+// leave the watchdog armed, or a leaked press would sit keyed with its only
+// backstop disarmed (Constitution VI: fail closed). onTxWatchdog() clears the
+// flag itself on the next poll that finds nothing keyed, so keeping it armed
+// here never over-polices.
+void AutomationServer::releaseEdgeHandsBackPolicing()
+{
+    if (txBridgeOwnsCurrentTransmit())
+        return;
+    clearTxBridgeInitiated();
+}
+
+QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& spec)
+{
+    const QString act = action.trimmed().toLower();
+    const bool press = act == QLatin1String("press") || act == QLatin1String("down");
+    if (!press && act != QLatin1String("release") && act != QLatin1String("up"))
+        return err(QStringLiteral("keyevent needs press|release"));
+    if (spec.isEmpty())
+        return err(QStringLiteral("keyevent requires an action id or key sequence, "
+                                  "e.g. 'ptt_hold' or 'Ctrl+T'"));
+
+    QWidget* mw = primaryTopLevelWindow();
+    if (!mw)
+        return err(QStringLiteral("no main window to deliver key event"));
+
+    int result = -1;
+    const bool invoked = QMetaObject::invokeMethod(
+        mw, "injectKeyEventForAutomation", Qt::DirectConnection,
+        Q_RETURN_ARG(int, result), Q_ARG(QString, spec), Q_ARG(bool, press),
+        Q_ARG(bool, m_txAllowed));
+    if (!invoked)
+        return err(QStringLiteral("injectKeyEventForAutomation not invokable on main window"));
+
+    bool consumed = false;
+    switch (result) {
+    case 0:  // MainWindow::KeyInjectOk
+        consumed = true;
+        break;
+    case 4:  // MainWindow::KeyInjectTxOk — a keysTx press the filter claimed
+        consumed = true;
+        // Arm the watchdog: a leaked press is policed by m_txMaxKeyMs /
+        // forceUnkey(). failSafeMomentaryKeyingToRx() fires only on
+        // deactivation, which a headless bridge session may never trigger,
+        // so the watchdog is the actual backstop for an unmatched press.
+        // Known over-arming: "the filter claimed it" can be broader than "we
+        // keyed something" — with keyboard shortcuts disabled the momentary
+        // handler still consumes, and the SWR-sweep guard swallows every
+        // key. Harmless in both directions: onTxWatchdog() clears the flag
+        // on the next poll that finds nothing keyed, and
+        // m_txKeyedAtRequestStart keeps it from claiming a transmission that
+        // was already up before the press.
+        markTxBridgeInitiated();
+        break;
+    case 1:  // KeyInjectUnknownKey
+        return err(QStringLiteral("not a known action id or key sequence: ") + spec);
+    case 5:  // KeyInjectUnbound
+        return err(QStringLiteral("action '") + spec
+                   + QStringLiteral("' exists but has no key binding; bind it in "
+                                    "Settings or pass a literal key sequence"));
+    case 2:  // KeyInjectTxBlocked
+        qCWarning(lcAutomation).noquote() << "BLOCKED transmit-keying key press" << spec;
+        return err(QStringLiteral("blocked: '") + spec
+                   + QStringLiteral("' keys the transmitter (TX-safety guard). "
+                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    case 3:  // KeyInjectNotConsumed — delivered, but the momentary handler's own
+             // gates (shortcuts disabled, text entry focused, radio disconnected)
+             // declined it. A real result, not an error: report it.
+        break;
+    default:
+        return err(QStringLiteral("unexpected key injection result for '") + spec
+                   + QLatin1Char('\''));
+    }
+    if (!press)
+        releaseEdgeHandsBackPolicing();
+
+    qCInfo(lcAutomation).noquote() << "keyevent" << (press ? "press" : "release")
+                                   << spec << "consumed=" << consumed;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("keyevent"), press ? QStringLiteral("press") : QStringLiteral("release")},
+        {QStringLiteral("key"), spec},
+        {QStringLiteral("consumed"), consumed},
     };
 }
 
