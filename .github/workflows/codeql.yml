@@ -36,6 +36,10 @@ on:
       - 'tools/**.cpp'
       - 'tools/**.h'
       - 'CMakeLists.txt'
+      # Test registration moved out of the root file into tests/tests.cmake.
+      # Before that split, adding a test target touched CMakeLists.txt and
+      # re-armed this workflow; without this line that trigger is lost.
+      - 'tests/tests.cmake'
       - '.github/codeql/**'
       - '.github/workflows/codeql.yml'
   schedule:

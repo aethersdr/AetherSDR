@@ -1,10 +1,12 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/TransmitDelta.h"
+#include "gui/HGauge.h"
 #include "gui/TxApplet.h"
 #include "models/TransmitModel.h"
 
 #include <QApplication>
 #include <QSignalSpy>
+#include <QPushButton>
 #include <QSlider>
 
 #include <cstdio>
@@ -33,6 +35,16 @@ QSlider* powerSlider(TxApplet& applet, const QString& accessibleName)
         if (slider->accessibleName() == accessibleName) {
             return slider;
         }
+    }
+    return nullptr;
+}
+
+QWidget* namedWidget(TxApplet& applet, const QString& accessibleName)
+{
+    const QList<QWidget*> widgets = applet.findChildren<QWidget*>();
+    for (QWidget* widget : widgets) {
+        if (widget->accessibleName() == accessibleName)
+            return widget;
     }
     return nullptr;
 }
@@ -81,6 +93,72 @@ void testReleaseReconcilesAuthoritativePower(const QString& accessibleName,
            QString::number(commandSpy.count()));
 }
 
+void testTxMetersAreLiveOnly()
+{
+    TxApplet applet;
+    QWidget* power = namedWidget(applet, QStringLiteral("Forward power gauge"));
+    QWidget* swr = namedWidget(applet, QStringLiteral("SWR gauge"));
+    report("TX gauges exist", power && swr);
+    if (!power || !swr)
+        return;
+
+    applet.updateMeters(37.0f, 1.7f, true);
+    auto* powerGauge = static_cast<HGauge*>(power);
+    auto* swrGauge = static_cast<HGauge*>(swr);
+    report("startup ignores a stale RF power sample", powerGauge->value() == 0.0f);
+
+    applet.setTransmitting(true);
+    applet.updateMeters(37.0f, 1.7f, true);
+    report("active TX displays RF power",
+           powerGauge->value() == 37.0f);
+    report("active TX displays SWR",
+           swrGauge->value() == 1.7f);
+
+    applet.setTransmitting(false);
+    report("un-key clears RF power immediately",
+           powerGauge->value() == 0.0f);
+    report("un-key parks SWR immediately",
+           swrGauge->value() == 1.0f);
+
+    applet.updateMeters(52.0f, 2.1f, true); // reply already in flight at un-key
+    applet.updatePeakPower(60.0f);
+    report("late meter replies cannot repaint idle RF power",
+           powerGauge->value() == 0.0f);
+}
+
+void testAtuSuccessTogglesToBypass()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    auto* atu = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU tune")));
+    report("ATU button exists", atu != nullptr);
+    if (!atu)
+        return;
+
+    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    TransmitDelta matched;
+    matched.transmitFreq = 14.100;
+    matched.atuEnabled = true;
+    matched.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+    model.applyChanges(matched);
+    atu->click();
+    report("successful same-frequency ATU click requests bypass",
+           !commandSpy.isEmpty()
+               && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu bypass"));
+
+    TransmitDelta bypassed;
+    bypassed.atuEnabled = false;
+    bypassed.atuStatusRaw = QStringLiteral("TUNE_BYPASS");
+    model.applyChanges(bypassed);
+    commandSpy.clear();
+    atu->click();
+    report("bypassed ATU click starts a fresh tune",
+           !commandSpy.isEmpty()
+               && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu start"));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -101,6 +179,8 @@ int main(int argc, char** argv)
 
     testReleaseReconcilesAuthoritativePower(QStringLiteral("RF power"), true);
     testReleaseReconcilesAuthoritativePower(QStringLiteral("Tune power"), false);
+    testTxMetersAreLiveOnly();
+    testAtuSuccessTogglesToBypass();
 
     std::printf("\n%s\n",
                 g_failed == 0

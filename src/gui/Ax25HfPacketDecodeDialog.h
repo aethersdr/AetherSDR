@@ -154,7 +154,10 @@ private:
     // True when the backend runs the modulator on this host (HL2) rather than
     // taking modulator input from a Flex DAX stream. Such a radio has no DAX
     // TX stream to wait for and no `transmit dax` setting to change.
-    bool hostModulatesTx() const;
+    // True when transmit audio reaches the radio WITHOUT a DAX stream —
+    // either the host modulates (HL2) or the audio leaves over the seam
+    // (Icom). Both skip the DAX-stream wait; see the definition.
+    bool txAudioBypassesDax() const;
     // Fail a TX that is waiting on a DAX stream which never arrives. The
     // `stream create` reply is asynchronous and its failure path only logs, so
     // without this a backend that drops the command leaves the TX — and every

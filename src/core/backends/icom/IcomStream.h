@@ -168,6 +168,16 @@ private:
     quint32 m_remoteSid = 0;
     quint16 m_boundPort = 0;
     bool m_ready = false;
+
+    // Handshake retry. A radio that is mid-wake, off-channel for a moment, or
+    // still releasing a session an earlier client left behind answers nothing —
+    // and one AreYouThere pair used to be the whole attempt. Six tries a second
+    // apart covers every stall seen during bring-up without hammering a radio
+    // that is genuinely busy with another client.
+    QTimer* m_handshakeTimer = nullptr;
+    int m_handshakeAttempts = 0;
+    static constexpr int kHandshakeRetryMs = 1000;
+    static constexpr int kHandshakeAttempts = 6;
     bool m_gotRemoteSid = false;
 
     quint16 m_txSeq = 0;       // header sequence for tracked packets

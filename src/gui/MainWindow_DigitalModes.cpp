@@ -283,7 +283,7 @@ void MainWindow::activateRADE(int sliceId)
     // panStream() null for every other family. The connect() further down
     // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,
     // not a decline. Same shape as the null-deref that crashed every HL2 connect
-    // three seconds in (HERMES.md §6 gap 1) and as the startDax() guard, which
+    // three seconds in (docs/HERMES.md §6 gap 1) and as the startDax() guard, which
     // this deliberately mirrors.
     //
     // Checked HERE rather than at the connect: everything between this point and
@@ -538,7 +538,7 @@ void MainWindow::activateRADE(int sliceId)
     {
         SliceModel* radeSlice = m_radioModel.slice(sliceId);
         int daxCh = radeSlice ? radeSlice->daxChannel() : 0;
-        if (daxCh >= 1 && daxCh <= 4) {
+        if (daxCh >= 1 && daxCh <= 8) {
             m_radeDaxChannel = daxCh;
             m_radioModel.acquireDaxChannel(
                 daxCh, PanadapterStream::DaxConsumer::Rade);
@@ -560,11 +560,11 @@ void MainWindow::activateRADE(int sliceId)
                 auto* ps = m_radioModel.panStream();
                 if (!ps) return;
                 const int oldCh = m_radeDaxChannel;
-                m_radeDaxChannel = (newCh >= 1 && newCh <= 4) ? newCh : 0;
+                m_radeDaxChannel = (newCh >= 1 && newCh <= 8) ? newCh : 0;
                 if (m_radeDaxChannel)
                     ps->acquireDaxChannel(m_radeDaxChannel,
                                           PanadapterStream::DaxConsumer::Rade);
-                if (oldCh >= 1 && oldCh <= 4 && oldCh != m_radeDaxChannel)
+                if (oldCh >= 1 && oldCh <= 8 && oldCh != m_radeDaxChannel)
                     ps->releaseDaxChannel(oldCh,
                                           PanadapterStream::DaxConsumer::Rade);
                 qCInfo(lcRade) << "MainWindow: RADE dax hold moved"
@@ -670,7 +670,7 @@ void MainWindow::deactivateRADE()
 
     m_audio->setRadeMode(false);
     m_radioModel.setDigitalVoiceTxSlice(-1);
-    m_audio->clearTxAccumulators();  // flush stale RADE modem data
+    m_audio->clearTxAccumulators();  // flush stale RADE modem data (self-marshals)
     m_appletPanel->phoneCwApplet()->setRadeActive(false);
 
     if (auto* applet = m_appletPanel->radeApplet()) {
@@ -704,7 +704,7 @@ void MainWindow::deactivateRADE()
         disconnect(m_radeEngine, &RADEEngine::eooCallsignReceived,
                    this, nullptr);
         disconnect(m_radeDaxReconcileConn);
-        if (m_radeDaxChannel >= 1 && m_radeDaxChannel <= 4) {
+        if (m_radeDaxChannel >= 1 && m_radeDaxChannel <= 8) {
             // Release RADE's hold; the centralized manager removes the
             // radio-side stream only when the LAST holder (TCI / DAX bridge /
             // RADE) releases — the ref-counting the old TODO here asked for
@@ -962,6 +962,21 @@ void MainWindow::showFreeDvReporter()
         connect(m_freedvClient, &FreeDvClient::stationRemoved,
                 m_freedvReporterDialog, &FreeDvReporterDialog::onStationRemoved,
                 Qt::QueuedConnection);
+        // Status message (#4231) — the client lives on m_spotThread, so the
+        // send hops threads via invokeMethod (mirrors the SpotHub wiring in
+        // MainWindow_Menus.cpp), and the enable/disable state comes back over
+        // a queued connection.
+        connect(m_freedvReporterDialog, &FreeDvReporterDialog::messageChanged,
+                this, [this](const QString& msg) {
+            QMetaObject::invokeMethod(m_freedvClient,
+                                      [this, msg] { m_freedvClient->updateMessage(msg); });
+        });
+        connect(m_freedvClient, &FreeDvClient::reportingStateChanged,
+                m_freedvReporterDialog, &FreeDvReporterDialog::setReportingActive,
+                Qt::QueuedConnection);
+        // Seed: reporting may already be on when the dialog is first opened.
+        m_freedvReporterDialog->setReportingActive(
+            m_freedvClient->isReportingEnabled());
         if (auto* s = activeSlice())
             m_freedvReporterDialog->setActiveSlice(s);
         // Seed with current state — bulk_update fires at connect time, before the
@@ -985,6 +1000,9 @@ void MainWindow::showFreeDvReporter()
             grid = m_freedvClient->myGrid();
         m_freedvReporterDialog->setMyGrid(grid);
     }
+    // Re-read the message every open so an edit made in SpotHub's FreeDV tab
+    // (same FreeDvMyMessage setting) doesn't leave this field stale (#4231).
+    m_freedvReporterDialog->reloadMessage();
     m_freedvReporterDialog->show();
     m_freedvReporterDialog->raise();
     m_freedvReporterDialog->activateWindow();
@@ -1020,7 +1038,10 @@ bool MainWindow::startDax()
 #endif
 
     m_daxBridge = new DaxBridge(this);
-    if (!m_daxBridge->open()) {
+    // Open only as many DAX RX devices as the radio has slices — the audio
+    // device list follows the radio (#4854). maxSlices() is known here: this
+    // runs on the 3 s post-connect timer, well after the radio reported it.
+    if (!m_daxBridge->open(m_radioModel.maxSlices())) {
         qWarning() << "MainWindow: failed to open DAX audio bridge";
         QMessageBox::warning(this, "DAX Audio Bridge Error",
             "AetherSDR could not open the DAX audio bridge.\n\n"
@@ -1035,14 +1056,14 @@ bool MainWindow::startDax()
     // statusReceived hooks with divergent filtering.
 
     // Acquire DAX channels only for slices with a channel assigned.
-    // FlexLib creates streams on demand, not all 4 unconditionally.
+    // FlexLib creates streams on demand, not all 8 unconditionally.
     // Creating unused streams causes the radio to round-robin audio
     // across all of them, starving the active channels.
     m_daxSliceLastCh.clear();
     for (auto* s : m_radioModel.slices()) {
         int ch = s->daxChannel();
         m_daxSliceLastCh[s->sliceId()] = ch;
-        if (ch >= 1 && ch <= 4) {
+        if (ch >= 1 && ch <= 8) {
             m_radioModel.acquireDaxChannel(
                 ch, PanadapterStream::DaxConsumer::Bridge);
         }
@@ -1069,7 +1090,7 @@ bool MainWindow::startDax()
         wireDaxSlice(s);
         // A slice can arrive already carrying a DAX channel (radio profile
         // restore); make sure its stream exists too.
-        if (s->daxChannel() >= 1 && s->daxChannel() <= 4) {
+        if (s->daxChannel() >= 1 && s->daxChannel() <= 8) {
             onDaxChannelChanged(s, s->daxChannel());
         }
     }));
@@ -1114,7 +1135,7 @@ bool MainWindow::startDax()
 
     // Apply saved gains to the bridge
     auto& ss = AppSettings::instance();
-    for (int i = 1; i <= 4; ++i)
+    for (int i = 1; i <= 8; ++i)
         m_daxBridge->setChannelGain(i, ss.value(QStringLiteral("DaxRxGain%1").arg(i), "0.5").toString().toFloat());
     m_daxBridge->setTxGain(ss.value("DaxTxGain", "0.5").toString().toFloat());
 
@@ -1148,7 +1169,7 @@ void MainWindow::stopDax()
     if (!m_daxBridge) return;
 
     m_audio->setDaxTxMode(false);
-    m_audio->clearTxAccumulators();
+    m_audio->clearTxAccumulators();  // self-marshals
 
     // #2895: drop the per-slice daxChannelChanged / sliceAdded reactions wired
     // in startDax() so they don't fire against a torn-down bridge.
@@ -1224,9 +1245,9 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
     // channel so a genuine off→on retoggle is seen as 0→N and re-acquires.
     m_daxSliceLastCh[sliceId] = newCh;
 
-    if (newCh >= 1 && newCh <= 4)
+    if (newCh >= 1 && newCh <= 8)
         ps->acquireDaxChannel(newCh, PanadapterStream::DaxConsumer::Bridge);
-    if (oldCh >= 1 && oldCh <= 4) {
+    if (oldCh >= 1 && oldCh <= 8) {
         // The Bridge's hold is per-channel, not per-slice: only release when
         // no slice references the old channel anymore (a channel can hop
         // between slices, and the moves can arrive in either order).

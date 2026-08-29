@@ -18,6 +18,14 @@ PC mic voice TX stream before VITA/Opus packetization. The radio receives
 the already-shaped voice signal and treats it identically to any other
 PC-mic input (enters at SC_MIC, meter 26).
 
+Mic hardware remains Int16 at its negotiated device rate. The normal voice
+path canonicalizes the selected channel, converts to float once, normalizes to
+a fixed 48 kHz processing domain, and remains float through RN2 and the complete
+channel strip. A 12%-transition-band SRC then converts 48 kHz to the existing
+24 kHz Flex transport rate before linked TPDF dither and the sole Int16
+quantization on the Flex path. See `audio-pipeline.md` for measured SRC delay
+and the separate HL2/Icom backend seam behavior.
+
 DAX/TCI TX and RADE are intentionally not part of this voice strip.
 DAX/TCI bypasses client voice DSP in `AudioEngine::feedDaxTxAudio()`.
 RADE branches early from `AudioEngine::onTxAudioReady()` and bypasses
@@ -30,9 +38,15 @@ to bypass, double-click to open the floating editor.
 ```
 PC mic capture (QAudioSource)
   │
+  ▼  Int16 at negotiated device rate
+Canonical channel selection → float conversion → 48 kHz normalization
+  │
+  ▼
+Optional native-48 kHz RN2 → 48 kHz test tone
+  │
   ▼
 ┌───────────────────────────────────────────────────────────────────┐
-│  CHAIN widget — drag-drop ordered TX DSP pipeline                  │
+│  CHAIN widget — drag-drop ordered 48 kHz float TX DSP pipeline     │
 │                                                                     │
 │  [GATE] → [EQ] → [DESS] → [COMP] → [TUBE] → [PUDU] → [VERB]        │
 │                                                                     │
@@ -45,7 +59,7 @@ PC mic capture (QAudioSource)
 │  ClientReverb  — Freeverb (disabled by default)                     │
 │                                                                     │
 │  Audio thread loads the packed chain order once per block and       │
-│  dispatches each stage to its per-stage apply helper.               │
+│  TxVoiceProcessor dispatches each enabled processor directly.       │
 └─────────┬──────────────────────────────────────────────────────────┘
           │
           ▼  (meters: per-stage inputPeak/outputPeak/GR, ClientEq FFT
@@ -53,6 +67,9 @@ PC mic capture (QAudioSource)
           │
           ▼
      PC mic gain → Quindar → final limiter → meters/scopes
+          │
+          ▼
+     48-to-24 kHz SRC → linked TPDF dither → Int16 quantization
           │
           ▼
      Opus remote_audio_tx / VITA encode → UDP → radio

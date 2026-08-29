@@ -8,6 +8,7 @@
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
+#include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -16,6 +17,7 @@
 #include "core/PeripheralSettings.h"
 #include <QApplication>
 #include <QAbstractItemView>
+#include <QLocale>
 #include <QSysInfo>
 #include "core/AudioEngine.h"
 #ifdef HAVE_SERIALPORT
@@ -28,6 +30,8 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/SpeConnection.h"
+#include "core/VkampConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -74,6 +78,8 @@
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QPoint>
 #include <QHostAddress>
 #include <QClipboard>
 #include <QDebug>
@@ -632,12 +638,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    AntennaGeniusModel* ag,
                                    KiwiSdrManager* kiwiSdrManager,
                                    AcomConnection* acom,
+                                   SpeConnection* spe,
+                                   VkampConnection* vkamp,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -754,6 +762,22 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("rx receive calibration rf gain preamp"), [this] { return buildRxTab(); });
     addPage(signalCategory, QStringLiteral("Filters"),
         QStringLiteral("filter bandwidth low high cut mode"), [this] { return buildFiltersTab(); });
+    // Calibration page (HL2 and any future family that cannot calibrate itself).
+    // Gated on the CAPABILITY, not on the family name: "does this radio correct
+    // its own oscillator" is the question, and a Flex answers it on the Receive
+    // page with its own hardware calibration.
+    QTreeWidgetItem* calItem = addPage(radioCategory, QStringLiteral("Calibration"),
+        QStringLiteral("frequency calibration ppb ppm oscillator crystal clock error wwv gpsdo zero beat"),
+        [this] { return buildCalibrationTab(); });
+    m_calibrationPageIndex = m_pageIndexes.value(QStringLiteral("Calibration"));
+    calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this, calItem] {
+        calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+        // A different radio may now be connected — re-read its own calibration
+        // so a later Trim press cannot commit the previous radio's number.
+        if (m_calibrationReseed)
+            m_calibrationReseed();
+    });
     addPage(hardwareCategory, QStringLiteral("Antennas"),
         QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
     addPage(hardwareCategory, QStringLiteral("Transverters"),
@@ -821,8 +845,17 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     + item->data(0, Qt::UserRole + 1).toString();
                 const bool matches = needle.isEmpty()
                     || haystack.contains(needle, Qt::CaseInsensitive);
+                // Capability-gated rows must survive the filter: recomputing
+                // setHidden() purely from the keyword match would unhide a page
+                // the radio cannot use (typing "calibration" on a Flex would
+                // surface the HL2-only page, whose controls move while nothing
+                // reaches the radio).
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
-                if (!apdRow || m_model->transmitModel().apdConfigurable()) {
+                const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
+                const bool gated =
+                    (apdRow && !m_model->transmitModel().apdConfigurable())
+                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
+                if (!gated) {
                     item->setHidden(!matches);
                 }
                 anyVisible = anyVisible || !item->isHidden();
@@ -865,6 +898,16 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         "QPushButton:hover { background: {{color.background.1}}; }");
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     layout->addWidget(buttons);
+}
+
+void RadioSetupDialog::showEvent(QShowEvent* event)
+{
+    PersistentDialog::showEvent(event);
+    // The dialog is a showOrRaisePersistent singleton and pages are built once,
+    // so anything that changed the stored calibration while it was closed (a
+    // `freqcal` bridge call, a different radio) has to be re-read here.
+    if (m_calibrationReseed)
+        m_calibrationReseed();
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
@@ -2500,10 +2543,14 @@ QWidget* RadioSetupDialog::buildRxTab()
         auto calibrationActive = std::make_shared<bool>(false);
         auto pllRunningSeen = std::make_shared<bool>(false);
         auto calibrationRun = std::make_shared<int>(0);
-        auto setCalStatus = [calStatus](const QString& text, const QString& color) {
+        // Takes a THEME TOKEN, not a colour literal. A raw setStyleSheet() with
+        // a token name in the colour slot is not merely ignored — Qt discards
+        // the whole rule, taking the font-size with it and leaving default
+        // black text, which is near-invisible on the dark theme.
+        auto setCalStatus = [calStatus](const QString& text, const QString& token) {
             calStatus->setText(text);
-            calStatus->setStyleSheet(
-                QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(calStatus,
+                QStringLiteral("QLabel { color: {{%1}}; font-size: 11px; }").arg(token));
         };
 
         connect(startBtn, &QPushButton::clicked, this,
@@ -2511,7 +2558,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                  calibrationRun, setCalStatus] {
             const QString calFreq = calEdit->text().trimmed();
             if (calFreq.isEmpty()) {
-                setCalStatus("Enter cal frequency", "#e0a050");
+                setCalStatus("Enter cal frequency", "color.accent.warning");
                 return;
             }
 
@@ -2520,7 +2567,7 @@ QWidget* RadioSetupDialog::buildRxTab()
             *pllRunningSeen = false;
             startBtn->setEnabled(false);
             startBtn->setText("Busy");
-            setCalStatus("Starting...", "#8aa8c0");
+            setCalStatus("Starting...", "color.text.secondary");
 
             qCDebug(lcProtocol) << "RadioSetupDialog: frequency calibration requested"
                                  << "cal_freq=" << calFreq
@@ -2744,6 +2791,394 @@ QWidget* RadioSetupDialog::buildRxTab()
     vbox->addStretch(1);
     return page;
 }
+// ── Calibration tab ──────────────────────────────────────────────────────────
+
+QWidget* RadioSetupDialog::buildCalibrationTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    // Themed throughout — every style on this page goes through ThemeManager
+    // rather than a literal hex, so the page follows the active theme and the
+    // hardcoded-colour ratchet stays flat.
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
+
+    static const QString kCalLabel =
+        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kCalButton =
+        QStringLiteral("QPushButton { background: {{color.background.1}}; "
+                       "border: 1px solid {{color.background.2}}; border-radius: 4px; "
+                       "color: {{color.text.primary}}; font-size: 12px; font-weight: bold; "
+                       "padding: 4px 10px; }"
+                       "QPushButton:hover { background: {{color.background.2}}; }");
+
+    auto* group = new QGroupBox("Frequency Calibration");
+    themed(group, QStringLiteral(
+        "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+        "margin-top: 8px; padding-top: 12px; font-weight: bold; "
+        "color: {{color.text.secondary}}; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"));
+    auto* gvb = new QVBoxLayout(group);
+    gvb->setSpacing(8);
+
+    {
+        auto* intro = new QLabel(
+            "This radio tunes from a free-running crystal and cannot measure its own error, "
+            "so the correction is applied here. Receive a signal of known frequency, tune "
+            "until it zero-beats, and press Calibrate — or enter an error you already know.");
+        themed(intro, kCalLabel);
+        intro->setWordWrap(true);
+        gvb->addWidget(intro);
+
+        auto* warmup = new QLabel(
+            "Let the radio warm up for 15 minutes first. The oscillator drifts as it heats.");
+        themed(warmup, QStringLiteral(
+            "QLabel { color: {{color.accent.warning}}; font-size: 12px; }"));
+        warmup->setWordWrap(true);
+        gvb->addWidget(warmup);
+    }
+
+    // The calibration is stored against the radio's own identity (its MAC), and
+    // that identity does not exist until a radio has been connected this
+    // session. Hl2Backend refuses to persist without one — an empty radio_id is
+    // the family-wide default row, which every other HL2 would then inherit
+    // (AGENTS.md) — and the `freqcal` bridge verb returns an error for the same
+    // reason. The page has to say so as well, or the operator trims, watches the
+    // readout move, and finds nothing was saved. m_calibrationReseed below
+    // disables the controls alongside this label.
+    auto* noRadioLbl = new QLabel(
+        "Connect the radio first. The calibration belongs to one physical radio, "
+        "and there is no radio identity to store it against yet.");
+    themed(noRadioLbl, QStringLiteral(
+        "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"));
+    noRadioLbl->setWordWrap(true);
+    noRadioLbl->setVisible(false);
+    gvb->addWidget(noRadioLbl);
+
+    auto* grid = new QGridLayout;
+    grid->setSpacing(6);
+    // Keep the controls next to their labels instead of letting the value
+    // column absorb the dialog's full width. Column 3 takes the slack.
+    grid->setColumnStretch(0, 0);
+    grid->setColumnStretch(1, 0);
+    grid->setColumnStretch(2, 0);
+    grid->setColumnStretch(3, 1);
+    int row = 0;
+
+    // ── Reference ────────────────────────────────────────────────────────────
+    auto* refLbl = new QLabel("Reference:");
+    themed(refLbl, kCalLabel);
+    grid->addWidget(refLbl, row, 0);
+
+    auto* refCombo = new QComboBox;
+    AetherSDR::applyComboStyle(refCombo);
+    // Standards first, then Custom. A bench GPSDO or a signal generator locked
+    // to one is the BEST reference available — no ionospheric Doppler (which
+    // wanders ~10 ppb at 10 MHz on an HF path), no fading mid-null — so Custom
+    // is a first-class entry here, not a fallback.
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 10 MHz"), 10'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 5 MHz"), 5'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 15 MHz"), 15'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 20 MHz"), 20'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 25 MHz"), 25'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 2.5 MHz"), 2'500'000.0);
+    refCombo->addItem(QStringLiteral("CHU — 7.850 MHz"), 7'850'000.0);
+    refCombo->addItem(QStringLiteral("CHU — 3.330 MHz"), 3'330'000.0);
+    refCombo->addItem(QStringLiteral("CHU — 14.670 MHz"), 14'670'000.0);
+    refCombo->addItem(QStringLiteral("GPSDO / signal generator (custom)"), 0.0);
+    refCombo->setToolTip(
+        QStringLiteral("The true frequency of the signal you are zero-beating.\n"
+                       "A local GPSDO is the most accurate choice — attenuate it "
+                       "at least 30 dB or couple loosely, its output will overload "
+                       "the receiver."));
+    refCombo->setMinimumWidth(230);
+    grid->addWidget(refCombo, row, 1);
+
+    auto* customEdit = new QLineEdit(QStringLiteral("10.000000"));
+    themed(customEdit, QStringLiteral(
+        "QLineEdit { background: {{color.background.1}}; "
+        "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+        "color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"));
+    customEdit->setFixedWidth(110);
+    customEdit->setValidator(new QDoubleValidator(0.1, 38.4, 6, customEdit));
+    customEdit->setToolTip(QStringLiteral("Reference frequency in MHz"));
+    customEdit->setVisible(false);
+    grid->addWidget(customEdit, row, 2);
+    ++row;
+
+    auto referenceHz = [refCombo, customEdit]() -> double {
+        const double fixed = refCombo->currentData().toDouble();
+        if (fixed > 0.0)
+            return fixed;
+        // Parse with the same locale the QDoubleValidator accepts. Validating
+        // system-locale ("10,000000" on de_DE) and parsing C-locale would let a
+        // visibly-valid field read back as 0, and Calibrate would report an
+        // empty reference over a field that plainly contains one.
+        bool ok = false;
+        const double mhz = QLocale::system().toDouble(customEdit->text(), &ok);
+        if (!ok)
+            return 0.0;
+        return mhz * 1.0e6;
+    };
+    connect(refCombo, &QComboBox::currentIndexChanged, this, [refCombo, customEdit](int) {
+        customEdit->setVisible(refCombo->currentData().toDouble() <= 0.0);
+    });
+
+    // ── Error, in ppb — the ONE stored number ────────────────────────────────
+    auto* ppbLbl = new QLabel("Error:");
+    themed(ppbLbl, kCalLabel);
+    grid->addWidget(ppbLbl, row, 0);
+
+    auto* ppbSpin = new QSpinBox;
+    ppbSpin->setObjectName(QStringLiteral("hl2FreqCalPpb"));
+    ppbSpin->setRange(Hl2FreqCal::kMinPpb, Hl2FreqCal::kMaxPpb);
+    ppbSpin->setSingleStep(10);
+    ppbSpin->setSuffix(QStringLiteral(" ppb"));
+    ppbSpin->setFixedWidth(120);
+    ppbSpin->setAccessibleName(QStringLiteral("Frequency error in parts per billion"));
+    ppbSpin->setToolTip(
+        QStringLiteral("Positive = the radio's clock runs fast, so signals appear low.\n"
+                       "100 ppb is 1 Hz at 10 MHz."));
+    ppbSpin->setValue(Hl2FreqCal::loadPpb(m_model->settingsScope()));
+    grid->addWidget(ppbSpin, row, 1);
+
+    auto* resetBtn = new QPushButton("Reset");
+    themed(resetBtn, kCalButton);
+    resetBtn->setFixedWidth(70);
+    resetBtn->setToolTip(QStringLiteral("Return this radio to uncalibrated (0 ppb)"));
+    grid->addWidget(resetBtn, row, 2);
+    ++row;
+
+    // The single write path for the page: adopt into the backend (which
+    // persists, re-pushes every NCO, and moves transmit with them) and refresh
+    // the readout. Everything below drives the spinbox; only this applies it.
+    auto* readout = new QLabel;
+    readout->setObjectName(QStringLiteral("hl2FreqCalReadout"));
+    readout->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(readout,
+        "QLabel { color: {{color.accent.bright}}; font-size: 12px; font-weight: bold; }");
+
+    auto activeSliceHz = [this]() -> double {
+        for (SliceModel* s : m_model->slices()) {
+            if (s && s->isActive())
+                return s->frequency() * 1.0e6;   // SliceModel carries MHz
+        }
+        return 0.0;
+    };
+
+    auto refreshReadout = [readout, ppbSpin, activeSliceHz] {
+        const int ppb = ppbSpin->value();
+        const double clock = Hl2FreqCal::effectiveClockHz(ppb);
+        QString text = QStringLiteral("Effective clock %1 Hz  ·  %2 ppb (%3 ppm)")
+            .arg(QLocale::system().toString(qRound64(clock)))
+            .arg(ppb)
+            .arg(ppb / 1000.0, 0, 'f', 3);
+        // The line that makes ppb mean something. "-182 ppb" is abstract;
+        // "-5.2 Hz at 28.500 MHz" is the error the operator was looking at.
+        if (const double rf = activeSliceHz(); rf > 0.0) {
+            text += QStringLiteral("\nWithout this correction, %1 MHz would be off by %2 Hz.")
+                .arg(rf / 1.0e6, 0, 'f', 6)
+                .arg(Hl2FreqCal::errorHzAt(rf, ppb), 0, 'f', 2);
+        }
+        readout->setText(text);
+    };
+
+    // persist=false applies live without writing the settings store — used by
+    // the auto-repeating Trim buttons, which commit once on release.
+    auto apply = [this, ppbSpin, refreshReadout](int ppb, bool persist = true) {
+        QSignalBlocker blocker(ppbSpin);
+        ppbSpin->setValue(Hl2FreqCal::clampPpb(ppb));
+        // The backend owns clamping, persistence and the re-push. Going through
+        // it rather than writing settings here is what keeps a mid-session
+        // change audible immediately instead of at the next tune.
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        persist ? QStringLiteral("freqcal.set")
+                                                : QStringLiteral("freqcal.set_live"),
+                                        0, QVariant(ppbSpin->value()));
+        refreshReadout();
+    };
+
+    // Commit on editing-finished rather than on every intermediate keystroke:
+    // with keyboard tracking on, typing "-1782" would persist four partial
+    // values and command four intermediate frequencies to the radio.
+    ppbSpin->setKeyboardTracking(false);
+    connect(ppbSpin, &QSpinBox::valueChanged, this, [apply](int v) { apply(v); });
+    connect(resetBtn, &QPushButton::clicked, this, [apply] { apply(0); });
+
+    // ── Trim ─────────────────────────────────────────────────────────────────
+    //
+    // Steps are labelled in Hz-at-10-MHz because that is the unit an operator
+    // nulling a beat note is actually hearing. The STORED value stays ppb: the
+    // error is fractional, so a step that means 1 Hz on 10 MHz means 0.1 Hz on
+    // 160 m, and storing Hz would be right on exactly one band.
+    auto* trimLbl = new QLabel("Trim:");
+    themed(trimLbl, kCalLabel);
+    grid->addWidget(trimLbl, row, 0);
+
+    auto* trimRow = new QWidget;
+    auto* trimBox = new QHBoxLayout(trimRow);
+    trimBox->setContentsMargins(0, 0, 0, 0);
+    trimBox->setSpacing(6);
+
+    auto* stepCombo = new QComboBox;
+    AetherSDR::applyComboStyle(stepCombo);
+    stepCombo->addItem(QStringLiteral("0.1 Hz @ 10 MHz"), 10);
+    stepCombo->addItem(QStringLiteral("1 Hz @ 10 MHz"), 100);
+    stepCombo->addItem(QStringLiteral("10 Hz @ 10 MHz"), 1000);
+    stepCombo->setCurrentIndex(1);
+
+    auto* downBtn = new QPushButton(QStringLiteral("−"));
+    auto* upBtn = new QPushButton(QStringLiteral("+"));
+    for (QPushButton* b : {downBtn, upBtn}) {
+        themed(b, kCalButton);
+        b->setFixedWidth(44);
+        b->setAutoRepeat(true);
+        b->setAutoRepeatDelay(400);
+        b->setAutoRepeatInterval(120);
+    }
+    downBtn->setAccessibleName(QStringLiteral("Decrease frequency calibration"));
+    upBtn->setAccessibleName(QStringLiteral("Increase frequency calibration"));
+    trimBox->addWidget(downBtn);
+    trimBox->addWidget(upBtn);
+    trimBox->addWidget(stepCombo);
+    trimBox->addStretch(1);
+    grid->addWidget(trimRow, row, 1, 1, 2);
+    ++row;
+
+    // Applied live while held (the beat note has to move under the operator's
+    // hand), persisted exactly once when the button is let go.
+    //
+    // isDown() is the discriminator, and it has to be read inside clicked() —
+    // not inside released(). Qt's auto-repeat emits released(), clicked() and
+    // pressed() on EVERY tick (that repeated clicked() is what drives the trim
+    // in the first place) and leaves the button DOWN throughout; only the real
+    // mouseReleaseEvent path clears down, via QAbstractButtonPrivate::click(),
+    // before emitting. Committing from released() would therefore persist ~8x a
+    // second while held — and store the value from one step ago, because
+    // released() is emitted before the clicked() that applies the step.
+    // Measured (Qt 6.11, tests/hl2_trim_autorepeat_test.cpp pins it): five ticks
+    // of released/clicked/pressed with down=1, then released/clicked with down=0
+    // on the physical release.
+    auto trim = [apply, ppbSpin, stepCombo](QPushButton* b, int sign) {
+        apply(ppbSpin->value() + sign * stepCombo->currentData().toInt(),
+              /*persist=*/!b->isDown());
+    };
+    connect(downBtn, &QPushButton::clicked, this, [trim, downBtn] { trim(downBtn, -1); });
+    connect(upBtn, &QPushButton::clicked, this, [trim, upBtn] { trim(upBtn, +1); });
+
+    gvb->addLayout(grid);
+
+    // ── Calibrate from the current VFO ───────────────────────────────────────
+    auto* calRow = new QHBoxLayout;
+    calRow->setSpacing(8);
+    auto* calBtn = new QPushButton("Calibrate from current VFO");
+    calBtn->setObjectName(QStringLiteral("hl2FreqCalCapture"));
+    themed(calBtn, kCalButton);
+    auto* calStatus = new QLabel;
+    calStatus->setWordWrap(true);
+    calRow->addWidget(calBtn);
+    calRow->addWidget(calStatus, 1);
+    gvb->addLayout(calRow);
+
+    // Takes a THEME TOKEN, not a colour. Keeps the status line on the same
+    // palette as the rest of the dialog in every theme.
+    auto setStatus = [calStatus, &theme](const QString& text, const QString& token) {
+        calStatus->setText(text);
+        theme.applyStyleSheet(calStatus,
+            QStringLiteral("QLabel { color: {{%1}}; font-size: 11px; }").arg(token));
+    };
+
+    connect(calBtn, &QPushButton::clicked, this,
+            [this, apply, referenceHz, activeSliceHz, setStatus] {
+        const double ref = referenceHz();
+        if (!(ref > 0.0)) {
+            setStatus(QStringLiteral("Enter a reference frequency."), "color.accent.warning");
+            return;
+        }
+        const double dialled = activeSliceHz();
+        if (!(dialled > 0.0)) {
+            setStatus(QStringLiteral("No active slice to read."), "color.accent.warning");
+            return;
+        }
+        const int ppb = Hl2FreqCal::ppbFromZeroBeat(ref, dialled);
+        // Refuse an implausible result rather than committing it. Zero-beating
+        // the wrong signal — a harmonic, the opposite sideband, the wrong
+        // station — produces a number that would move every band by kilohertz,
+        // and the operator would have no way to tell that from a real reading.
+        if (ppb == Hl2FreqCal::kMinPpb || ppb == Hl2FreqCal::kMaxPpb) {
+            setStatus(QStringLiteral("That is more than 50 ppm off (%1 MHz vs %2 MHz "
+                                     "reference) — check you are on the right signal.")
+                          .arg(dialled / 1.0e6, 0, 'f', 6)
+                          .arg(ref / 1.0e6, 0, 'f', 6),
+                      "color.accent.danger");
+            return;
+        }
+        apply(ppb);
+        setStatus(QStringLiteral("Calibrated: %1 MHz reads as %2 MHz → %3 ppb.")
+                      .arg(ref / 1.0e6, 0, 'f', 6)
+                      .arg(dialled / 1.0e6, 0, 'f', 6)
+                      .arg(ppb),
+                  "color.accent.success");
+    });
+
+    gvb->addWidget(readout);
+    vbox->addWidget(group);
+
+    // Keep the "off by N Hz at this frequency" line honest as the operator
+    // tunes around looking for the reference.
+    auto trackSlice = [this, refreshReadout](SliceModel* s) {
+        if (s)
+            connect(s, &SliceModel::frequencyChanged, this,
+                    [refreshReadout] { refreshReadout(); });
+    };
+    for (SliceModel* s : m_model->slices())
+        trackSlice(s);
+    // Slices created after the page was built (including every slice, when the
+    // page was built before connecting) would otherwise never move the "off by
+    // N Hz" line — the one line that gives this page its reason to exist.
+    connect(m_model, &RadioModel::sliceAdded, this,
+            [trackSlice, refreshReadout](SliceModel* s) {
+        trackSlice(s);
+        refreshReadout();
+    });
+
+    // Re-seed from the store, and re-check that there is a radio to store
+    // against, whenever the dialog is shown or the connected radio changes. The
+    // page is built once per process and the dialog is a persistent singleton,
+    // so without this the spinbox would keep the value it read at first build —
+    // and the next Trim press would commit that number to whichever radio is
+    // connected now.
+    QPointer<QSpinBox> spinGuard(ppbSpin);
+    QPointer<QLabel> noRadioGuard(noRadioLbl);
+    const QList<QPointer<QWidget>> calControls{
+        refCombo, customEdit, ppbSpin, resetBtn, downBtn, upBtn, stepCombo, calBtn};
+    m_calibrationReseed = [this, spinGuard, noRadioGuard, calControls, refreshReadout] {
+        if (!spinGuard)
+            return;
+        {
+            QSignalBlocker blocker(spinGuard);
+            spinGuard->setValue(Hl2FreqCal::loadPpb(m_model->settingsScope()));
+        }
+        // No identity, no write — the backend and the bridge verb both refuse in
+        // this state, so leaving the controls live would be a UI that reports
+        // success while nothing persists.
+        const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
+        for (const QPointer<QWidget>& w : calControls) {
+            if (w)
+                w->setEnabled(haveRadio);
+        }
+        if (noRadioGuard)
+            noRadioGuard->setVisible(!haveRadio);
+        refreshReadout();
+    };
+    m_calibrationReseed();
+
+    vbox->addStretch(1);
+    return page;
+}
+
 // ── Audio tab ────────────────────────────────────────────────────────────────
 
 QWidget* RadioSetupDialog::buildAudioTab()
@@ -6050,6 +6485,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
     {
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
+        m_flexControlGroup = group;
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -7122,6 +7558,360 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
     }
 
+    // Row 6: SPE Expert amplifier — serial OR ser2net network, structurally
+    // identical to the ACOM row above. See
+    // docs/architecture/spe-expert-amplifier-design.md for the design note.
+    if (m_spe) {
+        const int row = 6;
+        auto& speTheme = AetherSDR::ThemeManager::instance();
+        // Themed (token) styles rather than the ACOM row's raw-hex ones —
+        // the hardcoded-colour ratchet gates new hex references, and the
+        // tokens re-resolve on theme change for free.
+        static const QString kComboStyle =
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        static const QString kStatusOkStyle =
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kStatusIdleStyle =
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+
+        auto* devWidget = new QWidget;
+        auto* devLay = new QVBoxLayout(devWidget);
+        devLay->setContentsMargins(0, 0, 0, 0);
+        devLay->setSpacing(2);
+        auto* devLbl = new QLabel("SPE Expert Amplifier");
+        speTheme.applyStyleSheet(devLbl, kLabelStyle);
+        devLay->addWidget(devLbl);
+        auto* modeCombo = new QComboBox;
+        speTheme.applyStyleSheet(modeCombo, kComboStyle);
+#ifdef HAVE_SERIALPORT
+        modeCombo->addItem("Serial", "Serial");
+#endif
+        modeCombo->addItem("Network", "Network");
+        devLay->addWidget(modeCombo);
+        // Network mode = ser2net proxy. Raw and telnet modes both work for
+        // monitoring/control, but powering the amplifier ON over the network
+        // drives the proxy's DTR/RTS lines via RFC 2217 COM-port control, so
+        // that one feature needs `telnet(rfc2217=true)` specifically — plain
+        // telnet answers DONT and a raw port never answers at all. Surface
+        // the reference config where the user is already looking.
+        const QString speSer2netTip = QStringLiteral(
+            "Network mode connects through a ser2net serial-to-TCP proxy.\n"
+            "Monitoring and control work with the port in raw or telnet mode.\n"
+            "Powering the amplifier ON over the network additionally needs\n"
+            "RFC 2217 COM-port control, i.e. an rfc2217-enabled telnet port:\n"
+            "\n"
+            "connection: &spe\n"
+            "    accepter: telnet(rfc2217=true),64002\n"
+            "    enable: on\n"
+            "    options:\n"
+            "      kickolduser: true\n"
+            "    connector: serialdev,\n"
+            "              /dev/ttyUSB0");
+        devWidget->setToolTip(speSer2netTip);
+        modeCombo->setToolTip(speSer2netTip);
+        grid->addWidget(devWidget, row, 0);
+
+        auto* addrStack = new QStackedWidget;
+        int serialPageIdx = -1;
+        QComboBox* serialCombo = nullptr;
+        QLineEdit* serialCustomEdit = nullptr;
+#ifdef HAVE_SERIALPORT
+        {
+            auto* serialPage = new QWidget;
+            auto* lay = new QHBoxLayout(serialPage);
+            lay->setContentsMargins(0, 0, 0, 0);
+            serialCombo = new QComboBox;
+            speTheme.applyStyleSheet(serialCombo, kComboStyle);
+            serialCustomEdit = new QLineEdit;
+            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
+            speTheme.applyStyleSheet(serialCustomEdit, kEditStyle);
+            const QString savedSerialPort = PeripheralSettings::deviceString("SpeExpert", "SerialPort");
+            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
+            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
+            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [serialCombo, serialCustomEdit](int idx) {
+                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
+            });
+            lay->addWidget(serialCombo, 1);
+            lay->addWidget(serialCustomEdit, 1);
+            serialPageIdx = addrStack->addWidget(serialPage);
+        }
+#endif
+        auto* netPage = new QWidget;
+        auto* netLay = new QHBoxLayout(netPage);
+        netLay->setContentsMargins(0, 0, 0, 0);
+        auto* netIpEdit = new QLineEdit;
+        netIpEdit->setPlaceholderText("ser2net host — e.g. 192.168.1.52");
+        speTheme.applyStyleSheet(netIpEdit, kEditStyle);
+        netIpEdit->setToolTip(speSer2netTip);
+        netIpEdit->setText(PeripheralSettings::deviceString("SpeExpert", "ManualIp"));
+        netLay->addWidget(netIpEdit);
+        const int netPageIdx = addrStack->addWidget(netPage);
+        grid->addWidget(addrStack, row, 1);
+
+        // Fixed "115200 8N1" for serial (the spec's documented maximum, the
+        // amp auto-adapts — nothing to configure) OR a port spin box for
+        // network mode.
+        auto* portStack = new QStackedWidget;
+        int serialBaudIdx = -1;
+#ifdef HAVE_SERIALPORT
+        {
+            auto* fixedLbl = new QLabel("115200 8N1");
+            speTheme.applyStyleSheet(fixedLbl, kStatusIdleStyle);
+            serialBaudIdx = portStack->addWidget(fixedLbl);
+        }
+#endif
+        auto* netPortSpin = new QSpinBox;
+        netPortSpin->setRange(1, 65535);
+        netPortSpin->setValue(PeripheralSettings::deviceInt("SpeExpert", "ManualPort", 7000));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(netPortSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        const int netPortIdx = portStack->addWidget(netPortSpin);
+        grid->addWidget(portStack, row, 2);
+
+        auto applyMode = [=](const QString& mode) {
+#ifdef HAVE_SERIALPORT
+            if (mode == "Serial" && serialPageIdx >= 0) {
+                addrStack->setCurrentIndex(serialPageIdx);
+                portStack->setCurrentIndex(serialBaudIdx);
+                return;
+            }
+#endif
+            addrStack->setCurrentIndex(netPageIdx);
+            portStack->setCurrentIndex(netPortIdx);
+        };
+        const QString savedMode = PeripheralSettings::deviceString("SpeExpert", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        {
+            const int idx = modeCombo->findData(savedMode);
+            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        applyMode(modeCombo->currentData().toString());
+        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [=](int idx) {
+            const QString mode = modeCombo->itemData(idx).toString();
+            PeripheralSettings::setDeviceString("SpeExpert", "ConnectionMode", mode);
+            applyMode(mode);
+        });
+
+        auto* statusLbl = new QLabel(m_spe->isConnected() ? "Connected" : "Not connected");
+        speTheme.applyStyleSheet(statusLbl,
+            m_spe->isConnected() ? kStatusOkStyle : kStatusIdleStyle);
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* speBtn = new QPushButton(m_spe->isConnected() ? "Disconnect" : "Connect");
+        speTheme.applyStyleSheet(speBtn, kBtnStyle);
+        grid->addWidget(speBtn, row, 3);
+
+        auto updateSpeState = [this, speBtn, statusLbl]() {
+            const bool conn = m_spe->isConnected();
+            speBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kStatusOkStyle : kStatusIdleStyle);
+        };
+        connect(m_spe, &SpeConnection::connected, this, updateSpeState);
+        connect(m_spe, &SpeConnection::disconnected, this, updateSpeState);
+        connect(m_spe, &SpeConnection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+        });
+
+        connect(speBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_spe->isConnected()) {
+                m_spe->disconnect();
+                return;
+            }
+            const QString mode = modeCombo->currentData().toString();
+            if (mode == "Network") {
+                const QString ip = netIpEdit->text().trimmed();
+                if (ip.isEmpty()) return;
+                const int port = netPortSpin->value();
+                PeripheralSettings::setDeviceString("SpeExpert", "ManualIp", ip);
+                PeripheralSettings::setDeviceInt("SpeExpert", "ManualPort", port);
+                m_spe->connectNetwork(ip, static_cast<quint16>(port));
+            }
+#ifdef HAVE_SERIALPORT
+            else {
+                QString port = serialCombo->currentData().toString();
+                if (port == "__custom__")
+                    port = serialCustomEdit->text().trimmed();
+                if (port.isEmpty()) return;
+                PeripheralSettings::setDeviceString("SpeExpert", "SerialPort", port);
+                m_spe->connectSerial(port);
+            }
+#endif
+        });
+
+        // Save-on-close: same cleared-field handling as the ACOM row — wipe
+        // the saved manual network target when the user clears the field and
+        // closes without clicking Connect/Disconnect.
+        m_peripheralRowSavers.append([netIpEdit, this]() {
+            if (!netIpEdit) return;
+            const QString ip = netIpEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("SpeExpert", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("SpeExpert", "ManualIp");
+            PeripheralSettings::clearDeviceField("SpeExpert", "ManualPort");
+            if (m_spe->isConnected() && m_spe->description().startsWith(savedIp + ":")) {
+                m_spe->disconnect();
+            }
+        });
+    }
+
+    // Row 7: VK3AMP amplifier — TCP control/status only for v1 (see
+    // docs/architecture/vkamp-amplifier-design.md Section 3.3/Section 9:
+    // serial is a genuinely different wire format, deferred to a later
+    // phase), so this row is a plain host/port pair, no Serial/Network
+    // toggle.
+    if (m_vkamp) {
+        const int row = 7;
+
+        auto* devLbl = new QLabel("VK3AMP Amplifier");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(devLbl, kLabelStyle);
+        grid->addWidget(devLbl, row, 0);
+
+        auto* ipEdit = new QLineEdit;
+        ipEdit->setPlaceholderText("e.g. 192.168.1.50");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ipEdit, kEditStyle);
+        ipEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
+        // Name answers "what is this?", description answers "what do I type?"
+        // -- docs/a11y.md Section 2's rule for input widgets.
+        ipEdit->setAccessibleName(tr("VK3AMP address"));
+        ipEdit->setAccessibleDescription(tr("IP address or host name of the VK3AMP amplifier"));
+        grid->addWidget(ipEdit, row, 1);
+
+        auto* portSpin = new QSpinBox;
+        portSpin->setRange(1, 65535);
+        portSpin->setValue(PeripheralSettings::deviceInt("Vkamp", "ManualPort", 5005));
+        portSpin->setAccessibleName(tr("VK3AMP control port"));
+        portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 5005"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        grid->addWidget(portSpin, row, 2);
+
+        static const QString kVkampConnectedStyle = "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kVkampDisconnectedStyle = "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+        static const QString kVkampErrorStyle = "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
+        static const QString kVkampConnectingStyle = "QLabel { color: {{color.accent.warning}}; font-size: 11px; }";
+
+        auto* statusLbl = new QLabel(m_vkamp->isConnected() ? "Connected" : "Not connected");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+            m_vkamp->isConnected() ? kVkampConnectedStyle : kVkampDisconnectedStyle);
+        statusLbl->setAccessibleName(tr("VK3AMP connection status"));
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(vkampBtn, kBtnStyle);
+        vkampBtn->setAccessibleName(tr("Connect or disconnect the VK3AMP amplifier"));
+        grid->addWidget(vkampBtn, row, 3);
+
+        auto updateVkampState = [this, vkampBtn, statusLbl]() {
+            const bool conn = m_vkamp->isConnected();
+            vkampBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kVkampConnectedStyle : kVkampDisconnectedStyle);
+        };
+        connect(m_vkamp, &VkampConnection::connected, this, updateVkampState);
+        connect(m_vkamp, &VkampConnection::disconnected, this, updateVkampState);
+        connect(m_vkamp, &VkampConnection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampErrorStyle);
+        });
+
+        connect(vkampBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_vkamp->isConnected()) {
+                m_vkamp->disconnect();
+                return;
+            }
+            const QString ip = ipEdit->text().trimmed();
+            if (ip.isEmpty()) return;
+            const int port = portSpin->value();
+            PeripheralSettings::setDeviceString("Vkamp", "ManualIp", ip);
+            PeripheralSettings::setDeviceInt("Vkamp", "ManualPort", port);
+            // Immediate feedback -- a cold connect can legitimately take
+            // several seconds (this amp's own network stack only answers
+            // broadcast ARP, which can stall Windows' unicast-first
+            // neighbor-cache reconfirmation for up to ~kConnectTimeoutMs --
+            // see VkampConnection.h's own doc comment). Without this the
+            // status label just sits on "Not connected" the whole time,
+            // which reads as frozen/unresponsive rather than in progress.
+            // Overwritten by updateVkampState()/the connectionFailed handler
+            // below as soon as the real outcome lands.
+            statusLbl->setText("Connecting…");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampConnectingStyle);
+            m_vkamp->connectNetwork(ip, static_cast<quint16>(port));
+        });
+
+        // Save-on-close: same "user cleared the field and closed the dialog
+        // without clicking Connect/Disconnect" handling as ACOM's own row
+        // above.
+        m_peripheralRowSavers.append([ipEdit, this]() {
+            if (!ipEdit) return;
+            const QString ip = ipEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Vkamp", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Vkamp", "ManualIp");
+            PeripheralSettings::clearDeviceField("Vkamp", "ManualPort");
+            if (m_vkamp->isConnected() && m_vkamp->description().startsWith(savedIp + ":")) {
+                m_vkamp->disconnect();
+            }
+        });
+
+        // Row 8: VK3AMP hardware variant -- 600W/1000W/2000W ship as
+        // distinct rated-power classes, and the wire protocol has no
+        // model/wattage field to auto-detect which one this is (design
+        // doc's variant table). Picking the wrong one only misscales the
+        // forward-power gauge, not a safety issue, so this defaults to
+        // W2000 (the originally-confirmed unit) rather than blocking on a
+        // choice.
+        auto* variantLbl = new QLabel("Amplifier Model");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(variantLbl, kLabelStyle);
+        grid->addWidget(variantLbl, row + 1, 0);
+
+        auto* variantCombo = new QComboBox;
+        static const QString kVariantComboStyle =
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        AetherSDR::ThemeManager::instance().applyStyleSheet(variantCombo, kVariantComboStyle);
+        variantCombo->setAccessibleName(tr("VK3AMP amplifier model"));
+        variantCombo->setAccessibleDescription(
+            tr("Rated output of your unit. Sets the power meter's full scale; it does not change "
+               "anything on the amplifier."));
+        for (auto v : {Vkamp::Variant::W600, Vkamp::Variant::W1000, Vkamp::Variant::W2000}) {
+            variantCombo->addItem(Vkamp::variantLabel(v), static_cast<int>(v));
+        }
+        const int savedVariant = PeripheralSettings::deviceInt(
+            "Vkamp", "Variant", static_cast<int>(Vkamp::Variant::W2000));
+        {
+            const int idx = variantCombo->findData(savedVariant);
+            variantCombo->setCurrentIndex(idx >= 0 ? idx : variantCombo->count() - 1);
+        }
+        grid->addWidget(variantCombo, row + 1, 1);
+
+        connect(variantCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this, variantCombo](int idx) {
+            PeripheralSettings::setDeviceInt("Vkamp", "Variant", variantCombo->itemData(idx).toInt());
+            emit vkampVariantChanged();
+        });
+    }
+
     for (auto* lbl : group->findChildren<QLabel*>())
         if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);
 
@@ -7148,6 +7938,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_acom) {
             m_acom->setAutoReconnect(on);
+        }
+        if (m_spe) {
+            m_spe->setAutoReconnect(on);
         }
     });
     vbox->addWidget(reconnectCheck);
@@ -7203,6 +7996,45 @@ void RadioSetupDialog::selectTab(const QString& tabName)
         m_navigation->setCurrentItem(item);
         m_navigation->scrollToItem(item, QAbstractItemView::PositionAtCenter);
     }
+}
+
+void RadioSetupDialog::revealFlexControlSettings()
+{
+    selectTab(QStringLiteral("Serial & Controllers"));
+    if (!m_flexControlGroup) {
+        return;
+    }
+    // selectTab() just switched (and, on first visit, built) the page on
+    // this call stack, but the scroll area it's wrapped in (#3345) hasn't
+    // laid out yet — ensureWidgetVisible() against stale/zero geometry is a
+    // no-op. Defer one event-loop turn so layout has actually happened.
+    QPointer<QGroupBox> group = m_flexControlGroup;
+    QTimer::singleShot(0, this, [group] {
+        if (!group) {
+            return;
+        }
+        // The group lives inside the tab's content widget, which
+        // wrapTabInScrollArea() set as the QScrollArea's viewport child —
+        // walk up the parent chain to find that enclosing scroll area.
+        for (QWidget* w = group->parentWidget(); w; w = w->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(w)) {
+                QWidget* content = area->widget();
+                if (!content) {
+                    return;
+                }
+                // Deliberately not ensureWidgetVisible(): it *centers* a
+                // widget taller than the viewport, and the FlexControl
+                // Tuning Knob group (~450-480px) is tall enough that at the
+                // dialog's 960x680 floor, centering pushes the group's own
+                // title and Status row above the top edge — the opposite of
+                // what "reveal" should do. Scroll its top edge into view
+                // directly instead (PR #5157 review).
+                const int y = group->mapTo(content, QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
 }
 
 void RadioSetupDialog::refreshFlexControlButtonActions()

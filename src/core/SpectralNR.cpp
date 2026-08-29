@@ -344,6 +344,10 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
         0.85, 256.0, 20100.0, m_hopSize, sampleRate);
     m_nstatAlphaP = scaledSmoothing(
         0.2, 256.0, 20100.0, m_hopSize, sampleRate);
+    m_nstatTonalAlpha = std::exp(
+        -static_cast<double>(m_hopSize) / (0.25 * sampleRate));
+    m_nstatTonalReleaseAlpha = std::exp(
+        -static_cast<double>(m_hopSize) / (0.05 * sampleRate));
     m_nstatLowFrequencyBin = static_cast<int>(
         1000.0 / (sampleRate / 2.0) * m_msize);
     m_nstatMidFrequencyBin = static_cast<int>(
@@ -352,16 +356,19 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     m_gainDecreaseSmooth = hopScaledSmoothing(
         0.5, m_hopSize, sampleRate);
     m_rampFrames = std::max(1, static_cast<int>(std::lround(framesPerSec)));
-    m_recentSpeechFramesMax = std::max(
-        1, static_cast<int>(std::lround(0.50 * framesPerSec)));
-    m_releaseCandidateFramesMin = std::max(
-        2, static_cast<int>(std::lround(0.05 * framesPerSec)));
-    m_releaseNoiseFramesMax = std::max(
-        1, static_cast<int>(std::lround(2.00 * framesPerSec)));
-    m_releaseNoiseDecay = std::exp(
-        -static_cast<double>(m_hopSize) / (0.20 * sampleRate));
-    m_releaseBaselineAlpha = std::exp(
-        -static_cast<double>(m_hopSize) / (0.50 * sampleRate));
+    // Residual-target calibration is an estimator concern, not an audible
+    // gain-smoothing preference. Preserve the established 1024/4 default
+    // convergence (0.85^93.75) at every supported FFT geometry.
+    constexpr double kReferenceGainSmoothing = 0.85;
+    constexpr double kReferenceFramesPerSecond = 24000.0 / (1024.0 / 4.0);
+    const double residualReferenceInitialWeight = std::pow(
+        kReferenceGainSmoothing, kReferenceFramesPerSecond);
+    m_residualReferenceAlpha = std::exp(
+        std::log(residualReferenceInitialWeight) / m_rampFrames);
+    m_commonReferenceAlpha = std::exp(
+        -static_cast<double>(m_hopSize) / (2.0 * sampleRate));
+    m_commonScaleAlpha = std::exp(
+        -static_cast<double>(m_hopSize) / (0.10 * sampleRate));
 
     // Allocate overlap-add accumulators
     m_inAccum.resize(fftSize * 4, 0.0);
@@ -428,9 +435,15 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     m_nstatPower.resize(m_msize);
     m_nstatPowerMin.resize(m_msize);
     m_nstatSpeechProbability.resize(m_msize);
+    m_nstatTonalProbability.resize(m_msize);
+    m_nstatTonalIndicator.resize(m_msize, 0);
+    m_commonWantedProtected.resize(m_msize, 0);
     m_nstatNoisePsd.resize(m_msize);
-    m_releaseBaselinePsd.resize(m_msize);
-    m_releaseNoisePsd.resize(m_msize);
+    m_commonReferencePsd.resize(m_msize);
+    m_residualReferencePsd.resize(m_msize);
+    m_residualReferenceGainRatio.resize(m_msize, 1.0);
+    m_residualReferenceValid.resize(m_msize, 0);
+    m_commonNoiseLike.resize(m_msize, 0);
 
     m_actMinBuf.resize(m_U);
     for (auto& v : m_actMinBuf)
@@ -551,10 +564,22 @@ void SpectralNR::reset()
     std::fill(m_nstatPowerMin.begin(), m_nstatPowerMin.end(), 0.0);
     std::fill(m_nstatSpeechProbability.begin(),
               m_nstatSpeechProbability.end(), 0.0);
+    std::fill(m_nstatTonalProbability.begin(),
+              m_nstatTonalProbability.end(), 0.0);
+    std::fill(m_nstatTonalIndicator.begin(),
+              m_nstatTonalIndicator.end(), 0);
+    std::fill(m_commonWantedProtected.begin(),
+              m_commonWantedProtected.end(), 0);
     std::fill(m_nstatNoisePsd.begin(), m_nstatNoisePsd.end(), 0.0);
-    std::fill(m_releaseBaselinePsd.begin(),
-              m_releaseBaselinePsd.end(), 0.0);
-    std::fill(m_releaseNoisePsd.begin(), m_releaseNoisePsd.end(), 0.0);
+    std::fill(m_commonReferencePsd.begin(),
+              m_commonReferencePsd.end(), 0.0);
+    std::fill(m_residualReferencePsd.begin(),
+              m_residualReferencePsd.end(), 0.0);
+    std::fill(m_residualReferenceGainRatio.begin(),
+              m_residualReferenceGainRatio.end(), 1.0);
+    std::fill(m_residualReferenceValid.begin(),
+              m_residualReferenceValid.end(), 0);
+    std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
 
     for (auto& v : m_actMinBuf)
         std::fill(v.begin(), v.end(), 1e30);
@@ -571,12 +596,15 @@ void SpectralNR::reset()
     // observed audio rather than waiting a full sub-window on its seed value.
     m_subwc = m_V;
     m_ambIdx = 0;
-    m_recentSpeechFrames = 0;
-    m_releaseCandidateFrames = 0;
-    m_releaseNoiseFrames = 0;
-    m_releaseNpeMethod = -1;
-    m_releaseNoiseRefreshed = false;
-    m_releaseBaselineInitialized = false;
+    m_commonReferenceInitialized = false;
+    m_commonReferenceReacquiring = false;
+    m_commonSilenceRecoveryContext = false;
+    m_commonLevelReferenceInitialized = false;
+    m_commonLevelReferencePower = 0.0;
+    m_commonScaleLog = 0.0;
+    m_commonAppliedScale = 1.0;
+    m_commonReturnScale = 1.0;
+    m_commonDetectedScale = 1.0;
     m_frameCount = 0;
     m_currentWet = 0.0;
 }
@@ -949,14 +977,16 @@ bool SpectralNR::updateMaskFromCurrentFrame()
     for (int k = 0; k < m_msize; ++k)
         m_lambdaY[k] = m_freqRe[k] * m_freqRe[k] + m_freqIm[k] * m_freqIm[k];
 
-    // Detect a speech-conditioned receiver-noise rise against the stable raw
-    // noise spectrum captured before speech. Running this before the selected
-    // estimator updates keeps the behavior consistent for OSMS and MMSE.
-    updateSpeechReleaseState();
+    // Detect a receiver-AGC common-mode scale before any estimator consumes
+    // this periodogram. This is intentionally driven by spectral confidence,
+    // not by speech-stop state or a release timer.
+    detectCommonModeScale();
 
-    // Selected noise-floor estimator.
+    // This order is load-bearing: NSTAT updates the common-mode classification
+    // maps consumed by applyCommonModeNoiseEstimate(), even when another NPE
+    // method is selected for the actual noise floor.
     estimateNoise();
-    applySpeechReleaseEstimate();
+    applyCommonModeNoiseEstimate();
 
     // Compute spectral gain mask
     computeGain();
@@ -965,34 +995,52 @@ bool SpectralNR::updateMaskFromCurrentFrame()
     if (m_aeFilter.load())
         applyAeFilter();
 
-    // Preserve a low-level copy of the original broadband residual. Deep,
-    // independently moving nulls are perceived as isolated tones; a bounded
-    // floor trades a little suppression for a more natural noise texture.
+    // Preserve the pre-AGC residual level for bins that the common-mode
+    // detector classified as noise. Estimator rescaling preserves SNR but
+    // would otherwise pass proportionally louder post-AGC static.
     const double gainMax = std::max(0.0, m_gainMax.load());
     const double gainFloor = std::clamp(m_gainFloor.load(), 0.0, gainMax);
-    const bool suppressSpeechRelease = m_releaseNoiseFrames > 0;
-    constexpr double kSpeechReleaseGainCap = 0.05;
-    constexpr double kSpeechReleaseResidualHeadroom = 0.80;
+    // Capture an estimator-level residual target before either the AGC cap or
+    // the user gain controls are applied. The current Naturalness/Reduction
+    // values are folded into that target below, so changing either control
+    // after startup has the same result as selecting it before audio starts.
+    updateResidualReference(gainMax, false);
+    // Preserve the residual headroom used by the original AGC-release path.
+    // The stored PSD is an upper-envelope target captured while the estimator
+    // is converging; reproducing it at unity makes the recovered static
+    // perceptibly louder than the settled pre-change residual. The continuous
+    // detector protects more noise bins than the old release bridge, so keep
+    // a 3 dB quiet-side confidence margin on the common-mode residual target.
+    constexpr double kCommonResidualHeadroom = 1.0 / std::numbers::sqrt2;
     for (int k = 0; k < m_msize; ++k) {
         double frameGainFloor = gainFloor;
         double frameGainMax = gainMax;
-        const double oldNoise = std::max(
-            m_releaseBaselinePsd[k], EpsFloor);
-        const double releaseNoise = m_releaseNoisePsd[k];
-        const bool suppressReleaseBin = suppressSpeechRelease
-            && releaseNoise > 1.05 * oldNoise;
-        if (suppressReleaseBin) {
-            // Naturalness is a steady-state residual floor. Applying the same
-            // fixed gain to a temporary receiver-AGC noise rise recreates that
-            // rise at the output. Scale the floor by the old/new noise-amplitude
-            // ratio so the broadband residual stays near its pre-speech level.
-            const double floorScale = kSpeechReleaseResidualHeadroom
+        if (m_commonNoiseLike[k] != 0) {
+            const double noisePsd = std::max({m_noisePsd[k], EpsFloor,
+                m_commonReferencePsd[k] * m_commonDetectedScale});
+            const double referenceGain = std::clamp(
+                m_residualReferenceGainRatio[k] * gainMax,
+                gainFloor, gainMax);
+            const double residualPsd = std::max(
+                referenceGain * referenceGain
+                    * m_residualReferencePsd[k],
+                EpsFloor);
+            const double residualHeadroom = m_commonSilenceRecoveryContext
+                ? 1.0
+                : kCommonResidualHeadroom;
+            const double residualGainCap = residualHeadroom
                 * std::sqrt(std::clamp(
-                    oldNoise / releaseNoise, 0.0, 1.0));
-            frameGainFloor *= floorScale;
-            frameGainMax = std::min(
-                gainMax, std::max(frameGainFloor,
-                                  kSpeechReleaseGainCap * floorScale));
+                    residualPsd / noisePsd, 0.0, 1.0));
+            // Naturalness participates in the pre-change referenceGain above;
+            // scale that user-selected residual with the receiver level rather
+            // than treating the startup value as a permanently absolute floor.
+            frameGainFloor = std::min(frameGainFloor, residualGainCap);
+            frameGainMax = std::min(gainMax, std::max(
+                frameGainFloor, residualGainCap));
+            // The decision-directed memory is dimensionless, but it must not
+            // keep reopening a bin that the continuous noise classification
+            // has just capped. A new speech-like frame clears this naturally.
+            m_prevMask[k] = std::min(m_prevMask[k], residualGainCap);
         }
         m_mask[k] = std::clamp(m_mask[k], frameGainFloor, frameGainMax);
     }
@@ -1005,13 +1053,18 @@ bool SpectralNR::updateMaskFromCurrentFrame()
         const double gs = m_gainSmooth.load();
         double smoothing = gs;
         if (m_mask[k] < m_smoothMask[k]) {
-            smoothing = suppressSpeechRelease
+            smoothing = m_commonNoiseLike[k] != 0
                 ? 0.0
                 : std::min(gs, m_gainDecreaseSmooth);
         }
         m_smoothMask[k] = smoothing * m_smoothMask[k]
                         + (1.0 - smoothing) * m_mask[k];
     }
+
+    // Exact silence can postpone the first usable target until after startup.
+    // In that case preserve the established silence-recovery behavior by
+    // seeding from the already-capped output mask, not reset-time unity.
+    updateResidualReference(gainMax, true);
 
     // Startup ramp: crossfade from dry (gain=1) to processed over ~1 second
     // to avoid transients while the noise estimator converges.
@@ -1084,7 +1137,8 @@ void SpectralNR::estimateNoise()
     // active estimator leaves the other histories at their reset seeds and
     // creates a level-dependent transient when one is selected later. These
     // passes are O(FFT bins) and small beside the transforms, so keep every
-    // estimator current and copy only the selected result into m_noisePsd.
+    // estimator current and derive m_noisePsd from the selected result, with
+    // recovery-only corroboration below.
     estimateNoiseOsms();
     estimateNoiseMmse();
     estimateNoiseNstat();
@@ -1097,7 +1151,37 @@ void SpectralNR::estimateNoise()
         selected = &m_nstatNoisePsd;
     }
     for (int k = 0; k < m_msize; ++k) {
-        m_noisePsd[k] = std::max((*selected)[k], EpsFloor);
+        double selectedNoise = std::max((*selected)[k], EpsFloor);
+        if (method != 2 && (m_commonReferenceReacquiring
+                            || m_commonWantedProtected[k] != 0)) {
+            // OSMS/MMSE can eventually absorb a long-held wanted component
+            // into their minima. NSTAT stays warm and provides independent
+            // per-bin evidence: corroborated excess protects wanted bins,
+            // while agreement on stationary energy selects the stronger
+            // floor. This stays per-bin because real receiver audio contains
+            // speech and noise simultaneously even after a global reference
+            // has become valid.
+            const double nstatNoise = std::max(
+                m_nstatNoisePsd[k], EpsFloor);
+            const double nstatRatio = m_nstatPower[k] / nstatNoise;
+            const bool wantedLike = isCommonWantedLike(k);
+            if (wantedLike) {
+                const double wantedConfidence = std::clamp(
+                    (nstatRatio - 2.0) / 3.0, 0.0, 1.0);
+                const double protectedNoise = std::min(
+                    selectedNoise, nstatNoise);
+                selectedNoise = (1.0 - wantedConfidence) * selectedNoise
+                    + wantedConfidence * protectedNoise;
+            } else if (m_commonReferenceReacquiring
+                       && nstatRatio <= 2.0) {
+                // Both estimators describe stationary energy. Taking the
+                // stronger floor prevents the configured slow-minimum method
+                // from lagging a newly established colored noise floor; this
+                // is estimator fusion based on agreement, not a mode switch.
+                selectedNoise = std::max(selectedNoise, nstatNoise);
+            }
+        }
+        m_noisePsd[k] = selectedNoise;
     }
 }
 
@@ -1235,31 +1319,15 @@ void SpectralNR::estimateNoiseOsms()
     }
 }
 
-void SpectralNR::updateSpeechReleaseState()
+void SpectralNR::detectCommonModeScale()
 {
-    const int npeMethod = m_npeMethod.load();
-    if (npeMethod != m_releaseNpeMethod) {
-        m_releaseNpeMethod = npeMethod;
-        m_recentSpeechFrames = 0;
-        m_releaseCandidateFrames = 0;
-        m_releaseNoiseFrames = 0;
-        std::fill(m_releaseNoisePsd.begin(), m_releaseNoisePsd.end(), 0.0);
+    if (!m_commonSilenceRecoveryContext) {
+        std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
     }
-    m_releaseNoiseRefreshed = false;
-
-    if (!m_releaseBaselineInitialized) {
+    if (!m_commonReferenceInitialized) {
         std::copy(m_lambdaY.begin(), m_lambdaY.end(),
-                  m_releaseBaselinePsd.begin());
-        m_releaseBaselineInitialized = true;
-    }
-    if (m_frameCount < m_rampFrames) {
-        for (int k = 0; k < m_msize; ++k) {
-            m_releaseBaselinePsd[k] = m_releaseBaselineAlpha
-                * m_releaseBaselinePsd[k]
-                + (1.0 - m_releaseBaselineAlpha) * m_lambdaY[k];
-        }
-        m_recentSpeechFrames = 0;
-        m_releaseCandidateFrames = 0;
+                  m_commonReferencePsd.begin());
+        m_commonReferenceInitialized = true;
         return;
     }
 
@@ -1268,118 +1336,279 @@ void SpectralNR::updateSpeechReleaseState()
     const int lastVoiceBin = std::min(
         m_msize - 1,
         static_cast<int>(std::floor(4000.0 * m_fftSize / m_sampleRate)));
-    const double binWidthHz = static_cast<double>(m_sampleRate) / m_fftSize;
-    const int radius = std::max(
-        1, static_cast<int>(std::lround(100.0 / binWidthHz)));
+    const int radius = std::max(1, static_cast<int>(std::lround(
+        100.0 * m_fftSize / m_sampleRate)));
+    // A 30 dB receiver gain change is approximately 1000x in power.
+    constexpr double kMinCommonPowerRatio = 1.0 / 1024.0;
+    constexpr double kMaxCommonPowerRatio = 1024.0;
+    // Only retain a quiet-state return marker after an unambiguous >=3 dB
+    // power decrease. Smaller motion remains the fine detector's job.
+    constexpr double kReturnQuietScaleMax = 0.50;
+    constexpr double kReturnStartingScaleMin = 0.90;
+
+    // A receiver passband can leave part of the nominal voice range tens of
+    // decibels below its occupied bins. Ratios there are dominated by FFT
+    // leakage and must not vote on whether the occupied noise shape moved as
+    // one. Derive the evidence floor from the stored reference itself so this
+    // remains independent of mode-specific filter limits.
+    double peakReferencePower = 0.0;
+    for (int k = firstVoiceBin; k <= lastVoiceBin; ++k) {
+        const int first = std::max(firstVoiceBin, k - radius);
+        const int last = std::min(lastVoiceBin, k + radius);
+        double referencePower = 0.0;
+        for (int j = first; j <= last; ++j) {
+            referencePower += m_commonReferencePsd[j];
+        }
+        peakReferencePower = std::max(peakReferencePower, referencePower);
+    }
+    constexpr double kReferenceActivityFraction = 0.01;
+    const double referenceActivityFloor = std::max(
+        EpsFloor, kReferenceActivityFraction * peakReferencePower);
 
     int comparableBins = 0;
-    int risingBins = 0;
-    int strongBins = 0;
-    double logPowerSum = 0.0;
-    double powerSum = 0.0;
-    double peakPower = 0.0;
     double logRatioSum = 0.0;
-    double ratioSum = 0.0;
+    double logRatioSquaredSum = 0.0;
+    double currentComparablePower = 0.0;
     for (int k = firstVoiceBin; k <= lastVoiceBin; ++k) {
         const int first = std::max(firstVoiceBin, k - radius);
         const int last = std::min(lastVoiceBin, k + radius);
         double currentPower = 0.0;
-        double noisePower = 0.0;
+        double referencePower = 0.0;
         for (int j = first; j <= last; ++j) {
             currentPower += m_lambdaY[j];
-            noisePower += m_releaseBaselinePsd[j];
+            referencePower += m_commonReferencePsd[j];
         }
-        if (noisePower <= EpsFloor) {
+        if (referencePower < referenceActivityFloor) {
             continue;
         }
+        // Keep the ratio finite without clipping a legitimate AGC-T step
+        // before the common-mode estimate is formed.
+        const double logRatio = std::log(std::clamp(
+            currentPower / referencePower,
+            kMinCommonPowerRatio, kMaxCommonPowerRatio));
+        logRatioSum += logRatio;
+        logRatioSquaredSum += logRatio * logRatio;
+        currentComparablePower += currentPower;
         ++comparableBins;
-        const double binPower = std::max(m_lambdaY[k], EpsFloor);
-        logPowerSum += std::log(binPower);
-        powerSum += binPower;
-        peakPower = std::max(peakPower, binPower);
-        const double ratio = currentPower / noisePower;
-        const double boundedRatio = std::clamp(ratio, EpsFloor, GammaMax);
-        logRatioSum += std::log(boundedRatio);
-        ratioSum += boundedRatio;
-        if (ratio > 1.25) {
-            ++risingBins;
-        }
-        if (ratio >= 12.0) {
-            ++strongBins;
-        }
-    }
-    if (comparableBins == 0) {
-        m_releaseCandidateFrames = 0;
-        return;
     }
 
-    const double strongFraction = static_cast<double>(strongBins)
-                                / comparableBins;
-    const double spectralFlatness = std::exp(logPowerSum / comparableBins)
-                                  / (powerSum / comparableBins);
-    const double spectralCrest = peakPower
-                               / (powerSum / comparableBins);
-    const double ratioFlatness = std::exp(logRatioSum / comparableBins)
-                               / (ratioSum / comparableBins);
-    const double commonRiseRatio = std::exp(
-        logRatioSum / comparableBins);
-    const bool coherentRise = risingBins >= static_cast<int>(
-        std::ceil(0.35 * comparableBins));
-    // Receiver filtering makes absolute spectral flatness unreliable: normal
-    // SSB static is intentionally non-flat outside the passband. An AGC rise,
-    // however, scales the existing noise shape nearly uniformly, so the
-    // current/noise ratio remains flat even when the spectrum itself does not.
-    const bool shapePreservingRise = coherentRise && ratioFlatness >= 0.80;
-    const bool releaseLikeRise = coherentRise
-        && commonRiseRatio >= 1.50
-        && (spectralFlatness >= 0.48 || ratioFlatness >= 0.80);
-    // Strong, filtered communications audio can legitimately occupy most of
-    // the voice passband. The former 50% upper bound rejected exactly those
-    // stations, so the following AGC noise release was never armed. This bridge
-    // only needs to arm for a strong station capable of moving receiver AGC;
-    // requiring genuinely high-SNR bins prevents ordinary residual noise from
-    // re-arming it as the OSMS minimum slowly follows the new floor.
-    const bool structuredSpeech = strongFraction >= 0.015
-        && spectralFlatness < 0.45
-        && (!shapePreservingRise || spectralFlatness < 0.25
-            || strongFraction >= 0.60 || spectralCrest >= 20.0);
-    if (structuredSpeech) {
-        m_recentSpeechFrames = m_recentSpeechFramesMax;
-        m_releaseCandidateFrames = 0;
-        m_releaseNoiseFrames = 0;
-        std::fill(m_releaseNoisePsd.begin(), m_releaseNoisePsd.end(), 0.0);
-    } else if (m_recentSpeechFrames > 0) {
-        --m_recentSpeechFrames;
-    }
-
-    if (structuredSpeech) {
-        return;
-    }
-    if (m_recentSpeechFrames <= 0 && m_releaseNoiseFrames <= 0) {
-        m_releaseCandidateFrames = 0;
+    if (m_frameCount < m_rampFrames) {
+        if (currentComparablePower > EpsFloor) {
+            if (!m_commonLevelReferenceInitialized) {
+                m_commonLevelReferencePower = currentComparablePower;
+                m_commonLevelReferenceInitialized = true;
+            } else {
+                // Calibrate the fine-scale statistic from the same arithmetic
+                // band-power measure used after startup. A periodogram/reference
+                // ratio has a systematic bias at sub-dB resolution; averaging
+                // the observed statistic directly avoids treating that bias as
+                // a receiver gain change.
+                const double sampleWeight = 1.0
+                    / static_cast<double>(m_frameCount + 1);
+                m_commonLevelReferencePower += sampleWeight
+                    * (currentComparablePower - m_commonLevelReferencePower);
+            }
+        }
         for (int k = 0; k < m_msize; ++k) {
-            m_releaseBaselinePsd[k] = m_releaseBaselineAlpha
-                * m_releaseBaselinePsd[k]
-                + (1.0 - m_releaseBaselineAlpha) * m_lambdaY[k];
+            m_commonReferencePsd[k] = m_commonReferenceAlpha
+                * m_commonReferencePsd[k]
+                + (1.0 - m_commonReferenceAlpha) * m_lambdaY[k];
         }
         return;
     }
-    if (!releaseLikeRise) {
-        m_releaseCandidateFrames = std::max(
-            0, m_releaseCandidateFrames - 1);
-        return;
-    }
-    ++m_releaseCandidateFrames;
-    if (m_releaseCandidateFrames < m_releaseCandidateFramesMin) {
+
+    if (comparableBins == 0) {
+        // Exact silence provides no AGC-scale evidence. Follow the first
+        // non-zero frame without applying a correction; subsequent frames can
+        // establish a common scale, with wanted bins excluded below.
+        for (int k = 0; k < m_msize; ++k) {
+            m_commonReferencePsd[k] = m_commonReferenceAlpha
+                * m_commonReferencePsd[k]
+                + (1.0 - m_commonReferenceAlpha) * m_lambdaY[k];
+        }
+        m_commonReferenceReacquiring = true;
+        m_commonSilenceRecoveryContext = true;
+        m_commonLevelReferenceInitialized = false;
+        m_commonLevelReferencePower = 0.0;
+        m_commonScaleLog = 0.0;
+        m_commonAppliedScale = 1.0;
+        m_commonReturnScale = 1.0;
+        m_commonDetectedScale = 1.0;
         return;
     }
 
-    // A speech-conditioned rise in the voice band identifies the receiver-AGC
-    // release. Apply the bridge only to bins that follow the common broadband
-    // rise. Spectral outliers are likely weak speech; globally capping those
-    // bins caused final syllables and low-level replies to disappear.
-    const double noiseLikeUpperRatio = std::max(
-        2.0, 3.5 * commonRiseRatio);
+    const double meanLogRatio = logRatioSum / comparableBins;
+    const double logRatioVariance = std::max(0.0,
+        logRatioSquaredSum / comparableBins - meanLogRatio * meanLogRatio);
+    const double scale = std::exp(meanLogRatio);
+    int coherentBins = 0;
+    const double coherenceWidth = 1.10;
+    for (int k = firstVoiceBin; k <= lastVoiceBin; ++k) {
+        const int first = std::max(firstVoiceBin, k - radius);
+        const int last = std::min(lastVoiceBin, k + radius);
+        double currentPower = 0.0;
+        double referencePower = 0.0;
+        for (int j = first; j <= last; ++j) {
+            currentPower += m_lambdaY[j];
+            referencePower += m_commonReferencePsd[j];
+        }
+        if (referencePower < referenceActivityFloor) {
+            continue;
+        }
+        const double localLogRatio = std::log(std::clamp(
+            currentPower / referencePower,
+            kMinCommonPowerRatio, kMaxCommonPowerRatio));
+        if (std::abs(localLogRatio - meanLogRatio) <= coherenceWidth) {
+            ++coherentBins;
+        }
+    }
+
+    if (m_commonReferenceReacquiring) {
+        double peakTrackedPower = 0.0;
+        for (int k = firstVoiceBin; k <= lastVoiceBin; ++k) {
+            if (m_commonWantedProtected[k] != 0
+                && m_nstatTonalProbability[k] >= 0.50) {
+                continue;
+            }
+            peakTrackedPower = std::max(
+                peakTrackedPower, m_nstatPower[k]);
+        }
+        const double activeBinFloor = 0.01 * peakTrackedPower;
+        int activeBins = 0;
+        int stationaryBins = 0;
+        for (int k = firstVoiceBin; k <= lastVoiceBin; ++k) {
+            if (m_commonWantedProtected[k] != 0
+                && m_nstatTonalProbability[k] >= 0.50) {
+                continue;
+            }
+            const double trackedPower = m_nstatPower[k];
+            if (trackedPower < activeBinFloor) {
+                continue;
+            }
+            ++activeBins;
+            if (trackedPower <= 2.0 * std::max(
+                    m_nstatNoisePsd[k], EpsFloor)) {
+                ++stationaryBins;
+            }
+        }
+        // Judge stationarity against NSTAT's per-bin floor rather than raw
+        // spectral flatness. Real receiver filters can color static heavily;
+        // its temporal stationarity is still valid evidence, while a new
+        // carrier or voice harmonic remains well above the tracked minimum.
+        const bool stationaryReference = activeBins > 0
+            && stationaryBins >= static_cast<int>(
+                std::ceil(0.70 * activeBins));
+        const bool coherentReference = coherentBins >= static_cast<int>(
+            std::ceil(0.55 * comparableBins))
+            && std::sqrt(logRatioVariance) <= coherenceWidth
+            && scale > 0.92 && scale < 1.08;
+        if (stationaryReference && coherentReference) {
+            m_commonReferenceReacquiring = false;
+        }
+    }
+
+    const bool coherentFrame = coherentBins >= static_cast<int>(
+        std::ceil(0.55 * comparableBins))
+        && std::sqrt(logRatioVariance) <= coherenceWidth;
+    const bool ordinaryContext = !m_commonReferenceReacquiring
+        && !m_commonSilenceRecoveryContext;
+    const bool commonMode = coherentFrame
+        && (scale >= 1.08 || scale <= 0.92);
+    bool fineCommonRise = false;
+    bool historyReturnRise = false;
+    if (commonMode) {
+        m_commonDetectedScale = scale;
+        if (scale < kReturnQuietScaleMax) {
+            m_commonReturnScale = scale;
+        } else if (scale > 1.0) {
+            m_commonReturnScale = 1.0;
+        }
+        const double correction = std::clamp(
+            scale / m_commonAppliedScale, 0.80, 1.25);
+        if (m_commonReferenceReacquiring) {
+            // A first non-zero signal after exact silence is ambiguous: its
+            // common scale contains both receiver noise and wanted energy.
+            // Scale only bins that NSTAT does not independently identify as
+            // sustained excess, keeping the noise histories covariant without
+            // teaching speech harmonics to the configured estimator.
+            for (int k = 0; k < m_msize; ++k) {
+                const bool wantedLike = isCommonWantedLike(k);
+                m_commonNoiseLike[k] = wantedLike ? 0 : 1;
+            }
+            scalePowerHistory(correction, &m_commonNoiseLike);
+        } else {
+            scalePowerHistory(correction);
+        }
+        m_commonAppliedScale *= correction;
+    } else if (scale > 0.92 && scale < 1.08 && coherentFrame) {
+        if (ordinaryContext) {
+            // Keep a scalar level reference separate from the adaptive spectral
+            // shape. The arithmetic band power is unbiased, so a coherent gain
+            // change remains measurable even while the per-bin reference learns
+            // slow receiver-filter shape changes.
+            if (!m_commonLevelReferenceInitialized) {
+                m_commonLevelReferencePower = std::max(
+                    currentComparablePower, EpsFloor);
+                m_commonScaleLog = 0.0;
+                m_commonLevelReferenceInitialized = true;
+            }
+            const double instantaneousScale = std::clamp(
+                currentComparablePower
+                    / std::max(m_commonLevelReferencePower, EpsFloor),
+                kMinCommonPowerRatio, kMaxCommonPowerRatio);
+            const double instantaneousLogScale = std::log(
+                instantaneousScale);
+            m_commonScaleLog = m_commonScaleAlpha * m_commonScaleLog
+                + (1.0 - m_commonScaleAlpha) * instantaneousLogScale;
+            m_commonDetectedScale = std::exp(m_commonScaleLog);
+            // A bare >1 comparison lets ordinary periodogram variance engage
+            // the residual controller on stationary noise. Require 0.2 dB of
+            // coherent power motion before treating the fine estimate as AGC.
+            constexpr double kFineCommonRisePowerRatio = 1.0471285480508996;
+            fineCommonRise =
+                instantaneousScale > kFineCommonRisePowerRatio;
+            if (m_commonReturnScale < kReturnQuietScaleMax
+                && instantaneousScale >= kReturnStartingScaleMin) {
+                // A down-scale followed by raw scale ~= 1 is a return to the
+                // original receiver level, not proof that the quieter residual
+                // target vanished. Keep that return visible to the residual
+                // controller while the estimators naturally readapt.
+                m_commonDetectedScale = std::max(
+                    m_commonDetectedScale,
+                    1.0 / std::max(m_commonReturnScale, EpsFloor));
+                historyReturnRise = true;
+            }
+        } else {
+            m_commonDetectedScale = 1.0;
+        }
+        const double referenceUpdateScale = fineCommonRise
+            ? std::max(m_commonDetectedScale, 1.0)
+            : 1.0;
+        for (int k = 0; k < m_msize; ++k) {
+            const double reference = std::max(m_commonReferencePsd[k], EpsFloor);
+            const double normalizedPower = m_lambdaY[k]
+                / referenceUpdateScale;
+            const double boundedPower = std::clamp(normalizedPower,
+                0.25 * reference, 4.0 * reference);
+            m_commonReferencePsd[k] = m_commonReferenceAlpha * reference
+                + (1.0 - m_commonReferenceAlpha) * boundedPower;
+        }
+        m_commonAppliedScale = m_commonReferenceAlpha * m_commonAppliedScale
+            + (1.0 - m_commonReferenceAlpha);
+        if (historyReturnRise) {
+            m_commonReturnScale = m_commonReferenceAlpha
+                * m_commonReturnScale
+                + (1.0 - m_commonReferenceAlpha);
+        }
+        fineCommonRise = fineCommonRise || historyReturnRise;
+    } else {
+        m_commonDetectedScale = 1.0;
+    }
+
+    if ((!commonMode || scale <= 1.0) && !fineCommonRise) {
+        return;
+    }
+    std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 1);
     for (int k = 0; k < m_msize; ++k) {
         const int first = std::max(0, k - radius);
         const int last = std::min(m_msize - 1, k + radius);
@@ -1387,59 +1616,134 @@ void SpectralNR::updateSpeechReleaseState()
         double referencePower = 0.0;
         for (int j = first; j <= last; ++j) {
             currentPower += m_lambdaY[j];
-            referencePower += m_releaseBaselinePsd[j];
+            referencePower += m_commonReferencePsd[j];
         }
-        const double localRiseRatio = std::clamp(
-            currentPower / std::max(referencePower, EpsFloor),
-            EpsFloor, GammaMax);
-        const bool noiseLikeBin = localRiseRatio >= 1.15
-                               && localRiseRatio <= noiseLikeUpperRatio;
-        if (!noiseLikeBin) {
-            m_releaseNoisePsd[k] = 0.0;
-            continue;
+        const double localLogRatio = std::log(std::max(
+            currentPower / std::max(referencePower, EpsFloor), EpsFloor));
+        if (std::abs(localLogRatio - meanLogRatio) > coherenceWidth) {
+            m_commonNoiseLike[k] = 0;
         }
-
-        const double oldNoise = std::max(
-            m_releaseBaselinePsd[k], EpsFloor);
-        m_prevGamma[k] = std::min(m_lambdaY[k] / oldNoise, GammaMax);
-        m_prevMask[k] = 0.0;
-        m_releaseNoisePsd[k] = std::max(
-            oldNoise,
-            currentPower / static_cast<double>(last - first + 1));
     }
-    m_releaseNoiseFrames = m_releaseNoiseFramesMax;
-    m_releaseNoiseRefreshed = true;
 }
 
-void SpectralNR::applySpeechReleaseEstimate()
+bool SpectralNR::isCommonWantedLike(int bin) const
 {
-    if (m_releaseNoiseFrames <= 0) {
-        std::fill(m_releaseNoisePsd.begin(), m_releaseNoisePsd.end(), 0.0);
-        m_releaseNoiseRefreshed = false;
+    const double nstatNoise = std::max(m_nstatNoisePsd[bin], EpsFloor);
+    const bool sustainedEvidence =
+        (m_commonWantedProtected[bin] != 0
+            && m_nstatTonalProbability[bin] >= 0.10)
+        || (m_commonReferenceReacquiring
+            && m_nstatSpeechProbability[bin] >= 0.90);
+    // A 10x instantaneous excess plus persistent evidence rejects isolated
+    // exponential periodogram peaks while retaining a carrier or harmonic.
+    return sustainedEvidence
+        && m_nstatPower[bin] > 2.0 * nstatNoise
+        && m_lambdaY[bin] > 10.0 * nstatNoise;
+}
+
+void SpectralNR::applyCommonModeNoiseEstimate()
+{
+    // A stationary-noise periodogram exceeds its mean sporadically. Requiring
+    // 7.4 dB of current excess in addition to NSTAT's sustained evidence
+    // reduces isolated random peaks punching holes in the residual cap.
+    constexpr double kInstantaneousSpeechExcessRatio = 5.5;
+    if (m_commonDetectedScale <= 1.0) {
         return;
     }
-
     for (int k = 0; k < m_msize; ++k) {
-        const double estimatorNoise = std::max(m_noisePsd[k], EpsFloor);
-        if (!m_releaseNoiseRefreshed && m_releaseNoisePsd[k] > 0.0) {
-            m_releaseNoisePsd[k] = m_releaseNoiseDecay
-                * m_releaseNoisePsd[k]
-                + (1.0 - m_releaseNoiseDecay) * estimatorNoise;
-            if (m_releaseNoisePsd[k] <= 1.02 * estimatorNoise) {
-                m_releaseNoisePsd[k] = 0.0;
+        if (m_commonNoiseLike[k] == 0) {
+            continue;
+        }
+        const double commonNoisePsd = std::max(EpsFloor,
+            m_commonReferencePsd[k] * m_commonDetectedScale);
+        // NSTAT stays warm for every selected NPE method. Its probability can
+        // spike on a common AGC step, so require both sustained confidence and
+        // smoothed power that actually exceeds the already-scaled common floor
+        // before allowing it to veto the noise classification.
+        const bool protectedSpeech = m_nstatSpeechProbability[k] >= 0.90
+            && m_nstatPower[k] > 1.10 * commonNoisePsd
+            && m_lambdaY[k]
+                > kInstantaneousSpeechExcessRatio * commonNoisePsd;
+        if (protectedSpeech) {
+            m_commonNoiseLike[k] = 0;
+            continue;
+        }
+        m_noisePsd[k] = std::max(m_noisePsd[k], commonNoisePsd);
+        m_prevGamma[k] = std::min(
+            m_lambdaY[k] / m_noisePsd[k], GammaMax);
+        m_prevMask[k] = 0.0;
+    }
+}
+
+void SpectralNR::scalePowerHistory(
+    double ratio, const std::vector<std::uint8_t>* binMask)
+{
+    const double boundedRatio = std::clamp(ratio, 0.125, 8.0);
+    const double ratioSquared = boundedRatio * boundedRatio;
+    const auto scalePower = [boundedRatio](double& value) {
+        if (value < 1e29) {
+            value *= boundedRatio;
+        }
+    };
+    const auto scaleSecondMoment = [ratioSquared](double& value) {
+        if (value < 1e29) {
+            value *= ratioSquared;
+        }
+    };
+    for (int k = 0; k < m_msize; ++k) {
+        if (binMask != nullptr && (*binMask)[k] == 0) {
+            continue;
+        }
+        scalePower(m_noisePsd[k]);
+        scalePower(m_osmsNoisePsd[k]);
+        scalePower(m_smoothPsd[k]);
+        scalePower(m_pMin[k]);
+        scalePower(m_pBar[k]);
+        scaleSecondMoment(m_p2Bar[k]);
+        scalePower(m_actMin[k]);
+        scalePower(m_actMinSub[k]);
+        scalePower(m_mmseNoisePsd[k]);
+        scalePower(m_nstatPower[k]);
+        scalePower(m_nstatPowerMin[k]);
+        scalePower(m_nstatNoisePsd[k]);
+    }
+    for (std::vector<double>& minima : m_actMinBuf) {
+        for (int k = 0; k < m_msize; ++k) {
+            if (binMask == nullptr || (*binMask)[k] != 0) {
+                scalePower(minima[k]);
             }
         }
-        if (m_releaseNoisePsd[k] > 0.0) {
-            m_noisePsd[k] = std::max(
-                estimatorNoise, m_releaseNoisePsd[k]);
+    }
+}
+
+void SpectralNR::updateResidualReference(double gainMax, bool afterCap)
+{
+    for (int k = 0; k < m_msize; ++k) {
+        const bool startupSeed = m_frameCount < m_rampFrames && !afterCap;
+        const bool lateSeed = m_frameCount >= m_rampFrames && afterCap
+            && m_residualReferenceValid[k] == 0;
+        if (startupSeed || lateSeed) {
+            const double sourceGain = lateSeed ? m_smoothMask[k] : m_mask[k];
+            const double gainRatio = gainMax > EpsFloor
+                ? std::clamp(sourceGain / gainMax, 0.0, 1.0)
+                : 0.0;
+            if (lateSeed) {
+                m_residualReferenceGainRatio[k] = gainRatio;
+            } else {
+                m_residualReferenceGainRatio[k] = m_residualReferenceAlpha
+                        * m_residualReferenceGainRatio[k]
+                    + (1.0 - m_residualReferenceAlpha) * gainRatio;
+            }
+            // Keep the estimator-level noise PSD separate from gain. The live
+            // user floor/cap is deliberately not baked into either value.
+            const double noisePsd = std::max(m_noisePsd[k], EpsFloor);
+            const double outputPsd = sourceGain * sourceGain * noisePsd;
+            if (outputPsd > EpsFloor) {
+                m_residualReferencePsd[k] = noisePsd;
+                m_residualReferenceValid[k] = 1;
+            }
         }
     }
-
-    --m_releaseNoiseFrames;
-    if (m_releaseNoiseFrames <= 0) {
-        std::fill(m_releaseNoisePsd.begin(), m_releaseNoisePsd.end(), 0.0);
-    }
-    m_releaseNoiseRefreshed = false;
 }
 
 // ─── Spectral Gain Computation (dispatches on m_gainMethod) ───────────────────
@@ -1696,6 +2000,56 @@ void SpectralNR::estimateNoiseNstat()
     const double correction = (1.0 - m_nstatGamma)
                             / (1.0 - m_nstatBeta);
 
+    // A temporal minimum tracker eventually labels a steady carrier or voiced
+    // harmonic as noise. Preserve a complementary, smoothed spectral-contrast
+    // probability so persistent narrowband structure remains wanted while
+    // isolated exponential periodogram peaks decay as non-persistent noise.
+    constexpr int kTonalRadius = 4;
+    constexpr int kTonalLobeRadius = 1;
+    constexpr double kTonalExcessRatio = 6.0;
+    for (int k = 0; k < m_msize; ++k) {
+        const int first = std::max(0, k - kTonalRadius);
+        const int last = std::min(m_msize - 1, k + kTonalRadius);
+        double neighborPower = 0.0;
+        int neighborCount = 0;
+        for (int j = first; j <= last; ++j) {
+            if (j != k) {
+                neighborPower += m_lambdaY[j];
+                ++neighborCount;
+            }
+        }
+        const double neighborMean = neighborPower
+            / std::max(1, neighborCount);
+        m_nstatTonalIndicator[k] = m_lambdaY[k]
+                > kTonalExcessRatio * std::max(neighborMean, EpsFloor)
+            ? 1 : 0;
+    }
+    for (int k = 0; k < m_msize; ++k) {
+        const int first = std::max(0, k - kTonalLobeRadius);
+        const int last = std::min(m_msize - 1, k + kTonalLobeRadius);
+        bool tonalLobe = false;
+        for (int j = first; j <= last; ++j) {
+            if (m_nstatTonalIndicator[j] != 0) {
+                tonalLobe = true;
+                break;
+            }
+        }
+        const double tonalIndicator = tonalLobe ? 1.0 : 0.0;
+        const double tonalAlpha = tonalLobe
+            ? m_nstatTonalAlpha : m_nstatTonalReleaseAlpha;
+        m_nstatTonalProbability[k] = tonalAlpha
+            * m_nstatTonalProbability[k]
+            + (1.0 - tonalAlpha) * tonalIndicator;
+        if (m_commonReferenceReacquiring
+            && m_nstatTonalProbability[k] >= 0.50) {
+            m_commonWantedProtected[k] = 1;
+            m_commonNoiseLike[k] = 0;
+        } else if (m_commonWantedProtected[k] != 0
+                   && m_nstatTonalProbability[k] < 0.10) {
+            m_commonWantedProtected[k] = 0;
+        }
+    }
+
     for (int k = 0; k < m_msize; ++k) {
         const double oldPower = m_nstatPower[k];
         m_nstatPower[k] = m_nstatEta * oldPower
@@ -1713,14 +2067,92 @@ void SpectralNR::estimateNoiseNstat()
         const double threshold = k <= m_nstatLowFrequencyBin ? 2.0
             : k <= m_nstatMidFrequencyBin ? 2.0
                                            : 5.0;
-        const double speechIndicator = ratio > threshold ? 1.0 : 0.0;
+        const double instantaneousRatio = m_lambdaY[k]
+            / std::max(m_nstatNoisePsd[k], EpsFloor);
+        // After an exact-silence restart, the temporal minimum tracker can
+        // retain speech probability after the wanted component has gone.
+        // Require current per-bin excess in that recovery context; ordinary
+        // running and genuine wanted bins keep the original NSTAT decision.
+        const bool currentWantedExcess = !m_commonSilenceRecoveryContext
+            || m_commonNoiseLike[k] != 0
+            || instantaneousRatio > 5.0;
+        const double speechIndicator = ratio > threshold
+                && currentWantedExcess
+            ? 1.0 : 0.0;
         m_nstatSpeechProbability[k] =
             m_nstatAlphaP * m_nstatSpeechProbability[k]
             + (1.0 - m_nstatAlphaP) * speechIndicator;
+        double wantedProbability = m_nstatSpeechProbability[k];
+        if (m_commonReferenceReacquiring
+            || m_commonWantedProtected[k] != 0) {
+            wantedProbability = std::max(
+                wantedProbability, m_nstatTonalProbability[k]);
+        }
         const double smoothing = m_nstatAlphaD
-            + (1.0 - m_nstatAlphaD) * m_nstatSpeechProbability[k];
+            + (1.0 - m_nstatAlphaD) * wantedProbability;
         m_nstatNoisePsd[k] = smoothing * m_nstatNoisePsd[k]
                            + (1.0 - smoothing) * m_lambdaY[k];
+    }
+
+    if (m_commonSilenceRecoveryContext) {
+        bool carrierHeldContext = false;
+        bool hasExistingNonTonalAmbiguity = false;
+        for (int k = 0; k < m_msize; ++k) {
+            if (m_commonNoiseLike[k] != 0) {
+                continue;
+            }
+            if (m_commonWantedProtected[k] != 0
+                && m_nstatTonalProbability[k] >= 0.50) {
+                carrierHeldContext = true;
+            } else {
+                hasExistingNonTonalAmbiguity = true;
+            }
+        }
+        carrierHeldContext = carrierHeldContext
+            && !hasExistingNonTonalAmbiguity;
+        bool hasUnresolvedNonTonalBins = false;
+        for (int k = 0; k < m_msize; ++k) {
+            const double nstatNoise = std::max(
+                m_nstatNoisePsd[k], EpsFloor);
+            const double instantaneousRatio = m_lambdaY[k] / nstatNoise;
+            if (carrierHeldContext
+                && m_commonNoiseLike[k] != 0
+                && isCommonWantedLike(k)) {
+                // A carrier may keep this transition alive after every other
+                // bin has become noise-valid. Make the map reversible so a
+                // later reply's corroborated current evidence can reopen its
+                // bins instead of remaining under the stale residual cap.
+                m_commonNoiseLike[k] = 0;
+                hasUnresolvedNonTonalBins = true;
+                continue;
+            }
+            if (m_commonNoiseLike[k] != 0) {
+                continue;
+            }
+            const bool wantedEvidenceGone =
+                m_commonWantedProtected[k] == 0
+                && m_nstatTonalProbability[k] < 0.10
+                && m_nstatSpeechProbability[k] < 0.20
+                && instantaneousRatio <= 5.0;
+            if (wantedEvidenceGone) {
+                // The silence restart made this bin ambiguous during the
+                // first common-mode decision. Once the global reference is
+                // stationary and independent per-bin evidence has expired,
+                // the bin is valid noise for the residual cap again.
+                m_commonNoiseLike[k] = 1;
+            } else if (m_commonWantedProtected[k] == 0
+                       || m_nstatTonalProbability[k] < 0.50) {
+                hasUnresolvedNonTonalBins = true;
+            }
+        }
+        if (!hasUnresolvedNonTonalBins
+            && !m_commonReferenceReacquiring) {
+            // A persistent carrier is a local wanted component, not evidence
+            // that every other bin remains globally ambiguous. Once all
+            // non-tonal bins are resolved, return to ordinary current-frame
+            // decisions so the carrier cannot lock out a later reply.
+            m_commonSilenceRecoveryContext = false;
+        }
     }
 }
 

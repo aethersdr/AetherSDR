@@ -43,6 +43,7 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
 #include "core/PropForecastClient.h"
 #ifdef HAVE_WEBSOCKETS
@@ -71,6 +72,8 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/SpeConnection.h"
+#include "core/VkampConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -121,7 +124,11 @@ class SpectrumWidget;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
+class MiniPanApplet;
 class PanadapterStack;
+class WorkspaceCanvas;
+class WorkspaceController;
+class WorkspaceWindow;
 class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
@@ -234,6 +241,11 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
+    // disable / place, driven by the `workspace` automation verb.  Returns
+    // an error key instead of throwing, like the other automation hooks.
+    Q_INVOKABLE QVariantMap automationWorkspace(const QString& action,
+                                                const QString& args);
     // Inject one learned VFO-knob CC value through MidiControlManager for
     // automation proof. Returns 0 on acceptance, 1 if MIDI is unavailable,
     // and 2 for an out-of-range MIDI value.
@@ -362,6 +374,10 @@ private:
     // than tuning it somewhere it hears nothing. A backend that reports no
     // range leaves every band enabled (the Flex behaviour).
     void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    // Push RadioCapabilities' notch fields into one panadapter: the +TNF
+    // button's visibility, the right-click add/remove entries, the depth and
+    // permanence submenus, and the width clamps on drag-resize.
+    void applyNotchCapabilities(SpectrumWidget* sw) const;
 
     // The one place a declared RadioCapabilities flag turns into UI visibility.
     //
@@ -438,6 +454,17 @@ private:
         RadioSliceSelectionSource source);
     void queueActiveSliceForSpectrumTarget(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
+
+    // Mini-pan glue. The applet is a VIEW: it creates no radio objects, it just
+    // re-slices the active slice's pan down to a +/-5 or +/-10 kHz window. The
+    // applet's own visibility drives m_miniPanFeedWanted — see the
+    // MiniPanApplet::feedWanted wiring in MainWindow_Session.cpp.
+    MiniPanApplet* miniPanApplet() const;   // null until the applet panel is built
+    void refreshMiniPanFollow();   // rebind readout/passband to the active slice
+    void teardownMiniPanFeed();    // unbind + blank the trace
+    // Re-slice one main-pan FFT frame into the mini-pan's window.
+    void feedMiniPanFromPanFrame(const PanadapterModel* pan,
+                                 const QVector<float>& bins);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
@@ -658,6 +685,11 @@ private:
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
+    // Display panel → "Clone to all Pans". Copies every Display setting from
+    // `source` onto every other open panadapter (client-side appearance via the
+    // SpectrumWidget setters that persist it, radio-authoritative values via the
+    // same commands the live sliders send). Returns how many pans were written.
+    int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -698,6 +730,7 @@ private:
     // Windows, without the custom frame, or for a maximized/fullscreen blob.
     // (#4328 — see src/gui/WindowGeometryRestore.h.)
     void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
+    void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -756,10 +789,31 @@ private:
     // the finished handler can detect a change and recreate the RX audio stream.
     void wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp);
 
+    // Open (or raise) the persistent RadioSetupDialog and, if given a
+    // non-empty page name, select that page. Collapses the prevComp/wasFresh/
+    // wireRadioSetupDialogSignals dance that used to be copy-pasted at every
+    // call site (Settings → Radio Setup, USB Cables, XVTR overlay,
+    // FlexControl "Settings…") into one place (#4940 follow-up — PR #5157
+    // review). Returns the dialog so a caller needing a page-specific reveal
+    // (e.g. revealFlexControlSettings()) can act on it further.
+    RadioSetupDialog* openRadioSetupPage(const QString& page = {});
+
     // Reorder the main splitter so the applet panel sits on the left or
     // right of the panadapter stack.  Wired from the dock-side icons in
     // the title bar and persisted via "AppletPanelDockedLeft".
     void setAppletPanelDockedLeft(bool left);
+
+    // Workspace canvas (RFC #4887 phase 3) — MainWindow_Workspace.cpp.
+    void wireWorkspaceCanvas();
+    void toggleWorkspaceCanvas(bool on, bool preserveEnabledPreference = false);
+    QWidget* centralPanWidget() const;
+    // One router for band-stack visibility: canvas mode hosts the panel as
+    // a canvas item, classic mode shows it inside the stack (#4887 ph 4).
+    void setBandStackPanelVisible(bool show);
+    // Rebuilds the View-menu workspace switcher on every open (phase 6) —
+    // a dynamic menu is never stale and needs no change bookkeeping.
+    void rebuildWorkspaceSwitcherMenu(QMenu* menu);
+    void rebuildCanvasWindowsMenu(QMenu* menu);
 
     // Show/hide the applet panel — single source of truth that updates the
     // title-bar dock icons and the persisted "AppletPanelVisible" setting.
@@ -795,6 +849,9 @@ private:
     void publishRadioStateMqtt();
 #endif
     void applyPanLayout(const QString& layoutId);
+    void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
+    void settleCanvasPanLayout(const QString& layoutId, int expectedPanCount,
+                               int attemptsRemaining, quint64 generation);
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
     void showPanadapterSliceCapacityMessage();
@@ -840,6 +897,7 @@ private:
     // Settle the bookkeeping for an auto-connect that has reached a terminal
     // state. A no-op when the connect in question was a manual one.
     void noteAutoConnectFinished(bool ok);
+    void updateExperimentalRadioSupport(bool connected);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
@@ -849,6 +907,15 @@ private:
     void setPaTempDisplayUnit(bool useFahrenheit);
     void setPanadapterConnectionAnimation(bool visible, const QString& label = {});
     void finishPanadapterConnectionAnimation();
+
+    // HL2 first-connect WDSP setup dialog (#5052). arm() is called from every
+    // dspSetupProgress and only starts a delay; show() builds the window if the
+    // build is still running when that delay expires; dismiss() is called from
+    // dspSetupFinished AND from setPanadapterConnectionAnimation(false), which
+    // is the net that catches a backend destroyed mid-build.
+    void armWdspSetupDialog();
+    void showWdspSetupDialog();
+    void dismissWdspSetupDialog();
     void syncMemorySpot(int memoryIndex);
     void removeMemorySpot(int memoryIndex);
     void clearMemorySpotFeed();
@@ -944,6 +1011,9 @@ private:
     // the box is WA_DeleteOnClose and may vanish without telling us.
     QPointer<QMessageBox> m_recorderNotice;
     QString               m_recorderNoticeKey;
+    // Only one radio session can own a live notice. Per-family suppression is
+    // separate and lives under the Icom/HL2 keys in ExperimentalRadioSupport.
+    QPointer<QMessageBox> m_experimentalRadioNotice;
     // Show a non-blocking recorder notice, deduped on `key`. Non-blocking is
     // the load-bearing part: the blocking form stalls the caller, which for
     // this signal is either the automation bridge's reply path or the MOX
@@ -978,6 +1048,8 @@ private:
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
+    SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
+    VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
@@ -1005,6 +1077,8 @@ private:
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
+    EibiClient*          m_eibiClient{nullptr};
+    QHash<QString, int>  m_eibiSpotKeyToId;
     N1MMSpotClient*      m_n1mmSpotClient{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
@@ -1196,6 +1270,26 @@ private:
     ::QSizeGrip*      m_sizeGrip{nullptr};
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
+    // Workspace canvas (RFC #4887 phase 3) — created in wireWorkspaceCanvas()
+    // (MainWindow_Workspace.cpp).  When canvas mode is on, m_workspaceCanvas
+    // sits in the splitter slot m_panStack normally occupies and hosts it as
+    // a canvas item; centralPanWidget() is what splitter size/stretch code
+    // compares against so both arrangements share one code path.
+    WorkspaceCanvas*     m_workspaceCanvas{nullptr};
+    WorkspaceController* m_workspaceController{nullptr};
+    QAction*             m_workspaceCanvasAction{nullptr};
+    quint64              m_canvasPanLayoutGeneration{0};
+    QString              m_pendingCanvasPanLayoutId;
+    int                  m_pendingCanvasPanLayoutTarget{-1};
+    // Additional canvas windows (phase 7), keyed by surface id.  A hidden
+    // window stays in the map (hide-and-keep reuses its canvas object);
+    // only remove/shutdown deletes.
+    QHash<QString, WorkspaceWindow*> m_workspaceWindows;
+    QAction*             m_workspaceEditAction{nullptr};
+    bool                 m_statusMessageMirrorWired{false};
+    QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
+    QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
+    bool m_miniPanFeedWanted{false};              // applet visible → consume frames
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
     QPointer<PanadapterApplet> m_cwDecoderApplet;
     QPointer<PanadapterApplet> m_rttyDecoderApplet;
@@ -1355,8 +1449,19 @@ private:
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};
+    QMetaObject::Connection m_tnfIndicatorConnection;
+    QMetaObject::Connection m_fdxIndicatorConnection;
+    // Manufacturer row above the model. Hidden unless the connected radio
+    // reports a make its own model string does not already carry — see
+    // refreshRadioIdentityLabels().
+    QLabel* m_radioMakeLabel{nullptr};
     QLabel* m_radioInfoLabel{nullptr};
     QLabel* m_radioVersionLabel{nullptr};
+    // Last manufacturer the backend reported. Cached because it arrives on
+    // capabilitiesChanged while the model and version arrive on infoChanged,
+    // and every one of those edges has to repaint the same three labels.
+    QString m_radioManufacturer;
+    void refreshRadioIdentityLabels();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
@@ -1588,11 +1693,14 @@ private:
     // that never went near a host-modulating backend.
     bool m_hostVoiceChainOwned{false};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
+    bool m_canvasWasOnBeforeMinimal{false}; // minimal exit restores canvas mode
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)
     bool m_startupGeometryReapplied{false};
     QByteArray m_startupGeometryForFirstShow;
     QAction* m_minimalModeAction{nullptr};
+    QDialog* m_wdspSetupDialog{nullptr};     // HL2 first-connect setup (#5052)
+    QTimer* m_wdspSetupDelayTimer{nullptr};  // delay-arm, so warm connects show nothing
     bool m_panadapterConnectionAnimationVisible{false};
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;

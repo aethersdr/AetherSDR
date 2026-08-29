@@ -3,8 +3,8 @@
 // ─── Audio format / sample-rate negotiation policy ───────────────────────────
 //
 // One ladder, one set of per-OS rules — the single home for "what rate and
-// sample format does this device want, and how do I get my 24 kHz canonical
-// audio onto it" (issue #3306).
+// sample format does this device want, and how do I bridge between that rate
+// and the caller's canonical device-boundary rate" (issue #3306).
 //
 // Historically each audio sink/source re-implemented this with its own
 // divergent fallback ladder and per-OS `#ifdef` branches, which is the root of
@@ -25,13 +25,17 @@
 // converts SampleFmt <-> QAudioFormat::SampleFormat.
 
 #include <QList>
+#include <functional>
 #include <QString>
 
 namespace AetherSDR {
 namespace AudioFormatNegotiator {
 
-// Canonical internal rate: the radio VITA-49 narrowband audio rate. Everything
-// resamples to/from this single value (AudioEngine::DEFAULT_SAMPLE_RATE).
+// Default device-boundary rate: the radio VITA-49 narrowband audio rate and
+// the canonical rate for RX and several digital/legacy routes
+// (AudioEngine::DEFAULT_SAMPLE_RATE). This is not a universal DSP rate: normal
+// PC-mic voice is normalized to TxVoiceProcessor's fixed 48 kHz float domain,
+// then returns to 24 kHz at its current transport/backend seam.
 constexpr int kInternalRate = 24000;
 
 // Target OS is data, not an #ifdef, so every runner tests every ladder.
@@ -87,7 +91,8 @@ struct DeviceCaps {
     int  channels = 2;
 
     // macOS Bluetooth hands-free/SCO capture route: caps out at 8/16/24k and
-    // must be opened at its native low rate, NOT forced to 48k (#2615).
+    // must be opened at its native low rate (#2615). After capture, normal
+    // voice normalizes to 48k; the separate RADE route converts to 24k.
     bool isBluetoothHfp = false;
 
     // False => isFormatSupported() is not trustworthy for this backend, so the
@@ -153,6 +158,101 @@ NegotiatedFormat negotiate(TargetOs os,
 ResamplerKind resamplerKindFor(int deviceRate,
                                ResamplerPolicy policy,
                                int internalRate = kInternalRate);
+
+// ─── WASAPI silent-open recovery ladder (#2929) ──────────────────────────────
+//
+// A separate failure mode from the ladders above, and the reason it needs its
+// own policy: WASAPI can return a NON-NULL QIODevice that then delivers zero
+// bytes for an open the endpoint cannot actually honour. Nothing fails, so the
+// null-open fallback ladder never sees it; a watchdog notices the silence after
+// ~1.5 s and reopens.
+//
+// That recovery used to walk ONE dimension — channel count — because a
+// mono-only USB PnP mic accepting a stereo open was the only known shape. Once
+// capture leads with Float32, the SAMPLE FORMAT becomes a second way to open
+// successfully and receive nothing: an Int16-capable endpoint that accepts a
+// Float open and returns silence would never reach the format it does support
+// (review of PR #5017).
+//
+// The ladder is ordered so the historical behaviour is preserved exactly: mono
+// is still tried before the format changes, because a mono-only mic is the
+// common case and Int16 is the rarer one.
+struct TxOpenAttempt {
+    int       rate = 48000;
+    SampleFmt fmt = SampleFmt::Float32;
+    int       channels = 2;   // 1 == forced mono
+
+    bool operator==(const TxOpenAttempt& other) const
+    {
+        return rate == other.rate && fmt == other.fmt && channels == other.channels;
+    }
+};
+
+// The FULL ordered TX capture attempt sequence for an initial open of
+// `initialChannels`. Index 0 is the initial open; everything after it is
+// recovery, whichever failure produced it.
+//
+// This is one ladder because there is one device. It previously WAS two —
+// a (format, channels) silent-open ladder at 48 kHz and, in AudioEngine, a
+// separate rate x channels x format loop entered only on a null open — and
+// they could interleave into a permanently silent mic: at the last stage of
+// the silent ladder a null open dropped into the other loop, which restarted
+// at 48 kHz Float stereo, a tuple already OBSERVED silent, and accepted it
+// with no watchdog budget left to catch it a second time (round-3 review of
+// PR #5017).
+//
+// Order:
+//   rate outermost (48000, 44100, 24000, 16000)
+//     format next   (Float32, then Int16)
+//       channels innermost (the clamped count, then forced mono)
+// which keeps the historical 48 kHz prefix exactly: Float32 clamped, Float32
+// mono (the #2929 one-reopen recovery), Int16 clamped, Int16 mono. Duplicate
+// rungs are collapsed, so a device already clamped to mono gets a shorter
+// ladder rather than reopening an identical format.
+QList<TxOpenAttempt> txOpenLadder(int initialChannels);
+
+// What a single open attempt did.
+//
+// Null and SilentNonNull are DELIBERATELY not distinguished by the cursor.
+// Both mean "this tuple does not work", and treating them differently is
+// precisely what let the two old ladders disagree about where they were.
+enum class TxOpenOutcome { Null, SilentNonNull, Delivers };
+
+// The cursor AudioEngine drives, and the one a test drives with simulated
+// outcomes — so a test cannot pass against a state machine that is not the
+// shipped one.
+//
+// It moves forward only. That is what makes "never re-accept a tuple already
+// observed silent" structural rather than bookkeeping: every such tuple is
+// behind the cursor.
+class TxOpenCursor {
+public:
+    explicit TxOpenCursor(int initialChannels, int stage = 0);
+
+    int  stage() const { return m_stage; }
+    int  size() const { return static_cast<int>(m_ladder.size()); }
+    const TxOpenAttempt& attempt() const { return m_ladder.at(m_stage); }
+    const QList<TxOpenAttempt>& ladder() const { return m_ladder; }
+
+    // Is there anywhere left to go? The watchdog arms iff this is true, and
+    // it is the same question advance() answers — one rule, not two.
+    bool hasNext() const { return m_stage + 1 < size(); }
+
+    // Step to the next attempt. False means the ladder is exhausted, which is
+    // a hard failure for a null open and a permanently silent mic for a
+    // no-data one.
+    bool advance();
+
+private:
+    QList<TxOpenAttempt> m_ladder;
+    int                  m_stage = 0;
+};
+
+// Drive a cursor to completion against a simulated device, returning the stage
+// that ends up carrying audio, or -1 if the mic never delivers. Uses the
+// cursor's own transitions, so it walks the shipped state machine.
+int walkTxOpen(TxOpenCursor& cursor,
+               const std::function<TxOpenOutcome(const TxOpenAttempt&)>& probe);
 
 // The host OS as a TargetOs (the ONE place the real #ifdef lives). The live
 // wrapper passes this; tests pass an explicit value.

@@ -29,10 +29,11 @@ jobs:
             build_type: Debug
             # ASan + UBSan applied via CXXFLAGS / LDFLAGS so the flags
             # reach every target the build produces — including the
-            # standalone unit-test executables (CMakeLists.txt:1273+),
+            # standalone unit-test executables (declared in
+            # tests/tests.cmake, which the root CMakeLists.txt includes),
             # which are NOT linked against the AetherSDR target and
             # therefore don't inherit the per-target -fsanitize=address
-            # option set at CMakeLists.txt:1260. Setting the flags here
+            # option set in the root file's sanitizer foreach. Setting the flags here
             # also lets us drop that coupling in a future
             # -DAETHERSDR_SANITIZER=... cleanup without touching this
             # workflow.

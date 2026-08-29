@@ -3,6 +3,8 @@
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
 
+#include <cmath>
+
 namespace AetherSDR {
 
 // Note: antenna-list splitting now lives in FlexBackend::decodeSliceStatus
@@ -316,6 +318,7 @@ void SliceModel::setRxAntenna(const QString& ant)
     if (m_rxAntenna == ant) return;
     m_rxAntenna = ant;
     sendCommand(QString("slice set %1 rxant=%2").arg(m_id).arg(ant));
+    emit rxAntennaCommandIssued(ant);
     emit rxAntennaChanged(ant);
 }
 
@@ -381,6 +384,19 @@ void SliceModel::setAnf(bool on)
     sendCommand(QString("slice set %1 anf=%2").arg(m_id).arg(on ? 1 : 0));
     emit autoNotchCommandIssued(on);
     emit anfChanged(on);
+}
+
+// NO sendCommand(). There is no Flex wire text for this — a Flex notches with
+// TNFs, which are a different instrument (see RadioCapabilities::hasManualNotch)
+// — so the intent goes to the seam and nowhere else. Inventing a `slice set
+// <id> mn=` verb would send a command no radio answers and make the control
+// look wired on a family that does not have it.
+void SliceModel::setMn(bool on)
+{
+    if (m_mn == on) return;
+    m_mn = on;
+    emit manualNotchCommandIssued(on, m_mnLevel);
+    emit mnChanged(on);
 }
 
 // v4 DSP toggles — command keys differ from status keys (FlexLib Slice.cs)
@@ -469,6 +485,19 @@ void SliceModel::setAnfLevel(int v)
     m_anfLevel = v;
     sendCommand(QString("slice set %1 anf_level=%2").arg(m_id).arg(v));
     emit anfLevelChanged(v);
+}
+
+// Position, not depth — 0 is one edge of the passband and 100 the other.
+// Re-emits the enable alongside it so a drag while the notch is off still
+// records where it will land, and the seam never has to remember a position it
+// was not given.
+void SliceModel::setMnLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_mnLevel == v) return;
+    m_mnLevel = v;
+    emit manualNotchCommandIssued(m_mn, v);
+    emit mnLevelChanged(v);
 }
 
 void SliceModel::setNrlLevel(int v)
@@ -740,6 +769,7 @@ void SliceModel::setFmToneMode(const QString& mode)
     if (m_fmToneMode == mode) return;
     m_fmToneMode = mode;
     sendCommand(QString("slice set %1 fm_tone_mode=%2").arg(m_id).arg(mode));
+    emit fmToneModeCommandIssued(mode);
     emit fmToneModeChanged(mode);
 }
 
@@ -748,6 +778,7 @@ void SliceModel::setFmToneValue(const QString& value)
     if (m_fmToneValue == value) return;
     m_fmToneValue = value;
     sendCommand(QString("slice set %1 fm_tone_value=%2").arg(m_id).arg(value));
+    emit fmToneValueCommandIssued(value.toDouble());
     emit fmToneValueChanged(value);
 }
 
@@ -756,6 +787,7 @@ void SliceModel::setRepeaterOffsetDir(const QString& dir)
     if (m_repeaterOffsetDir == dir) return;
     m_repeaterOffsetDir = dir;
     sendCommand(QString("slice set %1 repeater_offset_dir=%2").arg(m_id).arg(dir));
+    emit repeaterOffsetDirCommandIssued(dir);
     emit repeaterOffsetDirChanged(dir);
 }
 
@@ -765,7 +797,43 @@ void SliceModel::setFmRepeaterOffsetFreq(double mhz)
     m_fmRepeaterOffsetFreq = mhz;
     sendCommand(QString("slice set %1 fm_repeater_offset_freq=%2")
                     .arg(m_id).arg(mhz, 0, 'f', 6));
+    emit fmRepeaterOffsetCommandIssued(mhz * 1.0e6);
     emit fmRepeaterOffsetFreqChanged(mhz);
+}
+
+void SliceModel::applyRecalledFmRepeater(const QString& direction, double offsetMhz,
+                                         const QString& toneMode, double toneHz)
+{
+    // Local-memory radios have no vendor memory command to decode back through
+    // the model.  Apply the requested snapshot locally as one unit, then emit a
+    // grouped backend intent.  This deliberately avoids the four Flex wire
+    // strings above: RadioModel calls it only for the local-memory path.
+    if (m_repeaterOffsetDir != direction) {
+        m_repeaterOffsetDir = direction;
+        emit repeaterOffsetDirChanged(direction);
+    }
+    if (!qFuzzyCompare(m_fmRepeaterOffsetFreq, offsetMhz)) {
+        m_fmRepeaterOffsetFreq = offsetMhz;
+        emit fmRepeaterOffsetFreqChanged(offsetMhz);
+    }
+    if (m_fmToneValue != QString::number(toneHz, 'f', 1)) {
+        m_fmToneValue = QString::number(toneHz, 'f', 1);
+        emit fmToneValueChanged(m_fmToneValue);
+    }
+    if (m_fmToneMode != toneMode) {
+        m_fmToneMode = toneMode;
+        emit fmToneModeChanged(toneMode);
+    }
+    emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
+                                       toneMode, toneHz);
+}
+
+double SliceModel::txOffsetForDirection(const QString& dir, double magnitudeMhz)
+{
+    const double magnitude = std::abs(magnitudeMhz);
+    if (dir == QLatin1String("up"))   return  magnitude;
+    if (dir == QLatin1String("down")) return -magnitude;
+    return 0.0;   // simplex, and anything not a duplex direction
 }
 
 void SliceModel::setTxOffsetFreq(double mhz)
@@ -1324,6 +1392,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_anft = *d.anft;
         emit anftChanged(m_anft);
     }
+    if (d.mn.has_value()) {
+        m_mn = *d.mn;
+        emit mnChanged(m_mn);
+    }
     if (d.apf.has_value()) {
         bool v = *d.apf;
         if (m_apf != v) { m_apf = v; emit apfChanged(v); }
@@ -1370,13 +1442,32 @@ void SliceModel::applyChanges(const SliceDelta& d)
         int v = *d.anflLevel;
         if (m_anflLevel != v) { m_anflLevel = v; emit anflLevelChanged(v); }
     }
+    if (d.mnLevel.has_value()) {
+        int v = *d.mnLevel;
+        if (m_mnLevel != v) { m_mnLevel = v; emit mnLevelChanged(v); }
+    }
+    // GUARDED, like nrfLevel/anflLevel/mnLevel immediately above. These two
+    // were the only assign-and-emit pair in this block without an equality
+    // check, which was harmless while no backend published them from anything
+    // but a real change (Flex carry()s them only when the status carries the
+    // key; Sim sets them only inside setSliceAgc). HL2 publishes the pair on
+    // EVERY emitSliceState() — tune step, mode, filter, mute, TX-slice
+    // reassignment — so an unguarded emit turns a VFO drag into a stream of
+    // agcThresholdChanged at an unchanged value.
+    //
+    // That is not only churn. AgcCalibrationDialog wires agcThresholdChanged to
+    // AgcTCalibrator::onValueChanged, which in manual mode starts a settle timer
+    // that calls recordPoint() — and recordPoint() REPLACES an existing sample
+    // at the same value with a fresh currentRmsDb() reading. With the AGC
+    // Calibration dialog open on an HL2, tuning the VFO would overwrite a good
+    // calibration point with an RMS reading taken mid-tune, silently.
     if (d.agcMode.has_value()) {
-        m_agcMode = *d.agcMode;
-        emit agcModeChanged(m_agcMode);
+        const QString v = *d.agcMode;
+        if (m_agcMode != v) { m_agcMode = v; emit agcModeChanged(v); }
     }
     if (d.agcThreshold.has_value()) {
-        m_agcThreshold = *d.agcThreshold;
-        emit agcThresholdChanged(m_agcThreshold);
+        const int v = *d.agcThreshold;
+        if (m_agcThreshold != v) { m_agcThreshold = v; emit agcThresholdChanged(v); }
     }
     if (d.agcOffLevel.has_value()) {
         m_agcOffLevel = *d.agcOffLevel;

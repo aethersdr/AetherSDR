@@ -11,7 +11,7 @@ receive path** — discover → stream → tune → engine-side demod → panada
 — behind the existing seam, with **zero** change to any UI or model consumer of
 `IRadioBackend`. Transmit is explicitly out of scope for Phase 1. The data plane
 and register facts are already proven against real hardware by the throwaway
-spike in `prototypes/hl2/` (see its README); this note is the plan to port that
+spike in `tools/hl2/` (see its README); this note is the plan to port that
 proof in-tree.
 
 ---
@@ -35,7 +35,7 @@ normalized `sliceChanged` / `meterUpdate` / spectrum / audio outlets. It is the
 first backend that exercises the "owns a DSP chain" branch of the seam, and thus
 the first real test that the seam's abstraction holds.
 
-**What the spike already proved** (`prototypes/hl2/`, live against a real HL2 at
+**What the spike already proved** (`tools/hl2/`, live against a real HL2 at
 gateware 7.4):
 
 - Metis discovery (board id `0x06`), EP2/EP6 1032-byte framing, 0.00% loss.
@@ -81,7 +81,7 @@ Hl2Backend : IRadioBackend
             S-meter level      → meterUpdate
 ```
 
-`MetisClient` ports the proven `prototypes/hl2/hpsdr.py` register map and
+`MetisClient` ports the proven `tools/hl2/hpsdr.py` register map and
 framing primitives. `Hl2Dsp` replaces the spike's Python-only signal path with
 the production engine boundary described below.
 The modulation chain is not assembled from unrelated AetherSDR and WDSP stages.
@@ -120,6 +120,7 @@ where the same field would be a wire command.
 | `setSliceFrequency(id, hz)` | `MetisClient::setRxFrequencyHz` → RX1 NCO `C0=0x04`. (Phase 1: single slice, `id` fixed.) |
 | `setSliceMode(id, mode)` | **Engine DSP** — configures the backend-owned RX `WdspChannel` (AM/SSB/CW/FM/…). HL2 ships raw IQ, so mode is purely engine-side. |
 | `setSliceFilter(id, lo, hi)` | **Engine DSP** — configures the RX `WdspChannel` passband on the control path. |
+| `setSliceNoiseBlanker(id, on, level)` | **Engine DSP** — WDSP's ANB (`nob.c`) on the raw IQ ahead of the `WdspChannel`, per receiver ([screenshot](../screenshots/hl2-noise-blanker.png)). The HL2 runs no firmware DSP, so this is the same arrangement as the manual notch: the verb lands in WDSP on this host or it lands nowhere. `level` is 0..100 and rises with aggression; WDSP's own threshold is a multiple of the running average magnitude and therefore falls with it, so `WdspChannel::noiseBlankerThresholdForLevel()` owns the inversion. Held OFF across a transmit period — the mute path clocks the channel with silence, and a blanker whose reference average decays into that silence gates the start of the next receive period. The held stage is SKIPPED rather than flushed, so its average is frozen at the pre-transmit signal level and it is armed for the first receive sample; flushing on the T→R edge would re-arm it from full scale and leave it unable to trigger for ~200 ms of every receive period. `hasHostNoiseBlanker` is what makes the NB button visible. |
 | `setKeying(bool)` | **Guarded no-op** — `capabilities().canTransmit == false`, so the engine TX guard (RFC §6) denies keying above the seam; the backend never keys. (TX is Phase 2+.) |
 | `invokeExtension(...)` | Stub, exactly like FlexBackend (FlexBackend::invokeExtension): if `requestId != 0`, emit `extensionError` immediately. HL2 advertises **no** extension namespaces (see §4). |
 
@@ -303,7 +304,7 @@ GPL/open sources. Allowed inputs used:
 - **pihpsdr `src/old_protocol.c`** (DL1YCF, GPL-3.0) — consulted as a *behavioral
   reference* for the minimal round-robin C&C init sequence a receiver needs.
 - **Live black-box observation** of the AetherSDR-owned HL2 (register effects on
-  the IQ stream), recorded in `prototypes/hl2/`.
+  the IQ stream), recorded in `tools/hl2/`.
 
 No openHPSDR, Hermes-Lite 2, or pihpsdr source is incorporated, vendored,
 translated, or linked. The facts above are expressed in original AetherSDR code.

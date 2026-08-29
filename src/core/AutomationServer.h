@@ -332,6 +332,11 @@ public:
     {
         m_tciRouteSnapshotHandler = std::move(handler);
     }
+    void setDeviceDiagnosticsHandler(
+        std::function<QJsonObject(const QString&)> handler)
+    {
+        m_deviceDiagnosticsHandler = std::move(handler);
+    }
 
     // Shared-secret auth (#3646). When set to a non-empty token, every verb
     // except `ping` must carry a matching `token` field or it's rejected —
@@ -392,6 +397,7 @@ private:
     static QString verbNamesJoined();
 
     QJsonObject doDumpTree() const;
+    QJsonObject doDeviceDiagnostics(const QString& action) const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
     // grab pan <index> [path]: capture the raw SpectrumWidget framebuffer for a
@@ -484,7 +490,15 @@ private:
     // "containerClose" and only the first is reachable by invoke). TX-gated on the
     // whole ancestor chain; disabled widgets and (with the power ceiling armed)
     // the RF/Tune power sliders are refused.
-    QJsonObject doClickAt(const QString& target, const QString& value);
+    // A coordinate click, optionally a double-click. Double sends the full Qt
+    // sequence (Press, Release, DblClick, Release) — Qt does NOT promote two
+    // synthetic press/release pairs into a double-click, so a caller cannot
+    // build one out of two clickAt calls. (#5068)
+    enum class ClickKind { Single, Double };
+    QJsonObject doClickAt(const QString& target, const QString& value,
+                          ClickKind kind = ClickKind::Single);
+    // doubleClick <target> [x y] — same guards as clickAt, centre by default.
+    QJsonObject doDoubleClick(const QString& target, const QString& value);
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The
@@ -615,10 +629,19 @@ private:
     // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
     // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
+    // Manual notch filters (a Flex TNF, or the WDSP null that stands in for one
+    // on a radio with no DSP). `list` reports what the radio actually holds,
+    // which is what makes the feature provable: a notch that was placed but not
+    // applied looks identical to one that worked until you read it back.
+    QJsonObject doNotch(const QString& action, const QString& arg);
     // Disconnected-only GPS status fixtures for the 6000-series
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
     QJsonObject doTune(const QString& value, const QString& id);
+    // Manual frequency calibration. Gated on
+    // RadioCapabilities::hostFrequencyCalibration, so it refuses on a radio that
+    // calibrates itself rather than silently storing a number nothing applies.
+    QJsonObject doFreqCal(const QString& action, const QString& value);
     QJsonObject doTargetTune(const QString& value);
     QJsonObject doMemory(const QString& action, const QString& arg);
     // Demo fault injection (RFC #4288 #4): route a fault to backend->
@@ -626,6 +649,11 @@ private:
     QJsonObject doSimFault(const QString& fault, const QString& arg);
     // Raw CI-V inject + frame trace. Icom-only; other backends report it as
     // unimplemented rather than silently succeeding.
+    // The CI-V control registry: `map` reports every command the backend
+    // names joined with whether it is wired and whether it has been seen on
+    // the wire; `scrub` drives every settable control at its current value
+    // and reports which ones actually reached the radio.
+    QJsonObject doControls(const QString& action, const QString& arg);
     QJsonObject doCiv(const QString& action, const QString& arg);
     // Data-arrival ages plus the meter producer->consumer join.
     QJsonObject doLiveness();
@@ -634,6 +662,7 @@ private:
     // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated
     // by AETHER_AUTOMATION_ALLOW_TX (the same rail as txtest/atu); unkey is not.
     QJsonObject doKey(const QString& name, const QString& arg);
+    QJsonObject doTransmit(const QString& action, const QString& arg);
     QJsonObject doRadioCert(const QString& phaseArg, const QString& freqArg);
     // Drive the CWX keyer (send a CW string / set WPM / abort). `send` keys the
     // transmitter so it sits on the AETHER_AUTOMATION_ALLOW_TX rail and arms the
@@ -741,6 +770,7 @@ private:
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
+    std::function<QJsonObject(const QString&)> m_deviceDiagnosticsHandler;
     QJsonObject m_lastWaveformCommand;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
@@ -796,7 +826,14 @@ private:
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     // Correlates an extension reply with the request that caused it. Starts at
     // 1 because the sim-fault path deliberately uses 0 for fire-and-forget.
-    quint64 m_extensionRequestId{0};
+    //
+    // MUTABLE because `get hostnb` reads backend state through an extension
+    // call, and doGet() is const. The counter is a correlation token, not
+    // observable state — nothing reads it back and no answer depends on its
+    // value — so bumping it from a read does not make the read a write. The
+    // alternative, a fixed id, would work only for as long as every extension
+    // reply stayed synchronous.
+    mutable quint64 m_extensionRequestId{0};
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)
     QString m_authToken;           // shared-secret gate; empty = open (#3646)
     // Log/event channel (#3646 observability suite). The tap fills m_logRing
@@ -822,11 +859,40 @@ private:
         QPointer<QLocalSocket> socket;
         QTimer* timer{nullptr};
         QMetaObject::Connection connection;
+        // Bound alongside `connection` so a connect that FAILS returns the
+        // backend's message immediately instead of burning the whole timeout
+        // and then reporting the generic "timed out" (#4912).
+        QMetaObject::Connection errorConnection;
         QElapsedTimer elapsed;
         int timeoutMs{0};
         bool complete{false};
+        // Set when finishConnectWait() runs off connectionError rather than
+        // off the timer or a successful connectionStateChanged.
+        QString error;
     };
     std::vector<std::shared_ptr<ConnectWait>> m_connectWaits;
+
+    // The last deferred connect/disconnect failure, and when it happened.
+    //
+    // Every connect verb schedules its real work onto the GUI event loop and
+    // replies {ok:true, deferred:true} before that work runs, so a failure
+    // afterwards existed only as a qCWarning — invisible to the client that
+    // asked (#4912). Keeping the last one here lets `connect wait` hand it
+    // back, which is where a caller is already looking when a connect does not
+    // land. The reply carries the error's AGE, not its timestamp, so a stale
+    // failure from a previous attempt is distinguishable from this one's
+    // without the caller needing a clock of its own.
+    QString m_lastConnectError;
+    qint64 m_lastConnectErrorMs{-1};
+    // answerPendingWaits: whether this failure should complete outstanding
+    // `connect wait` calls. True for the connect verbs; false for disconnect,
+    // whose error would otherwise be handed to an unrelated connect still in
+    // flight.
+    void noteConnectFailure(const QString& what, const QString& error,
+                            bool answerPendingWaits = true);
+    // A connect that lands retires the previous failure, so `lastError` describes
+    // the current state of the world rather than everything that ever went wrong.
+    void clearLastConnectError();
 
     QTimer* m_memoryTimer{nullptr};
     QElapsedTimer m_memoryClock;

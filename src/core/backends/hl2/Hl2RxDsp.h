@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <memory>
@@ -31,6 +32,21 @@ public:
     // WDSP's internal DSP rate. Constant at 48 kHz and independent of both the
     // HL2 IQ rate and the audio rate — see the note in configure().
     static constexpr int kWdspDspSampleRateHz = 48000;
+
+    // RX filter length. This is also the manual-notch resolution: WDSP's
+    // narrowest notch is 1600 / (taps/256) Hz at kWdspDspSampleRateHz, and it
+    // WIDENS a narrower request instead of rejecting it. 8192 taps buys a 50 Hz
+    // floor (pihpsdr's value); WDSP's own default of 2048 would floor it at
+    // 200 Hz, wide enough to swallow a CW signal next to the carrier being
+    // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
+    // widths from it.
+    static constexpr int kRxFilterTaps = 8192;
+    static constexpr double kMinNotchWidthHz =
+        1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
+        * (static_cast<double>(kWdspDspSampleRateHz) / 48000.0);
+    static_assert(kMinNotchWidthHz <= 50.0,
+                  "RX filter taps no longer allow a 50 Hz notch; the width "
+                  "presets in the TNF menu assume one.");
 
     struct Config {
         int inputSampleRateHz = 48000;   // HL2 IQ sample rate
@@ -91,6 +107,87 @@ public:
     // fps <= 0 removes the cap. The rate is applied on a wall clock, so it
     // holds across a sample-rate change without needing to be recomputed.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
+
+    // Impulse noise blanker, on the raw IQ ahead of the demodulator.
+    //
+    // THE ONLY NOISE BLANKER THIS RADIO HAS. The HL2 ships raw IQ and runs no
+    // firmware DSP, so — exactly like the manual notch — this either happens on
+    // this host or it does not happen at all. That is why the NB button is
+    // visible on a radio that reports hasRadioSideDsp = false.
+    //
+    // Runs inside WdspChannel::processIq(), on the wire samples, immediately
+    // ahead of fexchange2. Placement is not a style choice: an impulse is
+    // narrow in time and wide in frequency, and once the bandpass has spread it
+    // over milliseconds there is no spike left to remove.
+    //
+    // ON THE AUDIO PATH ONLY. processIqBlock() feeds the panadapter from its
+    // own conjugated copy BEFORE it reaches the channel, so the spectrum and
+    // waterfall show UNBLANKED IQ. That is deliberate — the display is a
+    // measurement of what is on the air and blanking it would hide the very
+    // impulses the operator is deciding whether to blank — but it is a visible
+    // difference from a Flex, which blanks in its own DDC upstream of both.
+    // If that ever needs to change, the stage moves up here rather than gaining
+    // a second copy inside the channel.
+    //
+    // `level` is 0..100, larger being more aggressive; WdspChannel owns the map
+    // onto WDSP's inverted threshold.
+    //
+    // Held OUTSIDE Config, like the shift and the notch set and for the same
+    // reason: configure() REPLACES m_config, so a rate change carrying a
+    // caller's default would switch the blanker off while the operator's NB
+    // button stayed lit. Anything that must outlive a rebuild lives in its own
+    // member and is re-applied at the end of configure().
+    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    // What the operator ASKED for. Survives configure() and is what a rebuild
+    // re-applies.
+    [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
+    [[nodiscard]] int noiseBlankerLevel() const { return m_nbLevel; }
+    // What the WDSP stage ACTUALLY has, which is not the same question. The
+    // request crosses a queued connection to get here and WdspChannel can
+    // refuse it outright (a control operation already in flight), so a readback
+    // that reported the request back would be certifying its own input.
+    //
+    // ATOMIC because these two are the only members of this class read from
+    // OUTSIDE its thread: Hl2Backend answers the bridge's `hl2 nb.get` from the
+    // GUI thread while this object lives on the I/O thread. Relaxed is enough —
+    // they are independent scalars and nothing is ordered against them.
+    [[nodiscard]] bool appliedNoiseBlankerEnabled() const
+    {
+        return m_nbAppliedOn.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] int appliedNoiseBlankerLevel() const
+    {
+        return m_nbAppliedLevel.load(std::memory_order_relaxed);
+    }
+
+    // ── Manual notch filters ──────────────────────────────────────────────
+    //
+    // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
+    // notch ids onto it — this class just does as it is told, in the order it
+    // is told, so the two stay in step across every receiver.
+    //
+    // Centres are ABSOLUTE RF Hz. setNotchTuneFrequency() must follow the NCO,
+    // or the notches stay where the NCO used to be.
+    //
+    // The set is MIRRORED here as well as in WDSP, because reconfigure()
+    // destroys the notch database along with the channel. Without the copy, an
+    // operator's notches vanish on a sample-rate change — the same reason the
+    // shift is kept.
+    Q_INVOKABLE void addNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void editNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void removeNotch(int index);
+    // Empty both the mirror and WDSP's database. This is what makes seeding
+    // IDEMPOTENT: Hl2Backend::seedNotches() clears before it replays, so a
+    // second seed against a chain that already holds the set replaces it
+    // instead of appending a duplicate of every notch.
+    Q_INVOKABLE void clearNotches();
+    Q_INVOKABLE void setNotchesEnabled(bool on);
+    Q_INVOKABLE void setNotchTuneFrequency(double tuneHz);
+
+    // Mirror size, and WDSP's own count. These must agree — the positional
+    // index map depends on it — so both are exposed for the test that pins it.
+    [[nodiscard]] int notchCount() const;
+    [[nodiscard]] int wdspNotchCount() const;
 
     // Mute the DEMODULATOR while transmitting.
     //
@@ -220,7 +317,28 @@ private:
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
+    // Noise-blanker state, kept out of m_config so configure() cannot clear it.
+    // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
+    // took. They diverge exactly when something went wrong, which is the whole
+    // reason the bridge readback reports the applied pair.
+    bool m_nbOn = false;
+    int  m_nbLevel = 50;      // 0..100, the slice model's units
+    std::atomic<bool> m_nbAppliedOn {false};
+    std::atomic<int>  m_nbAppliedLevel {50};
     Config m_config;
+
+    // Notch set, mirrored so reconfigure() can replay it — see the note on
+    // addNotch(). Index in this vector IS the WDSP notch index; keeping them
+    // identical is the entire trick, and it works because every mutation here
+    // performs the same insert/erase WDSP performs.
+    struct Notch {
+        double centerHz = 0.0;
+        double widthHz = 0.0;
+        bool active = true;
+    };
+    std::vector<Notch> m_notches;
+    bool m_notchesEnabled = true;
+    double m_notchTuneHz = 0.0;
 
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on

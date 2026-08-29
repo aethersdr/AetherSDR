@@ -3,8 +3,11 @@
 #include "asr/SileroVad.h"
 #include "asr/SpeakerEmbedder.h"
 #include "core/Resampler.h"
+#include "core/ShutdownTrace.h"
 
 #include <QLoggingCategory>
+#include <QRegularExpression>
+#include <QStringList>
 #include <QThread>
 
 #include <algorithm>
@@ -23,6 +26,98 @@ constexpr int kResampleBlock = 4096; // max samples per r8brain process() call
 // resampler's group delay small (important for live copy and for prompt segment
 // close-out).
 constexpr double kResampleTransBand = 10.0;
+
+// Segment-overlap de-dup (RFC #4821, Approach A). A cap-forced segment carries a
+// little trailing audio into the next one, so the next decode re-transcribes the
+// tail of the previous segment as its own leading words. We strip that repeated
+// prefix at the text level — backend-agnostic, no whisper-param change, and it
+// keeps the byte-safe segment text (no per-token UTF-8 reconstruction).
+
+// Normalize a word for boundary comparison: drop leading/trailing non-alnum
+// (punctuation whisper may add on one side of the cut but not the other) and
+// lowercase, so "fox." and "Fox" match across the boundary.
+QString normWord(const QString& w)
+{
+    int a = 0;
+    int b = static_cast<int>(w.size());
+    while (a < b && !w.at(a).isLetterOrNumber()) ++a;
+    while (b > a && !w.at(b - 1).isLetterOrNumber()) --b;
+    return w.mid(a, b - a).toLower();
+}
+
+// Hard ceiling on the compared window regardless of overlapMs — a coincidental
+// long repeat must never swallow genuine new text.
+constexpr int kMaxOverlapWords = 12;
+// Rough shortest-plausible word length; overlapMs / this + a margin bounds how
+// many leading words the carried window could actually duplicate. Keeping the
+// strip near the real overlap (rather than the unconstrained longest match)
+// limits over-stripping genuine repeated speech at the boundary (Approach A is
+// deliberately lossy only at the margins — see RFC #4821).
+constexpr int kMinWordMs = 200;
+
+// Strip from `next` the longest run of leading words that duplicates the tail of
+// `prev` (word-level, normalized); return the remaining text. `overlapMs` is the
+// configured carry window — the comparison is bounded to about that many words.
+// No match → `next` unchanged.
+QString stripOverlapWords(const QString& prev, const QString& next, int overlapMs)
+{
+    static const QRegularExpression ws(QStringLiteral("\\s+"));
+    const QStringList prevWords = prev.split(ws, Qt::SkipEmptyParts);
+    const QStringList nextWords = next.split(ws, Qt::SkipEmptyParts);
+    // Bound the window by the carry duration (words the overlap could hold),
+    // then by the hard ceiling and the two token counts.
+    const int overlapWordBudget = overlapMs > 0 ? overlapMs / kMinWordMs + 1 : 0;
+    const int cap = std::min({overlapWordBudget, kMaxOverlapWords,
+                              static_cast<int>(prevWords.size()),
+                              static_cast<int>(nextWords.size())});
+    // Pre-normalize only the tokens in range: prev's last `cap`, next's first `cap`.
+    std::vector<QString> prevTail;
+    std::vector<QString> nextHead;
+    prevTail.reserve(cap);
+    nextHead.reserve(cap);
+    for (int i = 0; i < cap; ++i) {
+        prevTail.push_back(normWord(prevWords.at(prevWords.size() - cap + i)));
+        nextHead.push_back(normWord(nextWords.at(i)));
+    }
+    int best = 0;
+    for (int k = 1; k <= cap; ++k) {
+        bool match = true;
+        for (int j = 0; j < k; ++j) {
+            const QString& p = prevTail.at(cap - k + j);
+            const QString& n = nextHead.at(j);
+            // A punctuation-only token normalizes to "" — never let "" == ""
+            // count as a boundary-word match (it isn't a real repeated word).
+            if (p.isEmpty() || n.isEmpty() || p != n) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            best = k; // keep the longest k that fully matches
+        }
+    }
+    if (best == 0) {
+        return next;
+    }
+    // Return the ORIGINAL text sliced at the best-th word, not a rejoin of the
+    // split tokens. split("\\s+")+join(' ') would collapse internal whitespace
+    // runs, flatten tabs/non-breaking spaces, and drop whisper's leading space —
+    // but only on segments that happened to match, so de-dup'd continuations
+    // would be formatted differently from untouched ones (return next; above).
+    // Find where the best-th word starts and slice there (robust to a leading
+    // space; best == nextWords.size() slices to "" — a fully-overlapped segment).
+    static const QRegularExpression word(QStringLiteral("\\S+"));
+    QRegularExpressionMatchIterator it = word.globalMatch(next);
+    qsizetype offset = next.size();
+    for (int i = 0; it.hasNext(); ++i) {
+        const QRegularExpressionMatch m = it.next();
+        if (i == best) {
+            offset = m.capturedStart();
+            break;
+        }
+    }
+    return next.mid(offset);
+}
 } // namespace
 
 // ---- AsrWorker -------------------------------------------------------------
@@ -92,6 +187,7 @@ void AsrWorker::loadModel(const QString& modelPath)
         m_warnedNoModel = false;
         m_segmenter.reset();
         m_clusterer.reset();
+        m_prevSegmentText.clear();
         emit loaded();
     } else {
         emit loadFailed(error);
@@ -204,9 +300,27 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    std::vector<std::vector<float>> segments =
+    std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
+
+    // A real pause (long idle silence) flushes any carried ASR context so a
+    // noisy/garbled prior can't keep conditioning later utterances and never
+    // recover. Consume the one-shot now (it must clear even on a feed that
+    // produced no segment, so a gap spanning several silent buffers isn't held
+    // pending), but apply the flush AFTER decoding this feed's own segments
+    // below: a segment that closed BEFORE the gap should still be decoded with
+    // the previous context — the flush protects only what comes after the pause.
+    //
+    // Caller constraint: this relies on a single feed() never both closing an
+    // utterance and crossing longGapMs of idle silence. AsrAudioTap delivers
+    // chunks far shorter than longGapMs (2.5 s), so a close and a long gap never
+    // share one feed; a much larger buffer would break that and want revisiting.
+    const bool longGap = m_segmenter.consumeLongGap();
+
     if (segments.empty()) {
+        if (longGap && m_backend != nullptr) {
+            m_backend->resetContext();
+        }
         return;
     }
 
@@ -218,23 +332,58 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    for (std::vector<float>& seg : segments) {
+    for (AsrSegmenter::ClosedSegment& seg : segments) {
         QString error;
-        const AsrTranscript result = m_backend->transcribe(seg, &error);
+        const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
         if (!error.isEmpty()) {
             emit errorOccurred(error);
+            // A failed decode yields no tail — same as an empty one below: drop
+            // the reference so the next continuation doesn't de-dup against a
+            // stale, pre-failure segment.
+            m_prevSegmentText.clear();
             continue;
         }
         if (result.text.isEmpty()) {
+            // Nothing decoded. Clear the tail so the NEXT continuation (whose
+            // carried audio overlaps THIS segment, not the one before it) doesn't
+            // de-dup against a two-segments-old tail — m_prevSegmentText must
+            // always mirror the immediately-preceding segment.
+            m_prevSegmentText.clear();
             continue;
         }
+        // Segment overlap (RFC #4821): when this segment was seeded with audio
+        // carried across the previous cap-forced close, its leading words repeat
+        // that segment's tail — strip them so nothing is emitted twice.
+        QString emitText = result.text;
+        if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
+            // Use the window captured when THIS segment closed, not the live
+            // slider — a mid-backlog slider move must not re-scope a queued strip.
+            emitText = stripOverlapWords(m_prevSegmentText, result.text, seg.overlapMs);
+        }
+        m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
+        if (emitText.isEmpty()) {
+            continue; // the whole segment was overlap (rare) — nothing new to emit
+        }
         // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
+        // Known limitation (RFC #4821): for a continuation segment this embeds the
+        // whole buffer, including the carried overlap prefix that also fed the
+        // previous segment's embedding — a small same-speaker weighting bias
+        // (never a different voice), only material when speaker labeling AND
+        // overlap are both on with a small decode buffer. Not corrected here; a
+        // fix would thread the carried-sample count through to skip the prefix.
         int speaker = -1;
         if (m_speakerLabelingEnabled && m_embedder) {
             speaker = m_clusterer.assign(
-                m_embedder->embed(seg.data(), static_cast<int>(seg.size())));
+                m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
         }
-        emit segmentText(result.text, result.confidence, speaker);
+        emit segmentText(emitText, result.confidence, speaker);
+    }
+
+    // Apply the long-gap flush now, after this feed's own (pre-gap) segments have
+    // been decoded with the context they should have had — so the pause only
+    // affects the next utterance. (Guard kept though m_backend is non-null here.)
+    if (longGap && m_backend != nullptr) {
+        m_backend->resetContext();
     }
     }();
 
@@ -256,15 +405,43 @@ void AsrWorker::setHangoverMs(int ms)
     m_segmenter.setHangoverMs(ms);
 }
 
+void AsrWorker::setOverlapMs(int ms)
+{
+    m_segmenter.setOverlapMs(ms);
+}
+
 void AsrWorker::setSpeakerThreshold(float t)
 {
     m_clusterer.setThreshold(t);
 }
 
+void AsrWorker::setContextCarryEnabled(bool on)
+{
+    if (m_backend) {
+        m_backend->setContextCarryEnabled(on);
+    }
+}
+
+void AsrWorker::clearContext()
+{
+    // Explicit flush (the panel's Clear button): drop the carried prompt so the
+    // next utterance starts clean, matching the cleared display.
+    if (m_backend) {
+        m_backend->resetContext();
+    }
+}
+
 void AsrWorker::reset()
 {
     m_segmenter.reset();
+    // A retune/clear is a new context — don't prime the next decode with the
+    // previous QSO's carried prompt (retune is the one boundary where the
+    // operator has explicitly signalled a fresh start). Mirrors clearContext().
+    if (m_backend) {
+        m_backend->resetContext();
+    }
     m_clusterer.reset(); // new session/frequency → relabel speakers from A
+    m_prevSegmentText.clear(); // a Clear/retune must not de-dup against stale text
     m_resampler.reset();
     m_resamplerSrcRate = 0;
 }
@@ -306,7 +483,10 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(this, &AsrEngine::requestSetMaxSegmentMs, m_worker, &AsrWorker::setMaxSegmentMs);
     connect(this, &AsrEngine::requestSetSpeechRms, m_worker, &AsrWorker::setSpeechRms);
     connect(this, &AsrEngine::requestSetHangoverMs, m_worker, &AsrWorker::setHangoverMs);
+    connect(this, &AsrEngine::requestSetOverlapMs, m_worker, &AsrWorker::setOverlapMs);
     connect(this, &AsrEngine::requestSetSpeakerThreshold, m_worker, &AsrWorker::setSpeakerThreshold);
+    connect(this, &AsrEngine::requestSetContextCarryEnabled, m_worker, &AsrWorker::setContextCarryEnabled);
+    connect(this, &AsrEngine::requestClearContext, m_worker, &AsrWorker::clearContext);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
 
     // Worker -> engine (queued back to the main thread).
@@ -343,6 +523,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
 
 AsrEngine::~AsrEngine()
 {
+    ShutdownTrace trace("asr.thread.join");
     if (m_thread != nullptr) {
         if (m_worker != nullptr) {
             // Qt's own quit() already stops the worker from starting any FURTHER
@@ -444,9 +625,24 @@ void AsrEngine::setSilenceDurationMs(int ms)
     emit requestSetHangoverMs(ms);
 }
 
+void AsrEngine::setOverlapMs(int ms)
+{
+    emit requestSetOverlapMs(ms);
+}
+
 void AsrEngine::setSpeakerThreshold(float threshold)
 {
     emit requestSetSpeakerThreshold(threshold);
+}
+
+void AsrEngine::clearContext()
+{
+    emit requestClearContext();
+}
+
+void AsrEngine::setContextCarryEnabled(bool on)
+{
+    emit requestSetContextCarryEnabled(on);
 }
 
 void AsrEngine::reset()

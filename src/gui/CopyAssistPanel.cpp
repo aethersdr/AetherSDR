@@ -6,6 +6,7 @@
 #include <QMenu>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -115,6 +116,20 @@ CopyAssistPanel::CopyAssistPanel(QWidget* parent)
         emit newlineOnSilenceChanged(on);
     });
     controls->addWidget(m_newline);
+
+    // Context-carry toggle (RFC #4818). When on, each decode is conditioned on the
+    // previous confident segment's text for continuity across boundaries. Here on
+    // the header (not buried in ⚙ settings) so it can be A/B'd on the fly; the
+    // controller greys it out on the non-whisper tiers that can't honor it.
+    m_contextCarry = new QPushButton(tr("Context"), this);
+    m_contextCarry->setCheckable(true);
+    m_contextCarry->setToolTip(tr("Condition each decode on the previous confident segment's own "
+                                  "text, for continuity across segment boundaries. Gated internally "
+                                  "by that segment's confidence, so a garbled decode doesn't poison "
+                                  "the next one; a pause or Clear starts fresh. (whisper model only)"));
+    m_contextCarry->setAccessibleName(tr("Carry context across segments"));
+    connect(m_contextCarry, &QPushButton::toggled, this, &CopyAssistPanel::contextCarryToggled);
+    controls->addWidget(m_contextCarry);
 
     m_clear = new QPushButton(tr("Clear"), this);
     m_clear->setAccessibleName(tr("Clear transcript"));
@@ -345,6 +360,22 @@ void CopyAssistPanel::appendText(const QString& text, float confidence)
 void CopyAssistPanel::setNewlineOnSilence(bool on)
 {
     m_newline->setChecked(on); // fires toggled → updates m_newlineOnSilence + emits
+}
+
+void CopyAssistPanel::setContextCarryChecked(bool on)
+{
+    // Reflect persisted/programmatic state without echoing back out as an
+    // operator toggle (which would re-persist and re-apply what we just read).
+    const QSignalBlocker block(m_contextCarry);
+    m_contextCarry->setChecked(on);
+}
+
+void CopyAssistPanel::setContextCarryAvailable(bool available)
+{
+    // Whisper-only: greyed out on backends that inherit IAsrBackend's no-op
+    // context hooks. The checked state is preserved so it re-applies if the
+    // operator switches back to whisper.
+    m_contextCarry->setEnabled(available);
 }
 
 void CopyAssistPanel::clearText()

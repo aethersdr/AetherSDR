@@ -142,7 +142,13 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
 
 void CwxModel::send(const QString& text)
 {
-    if (text.isEmpty()) return;
+    if (text.isEmpty()) {
+        return;
+    }
+    if (!m_speedModifiersEnabled) {
+        emit transmissionRequested(text, m_speed);
+        return;
+    }
     emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
 }
 
@@ -285,6 +291,16 @@ void CwxModel::setSpeed(int wpm)
     if (wpm != m_speed) {
         m_speed = wpm;
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
+        emit speedChanged(m_speed);
+        emit speedCommandIssued(m_speed);
+    }
+}
+
+void CwxModel::adoptSpeed(int wpm)
+{
+    wpm = clampWpm(wpm);
+    if (wpm != m_speed) {
+        m_speed = wpm;
         emit speedChanged(m_speed);
     }
 }

@@ -1,5 +1,6 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/LogManager.h"   // lcHl2 — commanded-NCO breadcrumbs
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -367,6 +368,12 @@ void MetisClient::setRxFrequencyHz(int rxIndex, std::uint32_t hz)
         return;   // not a running receiver -- see the header for why not clamped
     if (rxIndex == 0)
         m_params.rxFrequencyHz = hz;
+    // The COMMANDED value, which is the only place it can be observed. Nothing
+    // reads an NCO register back, and above this seam the frequency is still in
+    // the true-RF domain — so without this line a frequency calibration, a
+    // transverter offset or an off-by-one in the bank index is invisible to
+    // everything except a spectrum analyser on the antenna port.
+    qCDebug(lcHl2) << "HL2: RX" << rxIndex << "NCO <-" << hz << "Hz (commanded)";
     m_ccRxFreq[static_cast<std::size_t>(rxIndex)] = ccRxFreq(rxIndex, hz);
     // Send the new NCO value immediately rather than waiting for the rotation.
     // That matters more with several receivers than it did with one: the
@@ -564,6 +571,11 @@ void MetisClient::setMox(bool keyed)
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
 {
+    // Logged for the same reason as the RX banks above, and it matters more
+    // here: the transmit oscillator is written by exactly one caller and never
+    // echoed anywhere, so "did transmit follow" has had no answer short of
+    // keying up and listening.
+    qCDebug(lcHl2) << "HL2: TX NCO <-" << hz << "Hz (commanded)";
     m_ccTxFreq = ccTxFreq(hz);
     m_oneShot.push_back(m_ccTxFreq);
 }
@@ -582,6 +594,38 @@ void MetisClient::setTxDriveLevel(int level)
         level = 0;
     m_ccTxDrive = ccTxDrive(level, level > 0);
     m_oneShot.push_back(m_ccTxDrive);
+}
+
+void MetisClient::setCwKeyDown(bool down)
+{
+    // Refuse the carrier at the same final wire authority that refuses MOX.
+    // Do not even latch a pending down edge: opening the gate later must never
+    // turn an earlier refused request into RF.
+    if (down && !m_txAllowed) {
+        return;
+    }
+    if (!down && !m_cwMode) {
+        return;
+    }
+    if (down && !m_cwMode) {
+        // CW owns the IQ stream until PTT drops. Voice already queued behind a
+        // manual MOX must not leak into the spaces between elements.
+        m_txIq.clear();
+        m_cwEnvelope = 0.0;
+    }
+    m_cwMode = true;
+    m_cwKeyDown = down;
+}
+
+void MetisClient::clearCwKeying()
+{
+    m_cwMode = false;
+    m_cwKeyDown = false;
+    m_cwEnvelope = 0.0;
+    // Anything captured while CW owned the stream is stale by definition.
+    // Dropping it here prevents an explicit CW-mode exit under a still-keyed
+    // manual PTT from releasing old microphone audio onto the wire.
+    m_txIq.clear();
 }
 
 void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
@@ -644,7 +688,27 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // Only put samples on the wire while actually keyed. Unkeyed frames carry
     // transmit silence, which is what ep2Packet's zero fill already gives us --
     // and which also keeps EADDR zero (see ep2WriteTxIq).
-    if (keyed && m_toneAmp > 0.0) {
+    if (keyed && m_cwMode) {
+        // piHPSDR's local/PC keyer likewise transmits host-generated IQ under
+        // MOX. Five milliseconds is long enough to suppress key clicks while
+        // staying short against a 40 ms dit at 30 WPM. A raised cosine has zero
+        // slope at both ends, unlike a linear edge.
+        constexpr double kCwCarrierAmplitude = 0.5;
+        constexpr int kCwRampSamples = 5 * kEp2AudioRateHz / 1000;
+        constexpr double kRampStep = 1.0 / static_cast<double>(kCwRampSamples);
+        constexpr double kPi = 3.14159265358979323846;
+        std::vector<std::complex<float>> block(kTxSamplesPerPacket);
+        for (std::complex<float>& sample : block) {
+            if (m_cwKeyDown) {
+                m_cwEnvelope = std::min(1.0, m_cwEnvelope + kRampStep);
+            } else {
+                m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);
+            }
+            const double shaped = 0.5 - 0.5 * std::cos(kPi * m_cwEnvelope);
+            sample = {static_cast<float>(kCwCarrierAmplitude * shaped), 0.0f};
+        }
+        ep2WriteTxIq(pkt, block);
+    } else if (keyed && m_toneAmp > 0.0) {
         // EP2 is clocked at a fixed 48 kHz regardless of the RX sample rate.
         std::vector<std::complex<float>> block(kTxSamplesPerPacket);
         const double dphi = 2.0 * 3.14159265358979323846 * m_toneHz / kEp2AudioRateHz;

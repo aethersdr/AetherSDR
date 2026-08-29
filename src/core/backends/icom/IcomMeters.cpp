@@ -25,6 +25,13 @@ constexpr std::array<CurvePoint, 13> kPowerIc705{{
     {183, 7.5}, {213, 10.0}, {255, 12.0},
 }};
 
+// IC-7300MK2 Po meter, raw -> watts. Its official guide gives 0/50/100
+// percent at 0/143/213 and the model is rated at 100 W. Keep the documented
+// headroom above the 100 percent point rather than pinning a hot final.
+constexpr std::array<CurvePoint, 4> kPowerIc7300Mk2{{
+    {0, 0.0}, {143, 50.0}, {213, 100.0}, {255, 130.0},
+}};
+
 // SWR. Icom's guide: 0 = 1.0, 48 = 1.5, 80 = 2.0, 120 = 3.0.
 //
 // The guide stops at 3.0 and the field is a full byte. The final point is an
@@ -45,9 +52,23 @@ constexpr std::array<CurvePoint, 3> kVd{{
     {0, 0.0}, {75, 5.0}, {241, 16.0},
 }};
 
+// IC-9700 Vd calibration from the model's CI-V reference guide. This is kept
+// separate from the portable-radio curve: raw 185 is the nominal 13.8 V point.
+constexpr std::array<CurvePoint, 4> kVdIc9700{{
+    {0, 0.0}, {13, 10.0}, {185, 13.8}, {241, 16.0},
+}};
+
 // Id (PA current), raw -> amps. Icom's guide: 0 = 0 A, 121 = 2 A, 241 = 4 A.
 constexpr std::array<CurvePoint, 3> kId{{
     {0, 0.0}, {121, 2.0}, {241, 4.0},
+}};
+
+// IC-7300MK2 desktop-radio calibration from its own CI-V guide.
+constexpr std::array<CurvePoint, 3> kVdIc7300Mk2{{
+    {0, 0.0}, {13, 10.0}, {241, 16.0},
+}};
+constexpr std::array<CurvePoint, 4> kIdIc7300Mk2{{
+    {0, 0.0}, {97, 10.0}, {146, 15.0}, {241, 25.0},
 }};
 
 // ALC, raw -> percent. Icom's guide gives only "0 = Minimum, 120 = Maximum",
@@ -115,11 +136,40 @@ double interpolateCurve(std::span<const CurvePoint> curve, int raw)
 }
 
 std::span<const CurvePoint> powerCurveIc705() { return kPowerIc705; }
+std::span<const CurvePoint> powerCurveIc7300Mk2() { return kPowerIc7300Mk2; }
 std::span<const CurvePoint> swrCurve()        { return kSwr; }
 std::span<const CurvePoint> compCurve()       { return kComp; }
 std::span<const CurvePoint> vdCurve()         { return kVd; }
 std::span<const CurvePoint> idCurve()         { return kId; }
 std::span<const CurvePoint> alcCurve()        { return kAlc; }
+
+std::span<const CurvePoint>
+powerCurveForCalibration(MeterCalibration calibration)
+{
+    switch (calibration) {
+    case MeterCalibration::Ic705:
+        return kPowerIc705;
+    case MeterCalibration::Ic7300Mk2:
+        return kPowerIc7300Mk2;
+    case MeterCalibration::Uncalibrated:
+    case MeterCalibration::Ic9700Voltage:
+        return {};
+    }
+    return {};
+}
+
+bool hasVoltageCalibration(MeterCalibration calibration) noexcept
+{
+    return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic9700Voltage
+        || calibration == MeterCalibration::Ic7300Mk2;
+}
+
+bool hasCurrentCalibration(MeterCalibration calibration) noexcept
+{
+    return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic7300Mk2;
+}
 
 double sMeterDbm(int raw, double s9Dbm)
 {
@@ -160,16 +210,43 @@ const MeterSpec* meterSpecForSub(std::uint8_t sub)
     return nullptr;
 }
 
-double meterValue(MeterId id, int raw, double s9Dbm)
+double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibration)
 {
+    const bool desktop = calibration == MeterCalibration::Ic7300Mk2;
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
-    case MeterId::Power:    return interpolateCurve(kPowerIc705, raw);
+    case MeterId::Power:
+        if (const std::span<const CurvePoint> curve = powerCurveForCalibration(calibration);
+            !curve.empty()) {
+            return interpolateCurve(curve, raw);
+        }
+        return std::clamp(raw, 0, 255) * 100.0 / 255.0;
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
     case MeterId::Comp:     return interpolateCurve(kComp, raw);
-    case MeterId::Vd:       return interpolateCurve(kVd, raw);
-    case MeterId::Id:       return interpolateCurve(kId, raw);
+    case MeterId::Vd:
+        if (!hasVoltageCalibration(calibration)) {
+            return 0.0;
+        }
+        switch (calibration) {
+        case MeterCalibration::Ic705:
+            return interpolateCurve(kVd, raw);
+        case MeterCalibration::Ic9700Voltage:
+            return interpolateCurve(kVdIc9700, raw);
+        case MeterCalibration::Ic7300Mk2:
+            return interpolateCurve(kVdIc7300Mk2, raw);
+        case MeterCalibration::Uncalibrated:
+            return 0.0;
+        }
+        return 0.0;
+    case MeterId::Id:
+        if (!hasCurrentCalibration(calibration)) {
+            return 0.0;
+        }
+        return interpolateCurve(
+                                desktop
+                                    ? std::span<const CurvePoint>(kIdIc7300Mk2)
+                                    : std::span<const CurvePoint>(kId), raw);
     // OVF is 00/01 from the radio, not a scaled reading.
     case MeterId::Overflow: return raw != 0 ? 1.0 : 0.0;
     }
@@ -241,6 +318,12 @@ void MeterPoller::markAnswered(MeterId id, std::int64_t nowMs)
     // request would let a slow link stack polls back-to-back the moment each
     // reply lands, which is the contention this scheduler exists to avoid.
     s.nextDueMs = nowMs + (spec ? spec->intervalMs : 200);
+    stateFor(id).answeredAtMs = nowMs;
+}
+
+std::int64_t MeterPoller::lastReadingAtMs(MeterId id) const
+{
+    return stateFor(id).answeredAtMs;
 }
 
 void MeterPoller::reset() noexcept

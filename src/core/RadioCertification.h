@@ -1,5 +1,7 @@
 #pragma once
 
+#include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
+
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPointer>
@@ -27,7 +29,7 @@ class AudioEngine;
 //
 // WHAT IT IS BUILT FROM. Every stage exists because something in the
 // Hermes-Lite 2 bring-up failed silently at exactly that point. The stage list
-// is a transcription of HERMES.md section 14, and each result carries the
+// is a transcription of docs/HERMES.md section 14, and each result carries the
 // reference so a future agent lands on the write-up rather than re-deriving it:
 //
 //   - four separate defects each produced a correct-looking keyed transmission
@@ -121,7 +123,7 @@ private:
     // `concern` is the closest thing to a verdict: it is set when a value falls
     // outside what this radio has previously been observed to do, and it names
     // the suspicion rather than declaring failure. `reference` points at the
-    // HERMES.md section that explains the failure mode, so the next agent gets
+    // docs/HERMES.md section that explains the failure mode, so the next agent gets
     // the history rather than a bare number.
     //
     // `meterDependent` marks a conclusion that was drawn from meterSnapshot(),
@@ -148,7 +150,7 @@ private:
     //
     // These run FIRST when both phases are selected, and not by accident: the
     // wire's handedness is one fact that transmit and receive both consume, and
-    // transmit cannot be reasoned about until it is settled (HERMES.md 15.6).
+    // transmit cannot be reasoned about until it is settled (docs/HERMES.md 15.6).
     void stageConsumerAgreement(const Options& o);
     void stageZeroShift(const Options& o);
     void stageRxSidebands(const Options& o);
@@ -167,7 +169,7 @@ private:
     //
     // The automation bridge drives RadioModel and the MOX button drives
     // TransmitModel, and three separate bugs reached the operator through that
-    // gap (HERMES.md 14.5). A transmit diagnostic that keyed the way only the
+    // gap (docs/HERMES.md 14.5). A transmit diagnostic that keyed the way only the
     // bridge can would inherit exactly the blindness it exists to remove.
     //
     // Returns whether the radio reached the requested state. Keying can be
@@ -195,6 +197,43 @@ private:
     void spin(int ms);
     QJsonObject meterSnapshot() const;
 
+    // WHAT THE OPERATOR'S GAUGE WILL SHOW, read the way the gauge reads it.
+    //
+    // meterSnapshot() above measures the SEAM — the value that crossed from the
+    // backend, by meter index. This measures the CONSUMER: the typed accessors
+    // the applets bind to, each behind the liveness gate its real consumer
+    // applies. The two answer different questions and a probe that mixes them
+    // becomes a third convention that agrees with neither (CERTIFICATION.md
+    // 1.34): reading MeterModel::swr() raw reported a confident 1.0:1 in the
+    // same stage that reported TX:SWR had never been fed, because an unfed SWR
+    // and a perfect match are the same float.
+    QJsonObject renderedSnapshot() const;
+
+    // Record forward power seen INSIDE a keyed window. Called from every stage
+    // that keys, because "did this radio actually radiate" is a precondition of
+    // every transmit-meter verdict and cannot be answered from the meter whose
+    // silence is being judged (CERTIFICATION.md 1.37).
+    void observeKeyedRf();
+
+    // Was a transmission ever CONFIRMED to have produced RF during this run?
+    //
+    // Judged on observed forward power, never on requested drive. A drive floor
+    // would catch the slider-at-zero case that exposed this and nothing else:
+    // an interlock, a band limit or a PA that never enabled are all silent at
+    // any slider setting, and all produce the identical "meter never fed".
+    bool keyedRfConfirmed() const;
+
+    // The floor forward power must clear for a keyed window to count as RF.
+    //
+    // Deliberately MeterModel's own SWR-qualifying floor rather than a number
+    // chosen here. The finding this precondition exists to suppress is "TX:SWR
+    // defined but never fed", and SWR is fed exactly when forward power clears
+    // that floor — so any other constant would make the precondition answer a
+    // slightly different question from the gate it is reasoning about, which is
+    // §1.1 one level up. Zero drive on the HL2 reads 0.001 W; a real key at
+    // 50 % read 2.0 W.
+    static constexpr double kKeyedRfFloorWatts = MeterModel::kMinForwardWattsForSwr;
+
     // QPointer, not raw: run() holds these across nested event loops for minutes
     // at a time. If the session tears down mid-run — a disconnect, an app quit —
     // raw pointers would have the remaining stages resume against freed objects.
@@ -204,6 +243,22 @@ private:
     std::function<void(bool)> m_onKey;
     int m_keyRefusals = 0;   // keys the radio refused; reported, never ignored
     QJsonArray m_stages;
+
+    // ---- keyed-RF evidence, accumulated across every stage that keys ----
+    //
+    // Negative means "never sampled": no keyed window found a fresh forward
+    // power reading, which is a DIFFERENT state from one that read zero and
+    // must not collapse into it.
+    double m_keyedFwdWattsMax = -1.0;
+    int m_keyedRfSamples = 0;        // fresh forward-power reads inside a key
+    int m_keyedWindows = 0;          // keyed windows that reached a measurement
+    bool m_fwdPowerMeterDefined = false;
+
+    // The consumer-side reading taken while the radio was actually keyed.
+    // stageMeterInventory runs after stageControlEffect has unkeyed and settled
+    // 700 ms, so sampling there is sampling the one moment a transmit-only
+    // quantity is guaranteed absent (CERTIFICATION.md 1.39).
+    QJsonObject m_renderedWhileKeyed;
 };
 
 }  // namespace AetherSDR

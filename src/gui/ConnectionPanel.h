@@ -52,7 +52,7 @@ public:
                                    const QRect& availableGeometry) const;
     void setConnected(bool connected);
     void setStatusText(const QString& text);
-    void probeRadio(const QString& ip);
+    void probeRadio(const QString& ip, bool restoreSavedFamily = false);
 
     // Radio families the "Connect by IP" page can dial. The manual page can no
     // longer guess: a FlexRadio answers TCP/4992 and a Hermes-Lite 2 answers
@@ -151,7 +151,17 @@ private:
     void updateLowBandwidthVisibility();
     void updateManualAdvancedVisibility();
     void refreshManualSourceOptions(const RadioBindSettings* selected = nullptr);
-    void applySavedSourceSelection(const QString& ip);
+    // `restoreFamily` decides whether the per-address profile is allowed to move
+    // the Radio type selector. FALSE on the keystroke path, and that is the
+    // whole point: the recent-IP combo is editable, so Qt gives it an INLINE
+    // completer, and typing one character can complete the field to a whole
+    // saved address. textChanged then fired with an address the operator never
+    // finished typing, this restored that address's family, and the Radio type
+    // selector changed under them mid-keystroke (the operator picks Icom, types
+    // "1", the field completes to a saved Flex address, and the selector jumps
+    // back to FlexRadio). The restore is still right when the operator PICKS an
+    // address — that is the `activated` path — and at startup.
+    void applySavedSourceSelection(const QString& ip, bool restoreFamily = true);
     RadioBindSettings currentManualBindSettings(bool* staleSelection = nullptr) const;
     void loadRecentManualIps();
     void rememberManualIp(const QString& ip);
@@ -243,8 +253,33 @@ private:
     // orphan labels behind.
     QWidget*     m_manualIcomUserRow{nullptr};
     QWidget*     m_manualIcomPassRow{nullptr};
+    QWidget*     m_manualIcomCivRow{nullptr};
+    // The hex entry's own row, shown only for "Custom...". Separate from the
+    // combo's row so the two can be hidden independently — the label column is
+    // measured across hidden rows too, so revealing this one does not move the
+    // Radio type and Radio IP fields sideways.
+    QWidget*     m_manualIcomCivCustomRow{nullptr};
     QLineEdit*   m_manualIcomUserEdit{nullptr};
     QLineEdit*   m_manualIcomPassEdit{nullptr};
+    // The model chooser. Non-editable: it enumerates a known set with an escape
+    // hatch, which is populateSerialPortCombo's job, not m_manualIpCombo's
+    // recent-values history.
+    QComboBox*   m_manualIcomCivCombo{nullptr};
+    QLineEdit*   m_manualIcomCivEdit{nullptr};
+    void         populateIcomCivCombo();
+    void         syncIcomCivCustomRow();
+    // Staged by probeRadio(), committed by setConnected(true), discarded on
+    // failure. A password is only worth persisting once the radio has said it
+    // is the right one.
+    // Drop a staged Icom credential that did not belong to the connect that
+    // actually happened. See setConnected().
+    void clearPendingIcomCredentials();
+
+    QString      m_pendingIcomPassword;
+    QString      m_pendingIcomHost;
+    QString      m_pendingIcomResolvedHost;
+    RadioBindSettings m_pendingIcomBindSettings;
+    QHostAddress m_pendingIcomSessionBindAddress;
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
     QToolButton* m_manualAdvancedToggle{nullptr};

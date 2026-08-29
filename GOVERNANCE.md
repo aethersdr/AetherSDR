@@ -53,7 +53,7 @@ Current domain areas:
 
 | Area | Path(s) | Notes |
 |------|---------|-------|
-| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides |
+| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides. Spans two CODEOWNERS tiers: `docs/` and `resources/help/` are Tier 3, bare `*.md` is Tier 2 |
 | Build / CI | `CMakeLists.txt`, `.github/` | Build system, CI pipelines |
 | Plugins | `plugins/` | Stream Deck, TCI plugins |
 | Platform: macOS | `src/platform/macos/` | macOS-specific code only |
@@ -139,17 +139,62 @@ PR review is gated by [`.github/CODEOWNERS`](.github/CODEOWNERS), which is the
 authoritative source of who must approve what (last-match-wins). It defines
 three tiers, broadest → most restrictive:
 
-- **Tier 3 — source code** (`@aethersdr/reviewers`): all of `src/` — including
-  the whole of `MainWindow` — plus anything not enumerated below. The broad
-  reviewer roster; routine source review benefits from more eyes.
-- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `docs/`, `*.md`,
-  `tests/`, `CMakeLists.txt`, and the routine CI workflows under
-  `.github/workflows/`.
+- **Tier 3 — source code, tests, and documentation** (`@aethersdr/reviewers`):
+  all of `src/` — including the whole of `MainWindow` — plus `tests/`,
+  `docs/`, and `resources/`, markdown included (so `resources/help/` is here
+  too), plus anything not enumerated below. The broad reviewer roster;
+  routine review of source, its tests, and its documentation all benefit from
+  more eyes. `tests/` is here because it *is* source — ~90k lines of C++ —
+  and because most code changes touch `src/` and `tests/` together. Two files
+  under `docs/` are carved back to Tier 1 below, so "all of `docs/`" is the
+  rule and not quite the whole story.
+- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `*.md` outside
+  those directories (`README.md`, `CHANGELOG.md`, `ROADMAP.md`,
+  `plugins/*/README.md`, …), `CMakeLists.txt`, the routine CI
+  workflows under `.github/workflows/`, and the AI-instruction files
+  (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
+  `.github/copilot-instructions.md`, `.claude/commands/`).
 - **Tier 1 — governance / security** (`@aethersdr/maintainers`): the governance
-  and security/compliance docs, `.github/CODEOWNERS` itself, the CodeQL config,
-  the security-sensitive workflows (release signing/publish + the CodeQL scan
-  invocation), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`,
-  `GEMINI.md`, `.claude/commands/`).
+  docs (the Constitution — **both** its canonical copy at
+  `.specify/memory/constitution.md` and the root `CONSTITUTION.md` mirror —
+  plus `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`),
+  the security/compliance paths (`SECURITY*`, `.github/CODEOWNERS` itself, the
+  CodeQL config, the release signing key and the `docs/VERIFYING-RELEASES.md`
+  that publishes its fingerprint), and the workflows that hold release
+  secrets or feed bytes into a signed artifact — which includes the CI-image
+  build, since the CodeQL scan runs inside that image.
+
+The lists above are a summary. `.github/CODEOWNERS` is the enforced artifact
+and wins on any disagreement; the path-level breakdown for contributors is the
+table in [`CONTRIBUTING.md`](CONTRIBUTING.md#reviews-and-merging). Deliberately
+not restated here: the exact workflow filenames, which change as workflows are
+added and renamed.
+
+One subtlety worth knowing before editing `.github/CODEOWNERS`: a pattern with
+no slash (`*.md`, `CMakeLists.txt`) — **or with only a trailing one**
+(`docs/`, `tests/`) — matches at **any depth**. Only a *leading* slash
+(`/docs/`) anchors a pattern to the repository root.
+
+Two consequences. The `*.md` glob reaches markdown inside every directory, so
+the `docs/`, `resources/`, and `tests/` lines have to come *after* it in the
+file for those directories' markdown to stay at Tier 3 — CODEOWNERS resolves by
+last match, not by specificity. And those three lines are themselves
+unanchored, so they also claim `third_party/crdv/docs/` and
+`third_party/crdv/tests/`. That is intended: a vendored tree's own docs and
+tests belong with its code, which is already Tier 3.
+
+Tier 1 is deliberately narrow: a path belongs there only if a wrong change to
+it would alter **who decides things** or **what gets signed**. Documentation
+that merely describes how to build the software — including the AI-instruction
+files, which carry architecture, build steps, and style conventions rather than
+policy — sits at Tier 2. Where an instruction file appears to conflict with
+this document or the Constitution, those win; the conflict is a defect in the
+instruction file, not a governance change, so gating it at Tier 1 bought
+friction rather than control.
+
+This reallocation does not touch **project direction**, which §Project
+Direction reserves to the Project Maintainer regardless of who can approve an
+edit to `ROADMAP.md`.
 
 Self-approval is blocked by GitHub on every tier — your own PR always needs a
 review from someone else. The Tier-1 paths are hard gates: no merge without
@@ -165,15 +210,32 @@ AetherSDR has two categories of AI involvement:
 ### AetherClaude (automated agent)
 
 AetherClaude is an official automated contributor that monitors the issue
-tracker and opens PRs for issues labeled `aetherclaude`. It operates within
-strict boundaries defined in `CLAUDE.md`:
+tracker and opens PRs for issues labeled `aetherclaude`.
 
-- **May autonomously fix:** bugs with clear root cause, protocol compliance
-  issues, build/CI failures
-- **May not autonomously change:** visual design, UX behavior, architecture,
-  feature scope, default values
+**The following limits are normative and defined here.** They apply to every
+automated agent that opens PRs against this repository, not only AetherClaude:
 
-AetherClaude PRs are reviewed by the maintainer before merge.
+- **May autonomously fix:** bugs with a clear root cause, protocol compliance
+  issues confirmed against FlexLib or a pcap, build/CI failures.
+- **May not autonomously change:** visual design (colours, fonts, layout,
+  theme), UX behaviour (what controls do, keyboard shortcuts), architecture
+  (new threads, signal routing, new dependencies), feature scope beyond what
+  the issue describes, or default values affecting all users.
+
+When in doubt, the agent implements the fix and notes in the PR that a design
+decision needs maintainer review. The Project Maintainer is the sole authority
+on visual design and UX direction.
+
+`AGENTS.md` §"Autonomous Agent Boundaries" elaborates these limits with
+worked examples for agent consumption. That file is Tier 2 and **may not
+widen them** — where it and this section differ, this section governs, and
+the difference is a defect in `AGENTS.md`. Widening an automated agent's
+autonomy is an amendment to this document and follows §Amendments.
+
+Bot-opened PRs are reviewed under the same CODEOWNERS tiers as any other PR.
+@AetherClaude is deliberately **not** a member of any code-owner team, so a
+bot PR always requires approval from a human code owner of every tier it
+touches, and the bot can never approve its own work or another agent's.
 
 ### AI-assisted human contributions
 

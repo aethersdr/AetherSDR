@@ -160,6 +160,10 @@ private:
     bool m_radioHasSideDsp{true};
 
     bool m_updatingFromModel{false};
+    // Presentation gate for TX-only meters. Meter replies can be in flight
+    // across an un-key, so stopping the poller alone cannot prevent a late
+    // non-zero sample from repainting an idle gauge.
+    bool m_transmitting{false};
 
     // PEP peak-hold for the FWDPWR gauge — mirrors the SMeterWidget RX
     // peak-hold pattern.  The peak captures the highest pre-smoothed FWDPWR
@@ -176,6 +180,13 @@ private:
     QElapsedTimer m_peakHoldTimer;
     bool m_peakHoldRunning{false};
     QTimer m_peakTick;
+
+    // setPowerScale() no-ops when neither input moved (#4845) — it's called
+    // on every RadioModel::infoChanged, most of which carry no scale-relevant
+    // change, and gauge->setRange() forces a repaint.
+    int  m_lastMaxWatts{-1};
+    bool m_lastHasAmplifier{false};
+    bool m_havePowerScale{false};
 };
 
 } // namespace AetherSDR

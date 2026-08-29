@@ -21,7 +21,8 @@ struct TxSourceSummary {
     int sampleRate{0};
     int channelCount{0};
     QAudioFormat::SampleFormat sampleFormat{QAudioFormat::Unknown};
-    bool resamplingTo24k{false};
+    bool normalizingTo48k{false};
+    bool radeResamplingTo24k{false};
     bool fallbackOccurred{false};
     QString fallbackReason;
 };
@@ -30,6 +31,7 @@ struct CwSidetoneSummary {
     QString backend;
     QString deviceDescription;
     int sampleRate{0};
+    QString timingPath;  // "pull" (PortAudio callback) or "push" (QAudioSink timer)
     bool fallbackOccurred{false};
     QString fallbackReason;
 };

@@ -40,6 +40,25 @@ public:
     double centerMhz() const { return m_centerMhz; }
     bool centerKnown() const { return m_centerKnown; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
+    // True when a target frequency (MHz) lies within this pan's current span
+    // [center - bw/2, center + bw/2]. The source of truth for the CAT
+    // (rigctld / SmartCAT) VFO-tune recenter policy — RadioModel::tuneSliceForCat
+    // and TciServer::tuneSliceAndConfirm are the callers: in-span retunes keep
+    // autopan=0 (no yank), out-of-span targets recenter/re-band the display. Every
+    // command plane resolves "in span" here so they cannot drift apart — CAT,
+    // rigctld and TCI open-coded identical copies until this one grew the
+    // centerKnown term below, which is the drift this replaces. Pinned by
+    // tests/cat_tune_policy_test.cpp. Until the radio has reported a real center
+    // (centerKnown), m_centerMhz is a placeholder, so treat the target as out of
+    // span — that recenters, which is the safe direction and establishes the
+    // center. A non-positive bandwidth (span not yet known) is likewise never in span.
+    bool spanContainsMhz(double mhz) const {
+        if (!m_centerKnown) {
+            return false;
+        }
+        const double halfBw = m_bandwidthMhz / 2.0;
+        return halfBw > 0.0 && qAbs(mhz - m_centerMhz) <= halfBw;
+    }
     // Normalized setter driven by the backend (aetherd RFC 2.3). A negative
     // value means "leave unchanged" (the radio may report one without the
     // other). Emits infoChanged when either value changes or when the center
@@ -97,7 +116,22 @@ public:
     int rfGainLow() const { return m_rfGainLow; }
     int rfGainHigh() const { return m_rfGainHigh; }
     int rfGainStep() const { return m_rfGainStep; }
-    void setRfGainInfo(int low, int high, int step);
+    // What the readout appends to the number. " dB" for a real gain register,
+    // "%" for a radio whose RF gain is an opaque scale — see
+    // IRadioBackend::panRfGainInfoChanged.
+    QString rfGainUnitSuffix() const { return m_rfGainUnitSuffix; }
+    void setRfGainInfo(int low, int high, int step,
+                       const QString& unitSuffix = QStringLiteral(" dB"));
+    // Discrete receive front-end stages. An EMPTY label list means the radio
+    // has no such stage and its control does not appear.
+    QStringList preampLabels() const { return m_preampLabels; }
+    int preampStep() const { return m_preampStep; }
+    void setPreampLabels(const QStringList& labels);
+    void setPreampStep(int step);
+    QStringList attenuatorLabels() const { return m_attenuatorLabels; }
+    int attenuatorStep() const { return m_attenuatorStep; }
+    void setAttenuatorLabels(const QStringList& labels);
+    void setAttenuatorStep(int step);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
     // antenna promoted to universal typed signals). Each emits its existing
     // change-signal only on an actual change; the wire decode lives in
@@ -181,7 +215,12 @@ signals:
     void rxAntennaChanged(const QString& ant);
     void antListChanged(const QStringList& ants);
     void rfGainChanged(int gain);
-    void rfGainInfoChanged(int low, int high, int step);
+    void rfGainInfoChanged(int low, int high, int step,
+                           const QString& unitSuffix = QStringLiteral(" dB"));
+    void preampLabelsChanged(const QStringList& labels);
+    void preampStepChanged(int step);
+    void attenuatorLabelsChanged(const QStringList& labels);
+    void attenuatorStepChanged(int step);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
@@ -224,6 +263,11 @@ private:
     int         m_rfGainLow{-8};
     int         m_rfGainHigh{32};
     int         m_rfGainStep{8};
+    QString     m_rfGainUnitSuffix{QStringLiteral(" dB")};
+    QStringList m_preampLabels;
+    int         m_preampStep{0};
+    QStringList m_attenuatorLabels;
+    int         m_attenuatorStep{0};
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};

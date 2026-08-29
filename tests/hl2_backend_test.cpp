@@ -103,6 +103,10 @@ int main(int argc, char** argv)
 
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<TransmitDelta>();
+    // QSignalSpy stores a notchChanged argument by metatype, so the notch
+    // session-scope case below reads an empty QVariant without this.
+    qRegisterMetaType<NotchDelta>();
 
     // The backend RESTORES the operator's remembered span at connect, so the
     // default-span assertion below depends on persisted state. The isolated
@@ -165,7 +169,14 @@ int main(int argc, char** argv)
     check(caps.canTransmit, "canTransmit is true for an interactive run");
     check(caps.maxSlices == 1, "one slice");
     check(caps.sampleRatesHz.contains(48000) && caps.sampleRatesHz.contains(384000), "sample rates");
-    check(caps.extensionNamespaces.isEmpty(), "no extension namespaces advertised");
+    // "hl2" since manual frequency calibration landed (freqcal.get / .set /
+    // .set_live). This field is the handshake a client pre-checks before it
+    // issues invokeExtension(), so it has to name every namespace the backend
+    // actually answers — an empty list here while the verbs work would report
+    // the opposite of the truth. The unknown-verb path is still an error; see
+    // the invokeExtension case below.
+    check(caps.extensionNamespaces == QVector<QString>{QStringLiteral("hl2")},
+          "advertises the hl2 extension namespace");
 
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
     QSignalSpy disconnectedSpy(&backend, &IRadioBackend::disconnected);
@@ -235,13 +246,68 @@ int main(int argc, char** argv)
     backend.setSliceFilter(0, 300, 2700);
     check(sliceCount >= sliceBefore + 3, "freq/mode/filter each emit sliceChanged");
 
+    // ---- CW reports a passband CENTRED on the marker ----
+    //
+    // The operator-facing half of the CW BFO split (the audio half is
+    // hl2_cw_bfo_test). What the seam reports is what the panadapter draws, so
+    // an asymmetric pair here is a skirt drawn off to one side of the marker —
+    // the shape of the bug this pins. Both CW modes report the SAME cuts:
+    // the sideband lives in the BFO now, not in the sign of the filter.
+    int cwLow = 0, cwHigh = 0;
+    auto captureFilter = QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                                          &backend, [&](int, const SliceDelta& d) {
+        if (d.filterLow)  cwLow  = *d.filterLow;
+        if (d.filterHigh) cwHigh = *d.filterHigh;
+    });
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    check(cwLow == -cwHigh && cwHigh > 0,
+          "CW passband is symmetric about the marker");
+    const int cwuLow = cwLow, cwuHigh = cwHigh;
+    backend.setSliceMode(0, QStringLiteral("CWL"));
+    check(cwLow == cwuLow && cwHigh == cwuHigh,
+          "CWL reports the same carrier-relative cuts as CWU");
+    // Changing the pitch must NOT move the operator's cuts: they are measured
+    // from the marker, so a 500 Hz filter stays a 500 Hz filter on any pitch.
+    backend.setCwPitch(700);
+    check(cwLow == cwuLow && cwHigh == cwuHigh,
+          "a pitch change leaves the operator's CW cuts alone");
+    QObject::disconnect(captureFilter);
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+
     // ---- keying does not disturb the link ----
     // Whether this actually keys depends on the transmit gate above; what
     // matters here is that asking does not upset the connection either way.
+    QSignalSpy keyStateSpy(&backend, &IRadioBackend::transmitChanged);
     backend.setKeying(true);
     check(backend.isConnected(), "setKeying(true) does not disrupt the link");
+    check(!keyStateSpy.isEmpty()
+              && keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(false),
+          "key-down publishes observed MOX for backend-owned CW break-in");
+    keyStateSpy.clear();
     backend.setKeying(false);
     check(backend.isConnected(), "setKeying(false) does not disrupt the link");
+    check(!keyStateSpy.isEmpty()
+              && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
+          "key-up publishes observed MOX for backend-owned CW break-in");
+
+    // ---- manual MOX takes ownership from the Break-In hang ----
+    // A completed element leaves MOX up for the configured hang. If the
+    // operator asserts manual PTT during that window, the old timer must not
+    // later drop the still-held manual transmission.
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    keyStateSpy.clear();
+    backend.setCwKeying(true, true, 30);
+    backend.setCwKeying(false, true, 30);
+    backend.setKeying(true);  // manual takeover while the hang is pending
+    keyStateSpy.clear();
+    spin(60);                 // past the stale hang deadline
+    check(keyStateSpy.isEmpty(),
+          "manual MOX takeover cancels the pending CW hang unkey");
+    backend.setKeying(false);
+    check(!keyStateSpy.isEmpty()
+              && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
+          "manual release unkeys after taking ownership from CW Break-In");
+    backend.setSliceMode(0, QStringLiteral("LSB"));
 
     // ---- invokeExtension honors the async contract ----
     backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("noop"), 42, {});
@@ -639,8 +705,195 @@ int main(int argc, char** argv)
         check(lastDrive == driveFor(40),
               "#4549: the unkey restores the power set DURING the tune");
 
+        // ---- #4912: health reports the APPLIED drive, not the request ------
+        //
+        // Nothing reported the drive the radio was actually given. `get
+        // transmit` has rfPower and `get radio` has txPower, but both read
+        // TransmitModel — the operator's ask — so a drive that never reached
+        // the radio read back as though it had. That is the exact failure the
+        // HL2 health section exists to catch, in the one area where it is
+        // safety-adjacent.
+        //
+        // Asserted against `lastDrive`, the value taken off the WIRE by the
+        // same reader the checks above use. A readback that agrees only with
+        // the model would prove nothing — agreement with the wire is the claim.
+        lastDrive = -1;
+        tuner.setTxPower(60);
+        spin(200);
+        {
+            const auto h = tuner.healthSnapshot();
+            check(lastDrive == driveFor(60), "#4912: RF power 60 reaches the wire");
+            check(h.values.value(QStringLiteral("rfPowerPercent")).toInt() == 60,
+                  "#4912: health reports the requested drive percent");
+            check(h.values.contains(QStringLiteral("txDriveRegister"))
+                      && h.values.value(QStringLiteral("txDriveRegister")).toInt()
+                             == lastDrive,
+                  "#4912: health reports the raw drive register sent to the radio");
+            check(h.values.contains(QStringLiteral("txDriveGated"))
+                      && !h.values.value(QStringLiteral("txDriveGated")).toBool(),
+                  "#4912: drive is not reported as gated in a TX-capable session");
+        }
+
         tuner.disconnectRadio();
         spin(50);
+    }
+
+    // ---- #4912: a TX-BLOCKED session says so, instead of looking normal -----
+    //
+    // applyDrive() forces the register to 0 when the transmit gate is closed
+    // while m_rfPowerPercent keeps the operator's value, so the two legitimately
+    // disagree — and until now nothing reported the disagreement. A script
+    // reading only the request would conclude the radio was driven at 100%.
+    //
+    // The gate is decided per connect from AETHER_AUTOMATION + ALLOW_TX, so a
+    // second backend connected with the bridge's variable set (and ALLOW_TX
+    // absent) exercises the blocked path without disturbing anything above.
+    {
+        const bool hadAutomation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+        const bool hadAllowTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+        check(!hadAllowTx, "#4912: ALLOW_TX is absent, so the gated case is reachable");
+        qputenv("AETHER_AUTOMATION", "1");
+        const auto restoreEnv = qScopeGuard([hadAutomation] {
+            if (!hadAutomation)
+                qunsetenv("AETHER_AUTOMATION");
+        });
+
+        QUdpSocket gatedRadio;
+        check(gatedRadio.bind(QHostAddress::LocalHost, 0), "#4912: gated fake radio binds");
+        std::uint32_t gatedSeq = 0;
+        int gatedDrive = -1;
+        QObject::connect(&gatedRadio, &QUdpSocket::readyRead, &gatedRadio, [&] {
+            while (gatedRadio.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = gatedRadio.receiveDatagram();
+                const int drive = ep2DriveLevel(dg.data());
+                if (drive >= 0)
+                    gatedDrive = drive;
+                gatedRadio.writeDatagram(fakeEp6(gatedSeq++), dg.senderAddress(),
+                                         dg.senderPort());
+            }
+        });
+
+        Hl2Backend gated;
+        RadioConnectRequest gatedReq;
+        gatedReq.host = QStringLiteral("127.0.0.1");
+        gatedReq.port = gatedRadio.localPort();
+        gated.connectRadio(gatedReq);
+        spin(300);
+        check(gated.isConnected(), "#4912: gated backend connects");
+
+        // BEFORE touching drive at all — the case a latched flag got wrong (#4918
+        // review). finishDspSetup() seeds the register with a direct
+        // setTxDriveLevel(0) that bypasses applyDrive(), so nothing observes the
+        // gate acting; meanwhile m_rfPowerPercent still reads its default 100.
+        // A flag set only inside applyDrive() therefore denied responsibility for
+        // the very divergence the row exists to explain.
+        {
+            const auto h0 = gated.healthSnapshot();
+            check(h0.values.value(QStringLiteral("txDriveGated")).toBool(),
+                  "#4918: the gate is reported before drive is ever commanded");
+            check(h0.values.value(QStringLiteral("rfPowerPercent")).toInt() == 100,
+                  "#4918: and the requested percent is still its default 100");
+        }
+
+        gatedDrive = -1;
+        gated.setTxPower(100);
+        spin(200);
+        const auto h = gated.healthSnapshot();
+        check(gatedDrive == 0, "#4912: the closed gate holds the wire drive at 0");
+        check(h.values.value(QStringLiteral("rfPowerPercent")).toInt() == 100,
+              "#4912: the operator's requested percent is still reported");
+        check(h.values.value(QStringLiteral("txDriveRegister")).toInt() == 0,
+              "#4912: the written register is reported as 0, matching the wire");
+        check(h.values.value(QStringLiteral("txDriveGated")).toBool(),
+              "#4912: the gate is named, so requested-vs-applied is explainable");
+
+        gated.disconnectRadio();
+        spin(50);
+    }
+
+    // ---- notch records are SESSION state, and ids are never recycled (#4780) --
+    //
+    // The half of the notch lifecycle that lives ABOVE Hl2RxDsp, and the one
+    // hl2_notch_seed_test cannot reach: that test pins seeding as idempotent
+    // against a single DSP chain, and never disconnects, so deleting
+    // m_notches.clear() from connectRadio() leaves it green.
+    //
+    // What that line prevents: RadioModel::onDisconnected() empties TnfModel,
+    // but a same-family reconnect rebuilds no backend, so records kept here
+    // would be replayed into the fresh WDSP chains by seedNotches() with
+    // nothing on screen naming them — nulls in the audio at frequencies the UI
+    // does not mention, and no id to remove them by. Asserted through the seam
+    // rather than by reaching into m_notches: a record that survived is a
+    // record still addressable, so setNotch/removeNotch on last session's id
+    // would report back.
+    {
+        QUdpSocket radio4;
+        check(radio4.bind(QHostAddress::LocalHost, 0), "fourth fake radio binds");
+        std::uint32_t seq4 = 0;
+        QObject::connect(&radio4, &QUdpSocket::readyRead, &radio4, [&] {
+            while (radio4.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = radio4.receiveDatagram();
+                if (seq4 < kCap)
+                    radio4.writeDatagram(fakeEp6(seq4++), dg.senderAddress(),
+                                         dg.senderPort());
+            }
+        });
+
+        Hl2Backend notcher;
+        QSignalSpy notchedSpy(&notcher, &IRadioBackend::notchChanged);
+        QSignalSpy unnotchedSpy(&notcher, &IRadioBackend::notchRemoved);
+        QSignalSpy notchConnected(&notcher, &IRadioBackend::connected);
+        RadioConnectRequest nr;
+        nr.host = QStringLiteral("127.0.0.1");
+        nr.port = radio4.localPort();
+        notcher.connectRadio(nr);
+        AetherSDR::test::awaitDspBuild("hl2_backend_test",
+                                      [&] { return notchConnected.count() >= 1; });
+        spin(300);
+        check(notchConnected.count() >= 1, "notch-session backend came up");
+
+        // Placed against a live chain, so the id the backend mints is the one a
+        // real session would carry.
+        notcher.createNotch(7'041'000.0, 200.0);
+        check(notchedSpy.count() == 1, "createNotch reports the id the backend minted");
+        const int firstId = notchedSpy.isEmpty() ? -1 : notchedSpy.first().at(0).toInt();
+
+        notcher.disconnectRadio();
+        spin(150);
+        seq4 = 0;               // let the same fake answer a second session
+        notcher.connectRadio(nr);
+        // Awaited rather than merely spun past. The second session opens its own
+        // WDSP chains on the I/O thread; leaving that build in flight would put
+        // the planner under whatever assertion runs next, which then fails for a
+        // reason it does not name.
+        AetherSDR::test::awaitDspBuild("hl2_backend_test",
+                                      [&] { return notchConnected.count() >= 2; });
+        spin(200);
+        check(notchConnected.count() >= 2, "the notch-session backend reconnected");
+
+        notchedSpy.clear();
+        unnotchedSpy.clear();
+        NotchDelta move;
+        move.centerHz = 7'042'000.0;
+        notcher.setNotch(firstId, move);
+        check(notchedSpy.isEmpty(),
+              "a notch from the previous session is still editable after reconnect");
+        notcher.removeNotch(firstId);
+        check(unnotchedSpy.isEmpty(),
+              "a notch from the previous session is still removable after reconnect");
+
+        // And the counter deliberately does NOT reset with the records: a
+        // recycled id would let a stale reference address a different notch.
+        notchedSpy.clear();
+        notcher.createNotch(7'050'000.0, 200.0);
+        check(notchedSpy.count() == 1, "the new session can still place a notch");
+        if (!notchedSpy.isEmpty()) {
+            check(notchedSpy.first().at(0).toInt() > firstId,
+                  "the new session handed out an id the old one already used");
+        }
+
+        notcher.disconnectRadio();
+        spin(100);
     }
 
     // ---- F4 (#4448): a connect to a radio that never answers must surface a

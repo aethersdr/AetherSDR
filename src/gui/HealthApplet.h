@@ -129,6 +129,14 @@ private:
     int m_activeFrames{0};
     int m_idleFrames{0};
     int m_incidentCooldownFrames{0};
+
+    // setPowerScale() no-ops when neither input moved (#4845) — called on
+    // every RadioModel::infoChanged, most of which carry no scale-relevant
+    // change; consistent with the other power gauges even though this one
+    // doesn't itself force a repaint.
+    int  m_lastMaxWatts{-1};
+    bool m_lastHasAmplifier{false};
+    bool m_havePowerScale{false};
 };
 
 } // namespace AetherSDR

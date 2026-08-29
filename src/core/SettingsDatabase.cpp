@@ -5,6 +5,13 @@
 
 #include <sqlite3.h>
 
+// Belt against a -DUSE_SYSTEM_SQLITE=ON pkg-config floor (CMakeLists.txt,
+// sqlite3>=3.33) disagreeing with the header actually picked up at compile
+// time: SettingsDatabase uses sqlite_schema (3.33.0, below) and VACUUM INTO
+// (3.27.0). Catches the mismatch at compile time rather than at first launch.
+static_assert(SQLITE_VERSION_NUMBER >= 3033000,
+              "SettingsDatabase requires SQLite >= 3.33.0 (sqlite_schema)");
+
 namespace AetherSDR {
 
 namespace {
@@ -100,6 +107,17 @@ bool SettingsDatabase::open(const QString& path)
     m_db = db;
     m_path = path;
 
+    // Re-establish, at runtime, the two aether_sqlite3 compile-time hardening
+    // options that a -DUSE_SYSTEM_SQLITE=ON distro library does not carry:
+    // rejecting double-quoted string literals as identifiers, and owner-only
+    // file permissions. Both are cheap and safe to redo unconditionally on
+    // the vendored path too, so this is one code path for both builds rather
+    // than one more thing to keep in sync with a CMake option.
+    sqlite3_db_config(m_db, SQLITE_DBCONFIG_DQS_DML, 0, nullptr);
+    sqlite3_db_config(m_db, SQLITE_DBCONFIG_DQS_DDL, 0, nullptr);
+    QFile::setPermissions(path,
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+
     // busy_timeout first so a concurrent instance's transaction doesn't turn
     // every subsequent pragma into an immediate SQLITE_BUSY failure.
     sqlite3_busy_timeout(m_db, 5000);
@@ -109,6 +127,14 @@ bool SettingsDatabase::open(const QString& path)
         close();
         return false;
     }
+
+    // journal_mode=WAL just created -wal/-shm (or reused them, already owner-
+    // only); they carry the same page data as the main file, so they get the
+    // same treatment. Harmless if either doesn't exist yet.
+    QFile::setPermissions(path + QStringLiteral("-wal"),
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    QFile::setPermissions(path + QStringLiteral("-shm"),
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 
     // A non-database file (e.g. truncated or foreign) often only fails once a
     // real query touches it — probe before trusting it.

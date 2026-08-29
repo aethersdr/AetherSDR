@@ -17,15 +17,16 @@ class PipeWireNativeRxSource;
 #endif
 
 // DAX virtual audio bridge for Linux using PulseAudio pipe modules.
-// Creates named pipes in /tmp and loads module-pipe-source (RX, 4 channels)
+// Creates named pipes in /tmp and loads module-pipe-source (RX, up to
+// NUM_CHANNELS — open() opens only maxSlices() of them, following the radio)
 // and module-pipe-sink (TX, 1 channel) so that apps like WSJT-X, VARA, fldigi
-// see "AetherSDR DAX 1-4" as audio input and "AetherSDR TX" as audio output.
+// see "AetherSDR DAX 1-8" as audio input and "AetherSDR TX" as audio output.
 // Works with both PulseAudio and PipeWire (via pipewire-pulse).
 class PipeWireAudioBridge : public QObject {
     Q_OBJECT
 
 public:
-    static constexpr int NUM_CHANNELS    = 4;
+    static constexpr int NUM_CHANNELS    = 8;
     static constexpr int RADIO_RATE      = 24000;  // radio-native DAX rate
     static constexpr int PIPE_RATE       = 48000;  // matches PipeWire graph rate — avoids in-graph resampler
     static constexpr int PIPE_CHANNELS   = 1;      // mono — ham radio DAX is single-channel
@@ -36,7 +37,12 @@ public:
     explicit PipeWireAudioBridge(QObject* parent = nullptr);
     ~PipeWireAudioBridge() override;
 
-    bool open();
+    // activeChannels = how many RX sources to actually open (the radio's
+    // slice capacity, RadioModel::maxSlices()). Clamped to [1, NUM_CHANNELS].
+    // NUM_CHANNELS stays the compile-time array bound; this only bounds the
+    // open loop so the device list follows the radio (#4854). Dynamic resize
+    // after connect is a follow-up (issue #4935).
+    bool open(int activeChannels = NUM_CHANNELS);
     void close();
     bool isOpen() const { return m_open; }
 
@@ -85,12 +91,16 @@ private:
     void feedSilenceToAllPipes();
 
     std::atomic_bool m_open{false};
+    // How many RX sources open() actually opened (bounded by maxSlices()).
+    // Teardown loops still walk the full NUM_CHANNELS bound — closing an
+    // unopened slot is a no-op. (#4854)
+    int m_activeChannels{NUM_CHANNELS};
     float m_gain{0.5f};
     // m_channelGain is read on PanadapterStream's network thread (DirectConnection
     // fast path) and written from the main thread (DaxApplet slider).  Float
     // load/store is naturally atomic on aligned x86_64 / aarch64, but use
     // std::atomic for the formal happens-before guarantee.
-    std::atomic<float> m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f};
+    std::atomic<float> m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
     float m_txGain{0.5f};
     std::atomic_bool m_transmitting{false};
 
@@ -98,7 +108,7 @@ private:
     // Holds the last input sample so the first interpolated output of the
     // next packet has a correct neighbor instead of starting from zero.
     // Only ever touched in feedDaxAudio (single thread, per-channel) — no atomic needed.
-    float m_rxLastSample[NUM_CHANNELS]{0.0f, 0.0f, 0.0f, 0.0f};
+    float m_rxLastSample[NUM_CHANNELS]{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
     // Wall-clock timestamp (ms) of the most recent real audio packet for any
     // channel.  Updated lock-free from the audio fast path; read by the

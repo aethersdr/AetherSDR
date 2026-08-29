@@ -89,23 +89,25 @@ TX AUDIO ROUTING SUMMARY:                  ◄── AUDIO THREAD
               │                       └─→ radio-native VITA PCC 0x0123
               │
               ▼
-      test tone → client TX DSP chain → post-DSP monitor
-        → PC mic gain → Quindar → final limiter → meters/scopes
+      device-rate Int16 → canonical mono → 48 kHz float normalization
+        → RN2 → test tone → client TX DSP chain → PC mic gain
+        → Quindar → final limiter → 48-to-24 kHz SRC
+        → linked TPDF + Int16 quantization → monitors/meters/scopes
               │
-              ├─→ Opus remote_audio_tx VITA PCC 0x8005
-              └─→ uncompressed VITA fallback PCC 0x03E3
-                              │
-                              ▼ [queued to NETWORK]
-                      PanadapterStream.sendToRadio()
-                              │
-                              ▼
-                         Radio UDP 4991
+              ├─→ backend TX seam (HL2/Icom, 24 kHz Int16)
+              │       └─→ backend-native conversion/modulation
+              │
+              └─→ Flex Opus PCC 0x8005 / uncompressed PCC 0x03E3
+                              └─→ [queued to NETWORK]
+                                  PanadapterStream.sendToRadio()
+                                      └─→ Radio UDP 4991
 
 The PSK Reporter WSPR beacon is a one-shot, operator-armed digital source. A
 precise timer on the AudioEngine worker thread generates sample-accurate 4-FSK
-independently of microphone callbacks and sends it through a client-owned
-`dax_tx` stream in DIGU. Its dedicated non-voice PTT source suppresses Quindar,
-and the generator holds silence through the unkey edge.
+independently of microphone callbacks. It uses a client-owned `dax_tx` stream
+on Flex and the normalized transmit-audio seam on Icom/HL2, in DIGU. Its
+dedicated non-voice PTT source suppresses Quindar, and the generator holds
+silence through the unkey edge.
 
 Four conventions in that generator are taken from WSJT-X's `Modulator.cpp`
 rather than invented, because a WSPR frame is judged by decoders we do not own:

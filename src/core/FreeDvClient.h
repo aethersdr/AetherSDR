@@ -49,6 +49,10 @@ public:
     void startConnection();
     void stopConnection();
     bool isConnected() const { return m_connected.load(); }
+    // Atomic like m_connected: written on the client's worker thread, read
+    // from the GUI thread (the reporter dialog gates its message field on
+    // it — #4231).
+    bool isReportingEnabled() const { return m_reportingEnabled.load(); }
     QString myGrid() const { return m_myGrid; }
     QHash<QString, StationInfo> stations() const { return m_stations; }
 
@@ -63,6 +67,10 @@ signals:
     void stationsCleared();
     void stationUpdated(const QString& sid, const AetherSDR::FreeDvClient::StationInfo& info);
     void stationRemoved(const QString& sid);
+    // Full-participant reporting turned on/off. The reporter dialog uses this
+    // to enable its message field, since updateMessage() only reaches the
+    // server while reporting is active (#4231).
+    void reportingStateChanged(bool enabled);
 
 public slots:
     // Defer QWebSocket + timer construction to the worker thread (#1929) —
@@ -120,7 +128,7 @@ private:
     QHash<QString, StationInfo> m_stations;  // sid → station info
 
     // Station reporting state
-    bool    m_reportingEnabled{false};
+    std::atomic<bool> m_reportingEnabled{false};
     bool    m_authNeedsRefresh{false};  // reconnect in progress for auth change
     QString m_myCallsign;
     QString m_myGrid;

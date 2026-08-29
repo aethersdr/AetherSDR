@@ -126,13 +126,15 @@ MeterApplet::MeterApplet(QWidget* parent)
     // ── PA Temp gauge ─────────────────────────────────────────────────────────
     m_paTempGauge = new HGauge(0.0f, 120.0f, 70.0f, "PA Temp", "",
         kCelsiusTicks, this, 55.0f);
+    m_paTempGauge->setObjectName(QStringLiteral("mtrPaTempGauge"));
     m_paTempGauge->setAccessibleName(tr("PA temperature"));
     vbox->addWidget(m_paTempGauge);
 
     // ── Supply voltage gauge ───────────────────────────────────────────────────
-    m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "+13.8V", "",
+    m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "Supply Voltage", "",
         {{10.5f, "10.5"}, {12, "12"}, {13.8f, "13.8"}, {15, "15"}},
         this, 14.1f);
+    m_supplyGauge->setObjectName(QStringLiteral("mtrSupplyVoltageGauge"));
     m_supplyGauge->setAccessibleName(tr("Supply voltage"));
     vbox->addWidget(m_supplyGauge);
 
@@ -154,20 +156,88 @@ void MeterApplet::setMeterModel(MeterModel* model)
 
     connect(model, &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyV) {
-        m_paTemp    = paTemp;
-        m_hasPaTemp = true;
-        const float dispTemp = m_tempFahrenheit ? toFahrenheit(paTemp) : paTemp;
-        m_paTempGauge->setValue(dispTemp);
-        m_paTempGauge->setLabel(formatTemp(paTemp, m_tempFahrenheit));
+        if (m_model->hasPaTemp()) {
+            m_paTemp    = paTemp;
+            m_hasPaTemp = true;
+            const float dispTemp = m_tempFahrenheit ? toFahrenheit(paTemp) : paTemp;
+            m_paTempGauge->setValue(dispTemp);
+            m_paTempGauge->setLabel(formatTemp(paTemp, m_tempFahrenheit));
+        }
 
-        m_supplyGauge->setValue(supplyV);
-        m_supplyGauge->setLabel(QString("+%1V").arg(supplyV, 0, 'f', 2));
+        // hwTelemetryChanged carries PA temperature and supply voltage
+        // together. A temperature-only update must not format MeterModel's
+        // 0.0 V initialiser as though the radio reported it.
+        if (m_model->hasSupplyVoltage()) {
+            m_supplyGauge->setValue(supplyV);
+            m_supplyGauge->setLabel(QStringLiteral("+%1V").arg(supplyV, 0, 'f', 2));
+        }
     });
 
     connect(model, &MeterModel::meterUpdated,
             this, &MeterApplet::onMeterUpdated);
 
     resolveIndices();
+}
+
+void MeterApplet::setPaTemperatureTelemetryState(bool connected, bool available)
+{
+    // A reading belongs to one radio session. Do not let a capable radio's
+    // final temperature survive a disconnect or reappear after an intervening
+    // radio that has no PA-temperature telemetry.
+    if (!connected || !available) {
+        m_paTemp = 0.0f;
+        m_hasPaTemp = false;
+        m_paTempGauge->setValueImmediate(m_tempFahrenheit ? 32.0f : 0.0f);
+        m_paTempGauge->setLabel(QStringLiteral("PA Temp"));
+    }
+
+    const bool visible = !connected || available;
+    m_paTempGauge->setVisible(visible);
+    m_tempUnitBtn->setVisible(visible);
+}
+
+void MeterApplet::setSupplyVoltageTelemetryState(bool connected)
+{
+    // A reading belongs to one extant meter in one radio session.
+    // MeterModel::clear() and removeMeter() drop the sample-validity sentinel
+    // without a telemetry update, so restore the neutral label when the shared
+    // capability lifecycle reports either transition.
+    if (!connected || !m_model || !m_model->hasSupplyVoltage()) {
+        resetSupplyVoltageDisplay();
+    }
+}
+
+void MeterApplet::resetSupplyVoltageDisplay()
+{
+    m_supplyGauge->setValueImmediate(0.0f);
+    m_supplyGauge->setLabel(QStringLiteral("Supply Voltage"));
+}
+
+void MeterApplet::setMainFanTelemetryState(bool connected, bool available)
+{
+    // applyCapabilitiesToUi() also runs for mid-session oscillator and GPS
+    // updates. Those are not radio/capability edges and must not discard the
+    // live meter identity on every refresh.
+    if (m_hasMainFanTelemetryState
+        && m_mainFanConnected == connected
+        && m_mainFanAvailable == available) {
+        return;
+    }
+    m_hasMainFanTelemetryState = true;
+    m_mainFanConnected = connected;
+    m_mainFanAvailable = available;
+
+    // A reading and its meter index belong to one radio session. Do not let a
+    // capable radio's last fan speed survive a disconnect or get interpreted
+    // as another radio's unrelated meter at the same index.
+    m_fanIdx = -1;
+    m_resolved = false;
+    if (!connected || !available) {
+        m_fanGauge->setValueImmediate(0.0f);
+        m_fanGauge->setLabel(QStringLiteral("Main Fan"));
+    }
+
+    m_fanGauge->setVisible(!connected || available);
 }
 
 void MeterApplet::resolveIndices()

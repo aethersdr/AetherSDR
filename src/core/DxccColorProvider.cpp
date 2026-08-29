@@ -1,5 +1,6 @@
 #include "DxccColorProvider.h"
 #include "AdifParser.h"
+#include "ShutdownTrace.h"
 
 #include <QFileInfo>
 #include <QMetaObject>
@@ -67,6 +68,7 @@ DxccColorProvider::DxccColorProvider(QObject* parent)
 
 DxccColorProvider::~DxccColorProvider()
 {
+    ShutdownTrace trace("dxcc.parser_thread.join");
     m_parseThread.quit();
     m_parseThread.wait();
     delete m_parser;

@@ -37,6 +37,7 @@ public:
     // Audio thread — overwrite int16 stereo samples with the
     // generated tone.  No-op if disabled.
     void process(int16_t* interleaved, int frames, int channels) noexcept;
+    void process(float* interleaved, int frames, int channels) noexcept;
 
     void reset() noexcept;
 

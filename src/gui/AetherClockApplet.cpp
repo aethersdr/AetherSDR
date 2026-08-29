@@ -313,6 +313,38 @@ QSize AetherClockApplet::minimumSizeHint() const
     return {220, std::max(180, scopeH + drawerH + warnH + 50)};
 }
 
+// DAX chooser length follows the radio's slice capacity (Principle I): a 6300
+// exposes 2 receivers, a 6700 eight. Fed by MainWindow from RadioModel::
+// maxSlices(); see #4854 review.
+void AetherClockApplet::setMaxDaxChannels(int n)
+{
+    n = qBound(1, n, 8);
+    if (n == m_maxDaxChannels)
+        return;
+    m_maxDaxChannels = n;
+    populateDaxCombo();
+}
+
+void AetherClockApplet::populateDaxCombo()
+{
+    if (!m_daxCombo)
+        return;
+    const int n = qBound(1, m_maxDaxChannels, 8);
+    const int cur = m_daxCombo->currentIndex();
+    const int keep = qBound(0, cur < 0 ? 0 : cur, n);
+    m_updatingDaxFromModel = true;
+    {
+        QSignalBlocker block(m_daxCombo);
+        m_daxCombo->clear();
+        QStringList items{QStringLiteral("DAX Off")};
+        for (int i = 1; i <= n; ++i)
+            items << QStringLiteral("DAX %1").arg(i);
+        m_daxCombo->addItems(items);
+        m_daxCombo->setCurrentIndex(keep);
+    }
+    m_updatingDaxFromModel = false;
+}
+
 void AetherClockApplet::buildUi()
 {
     theme::setContainer(this, QStringLiteral("applet/clock"));
@@ -494,9 +526,7 @@ void AetherClockApplet::buildUi()
         applyComboStyle(m_daxCombo);
         m_daxCombo->setFixedHeight(20);
         m_daxCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_daxCombo->addItems({QStringLiteral("DAX Off"), QStringLiteral("DAX 1"),
-                              QStringLiteral("DAX 2"), QStringLiteral("DAX 3"),
-                              QStringLiteral("DAX 4")});
+        populateDaxCombo();  // sized to the radio's slice capacity
         connect(m_daxCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
                 [this](int idx) {
             // Skip the echo while we sync the combo from the model (VfoWidget
@@ -1159,7 +1189,9 @@ void AetherClockApplet::refreshDaxUi()
     // back as a user edit; the guard flag is the VfoWidget belt-and-suspenders.
     if (m_daxCombo) {
         m_daxCombo->setEnabled(sel != nullptr);
-        const int ch = std::clamp(sel ? sel->daxChannel() : 0, 0, 4);
+        const int dc = sel ? sel->daxChannel() : 0;
+        // Out-of-range for this radio -> Off, not a false in-range channel (#4854 review).
+        const int ch = (dc >= 1 && dc <= m_maxDaxChannels) ? dc : 0;
         m_updatingDaxFromModel = true;
         {
             QSignalBlocker block(m_daxCombo);

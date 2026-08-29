@@ -1,10 +1,13 @@
 #include "CwxPanel.h"
 #include "core/AppSettings.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "core/TxKeyingMarker.h"
 #include "models/CwxModel.h"
 
 #include <QContextMenuEvent>
 #include <QDateTime>
+#include <QFont>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -183,6 +186,37 @@ static const char* kTextStyle =
     "QTextEdit { background: #0a0a14; color: #c8d8e8; border: none; "
     "font-family: monospace; font-size: 13px; padding: 8px; }";
 
+int CwxPanel::macroRowMinimumHeight(const QFont& baseFont)
+{
+    // #4945: with 12 Expanding rows in one grid, a short window (the app's
+    // own 400px minimum height leaves this panel ~330px) squeezed every
+    // row well below one line of text -- Qt's layout protects FIXED-size
+    // siblings like m_textEdit under a deficit, but has nowhere else to
+    // take the shortfall from an Expanding one, so it shrunk the widget
+    // itself and clipped the glyph tops rather than just hiding overflow
+    // text. buildSetupView() puts this grid in a QScrollArea, which is
+    // what actually stops the squeeze (verified: removing just this floor
+    // while keeping the scroll area still passed). Kept anyway as an
+    // explicit floor -- readability shouldn't depend on QTextEdit's
+    // incidental natural size hint staying above one line across Qt
+    // versions/themes.
+    //
+    // Derived from font metrics, not a bare pixel count (review on #5125)
+    // -- the widget's own .font() isn't reliable here (styled while still
+    // unpolished/unshown, the same timing trap #4869 documents for
+    // Qt::WA_Hover), so this constructs an explicit QFont matching the
+    // stylesheet's declared "font-size: 11px" rather than trusting .font()
+    // to already reflect it.
+    QFont macroFont = baseFont;
+    macroFont.setPixelSize(11);
+    const int oneLine = QFontMetrics(macroFont).height();
+    // ~2 lines + 8px. That 8 is QTextDocument's default documentMargin
+    // (4px, top and bottom) -- not the stylesheet's "padding: 2px" above,
+    // which is a QTextEdit frame margin and a separate, smaller
+    // contributor (review on #5125, credit NF0T for the correction).
+    return oneLine * 2 + 8;
+}
+
 CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
@@ -195,10 +229,10 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     vbox->setSpacing(0);
 
     // Title
-    auto* title = new QLabel("CWX");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
+    m_titleLabel = new QLabel("CWX");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
                          "padding: 6px 8px; background: {{color.background.0}}; }");
-    vbox->addWidget(title);
+    vbox->addWidget(m_titleLabel);
 
     // Stacked widget for Send/Live vs Setup
     m_stack = new QStackedWidget;
@@ -239,6 +273,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->addWidget(speedLabel);
 
     m_speedSpin = new QSpinBox;
+    m_speedSpin->setObjectName(QStringLiteral("cwxSpeedSpin"));
     m_speedSpin->setRange(5, 100);
     m_speedSpin->setValue(20);
     m_speedSpin->setFixedWidth(50);
@@ -303,7 +338,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             if (!m_model) return;
             if (m_txModeProvider) {
                 const QString mode = m_txModeProvider();
-                if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
+                if (!isCwMode(mode))
                     return;
             }
             // Log the macro text to the history feed BEFORE firing the
@@ -332,6 +367,50 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     });
 
     if (m_model) setModel(m_model);
+}
+
+void CwxPanel::setDisplayName(const QString& name)
+{
+    if (m_titleLabel)
+        m_titleLabel->setText(name);
+}
+
+QString CwxPanel::displayName() const
+{
+    return m_titleLabel ? m_titleLabel->text() : QString{};
+}
+
+void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,
+                                  bool supportsLive, bool supportsStoredMacros)
+{
+    setDisplayName(name);
+    if (m_speedSpin) {
+        const QSignalBlocker blocker(m_speedSpin);
+        m_speedSpin->setRange(minWpm, maxWpm);
+        m_speedSpin->setValue(qBound(minWpm, m_model ? m_model->speed() : 20,
+                                     maxWpm));
+    }
+    if (m_liveBtn) {
+        m_liveBtn->setVisible(supportsLive);
+        if (!supportsLive) {
+            m_liveBtn->setChecked(false);
+            if (m_model) {
+                m_model->setLive(false);
+            }
+        }
+    }
+    if (m_setupBtn) {
+        m_setupBtn->setVisible(supportsStoredMacros);
+        if (!supportsStoredMacros) {
+            m_setupBtn->setChecked(false);
+            // Capability updates are radio-driven and may arrive while the
+            // operator is editing an unrelated control. Select the only
+            // supported page without showSendView()'s user-action focus grab.
+            if (m_stack->currentWidget() != m_sendPage) {
+                m_stack->setCurrentWidget(m_sendPage);
+            }
+        }
+    }
 }
 
 void CwxPanel::setModel(CwxModel* model)
@@ -508,6 +587,9 @@ void CwxPanel::buildSetupView()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_macroEdits[i], "QTextEdit { background: {{color.text.primary}}; color: {{color.background.spectrum}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 2px; padding: 2px; font-size: 11px; }");
         m_macroEdits[i]->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        // See macroRowMinimumHeight() above (#4945/#5121 review) for why
+        // this exists and why it's derived from font metrics.
+        m_macroEdits[i]->setMinimumHeight(macroRowMinimumHeight(m_macroEdits[i]->font()));
         m_macroEdits[i]->setPlaceholderText(QString("F%1 macro...").arg(i + 1));
         m_macroEdits[i]->setAcceptRichText(false);
         m_macroEdits[i]->setLineWrapMode(QTextEdit::WidgetWidth);
@@ -530,7 +612,17 @@ void CwxPanel::buildSetupView()
         });
     }
 
-    vbox->addWidget(macroWidget, 1);
+    // #4945: scroll the grid instead of letting the outer layout squeeze
+    // every row's height when the panel is shorter than 12 readable rows
+    // need. setWidgetResizable(true) lets macroWidget still grow to fill
+    // available width/height when there's room, matching the pre-fix look
+    // at a normal window size.
+    auto* macroScroll = new QScrollArea;
+    macroScroll->setWidget(macroWidget);
+    macroScroll->setWidgetResizable(true);
+    macroScroll->setFrameShape(QFrame::NoFrame);
+    macroScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    vbox->addWidget(macroScroll, 1);
 
     // Prosign + speed-modifier legend
     auto* legend = new QLabel(

@@ -1,5 +1,6 @@
 #include "PhoneCwApplet.h"
 #include "GuardedSlider.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "ComboStyle.h"
 #include "HGauge.h"
 #include "models/TransmitModel.h"
@@ -92,6 +93,7 @@ static constexpr const char* kInsetEditStyle =
     "QLineEdit:focus { border: 1px solid #00b4d8; }";
 
 static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+static constexpr float kLevelGaugeFloorDbfs = -40.0f;
 
 // Mouse-over readout formatter for the ALC gauges — one decimal of dBFS so a
 // transmitting operator can read the exact SSB-peak level off the bar rather
@@ -132,6 +134,7 @@ PhoneCwApplet::PhoneCwApplet(QWidget* parent)
 
 void PhoneCwApplet::setSelectableMicInputs(bool selectable)
 {
+    m_selectableMicInputs = selectable;
     if (!m_micSourceCombo)
         return;
     // Rebuild rather than disable: a greyed-out MIC entry still reads as "this
@@ -176,13 +179,40 @@ void PhoneCwApplet::setSelectableMicInputs(bool selectable)
                          "Its own input selection is made on the radio."));
 }
 
-void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
+void PhoneCwApplet::setMicLevelMeterState(MicMeterSessionState session,
+                                          bool available)
 {
-    if (m_micLevelMeterAvailable == available)
-        return;   // idempotent: this rides capabilitiesChanged, which repeats
+    const bool stateChanged = session != m_micLevelMeterSession
+                              || available != m_micLevelMeterAvailable;
+    m_micLevelMeterSession = session;
     m_micLevelMeterAvailable = available;
-    if (m_levelGauge)
-        m_levelGauge->setVisible(available);
+    if (!m_levelGauge) {
+        return;
+    }
+
+    const bool connected = session == MicMeterSessionState::Connected;
+
+    // A meter reading belongs to one radio session. MeterModel::clear()
+    // resets its cached values on disconnect but emits no mic-meter update, so
+    // explicitly discard the prior radio's fill and peak at the lifecycle
+    // boundary. An unsupported connected radio gets the same reset before the
+    // gauge is hidden. Reset only on a state edge: repeated capability
+    // publications while disconnected must not erase live PC-mic telemetry.
+    if (stateChanged && (!connected || !available)) {
+        resetLevelMeter();
+    }
+    m_levelGauge->setVisible(!connected || available);
+}
+
+void PhoneCwApplet::setDaxVisible(bool visible)
+{
+    if (!m_daxBtn)
+        return;
+    m_daxBtn->setVisible(visible);
+    if (!visible) {
+        const QSignalBlocker blocker(m_daxBtn);
+        m_daxBtn->setChecked(false);
+    }
 }
 
 void PhoneCwApplet::buildPhonePanel()
@@ -193,9 +223,11 @@ void PhoneCwApplet::buildPhonePanel()
     vbox->setSpacing(2);
 
     // ── Level gauge (mic peak, dBFS: -40 to +10) ────────────────────────
-    m_levelGauge = new HGauge(-40.0f, 10.0f, 0.0f, "Level", "dB",
+    m_levelGauge = new HGauge(kLevelGaugeFloorDbfs, 10.0f, 0.0f, "Level", "dB",
         {{-40, "-40dB"}, {-30, "-30"}, {-20, "-20"}, {-10, "-10"}, {0, "0"}, {5, "+5"}, {10, "+10"}},
         nullptr, -10.0f);
+    m_levelGauge->setObjectName(QStringLiteral("phoneMicLevelGauge"));
+    resetLevelMeter();
     m_levelGauge->setAccessibleName("Microphone level gauge");
     m_levelGauge->setAccessibleDescription("Microphone input level in dBFS");
     // Mouse-over readout: exact mic peak in dB. (#3936)
@@ -299,12 +331,18 @@ void PhoneCwApplet::buildPhonePanel()
             // Don't push to the radio in RADE mode: the slider is acting
             // as client-side RADE gain (PcMicGain), and sending
             // mic_level=N would silently overwrite the user's hardware-mic
-            // setting.  PC mode is already client-authoritative on the
-            // radio side (mic_level is ignored for PC), so the gate only
-            // matters for RADE-with-hardware-mic.
-            if (!m_updatingFromModel && m_model && !m_radeActive)
-                m_model->setMicLevel(v);
-            emit micLevelChanged(v);
+            // setting. Ordinary PC mode is resolved by the capability-aware
+            // model sync below; only RADE unconditionally owns client gain.
+            if (!m_updatingFromModel) {
+                if (m_model && !m_radeActive)
+                    m_model->setMicLevel(v);
+                const bool clientOwnsGain =
+                    m_radeActive
+                    || (m_selectableMicInputs && m_model
+                        && m_model->micSelection() == QLatin1String("PC"));
+                if (clientOwnsGain)
+                    emit micLevelChanged(v);
+            }
         });
 
         connect(m_accBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -729,8 +767,9 @@ void PhoneCwApplet::buildCwPanel()
 
 void PhoneCwApplet::setMode(const QString& mode)
 {
-    // CWL is not a separate slice mode on fw v1.4.0.0 — only "CW" appears.
-    bool isCw = (mode == "CW");
+    // A Flex reports bare "CW"; an Icom and an HL2 spell the same mode CWU,
+    // and CWL is the reverse-side one. All three drive this applet.
+    bool isCw = isCwMode(mode);
     m_stack->setCurrentIndex(isCw ? 1 : 0);
 }
 
@@ -815,9 +854,15 @@ void PhoneCwApplet::syncPhoneFromModel()
         if (idx >= 0) m_micSourceCombo->setCurrentIndex(idx);
     }
 
-    // PC mic gain and RADE mic gain are both client-authoritative (radio returns 0 for PC,
-    // and is unused for RADE TX). Both share the PcMicGain setting.
-    if (m_model->micSelection() == "PC" || m_radeActive) {
+    // A genuine selectable PC input is Flex client audio and therefore owns
+    // PcMicGain.  On Icom/HL2 the single "PC" label is synthetic: the backend
+    // still owns and reports its modulation level, so adopt that radio value.
+    const bool clientOwnsGain =
+        m_radeActive
+        || (m_selectableMicInputs
+            && m_model->micSelection() == QLatin1String("PC"));
+    const QSignalBlocker micLevelBlocker(m_micLevelSlider);
+    if (clientOwnsGain) {
         int pcGain = AppSettings::instance().value("PcMicGain", 100).toInt();
         m_micLevelSlider->setValue(pcGain);
         m_micLevelLabel->setText(QString::number(pcGain));
@@ -923,6 +968,12 @@ void PhoneCwApplet::applyLevelMeterReceiveGate()
         m_levelGauge->setValue(-150.0f);
         m_levelGauge->setPeakValue(-150.0f);
     }
+}
+
+void PhoneCwApplet::resetLevelMeter()
+{
+    m_levelGauge->setValueImmediate(kLevelGaugeFloorDbfs);
+    m_levelGauge->clearPeak();
 }
 
 void PhoneCwApplet::updateCompression(float compPeak)

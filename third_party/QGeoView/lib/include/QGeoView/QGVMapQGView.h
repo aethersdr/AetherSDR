@@ -32,6 +32,7 @@
 #include <QMimeData>
 
 class QGVMap;
+class QNativeGestureEvent;
 
 class QGV_LIB_DECL QGVMapQGView : public QGraphicsView
 {
@@ -48,6 +49,10 @@ public:
     double getMinScale() const;
     double getMaxScale() const;
     void setScaleLimits(double minScale, double maxScale);
+    void setHorizontalWrapEnabled(bool enabled);
+    bool horizontalWrapEnabled() const;
+    void setVerticalBoundsEnabled(bool enabled);
+    bool verticalBoundsEnabled() const;
     void cleanState();
 
 Q_SIGNALS:
@@ -60,11 +65,14 @@ private:
     void cameraScale(const QRectF& projRect);
     void cameraRotate(double azimuth);
     void cameraMove(const QPointF& projPos);
+    QPointF constrainedCameraCenter(const QPointF& projPos) const;
+    void updateHorizontalWrapSceneRect(const QPointF& center);
     void blockCameraUpdate();
     void unblockCameraUpdate();
     void applyCameraUpdate(const QGVCameraState& oldState);
 
     void showTooltip(QHelpEvent* helpEvent);
+    bool zoomByNativeGesture(QNativeGestureEvent* event);
     void zoomByWheel(QWheelEvent* event);
     void startMoving(QMouseEvent* event);
     void startMovingObject(QMouseEvent* event);
@@ -83,6 +91,7 @@ private:
     void showMenu(QMouseEvent* event);
 
     bool event(QEvent* event) override final;
+    bool viewportEvent(QEvent* event) override final;
     void wheelEvent(QWheelEvent* event) override final;
     void mousePressEvent(QMouseEvent* event) override final;
     void mouseReleaseEvent(QMouseEvent* event) override final;
@@ -103,6 +112,8 @@ private:
     double mMaxScale;
     double mScale;
     double mAzimuth;
+    bool mHorizontalWrapEnabled;
+    bool mVerticalBoundsEnabled;
     QGV::MouseActions mMouseActions;
     QRect mViewRect;
     QGV::MapState mState;

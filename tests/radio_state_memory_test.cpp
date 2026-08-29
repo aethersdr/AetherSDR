@@ -42,7 +42,8 @@ RadioCapabilities hl2Caps()
     caps.family = QStringLiteral("hl2");
     caps.clientSettingsDomains = Domain::Tuning | Domain::Passband
                                  | Domain::SpanRate | Domain::RfGain
-                                 | Domain::TxSetpoints;
+                                 | Domain::TxSetpoints | Domain::Agc
+                                 | Domain::Cw;
     return caps;
 }
 
@@ -54,6 +55,19 @@ RestoredRadioState sampleState()
     state.filterLowHz = 100.0;
     state.filterHighHz = 2'900.0;
     state.sampleRateHz = 192'000;
+    state.agcMode = QStringLiteral("slow");
+    state.agcThreshold = 40;
+    state.cwSpeed = 31;
+    state.cwPitch = 720;
+    state.cwBreakIn = 1;
+    state.cwDelay = 275;
+    state.cwSidetone = 0;
+    state.cwIambic = 0;
+    state.cwIambicMode = 1;
+    state.cwSwapPaddles = 1;
+    state.cwlEnabled = 1;
+    state.monGainCw = 73;
+    state.monPanCw = 22;
     state.extensionSchemaVersion = 1;
     // The extension's top level is domain sub-objects (the per-domain gate);
     // each sub-object's contents are backend-owned.
@@ -114,6 +128,17 @@ int main(int argc, char** argv)
         check(restored.filterLowHz == 100.0 && restored.filterHighHz == 2'900.0,
               "passband round-trips");
         check(restored.sampleRateHz == 192'000, "span/rate round-trips");
+        check(restored.agcMode == QStringLiteral("slow")
+                  && restored.agcThreshold == 40,
+              "AGC mode and threshold round-trip (#4909)");
+        check(restored.cwSpeed == 31 && restored.cwPitch == 720
+                  && restored.cwBreakIn == 1 && restored.cwDelay == 275
+                  && restored.cwSidetone == 0 && restored.cwIambic == 0
+                  && restored.cwIambicMode == 1
+                  && restored.cwSwapPaddles == 1
+                  && restored.cwlEnabled == 1 && restored.monGainCw == 73
+                  && restored.monPanCw == 22,
+              "the complete client-owned CW surface round-trips");
         check(restored.extensionSchemaVersion == 1
                   && restored.extension.value(QStringLiteral("rfGain"))
                              .toObject()
@@ -152,6 +177,67 @@ int main(int argc, char** argv)
                   && gated.sampleRateHz == 0 && gated.extension.isEmpty(),
               "undeclared domains stay 'not restored' even though the stored "
               "document carries them");
+        // The AGC threshold's "not restored" is -1, not 0: zero is a value the
+        // operator can select, so a gated-out domain must not look like a
+        // deliberate AGC-T of 0.
+        check(gated.agcMode.isEmpty() && gated.agcThreshold == -1,
+              "an undeclared Agc domain is absent, not a threshold of 0");
+        check(gated.cwSpeed == 0 && gated.cwPitch == 0
+                  && gated.cwBreakIn == -1 && gated.cwDelay == -1
+                  && gated.monGainCw == -1 && gated.monPanCw == -1,
+              "an undeclared CW domain stays absent");
+    }
+
+    // ---- deliberate false/zero CW values survive -------------------------
+    // Every boolean and slider can legitimately sit at zero. The absent
+    // sentinel is therefore -1 for those fields, while speed/pitch use zero
+    // because their valid ranges start above it.
+    {
+        RadioCapabilities cwOnly;
+        cwOnly.family = QStringLiteral("hl2");
+        cwOnly.clientSettingsDomains = Domain::Cw;
+        const RadioSettingsScope zeroCwRadio(
+            QStringLiteral("hl2"), QStringLiteral("00:00:00:00:00:C0"));
+        RestoredRadioState state;
+        state.cwSpeed = 5;
+        state.cwPitch = 100;
+        state.cwBreakIn = 0;
+        state.cwDelay = 0;
+        state.cwSidetone = 0;
+        state.cwIambic = 0;
+        state.cwIambicMode = 0;
+        state.cwSwapPaddles = 0;
+        state.cwlEnabled = 0;
+        state.monGainCw = 0;
+        state.monPanCw = 0;
+        check(RadioStateMemory::store(zeroCwRadio, cwOnly, state),
+              "deliberate false/zero CW values store");
+        const RestoredRadioState back =
+            RadioStateMemory::load(zeroCwRadio, cwOnly);
+        check(back.cwSpeed == 5 && back.cwPitch == 100
+                  && back.cwBreakIn == 0 && back.cwDelay == 0
+                  && back.cwSidetone == 0 && back.cwIambic == 0
+                  && back.cwIambicMode == 0 && back.cwSwapPaddles == 0
+                  && back.cwlEnabled == 0 && back.monGainCw == 0
+                  && back.monPanCw == 0,
+              "false/zero CW values are not mistaken for absent");
+    }
+
+    // ---- a threshold of ZERO survives the round-trip -----------------------
+    // The sentinel is -1 precisely so this case works: with 0 as "absent" an
+    // operator who ran the AGC-T at the bottom of the slider would get 65 back.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope zeroRadio(QStringLiteral("hl2"),
+                                           QStringLiteral("00:00:00:00:00:0A"));
+        RestoredRadioState state = sampleState();
+        state.agcMode = QStringLiteral("off");
+        state.agcThreshold = 0;
+        check(RadioStateMemory::store(zeroRadio, caps, state),
+              "a zero AGC threshold stores");
+        const RestoredRadioState back = RadioStateMemory::load(zeroRadio, caps);
+        check(back.agcThreshold == 0 && back.agcMode == QStringLiteral("off"),
+              "a deliberate AGC threshold of 0 is not mistaken for 'absent'");
     }
 
     // ---- per-domain gating on store ---------------------------------------
