@@ -7,10 +7,13 @@
 #include "core/backends/icom/IcomCivBackend.h"
 
 #include <QCoreApplication>
+#include <QStringList>
 #include <QVariantMap>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 using namespace AetherSDR;
@@ -40,6 +43,34 @@ struct IcomCivBackendTestAccess {
     static QVariantMap incident(const IcomCivBackend& backend)
     {
         return backend.m_lastIncident;
+    }
+
+    // A backend that has a radio-authoritative frequency and one frequency
+    // write outstanding on the wire — the state a refused tune arrives into.
+    static void prepareOutstandingFrequencyWrite(IcomCivBackend& backend,
+                                                 const IcomModel& model,
+                                                 std::uint64_t generation,
+                                                 std::uint64_t heldHz)
+    {
+        backend.m_model = &model;
+        backend.m_connected = true;
+        backend.m_sessionGeneration = generation;
+        backend.m_frequencyHz = heldHz;
+        IcomCivScheduler::Request request;
+        request.frame = cmdSetFrequency(model.civAddress, heldHz + 1'000'000);
+        request.key = "frequency";
+        request.expectsReply = true;
+        request.acceptsGenericReply = true;
+        backend.m_civScheduler.enqueue(request, backend.nowMs());
+        // Take it off the queue so it is genuinely in flight: observe() only
+        // retires a transaction that was actually dispatched, and the whole
+        // point is that the FA below completes THIS request.
+        (void)backend.m_civScheduler.takeNext(backend.nowMs());
+    }
+
+    static std::string lastCompletedKey(const IcomCivBackend& backend)
+    {
+        return backend.m_civScheduler.stats().lastCompletedKey;
     }
 
     static void prepareAcceptedPttRead(IcomCivBackend& backend,
@@ -140,6 +171,61 @@ int main(int argc, char** argv)
         confirmationBackend, unkeyed, kGeneration);
     check(confirmations.size() == 1 && !confirmations.front(),
           "only an accepted CI-V PTT-off readback publishes confirmation");
+
+    // ---- A REFUSED TUNE IS NOT A SUCCESSFUL ONE --------------------------
+    //
+    // FA is the radio's NG. observe() retires FB and FA identically — both
+    // merely release the slot and carry no state — so before this, nothing in
+    // the backend consumed a refusal and the optimistic frequency stood.
+    // isNg() existed in CivCodec.h with no caller in the backend at all.
+    //
+    // Reachable in ordinary use on an IC-9700: three bands, two receivers, so
+    // a receiver cannot take a band the other one already holds. The radio
+    // answers cmd 05 with FA and does not move. Measured on hardware
+    // 2026-08-29 — six cross-band sets, six FAs, display followed all six
+    // (#4840).
+    {
+        constexpr std::uint64_t kHeldHz = 145'030'000;
+        IcomCivBackend refusedBackend;
+        std::vector<double> published;
+        QObject::connect(&refusedBackend, &IRadioBackend::sliceChanged, &app,
+                         [&published](int, const SliceDelta& delta) {
+                             if (delta.frequency)
+                                 published.push_back(*delta.frequency);
+                         });
+        QStringList warnings;
+        QObject::connect(&refusedBackend, &IRadioBackend::configurationWarning,
+                         &app, [&warnings](const QString& w) { warnings << w; });
+
+        IcomCivBackendTestAccess::prepareOutstandingFrequencyWrite(
+            refusedBackend, *ic705, kGeneration, kHeldHz);
+
+        CivFrame refused;
+        refused.to = kControllerAddress;
+        refused.from = ic705->civAddress;
+        refused.cmd = kCivNg;
+        IcomCivBackendTestAccess::deliver(refusedBackend, refused, kGeneration);
+
+        // The correction is deferred one event-loop turn, for the same reason
+        // setSliceFrequency()'s out-of-band gate defers it: SliceModel has
+        // already announced the operator's request, so a direct emit would be
+        // announced away and the indicator would keep lying.
+        QCoreApplication::processEvents();
+
+        check(IcomCivBackendTestAccess::lastCompletedKey(refusedBackend)
+                  == "frequency",
+              "the FA retires the outstanding frequency write");
+        check(!warnings.isEmpty()
+                  && warnings.constLast().contains(QLatin1String("refused")),
+              "a refused tune TELLS the operator the radio said no");
+        // The load-bearing assertion: a backend that ignores FA publishes
+        // nothing here, and the display keeps the frequency the radio rejected.
+        check(published.size() == 1
+                  && std::llround(published.front() * 1.0e6)
+                         == static_cast<long long>(kHeldHz),
+              "a refused tune republishes the radio's real VFO, not the "
+              "frequency the radio rejected");
+    }
 
     return failures == 0 ? 0 : 1;
 }
