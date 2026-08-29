@@ -6281,17 +6281,10 @@ void VfoWidget::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < m_fmToneValueCmb->count(); ++i) {
-        const QString frequency = m_fmToneValueCmb->itemData(
-            i, kCtcssToneFrequencyRole).toString();
-        const QString designation = m_fmToneValueCmb->itemData(
-            i, kCtcssToneDesignationRole).toString();
-        const QString toneLabel = ctcssToneLabel(frequency, designation);
-        m_fmToneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, toneLabel));
-        m_fmToneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, toneLabel));
-    }
+    configureCtcssToneComboLabels(
+        m_fmToneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_fmToneRxValueCmb, presentation, FmToneRole::Rx);
     const bool modeEligible = m_slice && hasFmToneControls(m_slice->mode());
     const QString selected = m_slice
         ? m_slice->fmToneMode() : m_fmToneModeCmb->currentData().toString();

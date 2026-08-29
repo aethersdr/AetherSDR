@@ -1932,17 +1932,10 @@ void RxApplet::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < m_toneValueCmb->count(); ++i) {
-        const QString frequency = m_toneValueCmb->itemData(
-            i, kCtcssToneFrequencyRole).toString();
-        const QString designation = m_toneValueCmb->itemData(
-            i, kCtcssToneDesignationRole).toString();
-        const QString toneLabel = ctcssToneLabel(frequency, designation);
-        m_toneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, toneLabel));
-        m_toneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, toneLabel));
-    }
+    configureCtcssToneComboLabels(
+        m_toneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_toneRxValueCmb, presentation, FmToneRole::Rx);
     const QString sliceMode = m_slice ? m_slice->mode() : QString();
     const bool modeEligible = sliceMode == QLatin1String("FM")
         || sliceMode == QLatin1String("NFM") || sliceMode == QLatin1String("DFM");

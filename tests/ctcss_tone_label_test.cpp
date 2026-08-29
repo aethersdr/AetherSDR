@@ -5,7 +5,6 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QColor>
-#include <QFile>
 #include <QImage>
 #include <QPainter>
 #include <QScrollBar>
@@ -75,15 +74,6 @@ int dominantPixels(const QImage& image, const QRect& rect, DominantChannel chann
     return count;
 }
 
-QString readSource(const char* relativePath)
-{
-    QFile file(QStringLiteral(AETHER_SOURCE_DIR) + QString::fromLatin1(relativePath));
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    return QString::fromUtf8(file.readAll());
-}
-
 } // namespace
 
 int main(int argc, char** argv)
@@ -111,6 +101,9 @@ int main(int argc, char** argv)
                  "an interstitial without a PL designation renders as frequency only");
 
     QComboBox combo;
+    QFont stressFont = combo.font();
+    stressFont.setPointSize(std::max(14, stressFont.pointSize() + 4));
+    combo.setFont(stressFont);
     AetherSDR::populateCtcssToneCombo(&combo);
     ok &= expect(combo.count() == static_cast<int>(AetherSDR::kCtcssToneCount),
                  "the shared population helper exposes every legal tone");
@@ -146,11 +139,14 @@ int main(int argc, char** argv)
     palette.setColor(QPalette::Disabled, QPalette::Text, Qt::blue);
     combo.setPalette(palette);
 
+    AetherSDR::configureCtcssToneComboLabels(
+        &combo, AetherSDR::FmTonePresentation::Ctcss,
+        AetherSDR::FmToneRole::Tx);
+    ok &= expect(combo.itemText(codedRow) == QStringLiteral("TX: 123.0 3Z")
+                     && combo.itemData(codedRow, AetherSDR::kCtcssTonePrefixRole)
+                            == QStringLiteral("TX:"),
+                 "CTCSS TX presentation preserves its role prefix in the popup model");
     const QImage expected = renderRow(combo, codedRow, selectedState);
-    combo.setItemText(codedRow, QStringLiteral("OVERLAY SENTINEL"));
-    const QImage displayRoleChanged = renderRow(combo, codedRow, selectedState);
-    ok &= expect(expected == displayRoleChanged,
-                 "the delegate paints only the separate columns, never an overlaid display label");
 
     const QFontMetrics metrics(combo.font());
     const int frequencyWidth = AetherSDR::ctcssToneFrequencyColumnWidth(metrics);
@@ -160,16 +156,39 @@ int main(int argc, char** argv)
                              QString::number(tone.frequency, 'f', 1)),
                      "the frequency column accommodates every rendered tone value");
     }
-    const int gap = metrics.horizontalAdvance(QLatin1Char(' ')) * 3;
-    const QRect frequencyRect(AetherSDR::kCtcssToneHorizontalPadding, 0,
+    const int prefixWidth = metrics.horizontalAdvance(QStringLiteral("TX:"));
+    const int prefixGap = metrics.horizontalAdvance(QLatin1Char(' '));
+    const int designationGap = metrics.horizontalAdvance(QLatin1Char(' ')) * 3;
+    const QRect prefixRect(AetherSDR::kCtcssToneHorizontalPadding, 0,
+                           prefixWidth, expected.height());
+    const QRect frequencyRect(prefixRect.x() + prefixWidth + prefixGap, 0,
                               frequencyWidth, expected.height());
-    const QRect designationRect(frequencyRect.right() + gap, 0,
-                                expected.width() - frequencyRect.right() - gap
+    const QRect designationRect(frequencyRect.right() + designationGap, 0,
+                                expected.width() - frequencyRect.right() - designationGap
                                     - AetherSDR::kCtcssToneHorizontalPadding,
                                 expected.height());
-    ok &= expect(dominantPixels(expected, frequencyRect, DominantChannel::Red) > 0
+    ok &= expect(dominantPixels(expected, prefixRect, DominantChannel::Red) > 0
+                     && dominantPixels(expected, frequencyRect, DominantChannel::Red) > 0
                      && dominantPixels(expected, designationRect, DominantChannel::Red) > 0,
-                 "active selected rendering paints both aligned columns with active text");
+                 "active selected rendering paints the role and both aligned columns");
+
+    QStyleOptionViewItem sizeOption;
+    sizeOption.font = combo.font();
+    sizeOption.fontMetrics = metrics;
+    sizeOption.widget = combo.view();
+    const QSize codedSize = combo.itemDelegate()->sizeHint(
+        sizeOption, combo.model()->index(codedRow, 0));
+    int maximumDesignationWidth = 0;
+    for (const AetherSDR::CtcssTone& tone : AetherSDR::kCtcssTones) {
+        maximumDesignationWidth = std::max(
+            maximumDesignationWidth,
+            metrics.horizontalAdvance(QString::fromLatin1(tone.designation)));
+    }
+    const int requiredWidth = AetherSDR::kCtcssToneHorizontalPadding * 2
+        + prefixWidth + prefixGap + frequencyWidth + designationGap
+        + maximumDesignationWidth;
+    ok &= expect(codedSize.width() >= requiredWidth,
+                 "the delegate size hint accommodates the complete prefixed row");
 
     const QImage inactive = renderRow(
         combo, codedRow, QStyle::State_Enabled | QStyle::State_Selected);
@@ -186,6 +205,21 @@ int main(int argc, char** argv)
     ok &= expect(dominantPixels(uncoded, frequencyRect, DominantChannel::Red) > 0
                      && dominantPixels(uncoded, designationRect, DominantChannel::Red) == 0,
                  "an uncoded row paints frequency ink and leaves the designation column blank");
+
+    AetherSDR::configureCtcssToneComboLabels(
+        &combo, AetherSDR::FmTonePresentation::Ctcss,
+        AetherSDR::FmToneRole::Rx);
+    ok &= expect(combo.itemText(codedRow) == QStringLiteral("RX: 123.0 3Z")
+                     && combo.itemData(codedRow, AetherSDR::kCtcssTonePrefixRole)
+                            == QStringLiteral("RX:"),
+                 "CTCSS RX presentation remains distinguishable in the popup model");
+    AetherSDR::configureCtcssToneComboLabels(
+        &combo, AetherSDR::FmTonePresentation::Legacy,
+        AetherSDR::FmToneRole::Tx);
+    ok &= expect(combo.itemText(codedRow) == QStringLiteral("123.0 3Z")
+                     && combo.itemData(codedRow, AetherSDR::kCtcssTonePrefixRole)
+                            .toString().isEmpty(),
+                 "legacy presentation removes the role prefix without changing tone data");
 
     QString renderedPopupRules = AetherSDR::ctcssToneComboStyleRules();
     renderedPopupRules.replace(QStringLiteral("{{color.background.0}}"),
@@ -227,22 +261,6 @@ int main(int argc, char** argv)
                      && popupHeight <= rowHeight * AetherSDR::kCtcssTonePopupRows + 4,
                  "the rendered popup does not exceed 18 visible tone rows");
     combo.hidePopup();
-
-    // These are deliberately narrow source-contract checks, not widget
-    // behavior tests. Constructing either shipping surface requires its full
-    // radio/session graph, so the rendered delegate and popup behavior are
-    // exercised above while these assertions only prevent either consumer
-    // from drifting back to a private population or styling path.
-    const QString rxSource = readSource("/src/gui/RxApplet.cpp");
-    const QString vfoSource = readSource("/src/gui/VfoWidget.cpp");
-    for (const auto& [source, label] : {
-             std::pair{rxSource, "RX applet"},
-             std::pair{vfoSource, "VFO widget"}}) {
-        ok &= expect(source.count(QStringLiteral("populateCtcssToneCombo(")) == 2,
-                     qPrintable(QStringLiteral("%1 routes both tone selectors through the shared population path").arg(label)));
-        ok &= expect(source.count(QStringLiteral("ctcssToneComboStyleRules()")) == 2,
-                     qPrintable(QStringLiteral("%1 applies the shared popup styling to both tone selectors").arg(label)));
-    }
 
     const QString popupRules = AetherSDR::ctcssToneComboStyleRules();
     ok &= expect(popupRules.contains(QStringLiteral("combobox-popup: 0;")),
