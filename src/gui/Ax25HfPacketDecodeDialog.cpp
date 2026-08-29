@@ -15,6 +15,7 @@
 #include "gui/AprsMessagesDialog.h"
 #include "gui/AprsSymbolIcons.h"
 #include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25AudioCapture.h"
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "core/tnc/HeardList.h"
 #include "core/tnc/KissTncServer.h"
@@ -437,68 +438,6 @@ QFrame* statusPanel(const QString& title, QLabel** dot, QLabel** value, QWidget*
 QString utcClock()
 {
     return QDateTime::currentDateTimeUtc().toString(QStringLiteral("HH:mm:ss"));
-}
-
-QString ax25CapturePath()
-{
-    const QString dir = QFileInfo(AppSettings::instance().filePath()).absolutePath();
-    QDir().mkpath(dir);
-    const QString stamp = QDateTime::currentDateTimeUtc()
-        .toString(QStringLiteral("yyyyMMdd-HHmmss'Z'"));
-    return QDir(dir).filePath(QStringLiteral("ax25-rx-capture-%1-float32.wav").arg(stamp));
-}
-
-bool writeMonoFloatWav(const QString& path, const QByteArray& pcm, int sampleRate)
-{
-    if (sampleRate <= 0 || pcm.isEmpty() || pcm.size() % static_cast<int>(sizeof(float)) != 0)
-        return false;
-
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return false;
-
-    auto writeAscii = [&file](const char* text) {
-        file.write(text, 4);
-    };
-    auto writeU16 = [&file](quint16 value) {
-        char bytes[2] = {
-            static_cast<char>(value & 0xff),
-            static_cast<char>((value >> 8) & 0xff),
-        };
-        file.write(bytes, sizeof(bytes));
-    };
-    auto writeU32 = [&file](quint32 value) {
-        char bytes[4] = {
-            static_cast<char>(value & 0xff),
-            static_cast<char>((value >> 8) & 0xff),
-            static_cast<char>((value >> 16) & 0xff),
-            static_cast<char>((value >> 24) & 0xff),
-        };
-        file.write(bytes, sizeof(bytes));
-    };
-
-    constexpr quint16 channels = 1;
-    constexpr quint16 bitsPerSample = 32;
-    constexpr quint16 audioFormatIeeeFloat = 3;
-    const quint32 dataBytes = static_cast<quint32>(pcm.size());
-    const quint32 byteRate = static_cast<quint32>(sampleRate * channels * sizeof(float));
-    const quint16 blockAlign = channels * static_cast<quint16>(sizeof(float));
-
-    writeAscii("RIFF");
-    writeU32(36u + dataBytes);
-    writeAscii("WAVE");
-    writeAscii("fmt ");
-    writeU32(16);
-    writeU16(audioFormatIeeeFloat);
-    writeU16(channels);
-    writeU32(static_cast<quint32>(sampleRate));
-    writeU32(byteRate);
-    writeU16(blockAlign);
-    writeU16(bitsPerSample);
-    writeAscii("data");
-    writeU32(dataBytes);
-    file.write(pcm);
-    return file.error() == QFileDevice::NoError;
 }
 
 } // namespace
@@ -2019,8 +1958,11 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     }
 
     m_capturePcm.clear();
+    m_captureId = makeAx25AudioCaptureId();
     m_captureSampleRate = 0;
     m_captureTargetBytes = 0;
+    m_captureTxSequence = 0;
+    m_captureIcomPostResampleActive = false;
     m_captureActive = true;
     QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
     m_lastDiagnostics = {};
@@ -2032,35 +1974,102 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     if (m_captureButton)
         m_captureButton->setText(QStringLiteral("Cancel Capture"));
     appendSystemLine(QStringLiteral("Decoder state reset for RX audio capture."));
-    appendSystemLine(QStringLiteral("Starting %1 second RX audio capture; transmit several packets now.")
-        .arg(kAudioCaptureSeconds));
+    appendSystemLine(QStringLiteral(
+        "Starting %1 second RX/TX audio capture (%2); transmit several packets now.")
+        .arg(kAudioCaptureSeconds)
+        .arg(m_captureId));
 }
 
 void Ax25HfPacketDecodeDialog::finishAudioCapture(bool save)
 {
+    finishIcomPostResampleCapture();
     const QByteArray capture = m_capturePcm;
+    const QString captureId = m_captureId;
     const int sampleRate = m_captureSampleRate;
     m_capturePcm.clear();
+    m_captureId.clear();
     m_captureSampleRate = 0;
     m_captureTargetBytes = 0;
+    m_captureTxSequence = 0;
     m_captureActive = false;
     if (m_captureButton)
         m_captureButton->setText(QStringLiteral("Capture 3m"));
 
     if (!save) {
-        appendSystemLine(QStringLiteral("RX audio capture cancelled."));
+        appendSystemLine(QStringLiteral(
+            "RX audio capture cancelled; completed TX debug files were retained."));
         return;
     }
 
-    const QString path = ax25CapturePath();
-    if (!writeMonoFloatWav(path, capture, sampleRate)) {
-        appendSystemLine(QStringLiteral("RX audio capture failed: could not write %1.")
-            .arg(path));
+    const QString path = ax25AudioCapturePath(
+        Ax25AudioCaptureStage::Rx, captureId);
+    QString error;
+    if (!writeAx25Float32Wav(path, capture, sampleRate, 1, &error)) {
+        appendSystemLine(QStringLiteral("RX audio capture failed: %1 (%2).")
+            .arg(path, error));
         return;
     }
 
     appendSystemLine(QStringLiteral("RX audio capture saved: %1.")
         .arg(path));
+}
+
+void Ax25HfPacketDecodeDialog::captureGeneratedTxAudio(
+    const Ax25TransmitResult& tx)
+{
+    if (!m_captureActive || m_captureId.isEmpty()
+        || tx.stereoFloat32Pcm.isEmpty()) {
+        return;
+    }
+
+    finishIcomPostResampleCapture();
+    ++m_captureTxSequence;
+    const QString generatedPath = ax25AudioCapturePath(
+        Ax25AudioCaptureStage::TxGenerated,
+        m_captureId,
+        m_captureTxSequence);
+    QString error;
+    if (writeAx25Float32Wav(generatedPath, tx.stereoFloat32Pcm,
+                            tx.sampleRate, 2, &error)) {
+        appendSystemLine(QStringLiteral("Generated TX audio capture saved: %1.")
+            .arg(generatedPath));
+    } else {
+        appendSystemLine(QStringLiteral("Generated TX audio capture failed: %1 (%2).")
+            .arg(generatedPath, error));
+    }
+
+    if (!m_radio
+        || m_radio->backendCapabilities().family != QLatin1String("icom")) {
+        return;
+    }
+
+    QVariantMap args;
+    args.insert(QStringLiteral("captureId"), m_captureId);
+    args.insert(QStringLiteral("packetSequence"), m_captureTxSequence);
+    m_radio->invokeBackendExtension(
+        QStringLiteral("icom"),
+        QStringLiteral("debug.ax25.capture.begin"),
+        0,
+        args);
+    m_captureIcomPostResampleActive = true;
+    appendSystemLine(QStringLiteral("Icom post-resample TX capture armed: %1.")
+        .arg(ax25AudioCapturePath(
+            Ax25AudioCaptureStage::TxIcomPostResample,
+            m_captureId,
+            m_captureTxSequence)));
+}
+
+void Ax25HfPacketDecodeDialog::finishIcomPostResampleCapture()
+{
+    if (!m_captureIcomPostResampleActive) {
+        return;
+    }
+    if (m_radio) {
+        m_radio->invokeBackendExtension(
+            QStringLiteral("icom"),
+            QStringLiteral("debug.ax25.capture.end"));
+    }
+    m_captureIcomPostResampleActive = false;
 }
 
 void Ax25HfPacketDecodeDialog::startTransmitFromUi()
@@ -2111,6 +2120,8 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     m_txChunkCount = chunkBytes > 0
         ? static_cast<int>((m_txPcm.size() + chunkBytes - 1) / chunkBytes)
         : 0;
+
+    captureGeneratedTxAudio(tx);
 
     appendSystemLine(QStringLiteral(
         "TX packetized (%1): %2 > %3%4, %5 payload bytes, %6 frame bytes, %7 bits, %8 s, RMS %9 dBFS, peak %10 dBFS.")
@@ -2444,6 +2455,7 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
         m_txPaceTimer->stop();
 
     const bool hadTx = m_txActive || m_txPendingStream || !m_txPcm.isEmpty();
+    finishIcomPostResampleCapture();
     m_txActive = false;
     m_txPendingStream = false;
 

@@ -20,6 +20,7 @@
 #include "core/CtcssTones.h"
 #include "core/DtcsCodes.h"
 #include "core/Resampler.h"
+#include "core/tnc/Ax25AudioCapture.h"
 
 namespace AetherSDR::icom {
 namespace {
@@ -200,6 +201,7 @@ qint64 IcomCivBackend::nowMs() const
 
 IcomCivBackend::~IcomCivBackend()
 {
+    finishAx25PostResampleCapture();
     // QObject direct connections may run while this destructor body is still
     // active, so terminate before member destruction begins. The scheduler is
     // reset before results are emitted (terminateScheduler), which makes a
@@ -773,6 +775,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    finishAx25PostResampleCapture();
     finishMemoryRefresh(false);
     m_tuneTimer->stop();
     ++m_sessionGeneration;
@@ -3054,6 +3057,8 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         const auto* f = reinterpret_cast<const float*>(out.constData());
         mono.assign(f, f + out.size() / static_cast<int>(sizeof(float)));
     }
+
+    appendAx25PostResampleCapture(mono);
     m_session->sendAudio(mono);
 }
 
@@ -5523,11 +5528,120 @@ std::optional<std::vector<std::uint8_t>> parseHexBytes(const QString& in)
 }
 }  // namespace
 
+void IcomCivBackend::appendAx25PostResampleCapture(
+    std::span<const float> mono)
+{
+    if (m_ax25PostResampleCapturePath.isEmpty()
+        || m_ax25PostResampleCaptureTruncated) {
+        return;
+    }
+
+    const qsizetype captureBytes = static_cast<qsizetype>(mono.size())
+        * static_cast<qsizetype>(sizeof(float));
+    const qsizetype remaining = kAx25PostResampleCaptureMaxBytes
+        - m_ax25PostResampleCapturePcm.size();
+    const qsizetype appendBytes = std::min(captureBytes, remaining);
+    if (appendBytes > 0) {
+        m_ax25PostResampleCapturePcm.append(
+            reinterpret_cast<const char*>(mono.data()), appendBytes);
+    }
+    if (appendBytes < captureBytes) {
+        m_ax25PostResampleCaptureTruncated = true;
+        qCWarning(lcIcomTx)
+            << "AX.25 post-resample capture reached its 64 MiB bound";
+    }
+}
+
+QVariantMap IcomCivBackend::finishAx25PostResampleCapture()
+{
+    QVariantMap result;
+    if (m_ax25PostResampleCapturePath.isEmpty()) {
+        result.insert(QStringLiteral("active"), false);
+        result.insert(QStringLiteral("written"), false);
+        return result;
+    }
+
+    const QString path = m_ax25PostResampleCapturePath;
+    const QByteArray pcm = std::move(m_ax25PostResampleCapturePcm);
+    const bool truncated = m_ax25PostResampleCaptureTruncated;
+    m_ax25PostResampleCapturePath.clear();
+    m_ax25PostResampleCapturePcm.clear();
+    m_ax25PostResampleCaptureTruncated = false;
+
+    result.insert(QStringLiteral("active"), false);
+    result.insert(QStringLiteral("path"), path);
+    result.insert(QStringLiteral("bytes"), pcm.size());
+    result.insert(QStringLiteral("truncated"), truncated);
+    if (pcm.isEmpty()) {
+        result.insert(QStringLiteral("written"), false);
+        result.insert(QStringLiteral("error"),
+                      QStringLiteral("no TX audio reached the Icom backend"));
+        qCInfo(lcIcomTx)
+            << "AX.25 post-resample capture ended without audio" << path;
+        return result;
+    }
+
+    QString error;
+    const bool written = writeAx25Float32Wav(
+        path, pcm, m_audioRateHz, 1, &error);
+    result.insert(QStringLiteral("written"), written);
+    if (!written) {
+        result.insert(QStringLiteral("error"), error);
+        qCWarning(lcIcomTx)
+            << "AX.25 post-resample capture failed" << path << error;
+        return result;
+    }
+
+    qCInfo(lcIcomTx)
+        << "AX.25 post-resample capture saved" << path
+        << "bytes" << pcm.size()
+        << "sampleRate" << m_audioRateHz
+        << "truncated" << truncated;
+    return result;
+}
+
 void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                                      const QVariant& arg)
 {
     if (ns != QLatin1String("icom")) {
         emit extensionError(requestId, QStringLiteral("unknown namespace %1").arg(ns));
+        return;
+    }
+    if (verb == QLatin1String("debug.ax25.capture.begin")) {
+        const QVariantMap args = arg.toMap();
+        const QString captureId = args.value(QStringLiteral("captureId"))
+                                      .toString().trimmed();
+        const int packetSequence =
+            args.value(QStringLiteral("packetSequence")).toInt();
+        const QString path = ax25AudioCapturePath(
+            Ax25AudioCaptureStage::TxIcomPostResample,
+            captureId,
+            packetSequence);
+        if (path.isEmpty()) {
+            emit extensionError(
+                requestId,
+                QStringLiteral("invalid AX.25 capture id or packet sequence"));
+            return;
+        }
+
+        finishAx25PostResampleCapture();
+        m_ax25PostResampleCapturePath = path;
+        m_ax25PostResampleCapturePcm.clear();
+        m_ax25PostResampleCaptureTruncated = false;
+        qCInfo(lcIcomTx) << "AX.25 post-resample capture armed" << path;
+        if (requestId != 0) {
+            QVariantMap result;
+            result.insert(QStringLiteral("active"), true);
+            result.insert(QStringLiteral("path"), path);
+            emit extensionResult(requestId, result);
+        }
+        return;
+    }
+    if (verb == QLatin1String("debug.ax25.capture.end")) {
+        const QVariantMap result = finishAx25PostResampleCapture();
+        if (requestId != 0) {
+            emit extensionResult(requestId, result);
+        }
         return;
     }
     if (verb == QLatin1String("tuner.start")) {

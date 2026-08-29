@@ -1,5 +1,6 @@
 #include "core/tnc/AetherAx25LibmodemShim.h"
 #include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25AudioCapture.h"
 #include "core/tnc/KissFraming.h"
 
 #include "bitstream.h"
@@ -197,48 +198,6 @@ bool loadMonoFloatWav(const QString& path, ReplayAudio& audio, QString& error)
     audio.samples.resize(static_cast<size_t>(dataBytes / static_cast<qsizetype>(sizeof(float))));
     std::memcpy(audio.samples.data(), data, static_cast<size_t>(dataBytes));
     return true;
-}
-
-bool writeMonoFloatWavForTest(const QString& path, const std::vector<float>& samples, int sampleRate)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return false;
-
-    auto writeAscii = [&file](const char* text) { file.write(text, 4); };
-    auto writeU16 = [&file](quint16 value) {
-        char bytes[2] = {
-            static_cast<char>(value & 0xff),
-            static_cast<char>((value >> 8) & 0xff),
-        };
-        file.write(bytes, sizeof(bytes));
-    };
-    auto writeU32 = [&file](quint32 value) {
-        char bytes[4] = {
-            static_cast<char>(value & 0xff),
-            static_cast<char>((value >> 8) & 0xff),
-            static_cast<char>((value >> 16) & 0xff),
-            static_cast<char>((value >> 24) & 0xff),
-        };
-        file.write(bytes, sizeof(bytes));
-    };
-
-    const quint32 dataBytes = static_cast<quint32>(samples.size() * sizeof(float));
-    writeAscii("RIFF");
-    writeU32(36u + dataBytes);
-    writeAscii("WAVE");
-    writeAscii("fmt ");
-    writeU32(16);
-    writeU16(3);
-    writeU16(1);
-    writeU32(static_cast<quint32>(sampleRate));
-    writeU32(static_cast<quint32>(sampleRate * sizeof(float)));
-    writeU16(static_cast<quint16>(sizeof(float)));
-    writeU16(32);
-    writeAscii("data");
-    writeU32(dataBytes);
-    file.write(reinterpret_cast<const char*>(samples.data()), static_cast<qint64>(dataBytes));
-    return file.error() == QFileDevice::NoError;
 }
 
 void printReplayDiagnostics(const char* label,
@@ -794,7 +753,10 @@ void testReplayWavLoaderFeedsShim()
     const QString path = file.fileName();
     file.close();
 
-    report("temporary replay WAV written", writeMonoFloatWavForTest(path, audio, cfg.sampleRate));
+    const QByteArray pcm(reinterpret_cast<const char*>(audio.data()),
+                         static_cast<qsizetype>(audio.size() * sizeof(float)));
+    report("temporary replay WAV written",
+           writeAx25Float32Wav(path, pcm, cfg.sampleRate, 1));
 
     ReplayAudio loaded;
     QString error;
@@ -808,6 +770,63 @@ void testReplayWavLoaderFeedsShim()
                                               static_cast<int>(loaded.samples.size()),
                                               loaded.sampleRate);
     report("temporary replay WAV decodes", frames.size() == 1);
+}
+
+void testCaptureWriterSupportsTxStages()
+{
+    const QString captureId = QStringLiteral("20260828-201306Z");
+    const QString generated = ax25AudioCapturePath(
+        Ax25AudioCaptureStage::TxGenerated, captureId, 1);
+    const QString postResample = ax25AudioCapturePath(
+        Ax25AudioCaptureStage::TxIcomPostResample, captureId, 1);
+    report("generated TX capture path is named by stage and packet",
+           generated.endsWith(QStringLiteral(
+               "/ax25-tx-generated-20260828-201306Z-001-float32.wav")));
+    report("Icom TX capture path is named by stage and packet",
+           postResample.endsWith(QStringLiteral(
+               "/ax25-tx-icom-post-resample-20260828-201306Z-001-float32.wav")));
+    report("capture path rejects unsafe identifier",
+           ax25AudioCapturePath(Ax25AudioCaptureStage::TxGenerated,
+                                QStringLiteral("../escape"), 1).isEmpty());
+    report("TX capture path requires positive packet sequence",
+           ax25AudioCapturePath(Ax25AudioCaptureStage::TxGenerated,
+                                captureId, 0).isEmpty());
+
+    QTemporaryFile file;
+    file.setFileTemplate(QStringLiteral("aether-ax25-tx-capture-XXXXXX.wav"));
+    const bool opened = file.open();
+    report("temporary TX capture WAV opened", opened);
+    if (!opened) {
+        return;
+    }
+    const QString path = file.fileName();
+    file.close();
+
+    const float stereoFrames[] = {
+        0.25f, 0.25f,
+        -0.5f, -0.5f,
+    };
+    const QByteArray stereoPcm(
+        reinterpret_cast<const char*>(stereoFrames), sizeof(stereoFrames));
+    QString error;
+    report("stereo TX capture WAV written atomically",
+           writeAx25Float32Wav(path, stereoPcm, 24000, 2, &error));
+
+    QFile written(path);
+    report("stereo TX capture WAV reopened", written.open(QIODevice::ReadOnly));
+    const QByteArray bytes = written.readAll();
+    report("stereo TX capture WAV has complete header",
+           bytes.size() == 44 + stereoPcm.size()
+           && bytes.mid(0, 4) == QByteArrayLiteral("RIFF")
+           && bytes.mid(8, 4) == QByteArrayLiteral("WAVE"));
+    report("stereo TX capture WAV declares float32 stereo 24 kHz",
+           bytes.size() >= 44
+           && readLe16(bytes.constData() + 20) == 3
+           && readLe16(bytes.constData() + 22) == 2
+           && readLe32(bytes.constData() + 24) == 24000
+           && readLe16(bytes.constData() + 34) == 32);
+    report("capture writer rejects frame-misaligned PCM",
+           !writeAx25Float32Wav(path, QByteArray(5, '\0'), 24000, 2, &error));
 }
 
 void testBadFcsDoesNotEmit()
@@ -934,6 +953,7 @@ int main(int argc, char** argv)
     testMalformedTransmitMonitorSyntaxIsRejected();
     testChunkedSyntheticReplayUsesReceiveGate();
     testReplayWavLoaderFeedsShim();
+    testCaptureWriterSupportsTxStages();
     testBadFcsDoesNotEmit();
     testTooShortRejectDiagnostics();
     testTonePolarityConfig();

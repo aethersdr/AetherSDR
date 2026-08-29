@@ -183,6 +183,7 @@ private:
 
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
+    QVariantMap finishAx25PostResampleCapture();
     void reassertPanPreampWireStep(int step);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
@@ -667,6 +668,16 @@ private:
     void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     LinkStats m_link;
+
+    // Armed only by AetherModem's explicit Capture 3m action. One buffer covers
+    // one modem transmission and contains the exact mono float PCM handed to
+    // IcomSession after rate conversion, immediately before RS-BA1 framing.
+    QString m_ax25PostResampleCapturePath;
+    QByteArray m_ax25PostResampleCapturePcm;
+    bool m_ax25PostResampleCaptureTruncated = false;
+    void appendAx25PostResampleCapture(std::span<const float> mono);
+    static constexpr qsizetype kAx25PostResampleCaptureMaxBytes =
+        64 * 1024 * 1024;
 };
 
 }  // namespace AetherSDR::icom

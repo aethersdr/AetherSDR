@@ -2655,6 +2655,8 @@ add_test(NAME ax25_frame_formatter_test COMMAND ax25_frame_formatter_test)
 
 add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
+    src/core/Resampler.cpp
+    src/core/tnc/Ax25AudioCapture.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
@@ -2668,7 +2670,10 @@ add_executable(ax25_libmodem_shim_test
     src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(ax25_libmodem_shim_test PRIVATE src)
+target_include_directories(ax25_libmodem_shim_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core
     aether_afskdemod)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)

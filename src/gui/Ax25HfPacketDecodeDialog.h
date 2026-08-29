@@ -166,6 +166,8 @@ private:
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);
+    void captureGeneratedTxAudio(const Ax25TransmitResult& tx);
+    void finishIcomPostResampleCapture();
     void startTransmitFromUi();
     void startTransmit(const QString& text);
     void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
@@ -289,9 +291,12 @@ private:
     quint64 m_lastActivityHdlc{0};
     quint64 m_lastActivityAccepted{0};
     QByteArray m_capturePcm;
+    QString m_captureId;
     int m_captureSampleRate{0};
     qsizetype m_captureTargetBytes{0};
+    int m_captureTxSequence{0};
     bool m_captureActive{false};
+    bool m_captureIcomPostResampleActive{false};
     bool m_diagnosticsDebugEnabled{false};
     QByteArray m_txPcm;
     Ax25TransmitResult m_pendingTx;
