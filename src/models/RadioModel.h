@@ -1139,6 +1139,8 @@ signals:
     void networkQualityChanged(const QString& quality, int pingMs);
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
+    // Emitted only after the active backend has drained finite TX-audio state.
+    void txAudioFinished(quint64 token);
     // Emitted when the radio assigns a remote audio TX stream ID (voice/VOX).
     void remoteTxStreamReady(quint32 streamId);
     // Audio TX gate for sample pipeline (separate from optimistic MOX UI state).
@@ -1277,6 +1279,9 @@ public:
     // audio, whose level the sender owns (#4796).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled);
+    // Ordered completion barrier for a finite modem stream. The token lets the
+    // producer reject a stale completion from an aborted transmission.
+    void finishTxAudio(quint64 token);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);

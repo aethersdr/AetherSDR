@@ -45,6 +45,11 @@ public:
     // independent streams, never from the realtime process callback.
     void reset();
 
+    // Finish one finite stream. Feeds enough silence to expose the delayed
+    // samples still held by the linear-phase filter, returns that tail, then
+    // resets the converter for the next independent stream.
+    QByteArray drain();
+
     double srcRate() const { return m_srcRate; }
     double dstRate() const { return m_dstRate; }
 

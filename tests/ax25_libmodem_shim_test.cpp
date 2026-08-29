@@ -2,6 +2,7 @@
 #include "core/tnc/Ax25.h"
 #include "core/tnc/Ax25AudioCapture.h"
 #include "core/tnc/KissFraming.h"
+#include "core/Resampler.h"
 
 #include "bitstream.h"
 
@@ -610,6 +611,85 @@ void testTransmitVhf1200LoopbackDecodes()
            frames.first().payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS TX"));
 }
 
+void testIcomResamplerTailDrainPreservesVhfPacket()
+{
+    const Ax25DemodConfig config =
+        ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(config);
+    const Ax25TransmitResult tx = txShim.buildTransmitAudio(
+        QStringLiteral("KI6BCJ>APZATH,WIDE1-1:=3651.25N/11952.50W-AetherSDR"),
+        QStringLiteral("KI6BCJ"));
+    report("Icom tail-drain test packetizes", tx.ok);
+    if (!tx.ok) {
+        return;
+    }
+
+    // Mirror AudioEngine's host-route int16 conversion and IcomCivBackend's
+    // stereo downmix before the 24->48 kHz radio conversion.
+    const auto* stereo = reinterpret_cast<const float*>(
+        tx.stereoFloat32Pcm.constData());
+    std::vector<float> mono;
+    mono.reserve(static_cast<std::size_t>(tx.audioFrames));
+    for (int frame = 0; frame < tx.audioFrames; ++frame) {
+        const auto toInt16 = [](float value) {
+            const float finite = std::isfinite(value) ? value : 0.0f;
+            return static_cast<qint16>(
+                std::clamp(finite * 32768.0f, -32768.0f, 32767.0f));
+        };
+        const qint16 left = toInt16(stereo[frame * 2]);
+        const qint16 right = toInt16(stereo[frame * 2 + 1]);
+        mono.push_back((left + right) * 0.5f / 32768.0f);
+    }
+
+    Resampler upsampler(config.sampleRate, 48000, 4096);
+    QByteArray radioPcm;
+    constexpr int kChunkFrames = 480;
+    for (std::size_t offset = 0; offset < mono.size(); offset += kChunkFrames) {
+        const int count = static_cast<int>(std::min<std::size_t>(
+            kChunkFrames, mono.size() - offset));
+        radioPcm.append(upsampler.process(mono.data() + offset, count));
+    }
+    const int withoutDrainSamples =
+        radioPcm.size() / static_cast<int>(sizeof(float));
+    const QByteArray tail = upsampler.drain();
+    radioPcm.append(tail);
+    report("Icom resampler exposes a finite-stream tail", !tail.isEmpty());
+    report("Icom resampler tail covers its group delay",
+           tail.size() / static_cast<int>(sizeof(float))
+               >= upsampler.groupDelayInputFrames());
+
+    // The radio path is an exact 2x conversion. Selecting each input-aligned
+    // phase brings the captured 48 kHz stream back to the decoder's 24 kHz
+    // contract without introducing another stateful filter or another tail.
+    const auto* radioSamples = reinterpret_cast<const float*>(radioPcm.constData());
+    const int radioSamplesCount =
+        radioPcm.size() / static_cast<int>(sizeof(float));
+    std::vector<float> replay;
+    replay.reserve(static_cast<std::size_t>(radioSamplesCount / 2));
+    for (int index = 0; index + 1 < radioSamplesCount; index += 2) {
+        replay.push_back(radioSamples[index]);
+    }
+
+    AetherAx25LibmodemShim rxShim;
+    rxShim.configure(config);
+    const QVector<Ax25DecodedFrame> frames = rxShim.processMonoFloat(
+        replay.data(), static_cast<int>(replay.size()), config.sampleRate);
+    report("Icom resampler tail drain preserves one VHF AX.25 frame",
+           frames.size() == 1);
+    if (!frames.isEmpty()) {
+        report("Icom tail-drain frame FCS is valid", frames.first().fcsOk);
+        report("Icom tail-drain APRS payload is intact",
+               frames.first().payloadText
+                   == QStringLiteral("=3651.25N/11952.50W-AetherSDR"));
+    }
+
+    // Pin the failure mode that motivated the API: the undrained finite output
+    // is shorter by the converter's delayed tail.
+    report("undrained Icom output is shorter than finalized output",
+           withoutDrainSamples < radioSamplesCount);
+}
+
 void testKissFramingRoundTrip()
 {
     namespace k = AetherSDR::kiss;
@@ -948,6 +1028,7 @@ int main(int argc, char** argv)
     testTransmitRawPayloadBuildsLoopbackAudio();
     testTransmitMonitorSyntaxBuildsLoopbackAudio();
     testTransmitVhf1200LoopbackDecodes();
+    testIcomResamplerTailDrainPreservesVhfPacket();
     testKissFramingRoundTrip();
     testKissTxFromFrameLoopbackDecodes();
     testMalformedTransmitMonitorSyntaxIsRejected();

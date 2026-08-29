@@ -769,6 +769,11 @@ void IcomSession::sendAudio(std::span<const float> mono)
     m_tx.submit(mono);
 }
 
+std::size_t IcomSession::padTxAudioToFrame()
+{
+    return m_params.enableTx ? m_tx.padToFrame() : 0;
+}
+
 void IcomSession::flushTxAudio() { m_tx.flush(); }
 
 IcomSession::Stats IcomSession::stats() const

@@ -2836,6 +2836,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (!keyed && m_session) {
                 m_session->flushTxAudio();
             }
+            if (!keyed && m_txResampler) {
+                m_txResampler->reset();
+            }
             if (!m_keyed) {
                 clearDerivedForwardPower();
             }
@@ -3072,6 +3075,38 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
 
     appendAx25PostResampleCapture(mono);
     m_session->sendAudio(mono);
+}
+
+void IcomCivBackend::finishTxAudio()
+{
+    if (!m_txResampler) {
+        return;
+    }
+
+    if (!m_session || !m_connected || !m_keyed || m_tuning) {
+        m_txResampler->reset();
+        return;
+    }
+
+    // A finite packet ends while r8brain still holds one linear-phase group
+    // delay of real samples. The 24->48 kHz converter measures about 70 ms on
+    // this path — enough to hide the AX.25 FCS and postamble. Drain those
+    // samples while PTT is still confirmed, then finish the packetizer's last
+    // 20 ms frame with silence so none of that recovered tail remains pending
+    // when unkey flushes the queue.
+    const QByteArray tail = m_txResampler->drain();
+    if (!tail.isEmpty()) {
+        const auto* samples = reinterpret_cast<const float*>(tail.constData());
+        const std::span<const float> mono(
+            samples, static_cast<std::size_t>(tail.size() / sizeof(float)));
+        appendAx25PostResampleCapture(mono);
+        m_session->sendAudio(mono);
+    }
+    const std::size_t paddedBytes = m_session->padTxAudioToFrame();
+    qCInfo(lcIcomTx) << "Icom finite TX audio drained"
+                     << tail.size() / static_cast<int>(sizeof(float))
+                     << "samples; packetizer silence padding"
+                     << paddedBytes << "bytes";
 }
 
 void IcomCivBackend::onTuneAudioTick()

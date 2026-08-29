@@ -699,6 +699,11 @@ public:
         Q_UNUSED(clientLeveled);
     }
 
+    // Finish a finite processed-audio stream before its caller starts the PTT
+    // drain timer. Stateful converters may emit delayed tail samples here;
+    // streaming/no-op backends have nothing to do.
+    virtual void finishTxAudio() {}
+
     // ---- diagnostics ----
     //
     // A snapshot of whatever health/status registers this backend can report:

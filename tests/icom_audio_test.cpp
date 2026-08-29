@@ -118,6 +118,31 @@ static void testTxOverflowAndFlush()
     check(tx.takeFrame().empty(), "and nothing is emitted afterwards");
 }
 
+static void testTxTailPadding()
+{
+    TxPacketizer tx;
+    tx.submit(std::vector<float>(100, 0.25f));
+    const std::size_t padded = tx.padToFrame();
+    check(padded == kAudioFrameBytes - 200,
+          "tail padding fills the partial LPCM16 frame");
+    check(tx.pendingBytes() == kAudioFrameBytes,
+          "tail padding leaves exactly one complete frame");
+
+    const auto chunks = tx.takeFrame();
+    check(chunks.size() == 2, "the padded tail is transportable");
+    check(tx.padToFrame() == 0, "an aligned empty queue needs no padding");
+
+    TxPacketizer pcm8(AudioCodec::Lpcm1ch8);
+    pcm8.submit(std::vector<float>(1, 0.0f));
+    check(pcm8.padToFrame() == kAudioFrameBytes - 1,
+          "8-bit tail padding uses byte-sized samples");
+    const auto pcm8Chunks = pcm8.takeFrame();
+    check(!pcm8Chunks.empty()
+              && pcm8Chunks.front().bytes.front() == 0x80
+              && pcm8Chunks.back().bytes.back() == 0x80,
+          "8-bit tail padding is midpoint silence");
+}
+
 static void testLossConcealment()
 {
     RxAssembler rx;
@@ -138,6 +163,7 @@ int main()
     testEightBitAndULaw();
     testTxSplit();
     testTxOverflowAndFlush();
+    testTxTailPadding();
     testLossConcealment();
 
     if (g_failures == 0)

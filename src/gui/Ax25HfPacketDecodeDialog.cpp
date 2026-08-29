@@ -1162,6 +1162,8 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             if (m_txPendingStream)
                 beginTransmitWhenReady();
         });
+        connect(m_radio, &RadioModel::txAudioFinished,
+                this, &Ax25HfPacketDecodeDialog::handleTxAudioFinished);
         connect(&m_radio->transmitModel(), &TransmitModel::pttBlocked,
                 this, [this](const QString& message) {
             if (m_txActive || m_txPendingStream)
@@ -2462,11 +2464,25 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
             .arg(stretch, 0, 'f', 2)
             .arg(m_txPaceMaxGapMs)
             .arg(m_txPaceLateChunks));
-        appendSystemLine(QStringLiteral("AX.25 TX audio queued; waiting %1 ms before unkey.")
-            .arg(m_txTailMs));
-        QTimer::singleShot(m_txTailMs, this, [this] {
-            finishTransmit(false, QStringLiteral("AX.25 TX complete"));
-        });
+        if (m_txAwaitingAudioFinish) {
+            return;
+        }
+        m_txAwaitingAudioFinish = true;
+        const quint64 generation = m_txGeneration;
+        QPointer<AudioEngine> audio = m_audio;
+        const bool queued = QMetaObject::invokeMethod(
+            m_audio, [audio, generation] {
+                if (audio) {
+                    audio->finishModemTxAudio(generation);
+                }
+            }, Qt::QueuedConnection);
+        if (!queued) {
+            finishTransmit(true, QStringLiteral(
+                "could not queue TX-audio completion barrier"));
+            return;
+        }
+        appendSystemLine(QStringLiteral(
+            "AX.25 source audio queued; flushing the finite TX path."));
         return;
     }
 
@@ -2504,6 +2520,41 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
                 .arg(m_txOffsetBytes)
                 .arg(m_txPcm.size());
     }
+}
+
+void Ax25HfPacketDecodeDialog::handleTxAudioFinished(quint64 token)
+{
+    if (!m_txActive || !m_txAwaitingAudioFinish || token != m_txGeneration) {
+        return;
+    }
+    m_txAwaitingAudioFinish = false;
+
+    int drainBudgetMs = 0;
+    if (m_radio) {
+        const RadioCapabilities caps = m_radio->backendCapabilities();
+        if (caps.family == QLatin1String("icom")) {
+            const QVariantMap icom = caps.extensions
+                .value(QStringLiteral("icom")).toMap();
+            drainBudgetMs = std::max(
+                0, icom.value(QStringLiteral("txAudioDrainBudgetMs")).toInt());
+        }
+    }
+    const int unkeyDelayMs = m_txTailMs + drainBudgetMs;
+    appendSystemLine(QStringLiteral(
+        "AX.25 TX path flushed; waiting %1 ms before unkey (%2 ms drain, %3 ms tail).")
+        .arg(unkeyDelayMs)
+        .arg(drainBudgetMs)
+        .arg(m_txTailMs));
+    qCDebug(lcAx25) << "AX.25 TX path flushed; unkey schedule drainMs="
+                    << drainBudgetMs
+                    << "tailMs=" << m_txTailMs
+                    << "totalMs=" << unkeyDelayMs
+                    << "token=" << token;
+    QTimer::singleShot(unkeyDelayMs, this, [this, token] {
+        if (m_txActive && token == m_txGeneration) {
+            finishTransmit(false, QStringLiteral("AX.25 TX complete"));
+        }
+    });
 }
 
 void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reason)

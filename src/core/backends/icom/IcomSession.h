@@ -104,6 +104,9 @@ public:
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.
     void sendAudio(std::span<const float> mono);
+    // Complete the last 20 ms transport frame with silence. Returns bytes
+    // appended; the normal TX pump still sends the completed frame on cadence.
+    [[nodiscard]] std::size_t padTxAudioToFrame();
     // Discard queued transmit audio. Call on unkey.
     void flushTxAudio();
 

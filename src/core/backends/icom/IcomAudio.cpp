@@ -185,6 +185,30 @@ std::vector<TxPacketizer::Chunk> TxPacketizer::takeFrame()
 
 void TxPacketizer::flush() noexcept { m_pending.clear(); }
 
+std::size_t TxPacketizer::padToFrame()
+{
+    const std::size_t remainder = m_pending.size() % kAudioFrameBytes;
+    if (remainder == 0) {
+        return 0;
+    }
+
+    const std::size_t missing = kAudioFrameBytes - remainder;
+    while (m_pending.size() + missing > kMaxPendingBytes
+           && m_pending.size() >= kAudioFrameBytes) {
+        for (std::size_t index = 0; index < kAudioFrameBytes; ++index) {
+            m_pending.pop_front();
+        }
+    }
+    std::uint8_t silenceByte = 0x00;
+    if (m_codec == AudioCodec::Lpcm1ch8) {
+        silenceByte = 0x80;
+    } else if (m_codec == AudioCodec::ULaw1ch8) {
+        silenceByte = 0xFF;
+    }
+    m_pending.insert(m_pending.end(), missing, silenceByte);
+    return missing;
+}
+
 // ---------------------------------------------------------------------------
 // Receive reassembly
 // ---------------------------------------------------------------------------

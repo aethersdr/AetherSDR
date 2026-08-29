@@ -174,6 +174,7 @@ private:
     void beginTransmitWhenReady();
     void startTransmitAudioAfterPtt();
     void paceTransmitAudio();
+    void handleTxAudioFinished(quint64 token);
     void finishTransmit(bool aborted, const QString& reason);
 
     // APRS client (APRS tab): station table, timed beacon, messaging.

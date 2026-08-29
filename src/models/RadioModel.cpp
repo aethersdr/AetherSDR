@@ -8185,6 +8185,14 @@ void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
         m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled);
 }
 
+void RadioModel::finishTxAudio(quint64 token)
+{
+    if (m_backend) {
+        m_backend->finishTxAudio();
+    }
+    emit txAudioFinished(token);
+}
+
 bool RadioModel::sendCommand(const QString& cmd)
 {
     // #3977: last-line ownership gate for pan writes. Every UI path that

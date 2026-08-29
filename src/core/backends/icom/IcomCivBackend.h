@@ -122,6 +122,7 @@ public:
     void setRitOffset(int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled) override;
+    void finishTxAudio() override;
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg = {}) override;
 
