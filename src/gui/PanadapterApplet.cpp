@@ -1022,7 +1022,9 @@ void PanadapterApplet::appendRttyText(const QString& text, float confidence)
     // the CR/LF handling on purpose: Baudot CR and LF are ordinary codepoints
     // that noise hits as often as any other, and a dropped character must
     // not still spray blank lines down the pane. (#5028)
-    if (confidence < m_rttyConfThreshold) return;
+    if (confidence < m_rttyConfThreshold) {
+        return;
+    }
 
     // CR is a no-op in a wrapped text view; LF becomes a line break.
     // Standard RTTY sends CR+LF pairs — discarding CR and converting LF

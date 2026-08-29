@@ -28,7 +28,9 @@ int main()
         const bool ok = std::fabs(got - expected) < 0.0005f;
         std::printf("[%s] sens=%3d -> %.4f (expected %.4f) %s\n",
                     ok ? " OK " : "FAIL", sens, got, expected, why);
-        if (!ok) ++failures;
+        if (!ok) {
+            ++failures;
+        }
     };
     expectNear(0,   0.500f, "floor (and the default): every character passes");
     expectNear(38,  0.671f, "documented starting value: the decoder's ~3 dB lock point (snr = 10*log10(c/(1-c)))");
