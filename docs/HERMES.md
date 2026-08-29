@@ -239,9 +239,10 @@ Two consequences worth remembering:
   Otherwise leaving CW strands every other mode a pitch high, which reads as
   "the radio is off frequency" long after the operator left CW behind.
 
-Pinned by `hl2_cw_bfo_test` (audio actually lands on the pitch, and a signal a
-pitch away from the marker is rejected) and by `hl2_backend_test` (the seam
-reports symmetric cuts, and a pitch change does not move them).
+Pinned offline by `hl2_cw_bfo_test` (audio actually lands on the pitch, and a
+signal a pitch away from the marker is rejected). The former fake-radio seam
+coverage in `hl2_backend_test` is retired; symmetric-cut and pitch-change
+convergence must be verified on real hardware through the automation bridge.
 
 ### AGC
 
@@ -1381,9 +1382,9 @@ The snap is **nearest by RATIO, not linear distance**. The rates are
 octave-spaced and zoom is multiplicative, so linear-nearest biases every request
 toward the wider neighbour: between 96 and 192 kHz the geometric mean is
 135.8 kHz but the arithmetic mean is 144 kHz, and a 140 kHz request belongs to
-192 kHz by ratio and to 96 kHz by distance. `hl2_backend_test` pins exactly that
-case — every other row in its table agrees under both rules, so without it the
-`log()` could be deleted and the suite would stay green.
+192 kHz by ratio and to 96 kHz by distance. The retired `hl2_backend_test`
+fixture pinned exactly that case — every other row in its table agrees under
+both rules. That boundary case now belongs in the real-radio automation sweep.
 
 **Do NOT send a filter-pipeline reset (`0x39`) on a rate change.** See
 `MetisClient::requestPipelineReset` — doing that on every geometry change wedged
@@ -1739,7 +1740,7 @@ reason: **the test shared an assumption with the code.**
 - The panadapter FFT keeps working at any rate because it never touches
   `WdspChannel`, so **a healthy display is not evidence of a healthy receiver.**
   That is what made the audio fault look like a display-side change.
-- The span-snap table in `hl2_backend_test` would pass under either
+- Before its retirement, the span-snap table in `hl2_backend_test` would pass under either
   ratio-nearest or linear-nearest for every row except the one deliberately
   placed between the geometric and arithmetic means. Without that row the
   `log()` could be deleted and the suite would stay green.
@@ -2906,8 +2907,9 @@ the pacer for all of it, and the gateware watchdog halts the stream when EP2
 stops arriving; it also stalls the EP6 reader, so the connect watchdog can time
 out against a radio that is answering perfectly well.
 
-This was caught by `hl2_backend_test`, which stopped seeing `connected()` at all.
-It is the same lesson as §15.4 from the other direction: EP2 is not best-effort.
+This was caught before retirement by `hl2_backend_test`, which stopped seeing
+`connected()` at all. It is the same lesson as §15.4 from the other direction:
+EP2 is not best-effort.
 
 The count therefore comes from a **static** `MetisClient::effectiveNumRx(Params)`
 — the same clamp the running client applies to the same struct. The demux and
@@ -3109,7 +3111,10 @@ section and the easiest to regress.
     connected throughout, and `get_log` shows no `linkDown`. The stream restart
     re-sends metis-start, that datagram is as losable as the one at connect, and
     without a retry one lost packet ends the session ~2 s later on the silence
-    watchdog. Covered in-tree by `hl2_receiver_count_restart_test`.
+    watchdog. Covered in-tree by the retained
+    `hl2_receiver_count_restart_test` until the dropped-start assertion has a
+    socket-free injected transport replacement; a live run cannot prove that
+    the first datagram was ignored.
 17. A restart is not a reconnect. Exactly one `connected()` per session — a
     spurious one makes RadioModel stage every pane as previous-session leftovers
     and rebuild the operator's layout mid-click.
@@ -3169,8 +3174,8 @@ happens-before edge a `Qt::BlockingQueuedConnection` establishes (a `QSemaphore`
 inside QtCore) is invisible to TSan. Every blocking invoke therefore reports the
 callee's read of the caller's captures as a data race, with `QtCore` frames
 printed as `<null>`. This is pre-existing and abundant, not new:
-`hl2_backend_test`, which predates the multi-receiver work, reports 57 races
-under `-fsanitize=thread`, 32 of them in the queued-functor dispatcher.
+Before retirement, `hl2_backend_test` reported 57 races under
+`-fsanitize=thread`, 32 of them in the queued-functor dispatcher.
 
 Two consequences worth carrying forward:
 
@@ -3185,12 +3190,14 @@ Two consequences worth carrying forward:
   blocking-invoke reports unchanged either side. The absolute count is dominated
   by the Qt artifact and says nothing.
 
-`tests/hl2_receiver_churn_test.cpp` exists to give this a place to be seen: it
-is the only test that adds and closes receivers against a live EP6 stream, which
-is the contended window. It passes on a plain build regardless of the fix, and
-that is worth being blunt about — a use-after-free on a four-element vector
-usually reads memory the allocator handed straight back. Its value is under a
-sanitizer, and it reports 30 of the pre-existing Qt artifacts when run there.
+`tests/hl2_receiver_churn_test.cpp` gives this a place to be seen: it adds and
+closes receivers against a flowing fake EP6 stream, which is the contended
+window. It stays out of the default build and is enabled in both weekly
+sanitizer lanes with `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` — TSan for
+the race, ASan for the sequential use-after-free the allocator otherwise hides
+— until a socket-free concurrency harness replaces the peer. A plain pass is
+not race proof; under TSan, read the differential rather than the absolute Qt
+artifact count described above.
 
 ### 20.16 What is proven, and what is not
 
@@ -3406,15 +3413,12 @@ Against the HL2 at 192.168.1.21, RX-only:
 - 353 544 EP6 packets, 0 sequence gaps, 12.8 Mbps RX / 3.2 Mbps TX, arrival gap
   1 ms, RTT `not measured on this link` in all four places.
 
-`hl2_link_stats_test` covers the seam contract, including the silent-link case
-and the honesty invariant. `hl2_link_stats_model_test` covers the half that is
-downstream of it, because the backend can publish a perfect snapshot while every
-readout still lies: it drives a real `RadioModel` against a fake HL2 and pins the
-readouts leaving their structural zero, the predicates on **both** sides of the
-disconnect edge, and the per-session reset the two scoring-session entry points
-share. Per §7 that is necessary and not sufficient — but the RTT and category
-predicates are decisions about what we *refuse* to claim, which is one of the few
-things a fixture can check honestly.
+The former `hl2_link_stats_test` and `hl2_link_stats_model_test` fake-radio
+fixtures covered the seam and consumer halves of this contract. They are
+retired from the build; telemetry liveness and the readouts are verified
+through the automation bridge against real HL2 hardware, while the
+disconnect-edge clearing and RTT refuse-to-claim predicates — non-events a
+live run cannot prove — await socket-free injected replacements (#5254).
 
 ---
 

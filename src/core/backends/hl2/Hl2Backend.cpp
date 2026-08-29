@@ -1373,9 +1373,12 @@ RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
     c.txPowerBands = {};
+    c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
+    c.fmTonePresentation = FmTonePresentation::Legacy;
+    c.fmDtcsCodes = {};
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
     // running count would tell the UI the limit was already reached and
@@ -1414,6 +1417,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
+    // HL2 publishes an instantaneous directional estimate; preserve the
+    // established client-side PEP response above the backend seam.
+    c.forwardPowerRequiresSmoothing = true;
+    c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
@@ -1422,6 +1429,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
     c.hasManualNotch = false;
+    c.hasTransmitFrequencyCheck = false;
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum
@@ -1442,9 +1450,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
+    c.hasDownwardExpander = false;
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
+    // The host modulator implements a continuous transmit passband.
+    c.hasTxFilterControls = true;
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;
@@ -1468,6 +1479,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    c.alwaysUseClientSideSpots = false;
     // Manual notches, and the one piece of DSP on this radio that is NOT absent
     // just because hasRadioSideDsp is false. The notch runs in WDSP on this
     // host, which is the whole point: the HL2 sends raw IQ, so a notch either
@@ -1495,6 +1507,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    c.hasPaTemperatureTelemetry = true;
+    c.hasPaCurrentTelemetry = false;
+    c.speechProcessorLevelMaximum = 2;
+    c.speechProcessorLabel = QStringLiteral("PROC");
+    c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory

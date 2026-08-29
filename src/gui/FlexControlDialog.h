@@ -43,6 +43,10 @@ signals:
     void flexControlSettingsChanged();
     void physicalDetectRequested();
     void physicalDisconnectRequested();
+    // Deep-links to the FlexControl Tuning Knob group on the Serial &
+    // Controllers Radio Setup page (#4940) — a config shortcut, not a
+    // duplicate editor; the fields it opens onto stay the single source.
+    void configureRequested();
 
 public slots:
     void reject() override;
@@ -88,6 +92,9 @@ private:
     QLabel* m_modeLabel{nullptr};
     QLabel* m_pushHintLabel{nullptr};
     QPushButton* m_physicalButton{nullptr};
+#ifdef HAVE_SERIALPORT
+    QPushButton* m_settingsButton{nullptr};
+#endif
     QPushButton* m_compactButton{nullptr};
     QPushButton* m_externalSpinButton{nullptr};
     QPushButton* m_reverseButton{nullptr};

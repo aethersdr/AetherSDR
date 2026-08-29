@@ -124,6 +124,35 @@ void IcomSettings::setPorts(quint16 control, quint16 serial, quint16 audio)
     writeObj(obj);
 }
 
+quint16 IcomSettings::defaultBasePort()
+{
+    return icom::kControlPort;
+}
+
+quint16 IcomSettings::maximumBasePort()
+{
+    return 65533;
+}
+
+bool IcomSettings::usesDefaultPorts()
+{
+    return controlPort() == icom::kControlPort
+        && serialPort() == icom::kSerialPort
+        && audioPort() == icom::kAudioPort;
+}
+
+void IcomSettings::setBasePort(quint16 basePort)
+{
+    if (basePort == 0 || basePort > maximumBasePort()) {
+        setPorts(icom::kControlPort, icom::kSerialPort, icom::kAudioPort);
+        return;
+    }
+
+    setPorts(basePort,
+             static_cast<quint16>(basePort + 1),
+             static_cast<quint16>(basePort + 2));
+}
+
 std::uint8_t IcomSettings::civAddress()
 {
     const int v = readObj().value(QLatin1String(kFieldCivAddress)).toInt(IcomSettings::kDefaultCivAddress);

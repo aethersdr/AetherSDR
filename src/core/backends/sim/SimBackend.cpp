@@ -232,9 +232,12 @@ RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.txPowerBands = {};
+    caps.declaredBandRanges = {};
     caps.family = familyName();
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
+    caps.fmTonePresentation = FmTonePresentation::Legacy;
+    caps.fmDtcsCodes = {};
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     // Four receivers since #4887 phase 4 — enough to exercise the workspace
     // canvas's per-pan items and measure the multi-pan render budget in CI
@@ -246,15 +249,19 @@ RadioCapabilities SimBackend::capabilities() const
     // (Principle VI). TX stays off in the skeleton.
     caps.canTransmit = false;
     caps.txPowerMaxWatts = 0.0;
+    // Explicitly absent: the RX-only simulator publishes no forward power.
+    caps.forwardPowerRequiresSmoothing = false;
     // Moot on a backend that cannot key at all — canTransmit=false refuses every
     // mode already. Empty, not "all of them", because this field means "the
     // exceptions", and a simulator has none.
     caps.receiveOnlyModes = {};
+    caps.hasRadioDialLock = false;
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
     caps.hasManualNotch = false;
+    caps.hasTransmitFrequencyCheck = false;
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
@@ -264,11 +271,13 @@ RadioCapabilities SimBackend::capabilities() const
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
+    caps.hasDownwardExpander = false;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
+    caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
@@ -281,6 +290,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    caps.alwaysUseClientSideSpots = false;
     // No manual notch. The synthetic scene has an auto-notch in its mixer, but
     // nothing implements a placed, tracking null — so the +TNF button and the
     // panadapter's add-notch entries stay hidden here rather than appearing and
@@ -294,6 +304,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasGpsFrequencyReference = false;
     caps.hasGpsTimeConfiguration = false;
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
+    caps.hasPaCurrentTelemetry = false;       // synthetic scene; no PA current
+    caps.speechProcessorLevelMaximum = 2;
+    caps.speechProcessorLabel = QStringLiteral("PROC");
+    caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};

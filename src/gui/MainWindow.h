@@ -21,6 +21,7 @@
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
 #include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
+#include "gui/ConnectSliceEnumerationGuard.h"
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
@@ -241,6 +242,17 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // injectKeyEventForAutomation result codes (plain ints, same reason as
+    // above). Delivers a real KeyPress/KeyRelease through the application
+    // event filter so the momentary family (PTT hold, CW momentary keys),
+    // which registers no direct handler, can be exercised by the bridge (#5079).
+    static constexpr int KeyInjectOk          = 0;  // delivered and consumed (non-TX)
+    static constexpr int KeyInjectUnknownKey  = 1;  // neither an action id nor a parseable sequence
+    static constexpr int KeyInjectTxBlocked   = 2;  // keysTx PRESS with allowTx false (releases are never blocked)
+    static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
+    static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
+    static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
+    Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
     // disable / place, driven by the `workspace` automation verb.  Returns
     // an error key instead of throwing, like the other automation hooks.
@@ -415,6 +427,18 @@ private:
                                                        const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
+    // Shared band-selection implementation, used by both the
+    // SpectrumOverlayMenu band buttons and the band_* shortcut/MIDI actions
+    // so they behave identically (#4543):
+    //   - Flex: freqMhz/mode are hints only. selectBand() sends a
+    //     radio-authoritative band-stack recall (display pan set <panId>
+    //     band=<key>) and the radio restores its own saved frequency/mode/
+    //     filters/antenna; freqMhz/mode are ignored.
+    //   - non-Flex: there is no radio-owned band stack, so freqMhz/mode ARE
+    //     the actual local tune target — selectBand() sets mode (if
+    //     non-empty) then frequency directly on the active slice.
+    void selectBand(const QString& panId, const QString& bandName, double freqMhz,
+                    const QString& mode, const QString& stackKeyHint = QString());
     // Lock / SWR-sweep guards shared by every tune source.  Returns true if the
     // tune must be blocked (and, for a locked active slice, restores the VFO
     // readout).  Lets the edge-pan tune path — which bypasses applyTuneRequest
@@ -789,6 +813,15 @@ private:
     // the finished handler can detect a change and recreate the RX audio stream.
     void wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp);
 
+    // Open (or raise) the persistent RadioSetupDialog and, if given a
+    // non-empty page name, select that page. Collapses the prevComp/wasFresh/
+    // wireRadioSetupDialogSignals dance that used to be copy-pasted at every
+    // call site (Settings → Radio Setup, USB Cables, XVTR overlay,
+    // FlexControl "Settings…") into one place (#4940 follow-up — PR #5157
+    // review). Returns the dialog so a caller needing a page-specific reveal
+    // (e.g. revealFlexControlSettings()) can act on it further.
+    RadioSetupDialog* openRadioSetupPage(const QString& page = {});
+
     // Reorder the main splitter so the applet panel sits on the left or
     // right of the panadapter stack.  Wired from the dock-side icons in
     // the title bar and persisted via "AppletPanelDockedLeft".
@@ -840,6 +873,9 @@ private:
     void publishRadioStateMqtt();
 #endif
     void applyPanLayout(const QString& layoutId);
+    void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
+    void settleCanvasPanLayout(const QString& layoutId, int expectedPanCount,
+                               int attemptsRemaining, quint64 generation);
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
     void showPanadapterSliceCapacityMessage();
@@ -1266,6 +1302,9 @@ private:
     WorkspaceCanvas*     m_workspaceCanvas{nullptr};
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
+    quint64              m_canvasPanLayoutGeneration{0};
+    QString              m_pendingCanvasPanLayoutId;
+    int                  m_pendingCanvasPanLayoutTarget{-1};
     // Additional canvas windows (phase 7), keyed by surface id.  A hidden
     // window stays in the map (hide-and-keep reuses its canvas object);
     // only remove/shutdown deletes.
@@ -1323,6 +1362,9 @@ private:
     // write is dropped, and must outlast a slow rebuild. See the header.
     BandRecallSelectionGuard m_bandRecallSelection{
         kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
+    static constexpr int kConnectSliceEnumerationGraceMs = 3000;
+    ConnectSliceEnumerationGuard m_connectSliceEnumeration{
+        kConnectSliceEnumerationGraceMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1400,6 +1442,7 @@ private:
     // Menus
     QMenu*           m_profilesMenu{nullptr};
     QAction*         m_txBandAction{nullptr};
+    QMenu*           m_tuneInhibitMenu{nullptr};  // Flex rear-panel TX outputs — dimmed off-Flex (#5263)
     // Settings ▸ "Autostart DAX with AetherSDR". Held so
     // applyCapabilitiesToUi() can hide it on a radio with no DAX streams.
     // Null on platforms without a DAX bridge, where the entry is never created.
@@ -1509,6 +1552,7 @@ private:
     bool m_hasPaTempTelemetry{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
     // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
     //
     // The slot is driven by radioUpdated as well as radioDiscovered, and

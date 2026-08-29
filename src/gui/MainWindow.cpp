@@ -2305,8 +2305,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
             // A position receiver is not a frequency reference. Keep the
             // compact status-bar identity and fix state privacy-safe while
-            // the live grid and source remain available in the tooltip and
-            // GPS dashboard.
+            // the live position details remain available in the GPS dashboard.
             sourceLabel = QStringLiteral("Int. GPS");
             const QString positionStatus = m_radioModel.gpsPositionValid()
                 ? QStringLiteral("Locked")
@@ -2342,13 +2341,11 @@ MainWindow::MainWindow(QWidget* parent)
 
         QString tooltip;
         if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
-            tooltip = QStringLiteral("GPS position receiver\nSource: %1\nStatus: %2\nGrid: %3")
+            tooltip = QStringLiteral("GPS position receiver\nSource: %1\nStatus: %2")
                 .arg(m_radioModel.gpsSource().isEmpty() ? QStringLiteral("Unknown")
                                                         : m_radioModel.gpsSource(),
                      m_radioModel.gpsStatus().isEmpty() ? QStringLiteral("Waiting")
-                                                        : m_radioModel.gpsStatus(),
-                     m_radioModel.gpsGrid().isEmpty() ? QStringLiteral("--")
-                                                      : m_radioModel.gpsGrid().toUpper());
+                                                        : m_radioModel.gpsStatus());
         } else {
             tooltip = QStringLiteral("10 MHz reference\nSetting: %1\nActual: %2\nLock: %3")
                 .arg(oscillatorName(setting, false),
@@ -2407,9 +2404,6 @@ MainWindow::MainWindow(QWidget* parent)
                 || (normalizeOscillatorValue(m_radioModel.oscState()) == "gpsdo"
                     && m_radioModel.oscLocked()))) {
             m_gpsTimeLabel->setText(utcTime);
-            if (!m_radioModel.gpsDate().isEmpty()) {
-                m_gpsDateLabel->setText(m_radioModel.gpsDate());
-            }
             m_useSystemClock = false;
         } else {
             m_useSystemClock = true;
@@ -2428,8 +2422,15 @@ MainWindow::MainWindow(QWidget* parent)
         QString dateFmt = loc.dateFormat(QLocale::ShortFormat);
         if (!dateFmt.contains(QLatin1String("yyyy")))
             dateFmt.replace(QLatin1String("yy"), QLatin1String("yyyy"));
+        QDate displayDate = utc.date();
+        if (!m_useSystemClock) {
+            const QDate radioDate = QDate::fromString(m_radioModel.gpsDate(), Qt::ISODate);
+            if (radioDate.isValid()) {
+                displayDate = radioDate;
+            }
+        }
+        m_gpsDateLabel->setText(loc.toString(displayDate, dateFmt));
         if (m_useSystemClock) {
-            m_gpsDateLabel->setText(loc.toString(utc.date(), dateFmt));
             m_gpsTimeLabel->setText(utc.toString("HH:mm:ssZ"));
         }
     });
@@ -3027,6 +3028,10 @@ void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
                                           int audioLo, int audioHi)
 {
     if (path == ClientEqApplet::Path::Tx) {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        if (m_radioModel.isConnected() && !caps.hasTxFilterControls) {
+            return;
+        }
         auto& txm = m_radioModel.transmitModel();
         if (audioLo != txm.txFilterLow())  txm.setTxFilterLow(audioLo);
         if (audioHi != txm.txFilterHigh()) txm.setTxFilterHigh(audioHi);
@@ -3251,6 +3256,21 @@ void MainWindow::publishRadioStateMqtt()
 }
 #endif
 
+RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
+{
+    const QString prevComp = m_radioModel.audioCompressionParam();
+    const bool wasFresh = !m_radioSetupDialog;
+    showOrRaisePersistent(m_radioSetupDialog,
+                          &m_radioModel, m_audio,
+                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+    if (wasFresh && m_radioSetupDialog)
+        wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
+    if (m_radioSetupDialog && !page.isEmpty())
+        m_radioSetupDialog->selectTab(page);
+    return m_radioSetupDialog;
+}
+
 void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp)
 {
     if (!dlg) return;
@@ -3316,6 +3336,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (m_dialBackend &&
             s.value("UlanziDialEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                      Qt::QueuedConnection);
+        } else if (m_dialBackend) {
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
                                       Qt::QueuedConnection);
         }
 #ifdef HAVE_HIDAPI
@@ -3720,6 +3743,15 @@ void MainWindow::changeEvent(QEvent* event)
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     ShutdownTrace closeEventTrace("main_window.close_event");
+#ifdef Q_OS_MAC
+    // Shared Ulanzi access temporarily remaps only the dial's system key
+    // events. Restore that mapping while the macOS HID event system and Qt
+    // event loop are still live; ~MainWindow runs only after app.exec().
+    if (m_dialBackend) {
+        ShutdownTrace trace("controllers.dial.stop");
+        m_dialBackend->stop();
+    }
+#endif
     // Release the TGXL/PGXL native control sockets explicitly so the radio
     // can resume polling them on behalf of other clients (e.g. Maestro).
     // The radio-disconnect handler does this via a queued connection on
@@ -5855,6 +5887,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // one place so the count cannot leak across sessions.
     noteAutoConnectFinished(connected);
 
+    if (!connected) {
+        m_connectSliceEnumeration.cancelArm();
+    }
+
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
@@ -6018,11 +6054,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     xvtrBands.append({x.name, x.rfFreq, QString("X%1").arg(x.index)});
             }
             const ModelCapabilities caps = m_radioModel.capabilities();
+            const QVector<DeclaredBandRange> declaredBandRanges =
+                m_radioModel.backendCapabilities().declaredBandRanges;
             const QStringList declaredBands = m_radioModel.declaredBands();
             for (auto* applet : m_panStack->allApplets()) {
                 auto* menu = applet->spectrumWidget()->overlayMenu();
                 menu->setRadioCapabilities(caps);
-                menu->setDeclaredBands(declaredBands);
+                menu->setDeclaredBands(declaredBands, declaredBandRanges);
                 menu->setXvtrBands(xvtrBands);
                 applyTuningRangeToOverlayMenu(menu);
                 applyNotchCapabilities(applet->spectrumWidget());
@@ -7117,7 +7155,15 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
+            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
+            connected ? caps.speechProcessorLevelMaximum : 2);
+        m_appletPanel->meterApplet()->setMainFanTelemetryState(
+            connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->meterApplet()->setPaInstrumentTelemetryState(
+            connected, caps.hasPaTemperatureTelemetry,
+            caps.hasPaCurrentTelemetry);
         // The mic-level gauge follows the METER, not the capability: a Flex
         // does not let a client pick its input either and still publishes
         // MICPEAK. Absence of the meter is the only thing that means the face
@@ -7131,11 +7177,15 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // the session and leave a Flex's continuous control stepping through
         // another radio's list.
         if (auto* phone = m_appletPanel->phoneApplet()) {
+            phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
+            phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
-        m_appletPanel->setMicLevelMeterAvailable(
-            !connected || m_radioModel.meterModel().hasMicPeakMeter());
+        m_appletPanel->setMicLevelMeterState(
+            connected ? MicMeterSessionState::Connected
+                      : MicMeterSessionState::Disconnected,
+            m_radioModel.meterModel().hasMicPeakMeter());
     }
 
     // ── Display dBm scale: who owns it ─────────────────────────────────────
@@ -7294,6 +7344,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // meter, and MeterModel emits hwTelemetryChanged whenever EITHER half
     // changes — so on a radio that reports only PA temperature the volts half
     // arrives as its 0.0f initialiser on every tick.
+    if (m_appletPanel) {
+        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(connected);
+    }
     if (m_supplyVoltLabel) {
         m_supplyVoltLabel->setVisible(!connected || caps.hasSupplyVoltageTelemetry);
         if (!connected) {
@@ -7391,6 +7444,25 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     }
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+
+    // TX Band Settings and Inhibit-during-TUNE drive Flex interlock/band
+    // verbs that a backend with no command plane drops. Doctrine (#5263):
+    // dim, never hide — the entries stay visible on every family, disabled
+    // with a reason where the backend cannot honor them. Permissive on
+    // disconnect like every gate in this function.
+    {
+        const bool cmdPlane = !connected || m_radioModel.hasCommandPlane();
+        const QString why =
+            cmdPlane ? QString() : tr("Not supported by this radio");
+        if (m_txBandAction) {
+            m_txBandAction->setEnabled(cmdPlane);
+            m_txBandAction->setToolTip(why);
+        }
+        if (m_tuneInhibitMenu) {
+            m_tuneInhibitMenu->menuAction()->setEnabled(cmdPlane);
+            m_tuneInhibitMenu->menuAction()->setToolTip(why);
+        }
     }
 
     // ── GPS: the status-bar position readout and the dialog it opens ────────
@@ -10037,17 +10109,32 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     if (!m_radioModel.isConnected()) return;
 
     const int needed = panCountForLayoutId(layoutId);
-    const int existing = m_panStack->count();
+    const bool canvasLayout = m_workspaceController
+        && m_workspaceController->isEnabled();
+    const QStringList canvasPanIds = canvasLayout
+        ? m_workspaceController->activeMainPanIdsForLayout() : QStringList{};
+    const int existing = canvasLayout ? canvasPanIds.size() : m_panStack->count();
+    if (!canvasLayout) {
+        ++m_canvasPanLayoutGeneration;
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+    }
 
     if (needed < existing) {
         qDebug() << "applyPanLayout: reducing from" << existing << "to" << needed << "pans";
 
         // Close extra pans from the end (keep the first N)
-        auto allApplets = m_panStack->allApplets();
+        QStringList removalCandidates;
+        if (canvasLayout) {
+            removalCandidates = canvasPanIds;
+        } else {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                removalCandidates.append(applet->panId());
+            }
+        }
         int toRemove = existing - needed;
-        for (int i = allApplets.size() - 1; i >= 0 && toRemove > 0; --i) {
-            auto* applet = allApplets[i];
-            QString panId = applet->panId();
+        for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
+            const QString panId = removalCandidates.at(i);
             if (panId == "default") continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
             // Route through removePanadapter so a layout-shrink tears down the
@@ -10059,27 +10146,35 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             --toRemove;
         }
 
+        // Pan removal and slot rekeying arrive asynchronously. Reflow now and
+        // after each settling turn so the final survivors, rather than a pan
+        // that is still waiting to disappear, receive the canonical cells.
+        startCanvasPanLayoutSettle(layoutId, needed);
+
         // Rearrange remaining pans after a short delay for radio to process
         QTimer::singleShot(500, this, [this, layoutId]() {
-            m_panStack->rearrangeLayout(layoutId);
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
         });
         return;
     }
     if (needed == existing) {
         // Same count, just rearrange
-        m_panStack->rearrangeLayout(layoutId);
+        if (!canvasLayout) {
+            m_panStack->rearrangeLayout(layoutId);
+        }
+        startCanvasPanLayoutSettle(layoutId, needed);
         return;
     }
 
     // Create additional pans to reach the needed count.
     // Keep existing pan(s) alive — no tear-down, no dangling signals.
-    const int currentSliceCount = static_cast<int>(m_radioModel.slices().size());
-    if (currentSliceCount >= m_radioModel.maxSlices()) {
+    const int toCreate = needed - existing;
+    if (m_panStack->count() + toCreate > m_radioModel.maxPanadapters()) {
         showPanadapterSliceCapacityMessage();
         return;
     }
-
-    const int toCreate = needed - existing;
     auto panIds = std::make_shared<QStringList>();
 
     // Collect existing pan IDs first (they'll be part of the layout)
@@ -10089,7 +10184,72 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     qDebug() << "applyPanLayout: have" << existing << "pans, creating"
              << toCreate << "more for layout" << layoutId;
 
+    if (canvasLayout) {
+        startCanvasPanLayoutSettle(layoutId, needed);
+    }
     createPansSequentially(layoutId, toCreate, panIds, 0);
+}
+
+void MainWindow::startCanvasPanLayoutSettle(const QString& layoutId,
+                                            int expectedPanCount)
+{
+    if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+        return;
+    }
+    m_pendingCanvasPanLayoutId = layoutId;
+    m_pendingCanvasPanLayoutTarget = expectedPanCount;
+    const quint64 generation = ++m_canvasPanLayoutGeneration;
+    settleCanvasPanLayout(layoutId, expectedPanCount, 25, generation);
+}
+
+void MainWindow::settleCanvasPanLayout(const QString& layoutId,
+                                       int expectedPanCount,
+                                       int attemptsRemaining,
+                                       quint64 generation)
+{
+    if (m_shuttingDown || !m_panStack || generation != m_canvasPanLayoutGeneration) {
+        return;
+    }
+
+    if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+        if (attemptsRemaining > 0) {
+            QTimer::singleShot(200, this,
+                               [this, layoutId, expectedPanCount,
+                                attemptsRemaining, generation]() {
+                settleCanvasPanLayout(layoutId, expectedPanCount,
+                                      attemptsRemaining - 1, generation);
+            });
+        }
+        return;
+    }
+
+    m_workspaceController->applyPanLayout(layoutId);
+    const int actualPanCount =
+        m_workspaceController->activeMainPanIdsForLayout().size();
+    if (actualPanCount == expectedPanCount) {
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+        return;
+    }
+    if (attemptsRemaining <= 0) {
+        qWarning() << "applyPanLayout: canvas settle expired for" << layoutId
+                   << "expected" << expectedPanCount << "pans, found"
+                   << actualPanCount;
+        // Expiry is terminal. Only the disabled-canvas path above represents
+        // a suspended selection that may resume when canvas mode returns.
+        // Leaving an expired selection pending would let a later enable
+        // overwrite geometry the operator arranged in the meantime.
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+        return;
+    }
+
+    QTimer::singleShot(200, this,
+                       [this, layoutId, expectedPanCount, attemptsRemaining,
+                        generation]() {
+        settleCanvasPanLayout(layoutId, expectedPanCount,
+                              attemptsRemaining - 1, generation);
+    });
 }
 
 void MainWindow::createPansSequentially(const QString& layoutId, int total,
@@ -10113,7 +10273,10 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
             }
 
             // Rearrange splitter structure for the selected layout
-            m_panStack->rearrangeLayout(layoutId);
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
+            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
 
             m_panApplet = m_panStack->activeApplet();
 
@@ -10220,12 +10383,12 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
 
 void MainWindow::showPanadapterSliceCapacityMessage()
 {
-    const int limit = m_radioModel.maxSlices();
+    const int limit = m_radioModel.maxPanadapters();
     const QString model = m_radioModel.model().isEmpty()
         ? QStringLiteral("This radio")
         : m_radioModel.model();
     statusBar()->showMessage(
-        QStringLiteral("Slice capacity is full; cannot add another panadapter (%1 supports %2 slice%3)")
+        QStringLiteral("Panadapter capacity is full (%1 supports %2 panadapter%3)")
             .arg(model)
             .arg(limit)
             .arg(limit == 1 ? QString() : QStringLiteral("s")),

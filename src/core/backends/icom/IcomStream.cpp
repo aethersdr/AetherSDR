@@ -1,5 +1,6 @@
 #include "core/backends/icom/IcomStream.h"
 
+#include <QAbstractSocket>
 #include <QLoggingCategory>
 #include <QRandomGenerator>
 #include <QTimer>
@@ -45,9 +46,28 @@ bool IcomStream::bindOnly(const Config& config)
 {
     stop();
     m_config = config;
+    m_counters = Counters{};
+    m_activityClock.start();
+    m_lastRxAtMs = -1;
+    m_lastTxAtMs = -1;
+    m_lastPayloadAtMs = -1;
+    m_lastPingReplyAtMs = -1;
 
     m_socket = new QUdpSocket(this);
+    connect(m_socket, &QAbstractSocket::errorOccurred, this,
+            [this](QAbstractSocket::SocketError) {
+                ++m_counters.socketErrors;
+                m_counters.lastSocketError = m_socket
+                    ? m_socket->errorString() : QStringLiteral("socket unavailable");
+                qCWarning(lcIcomStream) << "UDP socket error on role"
+                                        << int(m_config.role) << ':'
+                                        << m_counters.lastSocketError;
+            });
     if (!m_socket->bind(QHostAddress::AnyIPv4, config.localPort)) {
+        if (m_counters.socketErrors == 0) {
+            ++m_counters.socketErrors;
+        }
+        m_counters.lastSocketError = m_socket->errorString();
         emit failed(QStringLiteral("cannot bind local UDP port %1").arg(config.localPort));
         return false;
     }
@@ -78,7 +98,6 @@ bool IcomStream::bindOnly(const Config& config)
     m_gapPending = false;
     m_replay.clear();
     m_reorder.clear();
-    m_counters = Counters{};
     m_idleSince.start();
     return true;
 }
@@ -166,8 +185,11 @@ void IcomStream::sendRaw(std::span<const std::uint8_t> packet)
         return;
     const qint64 n = m_socket->write(reinterpret_cast<const char*>(packet.data()),
                                      static_cast<qint64>(packet.size()));
-    if (n > 0)
+    if (n > 0) {
         m_counters.txBytes += static_cast<quint64>(n);
+        ++m_counters.txPackets;
+        m_lastTxAtMs = m_activityClock.elapsed();
+    }
 }
 
 void IcomStream::flush()
@@ -246,6 +268,7 @@ void IcomStream::onReadyRead()
         buf.resize(static_cast<qsizetype>(n));
         m_counters.rxBytes += static_cast<quint64>(n);
         ++m_counters.rxPackets;
+        m_lastRxAtMs = m_activityClock.elapsed();
         // EVERY inbound datagram, before any dispatch. On first contact with
         // real hardware the failure was a step that produced no reply at all,
         // and no amount of logging at the dispatch sites can distinguish "the
@@ -276,6 +299,7 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
                 // Smooth it: a single sample on WiFi swings enough to make the
                 // readout unreadable, and this number is only ever displayed.
                 m_counters.rttMs = m_counters.rttMs < 0 ? rtt : (m_counters.rttMs + rtt) / 2;
+                m_lastPingReplyAtMs = m_activityClock.elapsed();
             }
         }
         return;
@@ -463,7 +487,27 @@ void IcomStream::onReorderTick()
 
 void IcomStream::deliver(const QByteArray& packet)
 {
+    if (packet.size() > static_cast<qsizetype>(kHeaderSize)) {
+        m_lastPayloadAtMs = m_activityClock.elapsed();
+    }
     emit payloadReady(packet);
+}
+
+IcomStream::Counters IcomStream::counters() const
+{
+    Counters out = m_counters;
+    if (!m_activityClock.isValid()) {
+        return out;
+    }
+    const qint64 now = m_activityClock.elapsed();
+    const auto age = [now](qint64 atMs) {
+        return atMs >= 0 ? std::max<qint64>(0, now - atMs) : -1;
+    };
+    out.lastRxAgeMs = age(m_lastRxAtMs);
+    out.lastTxAgeMs = age(m_lastTxAtMs);
+    out.lastPayloadAgeMs = age(m_lastPayloadAtMs);
+    out.lastPingReplyAgeMs = age(m_lastPingReplyAtMs);
+    return out;
 }
 
 void IcomStream::onIdleTick()

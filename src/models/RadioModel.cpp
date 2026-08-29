@@ -750,6 +750,7 @@ void RadioModel::setupBackend(const QString& family)
     // and dropAllSessionModelsForFamilySwitch() deletes every slice before the
     // swap. What the rule is really about is a sender that lives as long as the
     // RadioModel: `this`, or a value member such as m_transmitModel.
+    m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
 
     {
@@ -1124,11 +1125,14 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
             [this](int index) {
         const bool hadMicPeak = m_meterModel.hasMicPeakMeter();
+        const bool hadSupplyVoltage = m_meterModel.hasSupplyVoltage();
         m_meterModel.removeMeter(index);
         // Symmetric on purpose: a meter that goes away must hide the face
         // again, or a radio swap leaves a dead gauge on screen.
-        if (hadMicPeak != m_meterModel.hasMicPeakMeter())
+        if (hadMicPeak != m_meterModel.hasMicPeakMeter()
+            || hadSupplyVoltage != m_meterModel.hasSupplyVoltage()) {
             publishCapabilities(isConnected());
+        }
     });
 
     // A backend may revise its own capabilities mid-session (SimBackend does so
@@ -1139,6 +1143,25 @@ void RadioModel::setupBackend(const QString& family)
     // signal to bind to and cannot observe a stale picture.
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] { publishCapabilities(isConnected()); });
+    connect(m_backend.get(), &IRadioBackend::transmitFrequencyCheckChanged, this,
+            [this](bool on) {
+        if (m_transmitFrequencyCheck == on) {
+            return;
+        }
+        m_transmitFrequencyCheck = on;
+        emit transmitFrequencyCheckChanged(on);
+    });
+    connect(m_backend.get(), &IRadioBackend::radioDialLockChanged, this,
+            [this](bool locked) {
+        m_radioDialLocked = locked;
+        SliceDelta delta;
+        delta.locked = locked;
+        for (SliceModel* slice : std::as_const(m_slices)) {
+            if (slice) {
+                slice->applyChanges(delta);
+            }
+        }
+    });
 
     // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend that
     // declares client-owned settings domains reports state movement; one
@@ -1210,6 +1233,21 @@ void RadioModel::setupBackend(const QString& family)
             // non-Flex backend, so nothing would create the model and every delta
             // would be dropped (slice panel stuck at 0.000000). Materialise it on
             // the first delta and route mode intents back through the seam.
+            if (auto it = m_staleSlices.find(sliceId);
+                it != m_staleSlices.end() && it.value()) {
+                s = it.value();
+                m_staleSlices.erase(it);
+                qCDebug(lcProtocol) << "RadioModel: reclaimed non-Flex slice"
+                                    << sliceId << "from previous session";
+                m_slices.append(s);
+                s->applyChanges(mapped);
+                m_meterModel.setActiveTxSlice(activeTxSliceNum());
+                refreshTxPowerLimit();
+                // Reuse the same SliceModel so every UI subscriber — including
+                // RX Controls — stays attached. A sliceAdded here would build a
+                // duplicate VFO for an object the UI already owns.
+                return;
+            }
             s = new SliceModel(sliceId, this);
             connect(s, &SliceModel::modeChangeRequested, this,
                     [this, s](const QString& mode) {
@@ -1260,6 +1298,55 @@ void RadioModel::setupBackend(const QString& family)
             connect(s, &SliceModel::squelchCommandIssued, this,
                     [this, s](bool on, int level) {
                 if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
+            });
+            // FM repeater controls are distinct neutral intents. Flex
+            // continues to use SliceModel's wire text; every other backend gets
+            // the same operator action through the seam instead of silently
+            // updating only the widgets.
+            connect(s, &SliceModel::fmToneModeCommandIssued, this,
+                    [this, s](const QString& mode) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneMode(s->sliceId(), mode);
+                }
+            });
+            connect(s, &SliceModel::fmToneValueCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmToneRxValueCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneRxValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmDtcsCommandIssued, this,
+                    [this, s](int code, bool txReverse, bool rxReverse) {
+                if (m_backend) {
+                    m_backend->setSliceFmDtcs(
+                        s->sliceId(), code, txReverse, rxReverse);
+                }
+            });
+            connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
+                    [this, s](const QString& direction) {
+                if (m_backend) {
+                    m_backend->setSliceRepeaterOffsetDir(s->sliceId(), direction);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterOffsetCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmRepeaterOffset(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterRecallCommandIssued, this,
+                    [this, s](const QString& direction, double offsetHz,
+                              const QString& toneMode, double toneHz) {
+                if (m_backend) {
+                    m_backend->setSliceFmRepeater(s->sliceId(), direction, offsetHz,
+                                                  toneMode, toneHz);
+                }
             });
             // RIT / XIT. The control already existed in VfoWidget and drove
             // SliceModel; only the last hop to the seam was missing.
@@ -1326,6 +1413,8 @@ void RadioModel::setupBackend(const QString& family)
                     m_cwxModel.adoptSpeed(*delta.cwSpeed);
                 }
             });
+    connect(m_backend.get(), &IRadioBackend::keyingStateConfirmed,
+            this, &RadioModel::radioTransmitConfirmed);
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
@@ -3725,6 +3814,21 @@ RadioCapabilities RadioModel::backendCapabilities() const
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
 }
 
+void RadioModel::setTransmitFrequencyCheck(bool on)
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    if (on && !backendCapabilities().hasTransmitFrequencyCheck) {
+        return;
+    }
+    // Capability gates a new ON edge, never OFF. The backend retains the
+    // release obligation if authoritative identity changes while ON is queued.
+    // The backend reply owns m_transmitFrequencyCheck. The button's physical
+    // down-state gives immediate press feedback without inventing radio state.
+    m_backend->setTransmitFrequencyCheck(on);
+}
+
 bool RadioModel::hasExtendedDspFilters() const
 {
     // Connected: the backend's declaration wins. For a Flex this is bit-for-bit
@@ -3897,6 +4001,8 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    m_transmitModel.setSpeechProcessorLevelMaximum(
+        connected ? caps.speechProcessorLevelMaximum : 2);
     refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
@@ -5811,6 +5917,14 @@ void RadioModel::onConnected()
     // replay — with the fixture set staying poisoned for the session.
     clearAutomationSliceFixtures();
     stageSessionModelsForReconnect();
+    // The selected discovery serial names the non-Flex session that actually
+    // reached Connected. Keep it separate from m_lastInfo: a same-family radio
+    // swap overwrites m_lastInfo before IcomCivBackend::connectRadio() tears the
+    // old session down, so disconnect-time lookup there would attribute radio
+    // A's staged models to radio B and defeat the cross-radio reclaim guard.
+    if (!m_flexBackend) {
+        m_connectedSessionSerial = m_lastInfo.serial;
+    }
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
@@ -5986,6 +6100,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     m_foreignSliceOwners.clear();
     m_activePanId.clear();
     m_staleSessionSerial.clear();
+    m_connectedSessionSerial.clear();
     m_chassisSerial.clear();
 }
 
@@ -6299,6 +6414,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("client low_bw_connect");
 
     m_guiClientRegistrationState.begin();
+    // The radio dumps slice status in response to GUI-client registration,
+    // which lands BEFORE the "client gui" reply that dispatches the sub batch.
+    // Arming at "sub slice all" opens the window after onSliceAdded has already
+    // chosen its source, so the guard is never consulted (#4759).
+    emit sliceConnectEnumerationStarted();
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
         if (code != 0) {
@@ -6556,6 +6676,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                 sendCmd("slice list",
                     [this](int code3, const QString& body) {
+                        emit sliceConnectEnumerationFinished();
                         const quint64 restoreGeneration = m_sessionModelGeneration;
                         QTimer::singleShot(kSessionRestorePruneDelayMs, this, [this, restoreGeneration]() {
                             pruneStaleSessionModels(restoreGeneration);
@@ -6845,6 +6966,11 @@ void RadioModel::onDisconnected()
     m_amplifier.reset();              // clear PGXL presence/operate (#4094)
     if (m_flexBackend) m_flexBackend->clearExtensionHandles();  // drop cached encode handles (#4198)
     m_fullDuplex = false;
+    if (m_transmitFrequencyCheck) {
+        m_transmitFrequencyCheck = false;
+        emit transmitFrequencyCheckChanged(false);
+    }
+    m_radioDialLocked.reset();
     // Reset to false so the next connect's skip-peek fast path requires the
     // radio's mf_enable status to actually arrive before treating multiFLEX
     // as enabled. Default-true would silently bypass the conflict check if
@@ -6896,8 +7022,16 @@ void RadioModel::onDisconnected()
     // next connect can refuse to reclaim them against a different radio.
     // Keep the previous value if this disconnect never learned a serial
     // (e.g. handshake failed before the info reply).
-    if (!m_chassisSerial.isEmpty())
+    if (!m_chassisSerial.isEmpty()) {
         m_staleSessionSerial = m_chassisSerial;
+    } else if (!m_connectedSessionSerial.isEmpty()) {
+        // Seam backends do not receive Flex's `info chassis_serial` reply. The
+        // serial captured on their successful connect edge is the authority
+        // that prevents slice id 0 from one physical radio being reclaimed by
+        // another radio of the same family.
+        m_staleSessionSerial = m_connectedSessionSerial;
+    }
+    m_connectedSessionSerial.clear();
     m_chassisSerial.clear();
     m_callsign.clear();
     // Clear the nickname here too, not just on the connectToRadio() seeding
@@ -6908,6 +7042,7 @@ void RadioModel::onDisconnected()
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
     m_region.clear();
+    m_declaredBands.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
     m_netCwIndex = 1;
@@ -7781,27 +7916,13 @@ void RadioModel::recallLocalMemory(int index)
 
     // These are the operator-issue setters, the same ones the panel controls
     // call, so each emits its *CommandIssued signal and reaches the radio
-    // through the backend seam. Order matches what `memory apply` does on a
-    // Flex: mode first (it resets the filter to the mode default), then the
-    // stored filter, then frequency.
+    // through the backend seam. Mode goes first because it resets the filter
+    // to the mode default; the stored filter follows, and tuning precedes the
+    // grouped FM repeater state for the IC-705 quirk documented below.
     if (!memory.mode.isEmpty())
         target->setMode(memory.mode);
     if (memory.rxFilterLow != 0 || memory.rxFilterHigh != 0)
         target->setFilterWidth(memory.rxFilterLow, memory.rxFilterHigh);
-
-    // FM repeater and tone fields have no seam route today — a non-Flex backend
-    // never sees SliceModel's Flex wire text for them. Applying them anyway
-    // keeps the model and the UI honest about what the recalled channel is; on
-    // a backend that grows FM support they will already be set.
-    if (!memory.offsetDir.isEmpty()) {
-        target->setRepeaterOffsetDir(memory.offsetDir);
-        target->setFmRepeaterOffsetFreq(std::abs(memory.repeaterOffset));
-    }
-    if (!memory.toneMode.isEmpty()) {
-        target->setFmToneMode(memory.toneMode);
-        target->setFmToneValue(QString::number(memory.toneValue, 'f', 1));
-    }
-    target->setSquelch(memory.squelch, memory.squelchLevel);
 
     // The tuning step, applied directly rather than commanded. On a Flex the
     // panel's follow-up `slice set N step=` round-trips through the radio and
@@ -7811,8 +7932,27 @@ void RadioModel::recallLocalMemory(int index)
     if (memory.step > 0)
         target->applyRecalledStepHz(memory.step);
 
+    // Tune BEFORE applying the repeater configuration.  The IC-705 has a
+    // documented frequency-change quirk that can clear repeater tone, so a
+    // recall that enabled tone and tuned afterwards looked correct in the UI
+    // while the radio had silently disabled it.  The grouped seam verb below
+    // writes tone enable last and always re-applies the complete memory, even
+    // when its values happen to equal the previous channel's model snapshot.
     if (memory.freq > 0.0)
         target->setFrequency(memory.freq);
+
+    if (!memory.offsetDir.isEmpty() || !memory.toneMode.isEmpty()) {
+        const QString direction = memory.offsetDir.isEmpty()
+            ? target->repeaterOffsetDir() : memory.offsetDir;
+        const double offsetMhz = memory.offsetDir.isEmpty()
+            ? target->fmRepeaterOffsetFreq() : std::abs(memory.repeaterOffset);
+        const QString toneMode = memory.toneMode.isEmpty()
+            ? target->fmToneMode() : memory.toneMode;
+        const double toneHz = memory.toneMode.isEmpty()
+            ? target->fmToneValue().toDouble() : memory.toneValue;
+        target->applyRecalledFmRepeater(direction, offsetMhz, toneMode, toneHz);
+    }
+    target->setSquelch(memory.squelch, memory.squelchLevel);
 
     qCInfo(lcProtocol).noquote().nospace()
         << "RadioModel: recalled local memory " << index
@@ -8391,8 +8531,13 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
     // with a `slice tune`, and the tune is Flex wire text), so fail the way the
     // rest of sendCmd's drops do: sequence 0, meaning "not dispatched".
     if (!hasCommandPlane()) {
-        qCDebug(lcProtocol).noquote()
+        // qCWarning, not qCDebug: a dropped command means a control moved and
+        // nothing reached the radio. Silent at default log levels, that is the
+        // HERMES §17 dead-control shape; loud, it is a reportable defect and
+        // the M4 conversion backlog finds its sites from these lines (#5263).
+        qCWarning(lcProtocol).noquote()
             << "RadioModel: no command plane for this backend, dropping" << command;
+        emit commandDropped(command);
         if (cb)
             cb(kNoCommandPlaneCode, QStringLiteral("this radio has no command plane"));
         return 0;
@@ -8455,6 +8600,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
     if (!s)
         return;
 
+    if (m_radioDialLocked && backendCapabilities().hasRadioDialLock) {
+        SliceDelta delta;
+        delta.locked = *m_radioDialLocked;
+        s->applyChanges(delta);
+    }
+
     // ONE place, called from EVERY site that constructs a SliceModel.
     //
     // These were originally written inline in the backend's slice-materialising
@@ -8485,6 +8636,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
             [this, s](const QString& antenna) {
         if (m_backend && !usesFlexCommandPlane())
             m_backend->setSliceRxAntenna(s->sliceId(), antenna);
+    });
+    connect(s, &SliceModel::lockCommandIssued, this,
+            [this](bool locked) {
+        if (m_backend && backendCapabilities().hasRadioDialLock) {
+            m_backend->setRadioDialLock(locked);
+        }
     });
     // "Make this the transmit slice." On a radio with one transmitter the
     // backend MOVES transmit rather than setting a flag, and republishes both

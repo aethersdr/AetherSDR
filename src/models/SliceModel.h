@@ -185,6 +185,10 @@ public:
     // Getters — FM duplex/repeater
     QString fmToneMode()          const { return m_fmToneMode; }
     QString fmToneValue()         const { return m_fmToneValue; }
+    QString fmToneRxValue()       const { return m_fmToneRxValue; }
+    int     fmDtcsCode()          const { return m_fmDtcsCode; }
+    bool    fmDtcsTxReverse()     const { return m_fmDtcsTxReverse; }
+    bool    fmDtcsRxReverse()     const { return m_fmDtcsRxReverse; }
     QString repeaterOffsetDir()   const { return m_repeaterOffsetDir; }
     double  fmRepeaterOffsetFreq()const { return m_fmRepeaterOffsetFreq; }
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
@@ -299,9 +303,19 @@ public:
     // Setters — FM duplex/repeater
     void setFmToneMode(const QString& mode);
     void setFmToneValue(const QString& value);
+    void setFmToneRxValue(const QString& value);
+    void setFmDtcs(int code, bool txReverse, bool rxReverse);
     void setRepeaterOffsetDir(const QString& dir);
     void setFmRepeaterOffsetFreq(double mhz);
+    void applyRecalledFmRepeater(const QString& direction, double offsetMhz,
+                                 const QString& toneMode, double toneHz);
     void setTxOffsetFreq(double mhz);
+    // The signed TX offset a repeater direction + unsigned magnitude imply.
+    // Direction and magnitude each send only their own key, so tx_offset_freq
+    // — the field that actually moves the transmitter — has to be written
+    // alongside them; every caller that sets duplex must send all three.
+    // One copy, because three hand-rolled ones is how this drifted (#5102).
+    static double txOffsetForDirection(const QString& dir, double magnitudeMhz);
     void setFmDeviation(int hz);
 
     // Apply a normalized, typed slice delta from the backend
@@ -403,6 +417,7 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
+    void lockCommandIssued(bool locked);
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
@@ -453,10 +468,20 @@ signals:
     // FM duplex/repeater signals
     void fmToneModeChanged(const QString& mode);
     void fmToneValueChanged(const QString& value);
+    void fmToneRxValueChanged(const QString& value);
+    void fmDtcsChanged(int code, bool txReverse, bool rxReverse);
     void repeaterOffsetDirChanged(const QString& dir);
     void fmRepeaterOffsetFreqChanged(double mhz);
     void txOffsetFreqChanged(double mhz);
     void fmDeviationChanged(int hz);
+    void fmToneModeCommandIssued(const QString& mode);
+    void fmToneValueCommandIssued(double hz);
+    void fmToneRxValueCommandIssued(double hz);
+    void fmDtcsCommandIssued(int code, bool txReverse, bool rxReverse);
+    void repeaterOffsetDirCommandIssued(const QString& direction);
+    void fmRepeaterOffsetCommandIssued(double hz);
+    void fmRepeaterRecallCommandIssued(const QString& direction, double offsetHz,
+                                       const QString& toneMode, double toneHz);
 
     void modeListChanged(const QStringList& modes);
     void recordOnChanged(bool on);
@@ -592,6 +617,12 @@ private:
     // FM duplex/repeater state
     QString m_fmToneMode{"off"};
     QString m_fmToneValue{"100.0"};
+    QString m_fmToneRxValue{"100.0"};
+    // -1 means the radio has not established this register yet. Do not invent
+    // a plausible 023/NN value while connect-time readback is outstanding.
+    int     m_fmDtcsCode{-1};
+    bool    m_fmDtcsTxReverse{false};
+    bool    m_fmDtcsRxReverse{false};
     QString m_repeaterOffsetDir{"simplex"};
     double  m_fmRepeaterOffsetFreq{0.0};
     double  m_txOffsetFreq{0.0};

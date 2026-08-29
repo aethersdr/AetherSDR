@@ -1,5 +1,6 @@
 #include "core/backends/icom/IcomCivScheduler.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <string>
@@ -71,6 +72,16 @@ int main()
         check(scheduler.observe(reply(0x15, 0x02, 0), 1110)
                   == IcomCivScheduler::Observation::Accepted,
               "matching reply completes the outstanding read");
+        const auto& history = scheduler.recentTransactions();
+        check(history.size() == 1 && history.back().key == "meter.s"
+                  && history.back().completion == IcomCivScheduler::Completion::Reply
+                  && history.back().queueWaitMs == 0
+                  && history.back().responseMs == 110,
+              "completed reads retain payload-free queue and response timing");
+        check(scheduler.stats().responseSamples == 1
+                  && scheduler.stats().lastResponseMs == 110
+                  && scheduler.stats().maxResponseMs == 110,
+              "reply timing contributes to bounded scheduler aggregates");
     }
 
     {
@@ -122,6 +133,11 @@ int main()
         const auto recovered = scheduler.takeNext(4350);
         check(recovered && recovered->key == "meter.s", "scheduler recovers after lost reply");
         check(scheduler.stats().timeouts == 1, "lost reply is counted");
+        const auto& history = scheduler.recentTransactions();
+        check(!history.empty() && history.front().key == "control.nr"
+                  && history.front().completion == IcomCivScheduler::Completion::Timeout
+                  && history.front().responseMs == IcomCivScheduler::kReadTimeoutMs,
+              "a lost reply leaves a timed transaction lifecycle record");
     }
 
     {
@@ -217,6 +233,11 @@ int main()
                   == IcomCivScheduler::Observation::Stale,
               "a reply that misses the timeout is still rejected against a "
               "newer write generation");
+        check(scheduler.recentTransactions().size() == 2
+                  && scheduler.recentTransactions().back().completion
+                      == IcomCivScheduler::Completion::LateStaleReply
+                  && scheduler.stats().lateReplies == 1,
+              "a superseded late reply is distinguished from its timeout");
     }
     {
         // ...but a merely slow reply with nothing newer behind it is not
@@ -227,6 +248,83 @@ int main()
         check(scheduler.observe(reply(0x14, 0x02, 0x50), 360)
                   == IcomCivScheduler::Observation::Unmatched,
               "a late reply with no newer intent behind it is not marked stale");
+        check(scheduler.recentTransactions().size() == 2
+                  && scheduler.recentTransactions().back().completion
+                      == IcomCivScheduler::Completion::LateReply,
+              "an authoritative slow reply remains visible as late, not stale");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        IcomCivScheduler::Request noReply;
+        noReply.frame = buildFrameSub(0xB6, 0x1C, 0x00, std::array<std::uint8_t, 1>{0});
+        noReply.key = "ptt";
+        noReply.priority = Priority::Emergency;
+        noReply.expectsReply = false;
+        scheduler.enqueue(std::move(noReply), 8000);
+        check(scheduler.takeNext(8000).has_value(),
+              "response-free fail-safe command dispatches");
+        check(scheduler.recentTransactions().size() == 1
+                  && scheduler.recentTransactions().back().completion
+                      == IcomCivScheduler::Completion::NoReply
+                  && scheduler.recentTransactions().back().responseMs == -1,
+              "response-free commands have an explicit terminal outcome");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        scheduler.enqueue(read("queued", 0x16, 0x40, Priority::Control), 0);
+        scheduler.enqueue(read("in-flight", 0x15, 0x02, Priority::ActiveMeter), 0);
+        check(scheduler.takeNext(0).has_value(), "reset fixture dispatches one request");
+        const IcomCivScheduler::ResetResult reset = scheduler.reset();
+        check(reset.requests.size() == 2,
+              "reset explicitly reports every queued and in-flight cancellation");
+        check(std::count_if(reset.requests.begin(), reset.requests.end(),
+                            [](const IcomCivScheduler::TerminalRequest& request) {
+                                return request.outcome
+                                        == IcomCivScheduler::TerminalOutcome::Cancelled
+                                    && request.wasInFlight;
+                            }) == 1,
+              "reset identifies the cancelled in-flight request");
+        check(std::count_if(reset.requests.begin(), reset.requests.end(),
+                            [](const IcomCivScheduler::TerminalRequest& request) {
+                                return request.outcome
+                                        == IcomCivScheduler::TerminalOutcome::Cancelled
+                                    && !request.wasInFlight;
+                            }) == 1,
+              "reset identifies the cancelled queued request");
+        check(scheduler.idle(), "reset leaves the scheduler idle");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        scheduler.enqueue(read("failed-in-flight", 0x15, 0x02,
+                               Priority::ActiveMeter), 0);
+        scheduler.enqueue(read("failed-queued", 0x16, 0x40,
+                               Priority::Control), 0);
+        check(scheduler.takeNext(0).has_value(), "failure fixture dispatches");
+        const IcomCivScheduler::ResetResult reset =
+            scheduler.reset(IcomCivScheduler::TerminalOutcome::Failed);
+        check(reset.requests.size() == 2
+                  && std::ranges::all_of(
+                      reset.requests,
+                      [](const IcomCivScheduler::TerminalRequest& request) {
+                          return request.outcome
+                              == IcomCivScheduler::TerminalOutcome::Failed;
+                      }),
+              "a command-plane failure terminates every queued and in-flight "
+              "request distinctly from operator cancellation");
+        check(std::ranges::any_of(
+                  reset.requests,
+                  [](const IcomCivScheduler::TerminalRequest& request) {
+                      return request.key == "failed-in-flight" && request.wasInFlight;
+                  })
+                  && std::ranges::any_of(
+                      reset.requests,
+                      [](const IcomCivScheduler::TerminalRequest& request) {
+                          return request.key == "failed-queued" && !request.wasInFlight;
+                      }),
+              "failure accounting preserves each request identity and lifecycle state");
     }
 
     if (g_failures == 0) {

@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -143,6 +144,11 @@ inline constexpr std::size_t kFreqBytes = 5;
 [[nodiscard]] std::vector<std::uint8_t> encodeFreq(std::uint64_t hz,
                                                     std::size_t bytes = kFreqBytes);
 [[nodiscard]] std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd);
+// Use at command boundaries whose protocol shape declares an exact number of
+// frequency bytes. Generic decodeFreq() intentionally supports multiple Icom
+// models and therefore cannot enforce a command's arity by itself.
+[[nodiscard]] std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes);
 
 // A scope EDGE frequency, which can be NEGATIVE.
 //
@@ -185,6 +191,9 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C; // 100 Hz units, LE BCD
+inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
+inline constexpr std::uint8_t kDuplex       = 0x0F;   // 10 simplex, 11 down, 12 up
 inline constexpr std::uint8_t kLevel        = 0x14;   // sub-addressed levels
 inline constexpr std::uint8_t kMeter        = 0x15;   // sub-addressed meters
 inline constexpr std::uint8_t kFunction     = 0x16;   // sub-addressed on/off functions
@@ -192,6 +201,7 @@ inline constexpr std::uint8_t kCwMessage    = 0x17;   // up to 30 ASCII characte
 inline constexpr std::uint8_t kPower        = 0x18;   // 00 off, 01 on
 inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceiver ID
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
+inline constexpr std::uint8_t kTone         = 0x1B;   // sub 00: repeater CTCSS frequency
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
 inline constexpr std::uint8_t kGps          = 0x23;   // position / GPS source
 inline constexpr std::uint8_t kScope        = 0x27;
@@ -289,6 +299,8 @@ inline constexpr std::uint8_t kAgc           = 0x12;   // 01 fast, 02 mid, 03 sl
 inline constexpr std::uint8_t kNoiseBlanker  = 0x22;
 inline constexpr std::uint8_t kNoiseReduce   = 0x40;
 inline constexpr std::uint8_t kAutoNotch     = 0x41;
+inline constexpr std::uint8_t kRepeaterTone  = 0x42;
+inline constexpr std::uint8_t kRepeaterAccess = 0x5D;
 inline constexpr std::uint8_t kCompressor    = 0x44;
 inline constexpr std::uint8_t kMonitorFn     = 0x45;
 inline constexpr std::uint8_t kVox           = 0x46;
@@ -338,6 +350,10 @@ inline constexpr std::uint8_t kNtpResult   = 0x08;   // accessing / succeeded / 
 [[nodiscard]] std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item);
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item,
                                                         std::uint8_t value);
+// SET-menu levels use the same two-byte 0000..0255 BCD payload as command 14,
+// unlike the one-byte enums written by cmdWriteSetting().
+[[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
+                                                             int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingData(
     std::uint8_t to, int item, std::span<const std::uint8_t> value);
 
@@ -385,6 +401,22 @@ inline constexpr std::uint8_t kTuner = 0x01;
 inline constexpr std::uint8_t kXfc   = 0x02;
 inline constexpr std::uint8_t kReadTxFreq = 0x03;
 }  // namespace control
+
+namespace repeaterAccess {
+inline constexpr std::uint8_t kFunction = 0x5D;
+}  // namespace repeaterAccess
+
+namespace repeaterTone {
+inline constexpr std::uint8_t kTxCtcss = 0x00;
+inline constexpr std::uint8_t kRxCtcss = 0x01;
+inline constexpr std::uint8_t kDtcs    = 0x02;
+}  // namespace repeaterTone
+
+struct RepeaterToneRegister {
+    int value = 0;
+    bool txReverse = false;
+    bool rxReverse = false;
+};
 
 namespace scope {
 inline constexpr std::uint8_t kWaveData    = 0x00;
@@ -620,11 +652,55 @@ struct PassbandEdges {
 [[nodiscard]] std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which,
                                                         int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetTransmitFrequencyCheck(std::uint8_t to,
+                                                                     bool on);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequencyCheck(std::uint8_t to);
 // Attenuator. `db` is the dB figure the radio prints (0 or 20 on an
 // IC-705), encoded as one BCD byte. The read form carries no payload.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
+enum class RepeaterOffsetDirection : std::uint8_t {
+    Simplex = 0x10,
+    Down = 0x11,
+    Up = 0x12,
+};
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffsetDirection(
+    std::uint8_t to, RepeaterOffsetDirection direction);
+[[nodiscard]] std::optional<RepeaterOffsetDirection> decodeRepeaterOffsetDirection(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to,
+                                                             int offsetHz);
+[[nodiscard]] std::optional<int> decodeRepeaterOffsetHz(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to,
+                                                           double toneHz);
+[[nodiscard]] std::optional<double> decodeRepeaterToneHz(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
+[[nodiscard]] std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload);
+// Normalized radio-state token for each documented IC-9700 16 5D value.
+// Empty means reserved/unknown. Kept here with the wire decoder so socket-free
+// protocol tests can pin every value without a fake radio session.
+[[nodiscard]] std::string_view repeaterAccessModeName(std::uint8_t value) noexcept;
+[[nodiscard]] std::optional<std::uint8_t> repeaterAccessModeValue(
+    std::string_view name) noexcept;
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which);
+[[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to,
+                                                        std::uint8_t which,
+                                                        double toneHz);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
+                                                             std::uint8_t mode);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);
