@@ -1004,6 +1004,14 @@ add_test(NAME map_wrap_test COMMAND map_wrap_test)
 set_tests_properties(map_wrap_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Globe drag and roll are independent interaction axes. This pure state test
+# guards the default level orientation, pole bounds and normalization without
+# requiring an OpenGL context or tile network.
+add_executable(globe_navigation_test tests/globe_navigation_test.cpp)
+target_include_directories(globe_navigation_test PRIVATE src)
+target_link_libraries(globe_navigation_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME globe_navigation_test COMMAND globe_navigation_test)
+
 # PSK Reporter map query scope and the UTC solar-position math used by the
 # optional day/night overlay. No network access is performed.
 add_executable(psk_reporter_map_behavior_test

@@ -134,6 +134,8 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
+    OpenGL
+    OpenGLWidgets
     Network
     Multimedia
     Test
@@ -887,6 +889,8 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
@@ -1977,6 +1981,8 @@ target_link_libraries(aethercore PUBLIC
 
 target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
