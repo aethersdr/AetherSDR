@@ -2669,17 +2669,18 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                                       Qt::AutoConnection);
         }
 
-        const bool enabled =
-            AppSettings::instance()
-                    .value(QStringLiteral("UlanziDialEnabled"),
-                           QStringLiteral("False"))
-                    .toString()
-            == QLatin1String("True");
+        const auto dialEnabled = [] {
+            return AppSettings::instance()
+                       .value(QStringLiteral("UlanziDialEnabled"),
+                              QStringLiteral("False"))
+                       .toString()
+                   == QLatin1String("True");
+        };
 
 #ifdef Q_OS_MAC
         QJsonObject snapshot = m_dialBackend->diagnostics();
         snapshot[QStringLiteral("operation")] = diagnostic;
-        snapshot[QStringLiteral("enabled")] = enabled;
+        snapshot[QStringLiteral("enabled")] = dialEnabled();
         return snapshot;
 #else
         // No diagnostics() on the Linux/Windows backends yet, so a bare
@@ -2714,7 +2715,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // threading decision in MainWindow_Controllers.cpp ever changes.
         result[QStringLiteral("queued")] =
             m_dialBackend->thread() != QThread::currentThread();
-        result[QStringLiteral("enabled")] = enabled;
+        result[QStringLiteral("enabled")] = dialEnabled();
         return result;
 #endif
     });
