@@ -1284,6 +1284,22 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
+    // Beside the other two diagnostic surfaces: Radio Health is the radio's
+    // own state, Slice Troubleshooting is one slice's path, System Info is this
+    // application's runtime (#2554).
+    // Not "System Info…", which acceptance criterion 1 in #2554 asks for:
+    // aether.sysinfo already carries the display label "System Info" in the
+    // category list next door in Help → Support (#4986), and two unrelated
+    // surfaces sharing one name is confusing in exactly the place an operator
+    // goes when they are already confused. The category shipped first, so the
+    // new arrival is the one that moves.
+    //
+    // "Runtime Monitor" rather than anything with "Diagnostics" in it: this
+    // menu already has Support & Diagnostics… one entry away, and trading one
+    // collision for a closer one is not a fix. It also stays accurate as the
+    // remaining tabs land — Overview, Memory, Painters all measure this app's
+    // own runtime, which is the scope the name claims.
+    helpMenu->addAction("Runtime Monitor...", this, [this]() { showSystemInfoDialog(); });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
             &m_radioModel, m_audio, this,

@@ -1,5 +1,7 @@
 #include "CwxLocalKeyer.h"
 
+#include "ThreadName.h"
+
 #include <QHash>
 
 namespace AetherSDR {
@@ -237,6 +239,12 @@ void CwxLocalKeyer::keyUpIfDown()
 
 void CwxLocalKeyer::workerLoop()
 {
+    // A raw std::thread never passes through QThread::start(), so Qt cannot
+    // name it the way it names the QThread workers — without this the keyer
+    // shows up as an unnamed row in the System Info thread table (#2554), which
+    // is unhelpful for exactly the CW timing work that would consult it.
+    setCurrentThreadName("CwxLocalKeyer");
+
     for (;;) {
         // ── Idle wait — park until there is text to send (or shutdown) ──
         {
