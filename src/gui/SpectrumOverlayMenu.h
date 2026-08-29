@@ -37,7 +37,7 @@ public:
 
     // Raise this widget and all floating panels above sibling widgets.
     void raiseAll();
-    void setMemories(const QMap<int, MemoryEntry>& memories);
+    void setMemories(const QMap<int, MemoryEntry>& memories, bool writable = true);
 
     // Set the antenna list (from RadioModel::antListChanged).
     void setAntennaList(const QStringList& ants);

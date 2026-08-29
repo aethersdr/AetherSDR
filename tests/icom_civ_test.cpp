@@ -207,6 +207,26 @@ static void testFmRepeaterCommands()
     check(bytesAre(cmdReadRepeaterToneRegister(0xA2, repeaterTone::kRxCtcss),
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01, 0xFD}),
           "IC-9700 RX CTCSS read is 1B 01");
+    check(bytesAre(cmdSetRepeaterToneRegister(
+                       0xA2, repeaterTone::kRxCtcss, 885),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01,
+                    0x00, 0x08, 0x85, 0xFD}),
+          "IC-9700 RX CTCSS write uses the extended 1B 01 register");
+    check(bytesAre(cmdSetRepeaterToneRegister(
+                       0xA2, repeaterTone::kDtcs, 23, true, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x02,
+                    0x10, 0x00, 0x23, 0xFD}),
+          "IC-9700 DTCS write preserves code and independent polarity");
+    for (const std::uint8_t registerId : {
+             repeaterTone::kTxCtcss, repeaterTone::kRxCtcss, repeaterTone::kDtcs}) {
+        const auto write = parseFrame(cmdSetRepeaterToneRegister(
+            0xA2, registerId, registerId == repeaterTone::kDtcs ? 23 : 885));
+        const auto confirmation = write
+            ? repeaterToneConfirmationForWrite(0xA2, *write) : std::nullopt;
+        check(confirmation
+                  && *confirmation == cmdReadRepeaterToneRegister(0xA2, registerId),
+              "every repeater tone write receives its matching radio readback");
+    }
     const auto dtcs = decodeRepeaterToneRegister(
         std::array<std::uint8_t, 3>{0x11, 0x00, 0x23});
     check(dtcs && dtcs->value == 23 && dtcs->txReverse && dtcs->rxReverse,

@@ -234,6 +234,18 @@ struct RadioCapabilities {
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
 
+    // Whether the radio-backed memory store accepts mutations and native
+    // recalls. These are deliberately separate from persistsMemories: an
+    // initial backend may prove that it can enumerate radio-owned channels
+    // before it is safe to overwrite them, and may expose those channels as
+    // tune presets without putting the radio into its vendor Memory mode.
+    bool canWriteMemories = false;
+    bool canApplyMemories = false;
+    bool canRefreshMemories = false;
+    QStringList memoryGroups;
+    QString memoryGroupColumnTitle = QStringLiteral("Group");
+    bool memoryRefreshRequiresGroup = false;
+
     // Domains of OPERATING STATE this client persists and restores because the
     // radio cannot (RFC #4603 proposal B). Constitution Principle III assigns
     // persistence authority per value, not per family — so this is a typed set,

@@ -241,7 +241,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 15> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 16> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -271,9 +271,11 @@ constexpr std::array<FeatureEvidence, 15> kIc705Evidence{{
      "IC-705 CI-V Reference Guide 2020, 23 00/01; live position proof 2026-08-21"},
     {IcomFeature::GpsTimeConfiguration, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020, SET 0167-0169 and 1A 07/08; live NTP proof 2026-08-21"},
+    {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, command 1A 00 memory-channel records"},
 }};
 
-constexpr std::array<FeatureEvidence, 13> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 14> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -300,9 +302,11 @@ constexpr std::array<FeatureEvidence, 13> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
     {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, 16 50"},
+    {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
+     "IC-7300MK2 CI-V Reference Guide, command 1A 00 memory-channel records"},
 }};
 
-constexpr std::array<FeatureEvidence, 12> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 13> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -327,6 +331,8 @@ constexpr std::array<FeatureEvidence, 12> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide 2019, 16 50; PR #5261 live proof"},
     {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
      "wfview RS-BA1 data-start implementation and published physical IC-9700 watchdog log"},
+    {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
+     "IC-9700 CI-V Reference Guide 2019, command 1A 00 memory-channel records"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not attested"},
 }};
 
@@ -598,6 +604,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 4.0,
             .holdIsolatedTxMinimums = true,
         },
+        .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
@@ -625,6 +632,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .hasPaCurrentTelemetry = true,
         },
         .civRecovery = CivRecoveryProfile{1000, 3},
+        .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
         .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
@@ -647,6 +655,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 25.0,
             .holdIsolatedTxMinimums = true,
         },
+        .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
+                                "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };
@@ -684,6 +694,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
     case IcomFeature::GpsPosition:         return "gps-position";
     case IcomFeature::GpsTimeConfiguration: return "gps-time-configuration";
+    case IcomFeature::MemoryChannels:      return "memory-channels";
     }
     return "unknown";
 }

@@ -560,15 +560,15 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
-    // ── Local memory bank (radios with no memory slots of their own) ─────────
+    // ── Memory command routing ──────────────────────────────────────────────
     //
-    // Answer a `memory …` command out of the local bank. Returns the sequence
-    // number sendCmd() would have returned (non-zero — sendCommand() reads that
-    // as "dispatched"), or nullopt when the command is not one the bank owns
-    // and must take its normal path.
+    // Answer a `memory …` command from the local bank or the cached read-only
+    // radio view. Returns the sequence number sendCmd() would have returned
+    // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
+    // writable/native radio backend must take its normal path.
     // (spelled out rather than the ResponseCallback alias — that is declared
     // further down this class.)
-    std::optional<quint32> tryLocalMemoryCommand(
+    std::optional<quint32> tryMemoryCommand(
         const QString& command, const RadioConnection::ResponseCallback& cb);
     // Settle which store owns the memory cache for the session being started:
     // the local bank, or the radio's own slots.
@@ -580,7 +580,7 @@ public:
     // Apply a stored channel to the active slice. This is what `memory apply`
     // does on a Flex; with no radio to do it, the model drives SliceModel's
     // operator-issue setters so the change routes through the backend seam.
-    void recallLocalMemory(int index);
+    bool recallCachedMemory(int index);
     void createAudioStream();
     // An operator CLICK on the PC Audio button. On an Icom this asks the radio
     // to switch its voice-mode modulation input, which Principle II permits
@@ -634,6 +634,12 @@ public:
     // RadioCapabilities::persistsMemories, so a new backend gets the local bank
     // by default rather than writing channels into a radio that drops them.
     bool usesLocalMemoryBank() const;
+    // True when the active store accepts create/edit/remove. A radio-backed
+    // read-only snapshot (initial Icom support) returns false while the
+    // existing host bank and Flex radio return true.
+    bool memoriesWritable() const;
+    bool memoriesRefreshable() const;
+    void refreshMemories(const QString& group = QString());
     // The bank itself, for the automation bridge and tests. Empty and unread
     // until the first local memory command or connect.
     LocalMemoryBank& localMemoryBank() { return m_localMemories; }
@@ -1108,6 +1114,9 @@ signals:
     void memoryChanged(int index);
     void memoryRemoved(int index);
     void memoriesCleared();
+    void memoryRefreshStarted(int total);
+    void memoryRefreshProgress(int completed, int total);
+    void memoryRefreshFinished(bool success, int completed, int total);
     void audioOutputChanged();
     // Emitted when multiFLEX is disabled and another client is already connected,
     // detected post-TCP-connect before client gui is sent. MainWindow should show

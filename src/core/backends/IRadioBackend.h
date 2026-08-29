@@ -33,6 +33,23 @@ struct RadioConnectRequest {
     QVariantMap params;     // family-specific extras (namespaced by the backend)
 };
 
+// Complete radio-owned memory state applied after the common frequency/mode
+// fields. Keeping this as one value object prevents positional call sites from
+// silently swapping the independent TX/RX tone and DTCS fields.
+struct MemoryRecallDetails {
+    int sliceId = -1;
+    int filterPreset = 0;
+    bool dataMode = false;
+    QString direction;
+    double offsetHz = 0.0;
+    QString toneMode;
+    double txToneHz = 0.0;
+    double rxToneHz = 0.0;
+    int dtcsCode = 23;
+    bool dtcsTxReverse = false;
+    bool dtcsRxReverse = false;
+};
+
 // The radio-facing seam of the engine (aetherd RFC §5.5). Everything that
 // speaks a vendor wire protocol lives *behind* this interface, inside
 // libaethercore; RadioModel and the (future) protocol see only this. The
@@ -585,6 +602,19 @@ public:
         setSliceFmToneValue(sliceId, toneHz);
         setSliceFmToneMode(sliceId, toneMode);
     }
+    virtual bool applyMemoryRecallDetails(const MemoryRecallDetails& details)
+    {
+        Q_UNUSED(details.filterPreset); Q_UNUSED(details.dataMode);
+        Q_UNUSED(details.rxToneHz); Q_UNUSED(details.dtcsCode);
+        Q_UNUSED(details.dtcsTxReverse); Q_UNUSED(details.dtcsRxReverse);
+        setSliceFmRepeater(details.sliceId, details.direction, details.offsetHz,
+                           details.toneMode, details.txToneHz);
+        return true;
+    }
+
+    // Request a fresh snapshot from a radio-owned memory store. Backends that
+    // only push changes, or whose memories live on the host, leave this a no-op.
+    virtual void refreshMemories(const QString& group) { Q_UNUSED(group); }
 
     // Momentary receive-on-transmit-frequency state (Icom XFC). This is
     // radio-wide selected-VFO state, not a memory/slice parameter.
@@ -858,6 +888,9 @@ signals:
     // RadioModel applies it to MemoryEntry (text sanitisation is a model
     // concern) or drops the slot when delta.removed is set.
     void memoryChanged(const MemoryDelta& delta);
+    void memoryRefreshStarted(int total);
+    void memoryRefreshProgress(int completed, int total);
+    void memoryRefreshFinished(bool success, int completed, int total);
 
     // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The
     // backend parses the vendor "profile <type> …" status (list/current + the

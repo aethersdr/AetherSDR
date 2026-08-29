@@ -8,14 +8,22 @@ struct MemoryEntry {
     int     index{-1};
     QString group;
     QString owner;
+    QString channel;          // native radio channel label, when one exists
     double  freq{0.0};
     QString name;
     QString mode;
+    int     nativeFilter{0}; // vendor memory-record filter selector, if exposed
+    int     dataMode{0};     // vendor memory-record data-mode flag, if exposed
     int     step{100};
     QString offsetDir;       // "simplex", "up", "down"
     double  repeaterOffset{0.0};
     QString toneMode;        // "off", "ctcss_tx", ...
     double  toneValue{0.0};
+    double  rxToneValue{0.0};
+    int     dtcsCode{23};
+    bool    dtcsTxReverse{false};
+    bool    dtcsRxReverse{false};
+    bool    recallable{true};
     bool    squelch{false};
     int     squelchLevel{0};
     int     rxFilterLow{0};

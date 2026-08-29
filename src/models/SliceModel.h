@@ -167,7 +167,7 @@ public:
     // radio opinion to defer to, the host bank owns the channel, and a recalled
     // step would otherwise never take because the wire command that normally
     // round-trips it is dropped. Named for its one caller so the exception stays
-    // visible; see RadioModel::recallLocalMemory().
+    // visible; see RadioModel::recallCachedMemory().
     void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
@@ -309,6 +309,11 @@ public:
     void setFmRepeaterOffsetFreq(double mhz);
     void applyRecalledFmRepeater(const QString& direction, double offsetMhz,
                                  const QString& toneMode, double toneHz);
+    void applyRecalledFmRepeaterState(const QString& direction, double offsetMhz,
+                                      const QString& toneMode, double toneValue,
+                                      double rxToneValue, int dtcsCode = -1,
+                                      bool dtcsTxReverse = false,
+                                      bool dtcsRxReverse = false);
     void setTxOffsetFreq(double mhz);
     // The signed TX offset a repeater direction + unsigned magnitude imply.
     // Direction and magnitude each send only their own key, so tx_offset_freq

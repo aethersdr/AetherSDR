@@ -411,6 +411,15 @@ add_executable(icom_civ_test
 target_include_directories(icom_civ_test PRIVATE src)
 add_test(NAME icom_civ_test COMMAND icom_civ_test)
 
+add_executable(icom_memory_test
+    tests/icom_memory_test.cpp
+    src/core/backends/icom/IcomMemoryCodec.cpp
+    src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/IcomMeters.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_memory_test PRIVATE src)
+add_test(NAME icom_memory_test COMMAND icom_memory_test)
+
 add_executable(icom_civ_scheduler_test
     tests/icom_civ_scheduler_test.cpp
     src/core/backends/icom/IcomCivScheduler.cpp

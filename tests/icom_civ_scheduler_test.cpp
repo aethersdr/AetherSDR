@@ -63,6 +63,35 @@ int main()
 
     {
         IcomCivScheduler scheduler;
+        scheduler.enqueue(read("memory.1.1", 0x1A, 0x00, Priority::Maintenance), 0);
+        scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), 0);
+        check(scheduler.hasPendingKeyPrefix("memory.", 0),
+              "memory drain detection sees queued snapshot work");
+        check(!scheduler.hasPendingKeyPrefix("scope.", 0),
+              "memory drain detection does not match unrelated work");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        auto first = read("memory.1.1", 0x1A, 0x00, Priority::Maintenance);
+        first.replyDataPrefix = {0x01, 0x00, 0x01};
+        auto second = read("memory.1.2", 0x1A, 0x00, Priority::Maintenance);
+        second.replyDataPrefix = {0x01, 0x00, 0x02};
+        scheduler.enqueue(std::move(first), 0);
+        scheduler.enqueue(std::move(second), 0);
+        check(scheduler.takeNext(0).has_value(), "first memory read dispatches");
+        check(scheduler.observe(CivFrame{0xE0, 0xA2, 0x1A, true, 0x00,
+                                         {0x01, 0x00, 0x02, 0xFF}}, 10)
+                  == IcomCivScheduler::Observation::Unmatched,
+              "a different memory slot cannot retire the in-flight read");
+        check(scheduler.observe(CivFrame{0xE0, 0xA2, 0x1A, true, 0x00,
+                                         {0x01, 0x00, 0x01, 0xFF}}, 20)
+                  == IcomCivScheduler::Observation::Accepted,
+              "the addressed memory reply completes its own read");
+    }
+
+    {
+        IcomCivScheduler scheduler;
         scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), 1000);
         scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), 1000);
         check(scheduler.stats().queueDepth == 1, "duplicate reads coalesce");

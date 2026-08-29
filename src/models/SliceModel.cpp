@@ -830,6 +830,17 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
     // the model.  Apply the requested snapshot locally as one unit, then emit a
     // grouped backend intent.  This deliberately avoids the four Flex wire
     // strings above: RadioModel calls it only for the local-memory path.
+    applyRecalledFmRepeaterState(
+        direction, offsetMhz, toneMode, toneHz, 0.0);
+    emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
+                                       toneMode, toneHz);
+}
+
+void SliceModel::applyRecalledFmRepeaterState(
+    const QString& direction, double offsetMhz,
+    const QString& toneMode, double toneValue, double rxToneValue,
+    int dtcsCode, bool dtcsTxReverse, bool dtcsRxReverse)
+{
     if (m_repeaterOffsetDir != direction) {
         m_repeaterOffsetDir = direction;
         emit repeaterOffsetDirChanged(direction);
@@ -838,16 +849,28 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
         m_fmRepeaterOffsetFreq = offsetMhz;
         emit fmRepeaterOffsetFreqChanged(offsetMhz);
     }
-    if (m_fmToneValue != QString::number(toneHz, 'f', 1)) {
-        m_fmToneValue = QString::number(toneHz, 'f', 1);
+    const QString toneText = QString::number(toneValue, 'f', 1);
+    if (m_fmToneValue != toneText) {
+        m_fmToneValue = toneText;
         emit fmToneValueChanged(m_fmToneValue);
+    }
+    const QString rxToneText = QString::number(rxToneValue, 'f', 1);
+    if (rxToneValue > 0.0 && m_fmToneRxValue != rxToneText) {
+        m_fmToneRxValue = rxToneText;
+        emit fmToneRxValueChanged(m_fmToneRxValue);
+    }
+    if (dtcsCode >= 0 && (m_fmDtcsCode != dtcsCode
+        || m_fmDtcsTxReverse != dtcsTxReverse
+        || m_fmDtcsRxReverse != dtcsRxReverse)) {
+        m_fmDtcsCode = dtcsCode;
+        m_fmDtcsTxReverse = dtcsTxReverse;
+        m_fmDtcsRxReverse = dtcsRxReverse;
+        emit fmDtcsChanged(dtcsCode, dtcsTxReverse, dtcsRxReverse);
     }
     if (m_fmToneMode != toneMode) {
         m_fmToneMode = toneMode;
         emit fmToneModeChanged(toneMode);
     }
-    emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
-                                       toneMode, toneHz);
 }
 
 double SliceModel::txOffsetForDirection(const QString& dir, double magnitudeMhz)

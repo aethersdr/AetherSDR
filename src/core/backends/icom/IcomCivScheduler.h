@@ -4,6 +4,7 @@
 #include <deque>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -44,6 +45,7 @@ public:
         std::uint8_t replyCmd = 0;
         bool replyHasSub = false;
         std::uint8_t replySub = 0;
+        std::vector<std::uint8_t> replyDataPrefix;
         // A write supersedes all older observations of the same semantic key.
         bool supersedes = false;
         // Reads and repeated slider writes collapse to the newest queued item.
@@ -149,6 +151,8 @@ public:
     }
     void clearTransactionHistory() noexcept { m_recentTransactions.clear(); }
     [[nodiscard]] bool idle() const noexcept { return m_queue.empty() && !m_inFlight; }
+    [[nodiscard]] bool hasPendingKeyPrefix(
+        std::string_view prefix, std::int64_t nowMs) const noexcept;
 
     static constexpr int kSlotMs = 25;
     static constexpr int kReadTimeoutMs = 350;

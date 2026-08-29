@@ -691,6 +691,11 @@ enum class RepeaterOffsetDirection : std::uint8_t {
     std::string_view name) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     std::uint8_t to, std::uint8_t which);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which, int value,
+    bool txReverse = false, bool rxReverse = false);
+[[nodiscard]] std::optional<std::vector<std::uint8_t>>
+repeaterToneConfirmationForWrite(std::uint8_t to, const CivFrame& write);
 [[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
     std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);

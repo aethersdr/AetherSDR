@@ -3763,7 +3763,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // Set panId on the overlay menu so +RX routes to the correct pan
     menu->setPanId(applet->panId());
-    menu->setMemories(m_radioModel.memories());
+    menu->setMemories(m_radioModel.memories(), m_radioModel.memoriesWritable());
     menu->setRadioModel(&m_radioModel);
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
