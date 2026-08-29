@@ -2739,6 +2739,9 @@ void SpectrumWidget::applyActiveVfoZOrder()
 
 void SpectrumWidget::setBandPlanManager(BandPlanManager* mgr) {
     m_bandPlanMgr = mgr;
+    if (m_overlayMenu) {
+        m_overlayMenu->setBandPlanManager(mgr);
+    }
     if (mgr) {
         connect(mgr, &BandPlanManager::planChanged, this, QOverload<>::of(&QWidget::update));
         connect(mgr, &BandPlanManager::kiwiDxSpotsChanged, this, [this]() {

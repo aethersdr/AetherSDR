@@ -1,4 +1,5 @@
 #include "gui/SpectrumOverlayMenu.h"
+#include "models/BandPlanManager.h"
 #include "models/SliceModel.h"
 
 #include <QApplication>
@@ -42,6 +43,14 @@ int main(int argc, char* argv[])
     QWidget parent;
     SpectrumOverlayMenu menu(&parent);
     SliceModel slice(0);
+    BandPlanManager bandPlan;
+    bandPlan.setSegmentsForTest({
+        {3.500, 3.800, "80m", "", QColor()},
+        {7.000, 7.200, "40m", "", QColor()},
+        {14.000, 14.350, "20m", "", QColor()},
+        {144.000, 148.000, "2m", "", QColor()},
+    });
+    menu.setBandPlanManager(&bandPlan);
 
     auto* btn20 = findBandButton(parent, "20");
     auto* btn40 = findBandButton(parent, "40");
@@ -70,6 +79,12 @@ int main(int argc, char* argv[])
     report("40m button highlighted when frequency changes to 7.150 MHz",
            btn40 && btn40->isChecked() && btn20 && !btn20->isChecked() &&
            btnGen && !btnGen->isChecked());
+
+    // 7.250 MHz is inside the legacy US BandDefs range but outside the active
+    // Region 1 plan supplied above, so the overlay must not highlight 40m.
+    slice.setFrequency(7.250);
+    report("GEN highlighted outside active regional 40m allocation",
+           btnGen && btnGen->isChecked() && btn40 && !btn40->isChecked());
 
     // Frequency changes to general coverage (15.000 MHz)
     slice.setFrequency(15.000);
@@ -130,6 +145,13 @@ int main(int argc, char* argv[])
     slice.setFrequency(146.000);
     report("2m button highlighted when outside XVTR window",
            btn2 && btn2->isChecked() && btn2mSat && !btn2mSat->isChecked());
+
+    // setRadioCapabilities()/setXvtrBands() rebuild the panel, so reacquire
+    // every raw button pointer used below after deferred deletes are drained.
+    btn20 = findBandButton(parent, "20");
+    btnGen = findBandButton(parent, "GEN");
+    btn2 = findBandButton(parent, "2");
+    btn2mSat = findBandButton(parent, "2m-Sat");
 
     // Detach slice
     menu.setSlice(nullptr);
