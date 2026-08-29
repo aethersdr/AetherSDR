@@ -2645,18 +2645,28 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // control from the two platforms the dial is most used on. The verb
         // advertises itself as "diagnostics and lifecycle control" on every
         // platform; only diagnostics() is macOS-only.
-        // QUEUED, NOT DIRECT. On Linux and Windows the backend is moved to the
-        // ExtControllers thread (MainWindow_Controllers.cpp), so calling
-        // start()/stop() straight from the bridge's thread would drive hidapi
-        // and evdev from the wrong one. Every other call site in the app uses
-        // this form; the macOS-only original could call directly only because
-        // macOS keeps the backend on the main thread for its CFRunLoop.
+        // QUEUED ONLY WHEN THE BACKEND LIVES ON ANOTHER THREAD.
+        //
+        // On Linux and Windows the backend is moved to the ExtControllers
+        // thread (MainWindow_Controllers.cpp), so calling start()/stop()
+        // straight from the bridge's thread would drive hidapi and evdev from
+        // the wrong one -- those must be queued.
+        //
+        // On macOS the backend deliberately stays on the main thread (IOKit
+        // needs the CFRunLoop), and this handler already runs on the main
+        // thread: AutomationServer is constructed there and never moved, and
+        // it is driven only by QLocalServer/QLocalSocket signals. Caller and
+        // receiver are therefore the SAME thread, where a queued call is
+        // POSTED to the event loop rather than run -- so the diagnostics()
+        // snapshot below would be taken BEFORE start()/stop() had executed and
+        // would report pre-call state. Qt::AutoConnection gives us both: a
+        // direct call when the threads match, queued when they do not.
         if (diagnostic == QLatin1String("ulanzi-start")) {
             QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                                      Qt::QueuedConnection);
+                                      Qt::AutoConnection);
         } else if (diagnostic == QLatin1String("ulanzi-stop")) {
             QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
-                                      Qt::QueuedConnection);
+                                      Qt::AutoConnection);
         }
 
         const bool enabled =
@@ -2695,11 +2705,15 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         result[QStringLiteral("diagnostic")] = QStringLiteral("ulanzi");
         result[QStringLiteral("operation")] = diagnostic;
         result[QStringLiteral("supported")] = false;  // the SNAPSHOT, not the operation
-        // "accepted", not "done": the call above is queued onto the backend's
-        // thread and has not run yet. Reporting isConnected() here would
-        // describe the state BEFORE the request and read as a failed command --
-        // the same ok-means-nothing confusion this change exists to remove.
-        result[QStringLiteral("queued")] = true;
+        // "accepted", not "done": on these platforms the backend lives on the
+        // ExtControllers thread, so the call above was posted to it and has not
+        // run yet. Reporting isConnected() here would describe the state BEFORE
+        // the request and read as a failed command -- the same ok-means-nothing
+        // confusion this change exists to remove. Derived from the backend's
+        // actual thread rather than hardcoded, so it stays honest if the
+        // threading decision in MainWindow_Controllers.cpp ever changes.
+        result[QStringLiteral("queued")] =
+            m_dialBackend->thread() != QThread::currentThread();
         result[QStringLiteral("enabled")] = enabled;
         return result;
 #endif

@@ -2366,9 +2366,26 @@ Observe only mode. A successful stop reports `restorationStatus:"success"`,
 `systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
 
 The read-only diagnostic is available in **Observe only** mode; none of these
-actions keys the transmitter. On non-macOS platforms it returns
-`supported:false` because those backends do not use the affected IOKit claim
-path.
+actions keys the transmitter.
+
+On **Linux and Windows** the snapshot and the lifecycle actions answer
+differently, because only the snapshot is macOS-specific:
+
+- A bare `devices ulanzi` query returns `ok:false` with `supported:false` and
+  an `error` naming what is available instead. Those backends have no
+  `diagnostics()`, so the question cannot be answered here -- it is reported as
+  a refusal rather than as a success carrying no data.
+- `devices ulanzi-start` and `devices ulanzi-stop` **do** run on these
+  platforms and return `ok:true` with `operation`, `enabled`, and `queued`.
+  `supported:false` still appears and refers to the *snapshot*, not the
+  operation.
+
+`queued` reports whether the call was posted to another thread rather than run
+inline. It is `true` on Linux and Windows, where the backend lives on the
+ExtControllers thread, so the reply is an acknowledgement that the request was
+accepted -- not a statement that it has completed. On macOS the backend stays
+on the main thread alongside the bridge handler, so the call runs inline and
+the returned snapshot reflects the state *after* it.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
