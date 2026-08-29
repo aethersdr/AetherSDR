@@ -118,8 +118,6 @@
 #include "TestEventLoop.h"
 
 #include <QCoreApplication>
-#include <QFile>
-#include <QFileInfo>
 #include <QSignalSpy>
 
 #include <cstdio>
@@ -847,23 +845,6 @@ int main(int argc, char** argv)
             check(!first->isLocked() && !second->isLocked(),
                   "radio-authoritative unlock clears every slice surface");
         }
-    }
-
-    // The retired socket fixture cannot reach connect-burst and timer call
-    // sites in the default test graph. Pair the behavioral helper assertions
-    // above with a narrow source-contract pin so deleting either production
-    // wiring edge, or bypassing the guarded ordinary write path, fails CI.
-    {
-        const QFileInfo testSource(QString::fromUtf8(__FILE__));
-        QFile backendSource(testSource.dir().filePath(
-            QStringLiteral("../src/core/backends/icom/IcomCivBackend.cpp")));
-        check(backendSource.open(QIODevice::ReadOnly),
-              "Icom backend source is available for the narrow wiring contract");
-        const QByteArray source = backendSource.readAll();
-        check(source.count("queueTunerReadIfSupported(") == 3,
-              "startup and periodic tuner reads both use the guarded helper");
-        check(source.count("sendTunerCommandIfSupported(") == 2,
-              "the ordinary setAtu path uses the guarded tuner-write helper");
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------

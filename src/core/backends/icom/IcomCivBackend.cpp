@@ -403,8 +403,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // its tuner state (1C 01 read) well enough for the button to tell the truth
     // once a cycle has run.
     //
-    // Preserve that established surface for the IC-705 and IC-7300MK2 only:
-    // their exact profiles document supported tuner command paths. The
+    // Preserve that established surface only for exact profiles whose guides
+    // document the tuner path: IC-705, IC-7300/MK2, IC-7610, and IC-785x. The
     // IC-9700 and unprofiled radios fail closed, while the shared UI keeps the
     // controls visible and presents them as unavailable.
     c.hasTuner = m.hasTransmit && profile.supports(IcomFeature::AntennaTuner);
