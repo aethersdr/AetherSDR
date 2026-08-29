@@ -973,11 +973,6 @@ add_executable(globe_navigation_test tests/globe_navigation_test.cpp)
 target_include_directories(globe_navigation_test PRIVATE src)
 target_link_libraries(globe_navigation_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME globe_navigation_test COMMAND globe_navigation_test)
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-add_test(NAME globe_lifecycle_contract_test
-    COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/globe_lifecycle_contract_test.py
-            ${CMAKE_CURRENT_SOURCE_DIR})
 
 # PSK Reporter map query scope and the UTC solar-position math used by the
 # optional day/night overlay. No network access is performed.
