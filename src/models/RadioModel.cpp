@@ -11,6 +11,7 @@
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
 #include "core/backends/icom/IcomCredentials.h"  // password: keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
+#include "core/backends/colibri/ColibriBackend.h"  // ColibriNANO backend (family "colibri")
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
@@ -678,6 +679,11 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     // restored state (Constitution II/III).
     if (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) == 0)
         return std::make_unique<icom::IcomCivBackend>();
+    // ColibriNANO: pure-seam like HL2/Icom — no RadioConnection, no
+    // PanadapterStream — so setupBackend()'s Flex/Sim harvesting block
+    // skips it and only the neutral connects apply.
+    if (family.compare(QLatin1String("colibri"), Qt::CaseInsensitive) == 0)
+        return std::make_unique<colibri::ColibriBackend>();
     // RFC #4288 demo mode: the synthetic radio is selected here like any other
     // family, which is what completes the "wire it through the real SimBackend
     // factory" ask. Unlike HL2 it is a Route A hybrid — it owns a RadioConnection

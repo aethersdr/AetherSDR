@@ -255,6 +255,26 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
+
+    // ColibriNANO discovery: same picker, same auto-reconnect slots, tagged
+    // family="colibri". Nothing here is family-special beyond the tag.
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_colibriDiscovery.start();
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,

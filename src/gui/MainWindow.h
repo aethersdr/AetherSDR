@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "core/backends/hl2/Hl2Discovery.h"
+#include "core/backends/colibri/ColibriDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
@@ -1007,6 +1008,9 @@ private:
     // HPSDR/Metis discovery for Hermes-Lite 2 radios. Feeds the same
     // ConnectionPanel slots as m_discovery, tagged family="hl2".
     hl2::Hl2Discovery m_hl2Discovery;
+    // ColibriNANO USB enumeration. Feeds the same ConnectionPanel slots,
+    // tagged family="colibri".
+    colibri::ColibriDiscovery m_colibriDiscovery;
     // Radio sessions (#3445 Camp B / #3351). Each session owns the full
     // per-radio aggregate; today there is exactly one. The vector sits at
     // the old `RadioModel m_radioModel` member position so destruction
