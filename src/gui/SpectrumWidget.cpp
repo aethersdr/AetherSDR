@@ -2175,8 +2175,20 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
         "QPushButton:pressed { background: #00b4d8; color: #000; }"
-        "QPushButton:disabled { background: rgba(15,15,26,90); border-color: {{color.border.subtle}};"
-        " color: {{color.text.disabled}}; }";
+        // rgba(), not a {{color.text.disabled}}/{{color.border.subtle}}
+        // token: this button always paints its own dark rgba(15,15,26,*)
+        // backdrop first, regardless of app theme, so a theme-relative
+        // "dimmed text" token is the wrong tool -- color.text.disabled
+        // resolves to #a0b0c0 in the light theme (WCAG luminance 0.42),
+        // BRIGHTER than the enabled state's hardcoded #90a0b0 (0.34),
+        // inverting the intended hierarchy (ten9876, #5166 review).
+        // Reusing the enabled colours' own RGB at reduced alpha dims them
+        // against this widget's own backdrop by construction, in every
+        // theme, without introducing a new hex literal for the ratchet
+        // (audit_colours.py) to flag -- rgba(15,15,26,90) two lines up is
+        // the existing precedent for that.
+        "QPushButton:disabled { background: rgba(15,15,26,90); border-color: rgba(48,64,80,90);"
+        " color: rgba(144,160,176,140); }";
 
     // objectName + accessibleName let the automation bridge target these by a
     // stable handle instead of the visible label \u2014 notably zoom-out, whose glyph
