@@ -985,9 +985,9 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
 
 void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs)
 {
-    // Cache the TGXL handle for the encode path (#4198). RadioModel passes the
-    // handle it already extracted+sanitized (never the 0x00000000 placeholder),
-    // so the tuner intents no longer carry a Flex identifier through the seam.
+    // Cache the TGXL handle for the encode path (#4198). A first status can
+    // carry 0x00000000 before the real handle is assigned; carry that identity
+    // in the delta for parity, but never cache it for outgoing tuner commands.
     if (!handle.isEmpty() && handle != QLatin1String("0x00000000"))
         m_tunerHandle = handle;
     // Present-only, strict parity with the prior TunerModel::applyStatus: bools

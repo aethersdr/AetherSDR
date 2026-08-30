@@ -36,6 +36,8 @@ void TunerModel::applyChanges(const TunerDelta& d)
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
     const bool wasPresent = isPresent();
     bool changed = false;
+    std::optional<int> antennaAChanged;
+    std::optional<bool> tuningChanged;
 
     if (d.handle && m_handle != *d.handle)           { m_handle = *d.handle;       changed = true; }
     if (d.serialNum && m_serialNum != *d.serialNum) { m_serialNum = *d.serialNum; changed = true; }
@@ -45,12 +47,12 @@ void TunerModel::applyChanges(const TunerDelta& d)
     if (d.antennaA && m_antennaA != *d.antennaA) {
         m_antennaA = *d.antennaA;
         changed = true;
-        emit antennaAChanged(m_antennaA);        // "antA" sorts before "tuning"
+        antennaAChanged = m_antennaA;
     }
     if (d.tuning && m_tuning != *d.tuning) {
         m_tuning = *d.tuning;
         changed = true;
-        emit tuningChanged(m_tuning);
+        tuningChanged = m_tuning;
     }
     if (d.relayC1 && m_relayC1 != *d.relayC1) { m_relayC1 = *d.relayC1; changed = true; }
     if (d.relayC2 && m_relayC2 != *d.relayC2) { m_relayC2 = *d.relayC2; changed = true; }
@@ -61,6 +63,12 @@ void TunerModel::applyChanges(const TunerDelta& d)
     const bool nowPresent = isPresent();
     if (wasPresent != nowPresent) {
         emit presenceChanged(nowPresent);
+    }
+    if (antennaAChanged) {
+        emit this->antennaAChanged(*antennaAChanged);  // "antA" sorts before "tuning"
+    }
+    if (tuningChanged) {
+        emit this->tuningChanged(*tuningChanged);
     }
     if (changed) {
         emit stateChanged();

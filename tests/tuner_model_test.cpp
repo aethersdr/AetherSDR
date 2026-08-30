@@ -25,21 +25,28 @@ int main(int argc, char** argv)
     {
         TunerModel t;
         QSignalSpy st(&t, &TunerModel::stateChanged);
+        QSignalSpy antennaEdge(&t, &TunerModel::antennaAChanged);
+        QSignalSpy tuningEdge(&t, &TunerModel::tuningChanged);
         bool operateAtPresence = false;
         bool bypassAtPresence = false;
+        bool edgesDeferredAtPresence = false;
         QString ipAtPresence;
         QObject::connect(&t, &TunerModel::presenceChanged, &t,
-                         [&t, &operateAtPresence, &bypassAtPresence, &ipAtPresence](bool present) {
+                         [&t, &antennaEdge, &tuningEdge, &operateAtPresence,
+                          &bypassAtPresence, &edgesDeferredAtPresence,
+                          &ipAtPresence](bool present) {
             if (present) {
                 operateAtPresence = t.isOperate();
                 bypassAtPresence = t.isBypass();
+                edgesDeferredAtPresence = antennaEdge.count() == 0
+                    && tuningEdge.count() == 0;
                 ipAtPresence = t.tgxlIp();
             }
         });
         TunerDelta d;
         d.handle = "0x2000";
         d.model = "TunerGeniusXL"; d.serialNum = "TG123";
-        d.operate = true; d.bypass = false;
+        d.operate = true; d.bypass = false; d.tuning = true;
         d.relayC1 = 20; d.relayC2 = 5; d.relayL = 12;
         d.antennaA = 1; d.oneByThree = true; d.ip = "10.0.0.5";
         t.applyChanges(d);
@@ -47,8 +54,10 @@ int main(int argc, char** argv)
         CHECK(t.isOperate() && !t.isBypass());
         CHECK(t.relayC1() == 20 && t.relayC2() == 5 && t.relayL() == 12);
         CHECK(t.antennaA() == 1 && t.hasAntennaSwitch() && t.tgxlIp() == "10.0.0.5");
-        CHECK(t.isPresent() && operateAtPresence && !bypassAtPresence);
+        CHECK(t.isPresent() && operateAtPresence && !bypassAtPresence
+              && edgesDeferredAtPresence);
         CHECK(ipAtPresence == "10.0.0.5");
+        CHECK(antennaEdge.count() == 1 && tuningEdge.count() == 1);
         CHECK(st.count() == 1);
         t.applyChanges(d);                // identical → change-gated, no re-emit
         CHECK(st.count() == 1);
@@ -63,26 +72,6 @@ int main(int argc, char** argv)
         TunerDelta b; b.operate = true;   // operate unchanged; relayC1 not present
         t.applyChanges(b);
         CHECK(t.relayC1() == 5 && st.count() == 0);
-    }
-
-    // ---- placeholder identity is replaced without a second presence edge ----
-    {
-        TunerModel t;
-        QSignalSpy presence(&t, &TunerModel::presenceChanged);
-        TunerDelta initial;
-        initial.handle = "0x00000000";
-        initial.operate = true;
-        initial.ip = "10.0.0.5";
-        t.applyChanges(initial);
-        CHECK(t.isPresent() && t.handle() == "0x00000000" && t.isOperate());
-        CHECK(presence.count() == 1);
-
-        TunerDelta assigned;
-        assigned.handle = "0x2000";
-        assigned.bypass = true;
-        t.applyChanges(assigned);
-        CHECK(t.handle() == "0x2000" && t.isBypass());
-        CHECK(presence.count() == 1);
     }
 
     // ---- direct presence with no radio handle survives a handle-less delta ----

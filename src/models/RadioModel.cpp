@@ -10036,10 +10036,7 @@ void RadioModel::onStatusReceived(const QString& object,
             }
 
             // Route TunerGeniusXL to TunerModel
-            const bool replacingPlaceholder =
-                m_tunerModel.handle() == QLatin1String("0x00000000");
-            if (model == "TunerGeniusXL" || handle == m_tunerModel.handle()
-                || replacingPlaceholder) {
+            if (model == "TunerGeniusXL" || handle == m_tunerModel.handle()) {
                 // Decode identity and state as one delta so first presence
                 // observers cannot read default operate/bypass values.
                 if (handle != "0x00000000" && handle != m_tunerModel.handle()) {
