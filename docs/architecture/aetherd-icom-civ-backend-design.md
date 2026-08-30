@@ -685,13 +685,15 @@ captures from our own radio.
   IC-9700, **Sync Memories** reads the model-specific ordinary-channel records
   with `1A 00` and ingests occupied channels into that database; Tune then
   recalls the durable database row like a manual or CSV-imported memory.
-  Repeated syncs update rows from the same radio/channel rather than duplicating
-  them. Reads are button-only; IC-705 requires a selected group so a click
-  queues 100 requests rather than scanning its 10,000-address space. Writing or
-  deleting the radio's own channels, plus scan-edge, call, and satellite
-  memories, remain deferred. Other Icom models still use the same client-side
-  database, but expose no Sync action until their published record layout is
-  implemented and verified.
+  Imported rows are keyed by the 16-byte radio GUID from the authenticated
+  RS-BA1 capabilities record plus the native group/channel, so DHCP, mDNS and
+  NAT endpoint changes cannot duplicate a radio's channel set. Reads are
+  button-only; IC-705 requires a selected native group so a click queues 100
+  requests rather than scanning its 10,000-address space. Flex global/TX
+  profiles are not valid Icom group selectors. Writing or deleting the radio's
+  own channels, plus scan-edge, call, and satellite memories, remain deferred.
+  Other Icom models still use the same client-side database, but expose no Sync
+  action until their published record layout is implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.

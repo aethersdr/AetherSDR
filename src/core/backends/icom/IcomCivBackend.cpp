@@ -730,13 +730,10 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
     disconnectRadio();
 
-    // Radio memory reads are an ingestion path into AetherSDR's shared memory
-    // database. Prefer the discovery identity so repeated syncs from the same
-    // radio update their rows; retain a deterministic endpoint fallback for a
-    // manually-entered radio that reports no serial.
-    const QString memoryIdentity = request.serial.trimmed().isEmpty()
-        ? request.host.trimmed() : request.serial.trimmed();
-    m_memoryImportSource = QStringLiteral("icom:%1").arg(memoryIdentity);
+    // The stable import identity arrives in the authenticated RS-BA1
+    // capabilities record. An endpoint is deliberately not used here: DHCP,
+    // mDNS and NAT changes must not turn one radio into a second import source.
+    m_memoryImportSource.clear();
 
     IcomSession::Params p;
     p.host = QHostAddress(request.host);
@@ -1122,6 +1119,14 @@ void IcomCivBackend::refreshMemories(const QString& groupName)
         return;
     }
     const MemoryProfile& memory = *profileFor(*m_model).memory;
+    if (m_memoryImportSource.isEmpty()) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: RS-BA1 supplied no stable radio identity";
+        emit configurationWarning(
+            QStringLiteral("This radio did not provide a stable RS-BA1 identity, so its "
+                           "memories cannot be synced safely."));
+        return;
+    }
     int selectedGroup = -1;
     if (!groupName.isEmpty() && memory.firstGroup >= 0) {
         for (int group = memory.firstGroup; group <= memory.lastGroup; ++group) {
@@ -1132,6 +1137,10 @@ void IcomCivBackend::refreshMemories(const QString& groupName)
         }
     }
     if (memory.requiresGroupSelection && selectedGroup < memory.firstGroup) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: invalid group selection" << groupName;
+        emit configurationWarning(
+            QStringLiteral("Choose a valid Icom memory group before syncing."));
         return;
     }
     m_memoryRefreshActive = true;
@@ -1391,6 +1400,13 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
     m_deviceName = deviceName.trimmed();
+    const std::string stableRadioId = radioIdHex(m_session->radioId());
+    if (stableRadioId.empty()) {
+        m_memoryImportSource.clear();
+    } else {
+        m_memoryImportSource = QStringLiteral("icom:%1").arg(
+            QString::fromStdString(stableRadioId));
+    }
     m_connected = true;
     m_connectedAtMs = nowMs();
     m_lastIncident.clear();

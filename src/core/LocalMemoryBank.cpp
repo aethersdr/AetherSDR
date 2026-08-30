@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/LocalMemoryStore.h"
 #include "core/LogManager.h"
+#include "core/MemoryFieldValues.h"
 #include "core/backends/MemoryWireCodec.h"
 
 #include <QDateTime>
@@ -118,6 +119,29 @@ void LocalMemoryBank::load()
             << (m_writable ? "(bank is still writable)"
                            : "(bank is READ-ONLY; edits will be refused)");
         return;
+    }
+
+    // The first Icom memory-import build persisted every IC-7300MK2 channel as
+    // display-only after mistaking its fixed-length RX+TX record for proof that
+    // Split was enabled.  Recallability is a property of the neutral database
+    // row: if its mode can be applied to an AetherSDR slice, stale Icom import
+    // metadata must not permanently prevent navigation.  Repair the rows once
+    // on load and persist the corrected document atomically.
+    int repairedRecallability = 0;
+    for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
+        if (!it->recallable
+            && it->importSource.startsWith(QLatin1String("icom:"))
+            && MemoryFields::isKnownMode(it->mode)) {
+            it->recallable = true;
+            ++repairedRecallability;
+        }
+    }
+    if (repairedRecallability > 0) {
+        m_dirty = true;
+        flush();
+        qCInfo(lcProtocol).noquote()
+            << "LocalMemoryBank: repaired recallability for"
+            << repairedRecallability << "Icom-imported memories";
     }
 
     if (importedFromLegacy) {

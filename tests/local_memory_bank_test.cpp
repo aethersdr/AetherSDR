@@ -144,8 +144,13 @@ int main(int argc, char** argv)
         imported.channel = QStringLiteral("42");
         imported.freq = 14.074;
         imported.name = QStringLiteral("FT8");
+        imported.mode = QStringLiteral("DIGU");
         imported.nativeFilter = 2;
         imported.dataMode = 1;
+        // Reproduce the poisoned flag written by the first IC-7300MK2 import
+        // implementation. Reopening the bank must repair it without requiring
+        // another live-radio sync.
+        imported.recallable = false;
         bank.record(0, imported);
 
         ok &= expect(bank.importedSlot("icom:7300-serial", "-1:42") == 0,
@@ -165,6 +170,16 @@ int main(int argc, char** argv)
         ok &= expect(stored.channel == "42" && stored.nativeFilter == 2
                          && stored.dataMode == 1,
                      "radio recall fields survive a database reopen");
+        ok &= expect(stored.recallable,
+                     "stale Icom display-only metadata is repaired on reopen");
+        ok &= expect(bankDocument()
+                         .value(QStringLiteral("memories"))
+                         .toArray()
+                         .at(0)
+                         .toObject()
+                         .value(QStringLiteral("recallable"))
+                         .toBool(),
+                     "the repaired Icom recallability is persisted");
     }
 
     // --- rejections -------------------------------------------------------

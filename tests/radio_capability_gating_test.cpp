@@ -107,6 +107,7 @@
 #include "core/AppSettings.h"
 #include "models/ModelCapabilities.h"
 #include "gui/DvkAvailabilityGate.h"
+#include "gui/MemoryFilterPolicy.h"
 #include "gui/VoiceModeGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -229,6 +230,36 @@ static bool gpsUiWouldShow(bool connected, bool familySupportsGps, bool unitHasG
     return !connected || (familySupportsGps && unitHasGps);
 }
 
+static void testMemoryFilterPolicy()
+{
+    RadioCapabilities flex;
+    flex.hasProfiles = true;
+    const MemoryFilterSpec flexFilters = memoryFilterSpec(
+        flex, {QStringLiteral("Local group")}, {QStringLiteral("Global")},
+        {QStringLiteral("Transmit")});
+    check(flexFilters.label == QStringLiteral("Profile:")
+              && flexFilters.names == QStringList({QStringLiteral("Global"),
+                                                   QStringLiteral("Transmit")}),
+          "Flex memory filter retains radio-owned global and TX profiles");
+
+    RadioCapabilities icom;
+    icom.canRefreshMemories = true;
+    icom.memoryRefreshRequiresGroup = true;
+    icom.memoryGroups = {QStringLiteral("Group 00"), QStringLiteral("Group 01")};
+    const MemoryFilterSpec icomFilters = memoryFilterSpec(
+        icom, {QStringLiteral("Local group")}, {QStringLiteral("Stale Flex global")},
+        {QStringLiteral("Stale Flex TX")});
+    check(icomFilters.label == QStringLiteral("Group:")
+              && icomFilters.names.contains(QStringLiteral("Group 00"))
+              && icomFilters.names.contains(QStringLiteral("Local group"))
+              && !icomFilters.names.contains(QStringLiteral("Stale Flex global"))
+              && !icomFilters.names.contains(QStringLiteral("Stale Flex TX")),
+          "Icom memory filter excludes Flex profile state");
+    check(!memoryRefreshSelectionValid(icom, QStringLiteral("Stale Flex global"))
+              && memoryRefreshSelectionValid(icom, QStringLiteral("group 01")),
+          "group-selecting Icom accepts only a declared native memory group");
+}
+
 static RadioInfo hl2Info()
 {
     RadioInfo i;
@@ -265,6 +296,7 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("radio-capability-gating-test"));
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
+    testMemoryFilterPolicy();
 
     // ---- Flex declares every gated capability ----------------------------
     //

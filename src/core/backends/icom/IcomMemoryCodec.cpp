@@ -223,7 +223,12 @@ std::optional<IcomMemoryChannel> decodeMemory(
         }
         memory.split = memory.split || ((selectByte >> 4) != 0);
     }
-    memory.recallable = mode.mode.has_value() && !memory.split && duplex != 3;
+    // AetherSDR recalls the RX side of a stored channel onto the active slice.
+    // Split/RPS metadata is useful provenance, but it must not make a memory
+    // impossible to navigate to: the local database already has a complete,
+    // neutral RX frequency and mode.  Modes with no neutral representation
+    // (currently DV/DD) remain display-only.
+    memory.recallable = mode.mode.has_value();
 
     if (layout.dtcsOffset >= 0) {
         const std::optional<RepeaterToneRegister> dtcs = decodeRepeaterToneRegister(

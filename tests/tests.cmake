@@ -3538,6 +3538,7 @@ add_executable(local_memory_bank_test
     tests/local_memory_bank_test.cpp
     src/core/LocalMemoryBank.cpp
     src/core/LocalMemoryStore.cpp
+    src/core/MemoryFieldValues.cpp
     src/core/backends/MemoryWireCodec.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
