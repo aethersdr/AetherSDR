@@ -40,7 +40,14 @@ public:
     int     antennaA()  const { return m_antennaA; }  // 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3, -1=unknown
     float   fwdPower()  const { return m_fwdPower; }  // forward power in watts (from direct TGXL status)
     float   swr()       const { return m_swr; }       // SWR ratio (from direct TGXL status)
-    bool    hasAntennaSwitch() const { return m_oneByThree; }  // true for TGXL 3x1 model (one_by_three=1)
+    // True for the TGXL 3x1 (antenna-switch) model. Reported two ways: the
+    // radio-relayed status calls it "one_by_three", the direct info reply
+    // calls it "3way". Either is proof of the switch.
+    bool    hasAntennaSwitch() const { return m_oneByThree || m_threeWay; }
+    // True once the radio has relayed a TGXL handle. Without one the operate /
+    // bypass relay commands have no address to go to, so the UI offers only the
+    // states the direct port-9010 channel can reach.
+    bool    hasRadioRelay() const { return !m_handle.isEmpty(); }
     bool    isPresent() const { return !m_handle.isEmpty() || m_directPresence; }
     bool    hasDirectConnection() const;
 
@@ -55,8 +62,10 @@ public:
     // Direct TGXL connection for manual relay control (#469)
     void setDirectConnection(TgxlConnection* conn);
 
-    // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
-    void adjustRelay(int relay, int direction);
+    // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; `steps` is a signed,
+    // relative step count (one wheel notch is 1, a drag is however far it
+    // went). Direct-connection only — the radio relay has no equivalent.
+    void adjustRelay(int relay, int steps);
 
     // Command methods — emit neutral intents (operate/bypass/autotune) that
     // RadioModel translates to the Flex TGXL relay via invokeExtension. The
@@ -66,7 +75,8 @@ public:
     void setBypass(bool on);
     void autoTune();
 
-    // Antenna switch (TGXL 3x1): ant = 1, 2, or 3 (1-indexed for command)
+    // Antenna switch (TGXL 3x1): ant = 1, 2, or 3 (1-indexed for command).
+    // Direct-connection only, and only on a tuner that reports the switch.
     void setAntennaA(int ant);
 
 signals:
@@ -98,7 +108,20 @@ private:
     int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
     float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
     float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
-    bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
+    bool    m_oneByThree{false}; // TGXL 3x1 model, from the relayed one_by_three=1
+    bool    m_threeWay{false};   // TGXL 3x1 model, from the direct info reply 3way=1
+
+    // Which of the direct channel's three message kinds a key/value set came
+    // from. Most fields mean the same thing in all three, but "state" is read
+    // ONLY from the status reply — the unsolicited push is itself named
+    // "state", and a key of that name elsewhere is not the operate flag.
+    enum class DirectSource { StatePush, StatusReply, InfoReply };
+
+    // Apply a key/value set from the direct port-9010 channel. Change-gated;
+    // emits the same edge signals as applyChanges. One path so a field carried
+    // by only some of the three message kinds still reaches the UI — the relay
+    // positions arrive on the status poll, which used to drop them (#4551).
+    void applyDirectKvs(const QMap<QString, QString>& kvs, DirectSource source);
 
     TgxlConnection* m_directConn{nullptr};
     bool            m_directPresence{false};

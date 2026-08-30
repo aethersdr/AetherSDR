@@ -38,6 +38,8 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
     m_version.clear();
     m_readBuf.clear();
     m_seq = 0;
+    m_seqInfo = 0;
+    m_rxLogRemaining = kRxLogLines;
     m_socket.abort();
     qCDebug(lcTuner) << "TgxlConnection: connecting to" << host << ":" << port;
     m_socket.connectToHost(host, port);
@@ -96,8 +98,17 @@ void TgxlConnection::onReadyRead()
         QString line = QString::fromUtf8(m_readBuf.left(idx)).trimmed();
         m_readBuf.remove(0, idx + 1);
 
-        if (!line.isEmpty())
+        if (!line.isEmpty()) {
+            // Log the opening exchange verbatim (version, info reply, first
+            // status replies). Off unless the tuner category is enabled; this
+            // is how the exact key names on the wire get identified without
+            // guessing at them. Capped so a long session doesn't log 1/sec.
+            if (m_rxLogRemaining > 0) {
+                --m_rxLogRemaining;
+                qCDebug(lcTuner) << "TgxlConnection: rx" << line;
+            }
             processLine(line);
+        }
     }
 }
 
@@ -109,8 +120,11 @@ void TgxlConnection::processLine(const QString& line)
         m_gotVersion = true;
         qCDebug(lcTuner) << "TgxlConnection: TGXL version" << m_version;
 
-        // Send init commands
-        sendCommand("info");
+        // Send init commands. The "info" reply carries the device capabilities
+        // ("3way=1" on the antenna-switch models); remember its sequence number
+        // so processLine can route the reply to infoUpdated rather than
+        // statusUpdated — both arrive as R-lines and are otherwise identical.
+        m_seqInfo = sendCommand("info");
         sendCommand("status");
 
         m_connected = true;
@@ -127,6 +141,8 @@ void TgxlConnection::processLine(const QString& line)
         int pipe1 = line.indexOf('|');
         int pipe2 = (pipe1 >= 0) ? line.indexOf('|', pipe1 + 1) : -1;
         if (pipe2 >= 0) {
+            bool seqOk = false;
+            const quint32 seq = line.mid(1, pipe1 - 1).toUInt(&seqOk);
             QString body = line.mid(pipe2 + 1).trimmed();
             if (!body.isEmpty()) {
                 QMap<QString, QString> kvs;
@@ -136,8 +152,14 @@ void TgxlConnection::processLine(const QString& line)
                     if (eq > 0)
                         kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
-                if (!kvs.isEmpty())
-                    emit statusUpdated(kvs);
+                if (!kvs.isEmpty()) {
+                    if (seqOk && m_seqInfo != 0 && seq == m_seqInfo) {
+                        m_seqInfo = 0;   // one reply only
+                        emit infoUpdated(kvs);
+                    } else {
+                        emit statusUpdated(kvs);
+                    }
+                }
             }
         }
         return;
@@ -174,6 +196,8 @@ void TgxlConnection::processLine(const QString& line)
             emit stateUpdated(kvs);
         } else if (object == "status") {
             emit statusUpdated(kvs);
+        } else if (object == "info") {
+            emit infoUpdated(kvs);
         }
         return;
     }
@@ -188,11 +212,12 @@ quint32 TgxlConnection::sendCommand(const QString& cmd)
     return seq;
 }
 
-void TgxlConnection::adjustRelay(int relay, int direction)
+void TgxlConnection::adjustRelay(int relay, int steps)
 {
     if (!m_connected) return;
     if (relay < 0 || relay > 2) return;
-    int move = (direction > 0) ? 1 : -1;
+    if (steps == 0) return;
+    const int move = qBound(-kMaxRelayMove, steps, kMaxRelayMove);
     sendCommand(QString("tune relay=%1 move=%2").arg(relay).arg(move));
 }
 
@@ -200,6 +225,12 @@ void TgxlConnection::requestAutotune()
 {
     if (!m_connected) return;
     sendCommand("autotune");
+}
+
+void TgxlConnection::setOperate(bool on)
+{
+    if (!m_connected) return;
+    sendCommand(QString("operate set=%1").arg(on ? 1 : 0));
 }
 
 void TgxlConnection::pollStatus()

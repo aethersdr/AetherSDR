@@ -5,6 +5,7 @@
 class QPushButton;
 class QLabel;
 class QTimer;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -19,6 +20,8 @@ class MeterModel;
 //  - SWR horizontal gauge (1.0–3.0, red > 2.5)
 //  - C1 / L / C2 relay position bars (0–255)
 //  - TUNE + OPERATE/BYPASS/STANDBY buttons
+//  - ANT 1/2/3 selector under the OPERATE button, shown only on the TGXL 3x1
+//    (antenna-switch) models and only while the direct connection is up
 class TunerApplet : public QWidget {
     Q_OBJECT
 
@@ -41,7 +44,9 @@ public slots:
 
 private:
     void buildUI();
+    void buildAntennaRow(QVBoxLayout* btnCol);
     void syncFromModel();
+    void updateAntennaVisibility();
     void cycleOperateState();
     void updateAntennaButtons(int antA);
     void updateValueLabels();
@@ -68,7 +73,7 @@ private:
     QPushButton* m_tuneBtn{nullptr};
     QPushButton* m_operateBtn{nullptr};
 
-    // Antenna switch buttons (TGXL 3x1)
+    // Antenna switch buttons (TGXL 3x1) — see buildAntennaRow
     QPushButton* m_ant1Btn{nullptr};
     QPushButton* m_ant2Btn{nullptr};
     QPushButton* m_ant3Btn{nullptr};

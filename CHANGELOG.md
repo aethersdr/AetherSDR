@@ -8,6 +8,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Tuner Genius XL — direct-connection fixes and the 3x1 antenna selector
+
+Three fixes for the TUN applet, all in the case where the TGXL is reached
+over its own port-9010 channel rather than being relayed by the radio.
+
+- **fix(tuner): C1 / L / C2 bars follow the tuner again** — the relay
+  positions arrive as `relayC1= relayL= relayC2=` on the 1/sec `status`
+  poll reply as well as on the unsolicited `state` push, but `TunerModel`
+  parsed them only on the push and read the poll for forward power and SWR
+  alone. On a tuner whose relay positions only ever came over the poll the
+  three bars sat at 0 forever. Both message kinds — plus the `info` reply —
+  now go through one `applyDirectKvs()`, so a key carried by any of them
+  reaches the UI.
+
+- **fix(tuner): the STANDBY button does something** — `TunerModel::setOperate`
+  required a Flex handle and silently returned without one, so the
+  OPERATE/BYPASS/STANDBY button was inert for a TGXL the radio never reports
+  as an amplifier object (the #2250 direct-detection case). Operate now
+  prefers the direct channel's native `operate set=<0|1>`, exactly as
+  `autoTune()` already prefers direct `autotune`, and falls back to the
+  radio's `tgxl set handle=<H> mode=` relay. Bypass has no direct equivalent,
+  so with no radio relay the button is an OPERATE ↔ STANDBY toggle rather
+  than offering a BYPASS step that could not be delivered.
+
+- **fix(tuner): the OPERATE/STANDBY button shows the tuner's real state at
+  startup** — `m_operate` defaults to false, and nothing read the flag back
+  from the direct channel, so a tuner that was online still came up showing
+  STANDBY; the display only became truthful once the operator clicked the
+  button and the optimistic update fired. `applyDirectKvs` now reads the flag
+  out of the status reply, which arrives on connect and once a second after.
+  The status reply calls it `state` (1 = online, 0 = standby) while the
+  command keeps its own spelling (`operate set=0|1`) — the two are not
+  symmetric. It is read from the status reply only: the unsolicited push is
+  itself the `state` object, so a key of that name anywhere else is something
+  different, and `applyDirectKvs` now takes the message kind to tell them
+  apart. `TgxlConnection` also logs the first 12 lines of each connection
+  verbatim under `aether.tuner`, which is how the key was identified.
+
+- **feat(tuner): drag the C1 / L / C2 bars to tune them by hand** — the bars
+  already showed a vertical-resize cursor and accepted the mouse wheel and the
+  Up/Down keys, but not the drag the cursor advertised. Left-drag now adjusts
+  a relay, one step per 3 px, with the remainder carried so a slow drag still
+  steps rather than rounding to nothing. `relayAdjusted` carries a signed step
+  count instead of a bare direction, so a drag of twenty steps is a single
+  `tune relay=<0|1|2> move=<steps>` (the wire takes any relative number)
+  rather than twenty separate ±1 commands; the wheel and keys still send ±1.
+  The bar shows the new position immediately instead of waiting up to a second
+  for the status poll to echo it, and the poll stays authoritative — including
+  when the tuner clamps at an end stop the local guess sailed past. Clicking a
+  bar now also takes keyboard focus, so Up/Down continues what a drag started.
+
+- **feat(tuner): ANT 1/2/3 selector on the 3x1 models** — the TGXL variants
+  with the three-port antenna switch report `3way=1` in the direct `info`
+  reply. `TgxlConnection` now tracks the sequence number of the `info` it
+  sends on connect so that reply can be told apart from the status polls and
+  emitted as `infoUpdated`, and the applet shows three compact port buttons
+  under a slightly shorter OPERATE button, highlighting the active port from
+  `antA`. They appear only on a tuner that reports the switch (`3way=1`
+  direct, or `one_by_three=1` relayed) and only while the direct connection
+  is up, since `activate ant=N` has no radio-relayed form; `setAntennaA()`
+  refuses to send on a tuner without the switch.
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

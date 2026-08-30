@@ -35,8 +35,17 @@ public:
 
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
 
-    // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
-    void adjustRelay(int relay, int direction);
+    // Manual relay adjustment: relay 0=C1, 1=L, 2=C2. `steps` is a signed,
+    // relative step count sent verbatim as the move= argument — the wire takes
+    // any relative number, so a drag of twelve steps is one command rather
+    // than twelve. Clamped to +/-kMaxRelayMove; 0 sends nothing.
+    void adjustRelay(int relay, int steps);
+
+    // Operate/standby over the direct channel: "operate set=1" brings the tuner
+    // online, "operate set=0" puts it in standby. The radio-relayed
+    // "tgxl set handle=<H> mode=" path needs a Flex handle, which a TGXL seen
+    // only over port 9010 never has (#2250) — this is the direct equivalent.
+    void setOperate(bool on);
 
     // Native autotune over the direct port-9010 channel. The TGXL drives
     // radio PTT via its hardware interlock cable, so no client-side keying
@@ -53,6 +62,9 @@ signals:
     void connectionFailed(const QString& errorString);
     void stateUpdated(const QMap<QString, QString>& kvs);
     void statusUpdated(const QMap<QString, QString>& kvs);
+    // Reply to the "info" command sent on connect. Carries the device's fixed
+    // capabilities — notably "3way=1" on the models with the antenna switch.
+    void infoUpdated(const QMap<QString, QString>& kvs);
 
 private slots:
     void onConnected();
@@ -69,6 +81,15 @@ private:
     QTimer     m_reconnectTimer;
     QByteArray m_readBuf;
     quint32    m_seq{0};
+    quint32    m_seqInfo{0};      // seq of the outstanding "info" command
+    // Verbatim logging of the first lines after each connect, so the wire's
+    // actual key names can be read out of the log (see onReadyRead).
+    static constexpr int kRxLogLines = 12;
+    // Ceiling on one relay command. The relay range is 0-255, so a single move
+    // never needs to be larger, and it keeps a runaway drag from sending
+    // something absurd.
+    static constexpr int kMaxRelayMove = 255;
+    int        m_rxLogRemaining{kRxLogLines};
     bool       m_connected{false};
     bool       m_gotVersion{false};
     bool       m_autoReconnect{false};

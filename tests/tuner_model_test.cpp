@@ -4,6 +4,7 @@
 // translation is covered separately by aetherd_tuner_decode_test.
 
 #include "models/TunerModel.h"
+#include "core/TgxlConnection.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -88,6 +89,110 @@ int main(int argc, char** argv)
         CHECK(t.isBypass() && st.count() == 2);
         t.autoTune();                                      // no direct conn → relay intent
         CHECK(at.count() == 1);
+    }
+
+    // ---- direct-channel kv apply: relays land from the status poll too -----
+    // Regression for the frozen C1/L/C2 bars: the relay positions arrive on the
+    // 1/sec status poll reply, which the model used to parse for meters only.
+    {
+        TunerModel t;
+        TgxlConnection conn;
+        t.setDirectConnection(&conn);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+
+        emit conn.statusUpdated({{"relayC1", "17"}, {"relayL", "4"}, {"relayC2", "9"}});
+        CHECK(t.relayC1() == 17 && t.relayL() == 4 && t.relayC2() == 9);
+        CHECK(st.count() == 1);
+        emit conn.statusUpdated({{"relayC1", "17"}, {"relayL", "4"}, {"relayC2", "9"}});
+        CHECK(st.count() == 1);                       // change-gated, no re-emit
+        emit conn.stateUpdated({{"relayC1", "18"}});   // the push path still works
+        CHECK(t.relayC1() == 18 && st.count() == 2);
+    }
+
+    // ---- direct-channel antenna-switch detection via the info reply --------
+    {
+        TunerModel t;
+        TgxlConnection conn;
+        t.setDirectConnection(&conn);
+        CHECK(!t.hasAntennaSwitch());
+        emit conn.infoUpdated({{"3way", "1"}});
+        CHECK(t.hasAntennaSwitch());
+
+        // A tuner without the switch omits the key; the relayed Flex key is
+        // an independent source of the same fact.
+        TunerModel u;
+        TunerDelta d; d.oneByThree = true;
+        u.applyChanges(d);
+        CHECK(u.hasAntennaSwitch());
+    }
+
+    // ---- direct-channel operate reaches the tuner without a Flex handle ----
+    // Regression for the dead Standby button: setOperate used to require a
+    // handle, which a direct-only TGXL (#2250) never has.
+    {
+        TunerModel t;
+        TgxlConnection conn;
+        t.setDirectConnection(&conn);
+        QSignalSpy op(&t, &TunerModel::operateRequested);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+
+        // No handle and no live socket → still a no-op, and no relay intent.
+        t.setOperate(true);
+        CHECK(op.count() == 0 && !t.isOperate() && st.count() == 0);
+        CHECK(!t.hasRadioRelay());
+
+        // With a handle the relay intent is emitted as before.
+        t.setHandle("0x2000");
+        CHECK(t.hasRadioRelay());
+        t.setOperate(true);
+        CHECK(op.count() == 1 && t.isOperate());
+
+        // The tuner's own report wins over the optimistic update.
+        emit conn.statusUpdated({{"state", "0"}});
+        CHECK(!t.isOperate());
+    }
+
+    // ---- operate state is learned from the tuner at startup ---------------
+    // Regression for the button coming up STANDBY on a tuner that is online:
+    // m_operate defaults to false, so the first status reply has to establish
+    // the true state before the operator touches anything (#4552).
+    {
+        TunerModel t;
+        TgxlConnection conn;
+        t.setDirectConnection(&conn);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+        CHECK(!t.isOperate());                       // default before any status
+
+        emit conn.statusUpdated({{"state", "1"}, {"relayC1", "3"}});
+        CHECK(t.isOperate() && st.count() == 1);     // no click needed
+        emit conn.statusUpdated({{"state", "1"}});
+        CHECK(st.count() == 1);                      // change-gated
+        emit conn.statusUpdated({{"state", "0"}});   // 0 = standby
+        CHECK(!t.isOperate() && st.count() == 2);
+    }
+
+    // ---- "state" is the operate flag ONLY in the status reply -------------
+    // The unsolicited push is itself the "state" object; a key of that name in
+    // the push or in the info reply is not the operate flag and must not move
+    // the button.
+    {
+        TunerModel t;
+        TgxlConnection conn;
+        t.setDirectConnection(&conn);
+        emit conn.statusUpdated({{"state", "1"}});
+        CHECK(t.isOperate());
+
+        emit conn.stateUpdated({{"state", "0"}});    // push — ignored
+        CHECK(t.isOperate());
+        emit conn.infoUpdated({{"state", "0"}});     // info reply — ignored
+        CHECK(t.isOperate());
+        emit conn.statusUpdated({{"state", "0"}});   // status reply — applied
+        CHECK(!t.isOperate());
+
+        // A status carrying no "state" leaves the flag alone.
+        emit conn.statusUpdated({{"state", "1"}});
+        emit conn.statusUpdated({{"fwd", "40.0"}});
+        CHECK(t.isOperate());
     }
 
     if (g_failures == 0) {

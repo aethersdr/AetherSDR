@@ -87,6 +87,47 @@ void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
     }
 }
 
+void TunerApplet::buildAntennaRow(QVBoxLayout* btnCol)
+{
+    m_antContainer = new QWidget;
+    m_antContainer->setVisible(false);
+    m_antContainer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    auto* antRow = new QHBoxLayout(m_antContainer);
+    antRow->setContentsMargins(0, 0, 0, 0);
+    antRow->setSpacing(2);
+
+    auto makeAntBtn = [](const QString& text, int port) {
+        auto* btn = new QPushButton(text);
+        btn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        btn->setFixedHeight(16);
+        btn->setToolTip(TunerApplet::tr("Select antenna port %1").arg(port));
+        btn->setAccessibleName(TunerApplet::tr("Antenna port %1").arg(port));
+        return btn;
+    };
+
+    m_ant1Btn = makeAntBtn(QStringLiteral("1"), 1);
+    m_ant2Btn = makeAntBtn(QStringLiteral("2"), 2);
+    m_ant3Btn = makeAntBtn(QStringLiteral("3"), 3);
+    antRow->addWidget(m_ant1Btn);
+    antRow->addWidget(m_ant2Btn);
+    antRow->addWidget(m_ant3Btn);
+
+    connect(m_ant1Btn, &QPushButton::clicked, this, [this]() {
+        if (m_model) m_model->setAntennaA(1);
+    });
+    connect(m_ant2Btn, &QPushButton::clicked, this, [this]() {
+        if (m_model) m_model->setAntennaA(2);
+    });
+    connect(m_ant3Btn, &QPushButton::clicked, this, [this]() {
+        if (m_model) m_model->setAntennaA(3);
+    });
+
+    // Paint them in their unselected state until the tuner reports antA.
+    updateAntennaButtons(-1);
+
+    btnCol->addWidget(m_antContainer);
+}
+
 void TunerApplet::buildUI()
 {
     auto* outer = new QVBoxLayout(this);
@@ -167,52 +208,21 @@ void TunerApplet::buildUI()
 
     m_operateBtn = new QPushButton("OPERATE");
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    m_operateBtn->setAccessibleName(tr("Tuner operate state"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
         "QPushButton:hover { background: {{color.background.1}}; }");
     btnCol->addWidget(m_operateBtn);
 
+    // Antenna switch row (TGXL 3x1) — sits directly under the OPERATE/STANDBY
+    // button and is hidden entirely on tuners without the switch, so the button
+    // column keeps its full height on every other model. When shown, the three
+    // buttons take a fixed 16 px and OPERATE gives up that much of its stretch.
+    buildAntennaRow(btnCol);
+
     bottomRow->addLayout(btnCol, 3);  // stretch 3 (30%)
 
     vbox->addLayout(bottomRow);
-
-    // Antenna switch row (TGXL 3x1) — hidden until direct connection active
-    {
-        m_antContainer = new QWidget;
-        m_antContainer->setVisible(false);
-        auto* antRow = new QHBoxLayout(m_antContainer);
-        antRow->setContentsMargins(0, 0, 0, 0);
-        antRow->setSpacing(2);
-
-        auto makeAntBtn = [](const QString& text) {
-            auto* btn = new QPushButton(text);
-            btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            btn->setFixedHeight(22);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(btn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-                "QPushButton:hover { background: {{color.background.1}}; }");
-            return btn;
-        };
-
-        m_ant1Btn = makeAntBtn("ANT 1");
-        m_ant2Btn = makeAntBtn("ANT 2");
-        m_ant3Btn = makeAntBtn("ANT 3");
-        antRow->addWidget(m_ant1Btn);
-        antRow->addWidget(m_ant2Btn);
-        antRow->addWidget(m_ant3Btn);
-
-        connect(m_ant1Btn, &QPushButton::clicked, this, [this]() {
-            if (m_model) m_model->setAntennaA(1);
-        });
-        connect(m_ant2Btn, &QPushButton::clicked, this, [this]() {
-            if (m_model) m_model->setAntennaA(2);
-        });
-        connect(m_ant3Btn, &QPushButton::clicked, this, [this]() {
-            if (m_model) m_model->setAntennaA(3);
-        });
-
-        vbox->addWidget(m_antContainer);
-    }
 
     outer->addWidget(body);
 
@@ -221,13 +231,14 @@ void TunerApplet::buildUI()
         if (m_model) m_model->autoTune();
     });
 
-    // Manual relay adjustment via mousewheel scroll (#469)
+    // Manual relay adjustment — drag up/down, wheel, or Up/Down keys (#469).
+    // The relay index is the wire's: 0=C1, 1=L, 2=C2.
     connect(static_cast<RelayBar*>(m_c1Bar), &RelayBar::relayAdjusted, this,
-            [this](int dir) { if (m_model) m_model->adjustRelay(0, dir); });
+            [this](int steps) { if (m_model) m_model->adjustRelay(0, steps); });
     connect(static_cast<RelayBar*>(m_lBar), &RelayBar::relayAdjusted, this,
-            [this](int dir) { if (m_model) m_model->adjustRelay(1, dir); });
+            [this](int steps) { if (m_model) m_model->adjustRelay(1, steps); });
     connect(static_cast<RelayBar*>(m_c2Bar), &RelayBar::relayAdjusted, this,
-            [this](int dir) { if (m_model) m_model->adjustRelay(2, dir); });
+            [this](int steps) { if (m_model) m_model->adjustRelay(2, steps); });
 
     // OPERATE button: cycle through OPERATE → BYPASS → STANDBY → OPERATE
     connect(m_operateBtn, &QPushButton::clicked, this,
@@ -257,18 +268,19 @@ void TunerApplet::setTunerModel(TunerModel* model)
     connect(m_model, &TunerModel::directConnectionChanged, this, updateScrollEnabled);
     updateScrollEnabled();
 
-    // Antenna switch: show buttons only when direct connection is active AND
-    // the TGXL reports antA (models without a switch never send antA).
-    auto updateAntVisible = [this]() {
-        m_antContainer->setVisible(m_model->hasDirectConnection()
-                                   && m_model->hasAntennaSwitch());
-    };
-    connect(m_model, &TunerModel::directConnectionChanged, this, updateAntVisible);
-    connect(m_model, &TunerModel::antennaAChanged, this, [this, updateAntVisible](int antA) {
-        updateAntVisible();
+    // Antenna switch: the buttons appear only on a tuner that reports the
+    // switch — "3way=1" in the direct info reply, or "one_by_three=1" in the
+    // radio-relayed status — and only while the direct connection is up, since
+    // "activate ant=N" has no radio-relayed equivalent. The capability arrives
+    // asynchronously (the info reply lands just after connect), so visibility
+    // is re-evaluated on every state change, not only on the connection edge.
+    connect(m_model, &TunerModel::directConnectionChanged,
+            this, &TunerApplet::updateAntennaVisibility);
+    connect(m_model, &TunerModel::antennaAChanged, this, [this](int antA) {
+        updateAntennaVisibility();
         updateAntennaButtons(antA);
     });
-    updateAntVisible();
+    updateAntennaVisibility();
     updateAntennaButtons(m_model->antennaA());
 
     // Tuning state changes → red button + SWR result flash
@@ -305,9 +317,18 @@ void TunerApplet::setTunerModel(TunerModel* model)
     syncFromModel();
 }
 
+void TunerApplet::updateAntennaVisibility()
+{
+    if (!m_antContainer) return;
+    m_antContainer->setVisible(m_model && m_model->hasDirectConnection()
+                               && m_model->hasAntennaSwitch());
+}
+
 void TunerApplet::syncFromModel()
 {
     if (!m_model) return;
+
+    updateAntennaVisibility();
 
     // Relay bars
     m_relayC1 = m_model->relayC1();
@@ -342,6 +363,16 @@ void TunerApplet::syncFromModel()
 void TunerApplet::cycleOperateState()
 {
     if (!m_model) return;
+
+    // Bypass is reachable only through the radio's TGXL relay, which needs a
+    // handle the radio only supplies when it reports the tuner as an amplifier
+    // object. A TGXL seen over the direct connection alone (#2250) therefore
+    // toggles OPERATE ↔ STANDBY, rather than offering a BYPASS step that would
+    // silently do nothing.
+    if (!m_model->hasRadioRelay()) {
+        m_model->setOperate(!m_model->isOperate());
+        return;
+    }
 
     // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
     if (m_model->isOperate() && !m_model->isBypass()) {
@@ -405,18 +436,25 @@ void TunerApplet::updateValueLabels()
 
 void TunerApplet::updateAntennaButtons(int antA)
 {
-    // antA is 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3
+    if (!m_ant1Btn) return;
+
+    // antA is 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3; -1 = not yet reported.
     static constexpr const char* kDefault =
-        "QPushButton { background: #1a2a3a; border: 1px solid #205070; "
-        "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: #204060; }";
+        "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 2px; color: {{color.text.primary}}; font-size: 9px; font-weight: bold; }"
+        "QPushButton:hover { background: {{color.background.2}}; }";
     static constexpr const char* kActive =
         "QPushButton { background: #006030; border: 1px solid #008040; "
-        "border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold; }";
+        "border-radius: 2px; color: #ffffff; font-size: 9px; font-weight: bold; }";
 
-    m_ant1Btn->setStyleSheet(antA == 0 ? kActive : kDefault);
-    m_ant2Btn->setStyleSheet(antA == 1 ? kActive : kDefault);
-    m_ant3Btn->setStyleSheet(antA == 2 ? kActive : kDefault);
+    QPushButton* const btns[3] = { m_ant1Btn, m_ant2Btn, m_ant3Btn };
+    for (int i = 0; i < 3; ++i) {
+        const bool active = (antA == i);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], active ? kActive : kDefault);
+        btns[i]->setAccessibleDescription(active
+            ? tr("Antenna port %1, selected").arg(i + 1)
+            : tr("Antenna port %1, not selected").arg(i + 1));
+    }
 }
 
 } // namespace AetherSDR

@@ -64,14 +64,23 @@ void TunerModel::applyChanges(const TunerDelta& d)
 
 void TunerModel::setOperate(bool on)
 {
-    if (m_handle.isEmpty()) {
-        qCDebug(lcTuner) << "TunerModel::setOperate: no handle yet, ignoring";
+    // Direct port-9010 channel first, for the same reason autoTune prefers it:
+    // it is the only path that exists for a TGXL the radio never reports as an
+    // amplifier object (#2250), and there is no handle to address in that case.
+    // "operate set=1" brings the tuner online, "operate set=0" is standby.
+    const bool direct = m_directConn && m_directConn->isConnected();
+    if (direct) {
+        qCDebug(lcTuner) << "TunerModel::setOperate: using direct TGXL path, on=" << on;
+        m_directConn->setOperate(on);
+    } else if (m_handle.isEmpty()) {
+        qCDebug(lcTuner) << "TunerModel::setOperate: no direct conn and no handle, ignoring";
         return;
+    } else {
+        // Neutral intent → Flex "tgxl set handle=<h> mode=" wire (via RadioModel).
+        emit operateRequested(on);
     }
-    // Neutral intent → Flex "tgxl set handle=<h> mode=" wire (via RadioModel).
-    emit operateRequested(on);
     // Optimistic update: reflect the commanded state immediately so the
-    // button label stays in sync even before the radio echoes back.
+    // button label stays in sync even before the tuner echoes back.
     if (m_operate != on) { m_operate = on; emit stateChanged(); }
 }
 
@@ -114,6 +123,12 @@ void TunerModel::setAntennaA(int ant)
         qCDebug(lcTuner) << "TunerModel::setAntennaA: no direct connection";
         return;
     }
+    // Only the 3x1 models have somewhere to switch to. On a single-port tuner
+    // the command is meaningless, so it is not sent at all.
+    if (!hasAntennaSwitch()) {
+        qCDebug(lcTuner) << "TunerModel::setAntennaA: tuner has no antenna switch";
+        return;
+    }
     if (ant < 1 || ant > 3) return;
     qCDebug(lcTuner) << "TunerModel: activate ant=" << ant;
     m_directConn->sendCommand(QString("activate ant=%1").arg(ant));
@@ -140,82 +155,110 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
             qCDebug(lcTuner) << "TunerModel: direct TGXL connection lost";
             m_directPresence = false;
+            // The 3way capability came from this device's info reply. A tuner
+            // without the switch omits the key entirely, so a stale true would
+            // survive a reconnect to a different device — clear it here.
+            if (m_threeWay) { m_threeWay = false; emit stateChanged(); }
             if (!isPresent())
                 emit presenceChanged(false);
             emit directConnectionChanged(false);
         });
-        // Update relay values from direct state pushes
+        // Every direct message kind — the unsolicited state push, the 1/sec
+        // status poll reply, and the one-shot info reply — carries an
+        // overlapping set of the same keys, so they all go through one apply.
         connect(m_directConn, &TgxlConnection::stateUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
-            bool changed = false;
-            if (kvs.contains("relayC1")) {
-                int v = kvs.value("relayC1").toInt();
-                if (m_relayC1 != v) { m_relayC1 = v; changed = true; }
-            }
-            if (kvs.contains("relayL")) {
-                int v = kvs.value("relayL").toInt();
-                if (m_relayL != v) { m_relayL = v; changed = true; }
-            }
-            if (kvs.contains("relayC2")) {
-                int v = kvs.value("relayC2").toInt();
-                if (m_relayC2 != v) { m_relayC2 = v; changed = true; }
-            }
-            if (kvs.contains("antA")) {
-                int v = kvs.value("antA").toInt();
-                if (m_antennaA != v) { m_antennaA = v; changed = true; emit antennaAChanged(v); }
-            }
-            if (changed) emit stateChanged();
-            // Forward power and SWR from direct TGXL connection (#625)
-            // TGXL reports fwd in dBm and swr as return loss (negative dB).
-            // Convert to watts and SWR ratio for the gauge.
-            // Always emit when meter fields are present — suppressing identical
-            // values caused meter-freeze when SWR settled to exactly 1.0 (#1530).
-            bool meters = false;
-            if (kvs.contains("fwd")) {
-                float dBm = kvs.value("fwd").toFloat();
-                float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
-                m_fwdPower = watts;
-                meters = true;
-            }
-            if (kvs.contains("swr")) {
-                float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
-                float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
-                float ratio = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
-                m_swr = ratio;
-                meters = true;
-            }
-            if (meters) emit metersChanged(m_fwdPower, m_swr);
+            applyDirectKvs(kvs, DirectSource::StatePush);
         });
-        // Also parse antA + meters from 1/sec status poll responses
         connect(m_directConn, &TgxlConnection::statusUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
-            if (kvs.contains("antA")) {
-                int v = kvs.value("antA").toInt();
-                if (m_antennaA != v) {
-                    m_antennaA = v;
-                    emit antennaAChanged(v);
-                    emit stateChanged();
-                }
-            }
-            // Forward power and SWR from direct TGXL status poll (#625)
-            // Always emit — see #1530 for why equality suppression was removed.
-            bool meters = false;
-            if (kvs.contains("fwd")) {
-                float dBm = kvs.value("fwd").toFloat();
-                float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
-                m_fwdPower = watts;
-                meters = true;
-            }
-            if (kvs.contains("swr")) {
-                float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
-                float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
-                float ratio = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
-                m_swr = ratio;
-                meters = true;
-            }
-            if (meters) emit metersChanged(m_fwdPower, m_swr);
+            applyDirectKvs(kvs, DirectSource::StatusReply);
+        });
+        connect(m_directConn, &TgxlConnection::infoUpdated, this,
+                [this](const QMap<QString, QString>& kvs) {
+            applyDirectKvs(kvs, DirectSource::InfoReply);
         });
     }
+}
+
+void TunerModel::applyDirectKvs(const QMap<QString, QString>& kvs, DirectSource source)
+{
+    bool changed = false;
+
+    // Pi-network relay positions. These arrive on the status poll as well as on
+    // the state push; parsing them only on the push left the C1 / L / C2 bars
+    // frozen at 0 for direct-only tuners (#4551).
+    if (kvs.contains(QStringLiteral("relayC1"))) {
+        const int v = kvs.value(QStringLiteral("relayC1")).toInt();
+        if (m_relayC1 != v) { m_relayC1 = v; changed = true; }
+    }
+    if (kvs.contains(QStringLiteral("relayL"))) {
+        const int v = kvs.value(QStringLiteral("relayL")).toInt();
+        if (m_relayL != v) { m_relayL = v; changed = true; }
+    }
+    if (kvs.contains(QStringLiteral("relayC2"))) {
+        const int v = kvs.value(QStringLiteral("relayC2")).toInt();
+        if (m_relayC2 != v) { m_relayC2 = v; changed = true; }
+    }
+
+    // Antenna-switch capability. The direct info reply spells it "3way"; the
+    // radio-relayed status spells it "one_by_three" (handled in applyChanges).
+    if (kvs.contains(QStringLiteral("3way"))) {
+        const bool v = (kvs.value(QStringLiteral("3way")) == QLatin1String("1"));
+        if (m_threeWay != v) { m_threeWay = v; changed = true; }
+    }
+
+    // Operate / standby. Reading this is what gives the button its state at
+    // startup: m_operate defaults to false, so without it the tuner always
+    // came up showing STANDBY however it was actually set, and only became
+    // truthful once the operator clicked it (#4552).
+    //
+    // The status reply calls the flag "state" — state=1 online, state=0
+    // standby. The command keeps its own spelling ("operate set=0|1"); the two
+    // are not symmetric. Read only from the status reply: the unsolicited push
+    // is itself the "state" object, so a key of that name in any other message
+    // is something else entirely.
+    if (source == DirectSource::StatusReply && kvs.contains(QStringLiteral("state"))) {
+        const bool v = (kvs.value(QStringLiteral("state")) == QLatin1String("1"));
+        if (m_operate != v) { m_operate = v; changed = true; }
+    }
+    if (kvs.contains(QStringLiteral("bypass"))) {
+        const bool v = (kvs.value(QStringLiteral("bypass")) == QLatin1String("1"));
+        if (m_bypass != v) { m_bypass = v; changed = true; }
+    }
+    if (kvs.contains(QStringLiteral("tuning"))) {
+        const bool v = (kvs.value(QStringLiteral("tuning")) == QLatin1String("1"));
+        if (m_tuning != v) { m_tuning = v; changed = true; emit tuningChanged(v); }
+    }
+
+    // Selected antenna port (0-indexed on the wire: 0=ANT1).
+    if (kvs.contains(QStringLiteral("antA"))) {
+        const int v = kvs.value(QStringLiteral("antA")).toInt();
+        if (m_antennaA != v) { m_antennaA = v; changed = true; emit antennaAChanged(v); }
+    }
+
+    if (changed)
+        emit stateChanged();
+
+    // Forward power and SWR from the direct TGXL connection (#625).
+    // TGXL reports fwd in dBm and swr as return loss (negative dB).
+    // Convert to watts and SWR ratio for the gauge.
+    // Always emit when meter fields are present — suppressing identical
+    // values caused meter-freeze when SWR settled to exactly 1.0 (#1530).
+    bool meters = false;
+    if (kvs.contains(QStringLiteral("fwd"))) {
+        const float dBm = kvs.value(QStringLiteral("fwd")).toFloat();
+        m_fwdPower = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+        meters = true;
+    }
+    if (kvs.contains(QStringLiteral("swr"))) {
+        const float rl = kvs.value(QStringLiteral("swr")).toFloat();  // return loss in dB (negative from TGXL)
+        const float rho = std::pow(10.0f, rl / 20.0f);                // rl is already negative
+        m_swr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+        meters = true;
+    }
+    if (meters)
+        emit metersChanged(m_fwdPower, m_swr);
 }
 
 bool TunerModel::hasDirectConnection() const
@@ -223,13 +266,13 @@ bool TunerModel::hasDirectConnection() const
     return m_directConn && m_directConn->isConnected();
 }
 
-void TunerModel::adjustRelay(int relay, int direction)
+void TunerModel::adjustRelay(int relay, int steps)
 {
     if (!m_directConn || !m_directConn->isConnected()) {
         qCDebug(lcTuner) << "TunerModel::adjustRelay: no direct connection";
         return;
     }
-    m_directConn->adjustRelay(relay, direction);
+    m_directConn->adjustRelay(relay, steps);
 }
 
 } // namespace AetherSDR

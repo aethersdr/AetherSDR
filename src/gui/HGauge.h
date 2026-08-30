@@ -401,8 +401,10 @@ public:
     {
         setFixedHeight(18);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setFocusPolicy(Qt::TabFocus);
-        setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
+        // ClickFocus as well as TabFocus: dragging a bar should leave the
+        // keyboard on it, so Up/Down continues the adjustment the drag started.
+        setFocusPolicy(Qt::StrongFocus);
+        setToolTip(tr("Drag up/down, scroll, or use Up/Down keys to adjust relay position"));
     }
 
     void setValue(int v) {
@@ -421,20 +423,60 @@ public:
     }
 
 signals:
-    void relayAdjusted(int direction);  // +1 scroll up, -1 scroll down
+    // Signed step count, not a direction: one wheel notch or key press sends
+    // ±1, while a drag sends however many steps the pointer covered, so a long
+    // drag is one "tune relay=N move=<steps>" instead of a burst of ±1s.
+    void relayAdjusted(int steps);
 
 protected:
     void keyPressEvent(QKeyEvent* e) override {
         if (!m_scrollEnabled) { QWidget::keyPressEvent(e); return; }
         if (e->key() == Qt::Key_Up || e->key() == Qt::Key_Plus || e->key() == Qt::Key_Right) {
-            emit relayAdjusted(+1);
+            adjustBy(+1);
             e->accept();
         } else if (e->key() == Qt::Key_Down || e->key() == Qt::Key_Minus || e->key() == Qt::Key_Left) {
-            emit relayAdjusted(-1);
+            adjustBy(-1);
             e->accept();
         } else {
             QWidget::keyPressEvent(e);
         }
+    }
+
+    void mousePressEvent(QMouseEvent* e) override {
+        if (!m_scrollEnabled || e->button() != Qt::LeftButton) {
+            QWidget::mousePressEvent(e);
+            return;
+        }
+        m_dragging = true;
+        m_dragAnchorY = static_cast<int>(e->position().y());
+        e->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!m_dragging) {
+            QWidget::mouseMoveEvent(e);
+            return;
+        }
+        // Screen y grows downward, so a negative delta is an upward drag and
+        // must increase the value. The anchor moves by exactly the pixels
+        // consumed, leaving the remainder to accumulate — so a slow drag still
+        // steps once per kPixelsPerStep rather than rounding away to nothing.
+        const int dy = m_dragAnchorY - static_cast<int>(e->position().y());
+        const int steps = dy / kPixelsPerStep;
+        if (steps != 0) {
+            m_dragAnchorY -= steps * kPixelsPerStep;
+            adjustBy(steps);
+        }
+        e->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (m_dragging && e->button() == Qt::LeftButton) {
+            m_dragging = false;
+            e->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(e);
     }
 
     void wheelEvent(QWheelEvent* e) override {
@@ -446,8 +488,8 @@ protected:
         m_angleAccum += e->angleDelta().y();
         constexpr int step = 120;
         int emitted = 0;
-        while (m_angleAccum >= step && emitted == 0)  { m_angleAccum -= step; emit relayAdjusted(+1); ++emitted; }
-        while (m_angleAccum <= -step && emitted == 0) { m_angleAccum += step; emit relayAdjusted(-1); ++emitted; }
+        while (m_angleAccum >= step && emitted == 0)  { m_angleAccum -= step; adjustBy(+1); ++emitted; }
+        while (m_angleAccum <= -step && emitted == 0) { m_angleAccum += step; adjustBy(-1); ++emitted; }
         if (emitted) m_angleAccum = 0;  // discard leftover inflation
         e->accept();
     }
@@ -479,7 +521,7 @@ protected:
         p.drawRect(barX, barY, barW - 1, barH - 1);
 
         // Filled portion
-        float frac = qBound(0.0f, m_value / 255.0f, 1.0f);
+        float frac = qBound(0.0f, m_value / static_cast<float>(kMaxRelay), 1.0f);
         int fillW = static_cast<int>(frac * (barW - 2));
         if (fillW > 0)
             p.fillRect(barX + 1, barY + 1, fillW, barH - 2, QColor(0x00, 0xb4, 0xd8));
@@ -492,10 +534,27 @@ protected:
     }
 
 private:
+    // One path for every input. The bar shows the new position immediately
+    // rather than waiting for the tuner's 1/sec status poll to echo it back —
+    // without that a drag feels dead. The poll remains authoritative and
+    // overwrites this via setValue, including when the tuner clamps at an end
+    // stop the local guess sailed past.
+    void adjustBy(int steps) {
+        if (steps == 0)
+            return;
+        emit relayAdjusted(steps);
+        setValue(qBound(0, m_value + steps, kMaxRelay));
+    }
+
+    static constexpr int kMaxRelay = 255;    // relay position range is 0–255
+    static constexpr int kPixelsPerStep = 3; // drag sensitivity
+
     QString m_label;
     int m_value{0};
     bool m_scrollEnabled{false};
     int m_angleAccum{0};
+    bool m_dragging{false};
+    int m_dragAnchorY{0};
 };
 
 } // namespace AetherSDR
