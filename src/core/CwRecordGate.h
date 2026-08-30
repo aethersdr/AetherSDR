@@ -88,4 +88,18 @@ constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
     return cwRecordPumpOwnsRecorder(s) && recordingOpen;
 }
 
+// Whether an over's END should arm the recorder's idle-stop countdown. The
+// recorder has two over sources — MOX (voice) and the CW gate — whose end
+// edges can interleave: the CW gate-close is queued and the over-hang lets a
+// voice over begin up to a hang before it lands, so the close can arrive
+// INSIDE a live voice over. Arming the countdown then would auto-stop that
+// recording mid-transmission once the (user-configurable, floor 10 s) timeout
+// elapses. The countdown may start only once BOTH sources are down; whichever
+// over ends last arms it.
+constexpr bool idleCountdownShouldArm(bool recording, bool transmitting,
+                                      bool cwOverActive)
+{
+    return recording && !transmitting && !cwOverActive;
+}
+
 } // namespace AetherSDR

@@ -215,5 +215,26 @@ int main()
                      "#4281: the hang is far shorter than the 1500 ms first attempt");
     }
 
+    // ── The idle countdown arms only when BOTH over sources are down ────────
+    // The CW gate-close is queued and the over-hang lets a voice over begin
+    // before it lands: arming the countdown inside that live voice over would
+    // auto-stop the recording mid-transmission. Whichever over ends last arms.
+    {
+        static_assert(!idleCountdownShouldArm(true, /*tx*/ true, /*cw*/ false),
+                      "CW gate-close inside a live voice over must not arm");
+        static_assert(!idleCountdownShouldArm(true, /*tx*/ false, /*cw*/ true),
+                      "MOX drop during a still-active CW over must not arm");
+        static_assert(idleCountdownShouldArm(true, false, false),
+                      "the last over source to end arms the countdown");
+        ok &= expect(!idleCountdownShouldArm(true, true, false),
+                     "#4281: CW gate-close inside a live voice over does not arm the idle stop");
+        ok &= expect(!idleCountdownShouldArm(true, false, true),
+                     "MOX drop during an active CW over does not arm the idle stop");
+        ok &= expect(idleCountdownShouldArm(true, false, false),
+                     "both over sources down: the idle countdown arms");
+        ok &= expect(!idleCountdownShouldArm(false, false, false),
+                     "no recording open: nothing to arm");
+    }
+
     return ok ? 0 : 1;
 }

@@ -1,5 +1,6 @@
 #include "QsoRecorder.h"
 #include "AppSettings.h"
+#include "CwRecordGate.h"
 #include "AudioDeviceNegotiator.h"
 #include "LogManager.h"
 #include "Resampler.h"
@@ -264,8 +265,15 @@ void QsoRecorder::applyOverBookkeeping(bool overActive)
         // Reset idle timer on each over
         m_idleTimer->stop();
     } else {
-        // TX ended — start idle countdown
-        if (m_recording)
+        // TX ended — start the idle countdown, but only once BOTH over sources
+        // are down. The CW gate-close is queued and can land inside a live
+        // voice over begun during the over-hang; arming then would auto-stop
+        // that recording mid-transmission (#4281). Whichever over ends last
+        // arms the countdown.
+        if (AetherSDR::idleCountdownShouldArm(
+                m_recording,
+                m_transmitting.load(std::memory_order_acquire),
+                m_cwOverActive.load(std::memory_order_acquire)))
             m_idleTimer->start(m_idleTimeoutSecs * 1000);
     }
 }
