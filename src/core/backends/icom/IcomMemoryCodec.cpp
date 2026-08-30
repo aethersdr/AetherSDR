@@ -161,7 +161,13 @@ std::optional<IcomMemoryChannel> decodeMemory(
         return std::nullopt;
     }
 
-    memory.split = payload.size() == static_cast<std::size_t>(layout.splitBytes);
+    // The IC-7300MK2 always returns the second 4..17 block documented by its
+    // CI-V guide, even when Split is OFF.  Its byte-3 SPLIT flag, decoded
+    // below, is therefore the authority; treating the 47-byte reply length as
+    // Split made every live channel display-only and prevented spot recall.
+    // The older dialects retain their established variable-length contract.
+    memory.split = dialect != MemoryDialect::Ic7300Mk2
+        && payload.size() == static_cast<std::size_t>(layout.splitBytes);
     const std::optional<std::uint64_t> frequency = decodeFreqExact(
         payload.subspan(static_cast<std::size_t>(layout.frequencyOffset), kFreqBytes),
         kFreqBytes);
