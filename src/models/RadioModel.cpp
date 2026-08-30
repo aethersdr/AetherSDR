@@ -1074,8 +1074,9 @@ void RadioModel::setupBackend(const QString& family)
     // capability flag, which is right: a Flex forbids mic-input selection too
     // and still publishes MICPEAK, so only the meter's absence means the face
     // can never move. But applyCapabilitiesToUi() runs on capabilitiesChanged,
-    // and FlexBackend never emits it — grep says the only backend that does is
-    // Sim. So on a Flex the gate ran exactly once, at connect, while
+    // and FlexBackend never emits it — of the four backends only Sim and Icom
+    // do (#5262 M1 makes emission a contract and retires this compensation).
+    // So on a Flex the gate ran exactly once, at connect, while
     // m_micPeakIdx was still -1, and hid a gauge that was about to start
     // working. Its visibility then depended on whether an unrelated oscillator
     // or GPS status message happened to land afterwards.
@@ -4446,10 +4447,16 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
         sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
                          debugSource, debugTraceId, debugSourceMs, scheduledAt);
     }
-    const bool prev = m_cwKeyActive;
+    // Deliberately no cwKeyDownChanged here.  This is the local iambic
+    // keyer's path, and its producer already drove the sidetone gate at the
+    // element's own scheduled instant (MainWindow_Session.cpp, #4890/#4942).
+    // Echoing would queue a second, wall-clock-stamped edge for the same
+    // element, raising CwSidetoneGenerator's monotonic floor to wake time
+    // and re-timing the following element to the GUI thread's rhythm — or,
+    // when the queued hop lands after the element ended, re-keying the gate
+    // for a spurious blip (#4976).  m_cwKeyActive is still tracked: it feeds
+    // the TX-ownership interlock alongside m_cwxActive.
     m_cwKeyActive = down;
-    if (prev != down)
-        emit cwKeyDownChanged(down);
 }
 
 // ── NetCW stream — VITA-49 UDP delivery with redundant sends ────────────────
@@ -10249,11 +10256,25 @@ void RadioModel::onStatusReceived(const QString& object,
     }
 
     // TNF status: "tnf <id> freq=14.100000 width=100 depth=1 permanent=0"
-    static const QRegularExpression tnfRe(R"(^tnf\s+(\d+)$)");
+    //
+    // Removal arrives as "tnf <id> removed" (bare token, whole string lands in
+    // `object`) or "tnf <id> removed=1" (kv form, `object` == "tnf <id>").
+    // SmartSDR DOES send one on `tnf remove` — contrary to the long-standing
+    // assumption that it sends nothing — and feeding it through
+    // applyTnfStatus() re-creates the entry via QMap::operator[], so a
+    // just-removed notch reappears on the panadapter a beat after the click.
+    // Route the removal form to removeTnf() instead (a no-op if the optimistic
+    // removal in requestRemoveTnf() already dropped it).
+    static const QRegularExpression tnfRe(R"(^tnf\s+(\d+)(?:\s+removed)?$)");
     auto tnfMatch = tnfRe.match(object);
     if (tnfMatch.hasMatch()) {
-        int tnfId = tnfMatch.captured(1).toInt();
-        m_tnfModel.applyTnfStatus(tnfId, kvs);
+        const int tnfId = tnfMatch.captured(1).toInt();
+        if (kvs.contains(QStringLiteral("removed"))
+            || object.endsWith(QLatin1String("removed"))) {
+            m_tnfModel.removeTnf(tnfId);
+        } else {
+            m_tnfModel.applyTnfStatus(tnfId, kvs);
+        }
         return;
     }
 

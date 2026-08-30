@@ -1539,7 +1539,8 @@ RadioCapabilities Hl2Backend::capabilities() const
                             // RadioStateMemory's ext gate (one domain, one
                             // document — RFC #4603 PR 6).
                             | RadioCapabilities::ClientSettingsDomain::Memories;
-    // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
+    // (extensionNamespaces is declared above, with the freqcal/nb verbs it
+    // names — an earlier revision of this comment claimed none existed.)
     return c;
 }
 

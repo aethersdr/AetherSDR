@@ -84,7 +84,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `canApplyMemories` | ✅ | ❌ | ❌ | `RadioModel::tryMemoryCommand` | True means the backend accepts its native memory-apply command. Initial Icom support is ❌ and applies recallable cached fields through the existing neutral slice setters instead of entering vendor Memory mode; split/RPS/DV/DD records are display-only. |
 | `canRefreshMemories` | ❌ | ❌ | ❌ | Memory Channels dialog → `RadioModel::refreshMemories` | Explicit, button-only radio-memory snapshots. IC-7300MK2 reads 99 channels; IC-9700 reads all 297 or one selected band; IC-705 requires one selected group and reads only its 100 channels. No memory scan runs during connection. |
 | `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
-| `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | `invokeExtension` pre-check | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page |
+| `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | No production reader or general `invokeExtension` pre-check yet | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page. Icom: `["icom"]`, with PC-audio, tuner, scope, control-map, scheduler and diagnostic verbs. RadioModel's Icom PC-audio wrappers and the Flex accessory routes still pre-check by family string; #5262 M1 converts those consumers. |
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
 | `notchMinWidthHz` / `notchMaxWidthHz` | 10 / 6000 | 50 / 6000 | 0 / 0 | `SpectrumWidget::setNotchCapabilities` | Clamps drag-resize and the width presets. HL2's floor is set by the RX filter length and WDSP **silently widens** anything narrower, so a UI offering less draws a notch narrower than the one being heard |
@@ -324,23 +324,25 @@ read at use time, not baked into a key at construction, so the ordering problem
 does not arise. It is still its own change, and it applies to more than this one
 control.
 
-## Declared, but the consumer bypasses the seam
+## Previously bypassed, now reconciled
 
-| Field | Flex | HL2 | Sim | Problem |
-|---|:--:|:--:|:--:|---|
-| `maxSlices` | `mc.maxSlices` | 1 | 1 | `RadioModel::maxSlices()` reads `capabilitiesFor(m_model)` — the model-**name** table — not the backend |
-| `maxPanadapters` | `mc.maxSlices` | 1 | 1 | `RadioModel::maxPanadapters()` does the same, and returns `.maxSlices` |
+`maxSlices` / `maxPanadapters` sat here for weeks: declared by every backend
+and read by nothing — `RadioModel::maxSlices()` resolved the model-**name**
+table, so an HL2 declaring `maxSlices = 1` was ignored and its limit came
+from whatever the string `"Hermes-Lite 2"` happened to resolve to (the same
+bypass `hasExtendedDsp` once had). **#4545 reconciled them**: both accessors
+now prefer the connected non-Flex backend's declaration (`RadioModel.h`,
+`maxSlices()` / `maxPanadapters()`). Their fallback paths differ:
+`maxSlices()` returns `m_maxSlices`, seeded from the FlexLib model table,
+revisable by live Flex `slices=N` status, and retained across disconnect
+(#4854); `maxPanadapters()` reads the model table directly. The three
+enforcement sites — `RigctlProtocol`, `TciServer`, `AutomationServer` — all
+resolve through the accessors. HL2's figure is genuinely dynamic (discovery
+receiver count, capped by the link budget at the running span).
 
-Every backend sets both, and nothing reads them. The three enforcement sites —
-`RigctlProtocol`, `TciServer`, `AutomationServer` — all resolve slice limits from
-the name table, so an HL2 declaring `maxSlices = 1` is ignored and its limit
-comes from whatever the string `"Hermes-Lite 2"` happens to resolve to.
-
-This is the same bypass `hasExtendedDsp` had before it was reconciled: the field
-existed, the backend populated it, and every call site went around it. The fix
-has the same shape — read the backend when connected, keep the name table as the
-disconnected fallback — but it touches slice/pan limits in TCI, rigctl and
-automation, so it is **deliberately deferred to its own PR.**
+The lesson this section keeps: a declared capability needs its consumers
+**converted**, not merely present — these two fields looked wired from the
+backend side the whole time.
 
 ## Declared, but nothing reads them at all
 
@@ -372,9 +374,9 @@ field makes a 10 W 23 cm transmission read against a 10 W scale instead of a
 100 W one; it does not clamp the request.
 
 These are the ones to check first when something "should have worked". Note the
-pattern in the Flex column: five fields across this table and the one above are
-left at their defaults, and every one of them is correct only by accident or
-inert only by luck. That is the trap in rule 1 above, sitting in the tree.
+pattern in the Flex column: all four fields in the table above are left at
+their defaults, and every one of them is correct only by accident or inert
+only by luck. That is the trap in rule 1 above, sitting in the tree.
 
 ## Not a capability field, but the same contract
 

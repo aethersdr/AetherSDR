@@ -3,6 +3,8 @@
 #include <QtEndian>
 #include <QThread>
 
+#include <cmath>
+
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
 #include "core/backends/sim/SimSignalSource.h"
@@ -71,6 +73,27 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
             this, &IRadioBackend::disconnected);
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
+
+    // The synthetic wire's demo intents route back into THIS backend: ANF/NB
+    // to the audible mixer, and VFO/mode to the seam slice intents (the demo's
+    // SliceModel is materialised by the synthetic `slice 0 …` status, and that
+    // creation path wires frequency/mode intents to m_flexBackend, which is
+    // null in demo mode — so without this forward the birdie never moved and
+    // sideband never changed, in demo mode only). Wired HERE, in the ctor,
+    // because both ends are owned by this backend and die together — this
+    // used to live in MainWindow behind a dynamic_cast<SimBackend*>, rewired
+    // per backend swap (M0, #5263). Cross-thread (m_connection lives on its
+    // worker), so queued.
+    connect(m_connection, &RadioConnection::demoAnfChanged, this,
+            [this](bool on) { setDemoAnf(on); }, Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoNbChanged, this,
+            [this](bool on) { setDemoNb(on); }, Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoVfoChanged, this,
+            [this](double mhz) { setSliceFrequency(0, mhz * 1.0e6); },
+            Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoModeChanged, this,
+            [this](const QString& mode) { setSliceMode(0, mode); },
+            Qt::QueuedConnection);
 
     // RFC #4288 (the VFO=0 fix): on the live hybrid path the synthetic wire
     // connection delivers Flex-format pan/slice status, but RadioModel decodes
@@ -309,6 +332,11 @@ RadioCapabilities SimBackend::capabilities() const
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};
+    // The "sim" namespace: fault injection (RFC #4288 #4) + the Demo Noise
+    // scene verbs (noise.*). Declared so clients can gate the Demo Noise
+    // applet on the HANDSHAKE instead of a dynamic_cast to this type — the
+    // first production reader of extensionNamespaces (M0, #5263).
+    caps.extensionNamespaces = {QStringLiteral("sim")};
     return caps;
 }
 
@@ -522,6 +550,123 @@ void SimBackend::invokeExtension(const QString& ns, const QString& verb,
         if (requestId != 0)
             emit extensionError(requestId,
                                 QStringLiteral("sim: not connected — connect the demo first"));
+        return;
+    }
+    // Demo Noise scene verbs (M0, #5263) — the DemoApplet's controls, routed
+    // through the seam instead of a dynamic_cast to this type. Compound args
+    // ride a QVariantMap; a preset is its bare name.
+    const auto rejectNoiseRequest = [this, requestId](const QString& reason) {
+        if (requestId != 0) {
+            emit extensionError(requestId, reason);
+        }
+    };
+    const auto readNoiseChannel = [&rejectNoiseRequest](const QVariantMap& values,
+                                                        QString* channel) {
+        if (!values.contains(QStringLiteral("ch"))) {
+            rejectNoiseRequest(QStringLiteral("sim: noise request is missing 'ch'"));
+            return false;
+        }
+        *channel = values.value(QStringLiteral("ch")).toString();
+        bool knownChannel = false;
+        NoiseMixer::fromName(*channel, &knownChannel);
+        if (!knownChannel) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: unknown noise channel '%1'").arg(*channel));
+        }
+        return knownChannel;
+    };
+    const auto readFiniteNumber = [&rejectNoiseRequest](const QVariantMap& values,
+                                                        const QString& key,
+                                                        double* value) {
+        bool converted = false;
+        *value = values.value(key).toDouble(&converted);
+        if (!values.contains(key) || !converted || !std::isfinite(*value)) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: noise request has invalid '%1'").arg(key));
+            return false;
+        }
+        return true;
+    };
+    if (verb == QLatin1String("noise.enable")) {
+        if (arg.metaType().id() != QMetaType::QVariantMap) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.enable expects a map"));
+            return;
+        }
+        const QVariantMap m = arg.toMap();
+        QString channel;
+        if (!readNoiseChannel(m, &channel)) {
+            return;
+        }
+        if (!m.contains(QStringLiteral("on"))
+            || m.value(QStringLiteral("on")).metaType().id() != QMetaType::Bool) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.enable has invalid 'on'"));
+            return;
+        }
+        setDemoNoiseEnabled(channel, m.value(QStringLiteral("on")).toBool());
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
+        return;
+    }
+    if (verb == QLatin1String("noise.level")) {
+        if (arg.metaType().id() != QMetaType::QVariantMap) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.level expects a map"));
+            return;
+        }
+        const QVariantMap m = arg.toMap();
+        QString channel;
+        double levelDb = 0.0;
+        if (!readNoiseChannel(m, &channel)
+            || !readFiniteNumber(m, QStringLiteral("db"), &levelDb)) {
+            return;
+        }
+        setDemoNoiseLevel(channel, levelDb);
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
+        return;
+    }
+    if (verb == QLatin1String("noise.knob")) {
+        if (arg.metaType().id() != QMetaType::QVariantMap) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.knob expects a map"));
+            return;
+        }
+        const QVariantMap m = arg.toMap();
+        QString channel;
+        const QString knob = m.value(QStringLiteral("knob")).toString();
+        static const QSet<QString> kNoiseKnobs{
+            QStringLiteral("hz"), QStringLiteral("rate"),
+            QStringLiteral("freq"), QStringLiteral("prf")};
+        double value = 0.0;
+        if (!readNoiseChannel(m, &channel)) {
+            return;
+        }
+        if (!m.contains(QStringLiteral("knob")) || !kNoiseKnobs.contains(knob)) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: unknown noise knob '%1'").arg(knob));
+            return;
+        }
+        if (!readFiniteNumber(m, QStringLiteral("v"), &value)) {
+            return;
+        }
+        setDemoNoiseKnob(channel, knob, value);
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
+        return;
+    }
+    if (verb == QLatin1String("noise.preset")) {
+        const QString preset = arg.toString();
+        if (arg.metaType().id() != QMetaType::QString
+            || !NoiseMixer::allPresetNames().contains(preset)) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: unknown noise preset '%1'").arg(preset));
+            return;
+        }
+        loadDemoNoisePreset(preset);
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
         return;
     }
     const bool handled = applyFault(verb, arg);

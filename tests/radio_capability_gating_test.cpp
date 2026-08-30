@@ -537,9 +537,44 @@ int main(int argc, char** argv)
             check(forwardedSpy.count() == 3
                       && forwardedSpy.last().value(0).toBool(),
                   "the same uninhibited down crosses the backend seam");
-            check(keyEdgeSpy.count() == 1,
-                  "an accepted down publishes one key-active edge");
+            // The iambic keyer drives the sidetone gate itself with the
+            // element's scheduled instant; sendCwKeyEdge must not echo it
+            // through cwKeyDownChanged (#4976).
+            check(keyEdgeSpy.count() == 0,
+                  "an accepted iambic down does not publish a key-active echo");
             model.sendCwKeyEdge(false);
+            check(keyEdgeSpy.count() == 0,
+                  "an accepted iambic up does not publish a key-active echo");
+            // Straight-key sources still publish: a following sendCwKey down
+            // emits even though the keyer edges touched the shared state.
+            // Note this holds because the two keyer edges above are
+            // BALANCED, leaving m_cwKeyActive false again — see the
+            // unbalanced case pinned below.
+            model.sendCwKey(true);
+            check(keyEdgeSpy.count() == 1
+                      && keyEdgeSpy.last().value(0).toBool(),
+                  "a straight-key down after balanced keyer edges publishes");
+            model.sendCwKey(false);
+
+            // Known limitation, pinned deliberately.  NOT a regression:
+            // `main` behaves identically, because sendCwKeyEdge set the
+            // same latch before #4976.  m_cwKeyActive is one bool shared by
+            // both entry points, so an UNBALANCED keyer edge leaves it set
+            // and the next straight-key down of the same polarity publishes
+            // nothing — the radio is keyed while the sidetone gate never
+            // hears the edge.  The interleave is reachable because
+            // straight-key sources are not gated on the iambic keyer
+            // running (TciProtocol's keyer:trx handler,
+            // MainWindow::setCwStraightKeyState) while paddle sources are.
+            // Giving sendCwKeyEdge its own edge-tracking bool is out of
+            // scope for #4976; this assertion is what flips when that
+            // decoupling lands.
+            const int publishedBeforeLatch = keyEdgeSpy.count();
+            model.sendCwKeyEdge(true);   // latches m_cwKeyActive, no echo
+            model.sendCwKey(true);       // prev == true, so nothing emits
+            check(keyEdgeSpy.count() == publishedBeforeLatch,
+                  "KNOWN LATCH: a straight-key down after an unbalanced "
+                  "keyer edge publishes nothing");
         }
     }
 
@@ -756,6 +791,53 @@ int main(int argc, char** argv)
               "Sim declares hasPaTemperatureTelemetry=false");
         check(!caps.hasMainFanTelemetry,
               "Sim declares hasMainFanTelemetry=false");
+        check(caps.extensionNamespaces.contains(QStringLiteral("sim")),
+              "Sim declares the 'sim' extension namespace — the Demo Noise "
+              "tile gates on this handshake, not on the backend type "
+              "(M0, #5263)");
+
+        IRadioBackend* simBackend = model.backend();
+        QSignalSpy extensionResultSpy(simBackend, &IRadioBackend::extensionResult);
+        QSignalSpy extensionErrorSpy(simBackend, &IRadioBackend::extensionError);
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.enable"), 101,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("pink")},
+                        {QStringLiteral("on"), true}});
+        check(extensionResultSpy.count() == 1
+                  && extensionResultSpy.takeFirst().value(0).toULongLong() == 101,
+              "valid Demo Noise extension request returns its correlated result");
+        check(extensionErrorSpy.isEmpty(),
+              "valid Demo Noise extension request returns no error");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.preset"), 102,
+            QStringLiteral("not-a-preset"));
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 102,
+              "unknown Demo Noise preset returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise preset does not falsely report applied=true");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.level"), 103,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("not-a-channel")},
+                        {QStringLiteral("db"), -20.0}});
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 103,
+              "unknown Demo Noise channel returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise channel does not report applied=true");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.knob"), 104,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("birdie")},
+                        {QStringLiteral("knob"), QStringLiteral("unknown")},
+                        {QStringLiteral("v"), 700.0}});
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 104,
+              "unknown Demo Noise knob returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise knob does not report applied=true");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
