@@ -2451,6 +2451,10 @@ MainWindow::MainWindow(QWidget* parent)
         setPanadapterConnectionAnimation(true, "Looking for your radio…");
     } else if (!autoConnectToLastRadio) {
         QTimer::singleShot(0, this, &MainWindow::showConnectionDialog);
+    } else {
+        // No saved radio exists for the enabled auto-connect path. Delay until
+        // the main window is mapped, matching the established first-run flow.
+        QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });
     }
 
     // Auto-connect to routed radios (probed, not broadcast-discovered)
@@ -2561,12 +2565,6 @@ MainWindow::MainWindow(QWidget* parent)
         }
         m_splitter->setSizes(sizes);
     });
-
-    // Auto-popup connection dialog if no saved radio
-    QString lastSerial = s.value("LastConnectedRadioSerial", "").toString();
-    if (lastSerial.isEmpty() && autoConnectToLastRadio) {
-        QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });
-    }
 
     // Restore the Memory dialog if it was open when the app last exited.
     QTimer::singleShot(0, this, [this]() {
