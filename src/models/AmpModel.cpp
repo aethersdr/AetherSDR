@@ -4,6 +4,7 @@ namespace AetherSDR {
 
 void AmpModel::applyChanges(const AmpDelta& d)
 {
+    const bool placeholderHandle = d.handle == QLatin1String("0x00000000");
     if (d.removed) {
         // Clear only if it's our amp (matches the original removal semantics —
         // leaves m_ip/m_operate untouched; consumers gate on present()).
@@ -17,17 +18,25 @@ void AmpModel::applyChanges(const AmpDelta& d)
     }
 
     // Presence latch: a detected (non-TGXL) power-amp model marks us present.
-    if (d.detectedModel) {
+    if (d.detectedModel && !d.handle.isEmpty() && !placeholderHandle) {
+        m_handle = d.handle;
+    } else if (m_present && m_handle.isEmpty()
+               && !d.handle.isEmpty() && !placeholderHandle) {
+        // A first status may identify the amp with the placeholder handle.
+        // Adopt the first real handle so subsequent model-less updates match.
         m_handle = d.handle;
     }
 
-    if (!m_handle.isEmpty() && d.handle == m_handle) {
+    const bool appliesToAmp = d.detectedModel.has_value()
+        || (!m_handle.isEmpty() && d.handle == m_handle);
+    bool stateDidChange = false;
+    if (appliesToAmp) {
         // Apply state before publishing first presence. The presence signal
         // makes the applet visible and reads operate() immediately; publishing
         // first used to paint a real operating PGXL as STANDBY during startup.
         if (d.operate && m_operate != *d.operate) {
             m_operate = *d.operate;
-            emit stateChanged();
+            stateDidChange = true;
         }
     }
 
@@ -42,7 +51,11 @@ void AmpModel::applyChanges(const AmpDelta& d)
         }
     }
 
-    if (!m_handle.isEmpty() && d.handle == m_handle) {
+    if (stateDidChange) {
+        emit stateChanged();
+    }
+
+    if (appliesToAmp) {
         // Forward telemetry (drain current, mains voltage, meffa, temp, …) so
         // the GUI updates without a direct PGXL TCP connection.
         emit telemetryUpdated(d.telemetry);

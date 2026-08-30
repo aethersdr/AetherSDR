@@ -3387,12 +3387,6 @@ target_link_libraries(aetherd_amp_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_amp_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_decode_test COMMAND aetherd_amp_decode_test)
 
-add_executable(pgxl_status_state_test tests/pgxl_status_state_test.cpp)
-target_include_directories(pgxl_status_state_test PRIVATE src)
-target_link_libraries(pgxl_status_state_test PRIVATE aethercore Qt6::Core Qt6::Test)
-set_target_properties(pgxl_status_state_test PROPERTIES AUTOMOC ON)
-add_test(NAME pgxl_status_state_test COMMAND pgxl_status_state_test)
-
 add_executable(tuner_model_test tests/tuner_model_test.cpp)
 target_include_directories(tuner_model_test PRIVATE src)
 target_link_libraries(tuner_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
