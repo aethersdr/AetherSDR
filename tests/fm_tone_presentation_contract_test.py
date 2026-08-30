@@ -30,6 +30,14 @@ def check_surface(path: Path) -> None:
     for role in ("Tx", "Rx"):
         if f"FmToneRole::{role}" not in source:
             fail(f"{path.name} no longer formats the {role} tone control")
+    if "&SliceModel::fmDtcsChanged" not in source:
+        fail(f"{path.name} no longer follows radio-authoritative DTCS readback")
+    if "setFmDtcs(" not in source:
+        fail(f"{path.name} no longer publishes DTCS operator intent")
+    if "caps.fmDtcsCodes" not in source:
+        fail(f"{path.name} bypasses the model-specific DTCS capability vocabulary")
+    if "fmToneUsesDtcsTx(mode)" not in source:
+        fail(f"{path.name} no longer places DTCS controls according to their TX/RX role")
 
 
 def main() -> int:
@@ -40,12 +48,26 @@ def main() -> int:
     check_surface(rx_path)
     check_surface(source_root / "src/gui/VfoWidget.cpp")
     rx_source = rx_path.read_text(encoding="utf-8")
+    radio_model_source = (source_root / "src/models/RadioModel.cpp").read_text(
+        encoding="utf-8"
+    )
+    if "&SliceModel::fmDtcsCommandIssued" not in radio_model_source:
+        fail("RadioModel no longer forwards normalized DTCS operator intent")
+    if "m_backend->setSliceFmDtcs(" not in radio_model_source:
+        fail("RadioModel no longer sends DTCS intent through IRadioBackend")
     mode_visibility_edge = re.compile(
         r"m_fmContainer->setVisible\(isFM\);\s*"
         r"(?:\s*//[^\n]*\n)*\s*configureFmToneControls\(\);"
     )
     if not mode_visibility_edge.search(rx_source):
         fail("RxApplet no longer re-evaluates tone children when FM visibility changes")
+    vfo_source = (source_root / "src/gui/VfoWidget.cpp").read_text(encoding="utf-8")
+    for container in ("m_fmToneRxContainer", "m_fmDtcsContainer"):
+        visibility = re.compile(
+            rf"{container}->setVisible\(\s*modeEligible\s*&&"
+        )
+        if not visibility.search(vfo_source):
+            fail(f"VfoWidget {container} can remain visible outside an FM mode")
     print("fm-tone presentation contract: PASS")
     return 0
 

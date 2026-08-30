@@ -14,7 +14,7 @@ class QPushButton;
 
 namespace AetherSDR {
 
-class MapView;
+class MapDisplayWidget;
 class AudioEngine;
 class PropForecastClient;
 class PskReporterClient;
@@ -75,7 +75,7 @@ private:
     PskReporterClient*  m_client{nullptr};
     PskReporterClient*  m_globalClient{nullptr};
     PropForecastClient* m_propForecast{nullptr};
-    MapView*            m_mapView{nullptr};
+    MapDisplayWidget*   m_mapView{nullptr};
     QComboBox*          m_bandCombo{nullptr};
     QComboBox*          m_modeCombo{nullptr};
     QComboBox*          m_lookbackCombo{nullptr};
@@ -84,6 +84,7 @@ private:
     QLabel*             m_dxLabel{nullptr};
     QLabel*             m_connLabel{nullptr};
     QCheckBox*          m_pathsCheck{nullptr};
+    QCheckBox*          m_globeCheck{nullptr};
     QCheckBox*          m_allCallsignsCheck{nullptr};
     QCheckBox*          m_activeMonitorsCheck{nullptr};
     QCheckBox*          m_terminatorCheck{nullptr};

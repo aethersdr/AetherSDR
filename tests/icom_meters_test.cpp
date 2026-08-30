@@ -509,6 +509,10 @@ static void testCapabilityProfiles()
     const FeatureEvidence* live705 = p705.evidenceFor(IcomFeature::FmRepeaterBasic);
     check(live705 && live705->evidence == EvidenceKind::OfficialGuideAndLiveHardware,
           "IC-705 tone, level, offset and XFC carry guide plus live evidence");
+    const FeatureEvidence* extended705 =
+        p705.evidenceFor(IcomFeature::FmRepeaterExtendedReadback);
+    check(extended705 && extended705->evidence == EvidenceKind::OfficialGuide,
+          "IC-705 DTCS and extended readback carry model-specific guide evidence");
 
     check(p705.scope.center && !p705.scope.fixed,
           "IC-705 scope profile exposes only its attested center mode");
@@ -526,6 +530,7 @@ static void testCapabilityProfiles()
     const ControlSpec* rxAntenna = spec("rx.antenna");
     const ControlSpec* dataMode = spec("data.mode");
     const ControlSpec* txBandwidth = spec("tx.bandwidth.edges");
+    const ControlSpec* dtcs = spec("repeater.dtcs");
     const IcomModel& model705 = *modelForCivAddress(0xA4);
     const IcomModel& model9700 = *modelForCivAddress(0xA2);
     const IcomModel& modelMk2 = *modelForCivAddress(0xB6);
@@ -540,6 +545,12 @@ static void testCapabilityProfiles()
               && !controlSupported(model9700, p9700, *txBandwidth)
               && controlSupported(modelMk2, pMk2, *txBandwidth),
           "effective registry refuses to borrow TX bandwidth on IC-9700");
+    check(dtcs && dtcs->wiring == Wiring::Both && dtcs->encoding == Encoding::Dtcs
+              && dtcs->seamVerb == "setSliceFmDtcs"
+              && controlSupported(model9700, p9700, *dtcs)
+              && controlSupported(model705, p705, *dtcs)
+              && !controlSupported(modelMk2, pMk2, *dtcs),
+          "DTCS write/read wiring is effective only for documented model profiles");
     const IcomModel& identityOnly = *modelForCivAddress(0x98);
     const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
     const ControlSpec* frequency = spec("freq");

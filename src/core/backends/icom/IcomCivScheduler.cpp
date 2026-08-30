@@ -55,7 +55,8 @@ bool IcomCivScheduler::sameReplyShape(const Request& a, const Request& b) noexce
         && a.acceptsGenericReply == b.acceptsGenericReply
         && a.replyCmd == b.replyCmd
         && a.replyHasSub == b.replyHasSub
-        && (!a.replyHasSub || a.replySub == b.replySub);
+        && (!a.replyHasSub || a.replySub == b.replySub)
+        && a.replyDataPrefix == b.replyDataPrefix;
 }
 
 std::uint64_t IcomCivScheduler::enqueue(Request request, std::int64_t nowMs)
@@ -132,6 +133,21 @@ std::uint64_t IcomCivScheduler::enqueue(Request request, std::int64_t nowMs)
     ++m_stats.queued;
     m_stats.queueDepth = m_queue.size();
     return currentGeneration;
+}
+
+bool IcomCivScheduler::hasPendingKeyPrefix(
+    std::string_view prefix, std::int64_t nowMs) const noexcept
+{
+    const auto matchesPrefix = [prefix](const Queued& queued) {
+        return queued.request.key.starts_with(prefix);
+    };
+    return (m_inFlight && matchesPrefix(*m_inFlight))
+        || std::any_of(m_queue.cbegin(), m_queue.cend(), matchesPrefix)
+        || std::any_of(m_expired.cbegin(), m_expired.cend(),
+                       [matchesPrefix, nowMs](const Expired& expired) {
+                           return expired.forgetAtMs > nowMs
+                               && matchesPrefix(expired.request);
+                       });
 }
 
 void IcomCivScheduler::expireRead(std::int64_t nowMs)
@@ -283,7 +299,12 @@ bool IcomCivScheduler::matches(const CivFrame& frame, const Queued& request) con
         || frame.hasSub != request.request.replyHasSub) {
         return false;
     }
-    return !frame.hasSub || frame.sub == request.request.replySub;
+    if (frame.hasSub && frame.sub != request.request.replySub) {
+        return false;
+    }
+    return frame.data.size() >= request.request.replyDataPrefix.size()
+        && std::equal(request.request.replyDataPrefix.begin(),
+                      request.request.replyDataPrefix.end(), frame.data.begin());
 }
 
 IcomCivScheduler::Observation IcomCivScheduler::observe(const CivFrame& frame,

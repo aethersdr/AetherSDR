@@ -134,6 +134,8 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
+    OpenGL
+    OpenGLWidgets
     Network
     Multimedia
     Test
@@ -621,6 +623,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
+    src/core/backends/icom/IcomMemoryCodec.cpp # profile-gated Icom radio memories (1A 00)
     src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
     src/core/backends/icom/IcomSession.cpp   # IcomCIV Phase 0 (handshake orchestration)
     src/core/backends/icom/IcomScope.cpp     # IcomCIV Phase 2 (0x27 waveform -> panadapter)
@@ -771,6 +774,9 @@ set(CORE_SOURCES
     src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
+    src/core/SystemInfo.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/ThreadName.cpp
     src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
@@ -886,6 +892,8 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
@@ -916,6 +924,7 @@ set(GUI_SOURCES
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
+    src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
@@ -1976,6 +1985,8 @@ target_link_libraries(aethercore PUBLIC
 
 target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 

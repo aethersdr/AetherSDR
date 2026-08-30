@@ -140,6 +140,7 @@ class SettingsBrowserDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
+class SystemInfoDialog;
 class AgcCalibrationDialog;
 class MemoryDialog;
 class NetSchedulerDialog;
@@ -881,6 +882,7 @@ private:
     void showPanadapterSliceCapacityMessage();
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
+    void showSystemInfoDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
     // Construct the AetherModem window hidden if it does not exist yet, and
@@ -1397,6 +1399,7 @@ private:
     QPointer<CallsignLookupDialog> m_callsignLookupDialog;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
+    QPointer<SystemInfoDialog> m_systemInfoDialog;
     QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
@@ -1550,6 +1553,7 @@ private:
     bool m_useSystemClock{true};     // true when no GPS installed
     bool m_paTempUseFahrenheit{true};
     bool m_hasPaTempTelemetry{false};
+    bool m_paCurrentStatusPreferred{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)

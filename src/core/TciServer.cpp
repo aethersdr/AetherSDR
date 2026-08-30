@@ -1634,9 +1634,11 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
     // closed -- and handleTrxRequest() defers every subsequent trx:true into
     // m_pendingTrxRequest while a transition is in flight, so WSJT-X could not
     // transmit again for the rest of the connection. That is the failure this
-    // guard exists to prevent, and the capacity test below does NOT catch it:
-    // maxSlices() is the model-string-derived Flex estimate (2 by default), not
-    // the backend's own maxSlices, so a single-slice HL2 looks like it has room.
+    // guard exists to prevent. (When the guard landed, the capacity test below
+    // could not catch it — maxSlices() then read the model-string Flex table,
+    // so a single-slice HL2 looked like it had room. #4545 made maxSlices()
+    // backend-authoritative, but the guard stays: it refuses for the right
+    // reason and does not depend on capacity arithmetic staying in sync.)
     //
     // Refusing is also the honest answer, not merely the safe one: WSJT-X's
     // "Split = Rig/Fake It" reaches exactly here, and reportVfoBRouteFailure

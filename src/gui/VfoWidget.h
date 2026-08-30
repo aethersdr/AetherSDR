@@ -27,6 +27,7 @@ class QCheckBox;
 class QGraphicsOpacityEffect;
 class QDoubleSpinBox;
 class QGridLayout;
+class QVBoxLayout;
 class QPainter;
 class QHideEvent;
 class QResizeEvent;
@@ -711,10 +712,15 @@ private:
     QStackedWidget*  m_digOffsetStack{nullptr};    // switches between label and edit
     // FM-family OPT controls. DSTR uses the duplex controls but not CTCSS.
     QWidget*       m_fmContainer{nullptr};
+    QVBoxLayout*   m_fmLayout{nullptr};
     QWidget*       m_fmToneContainer{nullptr};
+    QWidget*       m_fmToneRxContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};
     QComboBox*     m_fmToneRxValueCmb{nullptr};
+    QComboBox*     m_fmDtcsCodeCmb{nullptr};
+    QComboBox*     m_fmDtcsPolarityCmb{nullptr};
+    QWidget*       m_fmDtcsContainer{nullptr};
     QDoubleSpinBox* m_fmOffsetSpin{nullptr};
     QPushButton*   m_fmOffsetDown{nullptr};
     QPushButton*   m_fmSimplexBtn{nullptr};

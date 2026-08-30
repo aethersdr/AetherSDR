@@ -411,6 +411,15 @@ add_executable(icom_civ_test
 target_include_directories(icom_civ_test PRIVATE src)
 add_test(NAME icom_civ_test COMMAND icom_civ_test)
 
+add_executable(icom_memory_test
+    tests/icom_memory_test.cpp
+    src/core/backends/icom/IcomMemoryCodec.cpp
+    src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/IcomMeters.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_memory_test PRIVATE src)
+add_test(NAME icom_memory_test COMMAND icom_memory_test)
+
 add_executable(icom_civ_scheduler_test
     tests/icom_civ_scheduler_test.cpp
     src/core/backends/icom/IcomCivScheduler.cpp
@@ -988,6 +997,14 @@ target_link_libraries(map_wrap_test PRIVATE
 add_test(NAME map_wrap_test COMMAND map_wrap_test)
 set_tests_properties(map_wrap_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Globe drag and roll are independent interaction axes. This pure state test
+# guards the default level orientation, pole bounds and normalization without
+# requiring an OpenGL context or tile network.
+add_executable(globe_navigation_test tests/globe_navigation_test.cpp)
+target_include_directories(globe_navigation_test PRIVATE src)
+target_link_libraries(globe_navigation_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME globe_navigation_test COMMAND globe_navigation_test)
 
 # PSK Reporter map query scope and the UTC solar-position math used by the
 # optional day/night overlay. No network access is performed.
@@ -1818,6 +1835,7 @@ target_include_directories(client_reverb_test PRIVATE src)
 add_executable(iambic_keyer_test
     tests/iambic_keyer_test.cpp
     src/core/IambicKeyer.cpp
+    src/core/ThreadName.cpp
 )
 target_include_directories(iambic_keyer_test PRIVATE src)
 if(UNIX)
@@ -2618,10 +2636,18 @@ add_executable(cw_record_gate_test
 target_include_directories(cw_record_gate_test PRIVATE src)
 add_test(NAME cw_record_gate_test COMMAND cw_record_gate_test)
 
+# #5028 — the RTTY sensitivity slider's confidence mapping. Pure, header-only;
+# the floor/default/ceiling rows are compile-time static_asserts, so every CI
+# build enforces them even outside the ctest gates.
+add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test.cpp)
+target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
+add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
     src/core/CwxLocalKeyer.h
+    src/core/ThreadName.cpp
 )
 target_include_directories(cwx_local_keyer_drift_test PRIVATE src)
 target_link_libraries(cwx_local_keyer_drift_test PRIVATE Qt6::Core)
@@ -3111,6 +3137,11 @@ target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
 target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
 
+add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
+target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
+target_link_libraries(radiomodel_tnf_removal_status_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_tnf_removal_status_test COMMAND radiomodel_tnf_removal_status_test)
+
 # CAT/rigctld retune policy (#4497). The pan recenter is radio-side and the only
 # lever is the autopan=0 flag on "slice tune", which the CAT integration suites
 # cannot observe — reverting the recenter arm leaves all three of them green. So
@@ -3508,6 +3539,31 @@ endif()
 set_target_properties(transmit_model_apd_test PROPERTIES AUTOMOC ON)
 add_test(NAME transmit_model_apd_test COMMAND transmit_model_apd_test)
 
+# Runtime Monitor dialog (#2554): construct/show/hide, synthetic samples driven into
+# the thread table, the threshold alert, the Logs filters and the tail across a reset.
+# Needs QApplication + Widgets; offscreen.
+add_executable(system_info_dialog_test
+    tests/system_info_dialog_test.cpp
+    src/gui/SystemInfoDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/SystemInfo.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/ThreadName.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(system_info_dialog_test PRIVATE src tests)
+target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
+set_target_properties(system_info_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME system_info_dialog_test COMMAND system_info_dialog_test)
+set_tests_properties(system_info_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Help guide search tests - needs QApplication + Widgets.
 add_executable(help_dialog_test
     tests/help_dialog_test.cpp
@@ -3678,6 +3734,39 @@ set_target_properties(spectrum_overlay_wheel_guard_test PROPERTIES AUTOMOC ON)
 add_test(NAME spectrum_overlay_wheel_guard_test
          COMMAND spectrum_overlay_wheel_guard_test)
 set_tests_properties(spectrum_overlay_wheel_guard_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(spectrum_overlay_band_highlight_test
+    tests/spectrum_overlay_band_highlight_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_band_highlight_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_band_highlight_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_band_highlight_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_band_highlight_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_band_highlight_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_band_highlight_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_band_highlight_test
+         COMMAND spectrum_overlay_band_highlight_test)
+set_tests_properties(spectrum_overlay_band_highlight_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(device_diagnostics_test
@@ -4128,6 +4217,8 @@ set(AETHER_SETTINGS_CONSUMERS
     bandplan_voice_labels_test
     vkamp_connection_test
     radio_capability_gating_test
+    system_info_dialog_test
+    spectrum_overlay_band_highlight_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
@@ -4191,6 +4282,19 @@ set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 # progress, so the total still scales with the number of distinct plans.
 set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
     "Seconds FFTW may spend measuring each plan under test (empty = unbounded)")
+
+# Per-thread CPU accounting behind the Runtime Monitor (#2554): percent maths,
+# /proc state mapping, ring eviction and peak, the threshold latch, and the
+# kernel-name round-trip on the host platform.
+add_executable(system_info_test
+    tests/system_info_test.cpp
+    src/core/SystemInfo.cpp
+    src/core/ThreadName.cpp
+)
+target_include_directories(system_info_test PRIVATE src)
+target_link_libraries(system_info_test PRIVATE Qt6::Core)
+set_target_properties(system_info_test PROPERTIES AUTOMOC ON)
+add_test(NAME system_info_test COMMAND system_info_test)
 
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host

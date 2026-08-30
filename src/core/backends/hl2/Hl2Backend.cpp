@@ -1378,6 +1378,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
     c.fmTonePresentation = FmTonePresentation::Legacy;
+    c.fmDtcsCodes = {};
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
     // running count would tell the UI the limit was already reached and
@@ -1419,6 +1420,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
+    c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
@@ -1537,7 +1539,8 @@ RadioCapabilities Hl2Backend::capabilities() const
                             // RadioStateMemory's ext gate (one domain, one
                             // document — RFC #4603 PR 6).
                             | RadioCapabilities::ClientSettingsDomain::Memories;
-    // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
+    // (extensionNamespaces is declared above, with the freqcal/nb verbs it
+    // names — an earlier revision of this comment claimed none existed.)
     return c;
 }
 

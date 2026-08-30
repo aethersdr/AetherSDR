@@ -19,6 +19,7 @@
 #include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomCivScheduler.h"
 #include "core/backends/icom/IcomMeters.h"
+#include "core/backends/icom/IcomMemoryCodec.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/IcomScope.h"
@@ -85,6 +86,7 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    void setRadioDialLock(bool locked) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
@@ -106,8 +108,12 @@ public:
     void setSliceFmToneMode(int sliceId, const QString& mode) override;
     void setSliceFmToneValue(int sliceId, double hz) override;
     void setSliceFmToneRxValue(int sliceId, double hz) override;
+    void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                        bool rxReverse) override;
     void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
     void setSliceFmRepeaterOffset(int sliceId, double hz) override;
+    bool applyMemoryRecallDetails(const MemoryRecallDetails& details) override;
+    void refreshMemories(const QString& group) override;
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start) override;
@@ -253,7 +259,8 @@ private:
     bool refuseKeyingInReceiveOnlyMode();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
-                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
+                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
+                   std::vector<std::uint8_t> replyDataPrefix = {});
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true);
@@ -297,6 +304,10 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
+    int queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup);
+    void finishMemoryRefresh(bool success);
+    void finishMemoryRefreshWhenDrained(quint64 generation);
+    void publishExtendedRepeaterState();
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     void adoptReportedCivAddress(std::uint8_t reported);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
@@ -326,6 +337,10 @@ private:
     bool m_civAmbiguous = false;
     // Whether sendConnectReadBurst() has already run this session.
     bool m_connectBurstSent = false;
+    bool m_memoryRefreshActive = false;
+    quint64 m_memoryRefreshGeneration = 0;
+    QSet<int> m_memoryRefreshReplies;
+    int m_memoryRefreshTotal = 0;
     // The model the RS-BA1 handshake NAMED. Kept separately from m_model because
     // it is the third signal that separates "right radio, changed address" from
     // "wrong radio entirely" — see adoptReportedCivAddress().
@@ -514,6 +529,7 @@ private:
     std::optional<std::uint64_t> m_repeaterTxFrequencyHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
+    std::optional<bool> m_radioDialLocked;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //
