@@ -116,8 +116,9 @@ int main()
         // The latch is NOT stale during an over — the interlock is simply low
         // between elements. The pump must keep ownership across that gap, or
         // the mic tap fills it and the morse spacing is lost. Staleness is
-        // handled by ageing the latch (AudioEngine::kCwOverHangMs), not by
-        // reading the interlock.
+        // handled by ageing the latch (cwLatchShouldAge, below), which needs
+        // the hang elapsed AND the radio at RX — the interlock alone never
+        // ends an over.
         ok &= expect(cwRecordPumpOwnsRecorder(txRecorderSource(false, true)),
                      "#4281: the pump keeps the slot through an inter-element gap");
         ok &= expect(!micTapOwnsRecorder(txRecorderSource(false, true)),
@@ -128,7 +129,8 @@ int main()
     // With no file open QsoRecorder::feedTxAudio discards every block, so
     // rendering is waste on the audio thread. This must not disturb the gate
     // SIGNAL, which is what starts an auto-record — that ordering lives in
-    // onCwRecordPump and is covered by bench Arm E, not here.
+    // onCwRecordPump and is not covered by this pure test; the runtime check
+    // is: auto-record armed, no file open, key a CW over, a file must open.
     {
         const auto cw = txRecorderSource(true, true);
         ok &= expect(cwRecordPumpShouldRender(cw, true),
@@ -197,22 +199,43 @@ int main()
         static_assert(cwOverHangMs(0)  == cwOverHangMs(20),
                       "a nonsense speed falls back to 20 WPM, never divides by zero");
         // It must outlast the longest silence inside an over (the inter-word
-        // gap, 7 units) at every speed, or an over splits mid-transmission.
-        bool covers = true;
-        for (int wpm = 5; wpm <= 60; ++wpm) {
-            const long long interWordGapMs = 7LL * 1200 / wpm;
-            if (cwOverHangMs(wpm) <= interWordGapMs) {
-                covers = false;
-                std::printf("  %d WPM: hang %lldms <= inter-word gap %lldms\n",
-                            wpm, cwOverHangMs(wpm), interWordGapMs);
-            }
-        }
-        ok &= expect(covers,
-                     "#4281: the over-hang outlasts an inter-word gap at 5-60 WPM");
+        // gap, 7 units), or an over splits mid-transmission. Hang and gap are
+        // the same 1200/wpm unit scaled, so this is a property of the unit
+        // count, not of any speed — pinned on the constant rather than looped
+        // over speeds, which could not fail for any wpm.
+        static_assert(kCwOverHangUnits > 7,
+                      "#4281: the over-hang must outlast a 7-unit inter-word gap");
         // ...and must NOT be the old fixed 1500 ms, which held RX off for 1.5 s
         // after every over regardless of speed.
         ok &= expect(cwOverHangMs(20) < 1500,
                      "#4281: the hang is far shorter than the 1500 ms first attempt");
+    }
+
+    // ── The latch ages only while the radio is at RX ────────────────────────
+    // The stopwatch alone used to end the over. Whenever the radio was still
+    // holding TX past the hang — break-in off, or a break-in delay longer than
+    // the hang — the aged-out latch handed the slot to the mic tap in the
+    // middle of our over. The interlock is a required SECOND condition, not a
+    // replacement: under break-in it is false in every gap, so the stopwatch
+    // is still what ends the over there.
+    {
+        static_assert(cwLatchShouldAge(/*radioTx*/ false, /*gap*/ 481, /*hang*/ 480),
+                      "radio at RX and the hang elapsed: the over is finished");
+        static_assert(!cwLatchShouldAge(/*radioTx*/ true, /*gap*/ 481, /*hang*/ 480),
+                      "#4281: the radio still holds TX — the over is NOT finished, "
+                      "whatever the stopwatch says");
+        static_assert(!cwLatchShouldAge(false, 479, 480),
+                      "inside the hang: an inter-word gap is still the over");
+        ok &= expect(cwLatchShouldAge(false, 481, 480),
+                     "latch ages once the radio is at RX and the hang has elapsed");
+        ok &= expect(!cwLatchShouldAge(true, 481, 480),
+                     "#4281: latch holds while the radio transmits, past the hang");
+        ok &= expect(!cwLatchShouldAge(true, 100000, 480),
+                     "#4281: ...for as long as the radio transmits — no wall-clock ceiling");
+        ok &= expect(!cwLatchShouldAge(false, 480, 480),
+                     "exactly the hang is not yet past it");
+        ok &= expect(!cwLatchShouldAge(false, 0, 480),
+                     "a fresh key edge never ages");
     }
 
     // ── The idle countdown arms only when BOTH over sources are down ────────

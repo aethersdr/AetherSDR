@@ -8282,13 +8282,20 @@ void AudioEngine::onCwRecordPump()
     // not part of this — it stays up across mode changes whenever mic_selection
     // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
     // Age the CW-over latch: the over is finished once no element has been keyed
-    // for kCwOverHangMs. Done here, on the pump's free-running tick, rather than
-    // on the interlock edge — see setRadioTransmitting (#4281).
+    // for the over-hang AND the radio has returned to RX. The stopwatch runs on
+    // the pump's free-running tick rather than on the interlock edge because
+    // under break-in that edge falls in every inter-element gap (see
+    // setRadioTransmitting). The interlock term stops the stopwatch ending the
+    // over while the radio still holds TX — break-in off, or a break-in delay
+    // longer than the hang — which handed the slot to the mic tap mid-over.
+    // The rule and its accepted cost are stated at cwLatchShouldAge (#4281).
     if (m_cwKeyedThisOver.load(std::memory_order_acquire)) {
         const int64_t lastNs = m_cwLastKeyEdgeNs.load(std::memory_order_acquire);
         const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        if (lastNs != 0 && (nowNs - lastNs) > cwOverHangMs() * 1000000LL) {
+        if (lastNs != 0
+            && cwLatchShouldAge(m_radioTransmitting.load(std::memory_order_acquire),
+                                (nowNs - lastNs) / 1000000LL, cwOverHangMs())) {
             m_cwKeyedThisOver.store(false, std::memory_order_release);
             m_cwOverHadTx.store(false, std::memory_order_release);
         }
@@ -9044,8 +9051,9 @@ void AudioEngine::setRadioTransmitting(bool tx)
     // pump latches on our keyer, clears here). #2539.
     // NOT cleared here any more. Break-in drops the interlock between every CW
     // element, so clearing on this edge destroyed the "this over" latch in every
-    // inter-element gap (#4281). The pump ages it out instead, kCwOverHangMs
-    // after the last key-down, which is the point the over has actually ended.
+    // inter-element gap (#4281). The pump ages it out instead: kCwOverHangMs
+    // after the last key edge AND with this interlock down — the falling edge
+    // is necessary for the over to end, never sufficient (cwLatchShouldAge).
 
     // TX→RX edge: NR2 is bypassed entirely during TX (see the RX DSP chain
     // ~line 1512: raw PCM goes straight to writeAudio so the filter doesn't

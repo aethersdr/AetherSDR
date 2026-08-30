@@ -42,7 +42,8 @@ constexpr TxRecorderSource txRecorderSource(bool radioTransmitting,
     // stopped the pump emitting the silence that preserves morse spacing.
     //
     // The over is the unit of ownership, not the element. The latch spans it:
-    // set on our first key-down, aged out by the pump once the elements stop.
+    // set on our first key-down, aged out by the pump once the elements stop
+    // AND the radio is back at RX (cwLatchShouldAge).
     if (cwKeyedThisOver)   return TxRecorderSource::CwSidetone;
     if (radioTransmitting) return TxRecorderSource::Mic;
     return TxRecorderSource::None;
@@ -86,6 +87,33 @@ constexpr long long cwOverHangMs(int wpm)
 constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
 {
     return cwRecordPumpOwnsRecorder(s) && recordingOpen;
+}
+
+// Whether the CW-over latch may age out now. The pump asks this on every tick
+// once our keyer has fired.
+//
+// Two conditions, both required. The stopwatch — gapMs since the last key EDGE
+// exceeds the over-hang — is what ends the over under break-in, where the
+// radio drops the interlock in every inter-element gap and the interlock alone
+// would say "finished" dozens of times per over. The interlock — the radio
+// back at RX — is what ends it everywhere else: with break-in off, or with a
+// break-in delay longer than the hang, the radio holds TX across gaps the
+// stopwatch has already given up on, and a latch aged out under a live
+// interlock hands the recorder's TX slot to the mic tap
+// (txRecorderSource(true, false) == Mic) in the middle of our own over. That
+// is #4281's symptom returning one pause at a time, at any speed where the
+// hang is shorter than the radio's delay: 320 ms at 30 WPM against a delay
+// slider that runs to 2000.
+//
+// Cost, accepted: a transmission that raises the interlock inside the hang
+// for some OTHER reason — a voice over begun within 8 dit units of the last
+// CW element — keeps the latch, and so the pump, until the radio returns to
+// RX. Not producible by hand (a mode change plus PTT inside ~half a second);
+// stated in the PR rather than designed around.
+constexpr bool cwLatchShouldAge(bool radioTransmitting, long long gapMs,
+                                long long hangMs)
+{
+    return !radioTransmitting && gapMs > hangMs;
 }
 
 // Whether an over's END should arm the recorder's idle-stop countdown. The
