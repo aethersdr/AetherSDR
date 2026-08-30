@@ -189,6 +189,43 @@ The RX applet is the slice-centric receive control surface. It repeats the most 
 
 This applet appears when tuner hardware or tuner support is relevant. Use it to manage tuning state, watch SWR and power behavior, and confirm that the RF path is behaving as expected before staying on the air.
 
+It shows, top to bottom:
+
+- **PWR** and **SWR** gauges. Both read from the tuner itself when a direct connection to it is configured, so they show what the tuner sees rather than what the exciter is sending.
+- **C1**, **L**, and **C2** bars — the positions of the tuner's Pi-network relays, 0 to 255.
+- **TUNE**, which starts an auto-tune and reports the resulting SWR on the button when it finishes.
+- **OPERATE / BYPASS / STANDBY**, which advances one step per click.
+- **Antenna port buttons**, on the models that have an antenna switch.
+
+#### Tuning C1, L, and C2 by hand
+
+With a direct connection to the tuner (Radio Setup → Tuner), the three relay bars are adjustable, which is useful when auto-tune lands on a match you want to nudge. Any of these works:
+
+- **Drag** a bar up or down.
+- **Scroll** the wheel over it.
+- Click it and use the **Up/Down** arrow keys.
+
+The bar moves as you go and the tuner's own reading corrects it a moment later, so if you run past an end stop the display settles back to where the tuner actually is. Without a direct connection the bars are read-only — the radio's relay to the tuner carries no equivalent command.
+
+#### Operate, bypass, and standby
+
+The button below TUNE shows the current state and advances one step per click: **OPERATE** (green) → **BYPASS** (amber) → **STANDBY** (grey) → back to OPERATE.
+
+If the tuner is reachable only over its direct connection — some radios and firmware do not report the tuner to the client at all — bypass is not available, and the button toggles between **OPERATE** and **STANDBY** instead. The tooltip tells you which of the two behaviors you have.
+
+The `TUN` block in the status bar shows the same state and responds to a click the same way, so you can change it without opening the applet panel.
+
+#### Antenna selection (3-port models)
+
+Some Tuner Genius XL models have a three-port antenna switch. On those, three small port buttons — **1**, **2**, **3** — appear under the OPERATE button, with the selected port highlighted in green. Click one to switch the tuner to that antenna.
+
+The buttons appear only when both conditions hold:
+
+- the tuner reports that it has the switch, and
+- a direct connection to the tuner is up.
+
+Single-port tuners never show them, and no space is reserved for them. If your 3-port tuner is not showing the buttons, check the direct tuner connection in Radio Setup → Tuner first — antenna switching has no equivalent through the radio, so it needs that connection.
+
 ### `AMP`
 
 This applet is for amplifier integration when available. It is part of the station-status side of the app rather than the slice side, so always confirm whether you are making a station-wide change or a single-slice change.
@@ -378,7 +415,7 @@ The status bar is easy to underestimate. It carries both fast actions and live t
 - PA temperature
 - supply voltage
 - network quality
-- TGXL or PGXL accessory state
+- TGXL or PGXL accessory state — each shows OPERATE / BYPASS / STANDBY and can be clicked to change it, the same as the button in the matching applet
 - transmit indicator
 - grid
 - date and time

@@ -636,16 +636,12 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         return true;
     }
     if (obj == m_tgxlContainer && event->type() == QEvent::MouseButtonPress) {
-        auto& t = m_radioModel.tunerModel();
-        // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
-        if (t.isOperate() && !t.isBypass())
-            t.setBypass(true);
-        else if (t.isOperate() && t.isBypass())
-            t.setOperate(false);
-        else {
-            t.setBypass(false);
-            t.setOperate(true);
-        }
+        // Same transition as the tuner applet's OPERATE/BYPASS/STANDBY button.
+        // This used to be a second copy of the rules, which silently did
+        // nothing on a TGXL reached only over the direct connection: the first
+        // click asked for BYPASS, which needs a radio handle that tuner never
+        // has (#4553). TunerModel owns the state machine now.
+        m_radioModel.tunerModel().cycleOperateState();
         return true;
     }
     if (obj == m_pgxlContainer && event->type() == QEvent::MouseButtonPress) {

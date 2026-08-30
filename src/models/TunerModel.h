@@ -75,6 +75,15 @@ public:
     void setBypass(bool on);
     void autoTune();
 
+    // Advance the operate/bypass state machine one click: OPERATE → BYPASS →
+    // STANDBY → OPERATE. Lives here rather than in the widgets because two
+    // controls drive it — the tuner applet's button and the status-bar TUN
+    // indicator — and a second copy of the rules is a second thing to get
+    // wrong (the status bar's copy silently did nothing on a direct-only
+    // tuner, #4553). Falls back to OPERATE ↔ STANDBY when there is no radio
+    // relay, since bypass has no direct-connection equivalent.
+    void cycleOperateState();
+
     // Antenna switch (TGXL 3x1): ant = 1, 2, or 3 (1-indexed for command).
     // Direct-connection only, and only on a tuner that reports the switch.
     void setAntennaA(int ant);

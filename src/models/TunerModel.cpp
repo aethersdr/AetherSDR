@@ -117,6 +117,29 @@ void TunerModel::autoTune()
     emit autotuneRequested();
 }
 
+void TunerModel::cycleOperateState()
+{
+    // Bypass is reachable only through the radio's TGXL relay, which needs a
+    // handle the radio supplies only when it reports the tuner as an amplifier
+    // object. A TGXL seen over the direct connection alone (#2250) therefore
+    // toggles OPERATE ↔ STANDBY rather than offering a BYPASS step that would
+    // silently do nothing.
+    if (!hasRadioRelay()) {
+        setOperate(!m_operate);
+        return;
+    }
+
+    if (m_operate && !m_bypass) {
+        setBypass(true);                    // OPERATE → BYPASS
+    } else if (m_operate && m_bypass) {
+        setBypass(false);                   // BYPASS → STANDBY
+        setOperate(false);
+    } else {
+        setBypass(false);                   // STANDBY → OPERATE
+        setOperate(true);
+    }
+}
+
 void TunerModel::setAntennaA(int ant)
 {
     if (!m_directConn || !m_directConn->isConnected()) {

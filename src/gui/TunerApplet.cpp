@@ -330,6 +330,12 @@ void TunerApplet::syncFromModel()
 
     updateAntennaVisibility();
 
+    // Say which of the two click behaviors this tuner has — bypass needs the
+    // radio relay, so a direct-only tuner gets a two-state toggle (#4553).
+    m_operateBtn->setToolTip(m_model->hasRadioRelay()
+        ? tr("Click to cycle OPERATE / BYPASS / STANDBY")
+        : tr("Click to toggle OPERATE / STANDBY"));
+
     // Relay bars
     m_relayC1 = m_model->relayC1();
     m_relayL  = m_model->relayL();
@@ -362,31 +368,10 @@ void TunerApplet::syncFromModel()
 
 void TunerApplet::cycleOperateState()
 {
-    if (!m_model) return;
-
-    // Bypass is reachable only through the radio's TGXL relay, which needs a
-    // handle the radio only supplies when it reports the tuner as an amplifier
-    // object. A TGXL seen over the direct connection alone (#2250) therefore
-    // toggles OPERATE ↔ STANDBY, rather than offering a BYPASS step that would
-    // silently do nothing.
-    if (!m_model->hasRadioRelay()) {
-        m_model->setOperate(!m_model->isOperate());
-        return;
-    }
-
-    // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
-    if (m_model->isOperate() && !m_model->isBypass()) {
-        // Currently OPERATE → go to BYPASS
-        m_model->setBypass(true);
-    } else if (m_model->isOperate() && m_model->isBypass()) {
-        // Currently BYPASS → go to STANDBY
-        m_model->setBypass(false);
-        m_model->setOperate(false);
-    } else {
-        // Currently STANDBY → go to OPERATE
-        m_model->setBypass(false);
-        m_model->setOperate(true);
-    }
+    // The rules live in TunerModel — the status-bar TUN indicator drives the
+    // same transition and must behave identically (#4553).
+    if (m_model)
+        m_model->cycleOperateState();
 }
 
 void TunerApplet::updateMeters(float fwdPower, float swr)

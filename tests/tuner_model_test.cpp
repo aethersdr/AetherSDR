@@ -7,14 +7,71 @@
 #include "core/TgxlConnection.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QHostAddress>
 #include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <cstdio>
+#include <functional>
 
 using namespace AetherSDR;
 
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
+
+static bool waitFor(const std::function<bool()>& cond, int ms = 3000)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!cond() && t.elapsed() < ms)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return cond();
+}
+
+// A loopback stand-in for the tuner: speaks the port-9010 framing well enough
+// to exercise the real socket path — the version line that gates the client's
+// init commands, the sequence-numbered replies that tell an "info" answer from
+// a "status" answer, and a record of every command the client sent, so the
+// wire form of each verb can be asserted rather than assumed.
+class FakeTgxl : public QObject {
+public:
+    FakeTgxl() {
+        connect(&server, &QTcpServer::newConnection, this, [this]() {
+            peer = server.nextPendingConnection();
+            peer->write("V1.2.17\n");             // client waits for this
+            connect(peer, &QTcpSocket::readyRead, this, [this]() {
+                buf.append(peer->readAll());
+                int idx;
+                while ((idx = buf.indexOf('\n')) >= 0) {
+                    const QString line = QString::fromUtf8(buf.left(idx)).trimmed();
+                    buf.remove(0, idx + 1);
+                    if (line.isEmpty()) continue;
+                    // C<seq>|<command>
+                    const int pipe = line.indexOf('|');
+                    if (pipe < 0) continue;
+                    const QString seq = line.mid(1, pipe - 1);
+                    const QString cmd = line.mid(pipe + 1);
+                    commands << cmd;
+                    if (cmd == "info")
+                        peer->write(QString("R%1|0|3way=1 model=TGXL\n").arg(seq).toUtf8());
+                    else if (cmd == "status")
+                        peer->write(QString("R%1|0|state=1 relayC1=10 relayL=20 relayC2=30\n")
+                                        .arg(seq).toUtf8());
+                }
+            });
+        });
+    }
+    bool start() { return server.listen(QHostAddress::LocalHost, 0); }
+    quint16 port() const { return server.serverPort(); }
+    bool sent(const QString& cmd) const { return commands.contains(cmd); }
+
+    QTcpServer  server;
+    QTcpSocket* peer{nullptr};
+    QByteArray  buf;
+    QStringList commands;
+};
 
 int main(int argc, char** argv)
 {
@@ -193,6 +250,77 @@ int main(int argc, char** argv)
         emit conn.statusUpdated({{"state", "1"}});
         emit conn.statusUpdated({{"fwd", "40.0"}});
         CHECK(t.isOperate());
+    }
+
+    // ---- the operate/bypass cycle lives in the model ----------------------
+    // Both the applet button and the status-bar TUN indicator drive this; the
+    // status bar used to keep its own copy of the rules, whose first click
+    // asked for BYPASS and silently did nothing on a direct-only tuner (#4553).
+    {
+        TunerModel t;
+        t.setHandle("0x2000");                    // radio relay available
+        QSignalSpy op(&t, &TunerModel::operateRequested);
+        QSignalSpy by(&t, &TunerModel::bypassRequested);
+
+        t.cycleOperateState();                    // STANDBY → OPERATE
+        CHECK(t.isOperate() && !t.isBypass());
+        t.cycleOperateState();                    // OPERATE → BYPASS
+        CHECK(t.isOperate() && t.isBypass());
+        t.cycleOperateState();                    // BYPASS → STANDBY
+        CHECK(!t.isOperate() && !t.isBypass());   // bypass cleared, not left set
+        CHECK(op.count() == 2 && by.count() == 3);
+    }
+
+    // ---- end to end over a real socket ------------------------------------
+    // Everything above drives the model by emitting the transport's signals by
+    // hand, which cannot exercise the parts that depend on the connection
+    // actually being up: the commands are only sent when isConnected(), and the
+    // info/status replies are only told apart by sequence number in
+    // TgxlConnection::processLine. This runs the real path against a loopback
+    // stand-in and asserts the wire form of each verb.
+    {
+        FakeTgxl fake;
+        CHECK(fake.start());
+        TgxlConnection conn;
+        TunerModel t;
+        t.setDirectConnection(&conn);
+        conn.connectToTgxl(QStringLiteral("127.0.0.1"), fake.port());
+
+        CHECK(waitFor([&] { return conn.isConnected(); }));
+        CHECK(t.hasDirectConnection());
+        CHECK(!t.hasRadioRelay());          // direct only — no radio handle
+
+        // The info reply (matched by sequence number, not by shape) carries the
+        // antenna-switch capability; the status reply carries state + relays.
+        CHECK(waitFor([&] { return t.hasAntennaSwitch(); }));
+        CHECK(waitFor([&] { return t.isOperate(); }));          // state=1
+        CHECK(waitFor([&] { return t.relayC1() == 10 && t.relayL() == 20
+                                   && t.relayC2() == 30; }));
+
+        // With no radio relay the cycle is a two-state toggle, and it reaches
+        // the tuner as the direct operate verb rather than a dead bypass step.
+        t.cycleOperateState();                                  // OPERATE → STANDBY
+        CHECK(!t.isOperate());
+        CHECK(waitFor([&] { return fake.sent("operate set=0"); }));
+        t.cycleOperateState();                                  // → OPERATE
+        CHECK(waitFor([&] { return fake.sent("operate set=1"); }));
+
+        // A drag of twelve steps is one relative command, not twelve.
+        t.adjustRelay(1, 12);
+        CHECK(waitFor([&] { return fake.sent("tune relay=1 move=12"); }));
+        t.adjustRelay(0, -3);
+        CHECK(waitFor([&] { return fake.sent("tune relay=0 move=-3"); }));
+        t.adjustRelay(2, 0);                                    // no-op, sends nothing
+
+        // Antenna switching, allowed because the tuner reported 3way=1.
+        t.setAntennaA(2);
+        CHECK(waitFor([&] { return fake.sent("activate ant=2"); }));
+        t.setAntennaA(4);                                       // out of range
+        t.autoTune();
+        CHECK(waitFor([&] { return fake.sent("autotune"); }));
+
+        CHECK(!fake.sent("tune relay=2 move=0"));
+        CHECK(!fake.sent("activate ant=4"));
     }
 
     if (g_failures == 0) {

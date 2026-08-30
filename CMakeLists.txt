@@ -4255,7 +4255,7 @@ add_test(NAME aetherd_amp_decode_test COMMAND aetherd_amp_decode_test)
 
 add_executable(tuner_model_test tests/tuner_model_test.cpp)
 target_include_directories(tuner_model_test PRIVATE src)
-target_link_libraries(tuner_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
+target_link_libraries(tuner_model_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(tuner_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME tuner_model_test COMMAND tuner_model_test)
 

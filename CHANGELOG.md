@@ -10,8 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Tuner Genius XL — direct-connection fixes and the 3x1 antenna selector
 
-Three fixes for the TUN applet, all in the case where the TGXL is reached
-over its own port-9010 channel rather than being relayed by the radio.
+Four fixes and two additions for the TUN applet, most of them in the case
+where the TGXL is reached over its own port-9010 channel rather than being
+relayed by the radio.
 
 - **fix(tuner): C1 / L / C2 bars follow the tuner again** — the relay
   positions arrive as `relayC1= relayL= relayC2=` on the 1/sec `status`
@@ -58,6 +59,16 @@ over its own port-9010 channel rather than being relayed by the radio.
   for the status poll to echo it, and the poll stays authoritative — including
   when the tuner clamps at an end stop the local guess sailed past. Clicking a
   bar now also takes keyboard focus, so Up/Down continues what a drag started.
+
+- **fix(tuner): the status bar's TUN block actually changes the tuner state** —
+  it kept its own copy of the OPERATE → BYPASS → STANDBY rules, so on a TGXL
+  reached only over the direct connection its first click asked for BYPASS,
+  which needs a radio handle that tuner never has, and nothing happened. The
+  state machine moved into `TunerModel::cycleOperateState()`; the applet button
+  and the status-bar indicator both call it, and it falls back to an
+  OPERATE ↔ STANDBY toggle with no radio relay. Both controls now describe
+  which of the two behaviours they have in their tooltip. The two copies had
+  also drifted — the status bar's left `bypass` set on the way to standby.
 
 - **feat(tuner): ANT 1/2/3 selector on the 3x1 models** — the TGXL variants
   with the three-port antenna switch report `3way=1` in the direct `info`

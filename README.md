@@ -66,7 +66,9 @@ Works with any FlexRadio transceiver, including:
 - ML-, CL-, and RT-series devices
 
 Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
-power amplifier and TGXL (Tuner Genius XL) antenna tuner.
+power amplifier and TGXL (Tuner Genius XL) antenna tuner. A direct connection to
+the TGXL adds hand-adjustable C1/L/C2 relays and, on the 3-port models, antenna
+selection from the tuner applet.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.

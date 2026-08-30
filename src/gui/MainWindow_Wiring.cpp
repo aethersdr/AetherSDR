@@ -5633,6 +5633,20 @@ void MainWindow::wireMeters()
 
     auto updateTgxlStyle = [this, setIndicatorHtml]() {
         auto& t = m_radioModel.tunerModel();
+        // A TGXL reached only over the direct connection has no radio handle,
+        // so bypass is unreachable and the click is a two-state toggle. Say so
+        // rather than promising a BYPASS step that cannot happen (#4553).
+        if (t.hasRadioRelay()) {
+            m_tgxlContainer->setToolTip(
+                tr("Tuner Genius XL\nClick to cycle OPERATE / BYPASS / STANDBY"));
+            m_tgxlContainer->setAccessibleDescription(
+                tr("Click to cycle between OPERATE, BYPASS, and STANDBY"));
+        } else {
+            m_tgxlContainer->setToolTip(
+                tr("Tuner Genius XL\nClick to toggle OPERATE / STANDBY"));
+            m_tgxlContainer->setAccessibleDescription(
+                tr("Click to toggle between OPERATE and STANDBY"));
+        }
         if (t.isOperate() && !t.isBypass())
             setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE", "#00e060");
         else if (t.isOperate() && t.isBypass())
