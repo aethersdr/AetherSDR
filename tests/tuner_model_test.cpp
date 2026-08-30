@@ -4,6 +4,7 @@
 // translation is covered separately by aetherd_tuner_decode_test.
 
 #include "models/TunerModel.h"
+#include "core/TgxlConnection.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -62,6 +63,42 @@ int main(int argc, char** argv)
         TunerDelta b; b.operate = true;   // operate unchanged; relayC1 not present
         t.applyChanges(b);
         CHECK(t.relayC1() == 5 && st.count() == 0);
+    }
+
+    // ---- placeholder identity is replaced without a second presence edge ----
+    {
+        TunerModel t;
+        QSignalSpy presence(&t, &TunerModel::presenceChanged);
+        TunerDelta initial;
+        initial.handle = "0x00000000";
+        initial.operate = true;
+        initial.ip = "10.0.0.5";
+        t.applyChanges(initial);
+        CHECK(t.isPresent() && t.handle() == "0x00000000" && t.isOperate());
+        CHECK(presence.count() == 1);
+
+        TunerDelta assigned;
+        assigned.handle = "0x2000";
+        assigned.bypass = true;
+        t.applyChanges(assigned);
+        CHECK(t.handle() == "0x2000" && t.isBypass());
+        CHECK(presence.count() == 1);
+    }
+
+    // ---- direct presence with no radio handle survives a handle-less delta ----
+    {
+        TunerModel t;
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        QSignalSpy presence(&t, &TunerModel::presenceChanged);
+        CHECK(QMetaObject::invokeMethod(&direct, "connected", Qt::DirectConnection));
+        CHECK(t.isPresent() && t.handle().isEmpty() && presence.count() == 1);
+
+        TunerDelta directState;
+        directState.operate = true;
+        t.applyChanges(directState);
+        CHECK(t.isPresent() && t.handle().isEmpty() && t.isOperate());
+        CHECK(presence.count() == 1);
     }
 
     // ---- tuning + antenna edges emit their signals before stateChanged ----

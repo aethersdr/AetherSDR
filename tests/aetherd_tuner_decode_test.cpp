@@ -16,10 +16,11 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
-static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
+static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs,
+                         const QString& handle = QStringLiteral("0x2000"))
 {
     QSignalSpy spy(&b, &IRadioBackend::tunerChanged);
-    b.decodeTunerStatus(QStringLiteral("0x2000"), kvs);
+    b.decodeTunerStatus(handle, kvs);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<TunerDelta>();
 }
@@ -47,6 +48,18 @@ int main(int argc, char** argv)
         CHECK(d.antennaA.has_value() && *d.antennaA == 2);
         CHECK(d.oneByThree.has_value() && *d.oneByThree == true);
         CHECK(d.ip.has_value() && *d.ip == "10.0.0.5");
+    }
+
+    // ---- placeholder identity is carried until a real handle arrives ----
+    {
+        const TunerDelta placeholder = decode(
+            b, {{"model", "TunerGeniusXL"}}, QStringLiteral("0x00000000"));
+        CHECK(placeholder.handle.has_value()
+              && *placeholder.handle == "0x00000000");
+
+        const TunerDelta real = decode(
+            b, {{"operate", "1"}}, QStringLiteral("0x2001"));
+        CHECK(real.handle.has_value() && *real.handle == "0x2001");
     }
 
     // ---- present-only: absent keys stay disengaged ----
