@@ -3638,6 +3638,8 @@ target_include_directories(connection_panel_size_test PRIVATE src tests)
 target_link_libraries(connection_panel_size_test PRIVATE
     aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
 )
+target_compile_definitions(connection_panel_size_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(connection_panel_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES

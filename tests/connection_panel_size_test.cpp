@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFont>
+#include <QFile>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
@@ -461,6 +462,23 @@ int main(int argc, char** argv)
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QApplication app(argc, argv);
+
+    // MainWindow is intentionally not linked into this focused widget target.
+    // Pin its two startup call sites instead: both can be scheduled when
+    // auto-connect is disabled and no last-radio serial exists. They must be
+    // idempotent show requests, because a second toggle hides the dialog that
+    // the first timer just opened.
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    report("startup dialog test can inspect MainWindow",
+           mainWindowSource.open(QIODevice::ReadOnly));
+    const QByteArray mainWindowText = mainWindowSource.readAll();
+    report("auto-connect opt-out idempotently shows connection dialog",
+           mainWindowText.contains(
+               "QTimer::singleShot(0, this, &MainWindow::showConnectionDialog);"));
+    report("missing-radio fallback idempotently shows connection dialog",
+           mainWindowText.contains("if (lastSerial.isEmpty() && autoConnectToLastRadio) {")
+               && mainWindowText.contains(
+                   "QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });"));
     AppSettings::instance().load();
     std::printf("ConnectionPanel screen-fit test harness (#4515)\n\n");
 
