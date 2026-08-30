@@ -34,8 +34,10 @@ void TunerModel::applyChanges(const TunerDelta& d)
     // fields (nickname/version/ant/dhcp/netmask/gateway/ptta/pttb) are dropped there.
     // Edge-signal emit order matches the old QMap key-sorted iteration:
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
+    const bool wasPresent = isPresent();
     bool changed = false;
 
+    if (d.handle && m_handle != *d.handle)           { m_handle = *d.handle;       changed = true; }
     if (d.serialNum && m_serialNum != *d.serialNum) { m_serialNum = *d.serialNum; changed = true; }
     if (d.model && m_model != *d.model)             { m_model = *d.model;         changed = true; }
     if (d.operate && m_operate != *d.operate)       { m_operate = *d.operate;     changed = true; }
@@ -56,8 +58,13 @@ void TunerModel::applyChanges(const TunerDelta& d)
     if (d.oneByThree && m_oneByThree != *d.oneByThree) { m_oneByThree = *d.oneByThree; changed = true; }
     if (d.ip && m_tgxlIp != *d.ip)                     { m_tgxlIp = *d.ip;              changed = true; }
 
-    if (changed)
+    const bool nowPresent = isPresent();
+    if (wasPresent != nowPresent) {
+        emit presenceChanged(nowPresent);
+    }
+    if (changed) {
         emit stateChanged();
+    }
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────

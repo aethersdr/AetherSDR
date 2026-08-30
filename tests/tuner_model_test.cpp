@@ -24,7 +24,19 @@ int main(int argc, char** argv)
     {
         TunerModel t;
         QSignalSpy st(&t, &TunerModel::stateChanged);
+        bool operateAtPresence = false;
+        bool bypassAtPresence = false;
+        QString ipAtPresence;
+        QObject::connect(&t, &TunerModel::presenceChanged, &t,
+                         [&t, &operateAtPresence, &bypassAtPresence, &ipAtPresence](bool present) {
+            if (present) {
+                operateAtPresence = t.isOperate();
+                bypassAtPresence = t.isBypass();
+                ipAtPresence = t.tgxlIp();
+            }
+        });
         TunerDelta d;
+        d.handle = "0x2000";
         d.model = "TunerGeniusXL"; d.serialNum = "TG123";
         d.operate = true; d.bypass = false;
         d.relayC1 = 20; d.relayC2 = 5; d.relayL = 12;
@@ -34,6 +46,8 @@ int main(int argc, char** argv)
         CHECK(t.isOperate() && !t.isBypass());
         CHECK(t.relayC1() == 20 && t.relayC2() == 5 && t.relayL() == 12);
         CHECK(t.antennaA() == 1 && t.hasAntennaSwitch() && t.tgxlIp() == "10.0.0.5");
+        CHECK(t.isPresent() && operateAtPresence && !bypassAtPresence);
+        CHECK(ipAtPresence == "10.0.0.5");
         CHECK(st.count() == 1);
         t.applyChanges(d);                // identical → change-gated, no re-emit
         CHECK(st.count() == 1);

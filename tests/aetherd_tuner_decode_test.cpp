@@ -19,7 +19,7 @@ static int g_failures = 0;
 static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
 {
     QSignalSpy spy(&b, &IRadioBackend::tunerChanged);
-    b.decodeTunerStatus(QStringLiteral("0x2000"), kvs);   // handle unused by these delta-field checks (#4198)
+    b.decodeTunerStatus(QStringLiteral("0x2000"), kvs);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<TunerDelta>();
 }
@@ -37,6 +37,7 @@ int main(int argc, char** argv)
             {"operate", "1"}, {"bypass", "0"}, {"tuning", "1"},
             {"relayC1", "20"}, {"relayC2", "5"}, {"relayL", "12"},
             {"antA", "2"}, {"one_by_three", "1"}, {"ip", "10.0.0.5"}});
+        CHECK(d.handle.has_value() && *d.handle == "0x2000");
         CHECK(d.serialNum.has_value() && *d.serialNum == "TG9");
         CHECK(d.model.has_value() && *d.model == "TunerGeniusXL");
         CHECK(d.operate.has_value() && *d.operate == true);

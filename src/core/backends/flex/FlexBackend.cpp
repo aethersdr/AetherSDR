@@ -994,6 +994,9 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
     // are "1"-equality, ints are unguarded toInt() (matching val.toInt()), text
     // is verbatim. The change-gating / edge signals live in TunerModel::applyChanges.
     TunerDelta d;
+    if (!handle.isEmpty()) {
+        d.handle = handle;
+    }
     if (kvs.contains(QStringLiteral("serial_num")))
         d.serialNum = kvs.value(QStringLiteral("serial_num"));
     if (kvs.contains(QStringLiteral("model")))
