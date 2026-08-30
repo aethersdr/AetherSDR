@@ -8068,15 +8068,51 @@ bool RadioModel::recallCachedMemory(int index)
 
 void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 {
+    // A backend-provided import identity means this is a radio snapshot to fold
+    // into the one client database. Its native slot number is not a client slot:
+    // find the row previously imported from that radio/channel, or allocate a
+    // new client slot. This keeps manual/CSV memories visible and prevents a
+    // radio's channel 1 from overwriting the operator's client slot 1.
+    int targetIndex = d.index;
+    const bool isImport = d.importSource && !d.importSource->isEmpty()
+        && d.importKey && !d.importKey->isEmpty();
+    if (isImport) {
+        m_localMemories.load();
+        targetIndex = m_localMemories.importedSlot(*d.importSource, *d.importKey);
+
+        if (d.removed) {
+            if (targetIndex >= 0) {
+                m_localMemories.forget(targetIndex);
+                if (m_memories.remove(targetIndex) > 0) {
+                    emit memoryRemoved(targetIndex);
+                }
+            }
+            return;
+        }
+
+        if (targetIndex < 0) {
+            const LocalMemoryBank::CommandResult created =
+                m_localMemories.handleCommand(QStringLiteral("memory create"));
+            bool indexOk = false;
+            targetIndex = created.body.toInt(&indexOk);
+            if (created.code != 0 || !indexOk) {
+                qCWarning(lcProtocol).noquote()
+                    << "RadioModel: could not import radio memory" << *d.importKey
+                    << "from" << *d.importSource << created.body;
+                return;
+            }
+        }
+    }
+
     if (d.removed) {
-        if (m_memories.remove(d.index) > 0) {
-            emit memoryRemoved(d.index);
+        if (m_memories.remove(targetIndex) > 0) {
+            emit memoryRemoved(targetIndex);
         }
         return;
     }
 
-    auto& m = m_memories[d.index];
-    m.index = d.index;
+    auto& m = m_memories[targetIndex];
+    m.index = targetIndex;
 
     // Decode the protocol space-encoding (0x7f -> ' ') for free-text fields,
     // then strip any NUL/control bytes so corrupt values from the radio (or a
@@ -8093,6 +8129,8 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     if (d.group)          m.group          = decodeText(*d.group);
     if (d.owner)          m.owner          = decodeText(*d.owner);
     if (d.channel)        m.channel        = decodeText(*d.channel);
+    if (d.importSource)   m.importSource   = sanitize(*d.importSource);
+    if (d.importKey)      m.importKey      = sanitize(*d.importKey);
     if (d.name)           m.name           = decodeText(*d.name);
     if (d.mode)           m.mode           = sanitize(*d.mode);
     if (d.offsetDir)      m.offsetDir      = sanitize(*d.offsetDir);
@@ -8117,7 +8155,10 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     if (d.diglOffset)     m.diglOffset     = *d.diglOffset;
     if (d.diguOffset)     m.diguOffset     = *d.diguOffset;
 
-    emit memoryChanged(d.index);
+    if (isImport) {
+        m_localMemories.record(targetIndex, m);
+    }
+    emit memoryChanged(targetIndex);
 }
 
 // ─── Raw message handler (for meter status with '#' separators) ──────────────

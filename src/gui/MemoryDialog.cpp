@@ -743,6 +743,9 @@ void MemoryDialog::populateTable()
     m_table->setRowCount(0);
     const auto& memories = m_model->memories();
     const RadioCapabilities capabilities = m_model->backendCapabilities();
+    // Radio sync folds rows into the shared writable AetherSDR bank. Once
+    // imported they use the same durable schema and recall path as manual/CSV
+    // rows, rather than replacing the dialog with a transient radio-only view.
     const bool usesNativeMemorySchema = capabilities.family == QLatin1String("icom")
         && capabilities.persistsMemories;
     for (int column = 0; column < COLUMNS.size(); ++column) {
@@ -1473,6 +1476,14 @@ void MemoryDialog::rebuildFilterCombo()
         for (const QString& profile : m_model->transmitModel().profileList()) {
             if (!filterNames.contains(profile)) {
                 filterNames.append(profile);
+            }
+        }
+        // Read-only radio stores are import sources for this same database.
+        // Include their groups so group-selecting radios (IC-705) can still be
+        // synced without switching the dialog away from the local model.
+        for (const QString& group : capabilities.memoryGroups) {
+            if (!filterNames.contains(group)) {
+                filterNames.append(group);
             }
         }
     }

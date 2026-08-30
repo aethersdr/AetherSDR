@@ -394,6 +394,7 @@ private:
     QTimer* m_tuneTimer = nullptr;
 
     QString m_deviceName;
+    QString m_memoryImportSource;
     std::uint64_t m_frequencyHz = 0;
     CivMode m_mode = CivMode::Usb;
     bool m_dataMode = false;

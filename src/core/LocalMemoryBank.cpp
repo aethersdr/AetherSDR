@@ -148,6 +148,19 @@ int LocalMemoryBank::allocateSlot() const
     return index;
 }
 
+int LocalMemoryBank::importedSlot(const QString& source, const QString& key) const
+{
+    if (source.isEmpty() || key.isEmpty()) {
+        return -1;
+    }
+    for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it) {
+        if (it->importSource == source && it->importKey == key) {
+            return it.key();
+        }
+    }
+    return -1;
+}
+
 LocalMemoryBank::CommandResult LocalMemoryBank::handleCommand(const QString& command)
 {
     CommandResult result;

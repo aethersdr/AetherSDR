@@ -131,6 +131,42 @@ int main(int argc, char** argv)
         ok &= expect(!apply.delta.has_value(), "apply changes no stored state");
     }
 
+    // --- imported radio identity -----------------------------------------
+    {
+        resetBankDocument();
+        LocalMemoryBank bank;
+        bank.setFilePath(dir.path() + "/imports.json");
+        bank.handleCommand("memory create");
+
+        MemoryEntry imported;
+        imported.importSource = QStringLiteral("icom:7300-serial");
+        imported.importKey = QStringLiteral("-1:42");
+        imported.channel = QStringLiteral("42");
+        imported.freq = 14.074;
+        imported.name = QStringLiteral("FT8");
+        imported.nativeFilter = 2;
+        imported.dataMode = 1;
+        bank.record(0, imported);
+
+        ok &= expect(bank.importedSlot("icom:7300-serial", "-1:42") == 0,
+                     "a repeated radio sync finds its existing database row");
+        ok &= expect(bank.importedSlot("icom:other-radio", "-1:42") == -1,
+                     "the same channel on another radio does not alias");
+        ok &= expect(bank.importedSlot("icom:7300-serial", "-1:43") == -1,
+                     "a different native channel does not alias");
+
+        bank.flush();
+        LocalMemoryBank reopened;
+        reopened.setFilePath(dir.path() + "/unused-imports.json");
+        reopened.load();
+        ok &= expect(reopened.importedSlot("icom:7300-serial", "-1:42") == 0,
+                     "radio import identity survives a database reopen");
+        const MemoryEntry stored = reopened.entries().value(0);
+        ok &= expect(stored.channel == "42" && stored.nativeFilter == 2
+                         && stored.dataMode == 1,
+                     "radio recall fields survive a database reopen");
+    }
+
     // --- rejections -------------------------------------------------------
     {
         resetBankDocument();

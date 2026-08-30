@@ -647,6 +647,9 @@ int main(int argc, char** argv)
             check(caps.fmDtcsCodes.size() == 104
                       && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
                   "IC-9700 declares the complete DTCS operator vocabulary");
+            check(!caps.persistsMemories && !caps.canWriteMemories
+                      && caps.canRefreshMemories,
+                  "IC-9700 keeps the client database writable and exposes radio sync");
         }
 
         {
@@ -662,6 +665,9 @@ int main(int argc, char** argv)
                 check(caps.fmDtcsCodes.size() == 104
                           && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
                       "IC-705 declares its documented DTCS operator vocabulary");
+                check(!caps.persistsMemories && !caps.canWriteMemories
+                          && caps.canRefreshMemories,
+                      "IC-705 keeps the client database writable and exposes grouped sync");
             }
         }
 
@@ -677,6 +683,9 @@ int main(int argc, char** argv)
                       "IC-7300MK2 retains the legacy PROC presentation");
                 check(caps.fmDtcsCodes.isEmpty(),
                       "Icom models without documented DTCS do not activate controls");
+                check(!caps.persistsMemories && !caps.canWriteMemories
+                          && caps.canRefreshMemories,
+                      "IC-7300MK2 keeps the client database writable and exposes radio sync");
             }
         }
 

@@ -461,10 +461,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasRadioSideWaterfallAutoBlack = false;
     const MemoryProfile* memory = m_model && profileFor(*m_model).memory
         ? &*profileFor(*m_model).memory : nullptr;
-    c.persistsMemories = memory != nullptr;
+    // The AetherSDR memory model is always the shared client database for
+    // Icom. A model-specific codec only adds an explicit radio-to-database
+    // Sync source; it does not hand ownership of the working store to the
+    // radio.
+    c.persistsMemories = false;
     c.canWriteMemories = false;
     c.canApplyMemories = false;
-    c.canRefreshMemories = c.persistsMemories;
+    c.canRefreshMemories = memory != nullptr;
     if (memory) {
         c.memoryGroupColumnTitle = QString::fromLatin1(memory->groupColumnTitle.data(),
             static_cast<qsizetype>(memory->groupColumnTitle.size()));
@@ -725,6 +729,14 @@ int IcomCivBackend::activeTxBandwidthItem() const
 void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
     disconnectRadio();
+
+    // Radio memory reads are an ingestion path into AetherSDR's shared memory
+    // database. Prefer the discovery identity so repeated syncs from the same
+    // radio update their rows; retain a deterministic endpoint fallback for a
+    // manually-entered radio that reports no serial.
+    const QString memoryIdentity = request.serial.trimmed().isEmpty()
+        ? request.host.trimmed() : request.serial.trimmed();
+    m_memoryImportSource = QStringLiteral("icom:%1").arg(memoryIdentity);
 
     IcomSession::Params p;
     p.host = QHostAddress(request.host);
@@ -2546,6 +2558,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             }
             MemoryDelta delta;
             delta.index = index;
+            delta.importSource = m_memoryImportSource;
+            delta.importKey = QStringLiteral("%1:%2")
+                .arg(memory->group)
+                .arg(memory->channel);
+            delta.owner = m_model
+                ? QString::fromLatin1(m_model->name.data(),
+                                      static_cast<qsizetype>(m_model->name.size()))
+                : QStringLiteral("Icom");
             if (!memory->occupied) {
                 delta.removed = true;
                 emit memoryChanged(delta);

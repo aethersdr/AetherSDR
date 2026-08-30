@@ -79,6 +79,10 @@ public:
     bool isWritable() const { return m_writable; }
 
     const QMap<int, MemoryEntry>& entries() const { return m_entries; }
+    // Locate a row previously ingested from the same external source. The pair
+    // is deliberately independent of the client slot number: native radio
+    // channel numbers and CSV row numbers may collide with manual memories.
+    int importedSlot(const QString& source, const QString& key) const;
 
     // Handle one `memory …` command. Returns handled=false for anything outside
     // the four verbs above.

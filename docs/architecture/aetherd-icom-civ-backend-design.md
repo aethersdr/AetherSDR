@@ -680,14 +680,18 @@ captures from our own radio.
 ## 9. Explicitly out of scope for phase 1
 
 - **IQ.** It does not exist on this radio. Not deferred — absent.
-- **Writable memory channels.** Initial IC-705, IC-7300MK2, and IC-9700 support
-  reads their model-specific ordinary-channel records with `1A 00`, exposes occupied
-  channels through the shared memory model, and permits tuning to the cached
-  channel state. Reads are button-only; IC-705 requires a selected group so a
-  click queues 100 requests rather than scanning its 10,000-address space.
-  Writing, adding, deleting, scan-edge, call, and satellite
-  memories remain deferred. Other Icom models continue to use the client-side
-  bank until their own published record layouts are implemented and verified.
+- **Writing radio memory channels.** All Icom radios use AetherSDR's shared,
+  writable memory database as the working model. For IC-705, IC-7300MK2, and
+  IC-9700, **Sync Memories** reads the model-specific ordinary-channel records
+  with `1A 00` and ingests occupied channels into that database; Tune then
+  recalls the durable database row like a manual or CSV-imported memory.
+  Repeated syncs update rows from the same radio/channel rather than duplicating
+  them. Reads are button-only; IC-705 requires a selected group so a click
+  queues 100 requests rather than scanning its 10,000-address space. Writing or
+  deleting the radio's own channels, plus scan-edge, call, and satellite
+  memories, remain deferred. Other Icom models still use the same client-side
+  database, but expose no Sync action until their published record layout is
+  implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.
