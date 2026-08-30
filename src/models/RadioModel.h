@@ -248,6 +248,7 @@ public:
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
     QString gateway()     const { return m_gateway; }
+    QString networkName() const { return m_networkName; }
     QString mac()         const { return m_mac; }
     bool    enforcePrivateIp() const { return m_enforcePrivateIp; }
 
@@ -1679,6 +1680,7 @@ private:
     QString     m_ip;
     QString     m_netmask;
     QString     m_gateway;
+    QString     m_networkName;
     QString     m_mac;
     bool        m_hasStaticIp{false};
     QString     m_staticIp;

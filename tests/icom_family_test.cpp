@@ -43,6 +43,12 @@ struct IcomCivBackendTestAccess {
     {
         return backend.confirmationFor(frame);
     }
+
+    static void injectConnectedFrame(IcomCivBackend& backend, const CivFrame& frame)
+    {
+        backend.m_connected = true;
+        backend.onCivFrame(frame, backend.m_sessionGeneration);
+    }
 };
 
 } // namespace AetherSDR::icom
@@ -142,6 +148,36 @@ int main(int argc, char** argv)
                           QStringLiteral("ctcss_tx_dtcs_rx"))
                       && ic9700Caps.fmDtcsCodes.size() == 104,
                   "IC-9700 advertises its documented complete DTCS UI vocabulary");
+
+            RadioDelta published;
+            bool sawNetworkName = false;
+            QObject::connect(selectedBackend, &IRadioBackend::radioChanged,
+                             [&published, &sawNetworkName](const RadioDelta& delta) {
+                if (delta.networkName) {
+                    published = delta;
+                    sawNetworkName = true;
+                }
+            });
+            icom::CivFrame networkNameFrame;
+            networkNameFrame.cmd = icom::cmd::kSetting;
+            networkNameFrame.hasSub = true;
+            networkNameFrame.sub = 0x05;
+            networkNameFrame.data = {0x01, 0x44, 'S', 'H', 'A', 'C', 'K'};
+            icom::IcomCivBackendTestAccess::injectConnectedFrame(
+                *selectedBackend, networkNameFrame);
+            check(sawNetworkName
+                      && published.networkName == QStringLiteral("SHACK")
+                      && !published.nickname,
+                  "IC-9700 Network Name publishes dedicated network identity");
+            check(model.networkName() == QStringLiteral("SHACK")
+                      && model.nickname().isEmpty(),
+                  "Network Name reaches RadioModel without replacing station nickname");
+
+            check(QMetaObject::invokeMethod(&model, "onDisconnected",
+                                            Qt::DirectConnection),
+                  "Icom network-name reset fixture reached RadioModel");
+            check(model.networkName().isEmpty(),
+                  "disconnect clears session-owned Icom Network Name");
         }
         icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, initialModel);
     }

@@ -995,40 +995,54 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
     }
     if (m_remoteOnInfoField) {
-        m_remoteOnInfoField->setVisible(caps.hasRemoteOnControl);
+        applyCapabilitySurfaceVisibility(
+            m_remoteOnInfoField, connected, caps.hasRemoteOnControl);
     }
     if (m_rebootInfoField) {
-        m_rebootInfoField->setVisible(caps.canReboot);
+        applyCapabilitySurfaceVisibility(m_rebootInfoField, connected, caps.canReboot);
     }
     if (m_licenseInfoGroup) {
         m_licenseInfoGroup->setVisible(!connected || caps.hasLicenseInfo);
     }
     if (m_firmwareUpdateGroup) {
-        m_firmwareUpdateGroup->setVisible(caps.canUpgradeFirmware);
+        applyCapabilitySurfaceVisibility(
+            m_firmwareUpdateGroup, connected, caps.canUpgradeFirmware);
     }
     if (m_firmwareDisclaimer) {
-        m_firmwareDisclaimer->setVisible(caps.canUpgradeFirmware);
+        applyCapabilitySurfaceVisibility(
+            m_firmwareDisclaimer, connected, caps.canUpgradeFirmware);
+    }
+    if (m_networkIdentityGroup) {
+        applyCapabilitySurfaceVisibility(
+            m_networkIdentityGroup, connected, caps.hasNetworkConfigurationReadback);
     }
     if (m_vitaReceiveBufferLabel) {
-        m_vitaReceiveBufferLabel->setVisible(caps.usesVita49Transport);
+        applyCapabilitySurfaceVisibility(
+            m_vitaReceiveBufferLabel, connected, caps.usesVita49Transport);
     }
     if (m_vitaReceiveBufferControls) {
-        m_vitaReceiveBufferControls->setVisible(caps.usesVita49Transport);
+        applyCapabilitySurfaceVisibility(
+            m_vitaReceiveBufferControls, connected, caps.usesVita49Transport);
     }
     if (m_vitaReceiveBufferStatus) {
-        m_vitaReceiveBufferStatus->setVisible(caps.usesVita49Transport);
+        applyCapabilitySurfaceVisibility(
+            m_vitaReceiveBufferStatus, connected, caps.usesVita49Transport);
     }
     if (m_networkMtuLabel) {
-        m_networkMtuLabel->setVisible(caps.usesVita49Transport);
+        applyCapabilitySurfaceVisibility(
+            m_networkMtuLabel, connected, caps.usesVita49Transport);
     }
     if (m_networkMtuControl) {
-        m_networkMtuControl->setVisible(caps.usesVita49Transport);
+        applyCapabilitySurfaceVisibility(
+            m_networkMtuControl, connected, caps.usesVita49Transport);
     }
     if (m_privateIpPolicyLabel) {
-        m_privateIpPolicyLabel->setVisible(caps.hasPrivateIpConnectionPolicy);
+        applyCapabilitySurfaceVisibility(
+            m_privateIpPolicyLabel, connected, caps.hasPrivateIpConnectionPolicy);
     }
     if (m_privateIpPolicyControl) {
-        m_privateIpPolicyControl->setVisible(caps.hasPrivateIpConnectionPolicy);
+        applyCapabilitySurfaceVisibility(
+            m_privateIpPolicyControl, connected, caps.hasPrivateIpConnectionPolicy);
     }
     if (m_ipDhcpButton) {
         const bool canConfigure = caps.hasClientNetworkConfig;
@@ -1692,50 +1706,46 @@ QWidget* RadioSetupDialog::buildNetworkTab()
     // Network group
     {
         auto* group = new QGroupBox("Network");
+        m_networkIdentityGroup = group;
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
         grid->setColumnStretch(1, 1);
         grid->setColumnStretch(3, 1);
 
-        auto* ipNameLabel = new QLabel("IP Address:");
-        ipNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        grid->addWidget(ipNameLabel, 0, 0, Qt::AlignVCenter);
+        grid->addWidget(new QLabel("IP Address:"), 0, 0);
         auto* ipLbl = new QLabel(displayOrDash(m_model->ip()));
         ipLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("IP Address"), ipLbl), 0, 1,
-                        Qt::AlignVCenter);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("IP Address"), ipLbl), 0, 1);
 
-        auto* maskNameLabel = new QLabel("Subnet Mask:");
-        maskNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        grid->addWidget(maskNameLabel, 0, 2, Qt::AlignVCenter);
+        grid->addWidget(new QLabel("Subnet Mask:"), 0, 2);
         auto* maskLbl = new QLabel(displayOrDash(m_model->netmask()));
         maskLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Subnet Mask"), maskLbl), 0, 3,
-                        Qt::AlignVCenter);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Subnet Mask"), maskLbl), 0, 3);
 
-        auto* macNameLabel = new QLabel("MAC Address:");
-        macNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        grid->addWidget(macNameLabel, 1, 0, Qt::AlignVCenter);
+        grid->addWidget(new QLabel("MAC Address:"), 1, 0);
         auto* macLbl = new QLabel(displayOrDash(m_model->mac()));
         macLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1,
-                        Qt::AlignVCenter);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1);
 
-        auto* gatewayNameLabel = new QLabel("Default Gateway:");
-        gatewayNameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        grid->addWidget(gatewayNameLabel, 1, 2, Qt::AlignVCenter);
+        grid->addWidget(new QLabel("Default Gateway:"), 1, 2);
         auto* gatewayLbl = new QLabel(displayOrDash(m_model->gateway()));
         AetherSDR::ThemeManager::instance().applyStyleSheet(gatewayLbl, kValueStyle);
-        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Default Gateway"), gatewayLbl), 1, 3,
-                        Qt::AlignVCenter);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Default Gateway"), gatewayLbl), 1, 3);
+
+        grid->addWidget(new QLabel("Network Name:"), 2, 0);
+        auto* networkNameLbl = new QLabel(displayOrDash(m_model->networkName()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(networkNameLbl, kValueStyle);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Network Name"), networkNameLbl),
+                        2, 1, 1, 3);
 
         connect(m_model, &RadioModel::infoChanged, this,
-                [this, ipLbl, maskLbl, macLbl, gatewayLbl] {
+                [this, ipLbl, maskLbl, macLbl, gatewayLbl, networkNameLbl] {
             ipLbl->setText(displayOrDash(m_model->ip()));
             maskLbl->setText(displayOrDash(m_model->netmask()));
             macLbl->setText(displayOrDash(m_model->mac()));
             gatewayLbl->setText(displayOrDash(m_model->gateway()));
+            networkNameLbl->setText(displayOrDash(m_model->networkName()));
         });
 
         for (auto* lbl : group->findChildren<QLabel*>())
@@ -1749,8 +1759,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         auto* group = new QGroupBox("Advanced");
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
-        grid->setHorizontalSpacing(6);
-        grid->setVerticalSpacing(6);
+        grid->setSpacing(6);
 
         m_privateIpPolicyLabel = new QLabel("Enforce Private IP Connections:");
         grid->addWidget(m_privateIpPolicyLabel, 0, 0);
@@ -1902,7 +1911,6 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         {
             grid->addWidget(new QLabel("Allow TX via MCP:"), 3, 0);
             auto* txCheck = new QCheckBox("Enable transmit control");
-            txCheck->setMinimumHeight(tokenEdit->sizeHint().height());
             const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
             const bool envBlocksTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
             txCheck->setChecked(!envBlocksTx
@@ -1913,7 +1921,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "Bridge-originated TX is limited by a force-unkey watchdog. You are\n"
                 "responsible for anything transmitted. See docs/automation-bridge.md.");
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
-                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 2px; }"
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
             if (envBlocksTx) {
                 txCheck->setEnabled(false);
@@ -1973,7 +1981,6 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         {
             grid->addWidget(new QLabel("Observe only:"), 4, 0);
             auto* roCheck = new QCheckBox("Read-only (block all driving)");
-            roCheck->setMinimumHeight(tokenEdit->sizeHint().height());
             roCheck->setObjectName(QStringLiteral("automationReadOnlyCheck"));
             const bool envForcesRo = qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY");
             roCheck->setChecked(AutomationBridgeSettings::readOnly() || envForcesRo);
@@ -1985,7 +1992,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "client cannot bypass it. Toggle takes effect immediately on the\n"
                 "running bridge. See docs/automation-bridge.md.");
             AetherSDR::ThemeManager::instance().applyStyleSheet(roCheck,
-                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 2px; }"
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
             if (envForcesRo) {
                 roCheck->setEnabled(false);

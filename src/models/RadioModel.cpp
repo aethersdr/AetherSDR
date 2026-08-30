@@ -3399,6 +3399,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_ip = info.address.isNull() ? QString() : info.address.toString();
     m_netmask.clear();
     m_gateway.clear();
+    m_networkName.clear();
     m_mac.clear();
     emit infoChanged();
 
@@ -7033,6 +7034,7 @@ void RadioModel::onDisconnected()
     m_ip.clear();
     m_netmask.clear();
     m_gateway.clear();
+    m_networkName.clear();
     m_mac.clear();
     m_declaredBands.clear();
     m_rxAudio = {};
@@ -10442,6 +10444,7 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.ip) { m_ip = *d.ip; changed = true; }
     if (d.netmask) { m_netmask = *d.netmask; changed = true; }
     if (d.gateway) { m_gateway = *d.gateway; changed = true; }
+    if (d.networkName) { m_networkName = *d.networkName; changed = true; }
     if (d.remoteOnEnabled) { m_remoteOnEnabled = *d.remoteOnEnabled; changed = true; }
     if (d.multiFlexEnabled) { m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
     if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }

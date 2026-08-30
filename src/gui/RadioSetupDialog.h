@@ -175,6 +175,7 @@ private:
     QGroupBox* m_licenseInfoGroup{nullptr};
     QGroupBox* m_firmwareUpdateGroup{nullptr};
     QLabel* m_firmwareDisclaimer{nullptr};
+    QGroupBox* m_networkIdentityGroup{nullptr};
     QWidget* m_vitaReceiveBufferLabel{nullptr};
     QWidget* m_vitaReceiveBufferControls{nullptr};
     QWidget* m_vitaReceiveBufferStatus{nullptr};

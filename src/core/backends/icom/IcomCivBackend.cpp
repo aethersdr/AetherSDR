@@ -2655,12 +2655,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 if (!name) {
                     return;
                 }
-                network.nickname = QString::fromLatin1(
+                network.networkName = QString::fromLatin1(
                     name->data(), static_cast<qsizetype>(name->size()));
-            } else {
-                network = {};
             }
-            if (network.ip || network.netmask || network.gateway || network.nickname) {
+            if (network.ip || network.netmask || network.gateway || network.networkName) {
                 emit radioChanged(network);
                 return;
             }

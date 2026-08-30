@@ -23,6 +23,17 @@ int main(int argc, char** argv)
     IpConfigPresentationState state;
     const QString unavailable = QStringLiteral("unsupported");
 
+    QWidget gatedSurface;
+    applyCapabilitySurfaceVisibility(&gatedSurface, true, false);
+    check(gatedSurface.isHidden(),
+          "unsupported capability surface is hidden while connected");
+    applyCapabilitySurfaceVisibility(&gatedSurface, false, false);
+    check(!gatedSurface.isHidden(),
+          "unsupported capability surface becomes permissive on disconnect");
+    applyCapabilitySurfaceVisibility(&gatedSurface, true, true);
+    check(!gatedSurface.isHidden(),
+          "supported capability surface remains visible while connected");
+
     applyIpConfigPresentation(state, {}, false, false, {}, {}, {},
                               &dhcp, &staticButton, &ip, &mask, &gateway,
                               &apply, unavailable);

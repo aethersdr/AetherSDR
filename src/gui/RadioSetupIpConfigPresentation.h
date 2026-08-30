@@ -11,6 +11,13 @@ struct IpConfigPresentationState {
     bool canConfigure{false};
 };
 
+inline void applyCapabilitySurfaceVisibility(QWidget* surface,
+                                             bool connected,
+                                             bool supported)
+{
+    surface->setVisible(!connected || supported);
+}
+
 inline void applyIpConfigPresentation(
     IpConfigPresentationState& state,
     const QString& sessionKey,
