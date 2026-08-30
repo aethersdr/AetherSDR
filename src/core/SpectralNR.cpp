@@ -523,6 +523,17 @@ void SpectralNR::setNpeMethod(int method)
 
 void SpectralNR::reset()
 {
+    resetTransientState();
+    resetNoiseEstimate();
+}
+
+void SpectralNR::resetTransient()
+{
+    resetTransientState();
+}
+
+void SpectralNR::resetTransientState()
+{
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
     std::fill(m_stereoInAccumL.begin(), m_stereoInAccumL.end(), 0.0);
@@ -542,6 +553,47 @@ void SpectralNR::reset()
     m_outReadPos = 0;
     m_outputAvailable = m_fftSize;
 
+    // The AGC common-mode references flush with the transients rather than
+    // surviving alongside the noise estimate: their calibration re-runs
+    // inside the re-armed ramp window (m_frameCount < m_rampFrames), and its
+    // first frame overwrites the level reference with weight 1/(0+1) anyway,
+    // so a retained value could only live for one frame. Flushing keeps the
+    // recalibration deterministic — and post-TX the receiver AGC state that
+    // these references describe is exactly what may have changed.
+    std::fill(m_commonWantedProtected.begin(),
+              m_commonWantedProtected.end(), 0);
+    std::fill(m_commonReferencePsd.begin(),
+              m_commonReferencePsd.end(), 0.0);
+    std::fill(m_residualReferencePsd.begin(),
+              m_residualReferencePsd.end(), 0.0);
+    std::fill(m_residualReferenceGainRatio.begin(),
+              m_residualReferenceGainRatio.end(), 1.0);
+    std::fill(m_residualReferenceValid.begin(),
+              m_residualReferenceValid.end(), 0);
+    std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
+
+    std::fill(m_prevMask.begin(), m_prevMask.end(), 1.0);
+    std::fill(m_prevGamma.begin(), m_prevGamma.end(), 1.0);
+    std::fill(m_mask.begin(), m_mask.end(), 1.0);
+    std::fill(m_smoothMask.begin(), m_smoothMask.end(), 1.0);
+    std::fill(m_aeMask.begin(), m_aeMask.end(), 1.0);
+    std::fill(m_aePrefix.begin(), m_aePrefix.end(), 0.0);
+
+    m_commonReferenceInitialized = false;
+    m_commonReferenceReacquiring = false;
+    m_commonSilenceRecoveryContext = false;
+    m_commonLevelReferenceInitialized = false;
+    m_commonLevelReferencePower = 0.0;
+    m_commonScaleLog = 0.0;
+    m_commonAppliedScale = 1.0;
+    m_commonReturnScale = 1.0;
+    m_commonDetectedScale = 1.0;
+    m_frameCount = 0;
+    m_currentWet = 0.0;
+}
+
+void SpectralNR::resetNoiseEstimate()
+{
     // Start with a HIGH noise estimate — gains will be < 1 during convergence,
     // producing gentle suppression rather than amplification spikes.
     // The OSMS tracker will converge downward to the true noise floor in ~2s.
@@ -568,45 +620,16 @@ void SpectralNR::reset()
               m_nstatTonalProbability.end(), 0.0);
     std::fill(m_nstatTonalIndicator.begin(),
               m_nstatTonalIndicator.end(), 0);
-    std::fill(m_commonWantedProtected.begin(),
-              m_commonWantedProtected.end(), 0);
     std::fill(m_nstatNoisePsd.begin(), m_nstatNoisePsd.end(), 0.0);
-    std::fill(m_commonReferencePsd.begin(),
-              m_commonReferencePsd.end(), 0.0);
-    std::fill(m_residualReferencePsd.begin(),
-              m_residualReferencePsd.end(), 0.0);
-    std::fill(m_residualReferenceGainRatio.begin(),
-              m_residualReferenceGainRatio.end(), 1.0);
-    std::fill(m_residualReferenceValid.begin(),
-              m_residualReferenceValid.end(), 0);
-    std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
 
     for (auto& v : m_actMinBuf)
         std::fill(v.begin(), v.end(), 1e30);
-
-    std::fill(m_prevMask.begin(), m_prevMask.end(), 1.0);
-    std::fill(m_prevGamma.begin(), m_prevGamma.end(), 1.0);
-    std::fill(m_mask.begin(), m_mask.end(), 1.0);
-    std::fill(m_smoothMask.begin(), m_smoothMask.end(), 1.0);
-    std::fill(m_aeMask.begin(), m_aeMask.end(), 1.0);
-    std::fill(m_aePrefix.begin(), m_aePrefix.end(), 0.0);
 
     m_alphaC = 1.0;
     // WDSP rotates on the first complete frame so the estimator starts from
     // observed audio rather than waiting a full sub-window on its seed value.
     m_subwc = m_V;
     m_ambIdx = 0;
-    m_commonReferenceInitialized = false;
-    m_commonReferenceReacquiring = false;
-    m_commonSilenceRecoveryContext = false;
-    m_commonLevelReferenceInitialized = false;
-    m_commonLevelReferencePower = 0.0;
-    m_commonScaleLog = 0.0;
-    m_commonAppliedScale = 1.0;
-    m_commonReturnScale = 1.0;
-    m_commonDetectedScale = 1.0;
-    m_frameCount = 0;
-    m_currentWet = 0.0;
 }
 
 void SpectralNR::initWindow()
