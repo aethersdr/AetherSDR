@@ -440,6 +440,85 @@ bool runLifecycleTest()
 //
 } // namespace
 
+// Plan 4.1/4.2: runtime FIR-length change and the T/R invariants.
+//
+// setFilterTaps() switches the RX bandpass FIR at runtime (RXASetNC) without
+// closing the channel, so the notch-latency gate can drop 8192 -> 2048 when
+// the last notch goes. The mute-envelope defaults are the anti-click ramps
+// both reference clients use (HERMES.md §12.3) — a T/R transition clocks the
+// channel with silence rather than stopping it, so these ramps and a stable
+// channel id are the invariants that keep the transition clean.
+bool runFilterTapsTest()
+{
+    WdspChannel::Config defaults;
+    if (!require(defaults.filterTaps == 2048,
+                 "Config default filterTaps is no longer WDSP's 2048") ||
+        !require(defaults.muteDelayUpSec == 0.010
+                     && defaults.muteSlewUpSec == 0.025
+                     && defaults.muteDelayDownSec == 0.000
+                     && defaults.muteSlewDownSec == 0.010,
+                 "mute-envelope defaults drifted off the reference ramps "
+                 "(0.010 / 0.025 / 0.000 / 0.010)")) {
+        return false;
+    }
+
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.blockForOutput = true;
+    config.filterTaps = 2048;
+
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, error.c_str())) {
+        return false;
+    }
+    const int id = channel->channelIdForTest();
+
+    if (!require(channel->setFilterTaps(8192),
+                 "setFilterTaps(8192) failed on an RX channel") ||
+        !require(channel->config().filterTaps == 8192,
+                 "config().filterTaps did not follow setFilterTaps(8192)") ||
+        !require(channel->channelIdForTest() == id,
+                 "setFilterTaps closed and reopened the channel") ||
+        !require(channel->setFilterTaps(8192),
+                 "setFilterTaps() to the current value should be a no-op success") ||
+        !require(channel->setFilterTaps(2048),
+                 "setFilterTaps(2048) failed") ||
+        !require(channel->config().filterTaps == 2048,
+                 "config().filterTaps did not fall back to 2048") ||
+        !require(channel->channelIdForTest() == id,
+                 "the return to 2048 closed and reopened the channel") ||
+        !require(!channel->setFilterTaps(0),
+                 "setFilterTaps(0) was accepted")) {
+        return false;
+    }
+
+    // Notch database survives a tap change (the whole point of doing it in
+    // place rather than via reconfigure()).
+    if (!require(channel->setNotchTuneFrequency(7'000'000.0),
+                 "could not set the notch tune frequency") ||
+        !require(channel->addNotch(0, 7'001'500.0, 50.0, true),
+                 "could not add a notch at 8192 taps")) {
+        return false;
+    }
+    channel->setFilterTaps(8192);
+    if (!require(channel->notchCount() == 1,
+                 "the notch did not survive a redundant setFilterTaps")) {
+        return false;
+    }
+
+    WdspChannel::Config txConfig = config;
+    txConfig.direction = WdspChannel::Direction::Transmit;
+    std::unique_ptr<WdspChannel> tx = WdspChannel::create(txConfig, &error);
+    if (!require(tx != nullptr, error.c_str()) ||
+        !require(!tx->setFilterTaps(4096),
+                 "setFilterTaps was accepted on a transmit channel")) {
+        return false;
+    }
+    return true;
+}
+
 int main()
 {
     const uint64_t allocationBaseline = WdspChannel::outstandingAllocationsForTest();
@@ -459,6 +538,7 @@ int main()
         !runLeakChecked("underrun test", runUnderrunTest) ||
         !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
         !runLeakChecked("notch index test", runNotchIndexTest) ||
+        !runLeakChecked("filter taps / T-R invariants", runFilterTapsTest) ||
         !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
         !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
                  "WDSP test suite left allocations outstanding")) {
