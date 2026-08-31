@@ -54,6 +54,10 @@ public:
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip, bool restoreSavedFamily = false);
+    // Reports a startup-probe bail upward as startupConnectUnavailable, and
+    // returns whether this was in fact a startup probe. No-op for interactive
+    // and automation probes, whose operator can already read setManualMessage.
+    bool reportStartupProbeFailure(const QString& reason);
 
     // Radio families the "Connect by IP" page can dial. The manual page can no
     // longer guess: a FlexRadio answers TCP/4992 and a Hermes-Lite 2 answers
@@ -120,6 +124,10 @@ signals:
     void retryDiscoveryRequested();
     void networkDiagnosticsRequested();
     void smartLinkLoginRequested(const QString& email, const QString& password);
+    // A startup auto-connect gave up before it could reach the radio. Carries
+    // the operator-facing reason, which would otherwise be stranded on the
+    // manual page (see reportStartupProbeFailure).
+    void startupConnectUnavailable(const QString& reason);
 
 private slots:
     void onConnectionModeClicked(int id);
@@ -298,6 +306,9 @@ private:
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
     bool         m_manualConnectPending{false};
+    // Set for the duration of a startup probe (probeRadio's restoreSavedFamily
+    // call), which is the one probe with no operator watching the manual page.
+    bool         m_startupProbe{false};
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry
 

@@ -1397,6 +1397,9 @@ void ConnectionPanel::setConnected(bool connected)
         clearPendingIcomCredentials();
     }
 
+    if (connected)
+        m_startupProbe = false;
+
     m_connected = connected;
     m_disconnectBtn->setVisible(connected);
     updateActionState();
@@ -2493,6 +2496,7 @@ void ConnectionPanel::onManualConnectClicked()
         return;
 
     m_manualConnectPending = true;
+    m_startupProbe = false;
     setManualMessage(QStringLiteral("Checking %1…").arg(ip));
     probeRadio(ip);
 }
@@ -2503,11 +2507,32 @@ void ConnectionPanel::onManualAdvancedToggled(bool checked)
     m_manualAdvancedWidget->setVisible(checked);
 }
 
+bool ConnectionPanel::reportStartupProbeFailure(const QString& reason)
+{
+    // A startup probe is the one probe with nobody reading the manual page.
+    // MainWindow has covered the window with "Looking for your radio…", and it
+    // suppressed the no-saved-radio dialog popup precisely BECAUSE a radio is
+    // saved — so setManualMessage() alone writes the reason onto a page behind a
+    // dialog that will never open. The operator is left with a spinner and no
+    // route back to the connection UI. Hand the reason up instead.
+    if (!m_startupProbe)
+        return false;
+    m_startupProbe = false;
+    emit startupConnectUnavailable(reason);
+    return true;
+}
+
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
         return;
+
+    // Latched, not assigned: the Icom keychain read below re-enters probeRadio()
+    // without restoreSavedFamily, and that second pass is still the same startup
+    // attempt. Cleared on a proven connect and by onManualConnectClicked().
+    if (restoreSavedFamily)
+        m_startupProbe = true;
 
     // Interactive and automation probes keep the family currently selected by
     // the operator. Startup is the exception: it has no current operator
@@ -2532,6 +2557,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         updateManualAdvancedVisibility();
         setManualMessage("Choose a live source path before trying again.", true);
         m_manualConnectPending = false;
+        reportStartupProbeFailure(
+            QStringLiteral("The saved source path for this radio is unavailable."));
         return;
     }
 
@@ -2573,6 +2600,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                "radio. Check Network Control is ON in the radio's menu, then "
                                "enter the same credentials here."),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("This Icom needs its network user name and password."));
             return;
         }
         if (pass.isEmpty()) {
@@ -2603,6 +2632,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                             "set on the radio, then connect once to remember it."),
                         true);
                     panel->m_manualConnectPending = false;
+                    panel->reportStartupProbeFailure(
+                        QStringLiteral("No saved password for this Icom."));
                     return;
                 }
                 if (panel->m_manualIcomPassEdit
