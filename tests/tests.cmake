@@ -859,6 +859,14 @@ target_include_directories(hl2_noise_blanker_test PRIVATE src)
 target_link_libraries(hl2_noise_blanker_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
 
+# The HL2 RX mode table (Plan 2): operator mode -> WDSP mode + passband, the
+# restore-boundary guard, and the authoritative supported-mode list. Header-only
+# (Hl2ModeTable.h); pure Core, no WDSP channel.
+add_executable(hl2_mode_table_test tests/hl2_mode_table_test.cpp)
+target_include_directories(hl2_mode_table_test PRIVATE src)
+target_link_libraries(hl2_mode_table_test PRIVATE Qt6::Core)
+add_test(NAME hl2_mode_table_test COMMAND hl2_mode_table_test)
+
 # AM/SAM come back from WDSP's envelope detector with the carrier as a DC
 # pedestal; the blocker on the audio output must strip it without touching the
 # modes that were already zero-mean, and without its corner creeping up into

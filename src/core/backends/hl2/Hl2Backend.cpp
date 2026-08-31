@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 
+#include "core/backends/hl2/Hl2ModeTable.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
@@ -188,46 +189,10 @@ int wdspAgcMode(const QString& mode) noexcept
     return 3;                                  // medium: WDSP's own default
 }
 
-WdspChannel::Mode modeFromString(const QString& mode) noexcept
-{
-    const QString u = mode.toUpper();
-    if (u == QLatin1String("LSB"))  return WdspChannel::Mode::Lsb;
-    if (u == QLatin1String("USB"))  return WdspChannel::Mode::Usb;
-    if (u == QLatin1String("DSB"))  return WdspChannel::Mode::Dsb;
-    if (u == QLatin1String("CWL"))  return WdspChannel::Mode::Cwl;
-    // "CW" is the upper-sideband CW mode name the rest of the app uses (it is
-    // what TciProtocol::tciToSmartSDR produces for TCI's `cw`, and what a Flex
-    // reports); "CWU" is the explicit spelling. Only CWU was listed, so plain CW
-    // fell through to the USB fallback below and was demodulated as SSB -- the
-    // mode indicator read CW while the passband and detector were not.
-    if (u == QLatin1String("CWU") || u == QLatin1String("CW"))
-        return WdspChannel::Mode::Cwu;
-    if (u == QLatin1String("FM") || u == QLatin1String("NFM"))
-        return WdspChannel::Mode::Fm;
-    if (u == QLatin1String("AM"))   return WdspChannel::Mode::Am;
-    if (u == QLatin1String("DIGU")) return WdspChannel::Mode::Digu;
-    if (u == QLatin1String("DIGL")) return WdspChannel::Mode::Digl;
-    if (u == QLatin1String("SAM"))  return WdspChannel::Mode::Sam;
-    if (u == QLatin1String("DRM"))  return WdspChannel::Mode::Drm;
-    if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return WdspChannel::Mode::Wbfm;
-    return WdspChannel::Mode::Usb;
-}
-
-// Is `mode` a name modeFromString() genuinely maps (rather than falling back
-// to USB)? The restore boundary uses this so a corrupt document's mode string
-// is dropped instead of reaching Receiver::mode, the UI, and — via capture —
-// re-persisting itself (PR #4619 review, Ozy311).
-bool isKnownModeString(const QString& mode) noexcept
-{
-    static const QStringList kKnown = {
-        QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("DSB"),
-        QStringLiteral("CWL"), QStringLiteral("CWU"), QStringLiteral("CW"),
-        QStringLiteral("FM"),  QStringLiteral("NFM"), QStringLiteral("AM"),
-        QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("SAM"),
-        QStringLiteral("DRM"), QStringLiteral("WBFM"), QStringLiteral("WFM"),
-    };
-    return kKnown.contains(mode.toUpper());
-}
+// modeFromString(), isKnownModeString(), wdspModeName() and
+// defaultPassbandForMode() now live in Hl2ModeTable.h so they are unit-testable
+// without a connected backend (tests/hl2_mode_table_test.cpp). Brought into this
+// TU's scope by the header's `using` below.
 
 // The same question for the AGC vocabulary, and it needs asking for the same
 // reason: wdspAgcMode() FALLS BACK to medium for anything it does not
@@ -244,50 +209,6 @@ bool isKnownAgcModeString(const QString& mode) noexcept
     const QString m = mode.trimmed().toLower();
     return m == QLatin1String("off") || m == QLatin1String("slow")
            || m == QLatin1String("med") || m == QLatin1String("fast");
-}
-
-// Default RX passband per mode, in Hz relative to the carrier. Sign carries the
-// sideband, matching SliceModel's convention (USB-family positive, LSB-family
-// negative, carrier-straddling modes symmetric) -- a table with the wrong sign
-// here would be silently "corrected" by SliceModel::normalizeFilterPolarity and
-// the mistake would never surface.
-//
-// The digital entries are deliberately the widest of the set. DIGU is the mode
-// WSJT-X selects, and it must pass the whole 3 kHz audio window the decoder
-// expects; a snug SSB passband would clip the top of the FT8 sub-band and drop
-// exactly the signals at the edges.
-std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept
-{
-    const QString u = mode.toUpper();
-    if (u == QLatin1String("USB"))  return {100, 2900};
-    if (u == QLatin1String("LSB"))  return {-2900, -100};
-    if (u == QLatin1String("DIGU")) return {150, 3000};
-    if (u == QLatin1String("DIGL")) return {-3000, -150};
-    // CW: 500 Hz CENTRED ON THE CARRIER, both sidebands, because in CW the
-    // operator-facing passband is measured from the signal and not from the
-    // audio it becomes. The pitch offset lives in the BFO (cwBfoHz) instead —
-    // see the note there — so CWU and CWL share one table entry and differ only
-    // in which way the BFO leans.
-    //
-    // This is the convention the rest of the app already assumes:
-    // VfoWidget::applyFilterPreset builds every CW preset as {-w/2, +w/2}
-    // ("centred on carrier — radio's BFO handles pitch offset"), and a Flex
-    // reports CW cuts the same way (FlexLib Slice.cs clamps them to
-    // ±12000 - CWPitch, which only makes sense for cuts measured from the
-    // carrier). Returning {350, 850} here put the passband skirt a whole pitch
-    // to the RIGHT of the marker on the panadapter and, worse, meant the
-    // gateware transmitted a CW carrier at the marker while the receiver
-    // listened 600 Hz above it.
-    if (u == QLatin1String("CWU") || u == QLatin1String("CW")
-        || u == QLatin1String("CWL")) return {-250, 250};
-    // Carrier-straddling modes: symmetric about the carrier, which the envelope
-    // and synchronous detectors both need.
-    if (u == QLatin1String("AM") || u == QLatin1String("SAM")) return {-4000, 4000};
-    if (u == QLatin1String("DSB")) return {-3000, 3000};
-    if (u == QLatin1String("FM") || u == QLatin1String("NFM")) return {-8000, 8000};
-    if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return {-40000, 40000};
-    if (u == QLatin1String("DRM")) return {-5000, 5000};
-    return {150, 3000};   // matches modeFromString's USB fallback
 }
 
 // The CW BFO offset for `mode`, in Hz of audio: where a signal sitting exactly
@@ -5652,6 +5573,12 @@ void Hl2Backend::emitSliceState(int ddc)
     d.panId = ids->panId;
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
+    // The backend is authoritative about which modes it supports (Plan 2): the
+    // VFO combo shows exactly this list instead of the Flex fallback set, so no
+    // mode can be selected that silently demodulates as something else, and
+    // D-STAR / DRM / FreeDV — which need a decoder or an audio path this raw-IQ
+    // backend does not have — are simply not offered.
+    d.modeList = hl2SupportedModes();
     d.filterLow = r->filterLowHz;
     d.filterHigh = r->filterHighHz;
     d.audioGain = qRound(r->audioGain * 100.0f);
