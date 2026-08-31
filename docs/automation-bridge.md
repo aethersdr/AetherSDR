@@ -2310,9 +2310,11 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
 | `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
+| `rfgain` | `[<panId>] <dB>` | set the front-end RF/LNA gain. On a radio-wide preamp (the HL2's single AD9866 behind every DDC) the change reaches every pan; the optional `panId` addresses one where the backend supports it. |
+| `float` / `dock` | `<panId>` / `<index>` / `active` | undock / redock the pan via `PanadapterStack`'s real reparent path (#2495/#4319/#4617/#4864); re-poll `layout get` for `floatingCount` / `dockedCount`. |
 
-All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
-action is RX/config only; none keys the transmitter.
+All lifecycle actions are async (the radio echoes the change) — re-poll
+`get pans`. Every `pan` action is RX/config only; none keys the transmitter.
 
 Floating and docking use the production pan title-bar control rather than a
 radio lifecycle command. Target its stable object name through the pan scope;
@@ -3106,6 +3108,15 @@ while the engine runs):
 Bounded, automation-only PCM capture for receive-sync diagnostics. It is active
 only inside an `AETHER_AUTOMATION=1` process, is read-only, and does not change
 audio routing or playback buffers.
+
+| `action` | args | effect |
+|---|---|---|
+| `start` | `[<durationMs>] [<points>]` | begin capturing at the named tap points (`raw`,`post`,`output`,`final`, or `all`); default 5000 ms |
+| `stop` | — | stop early and return a compact snapshot |
+| `status` | — | compact snapshot (metadata only) without stopping |
+| `read` | `[<path>]` | write the full snapshot (base64 PCM) to a file, or return the compact snapshot when no path is given |
+| `probeNr2Stereo` | — | the no-option SpectralNR/`NR2` stereo-balance probe |
+| `probeDspStereo` | `<mode> [key=value …]` | deterministic synthetic RX proof for a DSP module (see the RN2 sub-section) |
 
 ```json
 → {"cmd":"audioCapture","action":"start","value":"5000 raw,post,output,final"}

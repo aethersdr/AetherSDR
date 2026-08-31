@@ -116,75 +116,94 @@ def generated_block(verbs):
             f"{END}")
 
 
-# The slice ACTION set is its own drift surface. #5102 was filed against a
-# working feature because two hand-maintained copies of this list disagreed;
-# the in-code copies were then collapsed into sliceActionList(). The docs held
-# a third and a fourth copy, and the `slice` action table is the one a reader
-# actually consults — so pin it to the code the same way the verb table is.
-_SLICE_LIST_RE = re.compile(
-    r'QString\s+sliceActionList\(\)\s*\{\s*return\s+QStringLiteral\('
+# A verb's ACTION set is its own drift surface. #5102 was filed against a
+# working feature because two hand-maintained copies of `slice`'s list
+# disagreed; the in-code copies were collapsed into sliceActionList(), and the
+# docs table a reader actually consults is pinned to it here. The same shape
+# now covers any verb with a `QString <verb>ActionList()` single source and a
+# `### \`<verb>\`` section whose table's first column names the actions.
+_ACTION_LIST_RE = re.compile(
+    r'QString\s+(?P<stem>\w+?)ActionList\(\)\s*\{\s*return\s+QStringLiteral\('
     r'(?P<body>(?:\s*"(?:[^"\\]|\\.)*")+)\s*\)\s*;',
     re.DOTALL)
 
+# verb -> (C++ ActionList() stem, doc heading). Add a row here, a
+# `<stem>ActionList()` function in AutomationServer.cpp, and a first-column
+# `` `action` `` table under the heading, and the drift check covers it.
+SUBACTION_VERBS = {
+    "slice": ("slice", "### `slice`"),
+    "pan": ("pan", "### `pan`"),
+    "audioCapture": ("audioCapture", "### `audioCapture`"),
+}
 
-def extract_slice_actions(cpp_path):
-    """The action names sliceActionList() advertises, in code order."""
+# Deliberately documented, deliberately NOT in the advertised list — accepted
+# aliases the *ActionList() strings omit on purpose (e.g. `slice source` is an
+# alias of `slice rxsource`). Naming them here is the difference between a lint
+# that encodes a known exception and one someone turns off.
+DOCUMENTED_ALIASES = {
+    "slice": {"source"},
+    "pan": set(),
+    "audioCapture": set(),
+}
+
+
+def extract_actions(cpp_path, stem):
+    """The action names `<stem>ActionList()` advertises, in code order."""
     with open(cpp_path, encoding="utf-8") as f:
         src = f.read()
-    m = _SLICE_LIST_RE.search(src)
-    if not m:
-        raise SystemExit(
-            "error: could not parse sliceActionList() from "
-            f"{cpp_path} — the docs-vs-code slice-action lint cannot run, and "
-            "silently skipping it is how the list drifted in the first place.")
-    joined = _join_literals(m.group("body"))
-    return [a for a in joined.split("|") if a]
+    for m in _ACTION_LIST_RE.finditer(src):
+        if m.group("stem") == stem:
+            joined = _join_literals(m.group("body"))
+            return [a for a in joined.split("|") if a]
+    raise SystemExit(
+        f"error: could not parse {stem}ActionList() from {cpp_path} — the "
+        "docs-vs-code action lint cannot run, and silently skipping it is how "
+        "the list drifted in the first place.")
 
 
-# Deliberately documented, deliberately NOT in sliceActionList(): `source` is
-# an accepted alias of `rxsource` (AutomationServer.cpp, the `rxsource`/`source`
-# branch) that the advertised list omits on purpose. Naming it here is the
-# difference between a lint that encodes one known exception and a lint someone
-# turns off.
-DOCUMENTED_SLICE_ALIASES = {"source"}
+def documented_actions(md_text, heading):
+    r"""Action names in the first column of `heading`'s *action* table(s).
 
-
-def documented_slice_actions(md_text):
-    """Action names in the first column of the `slice` section's table body.
-
-    Header rows are skipped structurally — a markdown table's header is the row
-    before its `|---|` separator — rather than by filtering the word "action",
-    which would also hide a real action called `action`.
+    A verb's section can carry more than one table (``### `audioCapture` `` also
+    has a "Capture points" table). Only rows of a table whose header's first
+    cell names "action" are counted, so a neighbouring ``| point | ... |``
+    table does not feed phantom actions into the drift check. Header rows are
+    skipped structurally — the row before the ``|---|`` separator.
     """
     lines = md_text.splitlines()
     start = None
     for i, ln in enumerate(lines):
-        if ln.strip() == "### `slice`":
+        if ln.strip() == heading:
             start = i
             break
     if start is None:
         raise SystemExit(
-            "error: no '### `slice`' section in the docs — the slice-action "
-            "lint cannot run.")
+            f"error: no '{heading}' section in the docs — its action lint "
+            "cannot run.")
     found = set()
-    pending_header = None
-    body = False
+    prev_line = ""
+    in_action_table = False
     for ln in lines[start + 1:]:
         # Stop at the next section of the same level; #### subsections belong
-        # to `slice` and may legitimately carry rows.
-        if ln.startswith("### ") and ln.strip() != "### `slice`":
+        # to this verb and may legitimately carry rows.
+        if ln.startswith("### ") and ln.strip() != heading:
             break
         if not ln.startswith("|"):
-            pending_header, body = None, False
+            in_action_table = False
+            prev_line = ln
             continue
         if re.fullmatch(r'\|[\s|:-]+', ln.strip()):
-            pending_header, body = None, True   # separator: header was above
+            # Separator: prev_line was this table's header. Count its rows only
+            # when the first header cell is about actions.
+            header_first = prev_line.split("|")[1] if "|" in prev_line else ""
+            header_first = header_first.replace("`", "").strip().lower()
+            in_action_table = "action" in header_first
             continue
-        if not body:
-            pending_header = ln                 # candidate header, not counted
-            continue
-        first_cell = ln.split("|")[1]
-        found.update(re.findall(r'`([a-z]+)`', first_cell))
+        if in_action_table:
+            first_cell = ln.split("|")[1]
+            # Allow digits after the first letter so `probeNr2Stereo` counts.
+            found.update(re.findall(r'`([a-zA-Z][a-zA-Z0-9]*)`', first_cell))
+        prev_line = ln
     return found
 
 
@@ -247,13 +266,19 @@ def main():
     # honest regardless of what the generator would produce.
     dups = find_duplicate_headings(md)
 
-    slice_actions = extract_slice_actions(CPP)
-    documented = documented_slice_actions(md)
-    undocumented = [a for a in slice_actions if a not in documented]
-    # ...and the other direction: an action the docs still describe after the
-    # code stopped advertising it. A reader cannot tell a removed action from a
-    # working one, and the drift that produced #5102 ran this way round too.
-    stale_docs = sorted(documented - set(slice_actions) - DOCUMENTED_SLICE_ALIASES)
+    # {verb: (advertised_actions, undocumented, stale_docs)}, in registry order.
+    action_audit = {}
+    total_actions = 0
+    for verb, (stem, heading) in SUBACTION_VERBS.items():
+        advertised = extract_actions(CPP, stem)
+        documented = documented_actions(md, heading)
+        undoc = [a for a in advertised if a not in documented]
+        # ...and the other direction: an action the docs still describe after
+        # the code stopped advertising it. A reader cannot tell a removed action
+        # from a working one; the drift that produced #5102 ran this way too.
+        stale = sorted(documented - set(advertised) - DOCUMENTED_ALIASES[verb])
+        action_audit[verb] = (advertised, undoc, stale)
+        total_actions += len(advertised)
 
     if args.check:
         problems = []
@@ -264,37 +289,39 @@ def main():
         if dups:
             problems.append("duplicate detail-section heading(s): "
                             + ", ".join(sorted(set(dups))))
-        if undocumented:
-            problems.append(
-                "slice action(s) advertised by sliceActionList() but absent "
-                "from the `slice` action table in the docs: "
-                + ", ".join(undocumented)
-                + " — document them (this table cannot be generated; the "
-                  "per-action prose is hand-written on purpose)")
-        if stale_docs:
-            problems.append(
-                "slice action(s) documented in the `slice` action table but "
-                "NOT advertised by sliceActionList(): " + ", ".join(stale_docs)
-                + " — remove the row, or add the action back to the code "
-                  "(known aliases live in DOCUMENTED_SLICE_ALIASES)")
+        for verb, (_adv, undoc, stale) in action_audit.items():
+            if undoc:
+                problems.append(
+                    f"`{verb}` action(s) advertised by {verb}ActionList() but "
+                    f"absent from the `### {verb}` action table in the docs: "
+                    + ", ".join(undoc)
+                    + " — document them (this table cannot be generated; the "
+                      "per-action prose is hand-written on purpose)")
+            if stale:
+                problems.append(
+                    f"`{verb}` action(s) documented but NOT advertised by "
+                    f"{verb}ActionList(): " + ", ".join(stale)
+                    + " — remove the row, or add the action back to the code "
+                      f"(known aliases live in DOCUMENTED_ALIASES['{verb}'])")
         if problems:
             for p in problems:
                 print("FAIL:", p, file=sys.stderr)
             return 1
         print(f"ok: docs verb table matches the registry ({len(verbs)} verbs), "
-              f"no duplicate headings, all {len(slice_actions)} slice actions "
-              "documented")
+              f"no duplicate headings, all {total_actions} sub-actions across "
+              f"{len(SUBACTION_VERBS)} verbs documented")
         return 0
 
     if dups:
         print("warning: duplicate detail-section heading(s): "
               + ", ".join(sorted(set(dups))), file=sys.stderr)
-    if undocumented:
-        print("warning: slice action(s) missing from the docs table: "
-              + ", ".join(undocumented), file=sys.stderr)
-    if stale_docs:
-        print("warning: slice action(s) documented but not advertised: "
-              + ", ".join(stale_docs), file=sys.stderr)
+    for verb, (_adv, undoc, stale) in action_audit.items():
+        if undoc:
+            print(f"warning: `{verb}` action(s) missing from the docs table: "
+                  + ", ".join(undoc), file=sys.stderr)
+        if stale:
+            print(f"warning: `{verb}` action(s) documented but not advertised: "
+                  + ", ".join(stale), file=sys.stderr)
     if want != md:
         with open(DOCS, "w", encoding="utf-8") as f:
             f.write(want)

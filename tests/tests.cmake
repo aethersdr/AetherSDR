@@ -2859,6 +2859,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # Guards the generalised sub-action audit itself: pan/audioCapture actions,
+    # not just slice, must round-trip against their *ActionList() single source.
+    add_test(NAME bridge_docs_subaction_audit
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_bridge_docs.py)
 endif()
 
 # Retired local-listener fixture. Positive behavior is covered through the live

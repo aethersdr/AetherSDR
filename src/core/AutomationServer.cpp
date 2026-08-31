@@ -1257,6 +1257,22 @@ QString sliceActionList()
         "centerlock|link|txant|rxant|rxsource|fixture|clearfixture");
 }
 
+// Same single-source contract as sliceActionList(): doPan()'s fallthrough
+// error reads this, so a new pan action cannot land there and drift from the
+// others (#5102's failure mode, one verb over).
+QString panActionList()
+{
+    return QStringLiteral(
+        "create|add|remove|close|center|rfgain|float|dock");
+}
+
+// Likewise for audioCapture; doAudioCapture()'s fallthrough error reads this.
+QString audioCaptureActionList()
+{
+    return QStringLiteral(
+        "start|stop|status|read|probeNr2Stereo|probeDspStereo");
+}
+
 QJsonObject err(const QString& msg)
 {
     return QJsonObject{{QStringLiteral("ok"), false},
@@ -10611,7 +10627,7 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
     }
 
     return err(QStringLiteral("unknown pan action: ") + action
-               + QStringLiteral(" (create|add|remove|close|center|rfgain)"));
+               + QStringLiteral(" (") + panActionList() + QStringLiteral(")"));
 }
 
 // ── Panadapter layout (bridge test hook) ────────────────────────────────────
@@ -12136,7 +12152,8 @@ QJsonObject AutomationServer::doAudioCapture(const QString& action,
         return m_audioEngine->automationDspStereoProbe(arg);
     }
 
-    return err(QStringLiteral("audioCapture action must be start, stop, status, read, probeNr2Stereo, or probeDspStereo"));
+    return err(QStringLiteral("unknown audioCapture action: ") + normalizedAction
+               + QStringLiteral(" (") + audioCaptureActionList() + QStringLiteral(")"));
 }
 
 QJsonObject AutomationServer::doWhoami() const
