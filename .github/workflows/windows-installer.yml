@@ -478,6 +478,8 @@ jobs:
       - name: Setup Microsoft Store Developer CLI
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
+        with:
+          version: v0.4.1
 
       - name: Stage Microsoft Store submission (draft)
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
@@ -488,12 +490,13 @@ jobs:
           SELLER_ID: ${{ secrets.SELLER_ID }}
           AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
         run: |
+          msstore --version
           msstore reconfigure `
             --tenantId $env:AZURE_AD_TENANT_ID `
             --sellerId $env:SELLER_ID `
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
-          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -UploadTimeoutSeconds 300
 
   # Daily and explicitly requested main-branch builds are committed to a
   # restricted Partner Center package flight. This is intentionally a separate
@@ -534,6 +537,8 @@ jobs:
 
       - name: Setup Microsoft Store Developer CLI
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
+        with:
+          version: v0.4.1
 
       - name: Publish developer Store flight
         env:
@@ -544,6 +549,7 @@ jobs:
           AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
           AETHERSDR_STORE_FLIGHT_ID: ${{ secrets.AETHERSDR_STORE_FLIGHT_ID }}
         run: |
+          msstore --version
           msstore reconfigure `
             --tenantId $env:AZURE_AD_TENANT_ID `
             --sellerId $env:SELLER_ID `
@@ -553,4 +559,5 @@ jobs:
             -ProductId $env:AETHERSDR_STORE_PRODUCT_ID `
             -FlightId $env:AETHERSDR_STORE_FLIGHT_ID `
             -SearchDir flight-package `
+            -UploadTimeoutSeconds 300 `
             -Commit

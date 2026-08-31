@@ -232,14 +232,15 @@ On a `v*` tag push the workflow:
 
 1. Builds `AetherSDR.exe`, runs `windeployqt`, packages the MSIX, and creates
    the `.msixupload` (existing steps).
-2. `microsoft/microsoft-store-apppublisher@v1.1` puts the `msstore` CLI on PATH.
+2. The pinned `microsoft/microsoft-store-apppublisher` action puts the pinned
+   `msstore` CLI v0.4.1 on PATH and the workflow logs `msstore --version`.
 3. `msstore reconfigure` authenticates from the four GitHub secrets.
 4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
-   `msstore publish <pkg>.msixupload -id <ProductId> --noCommit` — staging a
-   **draft**. `--noCommit` is the safety gate that keeps it out of
-   certification. A maintainer reviews the pending submission in Partner Center
-   and clicks **Submit to Store** to start certification. **CI never publishes
-   to the live channel on its own.**
+   `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
+   --verbose --noCommit` — staging a **draft**. `--noCommit` is the safety gate
+   that keeps it out of certification. A maintainer reviews the pending
+   submission in Partner Center and clicks **Submit to Store** to start
+   certification. **CI never publishes to the live channel on its own.**
 
 Guard rails (all three must pass before Partner Center is touched):
 
@@ -253,6 +254,18 @@ Guard rails (all three must pass before Partner Center is touched):
 If the MSIX packaging step (which is `continue-on-error`) produced no
 `.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
 otherwise-successful release red.
+
+The upload timeout is deliberately explicit. `msstore` CLI v0.4.0 and v0.4.1
+have a regression where omitting `--uploadTimeout` supplies a zero-second Azure
+blob network timeout, producing the characteristic `Uploading Bundle to Azure
+blob: 0%` failure and exit code `-1`
+([microsoft/msstore-cli#162](https://github.com/microsoft/msstore-cli/issues/162)).
+The script uses the documented workaround of 300 seconds and enables
+`--verbose` so any future upload failure retains its underlying exception in
+the CI log. The affected CLI is pinned to prevent `latest` from silently
+changing publish behavior; advance that pin only after validating a released
+version containing
+[microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163).
 
 ### One-time setup (maintainer, outside the repo)
 

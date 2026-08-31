@@ -45,6 +45,11 @@
     Directory to search for the upload package. Defaults to the current
     directory (where the workflow runs create-msix.ps1 with -OutputDir .).
 
+.PARAMETER UploadTimeoutSeconds
+    Network timeout, in seconds, for each Azure blob upload request. Defaults
+    to 300. This is always passed explicitly because msstore CLI v0.4.0 and
+    v0.4.1 incorrectly use zero when --uploadTimeout is omitted.
+
 .PARAMETER Commit
     Send the submission straight to certification instead of staging a draft.
     Drops the `--noCommit` safety gate.
@@ -56,6 +61,8 @@ param(
     [string]$FlightId = $env:AETHERSDR_STORE_FLIGHT_ID,
     [string]$UploadGlob = "AetherSDR-*.msixupload",
     [string]$SearchDir = ".",
+    [ValidateRange(100, 100000)]
+    [long]$UploadTimeoutSeconds = 300,
     [switch]$Commit
 )
 
@@ -87,8 +94,17 @@ if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
     Write-Host "Store flight Id  : $FlightId"
 }
 Write-Host "Upload package   : $upload"
+Write-Host "Upload timeout   : $UploadTimeoutSeconds seconds"
 
-$publishArgs = @("publish", $upload, "-id", $ProductId)
+$publishArgs = @(
+    "publish",
+    $upload,
+    "-id",
+    $ProductId,
+    "--uploadTimeout",
+    $UploadTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    "--verbose"
+)
 if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
     $publishArgs += @("-f", $FlightId)
 }
