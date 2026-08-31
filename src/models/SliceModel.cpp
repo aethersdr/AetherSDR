@@ -143,6 +143,23 @@ void SliceModel::tuneAndRecenter(double mhz)
 
 void SliceModel::setMode(const QString& mode)
 {
+    // The backend is authoritative about its mode set — Flex and HL2 publish
+    // SliceDelta::modeList, and on a raw-IQ radio a mode the demodulator does
+    // not implement would silently come out as something else (Plan 2, "no
+    // silent fall-through"). Refuse an operator/CAT/rigctl/TCI request for a
+    // mode the radio does not offer. An empty list means "unconstrained"
+    // (Sim, or a radio still mid-handshake). Status application goes through
+    // applyDelta(), which assigns m_mode directly and never reaches here, so
+    // this cannot reject the radio's own restored state (Principle II).
+    if (!m_modeList.isEmpty()
+        && !m_modeList.contains(mode, Qt::CaseInsensitive)) {
+        qWarning().noquote()
+            << "SliceModel: mode" << mode
+            << "is not offered by this radio (" << m_modeList.join(QLatin1Char('/'))
+            << "); ignoring";
+        return;
+    }
+
     const std::optional<DigitalVoiceModeId> requestedMode =
         DigitalVoiceModeRegistry::modeForRadioMode(mode);
     if (m_mode == mode) {

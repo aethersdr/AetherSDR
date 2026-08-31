@@ -1066,6 +1066,17 @@ target_include_directories(slice_model_squelch_memory_test PRIVATE src)
 target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
 
+# Plan 2.4: setMode() refuses a mode outside the backend's published modeList;
+# applyChanges() (status) is unaffected.
+add_executable(slice_model_mode_list_guard_test
+    tests/slice_model_mode_list_guard_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(slice_model_mode_list_guard_test PRIVATE src)
+target_link_libraries(slice_model_mode_list_guard_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME slice_model_mode_list_guard_test COMMAND slice_model_mode_list_guard_test)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
