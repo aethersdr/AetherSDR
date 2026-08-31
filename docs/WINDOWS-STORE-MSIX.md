@@ -333,43 +333,6 @@ certification), or publish to a **flight/insider ring** first with
 `-f <flightId>` and promote manually. Keep the draft gate until the weekly
 cadence has proven stable.
 
-### Daily developer package flight
-
-The Windows Installer workflow has a production-isolated developer flight
-path. Production tag submissions continue to use `--noCommit` and remain
-draft-only. A timezone-aware scheduled run at midnight in
-`America/Los_Angeles` builds current `main`, then a separate job commits the
-verified `.msixupload` to the configured Partner Center package flight. The
-same path can be requested manually from
-**Run workflow** by selecting **Publish this main-branch build to the developer
-Store flight**; flight publication is restricted to the `main` ref.
-
-Create the package flight under the existing AetherSDR Store product and attach
-a known-user group containing the developer Microsoft accounts. Keep the
-production package identity and `AETHERSDR_STORE_PRODUCT_ID` unchanged. Add the
-flight's Partner Center ID as this GitHub Actions repository secret:
-
-- `AETHERSDR_STORE_FLIGHT_ID`
-
-The flight ID is not a second Store product or MSIX identity. It is passed to
-`msstore publish` as `-f <flightId>`, while `-Commit` sends that restricted
-submission through certification so flight members can install it. The flight
-job fails before authentication if the secret is absent, rather than risking a
-production fallback.
-
-Daily flight packages retain the first three source-version components and use
-the monotonically increasing GitHub workflow run number as the fourth MSIX
-component (for example, `26.9.1.417`). This makes every Store package version
-unique without modifying `CMakeLists.txt`. A subsequent general release should
-increment the source patch component (for example, `26.9.2.0`), which sorts
-above every `26.9.1.*` flight build.
-
-The flight submission is created and committed through the Store API. Do not
-modify an in-progress API-created flight submission in the Partner Center UI;
-Microsoft warns that mixing the dashboard and API for the same submission can
-leave it in an error state. Manage failures by using the API/CLI to inspect or
-delete the pending flight submission before retrying.
-
 ## Local Sideload Signing
 
 Windows requires MSIX packages to be signed with a certificate that is trusted

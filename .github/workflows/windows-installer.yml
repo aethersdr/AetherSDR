@@ -4,17 +4,6 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      publish_store_flight:
-        description: 'Publish this main-branch build to the developer Store flight'
-        required: false
-        default: false
-        type: boolean
-  schedule:
-    # Daily developer-flight build at local midnight. The named timezone keeps
-    # the schedule at midnight across Pacific daylight-saving transitions.
-    - cron: '0 0 * * *'
-      timezone: 'America/Los_Angeles'
 
 permissions:
   contents: write
@@ -355,28 +344,6 @@ jobs:
       # established portable-zip + Inno installer delivery path that real
       # users depend on.  When MSIX matures we can promote it back into
       # the hard-required artifact set.
-      - name: Set developer flight MSIX version
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_store_flight))
-        run: |
-          $match = Select-String -Path CMakeLists.txt -Pattern '^\s*project\(AetherSDR\s+VERSION\s+([0-9]+(?:\.[0-9]+){1,3})' | Select-Object -First 1
-          if (-not $match) {
-            throw "Could not read the AetherSDR version from CMakeLists.txt."
-          }
-          $parts = @($match.Matches[0].Groups[1].Value.Split('.'))
-          while ($parts.Count -lt 3) {
-            $parts += '0'
-          }
-          $buildNumber = [int]"${{ github.run_number }}"
-          if ($buildNumber -lt 1 -or $buildNumber -gt 65535) {
-            throw "GitHub run number $buildNumber cannot be used as an MSIX version component (1..65535)."
-          }
-          # Flight packages retain the source version's first three components.
-          # The monotonically increasing workflow run number makes daily
-          # packages unique without changing the source-tree version.
-          $flightVersion = "$($parts[0]).$($parts[1]).$($parts[2]).$buildNumber"
-          "AETHERSDR_MSIX_VERSION=$flightVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Developer flight MSIX version: $flightVersion"
-
       - name: Create MSIX package
         continue-on-error: true
         env:
@@ -497,67 +464,3 @@ jobs:
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -UploadTimeoutSeconds 300
-
-  # Daily and explicitly requested main-branch builds are committed to a
-  # restricted Partner Center package flight. This is intentionally a separate
-  # job from the production tag path above: production remains draft-only.
-  publish-store-flight:
-    name: Publish developer Store flight
-    needs: build-windows
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      vars.AETHERSDR_STORE_PRODUCT_ID != '' &&
-      (github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_dispatch' && inputs.publish_store_flight))
-    runs-on: windows-latest
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Download verified Windows package
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: Windows-Installer
-          path: flight-package
-
-      - name: Validate developer flight configuration
-        env:
-          AETHERSDR_STORE_FLIGHT_ID: ${{ secrets.AETHERSDR_STORE_FLIGHT_ID }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:AETHERSDR_STORE_FLIGHT_ID)) {
-            throw "AETHERSDR_STORE_FLIGHT_ID must contain the Partner Center developer flight ID. Refusing to fall back to a production submission."
-          }
-          $uploads = @(Get-ChildItem flight-package -Recurse -File -Filter "AetherSDR-*.msixupload")
-          if ($uploads.Count -ne 1) {
-            throw "Expected exactly one verified .msixupload in the Windows-Installer artifact; found $($uploads.Count)."
-          }
-          Write-Host "Developer flight configuration and upload artifact are present."
-
-      - name: Setup Microsoft Store Developer CLI
-        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
-        with:
-          version: v0.4.1
-
-      - name: Publish developer Store flight
-        env:
-          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
-          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
-          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
-          SELLER_ID: ${{ secrets.SELLER_ID }}
-          AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
-          AETHERSDR_STORE_FLIGHT_ID: ${{ secrets.AETHERSDR_STORE_FLIGHT_ID }}
-        run: |
-          msstore --version
-          msstore reconfigure `
-            --tenantId $env:AZURE_AD_TENANT_ID `
-            --sellerId $env:SELLER_ID `
-            --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
-            --clientSecret $env:AZURE_AD_APPLICATION_SECRET
-          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 `
-            -ProductId $env:AETHERSDR_STORE_PRODUCT_ID `
-            -FlightId $env:AETHERSDR_STORE_FLIGHT_ID `
-            -SearchDir flight-package `
-            -UploadTimeoutSeconds 300 `
-            -Commit
