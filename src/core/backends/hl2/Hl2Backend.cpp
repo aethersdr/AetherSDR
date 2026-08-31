@@ -913,7 +913,7 @@ bool Hl2Backend::createPanadapter()
     dc.mode = modeFromString(r.mode);
     std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
     dc.agcMode = wdspAgcMode(r.agcMode);
-    dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
+    dc.maximumAgcGainDb = Hl2DbReference::agcCeilingDbForThreshold(r.agcThresholdDb);
     bool ok = false;
     Hl2RxDsp* dsp = r.dsp;
     QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &ok] {
@@ -2051,7 +2051,7 @@ void Hl2Backend::beginDspSetup()
         // rather than as a restore bug, which is why the three sites should
         // look identical.
         dc.agcMode = wdspAgcMode(r.agcMode);
-        dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
+        dc.maximumAgcGainDb = Hl2DbReference::agcCeilingDbForThreshold(r.agcThresholdDb);
         chains.push_back(r.dsp);
         configs.push_back(dc);
     }
@@ -2635,6 +2635,10 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // seedReceiverAgc); this makes the capture side agree with it.
     m_agcMode = r->agcMode;
     m_agcThresholdDb = r->agcThresholdDb;
+    // The shared signal-reference object tracks the same remembered value, so
+    // the LNA offset and the AGC ceiling — the two ends of the antenna→
+    // demodulator reference chain — are queryable from one place.
+    m_dbRef.setAgcThresholdOperatorUnits(r->agcThresholdDb);
     // WDSP IS TOLD WHAT THE RECEIVER NOW HOLDS, not what the caller asked for.
     // Deriving from `m` meant a refused mode still reached the DSP as
     // wdspAgcMode()'s medium fallback while r->agcMode, the applet echo and the
@@ -2643,7 +2647,8 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // surface nobody can see. It also fixes the empty-mode call (a
     // threshold-only change), which used to send medium over whatever mode the
     // receiver was actually running.
-    const double ceilingDb = r->agcThresholdDb * kAgcCeilingDbPerUnit;
+    const double ceilingDb =
+        Hl2DbReference::agcCeilingDbForThreshold(r->agcThresholdDb);
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r->agcMode)), Q_ARG(double, ceilingDb));
@@ -3200,7 +3205,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
         // moved their AGC would have had it silently snap back to medium/39 dB
         // every time they zoomed.
         dc.agcMode = wdspAgcMode(r.agcMode);
-        dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
+        dc.maximumAgcGainDb = Hl2DbReference::agcCeilingDbForThreshold(r.agcThresholdDb);
         std::string err;
         bool ok = false;
         Hl2RxDsp* dsp = r.dsp;
@@ -3231,7 +3236,8 @@ void Hl2Backend::applyPanBandwidth(double hz)
                 rc.mode = modeFromString(m_rx[k].mode);
                 std::tie(rc.filterLowHz, rc.filterHighHz) = dspFilterHz(m_rx[k]);
                 rc.agcMode = wdspAgcMode(m_rx[k].agcMode);
-                rc.maximumAgcGainDb = m_rx[k].agcThresholdDb * kAgcCeilingDbPerUnit;
+                rc.maximumAgcGainDb = Hl2DbReference::agcCeilingDbForThreshold(
+                    m_rx[k].agcThresholdDb);
                 std::string backErr;
                 bool backOk = false;
                 QMetaObject::invokeMethod(back, [back, &rc, &backErr, &backOk] {
@@ -5080,7 +5086,7 @@ void Hl2Backend::pushInitialState()
         // which is the rule the passband derivation guard exists to enforce.
         QMetaObject::invokeMethod(r.dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r.agcMode)),
-            Q_ARG(double, r.agcThresholdDb * kAgcCeilingDbPerUnit));
+            Q_ARG(double, Hl2DbReference::agcCeilingDbForThreshold(r.agcThresholdDb)));
         QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
             Q_ARG(bool, false));
         // The notch axis, which is measured from the NCO and defaults to ZERO.

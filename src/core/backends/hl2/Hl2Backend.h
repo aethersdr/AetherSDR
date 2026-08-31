@@ -953,9 +953,9 @@ private:
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
-    // Slice AGC threshold (0..100) -> WDSP gain ceiling in dB. 0.6 spans
-    // 0..60 dB; see the measurement in setSliceAgc().
-    static constexpr double kAgcCeilingDbPerUnit = 0.6;
+    // Slice AGC threshold (0..100) -> WDSP gain ceiling in dB lives on
+    // Hl2DbReference now (kAgcCeilingDbPerUnit / agcCeilingDbForThreshold) —
+    // one object owns the whole signal-reference chain. See setSliceAgc().
     static constexpr double kUsablePassbandFraction = 0.8;
     // Ceiling on host-mixed slice audio. N demodulated receivers are summed
     // here, so N loud slices can sum past full scale where one never could.

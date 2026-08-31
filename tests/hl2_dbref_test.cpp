@@ -62,6 +62,30 @@ int main()
     check(near(-13.0 + ref.offsetDb(), ref.toDbm(-13.0)),
           "offsetDb() and toDbm() agree (spectrum vs S-meter)");
 
+    // The AGC threshold conversion now lives on this object (Plan 4.4): one
+    // scale, one place, instead of `x * 0.6` copied into six Hl2Backend sites.
+    check(near(Hl2DbReference::agcCeilingDbForThreshold(65), 39.0),
+          "AGC-T 65 -> 39 dB ceiling (the slice model's default, measured on hardware)");
+    check(near(Hl2DbReference::agcCeilingDbForThreshold(0), 0.0),
+          "AGC-T 0 -> 0 dB");
+    check(near(Hl2DbReference::agcCeilingDbForThreshold(100), 60.0),
+          "AGC-T 100 -> 60 dB");
+
+    // The shared instance tracks the last operator-set threshold, so the full
+    // reference triplet (LNA gain, calibration offset, AGC ceiling) is
+    // readable from one object.
+    check(ref.agcThresholdOperatorUnits() == 65 && near(ref.agcCeilingDb(), 39.0),
+          "the object defaults to the slice-model threshold");
+    ref.setAgcThresholdOperatorUnits(40);
+    check(ref.agcThresholdOperatorUnits() == 40 && near(ref.agcCeilingDb(), 24.0),
+          "setAgcThresholdOperatorUnits() moves agcCeilingDb() with it");
+    // An AGC-T change does NOT touch the LNA offset — the two ends of the
+    // chain are independent values in one object, not a coupled pair.
+    const double offBefore = ref.offsetDb();
+    ref.setAgcThresholdOperatorUnits(90);
+    check(near(ref.offsetDb(), offBefore),
+          "changing the AGC threshold leaves the display offset untouched");
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_dbref_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
