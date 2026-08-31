@@ -339,6 +339,7 @@ void testAlcPercentIsMappedOntoTheGaugeRange()
     // and stays there, which is what "ALC is completely pegged" looked like.
     MeterModel model;
     model.defineMeter(txMeter(11, "ALC", "Percent"));
+    model.setActiveTxSlice(0);
 
     float alc = 999.0f;
     QObject::connect(&model, &MeterModel::swAlcChanged, [&alc](float v) { alc = v; });
@@ -356,11 +357,115 @@ void testAlcPercentIsMappedOntoTheGaugeRange()
     // cannot speak dBFS, not a reinterpretation of the ones that can.
     MeterModel dbfs;
     dbfs.defineMeter(txMeter(11, "ALC", "dBFS"));
+    dbfs.setActiveTxSlice(0);
     float passthrough = 999.0f;
     QObject::connect(&dbfs, &MeterModel::swAlcChanged,
                      [&passthrough](float v) { passthrough = v; });
     dbfs.updateValues({11}, {rawDb(-6.0f)});
     report("a dBFS ALC meter passes through unchanged", nearlyEqual(passthrough, -6.0f));
+}
+
+void testActiveTxSliceSelectsAlcAndItsUnit()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(15, 0));
+    model.defineMeter(txMeter(23, "ALC", "dBFS", 8));
+    model.defineMeter(slcMeter(37, 1));
+    model.defineMeter(txMeter(45, "ALC", "Percent", 9));
+
+    model.setActiveTxSlice(0);
+    model.updateValues({23}, {rawDb(-6.0f)});
+    report("active TX slice 0 uses its ALC meter and dBFS unit",
+           nearlyEqual(model.swAlc(), -6.0f));
+
+    model.updateValues({45}, {50});
+    report("inactive ALC meter is ignored", nearlyEqual(model.swAlc(), -6.0f));
+
+    model.setActiveTxSlice(1);
+    report("changing active TX slice clears stale ALC", nearlyEqual(model.swAlc(), 0.0f));
+
+    model.updateValues({45}, {50});
+    report("active TX slice 1 uses its ALC meter and Percent unit",
+           nearlyEqual(model.swAlc(), -10.0f));
+}
+
+void testMixedSourceAlcUsesManifestSliceContext()
+{
+    // FLEX-8400M fw 4.2.18 declares slice A's TX waveform block with num=0,
+    // then slice B's with num=9. Source-index arithmetic cannot map that pair;
+    // the preceding SLC block is the radio's stable association.
+    MeterModel model;
+    model.defineMeter(slcMeter(12, 0));
+    model.defineMeter(txMeter(22, "ALC", "dBFS", 0));
+    model.defineMeter(slcMeter(30, 1));
+    model.defineMeter(txMeter(40, "ALC", "dBFS", 9));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({22}, {rawDb(-3.0f)});
+    report("8400M slice B ignores slice A's zero-source ALC",
+           nearlyEqual(model.swAlc(), 0.0f));
+
+    model.updateValues({40}, {rawDb(-6.4f)});
+    report("8400M slice B resolves ALC from manifest context",
+           nearlyEqual(model.swAlc(), -6.4f));
+}
+
+void testMixedSourceTxWaveformMetersUseManifestSliceContext()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(12, 0));
+    model.defineMeter(txMeter(18, "SC_MIC", "dBFS", 0));
+    model.defineMeter(txMeter(20, "COMPPEAK", "dB", 0));
+    model.defineMeter(txMeter(21, "SC_FILT_1", "dBFS", 0));
+    model.defineMeter(txMeter(24, "SC_FILT_2", "dBFS", 0));
+    model.defineMeter(slcMeter(30, 1));
+    model.defineMeter(txMeter(36, "SC_MIC", "dBFS", 9));
+    model.defineMeter(txMeter(38, "COMPPEAK", "dB", 9));
+    model.defineMeter(txMeter(39, "SC_FILT_1", "dBFS", 9));
+    model.defineMeter(txMeter(42, "SC_FILT_2", "dBFS", 9));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({36, 38, 39, 42},
+                       {rawDb(-12.0f), rawDb(8.0f), rawDb(-9.0f), rawDb(-15.0f)});
+
+    report("8400M slice B resolves COMPPEAK from manifest context",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 8.0f));
+    report("8400M slice B resolves TX filter levels from manifest context",
+           model.hasTxFilterLevels() && nearlyEqual(model.scFilt1(), -9.0f)
+               && nearlyEqual(model.scFilt2(), -15.0f));
+}
+
+void testZeroSourceAlcUsesSliceContext()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(14, 0));
+    model.defineMeter(txMeter(20, "ALC", "dBFS", 0));
+    model.defineMeter(slcMeter(32, 1));
+    model.defineMeter(txMeter(44, "ALC", "dBFS", 0));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({20}, {rawDb(-4.0f)});
+    report("inactive zero-source ALC meter is ignored", nearlyEqual(model.swAlc(), 0.0f));
+
+    model.updateValues({44}, {rawDb(-12.0f)});
+    report("zero-source ALC meter follows active slice context",
+           nearlyEqual(model.swAlc(), -12.0f));
+}
+
+void testSingleImplicitAlcFollowsTransmitToAnySlice()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(1, 0));
+    model.defineMeter(txMeter(8, "ALC", "dBFS", 0));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({8}, {rawDb(-9.0f)});
+    report("a single implicit ALC follows transmit onto another slice",
+           nearlyEqual(model.swAlc(), -9.0f));
+
+    model.removeMeter(8);
+    report("removing the active ALC meter clears its value",
+           nearlyEqual(model.swAlc(), 0.0f));
 }
 
 void testDirectionalPowerUsesDirectReflectedMeter()
@@ -916,6 +1021,11 @@ int main(int argc, char** argv)
     testForwardPowerHonoursItsDeclaredUnit();
     testReflectedPowerHonoursItsDeclaredUnit();
     testAlcPercentIsMappedOntoTheGaugeRange();
+    testActiveTxSliceSelectsAlcAndItsUnit();
+    testMixedSourceAlcUsesManifestSliceContext();
+    testMixedSourceTxWaveformMetersUseManifestSliceContext();
+    testZeroSourceAlcUsesSliceContext();
+    testSingleImplicitAlcFollowsTransmitToAnySlice();
     testDirectionalPowerUsesDirectReflectedMeter();
     testNativeSwrRemainsRadioProvidedAtLowPower();
     testForwardPowerSnapsToZeroWhenTheCarrierStops();
