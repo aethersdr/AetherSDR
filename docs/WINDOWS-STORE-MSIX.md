@@ -324,9 +324,10 @@ cadence has proven stable.
 
 The Windows Installer workflow has a production-isolated developer flight
 path. Production tag submissions continue to use `--noCommit` and remain
-draft-only. A scheduled run at 13:17 UTC each day builds current `main`, then a
-separate job commits the verified `.msixupload` to the configured Partner
-Center package flight. The same path can be requested manually from
+draft-only. A timezone-aware scheduled run at midnight in
+`America/Los_Angeles` builds current `main`, then a separate job commits the
+verified `.msixupload` to the configured Partner Center package flight. The
+same path can be requested manually from
 **Run workflow** by selecting **Publish this main-branch build to the developer
 Store flight**; flight publication is restricted to the `main` ref.
 

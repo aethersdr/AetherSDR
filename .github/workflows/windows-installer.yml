@@ -11,9 +11,10 @@ on:
         default: false
         type: boolean
   schedule:
-    # Daily developer-flight build. GitHub schedules use UTC; choosing a
-    # non-zero minute avoids the heaviest scheduler contention.
-    - cron: '17 13 * * *'
+    # Daily developer-flight build at local midnight. The named timezone keeps
+    # the schedule at midnight across Pacific daylight-saving transitions.
+    - cron: '0 0 * * *'
+      timezone: 'America/Los_Angeles'
 
 permissions:
   contents: write
