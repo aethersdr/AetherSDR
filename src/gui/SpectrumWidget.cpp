@@ -7471,26 +7471,22 @@ void SpectrumWidget::applyDeferredRangeIfIdle()
 void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                                bool animateSmallNudges)
 {
-    // Record this as confirmed REGARDLESS of whether it changes the
-    // on-screen display below -- appendHistoryRow()'s callers depend on
-    // m_confirmedCenterMhz/m_confirmedBandwidthMhz being current even when
-    // the guard just below turns the rest of this call into a no-op (the
-    // common case: a zoom gesture's optimistic guess already matched what
-    // the backend just confirmed). Must run before every early return in
-    // this function, which is why it's first. The three OTHER early
-    // returns below (drag-hold, settle-pending, stale-echo) do NOT get
-    // this treatment -- they legitimately don't represent "this value is
-    // confirmed truth right now" (see their own comments).
-    m_confirmedCenterMhz    = centerMhz;
-    m_confirmedBandwidthMhz = bandwidthMhz;
-
-    if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
+    if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz) {
+        // Still confirm even though nothing changes on-screen --
+        // appendHistoryRow()'s callers depend on m_confirmedCenterMhz/
+        // m_confirmedBandwidthMhz being current even in the common case
+        // where a zoom gesture's optimistic guess already matched what the
+        // backend just confirmed (ten9876, #5142 review, "Blocker 1").
+        m_confirmedCenterMhz    = centerMhz;
+        m_confirmedBandwidthMhz = bandwidthMhz;
         return;
+    }
 
     // While the user is actively dragging the pan or a VFO/slice, the local
     // drag path owns the visual center. Radio echoes for intermediate drag
     // positions are stale by the time they arrive and would force the flag and
-    // waterfall back through old frames.
+    // waterfall back through old frames. NOT confirmed -- a stale echo isn't
+    // truth (see stale-echo guard below for the same reasoning).
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const bool vfoDragPanEchoHold =
         m_vfoDragPanEchoHoldUntilMs > 0 && nowMs < m_vfoDragPanEchoHoldUntilMs;
@@ -7503,7 +7499,8 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // While a local zoom/range gesture is settling, the widget owns the visual
     // center and bandwidth. Flex can echo older center-only statuses after a
     // combined center+bandwidth command; accepting those stale centers retargets
-    // the local view and can churn remote Kiwi W/F zoom/start requests.
+    // the local view and can churn remote Kiwi W/F zoom/start requests. NOT
+    // confirmed, same reasoning as the drag-hold guard above.
     if (m_frequencyRangeSettlePending
         && m_frequencyRangePendingValid
         && !mhzNearlyEqual(centerMhz, m_centerMhz)
@@ -7530,13 +7527,25 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // would either reverse the in-flight animation or trigger a false large-shift
     // that blanks the spectrum, so skip it — but only when the bandwidth is also
     // unchanged, so that bandwidth corrections (e.g. after xpixels resize) are
-    // not silently dropped (#1729).
+    // not silently dropped (#1729). NOT confirmed -- a stale echo isn't truth.
     if (m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped &&
         std::abs(centerMhz - m_panCenterStart) < 1e-9 &&
         bandwidthMhz == m_bandwidthMhz) {
         return;
     }
+
+    // Every return above this point is a value this function does NOT treat
+    // as confirmed truth (still dragging, a settling gesture, or a stale
+    // animation echo -- see each guard's own comment). Everything past here
+    // IS being applied, so this is the correct point to record it as
+    // confirmed for appendHistoryRow()/updateWaterfallRow()/
+    // pushWaterfallRow() to stamp waterfall rows with -- moved here from the
+    // top of the function, which ran before all three of the guards above
+    // despite their own comments claiming otherwise (ten9876, #5142 review,
+    // "Blocker 1").
+    m_confirmedCenterMhz    = centerMhz;
+    m_confirmedBandwidthMhz = bandwidthMhz;
 
     // Distinguish pan-follow nudges (#989) from large jumps (band change, click-to-tune).
     // Nudges shift center by ~10% of halfBw; 25% threshold comfortably separates the two.
@@ -12220,13 +12229,18 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
 
     const int srcSize = bins.size();
-    // Confirmed geometry, not the on-screen guess -- this call passes no
-    // explicit frame to appendHistoryRow() below (relies on ITS OWN
-    // fallback, also fixed to use m_confirmedCenterMhz/m_confirmedBandwidthMhz),
-    // so the pixel layout here must use the same values or the row's data
-    // and its stamp would disagree about what span it covers. See
-    // m_confirmedCenterMhz's own declaration comment.
-    const double panStartMhz = m_confirmedCenterMhz - m_confirmedBandwidthMhz / 2.0;
+    // On-screen geometry, NOT confirmed -- unlike updateWaterfallRow() (which
+    // lays out an explicitly-tiled row's own pixel data against confirmed
+    // geometry), panStartMhz here feeds ONLY the TX-mask test below; the
+    // actual bin-to-column mapping a few lines down is a plain proportional
+    // stretch of `bins` over destWidth and never consults it. `bins` itself
+    // is m_bins, which reprojectSpectrum()/updateSpectrum() keep resampled
+    // to the CURRENT on-screen m_centerMhz/m_bandwidthMhz, not the
+    // last-confirmed span -- so the mask must test against that same
+    // on-screen frame or it blanks the wrong columns relative to what's
+    // actually being plotted during a zoom's divergence window (ten9876,
+    // #5142 review, "Blocker 2").
+    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
     QVector<quint8> levels(destWidth, 0);
@@ -12235,7 +12249,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         if (useTxFilterMask) {
             const double freqMhz = panStartMhz
                 + (static_cast<double>(x) / static_cast<double>(destWidth))
-                    * m_confirmedBandwidthMhz;
+                    * m_bandwidthMhz;
             if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
                 scanline[x] = qRgb(0, 0, 0);
                 continue;
