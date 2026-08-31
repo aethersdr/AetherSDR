@@ -13,6 +13,9 @@
     reviews the pending submission in Partner Center and clicks "Submit to
     Store" to begin certification. Pass -Commit to skip the draft gate and send
     the submission straight to certification (each tag goes live on approval).
+    Pass -FlightId to target an existing Partner Center package flight. The
+    package identity and ProductId remain those of the production app; the
+    flight controls the restricted audience.
 
     Authentication is expected to already be configured via a prior
     `msstore reconfigure` call (tenant/seller/client id + client secret), which
@@ -33,6 +36,11 @@
     Glob used to find the upload package. Defaults to the create-msix.ps1
     naming convention "AetherSDR-*.msixupload".
 
+.PARAMETER FlightId
+    Optional Partner Center package flight Id. Defaults to
+    $env:AETHERSDR_STORE_FLIGHT_ID. When set, msstore publishes the package to
+    that flight instead of the production submission.
+
 .PARAMETER SearchDir
     Directory to search for the upload package. Defaults to the current
     directory (where the workflow runs create-msix.ps1 with -OutputDir .).
@@ -45,6 +53,7 @@
 [CmdletBinding()]
 param(
     [string]$ProductId = $env:AETHERSDR_STORE_PRODUCT_ID,
+    [string]$FlightId = $env:AETHERSDR_STORE_FLIGHT_ID,
     [string]$UploadGlob = "AetherSDR-*.msixupload",
     [string]$SearchDir = ".",
     [switch]$Commit
@@ -74,9 +83,15 @@ if ($uploads.Count -gt 1) {
 
 $upload = $uploads[0].FullName
 Write-Host "Store product Id : $ProductId"
+if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
+    Write-Host "Store flight Id  : $FlightId"
+}
 Write-Host "Upload package   : $upload"
 
 $publishArgs = @("publish", $upload, "-id", $ProductId)
+if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
+    $publishArgs += @("-f", $FlightId)
+}
 if (-not $Commit) {
     # --noCommit (-nc) uploads the package but keeps the submission in DRAFT
     # state; a maintainer commits it from Partner Center. This is the safety
@@ -85,7 +100,12 @@ if (-not $Commit) {
     Write-Host "Mode             : DRAFT (--noCommit; a maintainer submits from Partner Center)"
 }
 else {
-    Write-Host "Mode             : COMMIT (submission sent to certification)"
+    if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
+        Write-Host "Mode             : COMMIT (restricted flight sent to certification)"
+    }
+    else {
+        Write-Host "Mode             : COMMIT (production submission sent to certification)"
+    }
 }
 
 Write-Host "Running: msstore $($publishArgs -join ' ')"
@@ -94,4 +114,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "msstore publish failed with exit code $LASTEXITCODE."
 }
 
-Write-Host "Microsoft Store submission staged successfully."
+if ($Commit) {
+    Write-Host "Microsoft Store submission committed successfully."
+}
+else {
+    Write-Host "Microsoft Store submission staged successfully."
+}
