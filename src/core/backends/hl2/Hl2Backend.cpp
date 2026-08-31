@@ -1442,6 +1442,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasLmsNoiseFilters = false;
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
+    c.hasDdcPanEdgeRolloff = false;
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum

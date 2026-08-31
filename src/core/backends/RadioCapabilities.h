@@ -558,6 +558,19 @@ struct RadioCapabilities {
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
 
+    // The DDC's own CIC/half-band decimation chain rolls off amplitude
+    // toward the extreme edges of the panadapter bandwidth -- real,
+    // bench-measured attenuation baked into the sampled data itself, not a
+    // display artifact. True for ANAN-G2, the first (and so far only) DDC-
+    // based backend in this app; Flex/HL2/Icom/Kiwi all report false, since
+    // none of their receive chains have this shape. A capability flag
+    // rather than a family-string check at the one call site
+    // (MainWindow::onConnectionStateChanged(), which drives
+    // SpectrumWidget::setPanEdgeTaperEnabled()) so a future DDC backend
+    // gets the same cosmetic edge fade automatically instead of needing
+    // its own family added to a hardcoded list.
+    bool hasDdcPanEdgeRolloff = false;
+
     // NO hasTrackingNotchFilters HERE, deliberately. TNF looks like it belongs
     // beside the three below — TnfModel's whole surface is `tnf create/remove/
     // set` and `sub tnf all`, so it passes the "does the control only emit a

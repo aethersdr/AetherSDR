@@ -58,5 +58,11 @@ The HL2 bring-up narrative itself is [`docs/HERMES.md`](../HERMES.md) — read �
 and §5 before touching `src/core/backends/hl2/`. The Python probes that
 predate the backend live in `tools/hl2/`.
 
+- [`anan-p2-backend-design.md`](anan-p2-backend-design.md) — the original RFC
+  #4970 proposal for the ANAN-G2 openHPSDR Protocol 2 backend (`AnanBackend`),
+  preserved as the historical design record rather than kept in sync with the
+  shipped code line-by-line — see the doc's own header note for what has and
+  hasn't been resolved since it was written.
+
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.

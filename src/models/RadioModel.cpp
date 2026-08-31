@@ -8,6 +8,8 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
+#include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
+#include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
 #include "core/backends/icom/IcomCredentials.h"  // password: keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
@@ -607,6 +609,26 @@ void RadioModel::handRestoredStateToBackend(const QString& serial)
 // call cannot block on the keyring — see its header.
 static void populateFamilyParams(RadioConnectRequest& req, const QString& family)
 {
+    // The DDC0 rate and ADC options are connect-time preferences selected in
+    // ConnectionPanel's ANAN-only manual-connect rows. Operating state such as
+    // frequency is deliberately absent until this backend participates in the
+    // radio-scoped RadioStateMemory contract.
+    if (family.compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0) {
+        req.params.insert(QStringLiteral("anan.ddc0RateKsps"),
+                          anan::AnanSettings::ddc0RateKsps());
+        req.params.insert(QStringLiteral("anan.ditherEnabled"),
+                          anan::AnanSettings::ditherEnabled());
+        req.params.insert(QStringLiteral("anan.randomEnabled"),
+                          anan::AnanSettings::randomEnabled());
+        req.params.insert(QStringLiteral("anan.ddc0AdcIndex"),
+                          anan::AnanSettings::ddc0AdcIndex());
+        req.params.insert(QStringLiteral("anan.bypassAdc0Filters"),
+                          anan::AnanSettings::bypassAdc0Filters());
+        req.params.insert(QStringLiteral("anan.bypassAdc1Filters"),
+                          anan::AnanSettings::bypassAdc1Filters());
+        return;
+    }
+
     if (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) != 0)
         return;
     req.params.insert(QStringLiteral("icom.username"), IcomSettings::username());
@@ -668,6 +690,12 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
 {
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
         return std::make_unique<hl2::Hl2Backend>();
+    // ANAN-G2 (openHPSDR Protocol 2). Like HL2 this is a pure seam backend —
+    // it owns no RadioConnection and no PanadapterStream, so the
+    // dynamic_cast chain in setupBackend() correctly skips it too. RX-only
+    // in this phase (aetherd ANAN P2 Phase 1b); canTransmit is false.
+    if (family.compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0)
+        return std::make_unique<anan::AnanBackend>();
     // Icom networked radios (IC-705, IC-7300MK2, …). Like HL2 this is a pure
     // seam backend — it owns no RadioConnection and no PanadapterStream, so the
     // dynamic_cast chain in setupBackend() correctly skips it and every model

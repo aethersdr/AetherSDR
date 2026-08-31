@@ -80,16 +80,27 @@ int main(int argc, char** argv)
 
     const auto icomNotice = experimentalRadioDescriptor(QStringLiteral("icom"));
     const auto hl2Notice = experimentalRadioDescriptor(QStringLiteral("hl2"));
+    const auto ananNotice = experimentalRadioDescriptor(QStringLiteral("anan"));
     check(icomNotice && icomNotice->displayName == QStringLiteral("Icom"),
           "Icom is identified as an experimental radio family");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
           "Hermes-Lite 2 is identified as an experimental radio family");
+    check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),
+          "ANAN-G2 is identified as an experimental radio family");
     check(!experimentalRadioDescriptor(QStringLiteral("flex")),
           "Flex is not marked as an experimental radio family");
     check(icomNotice
-              && experimentalRadioNoticeText(icomNotice->displayName)
+              && experimentalRadioNoticeText(icomNotice->displayName, /*transmitAvailable=*/true)
                      .contains(QStringLiteral("Help \u2192 File an Issue")),
           "the experimental notice points operators to the issue-reporting workflow");
+    check(icomNotice
+              && experimentalRadioNoticeText(icomNotice->displayName, /*transmitAvailable=*/true)
+                     .contains(QStringLiteral("receive and transmit functions are available")),
+          "a transmit-capable family's notice does not claim receive-only");
+    check(ananNotice
+              && experimentalRadioNoticeText(ananNotice->displayName, /*transmitAvailable=*/false)
+                     .contains(QStringLiteral("receive-only")),
+          "a receive-only family's notice does not falsely claim transmit support");
 
     // ---- the factory selects it ------------------------------------------
     model.connectToRadio(infoFor(QStringLiteral("icom")));

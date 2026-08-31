@@ -5927,6 +5927,21 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
+    // Keyed off RadioCapabilities::hasDdcPanEdgeRolloff (see its own
+    // comment), not a family-name check -- a future DDC-based backend gets
+    // this automatically instead of needing its own family string added
+    // here. Re-evaluate on every connect and disconnect, since
+    // backendCapabilities() only knows the CURRENTLY connected radio.
+    if (m_panStack) {
+        const bool edgeTaperEnabled =
+            connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
+        for (auto* applet : m_panStack->allApplets()) {
+            if (applet && applet->spectrumWidget()) {
+                applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
+            }
+        }
+    }
+
     // Demo scene push on connect: the applet owns the startup scene, so its
     // control state is pushed to the engine the moment the demo connects (no
     // drift between sliders and audio). Demo-ness is read from the capability

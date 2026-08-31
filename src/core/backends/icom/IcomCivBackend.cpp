@@ -359,6 +359,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // hasDaxStreams below), so there is nothing here for a host stage to blank
     // even if we wanted one.
     c.hasHostNoiseBlanker = false;
+    // No DDC in any networked Icom's receive chain — CI-V ships finished audio
+    // (see hasDaxStreams below), not a decimated IQ stream with an edge to taper.
+    c.hasDdcPanEdgeRolloff = false;
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;

@@ -394,6 +394,33 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# ANAN P2 protocol — pure wire encode/decode, standalone (no Qt / aethercore).
+# Direct port of the live-validated anan/spike/phase1a.py spike (aetherd ANAN
+# P2 Phase 1a), run against a real ANAN-G2 on the bench.
+add_executable(anan_p2_protocol_test
+    tests/anan_p2_protocol_test.cpp
+    src/core/backends/anan/P2Protocol.cpp)
+target_include_directories(anan_p2_protocol_test PRIVATE src)
+add_test(NAME anan_p2_protocol_test COMMAND anan_p2_protocol_test)
+
+# ANAN RX DSP — IQ -> WdspChannel demod + AnanSpectrum. Links aethercore
+# (WDSP+FFTW), unlike anan_p2_protocol_test above. *** READ HERMES.md §16
+# and this file's own header comment before touching expected values here —
+# the handedness pin is bench-confirmed (2026-08-21, radiocert rx +
+# independent RSP1B), not a guess. ***
+add_executable(anan_rxdsp_handedness_test tests/anan_rxdsp_handedness_test.cpp)
+target_include_directories(anan_rxdsp_handedness_test PRIVATE src)
+target_link_libraries(anan_rxdsp_handedness_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME anan_rxdsp_handedness_test COMMAND anan_rxdsp_handedness_test)
+
+# ANAN backend -- IRadioBackend implementor. Pieces testable without a live
+# radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
+# passband-reset-only-on-actual-mode-change idempotence rule.
+add_executable(anan_backend_test tests/anan_backend_test.cpp)
+target_include_directories(anan_backend_test PRIVATE src)
+target_link_libraries(anan_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME anan_backend_test COMMAND anan_backend_test)
+
 # IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
 # An Icom networked radio is two protocols stacked: CI-V is the command plane
 # and RS-BA1 is the UDP transport it travels inside. Both halves unit-test
@@ -3172,6 +3199,13 @@ add_executable(icom_settings_test tests/icom_settings_test.cpp)
 target_include_directories(icom_settings_test PRIVATE src tests)
 target_link_libraries(icom_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_settings_test COMMAND icom_settings_test)
+
+# ANAN-G2 settings ("Anan" root key, Principle V). Own process because
+# AppSettings is a process-wide singleton, same reasoning as icom_settings_test.
+add_executable(anan_settings_test tests/anan_settings_test.cpp)
+target_include_directories(anan_settings_test PRIVATE src tests)
+target_link_libraries(anan_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME anan_settings_test COMMAND anan_settings_test)
 
 add_executable(icom_family_test tests/icom_family_test.cpp)
 target_include_directories(icom_family_test PRIVATE src)
