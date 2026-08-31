@@ -37,7 +37,7 @@ bool isUsbFallbackPassband(const QString& mode)
 int main()
 {
     // --- the supported list is exactly the raw-IQ-honourable set ------------
-    const QStringList supported = hl2SupportedModes();
+    const QStringList supported = supportedModes();
     check(supported.contains("RTTY") && supported.contains("DFM"),
           "RTTY and DFM are advertised");
     check(!supported.contains("DSTR") && !supported.contains("DRM")
@@ -58,11 +58,20 @@ int main()
     check(modeFromString("RTTY") == Mode::Usb,
           "RTTY demodulates as USB (the Baudot decode is client-side)");
     {
+        // The contract (Plan 2.2): a narrow window around the decoder's default
+        // mark (2125 Hz) / 170 Hz shift, wide enough for either polarity
+        // (space at 1955 or 2295) and no wider -- distinctly tighter than an
+        // SSB voice passband, so an adjacent RTTY signal does not bleed in.
+        constexpr int kMark = 2125;
+        constexpr int kShift = 170;
         const auto pb = defaultPassbandForMode("RTTY");
-        check(pb.first == 1900 && pb.second == 2400,
-              "RTTY passband is the narrow 1900..2400 window, not USB's 150..3000");
-        check((pb.second - pb.first) < 700,
-              "RTTY passband is narrow enough to reject an adjacent signal");
+        const int width = pb.second - pb.first;
+        check(!isUsbFallbackPassband("RTTY"),
+              "RTTY has its own passband, not the USB fallback");
+        check(pb.first <= (kMark - kShift) && pb.second >= (kMark + kShift),
+              "RTTY passband covers both mark and space in either polarity");
+        check(width > kShift && width <= 450,
+              "RTTY passband is wider than the shift but far tighter than SSB");
     }
     check(isKnownModeString("RTTY"), "RTTY survives the restore boundary");
 
@@ -78,13 +87,20 @@ int main()
     }
     check(isKnownModeString("DFM"), "DFM survives the restore boundary");
 
+    // --- DRM is firmly not a thing on this radio (no decoder anywhere) -----
+    check(modeFromString("DRM") == Mode::Usb,
+          "DRM is no longer mapped — it falls back to USB if forced");
+    check(isUsbFallbackPassband("DRM"), "DRM gets no dedicated passband");
+    check(!isKnownModeString("DRM"),
+          "a restored DRM slice is dropped, not honoured");
+
     // --- regression: the modes that already worked still map the same ------
     check(modeFromString("USB") == Mode::Usb && modeFromString("LSB") == Mode::Lsb
               && modeFromString("CW") == Mode::Cwu && modeFromString("CWL") == Mode::Cwl
               && modeFromString("AM") == Mode::Am && modeFromString("SAM") == Mode::Sam
               && modeFromString("FM") == Mode::Fm && modeFromString("NFM") == Mode::Fm
               && modeFromString("DIGU") == Mode::Digu && modeFromString("DIGL") == Mode::Digl
-              && modeFromString("DSB") == Mode::Dsb && modeFromString("DRM") == Mode::Drm
+              && modeFromString("DSB") == Mode::Dsb
               && modeFromString("WFM") == Mode::Wbfm,
           "the pre-Plan-2 mode map is unchanged");
     check(modeFromString("NONSENSE") == Mode::Usb,

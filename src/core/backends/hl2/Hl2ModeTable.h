@@ -23,10 +23,11 @@
 namespace AetherSDR::hl2 {
 
 // The set of modes the HL2 backend genuinely supports, published on every
-// SliceDelta so the VFO combo shows exactly these (no silent fall-through, and
-// no D-STAR / DRM / FreeDV entries the raw-IQ path cannot honour). "CW" is the
-// app-wide name for upper-sideband CW; CWL still works if sent explicitly.
-inline const QStringList& hl2SupportedModes()
+// SliceDelta so the VFO combo shows exactly these -- no silent fall-through,
+// and no D-STAR / DRM / FreeDV entries the raw-IQ path cannot honour (no AMBE
+// vocoder, no DRM decoder, no bus-B audio tap yet). "CW" is the app-wide name
+// for upper-sideband CW; CWL still works if sent explicitly.
+inline const QStringList& supportedModes()
 {
     static const QStringList kModes = {
         QStringLiteral("USB"),  QStringLiteral("LSB"),  QStringLiteral("CW"),
@@ -67,10 +68,14 @@ inline WdspChannel::Mode modeFromString(const QString& mode) noexcept
     if (u == QLatin1String("DIGL")) return WdspChannel::Mode::Digl;
     // RTTY: a narrow USB slice. The Baudot decode is client-side
     // (RttyDecoder, on rxDemodAudioReady), so WDSP just needs to hand it clean
-    // audio around the decoder's mark/space tones — see defaultPassbandForMode.
-    if (u == QLatin1String("RTTY")) return WdspChannel::Mode::Usb;
+    // audio around the decoder's mark/space tones -- see defaultPassbandForMode.
+    if (u == QLatin1String("RTTY")) {
+        return WdspChannel::Mode::Usb;
+    }
     if (u == QLatin1String("SAM"))  return WdspChannel::Mode::Sam;
-    if (u == QLatin1String("DRM"))  return WdspChannel::Mode::Drm;
+    // No DRM entry: WDSP's DRM mode only sets the demod up for an EXTERNAL DRM
+    // decoder, and there is none in the tree. It is not advertised and maps to
+    // the USB fallback if forced, rather than to a mode with nothing behind it.
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) {
         return WdspChannel::Mode::Wbfm;
     }
@@ -80,18 +85,20 @@ inline WdspChannel::Mode modeFromString(const QString& mode) noexcept
 // Is `mode` a name modeFromString() genuinely maps (rather than falling back to
 // USB)? The restore boundary uses this so a corrupt document's mode string is
 // dropped instead of reaching Receiver::mode, the UI, and -- via capture --
-// re-persisting itself (PR #4619 review, Ozy311).
+// re-persisting itself (PR #4619 review, Ozy311). It is the advertised set plus
+// the alias/legacy spellings modeFromString() also accepts but the combo does
+// not feature (explicit CW sidebands, double-sideband, wideband FM). No DRM:
+// there is no decoder, so a restored "DRM" is dropped like any other mode this
+// backend cannot honour.
 inline bool isKnownModeString(const QString& mode) noexcept
 {
-    static const QStringList kKnown = {
-        QStringLiteral("LSB"),  QStringLiteral("USB"),  QStringLiteral("DSB"),
-        QStringLiteral("CWL"),  QStringLiteral("CWU"),  QStringLiteral("CW"),
-        QStringLiteral("FM"),   QStringLiteral("NFM"),  QStringLiteral("DFM"),
-        QStringLiteral("AM"),   QStringLiteral("DIGU"), QStringLiteral("DIGL"),
-        QStringLiteral("RTTY"), QStringLiteral("SAM"),  QStringLiteral("DRM"),
+    static const QStringList kLegacySpellings = {
+        QStringLiteral("CWU"),  QStringLiteral("CWL"), QStringLiteral("DSB"),
         QStringLiteral("WBFM"), QStringLiteral("WFM"),
     };
-    return kKnown.contains(mode.toUpper());
+    const QString u = mode.toUpper();
+    return supportedModes().contains(u, Qt::CaseInsensitive)
+           || kLegacySpellings.contains(u);
 }
 
 // WdspChannel::Mode -> canonical name, for the `dsp.get` readback. The inverse
@@ -135,10 +142,12 @@ inline std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept
     if (u == QLatin1String("DIGU")) return {150, 3000};
     if (u == QLatin1String("DIGL")) return {-3000, -150};
     // RTTY: a narrow USB window over RttyDecoder's default mark (2125 Hz) and
-    // 170 Hz shift, wide enough for either polarity (space at 1955 or 2295) plus
-    // filter skirt. Narrow so an adjacent RTTY signal 300 Hz away does not bleed
-    // into the mark/space discriminator.
-    if (u == QLatin1String("RTTY")) return {1900, 2400};
+    // 170 Hz shift. 400 Hz spans the mark plus space in EITHER polarity (space
+    // at 1955 normal-reverse or 2295 normal) with a little filter skirt, and no
+    // more -- an adjacent RTTY signal a few hundred Hz off must not bleed into
+    // the mark/space discriminator. Wider than the shift itself (170 Hz) but far
+    // tighter than an SSB voice passband.
+    if (u == QLatin1String("RTTY")) return {1950, 2350};
     // CW: 500 Hz CENTRED ON THE CARRIER, both sidebands, because in CW the
     // operator-facing passband is measured from the signal and not from the
     // audio it becomes. The pitch offset lives in the BFO (cwBfoHz) instead --
@@ -161,7 +170,6 @@ inline std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept
     if (u == QLatin1String("FM") || u == QLatin1String("NFM")
         || u == QLatin1String("DFM")) return {-8000, 8000};
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return {-40000, 40000};
-    if (u == QLatin1String("DRM")) return {-5000, 5000};
     return {150, 3000};   // matches modeFromString's USB fallback
 }
 

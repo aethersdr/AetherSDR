@@ -28,6 +28,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2ModeTable.h"
 #include "core/RadioDiscovery.h"
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
@@ -501,10 +502,12 @@ static void testModeDefaultPassband()
 
     int low = 0, high = 0;
     int deltas = 0;
+    QStringList modeList;
     QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
                      [&](int, const SliceDelta& d) {
         if (d.filterLow)  low  = *d.filterLow;
         if (d.filterHigh) high = *d.filterHigh;
+        if (d.modeList)   modeList = *d.modeList;
         ++deltas;
     });
 
@@ -514,6 +517,18 @@ static void testModeDefaultPassband()
     const int cwWidth = high - low;
     check(cwWidth > 0 && cwWidth <= 900,
           "CWU gets a CW-width passband, not the SSB default");
+
+    // Plan 2: every slice delta carries the backend's authoritative mode list,
+    // so the VFO combo shows exactly the raw-IQ-honourable set — RTTY and DFM
+    // are in it; D-STAR / DRM / FreeDV are not.
+    check(modeList == hl2::supportedModes(),
+          "the slice delta carries the authoritative mode list");
+    check(modeList.contains(QStringLiteral("RTTY"))
+              && modeList.contains(QStringLiteral("DFM"))
+              && !modeList.contains(QStringLiteral("DSTR"))
+              && !modeList.contains(QStringLiteral("DRM"))
+              && !modeList.contains(QStringLiteral("FDVU")),
+          "the list adds RTTY/DFM and omits D-STAR/DRM/FreeDV");
 
     // "CW" is the spelling TciProtocol produces for TCI's `cw` and the one a
     // Flex reports; only "CWU" was recognised, so plain CW silently landed on

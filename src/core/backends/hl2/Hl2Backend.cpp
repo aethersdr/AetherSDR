@@ -191,8 +191,9 @@ int wdspAgcMode(const QString& mode) noexcept
 
 // modeFromString(), isKnownModeString(), wdspModeName() and
 // defaultPassbandForMode() now live in Hl2ModeTable.h so they are unit-testable
-// without a connected backend (tests/hl2_mode_table_test.cpp). Brought into this
-// TU's scope by the header's `using` below.
+// without a connected backend (tests/hl2_mode_table_test.cpp). This TU is inside
+// namespace AetherSDR::hl2, so the calls below resolve to the header's versions
+// with no `using`.
 
 // The same question for the AGC vocabulary, and it needs asking for the same
 // reason: wdspAgcMode() FALLS BACK to medium for anything it does not
@@ -5578,7 +5579,7 @@ void Hl2Backend::emitSliceState(int ddc)
     // mode can be selected that silently demodulates as something else, and
     // D-STAR / DRM / FreeDV — which need a decoder or an audio path this raw-IQ
     // backend does not have — are simply not offered.
-    d.modeList = hl2SupportedModes();
+    d.modeList = supportedModes();
     d.filterLow = r->filterLowHz;
     d.filterHigh = r->filterHighHz;
     d.audioGain = qRound(r->audioGain * 100.0f);

@@ -149,7 +149,7 @@ void SliceModel::setMode(const QString& mode)
     // silent fall-through"). Refuse an operator/CAT/rigctl/TCI request for a
     // mode the radio does not offer. An empty list means "unconstrained"
     // (Sim, or a radio still mid-handshake). Status application goes through
-    // applyDelta(), which assigns m_mode directly and never reaches here, so
+    // applyChanges(), which assigns m_mode directly and never reaches here, so
     // this cannot reject the radio's own restored state (Principle II).
     if (!m_modeList.isEmpty()
         && !m_modeList.contains(mode, Qt::CaseInsensitive)) {
