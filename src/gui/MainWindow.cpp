@@ -6028,12 +6028,23 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // Auto-hide the connection dialog on successful connect
         m_connPanel->hide();
 
-        // Close reconnect dialog if it was showing
-        if (m_reconnectDlg) {
+        // A transport connection is not the end of an in-progress radio wake:
+        // RS-BA1 can authenticate and even deliver scope frames before CI-V
+        // answers. Keep the wake dialog until the backend supplies its explicit
+        // protocol-readiness completion update.
+        if (m_reconnectDlg && !m_radioWakeInProgress) {
             QDialog* reconnectDialog = m_reconnectDlg;
             m_reconnectDlg = nullptr;
             reconnectDialog->close();
             reconnectDialog->deleteLater();
+        }
+        if (m_radioWakeInProgress) {
+            const QString progress = m_panadapterConnectionAnimationLabel.isEmpty()
+                ? tr("Connecting to radio…")
+                : m_panadapterConnectionAnimationLabel;
+            m_connStatusLabel->setText(tr("Connecting"));
+            m_connPanel->setStatusText(progress);
+            setPanadapterConnectionAnimation(true, progress);
         }
 
         // Load band stack bookmarks for this radio
@@ -6366,16 +6377,23 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
 
+        const QString recoveryLabel = m_radioWakeInProgress
+            && !m_panadapterConnectionAnimationLabel.isEmpty()
+            ? m_panadapterConnectionAnimationLabel
+            : tr("Reconnecting to radio…");
         setPanadapterConnectionAnimation(
             !m_userDisconnected && !terminalConnectionFailure,
-            "Reconnecting to radio…");
+            recoveryLabel);
 
         if (terminalConnectionFailure) {
             showConnectionDialog();
         }
 
-        // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        // A wake-capable radio deliberately recycles its authenticated transport
+        // while booting. The panadapter wake overlay already explains that
+        // bounded operation, so do not stack a flashing disconnect dialog over
+        // it. Ordinary unexpected disconnects retain the existing dialog.
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioWakeInProgress) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));
@@ -6395,7 +6413,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
             root->setContentsMargins(0, 0, 0, 0);
             root->setSpacing(0);
 
-            auto* titleBar = new FramelessWindowTitleBar(tr("Radio Disconnected"), m_reconnectDlg);
+            auto* titleBar = new FramelessWindowTitleBar(
+                tr("Radio Disconnected"), m_reconnectDlg);
             titleBar->setObjectName(QStringLiteral("framelessWindowTitleBar"));
             titleBar->setVisible(frameless);
             root->addWidget(titleBar);
@@ -6412,7 +6431,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
             title->setAlignment(Qt::AlignCenter);
             layout->addWidget(title);
 
-            auto* body = new QLabel(tr("AetherSDR is attempting to reconnect automatically."), content);
+            auto* body = new QLabel(
+                tr("AetherSDR is attempting to reconnect automatically."), content);
             body->setObjectName(QStringLiteral("reconnectBody"));
             body->setAlignment(Qt::AlignCenter);
             body->setWordWrap(true);

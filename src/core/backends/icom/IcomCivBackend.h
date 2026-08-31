@@ -304,6 +304,8 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
+    void queueConnectIdentityProbe(std::string key);
+    void wakeForConnect();
     int queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup);
     void finishMemoryRefresh(bool success);
     void finishMemoryRefreshWhenDrained(quint64 generation);
@@ -337,6 +339,22 @@ private:
     bool m_civAmbiguous = false;
     // Whether sendConnectReadBurst() has already run this session.
     bool m_connectBurstSent = false;
+    // IC-9700 network wake is conditional: only a failed directed identity
+    // read admits 18 01, and each fresh RS-BA1 session gets at most one write.
+    bool m_connectIdentityPending = false;
+    // True from the first transport-connected edge of a wake-capable radio
+    // until its directed CI-V identity reply. Scope packets can arrive before
+    // that proof; do not expose a half-ready panadapter to the operator.
+    bool m_connectReadinessPending = false;
+    bool m_connectWakeAttempted = false;
+    bool m_connectSessionRetryAttempted = false;
+    qint64 m_lastConnectSessionRetryUtcMs = 0;
+    // Survives backend reconnects so the hardware-proven two-session sequence
+    // cannot become an unbounded reconnect loop.
+    qint64 m_lastConnectWakeUtcMs = 0;
+    int m_connectWakeAttempts = 0;
+    bool m_postWakeStallReconnectIssued = false;
+    static constexpr int kConnectWakeCooldownMs = 300000;
     bool m_memoryRefreshActive = false;
     quint64 m_memoryRefreshGeneration = 0;
     QSet<int> m_memoryRefreshReplies;
@@ -350,6 +368,7 @@ private:
     // address, so a radio that answers nothing still connects.
     QTimer* m_civDetectTimer = nullptr;
     static constexpr int kCivDetectTimeoutMs = 1000;
+    static constexpr int kConnectIdentityTimeoutMs = 3000;
     // applyScopeStartup() now has two callers — the connect edge and a late
     // model resolution — and the radio only needs telling once.
     bool m_scopeStarted = false;
@@ -392,6 +411,10 @@ private:
     QTimer* m_meterTimer = nullptr;
     QTimer* m_linkTimer = nullptr;
     QTimer* m_tuneTimer = nullptr;
+    // Explicit hardware-test state. Power-off quiesces every CI-V producer so
+    // the response-free command is not followed by traffic that keeps the
+    // radio awake. Ordinary disconnect never enters this state.
+    bool m_powerTestQuiesced = false;
 
     QString m_deviceName;
     std::uint64_t m_frequencyHz = 0;

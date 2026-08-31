@@ -1014,6 +1014,9 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    // Non-fatal progress while a backend is still completing an explicit
+    // connection request (for example, waiting for a radio to wake).
+    void connectionProgress(const QString& msg);
     // Radio CONFIGURATION advice that does not end the session. See
     // IRadioBackend::configurationWarning for why this is a separate channel.
     void configurationWarning(const QString& msg);

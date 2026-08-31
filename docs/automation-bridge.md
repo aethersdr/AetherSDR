@@ -3299,6 +3299,15 @@ hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
 should only be enabled briefly when these structured diagnostics are
 insufficient.
 
+**`civ power standby|wake|probe|setting`** sends the documented CI-V power command through
+the active authenticated Icom session. `wake` applies the active model's
+verified native-LAN framing; unsupported models fail closed. `standby` first
+quiesces CI-V polling, and `probe` sends one identity read while quiesced so a
+hardware test can distinguish an asleep radio from an artificially quiet
+client. This is an explicit hardware-test action only: disconnect never powers
+the radio down. `setting` reads the IC-9700's Power OFF Setting (`1A 05 01 46`)
+without exposing the raw CI-V injector.
+
 ### `controls`
 
 The CI-V control and meter registry, joined against what is actually wired.

@@ -78,6 +78,7 @@
 #include <QAbstractButton>
 #include <QCheckBox>
 #include <QCoreApplication>
+
 #include <QDateTime>
 #include <QPointer>
 #include <QThread>
@@ -89,6 +90,32 @@
 namespace AetherSDR {
 
 namespace {
+// These are internal Flex-session setup and display-maintenance messages. A
+// non-Flex backend has no text command plane, so RadioModel correctly logs the
+// drop, but none represents an operator touching an unsupported control. Keep
+// them out of the user-facing toast while preserving the diagnostic signal for
+// every actual control request.
+bool isInternalNonFlexCommand(const QString& command)
+{
+    if (command.startsWith(QStringLiteral("sub "))
+        || command == QStringLiteral("transmit set dax=0")
+        || command.startsWith(QStringLiteral("display pan rfgain_info "))) {
+        return true;
+    }
+    if (command.startsWith(QStringLiteral("display panafall set "))) {
+        return command.contains(QStringLiteral(" color_gain="))
+            || command.contains(QStringLiteral(" black_level="))
+            || command.contains(QStringLiteral(" auto_black="));
+    }
+    if (command.startsWith(QStringLiteral("display pan set "))) {
+        return command.contains(QStringLiteral(" xpixels="))
+            || command.contains(QStringLiteral(" ypixels="))
+            || command.contains(QStringLiteral(" wnb="))
+            || command.contains(QStringLiteral(" wnb_level="));
+    }
+    return false;
+}
+
 QString defaultPanLayoutForCount(int panCount)
 {
     static const QMap<int, QString> kDefaultLayouts = {
@@ -706,7 +733,9 @@ void MainWindow::wireRadioModel()
             m_commandDroppedNoticeShown = false;
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
-            this, [this](const QString&) {
+            this, [this](const QString& command) {
+        if (isInternalNonFlexCommand(command))
+            return;
         if (m_commandDroppedNoticeShown)
             return;
         m_commandDroppedNoticeShown = true;
@@ -811,6 +840,68 @@ void MainWindow::wireRadioModel()
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    connect(&m_radioModel, &RadioModel::connectionProgress,
+            this, [this](const QString& message) {
+        // An empty update is the backend's positive, protocol-level readiness
+        // proof. A transport-connected edge is insufficient: the IC-9700 can
+        // authenticate RS-BA1 while its CI-V command plane is still asleep.
+        if (message.isEmpty()) {
+            if (m_radioWakeInProgress) {
+                m_radioWakeInProgress = false;
+                ++m_radioWakeGeneration;
+                if (m_reconnectDlg) {
+                    QDialog* wakeDialog = m_reconnectDlg;
+                    m_reconnectDlg = nullptr;
+                    wakeDialog->close();
+                    wakeDialog->deleteLater();
+                }
+                m_connStatusLabel->setText(tr("Connected"));
+                m_connPanel->setStatusText(tr("Connected"));
+                setPanadapterConnectionAnimation(false);
+                statusBar()->showMessage(tr("The radio is awake and connected."), 5000);
+            }
+            return;
+        }
+
+        const bool startingWake = !m_radioWakeInProgress;
+        m_radioWakeInProgress = true;
+        const int generation = startingWake ? ++m_radioWakeGeneration
+                                            : m_radioWakeGeneration;
+        statusBar()->showMessage(message, kRadioWakeWatchdogMs);
+        m_connPanel->setStatusText(message);
+        setPanadapterConnectionAnimation(true, message);
+
+        if (!startingWake) {
+            return;
+        }
+
+        // The complete wake includes authenticated RS-BA1 reconnects, not just
+        // the response-free CI-V write. Bound the user-visible operation across
+        // those session generations; a per-session timeout would restart on
+        // every retry and could leave the UI claiming progress forever.
+        QTimer::singleShot(kRadioWakeWatchdogMs, this, [this, generation]() {
+            if (!m_radioWakeInProgress || generation != m_radioWakeGeneration) {
+                return;
+            }
+            m_radioWakeInProgress = false;
+            ++m_radioWakeGeneration;
+            m_userDisconnected = true;
+            m_radioModel.disconnectFromRadio();
+            if (m_reconnectDlg) {
+                QDialog* wakeDialog = m_reconnectDlg;
+                m_reconnectDlg = nullptr;
+                wakeDialog->close();
+                wakeDialog->deleteLater();
+            }
+            const QString failure = tr(
+                "The radio did not finish waking. Check its remote-power setting and try again.");
+            m_connPanel->setStatusText(failure);
+            m_connStatusLabel->setText(tr("Error"));
+            statusBar()->showMessage(failure, 15000);
+            setPanadapterConnectionAnimation(false);
+            showConnectionDialog();
+        });
+    });
     // Radio configuration advice: shown, but it does NOT touch the session.
     // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
     // 15 s rather than the usual 4: this one names a four-level menu path the

@@ -48,6 +48,20 @@ std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd, std::
     return buildFrame(to, cmd, body);
 }
 
+std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to, std::size_t extraPreambleBytes,
+                                     std::uint8_t from)
+{
+    std::vector<std::uint8_t> frame = buildFrameSub(to, cmd::kPower, 0x01, {});
+    frame[3] = from;
+    frame.insert(frame.begin(), extraPreambleBytes, kCivPreamble);
+    return frame;
+}
+
+std::vector<std::uint8_t> cmdPowerOff(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kPower, 0x00, {});
+}
+
 // Which commands carry a subcommand is a per-command fact, not a positional
 // one. Treating every second byte as a subcommand would turn command 0x05's
 // first frequency digit into a "subcommand"; treating none of them as one
@@ -85,6 +99,16 @@ bool commandHasSubcommand(std::uint8_t command)
 
 std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
 {
+    // Wake synchronization fill is a run of FE bytes before the standard FE FE
+    // envelope. Parse from the final pair immediately before the first address.
+    std::size_t firstNonPreamble = 0;
+    while (firstNonPreamble < frame.size()
+           && frame[firstNonPreamble] == kCivPreamble) {
+        ++firstNonPreamble;
+    }
+    if (firstNonPreamble > 2) {
+        frame = frame.subspan(firstNonPreamble - 2);
+    }
     // FE FE <to> <from> <cmd> ... <FD>  — the shortest legal frame is 6 bytes
     // (an FB/FA acknowledgement with no payload).
     if (frame.size() < 6)

@@ -1,4 +1,5 @@
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomConnectBootstrap.h"
 
 #include <QDateTime>
 #include <QHash>
@@ -765,6 +766,18 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_civReported = 0;
     m_civAmbiguous = false;
     m_connectBurstSent = false;
+    m_connectIdentityPending = false;
+    m_connectReadinessPending = false;
+    m_connectWakeAttempted = false;
+    const qint64 connectNowUtcMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastConnectWakeUtcMs <= 0
+        || connectNowUtcMs - m_lastConnectWakeUtcMs >= kConnectWakeCooldownMs) {
+        m_connectWakeAttempts = 0;
+    }
+    if (m_lastConnectSessionRetryUtcMs <= 0
+        || connectNowUtcMs - m_lastConnectSessionRetryUtcMs >= kConnectWakeCooldownMs) {
+        m_connectSessionRetryAttempted = false;
+    }
     m_modelByName = nullptr;
     // 48 kHz, FIXED — the rate is deliberately not negotiable here.
     //
@@ -806,6 +819,7 @@ void IcomCivBackend::disconnectRadio()
 {
     finishMemoryRefresh(false);
     m_tuneTimer->stop();
+    m_powerTestQuiesced = false;
     ++m_sessionGeneration;
     m_civRecoveryStartedAtMs = 0;
     m_lastCivRecoveryAttemptAtMs = 0;
@@ -1079,6 +1093,91 @@ void IcomCivBackend::sendConnectReadBurst()
         queueStartupRead(cmdReadTuneOffset(m_session->civAddress(), sub));
     queueStartupRead(cmdReadTuner(m_session->civAddress()));
 
+}
+
+void IcomCivBackend::queueConnectIdentityProbe(std::string key)
+{
+    if (!m_session) {
+        return;
+    }
+    m_connectIdentityPending = true;
+    queueRead(cmdReadId(m_session->civAddress()), key,
+              IcomCivScheduler::Priority::Maintenance);
+    pumpCiv(nowMs());
+    const std::uint64_t generation = m_sessionGeneration;
+    QTimer::singleShot(kConnectIdentityTimeoutMs, this, [this, generation] {
+        if (!m_connectIdentityPending || generation != m_sessionGeneration) {
+            return;
+        }
+        m_connectIdentityPending = false;
+        if (!m_connectWakeAttempted) {
+            const qint64 nowUtcMs = QDateTime::currentMSecsSinceEpoch();
+            const bool wakeRecently = m_lastConnectWakeUtcMs > 0
+                && nowUtcMs - m_lastConnectWakeUtcMs < kConnectWakeCooldownMs;
+            const bool wakeLimitReached = wakeRecently && m_connectWakeAttempts >= 2;
+            const ConnectPowerAction action = connectPowerAction(
+                m_modelByName, ConnectIdentityResult::TimedOut,
+                m_connectSessionRetryAttempted, wakeLimitReached);
+            if (action == ConnectPowerAction::RetrySession) {
+                m_connectSessionRetryAttempted = true;
+                m_lastConnectSessionRetryUtcMs = nowUtcMs;
+                emit connectionProgress(QStringLiteral("Connecting to radio…"));
+                qCInfo(lcIcomLink)
+                    << "initial IC-9700 identity timed out; retrying one fresh session before wake";
+                m_session->stop();
+                onSessionDisconnected(QString{});
+            } else if (action == ConnectPowerAction::Wake) {
+                qCInfo(lcIcomLink)
+                    << "explicit IC-9700 connect has no CI-V payload; sending bounded wake";
+                wakeForConnect();
+            }
+        }
+    });
+}
+
+void IcomCivBackend::wakeForConnect()
+{
+    if (!m_session || !m_modelByName) {
+        return;
+    }
+    const std::optional<PowerOnProfile> powerOn =
+        profileFor(*m_modelByName).powerOn;
+    if (!powerOn) {
+        return;
+    }
+
+    m_connectWakeAttempted = true;
+    ++m_connectWakeAttempts;
+    m_lastConnectWakeUtcMs = QDateTime::currentMSecsSinceEpoch();
+    m_postWakeStallReconnectIssued = false;
+    m_connectIdentityPending = false;
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
+
+    std::vector<std::uint8_t> frame = cmdPowerOn(
+        m_session->civAddress(), powerOn->extraPreambleBytes,
+        powerOn->controllerAddress);
+    traceCiv(/*outbound=*/true, frame);
+    m_session->sendCiv(frame);
+    emit connectionProgress(m_connectWakeAttempts == 1
+        ? QStringLiteral("Waking the radio… Connection will continue automatically.")
+        : QStringLiteral("The radio is still starting… Sending one final wake request."));
+
+    const std::uint64_t generation = m_sessionGeneration;
+    QTimer::singleShot(powerOn->readyDelayMs, this, [this, generation] {
+        if (!m_session || !m_connected || generation != m_sessionGeneration) {
+            return;
+        }
+        // A cold standby pipe does not become usable after 18 01 even though
+        // the radio itself wakes. Hardware proof on the IC-9700 showed that a
+        // fresh RS-BA1 session is required. End this otherwise healthy-looking
+        // session without an error: RadioModel treats the edge as an expected
+        // recoverable disconnect and reconnects automatically.
+        qCInfo(lcIcomLink)
+            << "IC-9700 wake delay complete; opening a fresh RS-BA1 session";
+        m_session->stop();
+        onSessionDisconnected(QString{});
+    });
 }
 
 int IcomCivBackend::queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup)
@@ -1488,8 +1587,13 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
         m_civSeedAddress = m_modelByName->civAddress;
     }
 
-    // ONE BROADCAST 0x19 0x00 — the actual auto-detect, and the only frame this
-    // change adds to the connect edge.
+    // IDENTITY BEFORE POWER. On a hardware-verified IC-9700, an authenticated
+    // RS-BA1 session survives network standby but its CI-V pipe has two observed
+    // shapes: an existing pipe rejects 19 00 with FA, while a cold-start pipe
+    // carries no payload at all. This function is reached only after the
+    // operator deliberately requested Connect, so either standby shape admits
+    // one IC-9700 wake. An ordinary awake identity continues without touching
+    // power; every unverified model fails closed.
     //
     // CI-V is addressed, so a directed query can only ever confirm an address we
     // already believe; asked at 0x00 the radio answers with the address it
@@ -1503,7 +1607,12 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     //
     // SENT ONCE PER CONNECT. Never polled, never retried on a timer — see the
     // bounded wait below and RFC #4983.
-    if (!m_civAddressPinned) {
+    const bool conditionalWake = m_modelByName
+        && profileFor(*m_modelByName).powerOn.has_value();
+    m_connectReadinessPending = conditionalWake;
+    if (conditionalWake) {
+        queueConnectIdentityProbe("identity.connect-probe");
+    } else if (!m_civAddressPinned) {
         queueRead(cmdReadId(kBroadcastAddress), "identity.broadcast",
                   IcomCivScheduler::Priority::Maintenance);
     }
@@ -1516,9 +1625,9 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // correction path. Only a radio whose name we do not recognise waits, and
     // only for as long as it takes to learn where to send the snapshot; sending
     // it to a guessed address first would be twenty frames to nobody.
-    if (m_civAddressPinned || m_modelByName) {
+    if (!conditionalWake && (m_civAddressPinned || m_modelByName)) {
         sendConnectReadBurst();
-    } else {
+    } else if (!conditionalWake) {
         m_civDetectTimer = new QTimer(this);
         m_civDetectTimer->setSingleShot(true);
         connect(m_civDetectTimer, &QTimer::timeout, this, [this] {
@@ -1535,7 +1644,9 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
         });
         m_civDetectTimer->start(kCivDetectTimeoutMs);
     }
-    applyScopeStartup();
+    if (!conditionalWake) {
+        applyScopeStartup();
+    }
 
     // CONNECTED FIRST, then the state.
     //
@@ -1650,11 +1761,15 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 
     m_meterTimer = new QTimer(this);
     connect(m_meterTimer, &QTimer::timeout, this, &IcomCivBackend::onMeterTick);
-    m_meterTimer->start(kMeterTickMs);
+    if (!conditionalWake) {
+        m_meterTimer->start(kMeterTickMs);
+    }
 
     m_linkTimer = new QTimer(this);
     connect(m_linkTimer, &QTimer::timeout, this, &IcomCivBackend::onLinkTick);
-    m_linkTimer->start(kLinkTickMs);
+    if (!conditionalWake) {
+        m_linkTimer->start(kLinkTickMs);
+    }
 
     // Start the first snapshot request now.  Every remaining startup/control/
     // meter request leaves through the same paced writer on timer ticks.
@@ -1838,7 +1953,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         emit panCenterBandwidthChanged(panId(),
                                        static_cast<double>(sweep->centreHz()) / 1e6,
                                        static_cast<double>(sweep->bandwidthHz()) / 1e6);
-        emit spectrumFrameReady(0, floatBytes(toDbm(*sweep, geom, m_scopeCal)));
+        if (!m_connectReadinessPending) {
+            emit spectrumFrameReady(0, floatBytes(toDbm(*sweep, geom, m_scopeCal)));
+        }
         return;
     }
 
@@ -1868,8 +1985,28 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     if (frame.cmd == cmd::kReadId && frame.from == kControllerAddress)
         return;
 
+    const IcomCivScheduler::Stats schedulerBefore = m_civScheduler.stats();
+    const bool connectIdentityTransaction = m_connectIdentityPending
+        && (schedulerBefore.inFlightKey == "identity.connect-probe"
+            || schedulerBefore.inFlightKey == "identity.post-wake");
     const IcomCivScheduler::Observation observation =
         m_civScheduler.observe(frame, frameAtMs);
+    if (connectIdentityTransaction && frame.isNg()) {
+        const qint64 nowUtcMs = QDateTime::currentMSecsSinceEpoch();
+        const bool wakeRecently = m_lastConnectWakeUtcMs > 0
+            && nowUtcMs - m_lastConnectWakeUtcMs < kConnectWakeCooldownMs;
+        const bool wakeLimitReached = wakeRecently && m_connectWakeAttempts >= 2;
+        const ConnectPowerAction action = connectPowerAction(
+            m_modelByName, ConnectIdentityResult::Rejected,
+            m_connectSessionRetryAttempted, wakeLimitReached);
+        m_connectIdentityPending = false;
+        if (action == ConnectPowerAction::Wake) {
+            qCInfo(lcIcomLink)
+                << "IC-9700 rejected the connect identity probe; sending bounded wake";
+            wakeForConnect();
+        }
+        return;
+    }
     if (recoveryFrequencyCandidate
         && observation != IcomCivScheduler::Observation::Stale) {
         // CI-V has no transaction identifier. The strongest correlation the
@@ -1908,6 +2045,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     switch (frame.cmd) {
     case cmd::kReadId: {
         if (auto addr = parseModelIdReply(frame)) {
+            const bool completedReadiness = m_connectReadinessPending;
+            m_connectReadinessPending = false;
+            m_connectSessionRetryAttempted = false;
+            m_lastConnectSessionRetryUtcMs = 0;
+            m_connectWakeAttempts = 0;
+            const bool completesConnectProbe = m_connectIdentityPending;
+            m_connectIdentityPending = false;
             // THE ADDRESS ARRIVES TWICE — in the frame's `from` byte and in the
             // payload — and they agreed on every measured run. Prefer the
             // payload, because that is what the command is defined to answer,
@@ -1921,6 +2065,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                                   << "- using the payload";
             }
             adoptReportedCivAddress(*addr);
+            if (completedReadiness) {
+                emit connectionProgress(QString{});
+            }
             // AMBIGUOUS BUS: two devices answered with different addresses, so
             // neither one's identity can be trusted either. Leave m_model where
             // the name put it.
@@ -1969,6 +2116,16 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 applyScopeStartup();
             }
             publishIdentity();
+            if (completesConnectProbe && !m_connectBurstSent) {
+                sendConnectReadBurst();
+                applyScopeStartup();
+                if (m_meterTimer) {
+                    m_meterTimer->start(kMeterTickMs);
+                }
+                if (m_linkTimer) {
+                    m_linkTimer->start(kLinkTickMs);
+                }
+            }
         }
         pumpCiv(frameAtMs);
         return;
@@ -3361,19 +3518,24 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
     const bool routineDispatch = dispatch->priority == IcomCivScheduler::Priority::Ptt
         || dispatch->priority == IcomCivScheduler::Priority::ActiveMeter;
     traceCiv(/*outbound=*/true, dispatch->frame, routineDispatch);
+    const std::optional<CivFrame> parsedDispatch = parseFrame(dispatch->frame);
     if (dispatch->supersedes) {
-        if (dispatch->frame.size() > 5) {
-            noteControlSent(dispatch->frame[4], dispatch->frame[5], true);
-        } else if (dispatch->frame.size() > 4) {
-            noteControlSent(dispatch->frame[4], 0, false);
+        if (parsedDispatch) {
+            noteControlSent(parsedDispatch->cmd, parsedDispatch->sub,
+                            parsedDispatch->hasSub);
         }
     }
-    if (dispatch->frame.size() > 4) {
+    if (parsedDispatch) {
         QString hex;
-        for (std::size_t i = 4; i + 1 < dispatch->frame.size(); ++i) {
-            hex += QStringLiteral("%1 ").arg(dispatch->frame[i], 2, 16, QLatin1Char('0'));
+        hex += QStringLiteral("%1").arg(parsedDispatch->cmd, 2, 16, QLatin1Char('0'));
+        if (parsedDispatch->hasSub) {
+            hex += QStringLiteral(" %1").arg(parsedDispatch->sub, 2, 16,
+                                               QLatin1Char('0'));
         }
-        m_lastOutboundCiv = hex.trimmed();
+        for (const std::uint8_t byte : parsedDispatch->data) {
+            hex += QStringLiteral(" %1").arg(byte, 2, 16, QLatin1Char('0'));
+        }
+        m_lastOutboundCiv = hex;
         m_lastOutboundCivKey = QString::fromStdString(dispatch->key);
         m_lastOutboundCivAtMs = nowMs;
     }
@@ -5520,10 +5682,10 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
         // reply this whole category was added to make visible, is four bytes
         // and came out undecorated. Exactly the wrong-but-plausible output the
         // comment below warns about, in the direction that was not checked.
-        const int cmdIdx = outbound ? 4 : 0;
         QString tag;
-        if (frame.size() > static_cast<std::size_t>(cmdIdx)) {
-            const std::uint8_t c = frame[cmdIdx];
+        const std::optional<CivFrame> parsed = outbound ? parseFrame(frame) : std::nullopt;
+        if (parsed || (!outbound && !frame.empty())) {
+            const std::uint8_t c = outbound ? parsed->cmd : frame[0];
             tag = QStringLiteral(" cmd=%1").arg(c, 2, 16, QLatin1Char('0'));
             // Which commands carry a subcommand is a per-command fact, and
             // commandHasSubcommand() is the single list parseFrame() decodes
@@ -5531,10 +5693,12 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
             // drift would label command 0x05's first frequency digit as a
             // subcommand — the wrong-but-plausible output this tag exists to
             // avoid.
-            if (frame.size() > static_cast<std::size_t>(cmdIdx) + 1
-                && commandHasSubcommand(c)) {
+            const bool hasSub = outbound ? parsed->hasSub
+                                         : frame.size() > 1 && commandHasSubcommand(c);
+            if (hasSub) {
+                const std::uint8_t sub = outbound ? parsed->sub : frame[1];
                 tag += QStringLiteral(" sub=%1")
-                           .arg(frame[cmdIdx + 1], 2, 16, QLatin1Char('0'));
+                           .arg(sub, 2, 16, QLatin1Char('0'));
             }
         }
         qCDebug(lcIcomCiv).noquote().nospace()
@@ -5772,6 +5936,115 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
                           QStringLiteral("no session"));
         }
         emit extensionResult(requestId, result);
+        return;
+    }
+    if (verb == QLatin1String("power.standby")
+        || verb == QLatin1String("power.wake")
+        || verb == QLatin1String("power.probe")
+        || verb == QLatin1String("power.setting")) {
+        if (!m_session || !m_connected || !m_model) {
+            emit extensionError(requestId, QStringLiteral("not connected"));
+            return;
+        }
+        const bool wake = verb == QLatin1String("power.wake");
+        const bool probe = verb == QLatin1String("power.probe");
+        const bool setting = verb == QLatin1String("power.setting");
+        if (setting) {
+            if (m_model->civAddress != 0xA2) {
+                emit extensionError(requestId,
+                                    QStringLiteral("remote power setting read is verified only for IC-9700"));
+                return;
+            }
+            const std::vector<std::uint8_t> frame =
+                cmdReadSetting(m_session->civAddress(), 146);
+            sendUserCommand(frame);
+            emit extensionResult(
+                requestId,
+                QVariantMap{{QStringLiteral("sent"), true},
+                            {QStringLiteral("setting"), QStringLiteral("1a 05 01 46")}});
+            return;
+        }
+        if (probe) {
+            if (!m_powerTestQuiesced) {
+                if (m_meterTimer) {
+                    m_meterTimer->stop();
+                }
+                if (m_linkTimer) {
+                    m_linkTimer->stop();
+                }
+                m_powerTestQuiesced = true;
+            }
+            // Each diagnostic probe is a fresh observation. The preceding
+            // unanswered probe may still be the scheduler's in-flight read
+            // because polling is intentionally stopped and nothing else would
+            // advance its timeout.
+            terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                               SchedulerWaiterOutcome::Cancelled);
+            const std::vector<std::uint8_t> frame =
+                cmdReadId(m_session->civAddress());
+            queueRead(frame, "power.probe",
+                      IcomCivScheduler::Priority::Maintenance);
+            pumpCiv(nowMs());
+            emit extensionResult(
+                requestId,
+                QVariantMap{{QStringLiteral("sent"), true},
+                            {QStringLiteral("state"), QStringLiteral("probe")},
+                            {QStringLiteral("bytes"), static_cast<int>(frame.size())}});
+            return;
+        }
+        std::vector<std::uint8_t> frame;
+        const std::optional<PowerOnProfile> powerProfile =
+            profileFor(*m_model).powerOn;
+        if (!powerProfile) {
+            emit extensionError(
+                requestId,
+                QStringLiteral("network power control is not hardware-verified for %1")
+                    .arg(QString::fromLatin1(m_model->name)));
+            return;
+        }
+        if (wake) {
+            frame = cmdPowerOn(m_session->civAddress(),
+                               powerProfile->extraPreambleBytes,
+                               powerProfile->controllerAddress);
+        } else {
+            frame = cmdPowerOff(m_session->civAddress());
+        }
+        if (m_meterTimer) {
+            m_meterTimer->stop();
+        }
+        if (m_linkTimer) {
+            m_linkTimer->stop();
+        }
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
+        m_powerTestQuiesced = true;
+        traceCiv(/*outbound=*/true, frame);
+        m_session->sendCiv(frame);
+        if (wake) {
+            QTimer::singleShot(powerProfile->readyDelayMs, this, [this] {
+                if (!m_powerTestQuiesced || !m_session || !m_connected) {
+                    return;
+                }
+                m_powerTestQuiesced = false;
+                if (m_meterTimer) {
+                    m_meterTimer->start(kMeterTickMs);
+                }
+                if (m_linkTimer) {
+                    m_linkTimer->start(kLinkTickMs);
+                }
+                pumpCiv(nowMs());
+            });
+        }
+        emit extensionResult(
+            requestId,
+            QVariantMap{{QStringLiteral("sent"), true},
+                        {QStringLiteral("state"), wake ? QStringLiteral("wake")
+                                                       : QStringLiteral("standby")},
+                        {QStringLiteral("bytes"), static_cast<int>(frame.size())},
+                        {QStringLiteral("controller"), QStringLiteral("e1")},
+                        {QStringLiteral("pollingQuiesced"), true},
+                        {QStringLiteral("resumeDelayMs"),
+                         wake ? powerProfile->readyDelayMs : 0}});
         return;
     }
     if (verb == QLatin1String("civ.send")) {
@@ -6033,6 +6306,20 @@ void IcomCivBackend::onLinkTick()
         }
         qCWarning(lcIcomLink)
             << "CI-V data restarts produced no command reply; reconnecting session";
+        const qint64 nowUtcMs = QDateTime::currentMSecsSinceEpoch();
+        const bool wakeRecently = m_lastConnectWakeUtcMs > 0
+            && nowUtcMs - m_lastConnectWakeUtcMs < kConnectWakeCooldownMs;
+        if (postWakeStallAction(wakeRecently, m_postWakeStallReconnectIssued)
+            == PostWakeStallAction::ReconnectQuietly) {
+            m_postWakeStallReconnectIssued = true;
+            qCInfo(lcIcomLink)
+                << "IC-9700 boot interrupted the first post-wake CI-V session; "
+                   "reconnecting once without reporting a fault";
+            emit connectionProgress(QStringLiteral(
+                "The radio is finishing startup… Reconnecting automatically."));
+            disconnectRadio();
+            return;
+        }
         const QString reason = QStringLiteral(
             "Icom CI-V stream stopped responding; reconnecting the radio session");
         disconnectRadio();

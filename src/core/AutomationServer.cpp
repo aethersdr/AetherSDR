@@ -3446,7 +3446,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]|session|scheduler|incident> — CI-V "
+            "civ <send <hex>|power <standby|wake|probe|setting>|trace [all]|session|scheduler|incident> — CI-V "
             "inject, frame trace, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
@@ -7963,12 +7963,13 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
         return err(QStringLiteral("no backend available"));
 
     const QString a = action.trimmed().toLower();
-    if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
+    if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("power")
+                        && a != QLatin1String("trace")
                         && a != QLatin1String("session")
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|session|scheduler|incident)"));
+            "civ requires an action (send|power|trace|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -8000,13 +8001,29 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
         failure = msg;
     }, Qt::DirectConnection);
 
-    const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
+    QString verb;
+    QVariant extensionArg = arg.trimmed();
+    if (a == QLatin1String("power")) {
+        const QString state = arg.trimmed().toLower();
+        if (state != QLatin1String("standby") && state != QLatin1String("wake")
+            && state != QLatin1String("probe") && state != QLatin1String("setting")) {
+            disconnect(okConn);
+            disconnect(errConn);
+            return err(QStringLiteral("civ power requires standby|wake|probe|setting"));
+        }
+        verb = state == QLatin1String("wake") ? QStringLiteral("power.wake")
+             : state == QLatin1String("probe") ? QStringLiteral("power.probe")
+             : state == QLatin1String("setting") ? QStringLiteral("power.setting")
+                                                : QStringLiteral("power.standby");
+    } else {
+        verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
                        : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
                        : a == QLatin1String("scheduler")
                            ? QStringLiteral("civ.scheduler.status")
                                                      : QStringLiteral("civ.session");
-    backend->invokeExtension(QStringLiteral("icom"), verb, rid, arg.trimmed());
+    }
+    backend->invokeExtension(QStringLiteral("icom"), verb, rid, extensionArg);
     disconnect(okConn);
     disconnect(errConn);
 

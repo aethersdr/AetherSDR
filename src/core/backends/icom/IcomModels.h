@@ -438,6 +438,16 @@ struct CivRecoveryProfile {
     int maxAttempts = 3;
 };
 
+// Presence means this model's wake framing has been established for the
+// network transport this backend actually uses. Command-table similarity alone
+// is not enough: serial CI-V guides can require baud-dependent FE fill that an
+// RS-BA1 session does not expose.
+struct PowerOnProfile {
+    std::size_t extraPreambleBytes = 0;
+    std::uint8_t controllerAddress = kControllerAddress;
+    int readyDelayMs = 10000;
+};
+
 // Model-owned 1A 05 register addresses for radio-authoritative network state.
 // These differ across Icom command tables and are absent from the IC-705 guide.
 struct NetworkConfigurationProfile {
@@ -469,6 +479,7 @@ struct IcomModelProfile {
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;
+    std::optional<PowerOnProfile> powerOn;
     std::optional<CivRecoveryProfile> civRecovery;
     std::optional<MemoryProfile> memory;
     std::optional<NetworkConfigurationProfile> networkConfiguration;

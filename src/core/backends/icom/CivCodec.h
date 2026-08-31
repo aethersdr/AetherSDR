@@ -230,6 +230,13 @@ inline constexpr std::uint8_t kTuneOffset   = 0x21;
 inline constexpr std::uint8_t kVfoMode      = 0x26;
 }  // namespace cmd
 
+// Wake a transceiver from standby. `extraPreambleBytes` names model/baud-
+// specific FE synchronization fill before the standard two-byte preamble.
+[[nodiscard]] std::vector<std::uint8_t> cmdPowerOff(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to,
+                                                   std::size_t extraPreambleBytes = 0,
+                                                   std::uint8_t from = kControllerAddress);
+
 [[nodiscard]] std::vector<std::uint8_t> cmdSendCwMessage(
     std::uint8_t to, std::string_view ascii);
 [[nodiscard]] std::vector<std::uint8_t> cmdAbortCwMessage(std::uint8_t to);

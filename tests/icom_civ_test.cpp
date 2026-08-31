@@ -439,6 +439,21 @@ static void testModes()
 
 static void testCommands()
 {
+    check(bytesAre(cmdPowerOff(kIc705),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x18, 0x00, 0xFD}),
+          "power-off command is the documented standard frame");
+    check(bytesAre(cmdPowerOn(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x18, 0x01, 0xFD}),
+          "IC-705 wake is the standard 18 01 frame");
+    const std::vector<std::uint8_t> ic9700Wake = cmdPowerOn(0xA2, 150);
+    const std::optional<CivFrame> parsedWake = parseFrame(ic9700Wake);
+    check(ic9700Wake.size() == 157
+              && std::all_of(ic9700Wake.begin(), ic9700Wake.begin() + 152,
+                             [](std::uint8_t byte) { return byte == 0xFE; })
+              && parsedWake && parsedWake->to == 0xA2
+              && parsedWake->from == kControllerAddress
+              && parsedWake->cmd == cmd::kPower && parsedWake->sub == 0x01,
+          "IC-9700 wake carries and parses its documented maximum FE preamble");
     check(bytesAre(cmdSetPtt(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0x01, 0xFD}),
           "PTT on is 1C 00 01");
     check(bytesAre(cmdSetTransmitFrequencyCheck(kIc705, true),

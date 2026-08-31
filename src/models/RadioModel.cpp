@@ -1554,6 +1554,8 @@ void RadioModel::setupBackend(const QString& family)
                 this, &RadioModel::onDisconnected);
         connect(m_backend.get(), &IRadioBackend::connectionError,
                 this, &RadioModel::onConnectionError);
+        connect(m_backend.get(), &IRadioBackend::connectionProgress,
+                this, &RadioModel::connectionProgress);
         // Advisory only — deliberately NOT routed through onConnectionError,
         // which starts the reconnect timer. Re-emitted for the UI to surface.
         connect(m_backend.get(), &IRadioBackend::configurationWarning,

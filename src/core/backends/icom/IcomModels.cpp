@@ -628,6 +628,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .powerConversion = MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
             .hasPaCurrentTelemetry = true,
         },
+        // IC-9700 CI-V Reference Guide 2019, command 18 01: at 115200 baud send
+        // 150 FE bytes BEFORE the standard CI-V frame. The standard frame then
+        // contributes its own two-byte FE FE preamble (152 leading FE total).
+        .powerOn = PowerOnProfile{150, 0xE1, 10000},
         .civRecovery = CivRecoveryProfile{1000, 3},
         .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
         // IC-9700 CI-V Reference Guide 2019, printed p. 8.

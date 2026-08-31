@@ -799,6 +799,11 @@ signals:
     void disconnected();
     void connectionError(const QString& reason);
 
+    // A non-fatal connection phase the operator is expected to wait through.
+    // Unlike configurationWarning this names no fault, and unlike
+    // connectionError it must never start reconnect policy by itself.
+    void connectionProgress(const QString& message);
+
     // A problem with the RADIO'S CONFIGURATION that the operator should fix,
     // but which does not end the session. Distinct from connectionError, which
     // every consumer treats as fatal: RadioModel starts its reconnect timer on

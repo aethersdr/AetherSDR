@@ -1563,6 +1563,13 @@ private:
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
+    // A backend may deliberately recycle its transport while bringing a radio
+    // out of standby.  Keep that bounded recovery distinct from an unexpected
+    // disconnect so the UI can explain what is happening instead of alarming
+    // the operator for each required session reset.
+    bool m_radioWakeInProgress{false};
+    int m_radioWakeGeneration{0};
+    static constexpr int kRadioWakeWatchdogMs = 75000;
     // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
     //
     // The slot is driven by radioUpdated as well as radioDiscovered, and

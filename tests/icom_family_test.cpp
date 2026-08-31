@@ -12,6 +12,7 @@
 #include "models/RadioModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomConnectBootstrap.h"
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
@@ -367,6 +368,65 @@ int main(int argc, char** argv)
           "IC-9700 profile does not declare GPS hardware");
     check(!icom::profileFor(*icom::modelForCivAddress(0xB6)).hasGpsHardware,
           "IC-7300MK2 profile does not declare GPS hardware");
+    const auto ic705PowerOn = icom::profileFor(
+        *icom::modelForCivAddress(0xA4)).powerOn;
+    const auto ic9700PowerOn = icom::profileFor(
+        *icom::modelForCivAddress(0xA2)).powerOn;
+    const auto mk2PowerOn = icom::profileFor(
+        *icom::modelForCivAddress(0xB6)).powerOn;
+    check(!ic705PowerOn && ic9700PowerOn
+              && ic9700PowerOn->extraPreambleBytes == 150
+              && ic9700PowerOn->controllerAddress == 0xE1
+              && ic9700PowerOn->readyDelayMs == 10000
+              && !mk2PowerOn,
+          "only the hardware-verified IC-9700 LAN path declares wake");
+    check(!icom::profileFor(icom::unknownModel()).powerOn,
+          "unverified Icom paths never inherit wake-on-connect from a sibling model");
+    check(icom::connectPowerAction(
+              icom::modelForCivAddress(0xA2),
+              icom::ConnectIdentityResult::Identified, false, false)
+              == icom::ConnectPowerAction::Continue,
+          "an awake IC-9700 connect never sends power-on");
+    check(icom::connectPowerAction(
+              icom::modelForCivAddress(0xA2),
+              icom::ConnectIdentityResult::Rejected, false, false)
+              == icom::ConnectPowerAction::Wake,
+          "an IC-9700 FA identity reply admits one verified wake");
+    check(icom::connectPowerAction(
+              icom::modelForCivAddress(0xA2),
+              icom::ConnectIdentityResult::TimedOut, false, false)
+              == icom::ConnectPowerAction::RetrySession,
+          "initial IC-9700 silence retries a fresh session before wake");
+    check(icom::connectPowerAction(
+              icom::modelForCivAddress(0xA2),
+              icom::ConnectIdentityResult::TimedOut, true, false)
+              == icom::ConnectPowerAction::Wake,
+          "repeated IC-9700 silence admits bounded wake after the session retry");
+    check(icom::connectPowerAction(
+              icom::modelForCivAddress(0xA2),
+              icom::ConnectIdentityResult::Rejected, true, true)
+              == icom::ConnectPowerAction::Stop,
+          "an exhausted IC-9700 wake budget cannot loop power-on");
+    check(icom::connectPowerAction(
+              icom::modelForCivAddress(0xA2),
+              icom::ConnectIdentityResult::Rejected, true, false)
+              == icom::ConnectPowerAction::Wake,
+          "a fresh-session IC-9700 retry remains available inside the bounded budget");
+    check(icom::postWakeStallAction(true, false)
+              == icom::PostWakeStallAction::ReconnectQuietly,
+          "the first recent post-wake CI-V stall reconnects without a false error");
+    check(icom::postWakeStallAction(true, true)
+              == icom::PostWakeStallAction::ReportError
+              && icom::postWakeStallAction(false, false)
+                  == icom::PostWakeStallAction::ReportError,
+          "only one stall is absorbed by a recent hardware wake");
+    for (const std::uint8_t address : {std::uint8_t{0xA4}, std::uint8_t{0xB6}}) {
+        check(icom::connectPowerAction(
+                  icom::modelForCivAddress(address),
+                  icom::ConnectIdentityResult::Rejected, false, false)
+                  == icom::ConnectPowerAction::Stop,
+              "unverified Icom models fail closed on rejected identity");
+    }
     const auto ic9700Network = icom::profileFor(
         *icom::modelForCivAddress(0xA2)).networkConfiguration;
     const auto ic705Network = icom::profileFor(
