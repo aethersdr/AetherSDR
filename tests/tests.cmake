@@ -1055,6 +1055,20 @@ add_test(NAME window_geometry_restore_test COMMAND window_geometry_restore_test)
 set_tests_properties(window_geometry_restore_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Aetherial Audio Channel Strip toggle: a minimized window still reports
+# isVisible() and show() does not un-minimize it, so the old toggle could not
+# reopen the strip once minimized.  Drives a real QWidget offscreen so both Qt
+# behaviours are pinned rather than assumed.
+add_executable(window_show_state_test
+    tests/window_show_state_test.cpp
+    src/gui/WindowShowState.cpp
+)
+target_include_directories(window_show_state_test PRIVATE src)
+target_link_libraries(window_show_state_test PRIVATE Qt6::Widgets)
+add_test(NAME window_show_state_test COMMAND window_show_state_test)
+set_tests_properties(window_show_state_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Workspace canvas (RFC #4887) phase 1 — normalized geometry.  Pure logic, no
 # widgets: the edge-rounding rule that keeps tiled items seam-free, and the
 # resolution independence the whole RFC rests on, are pinned on every platform.

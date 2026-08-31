@@ -877,6 +877,7 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
     src/gui/WindowGeometryRestore.cpp
+    src/gui/WindowShowState.cpp
     src/gui/MainWindow_Controllers.cpp
     src/gui/MainWindow_DspApplets.cpp
     src/gui/MainWindow_Menus.cpp

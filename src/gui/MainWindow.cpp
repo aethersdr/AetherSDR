@@ -140,6 +140,7 @@
 #include "models/XvtrPolicy.h"
 #include "core/BandStackSettings.h"
 #include "gui/BandStackPanel.h"
+#include "gui/WindowShowState.h"
 #include "models/TunerModel.h"
 #include "models/TransmitModel.h"
 #include "models/EqualizerModel.h"
@@ -9378,13 +9379,15 @@ void MainWindow::toggleAetherialStrip()
         m_aetherialStrip->setMicInputReady(ready);
         m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
     }
-    if (m_aetherialStrip->isVisible()) {
+    // windowIsShowing() rather than isVisible(): a minimized strip still
+    // reports isVisible(), so the bare check sent it down the hide() branch and
+    // the next press called show(), which restores it straight back to
+    // minimized.  The strip could then only be recovered from the taskbar/Dock,
+    // never from its own button.
+    if (windowIsShowing(m_aetherialStrip))
         m_aetherialStrip->hide();
-    } else {
-        m_aetherialStrip->show();
-        m_aetherialStrip->raise();
-        m_aetherialStrip->activateWindow();
-    }
+    else
+        showAndRaiseWindow(m_aetherialStrip);
 }
 
 void MainWindow::toggleMinimalModeFromAction()
