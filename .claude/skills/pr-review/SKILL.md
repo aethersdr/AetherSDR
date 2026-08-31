@@ -11,17 +11,56 @@ use the PR for the current branch via `gh pr view`). The deliverables are
 right review event) and **a markdown report to the operator** (step 9).
 Post nothing else to GitHub — no labels, no extra comments, no merges.
 
-Work in parallel where the steps are independent. Do all repo reads through
-`gh`/`git show`, or check the PR out in a **scratch worktree** — never mutate
-the checkout you were invoked in. Someone else may be working in it, and a
-`git checkout` there retargets them silently. (Some setups make this a hard
-rule in a local `CLAUDE.local.md`; treat it as one regardless.)
+After step 0 passes, work in parallel where the remaining steps are independent.
+Do all repo reads through `gh`/`git show`, or check the PR out in a **scratch
+worktree** — never mutate the checkout you were invoked in. Someone else may be
+working in it, and a `git checkout` there retargets them silently. (Some setups
+make this a hard rule in a local `CLAUDE.local.md`; treat it as one regardless.)
 
 Where `gh` is unavailable — Claude Code Remote and web sessions have no `gh`
 CLI — use the GitHub MCP tools (`mcp__github__*`) in its place throughout:
 `pull_request_read` for `gh pr view` / `gh pr diff`, `issue_read` for
 `gh issue view`, and `pull_request_review_write` +
 `add_comment_to_pending_review` for the step 8 posting flow.
+
+## 0. Test-boundary preflight — before parallel work
+
+Complete this preflight before building or running any test. It overrides the
+parallel-work instruction and the normal requirement to post a review.
+
+Read `AGENTS.md`'s "Test-layer boundary" and inspect the PR's added or modified
+test sources — not only `tests.cmake` — for socket ownership or a synthetic
+peer. Look for `QTcpServer`, `QTcpSocket`, `QUdpSocket`, `QLocalServer`,
+`QWebSocketServer`, `bind()`, `listen()`, `connectToHost()`, peer processes,
+and `Fake*` radio, amplifier, or tuner classes. Also check whether an existing
+registered target has quietly gained network behavior. These are inspection
+candidates, not proof by themselves; distinguish a socket object used only as
+an inert value from a test that opens, binds, listens, or connects.
+
+If a new or modified socket-based test is found, **STOP immediately**:
+
+- Notify the operator with the test, socket type, target, and whether CI runs it.
+- Do not build or run it, continue the review, or post the GitHub review.
+- Resume only after explicit, PR-specific operator direction.
+
+Classify acceptable coverage before requesting a regression test:
+
+- Wire encoding, parsing, model tables, scheduling, DSP, capabilities, and
+  safety policy: a socket-free CTest.
+- Refusals, malformed or disconnected input, dropped messages, non-events, and
+  TX guards: socket-free transport or state-machine injection.
+- Race or lifetime behavior: the appropriate sanitizer lane.
+- Positive session, RX, control, or meter convergence: the automation bridge
+  plus `radiocert` against real firmware.
+- A necessary simulator closed loop: explicit opt-in, never the default graph.
+
+Do not request or accept a synthetic peer standing in for third-party radio,
+amplifier, tuner, or other external-device firmware. Tests of AetherSDR's own
+server surfaces may be legitimate, but still trigger the stop-and-notify rule
+and must fail fast or skip when binding is unavailable.
+
+Bracket-commented, retired, `EXCLUDE_FROM_ALL`, or otherwise unexecuted tests do
+not count as delivered regression coverage.
 
 ## 1. Gather
 
@@ -47,11 +86,15 @@ CLI — use the GitHub MCP tools (`mcp__github__*`) in its place throughout:
   diff: which hunk addresses it? Flag requirements the diff does not touch,
   and diff changes that no requirement explains — those feed the scope audit
   in step 3, which is mandatory on every review.
-- Check the tests: is there a test that fails without the fix and passes
-  with it? A fix for a reported bug with no regression test pinning the
-  reported symptom is at minimum a nit, and a blocker for bug-class fixes
-  the project has pinned before (see the mutation-testing culture in recent
-  settings PRs: "break the guard on purpose and watch the test fail").
+- After completing the test-boundary preflight, check whether admissible
+  coverage fails without the fix and passes with it. Prefer the smallest
+  socket-free behavioral seam and require mutation evidence when practical.
+- Missing coverage is a blocker only when the reported behavior has a
+  deterministic, policy-compliant test seam or project canon explicitly makes
+  that coverage merge-gating. If the only apparent approach is a synthetic
+  firmware peer, do not request it; describe the honest coverage boundary and
+  route positive convergence to bridge/`radiocert` evidence.
+- Never count additions to a retired or unregistered target as coverage.
 - If there is NO linked issue: say so, review the PR against its own stated
   intent, and note whether project process wanted an issue/RFC first
   (GOVERNANCE.md — architectural changes need an RFC; "bug fixes with a
@@ -252,10 +295,12 @@ parenting), error handling per house style (no exceptions; check returns;
 `qWarning` with category), silent failure modes (unchecked writes, swallowed
 errors), and whether comments explain *why* (constraints), not *what*.
 
-Verify at least one non-trivial claim empirically when feasible (apply the
-diff in a scratch worktree and build the touched target, or run the PR's own
-tests). Say in the report what you verified vs. only read. Never trust a
-green CI badge over a local reproduction when they disagree.
+Verify at least one non-trivial claim empirically when feasible, but re-run the
+test-boundary preflight against the exact target before invoking it. Prefer
+focused socket-free targets; do not start a broad suite merely to find
+something empirical to report. Say in the report what you verified vs. only
+read. Never trust a green CI badge over a local reproduction when they
+disagree.
 
 **"CI is green" is not "the suite passes."** Every `ctest` call in `ci.yml` is
 `-R`-filtered to a handful of named tests, so only a small fraction of the suite
@@ -263,9 +308,12 @@ gates a merge. If you run the suite locally, expect failures that have nothing
 to do with the PR.
 
 **Before blaming the PR for a test failure, prove it.** Build the PR's merge
-base clean in a separate worktree and run the same test there. For an
-intermittent failure, run it 20× on each side and compare rates — a single
-run tells you nothing. Report the comparison, not the impression.
+base clean in a separate worktree and run the same test there. For a genuinely
+intermittent, socket-free failure, compare repeated runs on each side using a
+proportionate sample. Do not repeat a bind, sandbox, permission,
+unavailable-peer, or timeout failure: classify it as an environment or
+test-layer boundary and stop under step 0. Report the comparison, not the
+impression.
 
 ## 8. Post the review to the PR
 
