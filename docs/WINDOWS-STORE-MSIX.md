@@ -333,6 +333,51 @@ certification), or publish to a **flight/insider ring** first with
 `-f <flightId>` and promote manually. Keep the draft gate until the weekly
 cadence has proven stable.
 
+### Manually triggered developer package flight
+
+The Windows Installer workflow can build any explicitly selected ref and fully
+submit its `.msixupload` to an existing Partner Center developer package
+flight. This path runs only through **Run workflow** when **Build and fully
+submit this ref to the Microsoft Store developer flight** is selected. It has
+no schedule and creates no Git tag or GitHub Release.
+
+The manual flight path is isolated from production:
+
+- production tag submissions retain `--noCommit` and remain drafts;
+- the flight job runs only for an explicit `workflow_dispatch` request in the
+  upstream `aethersdr/AetherSDR` repository;
+- `AETHERSDR_STORE_FLIGHT_ID` is required and validated before authentication;
+  a missing flight ID fails the job rather than falling back to production;
+- the flight ID is passed explicitly as `--flightId`, and `-Commit` omits
+  `--noCommit`, so Partner Center starts ingestion/certification automatically.
+
+Create the package flight and its known-user group in Partner Center first,
+then add the flight ID as the repository Actions secret
+`AETHERSDR_STORE_FLIGHT_ID`. Keep `AETHERSDR_STORE_PRODUCT_ID` pointed at the
+existing production app; a flight is a restricted channel under that product,
+not a second product identity.
+
+Before the first CI upload, remove any pending submission that was created for
+the flight in Partner Center. The Store CLI cannot upload into a portal-created
+first draft because that draft has no API file-upload URL; the workflow must be
+allowed to create the first API-backed submission itself. This is a one-time
+flight setup concern, not part of the production submission path.
+
+For a selected source version such as `26.9.1`, the workflow assigns the
+manual build an MSIX version such as `26.9.1.203`, using the monotonically
+increasing Windows Installer workflow run number as the fourth component. This
+avoids editing release metadata or creating a public tag. The next production
+release should increment the source patch component (for example, to
+`26.9.2.0`) so it ranks above all `26.9.1.*` flight builds.
+
+Microsoft warns that an API-created flight submission must continue to be
+managed through the API. Do not edit the in-progress submission in Partner
+Center. The pinned Store CLI replaces an existing pending submission after the
+flight has a published submission, and replaces a failed or expired API-created
+first submission; it then commits and polls the new submission. After a
+successful commit, Partner Center moves the flight through preprocessing,
+certification, and publication to the flight's known-user group.
+
 ## Local Sideload Signing
 
 Windows requires MSIX packages to be signed with a certificate that is trusted
