@@ -103,6 +103,42 @@ int main(int argc, char** argv)
     check(dsp.notchCount() == 0, "seeding an empty set left mirror entries");
     check(dsp.wdspNotchCount() == 0, "seeding an empty set left WDSP entries");
 
+    // --- Plan 4.1: notch-tap gating -----------------------------------------
+    // The RX FIR runs the low-latency length until a notch is placed, switches
+    // to the notch-capable length for as long as any notch exists, and drops
+    // back — all in place, without closing and reopening the channel.
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsShort,
+          "no notch -> short (low-latency) RX filter");
+    const int chanId = dsp.wdspChannelId();
+
+    dsp.addNotch(0, tuneHz + 1500.0, 50.0, true);
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsLong,
+          "first notch -> long (50 Hz-capable) RX filter");
+    check(dsp.wdspChannelId() == chanId,
+          "the tap change kept the same WDSP channel (no close/reopen)");
+    check(dsp.wdspNotchCount() == 1, "the notch survived the tap change");
+
+    dsp.addNotch(1, tuneHz + 2500.0, 400.0, true);
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsLong,
+          "a second notch keeps the long filter");
+
+    dsp.removeNotch(1);
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsLong,
+          "one notch remaining -> still long");
+
+    dsp.removeNotch(0);
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsShort,
+          "last notch removed -> back to the short filter");
+    check(dsp.wdspChannelId() == chanId,
+          "dropping back to short kept the same WDSP channel");
+
+    dsp.addNotch(0, tuneHz + 1000.0, 50.0, true);
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsLong,
+          "a re-added notch pulls the filter long again");
+    dsp.clearNotches();
+    check(dsp.channelConfig().filterTaps == Hl2RxDsp::kRxFilterTapsShort,
+          "clearNotches() lands on the short filter");
+
     if (g_failures == 0)
         std::printf("hl2_notch_seed_test: PASS\n");
     return g_failures == 0 ? 0 : 1;

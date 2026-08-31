@@ -496,6 +496,29 @@ bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
     return true;
 }
 
+bool WdspChannel::setFilterTaps(int taps) noexcept
+{
+    if (m_config.direction != Direction::Receive || taps <= 0) {
+        return false;
+    }
+    if (taps == m_config.filterTaps) {
+        return true;   // already there — not a failure
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        // Same call open() makes. RXASetNC reallocates the NBP FIR and cycles
+        // the channel state; the notch database and the shift are separate NBP
+        // state that it leaves intact.
+        RXASetNC(m_channelId, taps);
+    }
+    m_config.filterTaps = taps;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)

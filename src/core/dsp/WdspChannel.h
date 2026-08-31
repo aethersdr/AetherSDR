@@ -128,6 +128,16 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+    // Runtime RX bandpass FIR length change (the selectivity/latency trade —
+    // longer sharpens the skirt and the minimum notch width, and adds group
+    // delay). RXASetNC internally stops and restarts the channel, so this is
+    // control-path work guarded exactly like setAgc(); never call it from
+    // processIq(). The RXA-NBP notch database and the frequency shift are NBP
+    // state that survives the restart, so callers need not replay them.
+    // Receive channels only. Returns true when the channel now runs `taps`
+    // (including a no-op when it already did); false on a transmit channel, a
+    // non-positive count, or control-operation contention.
+    bool setFilterTaps(int taps) noexcept;
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
     // WDSP's ANB (nob.c), run on the RAW IQ ahead of the channel. It has to be

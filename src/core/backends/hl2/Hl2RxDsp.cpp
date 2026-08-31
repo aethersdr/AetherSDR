@@ -74,13 +74,13 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // change. m_nbOn survives configure(); Config deliberately does not carry it.
     wc.noiseBlankerEnabled = m_nbOn;
     wc.noiseBlankerLevel = m_nbLevel;
-    // Filter length. WDSP's default of 2048 is fine for a passband edge, but it
-    // also sets the NARROWEST POSSIBLE NOTCH — min_notch_width is
-    // 1600 / (nc/256) Hz at 48 kHz, so 2048 taps floors a notch at 200 Hz and
-    // WDSP silently widens anything narrower rather than refusing it. A carrier
-    // heterodyne wants ~50 Hz, which needs 8192. That is what pihpsdr runs
-    // (receiver.c), and the cost is filter-delay, not CPU.
-    wc.filterTaps = kRxFilterTaps;
+    // Filter length, gated on notch state (Plan 4.1). The short length is the
+    // low-latency default; the long one is needed only for a narrow manual
+    // notch (min_notch_width is 1600 / (nc/256) Hz — 2048 floors it at ~200 Hz,
+    // 8192 at 50 Hz) and costs +64 ms of group delay. A rate-change rebuild
+    // therefore comes up at whichever length the current notch set needs, and
+    // addNotch/removeNotch flip it at runtime via WdspChannel::setFilterTaps.
+    wc.filterTaps = m_notches.empty() ? kRxFilterTapsShort : kRxFilterTapsLong;
 
     auto channel = WdspChannel::create(wc, error);
     if (!channel)
@@ -222,6 +222,14 @@ void Hl2RxDsp::addNotch(int index, double centerHz, double widthHz, bool active)
     widthHz = std::max(widthHz, kMinNotchWidthHz);
     if (index < 0 || index > static_cast<int>(m_notches.size()))
         return;
+    // The first notch pulls the RX FIR up to the notch-capable length BEFORE
+    // WDSP places it, so a 50 Hz request is honoured rather than widened
+    // (Plan 4.1). A refusal here (control-op contention) bails without adding,
+    // same as the WDSP-refused case below — the operator retries and the
+    // chain stays consistent.
+    if (m_channel && m_notches.empty()
+        && !m_channel->setFilterTaps(kRxFilterTapsLong))
+        return;
     // Order matters: WDSP first, and the mirror only if it took it. The mirror
     // is what configure() replays after a rate change, so an entry WDSP refused
     // (database full, or a beginControlOperation that lost to a concurrent
@@ -247,6 +255,11 @@ void Hl2RxDsp::clearNotches()
             return;
         m_notches.pop_back();
     }
+    // No notches left — drop the RX FIR back to the low-latency length
+    // (Plan 4.1). Best-effort: the notches are already gone, so a refusal here
+    // just leaves the chain a bit longer than it needs until the next rebuild.
+    if (m_channel && m_notches.empty())
+        m_channel->setFilterTaps(kRxFilterTapsShort);
 }
 
 void Hl2RxDsp::editNotch(int index, double centerHz, double widthHz, bool active)
@@ -266,6 +279,10 @@ void Hl2RxDsp::removeNotch(int index)
     if (m_channel && !m_channel->removeNotch(index))
         return;   // see addNotch(): the mirror must not lose what WDSP kept
     m_notches.erase(m_notches.begin() + index);
+    // Last notch gone — back to the low-latency FIR length (Plan 4.1),
+    // best-effort as in clearNotches().
+    if (m_channel && m_notches.empty())
+        m_channel->setFilterTaps(kRxFilterTapsShort);
 }
 
 void Hl2RxDsp::setNotchesEnabled(bool on)

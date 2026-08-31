@@ -329,10 +329,11 @@ bool runNotchAttenuationTest()
     config.agcMode = 0;
     config.agcFixedGainDb = 0.0;
     config.blockForOutput = true;
-    // The tap count HL2 actually runs (Hl2RxDsp::kRxFilterTaps), so the null is
-    // measured in the configuration the operator hears rather than in WDSP's
-    // 2048 default — which is also the one whose 200 Hz notch floor this PR
-    // exists to get away from.
+    // The notch-capable tap count HL2 runs while a notch is placed
+    // (Hl2RxDsp::kRxFilterTapsLong), so the null is measured in the
+    // configuration the operator hears rather than in WDSP's 2048 default —
+    // which is also the one whose 200 Hz notch floor this measurement exists
+    // to get away from.
     config.filterTaps = 8192;
 
     const double tuneHz = 7'000'000.0;
