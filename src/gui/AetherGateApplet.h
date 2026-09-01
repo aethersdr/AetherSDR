@@ -56,6 +56,7 @@ protected:
 
 private:
     QString baseUrl() const;
+    void reprobe();                               // address changed — ask again
     void poll();                                  // /status — cheap, on the timer
     void refreshDeviceControls();                 // /device — only when it can have changed
     void applyStatus(const QByteArray& json);
@@ -70,6 +71,7 @@ private:
     QTimer*                m_timer{nullptr};
     bool                   m_present{false};
     int                    m_failures{0};
+    QString                m_probedIp;            // the address we last asked
 
     // Header
     QLabel* m_status{nullptr};

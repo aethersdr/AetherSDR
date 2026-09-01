@@ -130,8 +130,36 @@ AetherGateApplet::AetherGateApplet(QWidget* parent)
 void AetherGateApplet::setRadioModel(RadioModel* model)
 {
     m_model = model;
-    // A new connection may be a different radio entirely, so drop what we know
-    // and re-probe rather than showing the previous gate's controls.
+    if (!m_model)
+        return;
+
+    // infoChanged, NOT connectionStateChanged.  The gate answers at the RADIO's
+    // address, and ip() is filled in by the reply to "info" — which the model
+    // only sends AFTER it announces the connection.  Probing on the connect
+    // edge finds an empty address, and a probe with nowhere to go never counts
+    // a failure, so the applet would give up without ever having asked.  (Same
+    // ordering trap the TX power-scale wiring hit in #4813.)
+    connect(m_model, &RadioModel::infoChanged,
+            this, &AetherGateApplet::reprobe);
+    // A reconnect to the same radio must ask again: the gate may have been
+    // restarted, or replaced by a real Flex at the same address.
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool up) {
+        if (!up)
+            m_probedIp.clear();
+    });
+
+    reprobe();
+}
+
+void AetherGateApplet::reprobe()
+{
+    const QString ip = m_model ? m_model->ip() : QString();
+    if (ip.isEmpty() || ip == m_probedIp)
+        return;                       // nothing to ask, or already asked this one
+
+    // A different address is a different radio: drop what we knew rather than
+    // showing the previous gate's controls.
+    m_probedIp = ip;
     m_controlsFingerprint.clear();
     m_failures = 0;
     setPresent(false);

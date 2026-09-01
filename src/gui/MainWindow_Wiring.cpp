@@ -6648,12 +6648,10 @@ void MainWindow::wireMeters()
     // previous radio's controls.  Presence is the applet's own discovery, so
     // it drives the bar button rather than the capability table.
     if (auto* gate = m_appletPanel->aetherGateApplet()) {
+        // The applet re-probes on its own (it watches infoChanged for the
+        // radio's address); all this side owns is turning its answer into a
+        // bar button.
         gate->setRadioModel(&m_radioModel);
-        connect(&m_radioModel, &RadioModel::connectionStateChanged, gate,
-                [this, gate](bool connected) {
-                    if (connected)
-                        gate->setRadioModel(&m_radioModel);
-                });
         connect(gate, &AetherGateApplet::gatePresenceChanged, this,
                 [this](bool present) {
                     m_appletPanel->setAetherGateVisible(present);
