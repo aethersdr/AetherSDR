@@ -857,8 +857,9 @@ void MainWindow::wireRadioModel()
                 }
                 m_connStatusLabel->setText(tr("Connected"));
                 m_connPanel->setStatusText(tr("Connected"));
+                m_connPanel->hide();
                 setPanadapterConnectionAnimation(false);
-                statusBar()->showMessage(tr("The radio is awake and connected."), 5000);
+                statusBar()->showMessage(tr("Radio connected."), 5000);
             }
             return;
         }
@@ -894,7 +895,7 @@ void MainWindow::wireRadioModel()
                 wakeDialog->deleteLater();
             }
             const QString failure = tr(
-                "The radio did not finish waking. Check its remote-power setting and try again.");
+                "The radio did not finish connecting. Check the network and radio settings, then try again.");
             m_connPanel->setStatusText(failure);
             m_connStatusLabel->setText(tr("Error"));
             statusBar()->showMessage(failure, 15000);

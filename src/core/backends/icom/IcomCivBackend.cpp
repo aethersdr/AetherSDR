@@ -768,6 +768,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_connectBurstSent = false;
     m_connectIdentityPending = false;
     m_connectReadinessPending = false;
+    m_connectionPublished = false;
     m_connectWakeAttempted = false;
     const qint64 connectNowUtcMs = QDateTime::currentMSecsSinceEpoch();
     if (m_lastConnectWakeUtcMs <= 0
@@ -916,13 +917,15 @@ void IcomCivBackend::disconnectRadio()
     m_tuning = false;
     m_cwBreakInMode = 1;
     m_preTuneTxPowerPercent = -1;
-    if (m_connected) {
-        m_connected = false;
+    const bool published = m_connectionPublished;
+    m_connectionPublished = false;
+    m_connected = false;
+    if (published) {
         emit disconnected();
     }
 }
 
-bool IcomCivBackend::isConnected() const { return m_connected; }
+bool IcomCivBackend::isConnected() const { return m_connectionPublished; }
 
 // The connect-edge read burst.
 //
@@ -1648,6 +1651,20 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
         applyScopeStartup();
     }
 
+    if (conditionalWake) {
+        return;
+    }
+
+    publishConnectedSession();
+}
+
+void IcomCivBackend::publishConnectedSession()
+{
+    if (m_connectionPublished) {
+        return;
+    }
+    m_connectionPublished = true;
+
     // CONNECTED FIRST, then the state.
     //
     // RadioModel stages the previous session's slices and CLEARS m_slices on
@@ -1761,15 +1778,11 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 
     m_meterTimer = new QTimer(this);
     connect(m_meterTimer, &QTimer::timeout, this, &IcomCivBackend::onMeterTick);
-    if (!conditionalWake) {
-        m_meterTimer->start(kMeterTickMs);
-    }
+    m_meterTimer->start(kMeterTickMs);
 
     m_linkTimer = new QTimer(this);
     connect(m_linkTimer, &QTimer::timeout, this, &IcomCivBackend::onLinkTick);
-    if (!conditionalWake) {
-        m_linkTimer->start(kLinkTickMs);
-    }
+    m_linkTimer->start(kLinkTickMs);
 
     // Start the first snapshot request now.  Every remaining startup/control/
     // meter request leaves through the same paced writer on timer ticks.
@@ -1783,11 +1796,12 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
     m_tuneTimer->stop();
     m_tuning = false;
     m_preTuneTxPowerPercent = -1;
-    const bool was = m_connected;
+    const bool was = m_connectionPublished;
     if (was && !reason.isEmpty()) {
         recordIncident(QStringLiteral("session-disconnected"), reason);
     }
     m_connected = false;
+    m_connectionPublished = false;
     ++m_sessionGeneration;
     if (m_session) {
         disconnect(m_session.get(), nullptr, this, nullptr);
@@ -2066,6 +2080,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             }
             adoptReportedCivAddress(*addr);
             if (completedReadiness) {
+                publishConnectedSession();
                 emit connectionProgress(QString{});
             }
             // AMBIGUOUS BUS: two devices answered with different addresses, so

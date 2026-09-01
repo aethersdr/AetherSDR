@@ -166,6 +166,7 @@ public:
 
 private slots:
     void onSessionConnected(const QString& deviceName);
+    void publishConnectedSession();
     void onSessionDisconnected(const QString& reason);
     void onCivFrame(const AetherSDR::icom::CivFrame& frame,
                     std::uint64_t sessionGeneration);
@@ -346,6 +347,7 @@ private:
     // until its directed CI-V identity reply. Scope packets can arrive before
     // that proof; do not expose a half-ready panadapter to the operator.
     bool m_connectReadinessPending = false;
+    bool m_connectionPublished = false;
     bool m_connectWakeAttempted = false;
     bool m_connectSessionRetryAttempted = false;
     qint64 m_lastConnectSessionRetryUtcMs = 0;

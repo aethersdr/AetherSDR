@@ -6475,11 +6475,30 @@ void MainWindow::onConnectionError(const QString& msg)
     // maybeAutoConnectToDiscoveredRadio(). Done here rather than in that slot
     // because this is the only place a connect is known to have ended badly.
     noteAutoConnectFinished(false);
+
+    // A wake failure is terminal for the bounded connect attempt. Clear its
+    // overlay and return to the connection panel without briefly presenting
+    // the ordinary unexpected-disconnect dialog underneath it.
+    if (m_radioWakeInProgress) {
+        m_radioWakeInProgress = false;
+        ++m_radioWakeGeneration;
+        if (m_reconnectDlg) {
+            QDialog* wakeDialog = m_reconnectDlg;
+            m_reconnectDlg = nullptr;
+            wakeDialog->close();
+            wakeDialog->deleteLater();
+        }
+        setPanadapterConnectionAnimation(false);
+        showConnectionDialog();
+        return;
+    }
+
     m_connPanel->setStatusText("Error: " + msg);
     m_connStatusLabel->setText("Error");
     statusBar()->showMessage("Connection error: " + msg, 5000);
-    if (!m_reconnectDlg)
+    if (!m_reconnectDlg) {
         setPanadapterConnectionAnimation(false);
+    }
 }
 
 void MainWindow::onWanCertFingerprintMismatch(const QString& host,
