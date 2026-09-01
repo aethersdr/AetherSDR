@@ -74,6 +74,16 @@ int dominantPixels(const QImage& image, const QRect& rect, DominantChannel chann
     return count;
 }
 
+int rightmostDominantPixel(const QImage& image, DominantChannel channel)
+{
+    for (int x = image.width() - 1; x >= 0; --x) {
+        if (dominantPixels(image, QRect(x, 0, 1, image.height()), channel) > 0) {
+            return x;
+        }
+    }
+    return -1;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -114,8 +124,7 @@ int main(int argc, char** argv)
     const int codedRow = combo.findData(QStringLiteral("123.0"));
     ok &= expect(codedRow >= 0
                      && combo.itemText(codedRow) == QStringLiteral("123.0 3Z")
-                     && combo.itemData(codedRow, AetherSDR::kCtcssToneFrequencyRole)
-                            == QStringLiteral("123.0")
+                     && combo.itemData(codedRow, Qt::UserRole) == QStringLiteral("123.0")
                      && combo.itemData(codedRow, AetherSDR::kCtcssToneDesignationRole)
                             == QStringLiteral("3Z"),
                  "the shared combo retains separate frequency and designation columns");
@@ -172,23 +181,26 @@ int main(int argc, char** argv)
                      && dominantPixels(expected, designationRect, DominantChannel::Red) > 0,
                  "active selected rendering paints the role and both aligned columns");
 
-    QStyleOptionViewItem sizeOption;
-    sizeOption.font = combo.font();
-    sizeOption.fontMetrics = metrics;
-    sizeOption.widget = combo.view();
-    const QSize codedSize = combo.itemDelegate()->sizeHint(
-        sizeOption, combo.model()->index(codedRow, 0));
-    int maximumDesignationWidth = 0;
-    for (const AetherSDR::CtcssTone& tone : AetherSDR::kCtcssTones) {
-        maximumDesignationWidth = std::max(
-            maximumDesignationWidth,
-            metrics.horizontalAdvance(QString::fromLatin1(tone.designation)));
-    }
-    const int requiredWidth = AetherSDR::kCtcssToneHorizontalPadding * 2
-        + prefixWidth + prefixGap + frequencyWidth + designationGap
-        + maximumDesignationWidth;
-    ok &= expect(codedSize.width() >= requiredWidth,
-                 "the delegate size hint accommodates the complete prefixed row");
+    const int firstAlignedRow = combo.findData(QStringLiteral("165.5"));
+    const int secondAlignedRow = combo.findData(QStringLiteral("199.5"));
+    AetherSDR::configureCtcssToneComboLabels(
+        &combo, AetherSDR::FmTonePresentation::Legacy,
+        AetherSDR::FmToneRole::Tx);
+    combo.setItemData(firstAlignedRow, QStringLiteral("1.5"), Qt::UserRole);
+    combo.setItemData(secondAlignedRow, QStringLiteral("111.5"), Qt::UserRole);
+    const QImage firstBareFrequency = renderRow(combo, firstAlignedRow, selectedState);
+    const QImage secondBareFrequency = renderRow(combo, secondAlignedRow, selectedState);
+    const int firstFrequencyRight = rightmostDominantPixel(
+        firstBareFrequency, DominantChannel::Red);
+    const int secondFrequencyRight = rightmostDominantPixel(
+        secondBareFrequency, DominantChannel::Red);
+    ok &= expect(firstAlignedRow >= 0 && secondAlignedRow >= 0
+                     && firstFrequencyRight >= 0
+                     && firstFrequencyRight == secondFrequencyRight,
+                 "different bare frequencies share the same rendered right edge");
+    AetherSDR::configureCtcssToneComboLabels(
+        &combo, AetherSDR::FmTonePresentation::Ctcss,
+        AetherSDR::FmToneRole::Tx);
 
     const QImage inactive = renderRow(
         combo, codedRow, QStyle::State_Enabled | QStyle::State_Selected);

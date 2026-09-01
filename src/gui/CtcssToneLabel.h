@@ -24,9 +24,8 @@ namespace AetherSDR {
 inline constexpr int kCtcssTonePopupRows = 18;
 inline constexpr int kCtcssToneRowHeight = 22;
 inline constexpr int kCtcssToneHorizontalPadding = 8;
-inline constexpr int kCtcssToneFrequencyRole = Qt::UserRole + 1;
-inline constexpr int kCtcssToneDesignationRole = Qt::UserRole + 2;
-inline constexpr int kCtcssTonePrefixRole = Qt::UserRole + 3;
+inline constexpr int kCtcssToneDesignationRole = Qt::UserRole + 1;
+inline constexpr int kCtcssTonePrefixRole = Qt::UserRole + 2;
 
 inline QString ctcssToneLabel(const QString& frequency, const QString& designation)
 {
@@ -82,18 +81,8 @@ public:
                    const QModelIndex& index) const override
     {
         QSize size = QStyledItemDelegate::sizeHint(option, index);
-        updateMetrics(option.font);
-        const QFontMetrics metrics(option.font);
-        const QString prefix = index.data(kCtcssTonePrefixRole).toString();
-        const int prefixWidth = metrics.horizontalAdvance(prefix);
-        const int prefixGap = prefix.isEmpty()
-            ? 0 : metrics.horizontalAdvance(QLatin1Char(' '));
-        const int designationGap = m_designationWidth == 0
-            ? 0 : metrics.horizontalAdvance(QLatin1Char(' ')) * 3;
-        size.setWidth(std::max(
-            size.width(), kCtcssToneHorizontalPadding * 2 + prefixWidth
-                + prefixGap + m_frequencyWidth + designationGap
-                + m_designationWidth));
+        const ColumnLayout layout = columns(option, index);
+        size.setWidth(std::max(size.width(), layout.requiredWidth));
         size.setHeight(std::max(size.height(), kCtcssToneRowHeight));
         return size;
     }
@@ -109,7 +98,7 @@ public:
         style->drawControl(QStyle::CE_ItemViewItem, &backgroundOption,
                            painter, option.widget);
 
-        const QString frequency = index.data(kCtcssToneFrequencyRole).toString();
+        const QString frequency = index.data(Qt::UserRole).toString();
         const QString designation = index.data(kCtcssToneDesignationRole).toString();
         const QString prefix = index.data(kCtcssTonePrefixRole).toString();
         if (frequency.isEmpty()) {
@@ -126,30 +115,48 @@ public:
             ? QPalette::HighlightedText : QPalette::Text;
         painter->setPen(option.palette.color(group, role));
 
-        const QFontMetrics metrics(option.font);
-        updateMetrics(option.font);
-        const int prefixWidth = metrics.horizontalAdvance(prefix);
-        const int prefixGap = prefix.isEmpty()
-            ? 0 : metrics.horizontalAdvance(QLatin1Char(' '));
-        const int designationGap = metrics.horizontalAdvance(QLatin1Char(' ')) * 3;
-        const QRect content = option.rect.adjusted(
-            kCtcssToneHorizontalPadding, 0, -kCtcssToneHorizontalPadding, 0);
-        const QRect prefixRect(content.left(), content.top(), prefixWidth,
-                               content.height());
-        const int frequencyLeft = content.left() + prefixWidth + prefixGap;
-        const QRect frequencyRect(frequencyLeft, content.top(),
-                                  m_frequencyWidth,
-                                  content.height());
-        const QRect designationRect(frequencyRect.right() + designationGap,
-                                    content.top(), m_designationWidth,
-                                    content.height());
-        painter->drawText(prefixRect, Qt::AlignLeft | Qt::AlignVCenter, prefix);
-        painter->drawText(frequencyRect, Qt::AlignRight | Qt::AlignVCenter, frequency);
-        painter->drawText(designationRect, Qt::AlignLeft | Qt::AlignVCenter, designation);
+        const ColumnLayout layout = columns(option, index);
+        painter->drawText(layout.prefix, Qt::AlignLeft | Qt::AlignVCenter, prefix);
+        painter->drawText(layout.frequency, Qt::AlignRight | Qt::AlignVCenter, frequency);
+        painter->drawText(layout.designation, Qt::AlignLeft | Qt::AlignVCenter, designation);
         painter->restore();
     }
 
 private:
+    struct ColumnLayout {
+        QRect prefix;
+        QRect frequency;
+        QRect designation;
+        int requiredWidth = 0;
+    };
+
+    ColumnLayout columns(const QStyleOptionViewItem& option,
+                         const QModelIndex& index) const
+    {
+        updateMetrics(option.font);
+        const QFontMetrics metrics(option.font);
+        const QString prefix = index.data(kCtcssTonePrefixRole).toString();
+        const int prefixWidth = metrics.horizontalAdvance(prefix);
+        const int prefixGap = prefix.isEmpty()
+            ? 0 : metrics.horizontalAdvance(QLatin1Char(' '));
+        const int designationGap = m_designationWidth == 0
+            ? 0 : metrics.horizontalAdvance(QLatin1Char(' ')) * 3;
+        const QRect content = option.rect.adjusted(
+            kCtcssToneHorizontalPadding, 0, -kCtcssToneHorizontalPadding, 0);
+        ColumnLayout layout;
+        layout.prefix = QRect(content.left(), content.top(), prefixWidth,
+                              content.height());
+        const int frequencyLeft = content.left() + prefixWidth + prefixGap;
+        layout.frequency = QRect(frequencyLeft, content.top(), m_frequencyWidth,
+                                 content.height());
+        layout.designation = QRect(layout.frequency.right() + designationGap,
+                                   content.top(), m_designationWidth,
+                                   content.height());
+        layout.requiredWidth = kCtcssToneHorizontalPadding * 2 + prefixWidth
+            + prefixGap + m_frequencyWidth + designationGap + m_designationWidth;
+        return layout;
+    }
+
     void updateMetrics(const QFont& font) const
     {
         if (m_hasCachedMetrics && font == m_cachedFont) {
@@ -183,7 +190,6 @@ inline void populateCtcssToneCombo(QComboBox* combo)
         const QString designation = QString::fromLatin1(tone.designation);
         combo->addItem(ctcssToneLabel(tone), frequency);
         const int row = combo->count() - 1;
-        combo->setItemData(row, frequency, kCtcssToneFrequencyRole);
         combo->setItemData(row, designation, kCtcssToneDesignationRole);
     }
 }
@@ -197,8 +203,7 @@ inline void configureCtcssToneComboLabels(QComboBox* combo,
                                  : QStringLiteral("RX:")
         : QString();
     for (int i = 0; i < combo->count(); ++i) {
-        const QString frequency = combo->itemData(
-            i, kCtcssToneFrequencyRole).toString();
+        const QString frequency = combo->itemData(i, Qt::UserRole).toString();
         const QString designation = combo->itemData(
             i, kCtcssToneDesignationRole).toString();
         const QString toneLabel = ctcssToneLabel(frequency, designation);
