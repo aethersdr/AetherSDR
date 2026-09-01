@@ -26,22 +26,34 @@ CLI — use the GitHub MCP tools (`mcp__github__*`) in its place throughout:
 ## 0. Test-boundary preflight — before parallel work
 
 Complete this preflight before building or running any test. It overrides the
-parallel-work instruction and the normal requirement to post a review.
+parallel-work instruction below, and it gates *executing* a socket-owning
+target — it does not suspend the requirement to finish and post the review.
 
-Read `AGENTS.md`'s "Test-layer boundary" and inspect the PR's added or modified
-test sources — not only `tests.cmake` — for socket ownership or a synthetic
-peer. Look for `QTcpServer`, `QTcpSocket`, `QUdpSocket`, `QLocalServer`,
+Read `AGENTS.md`'s "Test-layer boundary". Fetch the PR's own sources before
+inspecting anything — `gh pr diff <PR>`, or `git fetch origin pull/<PR>/head`
+then `git show FETCH_HEAD:<path>`; never read the working tree, which is the
+base branch and will pass this preflight vacuously on a PR that does add a
+socket test. Inspect the PR's added or modified test sources — not only
+`tests.cmake` — for socket ownership or a synthetic peer. Look for
+`QTcpServer`, `QTcpSocket`, `QUdpSocket`, `QLocalServer`,
 `QWebSocketServer`, `bind()`, `listen()`, `connectToHost()`, peer processes,
 and `Fake*` radio, amplifier, or tuner classes. Also check whether an existing
 registered target has quietly gained network behavior. These are inspection
 candidates, not proof by themselves; distinguish a socket object used only as
 an inert value from a test that opens, binds, listens, or connects.
 
-If a new or modified socket-based test is found, **STOP immediately**:
+If a new or modified socket-based test is found, **stop before executing it**:
 
 - Notify the operator with the test, socket type, target, and whether CI runs it.
-- Do not build or run it, continue the review, or post the GitHub review.
-- Resume only after explicit, PR-specific operator direction.
+- Do not build or run that target. Get explicit, PR-specific operator direction
+  before you do.
+- Continue the rest of the review and post it, recording the socket test and the
+  notification in the review body. `AGENTS.md` requires the operator be notified
+  *before continuing*, not that the review be abandoned — and an unattended run
+  has nobody to supply the direction, so aborting there would mean the PR is
+  never reviewed at all.
+- A PR that **removes** a socket test or fake peer is the remediation #5254 asks
+  for. Notify, then review it normally; do not treat it as a stop.
 
 Classify acceptable coverage before requesting a regression test:
 
@@ -56,11 +68,21 @@ Classify acceptable coverage before requesting a regression test:
 
 Do not request or accept a synthetic peer standing in for third-party radio,
 amplifier, tuner, or other external-device firmware. Tests of AetherSDR's own
-server surfaces may be legitimate, but still trigger the stop-and-notify rule
-and must fail fast or skip when binding is unavailable.
+server surfaces (rigctld, CAT, the TCI server, the automation bridge transport)
+are legitimate per `AGENTS.md`, but still trigger the notify rule. For those,
+check the three obligations canon puts on them and report any that are missing:
 
-Bracket-commented, retired, `EXCLUDE_FROM_ALL`, or otherwise unexecuted tests do
-not count as delivered regression coverage.
+- the test is disclosed in the PR body;
+- its `tests.cmake` block names the socket it binds;
+- it fails fast, or skips with **exit 77** (`SKIP_RETURN_CODE 77`), when it
+  cannot bind — rather than consuming its timeout.
+
+Bracket-commented, retired, or otherwise unexecuted tests do not count as
+delivered regression coverage. Deliberately opt-in targets are different and do
+count, provided the PR says how to run them: an `option()`-gated or
+`EXCLUDE_FROM_ALL` target carrying the `# not registered: <reason>` marker is
+the shape the bullet above routes a simulator closed loop to — see
+`hl2_tx_loopback_test` in `tests/tests.cmake`.
 
 ## 1. Gather
 
@@ -93,8 +115,12 @@ not count as delivered regression coverage.
   deterministic, policy-compliant test seam or project canon explicitly makes
   that coverage merge-gating. If the only apparent approach is a synthetic
   firmware peer, do not request it; describe the honest coverage boundary and
-  route positive convergence to bridge/`radiocert` evidence.
-- Never count additions to a retired or unregistered target as coverage.
+  route positive convergence to bridge/`radiocert` evidence. Report the gap as
+  a nit either way — an untestable gap is still worth naming, it just is not a
+  reason to withhold a merge.
+- Never count additions to a retired target, or to an unregistered target that
+  lacks the `# not registered: <reason>` marker `AGENTS.md` recognizes, as
+  coverage.
 - If there is NO linked issue: say so, review the PR against its own stated
   intent, and note whether project process wanted an issue/RFC first
   (GOVERNANCE.md — architectural changes need an RFC; "bug fixes with a
@@ -310,10 +336,12 @@ to do with the PR.
 **Before blaming the PR for a test failure, prove it.** Build the PR's merge
 base clean in a separate worktree and run the same test there. For a genuinely
 intermittent, socket-free failure, compare repeated runs on each side using a
-proportionate sample. Do not repeat a bind, sandbox, permission,
-unavailable-peer, or timeout failure: classify it as an environment or
-test-layer boundary and stop under step 0. Report the comparison, not the
-impression.
+proportionate sample. For a bind, sandbox, permission, or unavailable-peer
+failure, do not repeat it — but do check the merge base once before classifying
+it. If the merge base fails the same way it is an environment or test-layer
+boundary; stop under step 0 and say so. If only the PR head fails to bind, that
+is a finding about the PR, not the sandbox — our own server surfaces regress
+exactly that way. Report the comparison, not the impression.
 
 ## 8. Post the review to the PR
 
