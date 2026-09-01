@@ -1,5 +1,6 @@
 #include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
+#include "RttyDecodeSettings.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -2710,6 +2711,25 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
                 "radio set rtty_mark_default=" + markEdit->text());
         });
         grid->addWidget(markEdit, 0, 1);
+
+        // RTTY Decode — the operator's explicit "I want the decoder pane"
+        // state (#5353).  The pane's own ✕ clears this flag, and before it
+        // existed there was no way back on: visibility was recomputed from
+        // the slice mode, so the pane reopened on the next slice switch or
+        // rtty_mark echo.  This is the re-enable, and it mirrors the CW
+        // Decode RX/TX toggles above.  MainWindow re-evaluates panel and
+        // run state on dialog close via refreshRttyDecodeState().
+        auto* rttyDecodeLbl = new QLabel("RTTY Decode:");
+        rttyDecodeLbl->setStyleSheet(kLabelStyle);
+        grid->addWidget(rttyDecodeLbl, 1, 0);
+        auto* rttyDecodeBtn = mkTogBtn(
+            RttyDecodeSettings::enabled() ? "Enabled" : "Disabled",
+            RttyDecodeSettings::enabled());
+        connect(rttyDecodeBtn, &QPushButton::toggled, this, [rttyDecodeBtn](bool on) {
+            RttyDecodeSettings::setEnabled(on);
+            rttyDecodeBtn->setText(on ? "Enabled" : "Disabled");
+        });
+        grid->addWidget(rttyDecodeBtn, 1, 1);
 
         vbox->addWidget(group);
     }

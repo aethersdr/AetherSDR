@@ -3402,6 +3402,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         // Re-evaluate CW decode panel and TX tap from the dialog's
         // RX/TX toggles, plus run state vs current slice mode (#2417).
         refreshCwDecodeState();
+        // Same for the Digital tab's RTTY Decode toggle — this is how the
+        // pane comes back after the operator dismissed it with ✕ (#5353).
+        refreshRttyDecodeState();
 
         // If audio compression changed, recreate the RX audio stream
         QString newComp = m_radioModel.audioCompressionParam();
