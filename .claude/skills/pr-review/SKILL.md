@@ -1,27 +1,88 @@
 ---
 name: pr-review
-description: Full PR review for AetherSDR — verifies the PR against its linked issue, audits scope creep and undisclosed changes, checks governance and code quality, posts one GitHub review with inline comments, and reports blockers/nits/recommendation as markdown. Use when asked to review a PR (e.g. "/pr-review 4609").
+description: Full adversarial PR review for AetherSDR — red-teams the PR against its linked issue, tests every claim in the body, audits scope creep and undisclosed changes, checks governance and code quality, posts one GitHub review with inline comments, and reports blockers/nits/recommendation as markdown. Use when asked to review a PR (e.g. "/pr-review 4609").
 ---
 
 # PR Review (issue-fit + governance + quality)
 
 Review the PR given in `$ARGUMENTS` (a PR number, or a full PR URL; if absent,
 use the PR for the current branch via `gh pr view`). The deliverables are
-**one posted GitHub review** (step 8 — inline comments, suggestions, and the
-right review event) and **a markdown report to the operator** (step 9).
+**one posted GitHub review** (step 9 — inline comments, suggestions, and the
+right review event) and **a markdown report to the operator** (step 10).
 Post nothing else to GitHub — no labels, no extra comments, no merges.
 
-After step 0 passes, work in parallel where the remaining steps are independent.
-Do all repo reads through `gh`/`git show`, or check the PR out in a **scratch
-worktree** — never mutate the checkout you were invoked in. Someone else may be
-working in it, and a `git checkout` there retargets them silently. (Some setups
-make this a hard rule in a local `CLAUDE.local.md`; treat it as one regardless.)
+After step 0 passes, work in parallel where the remaining steps are
+independent. Do all repo reads through `gh`/`git show`, or check the PR out in a **scratch worktree** — never mutate
+the checkout you were invoked in. Someone else may be working in it, and a
+`git checkout` there retargets them silently. (Some setups make this a hard
+rule in a local `CLAUDE.local.md`; treat it as one regardless.)
 
 Where `gh` is unavailable — Claude Code Remote and web sessions have no `gh`
 CLI — use the GitHub MCP tools (`mcp__github__*`) in its place throughout:
 `pull_request_read` for `gh pr view` / `gh pr diff`, `issue_read` for
 `gh issue view`, and `pull_request_review_write` +
-`add_comment_to_pending_review` for the step 8 posting flow.
+`add_comment_to_pending_review` for the step 9 posting flow.
+
+## Stance — adversarially red-team the PR
+
+**Your job is to break the PR, not to bless it.** Assume the author is
+competent and that the PR body is written to sound airtight; verify every
+claim in it, and treat anything you cannot reproduce as a finding. A review
+that ends "looks good to me" without naming what you tried and failed to
+break is not a review — it is a signature.
+
+Hold this posture for the whole pass:
+
+- **The burden of proof is on the PR, not on you.** The author asserts; you
+  falsify. "I see no problem" is not a conclusion — "I tried X, Y and Z and
+  the code survived all three" is. Every clean verdict must name the attacks
+  it survived.
+- **Every sentence in the body is a claim to test.** "No behavior change",
+  "pure refactor", "trivial", "cannot fail", "matches SmartSDR", "no impact
+  on other radios", "existing tests cover this", "safe on all platforms" —
+  each one is a hypothesis with a specific way to be wrong. Find the way, run
+  it, and report the result either way. A claim you could not test is itself
+  reportable: say which claim, and what would have settled it.
+- **Reading the diff is not reviewing it.** Ask what input makes this code
+  wrong: first/last/empty/zero/negative/overflow, null or dangling pointers,
+  disconnect mid-operation, reentrancy, the callback firing during teardown,
+  two threads, the error path nobody exercises, the second radio, the second
+  slice, the second monitor. Then look for whether the diff handles it.
+- **Read what is NOT in the diff.** The strongest findings are usually
+  absences: the sibling call site left unfixed, the error return nobody
+  checks, the migration path for existing users' saved state, the test that
+  would have caught this. A diff can only show you what changed; you have to
+  go get what didn't.
+- **Attack the tests, not just the code.** A test that passes against the
+  *unfixed* code proves nothing. Ask — and where feasible check — whether it
+  fails when the fix is reverted or the guard is broken on purpose. Tests
+  that assert the implementation back to itself, or that would pass with the
+  function body deleted, are findings.
+- **Polish is not evidence.** Clean formatting, a confident PR body, a
+  thorough-looking test file, and a green CI badge are all cheap to produce
+  and none of them are correctness. Where the presentation is most polished,
+  spend *more* scrutiny, not less — that is where a wrong assumption hides
+  longest.
+- **Distrust green.** CI proves the filtered subset passed on some merge
+  base, nothing more (see step 7). A bot's comment is a lead, not a finding.
+  A previous approving review is not a reason to look less hard.
+- **You can settle most runtime questions, so settle them.** This app is
+  drivable: the automation bridge (step 8) will run the PR head against the
+  built-in demo simulator, click the control, read back model state, and
+  screenshot the panadapter — no hardware, no risk to the operator's station.
+  A behavioral claim you argued about instead of reproducing is a claim you
+  left untested.
+- **Disagree with the framing when the framing is wrong.** The PR chooses the
+  problem statement, the fix's shape, and where the seam goes. Any of those
+  can be the actual defect — a correct implementation of the wrong change is
+  still a finding.
+
+The one thing adversarial does **not** mean: manufacturing findings. The
+stance is a burden of proof, not a quota, and a PR that survives it earns a
+clean report stated plainly and without hedging. Severity stays calibrated
+(step 10), tone stays collegial and evidence-first, and every finding cites
+what you actually observed — file:line, command output, failing scenario.
+Break the code, not the author.
 
 ## 0. Test-boundary preflight — before parallel work
 
@@ -321,16 +382,32 @@ parenting), error handling per house style (no exceptions; check returns;
 `qWarning` with category), silent failure modes (unchecked writes, swallowed
 errors), and whether comments explain *why* (constraints), not *what*.
 
-Verify at least one non-trivial claim empirically when feasible, but re-run the
-test-boundary preflight against the exact target before invoking it. Prefer
-focused socket-free targets; do not start a broad suite merely to find
-something empirical to report. Say in the report what you verified vs. only
-read. Never trust a green CI badge over a local reproduction when they
-disagree.
+Read hostilely: for each non-trivial hunk, spend a moment constructing the
+input, ordering, or lifecycle event that makes it misbehave before you accept
+that it doesn't. Walk the failure paths as carefully as the happy path — what
+the code does when the write fails, the pointer is stale, the radio drops
+mid-call, or the user does it twice.
+
+Verify at least one non-trivial claim empirically when feasible (build the PR
+head in a scratch worktree, run the PR's own tests, and drive the result
+through the automation bridge — step 8, which is the default verification
+path for anything user-visible). Re-run the step-0 preflight against the exact
+target before invoking it, prefer focused socket-free targets, and do not start
+a broad suite merely to find something empirical to report. Prefer verifying
+the claim the PR most depends on and would most like you to take on faith. Say in the report what
+you verified vs. only read, and
+say plainly when a load-bearing claim went unverified — an untested assertion
+reported as untested is honest; one reported as fine is not. Never trust a
+green CI badge over a local reproduction when they disagree.
+
+Where the PR adds or changes a test, break the code on purpose and confirm
+the test notices. A regression test that still passes with the fix reverted
+is a blocker in its own right — it pins nothing, and it will read as coverage
+forever after.
 
 **"CI is green" is not "the suite passes."** Every `ctest` call in `ci.yml` is
-`-R`-filtered to a handful of named tests, so only a small fraction of the suite
-gates a merge. If you run the suite locally, expect failures that have nothing
+`-R`-filtered to a handful of named tests, so only a few of the ~240 tests
+gate a merge. If you run the suite locally, expect failures that have nothing
 to do with the PR.
 
 **Before blaming the PR for a test failure, prove it.** Build the PR's merge
@@ -343,7 +420,140 @@ boundary; stop under step 0 and say so. If only the PR head fails to bind, that
 is a finding about the PR, not the sandbox — our own server surfaces regress
 exactly that way. Report the comparison, not the impression.
 
-## 8. Post the review to the PR
+## 8. Drive the app — verify findings against the running GUI
+
+**Any claim about runtime behavior gets tested against the running app, not
+argued from the diff.** UI state, a control's effect, a dialog's lifecycle,
+what the panadapter actually renders, connect/disconnect and slice-recreate
+paths, whether a setting survives a restart — the automation bridge can reach
+all of it, so "I think this breaks X" is a hypothesis you are equipped to
+settle. Drive it before you post. This is what turns a suspicion into a
+finding a maintainer can act on, and what kills the plausible-but-wrong ones
+before they reach the author.
+
+`docs/automation-bridge.md` is the reference; it is written for agents and is
+copy-pasteable.
+
+### Demo mode, never the live radio
+
+**Every bridge session in a review runs against the built-in demo simulator
+(`SimBackend`, RFC #4288) — never the operator's FLEX-8600.** The demo is a
+synthetic backend that generates its own RX audio and matching panadapter, it
+exercises the same `RadioModel` / slice / pan / settings paths the GUI uses
+with real hardware, and by construction it **cannot key** (Principle VI). It
+is the correct target for a review: reproducible, no hardware contention, no
+emissions, and nothing you do to it can disturb the operator's station.
+
+The trap is that this is opt-*out*, not opt-in: `AutoConnectToLastRadio`
+defaults on, and on the operator's machine the saved settings point at the
+real radio — so a bridge instance launched with the default config **will
+connect itself to the live FLEX** before you have issued a single verb. Two
+things prevent it, and you do both:
+
+1. **Isolate the settings store**, so there is no saved radio to autoconnect
+   to. `AETHER_SETTINGS_DIR` is honoured at runtime (`SettingsPaths.cpp`);
+   point it at a fresh scratch dir. A per-session scratch `HOME` /
+   `XDG_CONFIG_HOME` does the same job. A clean store also means
+   `ShowDemoRadio` is at its default (on), so the demo entry is in the list.
+2. **Connect explicitly to the demo, and to nothing else.** Its discovery
+   serial is `DEMO-0001` (`SimBackend::demoSerial()`), family `sim`, shown as
+   "Simulator (not on the air)".
+
+```sh
+export SCRATCH=<your scratch dir>
+AETHER_AUTOMATION=1 QT_QPA_PLATFORM=offscreen \
+AETHER_SETTINGS_DIR="$SCRATCH/settings" \
+AETHER_AUTOMATION_IDENTITY=pr-<PR>-review \
+AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
+AETHER_AUTOMATION_NO_TX=1 \
+setsid nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
+```
+
+Then, before anything else, confirm where you are pointed and attach the demo:
+
+```text
+connect list                      → verify DEMO-0001 is offered
+connect local serial DEMO-0001
+connect wait 30000                → asserts connected, returns the radio block
+get radio                         → confirm model "AetherSDR Demo", family sim
+```
+
+If `get radio` ever shows a FLEX serial, you are on the operator's hardware:
+`disconnect` immediately, fix the isolation, and say so in the report.
+
+The demo also gives you failure paths that live hardware will not: the `sim`
+verb injects faults (`swr`, `dropslice`, `stallscope`, `disconnect`,
+`malformed`, `clear`) while it is connected — that is how you exercise the
+error handling in step 7 rather than only reading it.
+
+Its limits, so you don't mistake one for a finding: it advertises a **single
+slice**, it cannot transmit, and it does not implement every Flex-specific
+protocol surface. When a PR's behavior genuinely cannot be reached in demo
+mode, that is a legitimate "could not verify" — report it as one (see the end
+of this step). It is **not** a licence to reach for the real radio; using
+live hardware needs the operator's explicit go-ahead in that review, and even
+then never for TX.
+
+### Driving it
+
+With the demo attached, use the `aethersdr-automation` MCP tools:
+`bridge_status` →
+`dump_tree filter=<widget>` → `invoke` / `gesture` / `shortcut` / `tune` /
+`slice` / `menu` → `assert_state` / `wait_for` on the model property that
+should have changed → `grab_widget` when the claim is visual. `bridge_command`
+is the escape hatch for verbs without a typed tool (`hover`, `clickAt`,
+`contextMenu`, `layout`, `tci`, …). If MCP is unavailable, `python3
+tools/automation_probe.py` or raw line-delimited JSON over the socket does the
+same job — the bridge being awkward to reach is not a reason to skip it.
+
+The loop that produces evidence:
+
+1. **Reproduce on the merge base first** when the PR claims a fix. A "before"
+   you cannot make fail is itself a finding — either the repro is wrong or the
+   fix is fixing nothing. Same worktree layout, same steps, different binary.
+2. **Re-run identically on the PR head.** Prefer `assert_state`/`wait_for` —
+   they read model truth and report pass/fail — over eyeballing a screenshot.
+   Grab pixels when the claim is about pixels.
+3. **Then attack past the happy path**, which is the part the author almost
+   certainly did not drive: the second slice, the second pan, disconnect
+   mid-operation, the dialog closed and reopened, the value at its range
+   limits, the same action twice. Persistence claims are only proven across a
+   process boundary — relaunch and re-read, don't trust the in-session value.
+4. **Quote what the app returned** — the `get_state`/`assert_state` JSON, the
+   `get_log` lines, the PNG — in the finding. Bridge output is the strongest
+   evidence available in a review; use it verbatim rather than paraphrasing.
+
+Use it on the body's runtime claims too, not only on your own suspicions.
+"No behavior change", "the panel still remembers its geometry", "other radios
+are unaffected", "the shortcut still works" are all one bridge session away
+from being confirmed or refuted.
+
+Non-negotiable operating rules:
+
+- **`pgrep -a AetherSDR` first.** Instances that are not yours — especially
+  any launched from the shared checkout — are the operator's session. Never
+  drive, close, or kill one.
+- **Always pass an explicit socket.** The discovery file
+  `<temp>/aethersdr-automation.json` is last-writer-wins and will happily
+  point you at another agent's instance.
+- **Never key TX.** The transmit verbs stay gated behind
+  `AETHER_AUTOMATION_ALLOW_TX`; a review never needs them. Launch with
+  `AETHER_AUTOMATION_NO_TX=1` (or via the MCP `app_instance` tool, which pins
+  it) so the gate is off regardless of the saved preference.
+- **Demo mode, offscreen, isolated settings — always.** Never point a review
+  instance at the FLEX-8600. It is single-occupancy and it is the operator's
+  station, not test equipment; a review has no business on it. If a finding
+  truly cannot be reached in demo mode, ask the operator rather than
+  connecting.
+- **Close your instance when done**, and say in the report which instance you
+  drove and that it was the demo.
+
+When you genuinely cannot drive it — the change is headless, the path needs
+hardware you must not touch, the build fails — say so explicitly and label the
+affected findings as reasoned-from-code rather than reproduced. An unverified
+finding reported as unverified is honest; one reported as observed is not.
+
+## 9. Post the review to the PR
 
 Post exactly ONE review carrying the findings as **inline comments anchored
 to the diff lines they concern**, with GitHub suggestion blocks wherever the
@@ -369,9 +579,15 @@ fix is a concrete small edit:
   the diff is explained by the issue" and move on when it is clean), the
   numbered blockers (each cross-referencing its inline comment), then nits
   marked explicitly non-blocking. State what was verified empirically vs.
-  read. Anchor each out-of-scope finding inline on the file it concerns —
-  line 1 of an added file is a valid anchor — so the author sees it where the
-  change is, not only in the summary.
+  read, and — briefly — what you tried to break that held up, so the author
+  can see the review was adversarial rather than cursory, and can correct you
+  if you attacked the wrong thing. Where a finding came from driving the app,
+  paste the bridge evidence with it: the state JSON, the log line, or the
+  `grab_widget` PNG (attach images by URL in the comment body). A reproduced
+  finding with app output attached rarely gets argued with. Anchor each
+  out-of-scope finding inline on the file it concerns — line 1 of an added
+  file is a valid anchor — so the author sees it where the change is, not only
+  in the summary.
 - If the posting API call fails (e.g. an anchor line is not in the diff),
   fix the anchors and retry once; if it still fails, fall back to
   `gh pr review` with the full markdown body and say so in the report.
@@ -380,7 +596,7 @@ fix is a concrete small edit:
   the last push, and re-approve after any later merge-from-main. Check
   `reviewDecision` afterwards rather than assuming it stuck.
 
-## 9. Report (markdown, to the operator only)
+## 10. Report (markdown, to the operator only)
 
 ```markdown
 ## PR #NNNN — <title> (@author)
@@ -403,6 +619,16 @@ scenario), which rule it violates (if governance), and what a fix looks like.
 
 ### Nits
 Bulleted, explicitly non-blocking. Style, naming, missed niceties, stale docs.
+
+### What I tried to break
+The attacks that did NOT produce a finding — the claims from the body you
+tested and that held, the edge cases and failure paths you walked, the tests
+you inverted, what you built or ran, and **the bridge session**: which build
+you drove against the demo, the verbs/tools you used, and the state you
+asserted. Two to five
+bullets. This is what makes a clean review trustworthy; without it, "no
+blockers" and "I did not look" are indistinguishable. Name anything you could
+not test and why — including "did not drive the app because …".
 
 ### Recommendation
 One of: **Approve** / **Approve with nits** / **Request changes** /
