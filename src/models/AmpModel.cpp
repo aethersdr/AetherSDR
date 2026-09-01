@@ -4,7 +4,6 @@ namespace AetherSDR {
 
 void AmpModel::applyChanges(const AmpDelta& d)
 {
-    const bool placeholderHandle = d.handle == QLatin1String("0x00000000");
     if (d.removed) {
         // Clear only if it's our amp (matches the original removal semantics —
         // leaves m_ip/m_operate untouched; consumers gate on present()).
@@ -18,12 +17,7 @@ void AmpModel::applyChanges(const AmpDelta& d)
     }
 
     // Presence latch: a detected (non-TGXL) power-amp model marks us present.
-    if (d.detectedModel && !d.handle.isEmpty() && !placeholderHandle) {
-        m_handle = d.handle;
-    } else if (m_present && m_handle.isEmpty()
-               && !d.handle.isEmpty() && !placeholderHandle) {
-        // A first status may identify the amp with the placeholder handle.
-        // Adopt the first real handle so subsequent model-less updates match.
+    if (d.detectedModel && !d.handle.isEmpty()) {
         m_handle = d.handle;
     }
 

@@ -75,7 +75,7 @@ int main(int argc, char** argv)
         CHECK(presence.count() == 0);
     }
 
-    // ---- placeholder handle recovers when the radio publishes the real one ----
+    // ---- unidentified detection cannot adopt a model-less TGXL handle ----
     {
         AmpModel amp;
         bool operateAtPresence = false;
@@ -85,14 +85,22 @@ int main(int argc, char** argv)
                 operateAtPresence = amp.operate();
             }
         });
-        amp.applyChanges(detected("0x00000000", "PowerGeniusXL",
+        // FlexBackend normalizes the SmartSDR placeholder to an empty handle.
+        amp.applyChanges(detected(QString(), "PowerGeniusXL",
                                   "192.168.1.50", true));
         CHECK(amp.present() && amp.handle().isEmpty());
         CHECK(amp.operate() && operateAtPresence);
 
         QSignalSpy state(&amp, &AmpModel::stateChanged);
         QSignalSpy telemetry(&amp, &AmpModel::telemetryUpdated);
-        amp.applyChanges(update("0x1000", false, {{"state", "STANDBY"}}));
+        amp.applyChanges(update("0x2000", false, {{"state", "STANDBY"}}));
+        CHECK(amp.handle().isEmpty());
+        CHECK(amp.operate() && state.count() == 0 && telemetry.count() == 0);
+
+        // A later model-bearing PGXL status safely establishes identity and
+        // applies its state; model-less updates can only match after that.
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", QString(), false,
+                                  {{"state", "STANDBY"}}));
         CHECK(amp.handle() == "0x1000");
         CHECK(!amp.operate() && state.count() == 1 && telemetry.count() == 1);
     }

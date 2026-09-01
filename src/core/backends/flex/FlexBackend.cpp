@@ -938,10 +938,11 @@ void FlexBackend::decodeAtuStatus(const QMap<QString, QString>& kvs)
 void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& model,
                                         const QMap<QString, QString>& kvs, bool removed)
 {
-    // Stateless translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
-    // (#4094). The presence latch, operate change-gating, and handle matching are
-    // the model's job (AmpModel::applyChanges) — this only reports what the wire
-    // said. Command/encode is the reverse path — invokeExtension("flex",
+    // Translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
+    // (#4094). Placeholder handles are normalized here so the vendor-neutral
+    // model never needs SmartSDR sentinel knowledge. The presence latch, operate
+    // change-gating, and handle matching are the model's job
+    // (AmpModel::applyChanges). Command/encode is the reverse path — invokeExtension("flex",
     // "amp.operate", …) below translates AmpModel's neutral intent (#4094).
     AmpDelta d;
     d.handle = handle;
@@ -955,14 +956,18 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
         emit amplifierChanged(d);
         return;
     }
+    if (handle == QLatin1String("0x00000000")) {
+        d.handle.clear();
+    }
     // RadioModel routes only power amps (PGXL) into this decode, so the handle is
     // the amp's — cache it for the encode path (#4198). Ignore the placeholder
     // handle a first status can carry before the real one is assigned. Defense in
     // depth (#4203): a pre-existing routing edge — a model-less TGXL status arriving
     // before its handle is known — can fall through to here; refuse to cache a
     // known-tuner handle so a later amp.operate can never mis-target the TGXL.
-    if (!handle.isEmpty() && handle != QLatin1String("0x00000000") && handle != m_tunerHandle)
-        m_ampHandle = handle;
+    if (!d.handle.isEmpty() && d.handle != m_tunerHandle) {
+        m_ampHandle = d.handle;
+    }
     // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
     // the tuner and routes to TunerModel, not here.
     if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
