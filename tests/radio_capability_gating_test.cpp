@@ -825,6 +825,22 @@ int main(int argc, char** argv)
               "relay: capabilitiesChanged fired on the connect edge");
         check(model.isConnected(),
               "synthetic demo connect reached the connected state");
+
+        // Captured SmartSDR status can be replayed while SimBackend is active.
+        // The neutral identity path must not depend on a live FlexBackend.
+        const QString tunerObject = QStringLiteral("amplifier 0x2000");
+        const QMap<QString, QString> tunerStatus{
+            {QStringLiteral("model"), QStringLiteral("TunerGeniusXL")}
+        };
+        check(QMetaObject::invokeMethod(
+                  &model, "onStatusReceived", Qt::DirectConnection,
+                  QGenericArgument("QString", &tunerObject),
+                  QGenericArgument("QMap<QString,QString>", &tunerStatus)),
+              "demo TGXL status fixture reached RadioModel");
+        check(model.tunerModel().handle() == QStringLiteral("0x2000")
+                  && model.tunerModel().isPresent(),
+              "demo TGXL status preserves backend-neutral tuner identity");
+        model.tunerModel().setHandle({});
         if (spy.count() > 0) {
             const QList<QVariant> args = spy.last();
             check(args.value(0).toBool(),

@@ -10039,12 +10039,21 @@ void RadioModel::onStatusReceived(const QString& object,
             if (model == "TunerGeniusXL" || handle == m_tunerModel.handle()) {
                 // Decode identity and state as one delta so first presence
                 // observers cannot read default operate/bypass values.
-                if (handle != "0x00000000" && handle != m_tunerModel.handle()) {
-                    m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
-                } else if (m_tunerModel.handle().isEmpty()) {
+                if (handle != "0x00000000"
+                    && handle != m_tunerModel.handle()) {
                     m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
                 }
-                if (m_flexBackend) m_flexBackend->decodeTunerStatus(handle, kvs);   // #4092/#4198
+                if (m_flexBackend) {
+                    m_flexBackend->decodeTunerStatus(handle, kvs);   // #4092/#4198
+                } else if (!handle.isEmpty()
+                           && handle != QLatin1String("0x00000000")) {
+                    // Captured status replay in demo/sim has no Flex decoder.
+                    // Preserve the old backend-neutral identity path without
+                    // teaching RadioModel to decode SmartSDR tuner fields.
+                    TunerDelta identity;
+                    identity.handle = handle;
+                    m_tunerModel.applyChanges(identity);
+                }
             }
             // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
             // tuner branch: a TGXL status is already routed above and would only

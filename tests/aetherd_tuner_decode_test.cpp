@@ -16,10 +16,11 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
-static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
+static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs,
+                         const QString& handle = QStringLiteral("0x2000"))
 {
     QSignalSpy spy(&b, &IRadioBackend::tunerChanged);
-    b.decodeTunerStatus(QStringLiteral("0x2000"), kvs);
+    b.decodeTunerStatus(handle, kvs);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<TunerDelta>();
 }
@@ -55,6 +56,16 @@ int main(int argc, char** argv)
         CHECK(d.operate.has_value() && *d.operate == true);
         CHECK(!d.bypass.has_value() && !d.relayC1.has_value()
               && !d.model.has_value() && !d.antennaA.has_value());
+    }
+
+    // ---- SmartSDR's placeholder never becomes neutral tuner identity ----
+    {
+        const TunerDelta d = decode(b, {{"model", "TunerGeniusXL"},
+                                        {"operate", "1"}},
+                                    QStringLiteral("0x00000000"));
+        CHECK(!d.handle.has_value());
+        CHECK(d.model.has_value() && *d.model == "TunerGeniusXL");
+        CHECK(d.operate.has_value() && *d.operate == true);
     }
 
     // ---- informational keys (nickname/version/gateway/…) are dropped ----
