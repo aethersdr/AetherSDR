@@ -33,10 +33,26 @@ static constexpr int kGateControlPort = 8731;
 // gate died) and the applet should get out of the way.
 static constexpr int kFailuresBeforeAbsent = 3;
 
+// Row labels resolve their colour from a theme token instead of a literal, so a
+// user theme can restyle them and a live theme switch repaints them —
+// applyStyleSheet() re-resolves every widget it tracks, which a bare
+// setStyleSheet() never did (docs/style/theme-style-guide.md). It also keeps
+// this file off the hardcoded-colour ratchet in static-checks.yml.
+//
+// color.text.secondary (#8ea8c0) rather than color.text.label (#506070): the
+// literal these labels used, #8090a0, is a light mid-grey, so the label token
+// would have visibly darkened them against every sibling applet. TunerApplet
+// and ProfileSwitcherApplet still carry their own copy of the old literal;
+// converging all three on this token is a follow-up, not this PR's business.
 static const char* kRowLabelStyle =
-    "QLabel { color: #8090a0; font-size: 10px; font-weight: bold; }";
+    "QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }";
 
 namespace {
+
+void styleRowLabel(QLabel* label)
+{
+    ThemeManager::instance().applyStyleSheet(label, QString::fromLatin1(kRowLabelStyle));
+}
 
 QString formatHz(double hz)
 {
@@ -79,7 +95,7 @@ AetherGateApplet::AetherGateApplet(QWidget* parent)
     root->setSpacing(6);
 
     m_status = new QLabel(tr("looking for a gate…"), this);
-    m_status->setStyleSheet(kRowLabelStyle);
+    styleRowLabel(m_status);
     root->addWidget(m_status);
 
     // --- panadapter resolution ------------------------------------------
@@ -104,8 +120,8 @@ AetherGateApplet::AetherGateApplet(QWidget* parent)
 
     auto* spanLabel = new QLabel(tr("Span"), this);
     auto* binsLabel = new QLabel(tr("Bins"), this);
-    spanLabel->setStyleSheet(kRowLabelStyle);
-    binsLabel->setStyleSheet(kRowLabelStyle);
+    styleRowLabel(spanLabel);
+    styleRowLabel(binsLabel);
     resForm->addRow(spanLabel, m_span);
     resForm->addRow(binsLabel, m_bins);
     resForm->addRow(QString(), m_binWidth);
@@ -373,7 +389,7 @@ void AetherGateApplet::buildDeviceControls(const QJsonObject& dev)
                         connect(r, &QNetworkReply::finished, r, &QNetworkReply::deleteLater);
                     });
             auto* label = new QLabel(tr("Antenna"), m_deviceBox);
-            label->setStyleSheet(kRowLabelStyle);
+            styleRowLabel(label);
             m_deviceForm->addRow(label, m_antenna);
         }
 
@@ -425,7 +441,7 @@ void AetherGateApplet::buildDeviceControls(const QJsonObject& dev)
             }
             m_settingWidgets.insert(key, w);
             auto* label = new QLabel(name, m_deviceBox);
-            label->setStyleSheet(kRowLabelStyle);
+            styleRowLabel(label);
             m_deviceForm->addRow(label, w);
         }
         m_deviceBox->setVisible(!shape.isEmpty());
