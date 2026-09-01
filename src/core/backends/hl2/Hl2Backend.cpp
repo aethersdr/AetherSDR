@@ -101,6 +101,14 @@ constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 // guard.
 constexpr int kMinForwardCountsForSwr = 16;
 
+// The radio's rated output, in watts, as the gauges' full-scale reference.
+//
+// The HL2 wiki's own FAQ: "The Hermes-Lite 2.0 is a QRP transceiver and
+// achieves 5W out on all HF amateur radio bands." A published figure rather
+// than a measurement, which is the right kind of number for a scale — it must
+// be the same on every operator's radio, not a property of one unit's PA.
+constexpr int kHl2RatedOutputWatts = 5;
+
 // Snap a requested span (Hz) to the rate that best matches it.
 //
 // Nearest in the LOG domain, not the linear one: the rates are octave-spaced, so
@@ -1417,6 +1425,30 @@ RadioCapabilities Hl2Backend::capabilities() const
     // rolls off and there is nothing to hear.
     c.tuningMinHz = 100'000.0;
     c.tuningMaxHz = 38'400'000.0;
+    // THE RADIO'S POWER CLASS, which is what every forward-power gauge scales
+    // its arc from. Declared as a band table because that is the seam the
+    // clients already read: RadioModel::refreshTxPowerLimit turns it into
+    // TransmitModel::maxPowerLevel, and TxApplet additionally treats a
+    // non-empty table as permission to draw a face other than the 100 W one
+    // (m_forwardPowerScaleFollowsBandRating).
+    //
+    // WITHOUT IT, TransmitModel kept its compiled-in 100 W default and every
+    // gauge scaled for a 100 W radio: a full-power HL2 transmission sat in the
+    // bottom few percent of the arc, which is indistinguishable from a meter
+    // that does not work — and is what it has been reported as.
+    //
+    // ONE BAND, spanning the whole tuning range, because that is the truth
+    // about this radio rather than a simplification: "The Hermes-Lite 2.0 is a
+    // QRP transceiver and achieves 5W out on ALL HF amateur radio bands" (HL2
+    // wiki, FAQ). Unlike the IC-9700, whose three decks each have their own
+    // ceiling, there is no per-band variation to describe.
+    //
+    // The secondary instrumentation output at RF1 is +17 dBm and is
+    // deliberately NOT what this describes: it is selected in hardware with no
+    // register to read back, so scaling for it would be wrong for every
+    // operator using the normal output.
+    c.txPowerBands = {TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
+                                  static_cast<double>(kHl2RatedOutputWatts)}};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -4549,6 +4581,7 @@ void Hl2Backend::pushInitialState()
     // belongs here.
     if (const Receiver* txRx = rx(m_txDdc))
         setTxFrequency(txRx->sliceFreqHz);
+
     // NOT the drive level. connectRadio() already asserts a safe 0 before the
     // link comes up, and by the time this runs RadioModel has pushed the
     // operator's actual RF power — emit connected() above is synchronous, so
