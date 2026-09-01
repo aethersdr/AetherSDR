@@ -50,6 +50,23 @@ struct IcomCivBackendTestAccess {
         backend.m_connected = true;
         backend.onCivFrame(frame, backend.m_sessionGeneration);
     }
+
+    static void beginUnpublishedReadiness(IcomCivBackend& backend)
+    {
+        backend.m_connected = true;
+        backend.m_connectionPublished = false;
+        backend.m_connectReadinessPending = true;
+    }
+
+    static void failConnectReadiness(IcomCivBackend& backend, const QString& reason)
+    {
+        backend.failConnectReadiness(reason);
+    }
+
+    static bool readinessPending(const IcomCivBackend& backend)
+    {
+        return backend.m_connectReadinessPending;
+    }
 };
 
 } // namespace AetherSDR::icom
@@ -225,6 +242,41 @@ int main(int argc, char** argv)
                               0xA4, icom::repeaterTone::kDtcs),
                   "DTCS operator writes schedule an immediate authoritative readback");
         }
+    }
+
+    // Wake/session bounces happen before connected() is published. They still
+    // need a disconnect edge so RadioModel opens the promised fresh session;
+    // terminal Stop paths need an error and must release readiness instead.
+    {
+        icom::IcomCivBackend bounceBackend;
+        int disconnects = 0;
+        int errors = 0;
+        QObject::connect(&bounceBackend, &IRadioBackend::disconnected,
+                         [&disconnects] { ++disconnects; });
+        QObject::connect(&bounceBackend, &IRadioBackend::connectionError,
+                         [&errors](const QString&) { ++errors; });
+        icom::IcomCivBackendTestAccess::beginUnpublishedReadiness(bounceBackend);
+        check(QMetaObject::invokeMethod(
+                  &bounceBackend, "onSessionDisconnected", Qt::DirectConnection,
+                  Q_ARG(QString, QString{})),
+              "unpublished wake bounce reaches the backend disconnect handler");
+        check(disconnects == 1 && errors == 0,
+              "unpublished wake bounce emits the reconnect-driving disconnect edge");
+
+        icom::IcomCivBackend stopBackend;
+        int stopErrors = 0;
+        QObject::connect(&stopBackend, &IRadioBackend::connectionError,
+                         [&stopErrors](const QString& reason) {
+            if (!reason.isEmpty()) {
+                ++stopErrors;
+            }
+        });
+        icom::IcomCivBackendTestAccess::beginUnpublishedReadiness(stopBackend);
+        icom::IcomCivBackendTestAccess::failConnectReadiness(
+            stopBackend, QStringLiteral("identity stopped"));
+        check(stopErrors == 1
+                  && !icom::IcomCivBackendTestAccess::readinessPending(stopBackend),
+              "terminal identity Stop reports failure and releases readiness");
     }
 
     // The Icom transport reports one stable VFO as slice 0. On reconnect,

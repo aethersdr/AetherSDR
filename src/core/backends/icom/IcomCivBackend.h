@@ -305,8 +305,9 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
-    void queueConnectIdentityProbe(std::string key);
+    void queueConnectIdentityProbe(std::string key, bool directed = false);
     void wakeForConnect();
+    void failConnectReadiness(const QString& reason);
     int queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup);
     void finishMemoryRefresh(bool success);
     void finishMemoryRefreshWhenDrained(quint64 generation);
@@ -340,11 +341,13 @@ private:
     bool m_civAmbiguous = false;
     // Whether sendConnectReadBurst() has already run this session.
     bool m_connectBurstSent = false;
-    // IC-9700 network wake is conditional: only a failed directed identity
-    // read admits 18 01, and each fresh RS-BA1 session gets at most one write.
+    // IC-9700 network wake is conditional: only failed broadcast and selected-
+    // address identity reads admit 18 01, and each fresh RS-BA1 session gets at
+    // most one write.
     bool m_connectIdentityPending = false;
+    bool m_connectDirectedFallbackAttempted = false;
     // True from the first transport-connected edge of a wake-capable radio
-    // until its directed CI-V identity reply. Scope packets can arrive before
+    // until its CI-V identity reply. Scope packets can arrive before
     // that proof; do not expose a half-ready panadapter to the operator.
     bool m_connectReadinessPending = false;
     bool m_connectionPublished = false;

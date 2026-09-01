@@ -90,32 +90,6 @@
 namespace AetherSDR {
 
 namespace {
-// These are internal Flex-session setup and display-maintenance messages. A
-// non-Flex backend has no text command plane, so RadioModel correctly logs the
-// drop, but none represents an operator touching an unsupported control. Keep
-// them out of the user-facing toast while preserving the diagnostic signal for
-// every actual control request.
-bool isInternalNonFlexCommand(const QString& command)
-{
-    if (command.startsWith(QStringLiteral("sub "))
-        || command == QStringLiteral("transmit set dax=0")
-        || command.startsWith(QStringLiteral("display pan rfgain_info "))) {
-        return true;
-    }
-    if (command.startsWith(QStringLiteral("display panafall set "))) {
-        return command.contains(QStringLiteral(" color_gain="))
-            || command.contains(QStringLiteral(" black_level="))
-            || command.contains(QStringLiteral(" auto_black="));
-    }
-    if (command.startsWith(QStringLiteral("display pan set "))) {
-        return command.contains(QStringLiteral(" xpixels="))
-            || command.contains(QStringLiteral(" ypixels="))
-            || command.contains(QStringLiteral(" wnb="))
-            || command.contains(QStringLiteral(" wnb_level="));
-    }
-    return false;
-}
-
 QString defaultPanLayoutForCount(int panCount)
 {
     static const QMap<int, QString> kDefaultLayouts = {
@@ -392,6 +366,8 @@ void MainWindow::wireDiscovery()
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{
         m_userDisconnected = true;
+        m_radioWakeInProgress = false;
+        ++m_radioWakeGeneration;
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
         setPanadapterConnectionAnimation(false);
@@ -733,9 +709,7 @@ void MainWindow::wireRadioModel()
             m_commandDroppedNoticeShown = false;
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
-            this, [this](const QString& command) {
-        if (isInternalNonFlexCommand(command))
-            return;
+            this, [this](const QString&) {
         if (m_commandDroppedNoticeShown)
             return;
         m_commandDroppedNoticeShown = true;

@@ -6488,6 +6488,10 @@ void MainWindow::onConnectionError(const QString& msg)
             wakeDialog->close();
             wakeDialog->deleteLater();
         }
+        const QString errorText = tr("Error: %1").arg(msg);
+        m_connPanel->setStatusText(errorText);
+        m_connStatusLabel->setText(tr("Error"));
+        statusBar()->showMessage(tr("Connection error: %1").arg(msg), 5000);
         setPanadapterConnectionAnimation(false);
         showConnectionDialog();
         return;
