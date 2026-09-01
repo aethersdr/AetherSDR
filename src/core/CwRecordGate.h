@@ -84,6 +84,26 @@ constexpr long long cwOverHangMs(int wpm)
     return kCwOverHangUnits * 1200LL / (wpm > 0 ? wpm : 20);
 }
 
+// The over-scoped variant. The hang must outlast the longest silence WITHIN
+// the over, and that silence is the inter-word gap at the SLOWEST speed being
+// keyed — which is not always the mirror's speed: CWX keys at CwxModel's own
+// per-segment wpm, independent of TransmitModel::cwSpeed. A 15 WPM macro
+// against a 30 WPM mirror put a 560 ms word gap against a 320 ms hang, so the
+// latch aged inside every word gap and the over split per word (#4281).
+//
+// overrideWpm carries the slowest speed announced for the CURRENT over
+// (min-tracked as CWX segments announce; 0 = no override, a paddle over).
+// The slower of the two speeds — the longer hang — always wins: a hang too
+// short splits the over (correctness); a hang too long shaves bounded
+// milliseconds off the recording's tail (cost), and only when speeds are
+// actually mixed.
+constexpr long long cwOverHangMs(int mirrorWpm, int overrideWpm)
+{
+    return (overrideWpm > 0 && (mirrorWpm <= 0 || overrideWpm < mirrorWpm))
+        ? cwOverHangMs(overrideWpm)
+        : cwOverHangMs(mirrorWpm);
+}
+
 constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
 {
     return cwRecordPumpOwnsRecorder(s) && recordingOpen;

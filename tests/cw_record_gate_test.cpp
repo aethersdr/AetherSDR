@@ -227,6 +227,30 @@ int main()
         // after every over regardless of speed.
         ok &= expect(cwOverHangMs(20) < 1500,
                      "#4281: the hang is far shorter than the 1500 ms first attempt");
+
+        // ── The over-scoped speed override (#4281 round 2) ──────────────────
+        // CWX keys at CwxModel's own per-segment speed, which the
+        // TransmitModel::cwSpeed mirror never sees. The reviewer's scenario,
+        // by the arithmetic: paddle 30 WPM → hang 8×40 = 320 ms; CWX macro at
+        // 15 WPM → inter-word gap 7×80 = 560 ms > 320, so under break-in the
+        // latch aged inside every word gap and the over split per word. The
+        // override carries the over's slowest announced speed; the SLOWER
+        // speed (longer hang) always wins, because a hang too short splits
+        // the over while a hang too long costs bounded tail milliseconds.
+        static_assert(cwOverHangMs(30, 0) == cwOverHangMs(30),
+                      "no override (a paddle over): the mirror alone decides");
+        static_assert(cwOverHangMs(30, 15) == cwOverHangMs(15),
+                      "#4281: a slower CWX message re-sizes the hang");
+        static_assert(cwOverHangMs(30, 15) == 640,
+                      "#4281: 640 ms outlasts the 15 WPM word gap of 560 ms");
+        static_assert(cwOverHangMs(15, 30) == cwOverHangMs(15),
+                      "a FASTER override never shortens the hang — min wins");
+        static_assert(cwOverHangMs(0, 15) == cwOverHangMs(15),
+                      "nonsense mirror with a real override: the override decides");
+        ok &= expect(cwOverHangMs(30, 15) > 7 * 1200 / 15,
+                     "#4281: the overridden hang outlasts the slow inter-word gap");
+        ok &= expect(cwOverHangMs(30, 26) == cwOverHangMs(26),
+                     "#4281: even a modest speed split (30/26) takes the slower hang");
     }
 
     // ── The latch ages only while no transmission of OURS is up ─────────────

@@ -220,6 +220,7 @@ public:
         if (was && !cw) {
             m_cwKeyedThisOver.store(false, std::memory_order_release);
             m_cwOverHadTx.store(false, std::memory_order_release);
+            m_cwOverWpm.store(0, std::memory_order_relaxed);
         }
     }
     // Mirror of TransmitModel's tune state (optimistic-local, then status-
@@ -227,6 +228,22 @@ public:
     // not a CW over; cwOverTxActive excludes it (#4281).
     void setTuneActive(bool tuning) {
         m_tuneActive.store(tuning, std::memory_order_release);
+    }
+    // A speed our keyer will send THIS over at, min-tracked into the over-hang
+    // (#4281): CWX keys at CwxModel's own per-segment wpm, independent of the
+    // TransmitModel::cwSpeed mirror, and a 15 WPM macro against a 30 WPM
+    // mirror aged the latch inside every 560 ms word gap (hang: 320 ms). All
+    // of a message's segments announce at send time, so min-tracking sizes
+    // the hang from the message's slowest speed; see cwOverHangMs(int, int).
+    void noteCwOverSpeed(int wpm) {
+        if (wpm <= 0) {
+            return;
+        }
+        int cur = m_cwOverWpm.load(std::memory_order_relaxed);
+        while ((cur == 0 || wpm < cur)
+               && !m_cwOverWpm.compare_exchange_weak(
+                      cur, wpm, std::memory_order_relaxed)) {
+        }
     }
     bool kiwiSdrAudioTransmitMuted() const;
     bool hasKiwiSdrAudioSource(const QString& sourceId) const;
@@ -1128,8 +1145,15 @@ private:
     // The arithmetic lives in CwRecordGate.h so it is pinned by the same test
     // as the ownership rule.
     int64_t cwOverHangMs() const {
-        return AetherSDR::cwOverHangMs(m_cwWpm.load(std::memory_order_relaxed));
+        return AetherSDR::cwOverHangMs(
+            m_cwWpm.load(std::memory_order_relaxed),
+            m_cwOverWpm.load(std::memory_order_relaxed));
     }
+    // Slowest speed announced for the CURRENT over, 0 = none (a paddle over).
+    // Min-tracked by noteCwOverSpeed as CWX segments announce at send time;
+    // cleared by the pump when the over's latch ages out and on the CW-mode
+    // exit edge, so the next paddle over is back on the mirror alone (#4281).
+    std::atomic<int>   m_cwOverWpm{0};
     std::atomic<bool>  m_qsoRecordingActive{false};   // a recording file is open
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the

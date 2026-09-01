@@ -8312,6 +8312,9 @@ void AudioEngine::onCwRecordPump()
                    (nowNs - lastNs) / 1000000LL, cwOverHangMs())) {
             m_cwKeyedThisOver.store(false, std::memory_order_release);
             m_cwOverHadTx.store(false, std::memory_order_release);
+            // The over is finished, so its speed override dies with it: the
+            // next paddle over sizes the hang from the mirror alone (#4281).
+            m_cwOverWpm.store(0, std::memory_order_relaxed);
         }
     }
 
