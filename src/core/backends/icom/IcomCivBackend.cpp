@@ -264,15 +264,20 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     // Published from the model's own band table rather than a second hand-kept
     // list, so the ceilings and the tune guard can never describe different
-    // hardware. An empty table (every model but the IC-9700) leaves the vector
-    // empty, which is what RadioModel reads as "txPowerMaxWatts applies
-    // everywhere" — the prior behaviour, unchanged.
+    // hardware. IC-705 additionally opts into one continuous rated-output
+    // range so its verified 10 W ceiling drives the low-power face. Other
+    // continuous-range models keep an empty vector and their prior UI path.
     c.txPowerBands = {};
     c.txPowerBands.reserve(static_cast<int>(bands.size()));
     for (const IcomBand& band : bands) {
         c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),
                                           static_cast<double>(band.highHz),
                                           band.maxWatts});
+    }
+    if (bands.empty() && profile.meters.scaleForwardPowerToRatedOutput
+        && m.hasTransmit && m.txPowerMaxWatts > 0.0) {
+        c.txPowerBands.append(TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
+                                          m.txPowerMaxWatts});
     }
     c.forwardPowerRequiresSmoothing = profile.meters.powerConversion
         != MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;

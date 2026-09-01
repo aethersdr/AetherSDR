@@ -598,6 +598,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .meters = MeterCalibrationProfile{
             .calibration = MeterCalibration::Ic705,
             .currentFullScaleAmps = 4.0,
+            .scaleForwardPowerToRatedOutput = true,
             .holdIsolatedTxMinimums = true,
         },
         .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},

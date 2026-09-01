@@ -432,8 +432,9 @@ int main(int argc, char** argv)
         check(caps.receiveOnlyModes.isEmpty(),
               "HL2 declares no receive-only modes — it modulates on this host, "
               "so there is no mode it hears and cannot send");
-        check(caps.txPowerBands.isEmpty(),
-              "HL2 explicitly leaves per-band TX power limits empty");
+        check(caps.txPowerBands.size() == 1
+                  && caps.txPowerMaxWattsAt(14'200'000.0) == 5.0,
+              "HL2 declares its continuous 5 W rated-output range");
         check(!caps.hasDaxStreams,
               "HL2 declares hasDaxStreams=false (one raw IQ feed, no stream plane)");
         check(!caps.hasExtendedDsp,
@@ -618,6 +619,29 @@ int main(int argc, char** argv)
     // ---- Icom model capabilities and CI-V dial lock without a socket -------
     {
         using namespace AetherSDR::icom;
+        const IcomModel* ic705 = modelForName("IC-705");
+        check(ic705 != nullptr, "the IC-705 resolves from the Icom model table");
+        if (ic705) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic705);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 1
+                      && caps.txPowerMaxWattsAt(14'200'000.0) == 10.0,
+                  "IC-705 alone declares its continuous 10 W rated-output range");
+        }
+
+        const IcomModel* ic7300Mk2 = modelForName("IC-7300MK2");
+        check(ic7300Mk2 != nullptr,
+              "the IC-7300MK2 resolves from the Icom model table");
+        if (ic7300Mk2) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic7300Mk2);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.isEmpty()
+                      && caps.txPowerMaxWattsAt(14'200'000.0) == 100.0,
+                  "IC-7300MK2 retains its unbanded 100 W capability path");
+        }
+
         const IcomModel* ic9700 = modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
         // Guarded as a block: without the guard a failed lookup would run the
