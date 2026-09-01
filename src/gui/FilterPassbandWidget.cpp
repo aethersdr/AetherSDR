@@ -1,4 +1,5 @@
 #include "FilterPassbandWidget.h"
+#include "FilterPassbandMath.h"
 #include "MacCursorCompat.h"
 
 #include <QPainterPath>
@@ -29,6 +30,14 @@ void FilterPassbandWidget::setMode(const QString& mode)
 {
     if (mode == m_mode) return;
     m_mode = mode;
+    update();
+}
+
+void FilterPassbandWidget::setWidthRange(int minimumHz, int maximumHz, int stepHz)
+{
+    m_minimumWidthHz = minimumHz > 0 ? minimumHz : 50;
+    m_maximumWidthHz = maximumHz >= m_minimumWidthHz ? maximumHz : 6000;
+    m_widthStepHz = stepHz > 0 ? stepHz : 50;
     update();
 }
 
@@ -155,8 +164,9 @@ void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
 
     const int usableW = width() - 32;
     const int usableH = height();
-    const double hzPerPxH = 6000.0 / std::max(usableW, 1);
-    const double hzPerPxV = 4000.0 / std::max(usableH, 1);
+    const double hzPerPxH = passbandDragScaleHzPerPixel(m_maximumWidthHz, usableW);
+    const double hzPerPxV = passbandDragScaleHzPerPixel(
+        m_maximumWidthHz - m_minimumWidthHz, usableH);
 
     int newLo = m_dragStartLo;
     int newHi = m_dragStartHi;
@@ -165,36 +175,39 @@ void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
         // Horizontal: shift passband, vertical: symmetric width
         int shiftHz = static_cast<int>(dx * hzPerPxH);
         int bwChange = static_cast<int>(-dy * hzPerPxV);
-        shiftHz = (shiftHz / 50) * 50;
-        bwChange = (bwChange / 50) * 50;
+        shiftHz = static_cast<int>(std::round(
+            static_cast<double>(shiftHz) / m_widthStepHz)) * m_widthStepHz;
+        bwChange = static_cast<int>(std::round(
+            static_cast<double>(bwChange) / m_widthStepHz)) * m_widthStepHz;
         newLo = m_dragStartLo + shiftHz - bwChange / 2;
         newHi = m_dragStartHi + shiftHz + bwChange / 2;
     } else if (m_dragMode == DragLo) {
         int deltaHz = static_cast<int>(dx * hzPerPxH);
-        deltaHz = (deltaHz / 50) * 50;
+        deltaHz = static_cast<int>(std::round(
+            static_cast<double>(deltaHz) / m_widthStepHz)) * m_widthStepHz;
         newLo = m_dragStartLo + deltaHz;
     } else if (m_dragMode == DragHi) {
         int deltaHz = static_cast<int>(dx * hzPerPxH);
-        deltaHz = (deltaHz / 50) * 50;
+        deltaHz = static_cast<int>(std::round(
+            static_cast<double>(deltaHz) / m_widthStepHz)) * m_widthStepHz;
         newHi = m_dragStartHi + deltaHz;
     }
 
-    // Enforce minimum bandwidth
-    if (newHi - newLo < MIN_BW) {
-        if (m_dragMode == DragLo)
-            newLo = newHi - MIN_BW;
-        else if (m_dragMode == DragHi)
-            newHi = newLo + MIN_BW;
-        else {
-            int center = (newLo + newHi) / 2;
-            newLo = center - MIN_BW / 2;
-            newHi = center + MIN_BW / 2;
-        }
-    }
+    // Enforce the connected radio's mode-specific width range while keeping
+    // the edge the operator did not touch anchored.
+    const PassbandDragEdge draggedEdge = m_dragMode == DragLo
+        ? PassbandDragEdge::Low
+        : m_dragMode == DragHi ? PassbandDragEdge::High : PassbandDragEdge::Both;
+    const PassbandEdgePair constrained = constrainPassbandWidth(
+        newLo, newHi, m_minimumWidthHz, m_maximumWidthHz, draggedEdge);
+    newLo = constrained.lowHz;
+    newHi = constrained.highHz;
 
-    // Snap to 50 Hz grid
-    newLo = (newLo / 50) * 50;
-    newHi = (newHi / 50) * 50;
+    // Snap to the radio's width grid.
+    newLo = static_cast<int>(std::round(
+        static_cast<double>(newLo) / m_widthStepHz)) * m_widthStepHz;
+    newHi = static_cast<int>(std::round(
+        static_cast<double>(newHi) / m_widthStepHz)) * m_widthStepHz;
 
     if (newLo != m_lo || newHi != m_hi) {
         m_lo = newLo;

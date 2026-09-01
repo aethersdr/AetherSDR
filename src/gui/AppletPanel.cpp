@@ -1669,6 +1669,13 @@ void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
         m_rxApplet->setRadioFilterWidths(widthsHz);
 }
 
+void AppletPanel::setRadioFilterControl(const RxFilterControl& control)
+{
+    if (m_rxApplet) {
+        m_rxApplet->setRadioFilterControl(control);
+    }
+}
+
 void AppletPanel::setMicLevelMeterState(MicMeterSessionState session,
                                         bool available)
 {

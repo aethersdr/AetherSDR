@@ -476,6 +476,18 @@ struct VfoModeState {
 // the same narrow-to-wide order as every other filter row in the app.
 [[nodiscard]] std::vector<int> filterWidthsForMode(const std::string& mode);
 
+struct FilterPresetState {
+    int id = 0;
+    int widthHz = 0;
+
+    bool operator==(const FilterPresetState&) const = default;
+};
+
+// FIL1/FIL2/FIL3 in radio order. The selected slot may carry a custom width;
+// replacing its content must never reorder or rename the slot.
+[[nodiscard]] std::vector<FilterPresetState> filterPresetsForMode(
+    const std::string& mode, int selectedPresetId = 0, int selectedWidthHz = 0);
+
 // The passband that filter gives in that mode, in Hz relative to the carrier,
 // sign carrying the sideband (SliceModel's convention). The backend needs this
 // because an IC-705's IF filters cannot be read back as Hz — nothing else in

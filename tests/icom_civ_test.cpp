@@ -416,6 +416,24 @@ static void testModes()
     // three identical buttons, two of which read as broken.
     check(filterWidthsForMode("WFM").size() == 1, "WFM publishes its single filter once");
 
+    // BUTTON IDENTITY IS THE FIL SLOT, NOT ITS MUTABLE WIDTH. Customising the
+    // selected slot must update its tooltip/passband content without sorting
+    // it into another button position or changing its label.
+    const std::vector<FilterPresetState> usbCustom =
+        filterPresetsForMode("USB", 2, 2700);
+    check((usbCustom == std::vector<FilterPresetState>{{1, 3000}, {2, 2700}, {3, 1800}}),
+          "a custom USB FIL2 width keeps FIL1/FIL2/FIL3 in radio order");
+    const std::vector<FilterPresetState> amCustom =
+        filterPresetsForMode("AM", 1, 10000);
+    check((amCustom == std::vector<FilterPresetState>{{1, 10000}, {2, 6000}, {3, 3000}}),
+          "a custom AM FIL1 width stays FIL1 instead of becoming a 10K button");
+    const std::vector<FilterPresetState> cwCustom =
+        filterPresetsForMode("CW", 3, 700);
+    check((cwCustom == std::vector<FilterPresetState>{{1, 1200}, {2, 500}, {3, 700}}),
+          "a custom CW FIL3 width stays FIL3 even when wider than FIL2");
+    check(filterPresetsForMode("WFM").size() == 1,
+          "a fixed WFM filter publishes one stable slot");
+
     // A sideband passband sits off the carrier and carries its sideband in the
     // sign; AM and its relatives straddle it.
     {

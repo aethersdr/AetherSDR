@@ -459,6 +459,30 @@ std::vector<int> filterWidthsForMode(const std::string& mode)
     return {l.fil3, l.fil2, l.fil1};
 }
 
+std::vector<FilterPresetState> filterPresetsForMode(const std::string& mode,
+                                                     int selectedPresetId,
+                                                     int selectedWidthHz)
+{
+    const FilterLadder ladder = ladderFor(mode);
+    std::vector<FilterPresetState> presets{
+        {1, ladder.fil1},
+        {2, ladder.fil2},
+        {3, ladder.fil3},
+    };
+    if (ladder.fil1 == ladder.fil2 && ladder.fil2 == ladder.fil3) {
+        presets.resize(1);
+    }
+    if (selectedWidthHz > 0) {
+        for (FilterPresetState& preset : presets) {
+            if (preset.id == selectedPresetId) {
+                preset.widthHz = selectedWidthHz;
+                break;
+            }
+        }
+    }
+    return presets;
+}
+
 std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter)
 {
     const FilterLadder l = ladderFor(mode);

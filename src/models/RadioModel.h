@@ -372,6 +372,8 @@ public:
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
     QList<int> radioFilterWidthsHz() const;
+    RxFilterControl radioFilterControl() const;
+    void selectRadioFilterPreset(int sliceId, int presetId);
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.

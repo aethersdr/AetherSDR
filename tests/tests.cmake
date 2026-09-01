@@ -4025,6 +4025,13 @@ target_include_directories(rx_filter_step_test PRIVATE src)
 target_link_libraries(rx_filter_step_test PRIVATE Qt6::Core)
 add_test(NAME rx_filter_step_test COMMAND rx_filter_step_test)
 
+# Socket-free passband interaction math. Pins mode-aware skirt scaling and the
+# untouched-edge anchor contract without constructing the full desktop applet.
+add_executable(filter_passband_math_test tests/filter_passband_math_test.cpp)
+target_include_directories(filter_passband_math_test PRIVATE src)
+target_link_libraries(filter_passband_math_test PRIVATE Qt6::Core)
+add_test(NAME filter_passband_math_test COMMAND filter_passband_math_test)
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
