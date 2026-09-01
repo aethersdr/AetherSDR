@@ -59,6 +59,24 @@ static_assert(txRecorderSource(true,  true)  == TxRecorderSource::CwSidetone);
 // interlock is false in every inter-element gap while the over continues.
 static_assert(txRecorderSource(false, true)  == TxRecorderSource::CwSidetone);
 
+// ── Our transmission, not any client's (#4281 round 2) ─────────────────────
+// The latch machinery previously consumed the raw any-owner interlock, which
+// let a foreign transmission validate or prolong our over and let a tune
+// carrier hold it open. cwOverTxActive is the composite every latch site now
+// asks: transmitting AND attributed to us AND not a tune carrier. Full truth
+// table — exactly one true row.
+static_assert(!cwOverTxActive(false, false, false));
+static_assert(!cwOverTxActive(false, false, true));
+static_assert(!cwOverTxActive(false, true,  false));
+static_assert(!cwOverTxActive(false, true,  true));
+static_assert(!cwOverTxActive(true,  false, false),
+              "#4281: another client's transmission is not our over");
+static_assert(!cwOverTxActive(true,  false, true));
+static_assert(!cwOverTxActive(true,  true,  true),
+              "#4281: our own tune carrier is not our CW over");
+static_assert( cwOverTxActive(true,  true,  false),
+              "an attributed, non-tune transmission is ours");
+
 // Rendering additionally requires an open file. Ownership stays a two-input
 // contract (pinned above); "is there a file" is a separate question, so the
 // defect that started this — an extra input folded into ownership — cannot
@@ -211,31 +229,48 @@ int main()
                      "#4281: the hang is far shorter than the 1500 ms first attempt");
     }
 
-    // ── The latch ages only while the radio is at RX ────────────────────────
+    // ── The latch ages only while no transmission of OURS is up ─────────────
     // The stopwatch alone used to end the over. Whenever the radio was still
     // holding TX past the hang — break-in off, or a break-in delay longer than
     // the hang — the aged-out latch handed the slot to the mic tap in the
-    // middle of our over. The interlock is a required SECOND condition, not a
-    // replacement: under break-in it is false in every gap, so the stopwatch
-    // is still what ends the over there.
+    // middle of our over. The our-TX term is a required SECOND condition, not
+    // a replacement: under break-in it is false in every gap, so the stopwatch
+    // is still what ends the over there. Round 2: the term is cwOverTxActive,
+    // not the raw interlock — a transmission that is not ours no longer holds
+    // the over open.
     {
-        static_assert(cwLatchShouldAge(/*radioTx*/ false, /*gap*/ 481, /*hang*/ 480),
-                      "radio at RX and the hang elapsed: the over is finished");
-        static_assert(!cwLatchShouldAge(/*radioTx*/ true, /*gap*/ 481, /*hang*/ 480),
-                      "#4281: the radio still holds TX — the over is NOT finished, "
+        static_assert(cwLatchShouldAge(/*ourTx*/ false, /*gap*/ 481, /*hang*/ 480),
+                      "no TX of ours and the hang elapsed: the over is finished");
+        static_assert(!cwLatchShouldAge(/*ourTx*/ true, /*gap*/ 481, /*hang*/ 480),
+                      "#4281: our TX still holds — the over is NOT finished, "
                       "whatever the stopwatch says");
         static_assert(!cwLatchShouldAge(false, 479, 480),
                       "inside the hang: an inter-word gap is still the over");
         ok &= expect(cwLatchShouldAge(false, 481, 480),
-                     "latch ages once the radio is at RX and the hang has elapsed");
+                     "latch ages once our TX is down and the hang has elapsed");
         ok &= expect(!cwLatchShouldAge(true, 481, 480),
-                     "#4281: latch holds while the radio transmits, past the hang");
+                     "#4281: latch holds while our transmission holds, past the hang");
         ok &= expect(!cwLatchShouldAge(true, 100000, 480),
-                     "#4281: ...for as long as the radio transmits — no wall-clock ceiling");
+                     "#4281: ...for as long as our TX holds — no wall-clock ceiling");
         ok &= expect(!cwLatchShouldAge(false, 480, 480),
                      "exactly the hang is not yet past it");
         ok &= expect(!cwLatchShouldAge(false, 0, 480),
                      "a fresh key edge never ages");
+
+        // The composite feeding that term (#4281 round 2): what is NOT ours
+        // does not hold the over, however long it transmits.
+        static_assert(cwLatchShouldAge(cwOverTxActive(true, false, false), 481, 480),
+                      "a foreign transmission past the hang does not hold our over");
+        static_assert(cwLatchShouldAge(cwOverTxActive(true, true, true), 481, 480),
+                      "a tune carrier past the hang does not hold the over");
+        static_assert(!cwLatchShouldAge(cwOverTxActive(true, true, false), 481, 480),
+                      "#4281: our own attributed TX still holds the over");
+        ok &= expect(cwLatchShouldAge(cwOverTxActive(true, false, false), 481, 480),
+                     "another client's TX does not hold our over past the hang");
+        ok &= expect(cwLatchShouldAge(cwOverTxActive(true, true, true), 481, 480),
+                     "TUNE raised within the hang no longer holds the over open");
+        ok &= expect(!cwLatchShouldAge(cwOverTxActive(true, true, false), 100000, 480),
+                     "#4281: our attributed TX holds — still no wall-clock ceiling");
     }
 
     // ── The idle countdown arms only when BOTH over sources are down ────────

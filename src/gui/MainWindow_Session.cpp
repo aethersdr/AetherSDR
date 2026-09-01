@@ -1307,7 +1307,11 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool tx) {
         if (m_audio) {
-            m_audio->setRadioTransmitting(tx);
+            // Ownership rides along: the interlock parse stores its
+            // tx_client_handle attribution before emitting this signal, so the
+            // pair is one consistent snapshot — the CW over machinery tracks
+            // OUR transmission, not any client's (#4281).
+            m_audio->setRadioTransmitting(tx, m_radioModel.txOwnedByUs());
         }
         // Waterfall freeze/unfreeze: gate on the actual interlock TRANSMITTING
         // state, not the MOX edge. moxChanged fires the instant the user releases

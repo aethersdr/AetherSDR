@@ -8239,16 +8239,24 @@ void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point 
     // setKeyDown()s are lock-free atomics, safe to call from the keyer threads.
     if (m_cwSidetone)       m_cwSidetone->setKeyDown(down, when);
     if (m_cwRecordSidetone) m_cwRecordSidetone->setKeyDown(down, when);
-    // Latch that this TX over is a CW over (our keyer fired). The record pump
-    // gates on this so it captures CW but not voice/DAX/tune overs that never
-    // key the sidetone. Reset on the radio TX→RX edge (setRadioTransmitting).
-    if (down) {
+    // Latch that this TX over is a CW over (our keyer fired in a CW mode). The
+    // record pump gates on this so it captures CW but not voice/DAX/tune overs
+    // that never key the sidetone. Aged out by the pump (cwLatchShouldAge),
+    // NOT on the radio TX→RX edge — break-in drops that edge in every gap
+    // (#4281). The mode gate is load-bearing: sendCwKey has no mode gate, so
+    // key edges arrive here during voice overs too (a brushed paddle, a
+    // key-line glitch), and those must not claim the recorder.
+    if (down && m_txModeIsCw.load(std::memory_order_acquire)) {
         m_cwKeyedThisOver.store(true, std::memory_order_release);
-        // If the interlock is already up, this over has transmitted. The other
-        // direction — interlock rising after the first element — is handled in
+        // If our transmission is already up — attributed to us and not a tune
+        // carrier — this over has transmitted. The other direction, the
+        // interlock rising after the first element, is handled in
         // setRadioTransmitting, because the radio's edge lags the key by a few ms.
-        if (m_radioTransmitting.load(std::memory_order_acquire))
+        if (cwOverTxActive(m_radioTransmitting.load(std::memory_order_acquire),
+                           m_radioTxOwnedByUs.load(std::memory_order_acquire),
+                           m_tuneActive.load(std::memory_order_acquire))) {
             m_cwOverHadTx.store(true, std::memory_order_release);
+        }
     }
     // Stamp BOTH edges. The over ends a fixed number of dit units after the last
     // edge; timing that from key-down alone would add the element's own duration
@@ -8282,20 +8290,26 @@ void AudioEngine::onCwRecordPump()
     // not part of this — it stays up across mode changes whenever mic_selection
     // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
     // Age the CW-over latch: the over is finished once no element has been keyed
-    // for the over-hang AND the radio has returned to RX. The stopwatch runs on
-    // the pump's free-running tick rather than on the interlock edge because
-    // under break-in that edge falls in every inter-element gap (see
-    // setRadioTransmitting). The interlock term stops the stopwatch ending the
-    // over while the radio still holds TX — break-in off, or a break-in delay
-    // longer than the hang — which handed the slot to the mic tap mid-over.
-    // The rule and its accepted cost are stated at cwLatchShouldAge (#4281).
+    // for the over-hang AND no transmission of OURS is still up. The stopwatch
+    // runs on the pump's free-running tick rather than on the interlock edge
+    // because under break-in that edge falls in every inter-element gap (see
+    // setRadioTransmitting). The our-TX term — cwOverTxActive: attributed to
+    // us and not a tune carrier — stops the stopwatch ending the over while
+    // the radio still holds OUR TX (break-in off, or a break-in delay longer
+    // than the hang), which handed the slot to the mic tap mid-over. A foreign
+    // or tune transmission raised inside the hang no longer holds the over
+    // open. The rule and its residual are stated at cwLatchShouldAge (#4281).
     if (m_cwKeyedThisOver.load(std::memory_order_acquire)) {
         const int64_t lastNs = m_cwLastKeyEdgeNs.load(std::memory_order_acquire);
         const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         if (lastNs != 0
-            && cwLatchShouldAge(m_radioTransmitting.load(std::memory_order_acquire),
-                                (nowNs - lastNs) / 1000000LL, cwOverHangMs())) {
+            && cwLatchShouldAge(
+                   cwOverTxActive(
+                       m_radioTransmitting.load(std::memory_order_acquire),
+                       m_radioTxOwnedByUs.load(std::memory_order_acquire),
+                       m_tuneActive.load(std::memory_order_acquire)),
+                   (nowNs - lastNs) / 1000000LL, cwOverHangMs())) {
             m_cwKeyedThisOver.store(false, std::memory_order_release);
             m_cwOverHadTx.store(false, std::memory_order_release);
         }
@@ -9021,19 +9035,29 @@ void AudioEngine::setTransmitting(bool tx)
     if (!tx) clearTxAccumulators();
 }
 
-void AudioEngine::setRadioTransmitting(bool tx)
+void AudioEngine::setRadioTransmitting(bool tx, bool ownedByUs)
 {
+    // Attribution rides with the state: the interlock parse stores
+    // tx_client_handle ownership before emitting radioTransmittingChanged, so
+    // the two arrive here as one consistent snapshot (#4281).
+    m_radioTxOwnedByUs.store(ownedByUs, std::memory_order_release);
     const bool previous = m_radioTransmitting.exchange(tx);
     if (previous == tx)
         return;
 
     if (tx) {
-        // The radio really is transmitting, so if our keyer has fired this over
-        // it is a genuine CW over and the pump may own the recorder's TX slot.
-        // The interlock's rising edge lags the key by a few ms, which is why
-        // this is latched here as well as in setCwKeyDown (#4281).
-        if (m_cwKeyedThisOver.load(std::memory_order_acquire))
+        // The radio really is transmitting OUR over — attributed to us and not
+        // a tune carrier — so if our keyer has fired this over it is a genuine
+        // CW over and the pump may own the recorder's TX slot. The interlock's
+        // rising edge lags the key by a few ms, which is why this is latched
+        // here as well as in setCwKeyDown (#4281). A foreign or tune
+        // transmission no longer validates the over: that defeated the had-TX
+        // guard (practice sidetone auto-recording off another client's TX).
+        if (m_cwKeyedThisOver.load(std::memory_order_acquire)
+            && cwOverTxActive(tx, ownedByUs,
+                              m_tuneActive.load(std::memory_order_acquire))) {
             m_cwOverHadTx.store(true, std::memory_order_release);
+        }
         // radioTransmittingChanged originates on the UI thread while AudioEngine
         // owns its QAudioSource and health tracker on the audio thread. Preserve
         // the existing immediate atomic TX edge, but sample capture state only

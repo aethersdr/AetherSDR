@@ -1731,6 +1731,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_audio->setCwWpm(m_radioModel.transmitModel().cwSpeed());
     connect(&m_radioModel.transmitModel(), &TransmitModel::cwSpeedChanged,
             m_audio, [this](int wpm) { m_audio->setCwWpm(wpm); });
+    // Tune carriers raise the interlock as an owned TX but are not a CW over:
+    // mirror tune state so cwOverTxActive can exclude them (#4281).
+    // TransmitModel sets its flag optimistically before the tune command is
+    // even sent, so this mirror cannot lose a race against the interlock rise.
+    m_audio->setTuneActive(m_radioModel.transmitModel().isTuning());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            m_audio, [ae = m_audio](bool tuning) { ae->setTuneActive(tuning); });
     // Let the CW record pump skip rendering while no file is open (#4281).
     // Direct connections: the slot is a single atomic store that touches no Qt
     // state, and recordingStarted is emitted once the file is open and
@@ -9654,6 +9661,14 @@ void MainWindow::updateKeyerAvailability()
     // activatedAmbiguously (#2464, #2582, #4173).
     SliceModel* txSlice = m_radioModel.txSlice();
     const QString txMode = txSlice ? txSlice->mode() : QString();
+    // Mirror "the TX slice is in a CW mode" into the CW over machinery: the
+    // record-gate latch must not arm off a key edge in a voice mode, and
+    // leaving CW ends any over in flight (#4281). This function already
+    // re-runs on every mode change and TX-slice reassignment — exactly the
+    // coverage the mirror needs. No TX slice (receive-only) parses as not-CW.
+    if (m_audio) {
+        m_audio->setTxModeCw(isCwMode(txMode));
+    }
     // Both keyers carry a family gate ahead of the mode gate: a radio with no
     // text buffer and no voice recorder never gains one by switching mode, so
     // the capability is ANDed into the availability that drives the enabled

@@ -89,31 +89,59 @@ constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
     return cwRecordPumpOwnsRecorder(s) && recordingOpen;
 }
 
+// Whether the radio's transmission is OUR CW over's — the composite the latch
+// machinery consumes wherever it previously asked the raw interlock.
+//
+// radioTransmitting alone is the ANY-OWNER interlock (its status mirror is
+// documented "fired for every interlock state=TRANSMITTING regardless of TX
+// ownership", MainWindow_Session.cpp). Keying the over machinery off it let
+// three foreign shapes drive our state: another client's transmission
+// validated a practice-sidetone over, any transmission raised inside the hang
+// held the over open for its whole duration (TUNE is one click away), and a
+// stray CW key edge during a voice over handed that over's remainder to the
+// pump.
+//
+// - txOwnedByUs is the interlock's own attribution: tx_client_handle equals
+//   our handle, parsed alongside the interlock state itself. Unlike MOX it
+//   rises WITH the interlock — break-in keys the radio without a local MOX
+//   edge — so it is valid during CW. A radio that reports no handle parses as
+//   owned (RadioModel treats tx_client_handle == 0 as ours), degrading to the
+//   previous any-owner behaviour rather than ever dropping our own over.
+// - tuneActive excludes our own TUNE/two-tone carrier: owned, but not CW.
+//   TransmitModel sets its flag optimistically before the tune command is
+//   even sent, so the mirror cannot lose a race against the interlock's rise.
+constexpr bool cwOverTxActive(bool radioTransmitting, bool txOwnedByUs,
+                              bool tuneActive)
+{
+    return radioTransmitting && txOwnedByUs && !tuneActive;
+}
+
 // Whether the CW-over latch may age out now. The pump asks this on every tick
 // once our keyer has fired.
 //
 // Two conditions, both required. The stopwatch — gapMs since the last key EDGE
 // exceeds the over-hang — is what ends the over under break-in, where the
 // radio drops the interlock in every inter-element gap and the interlock alone
-// would say "finished" dozens of times per over. The interlock — the radio
-// back at RX — is what ends it everywhere else: with break-in off, or with a
-// break-in delay longer than the hang, the radio holds TX across gaps the
-// stopwatch has already given up on, and a latch aged out under a live
-// interlock hands the recorder's TX slot to the mic tap
-// (txRecorderSource(true, false) == Mic) in the middle of our own over. That
-// is #4281's symptom returning one pause at a time, at any speed where the
-// hang is shorter than the radio's delay: 320 ms at 30 WPM against a delay
-// slider that runs to 2000.
+// would say "finished" dozens of times per over. The our-TX term — callers
+// pass cwOverTxActive(...), not the raw interlock — is what ends it everywhere
+// else: with break-in off, or with a break-in delay longer than the hang, the
+// radio holds TX across gaps the stopwatch has already given up on, and a
+// latch aged out under our own live transmission hands the recorder's TX slot
+// to the mic tap (txRecorderSource(true, false) == Mic) in the middle of our
+// own over. That is #4281's symptom returning one pause at a time, at any
+// speed where the hang is shorter than the radio's delay: 320 ms at 30 WPM
+// against a delay slider that runs to 2000.
 //
-// Cost, accepted: a transmission that raises the interlock inside the hang
-// for some OTHER reason — a voice over begun within 8 dit units of the last
-// CW element — keeps the latch, and so the pump, until the radio returns to
-// RX. Not producible by hand (a mode change plus PTT inside ~half a second);
-// stated in the PR rather than designed around.
-constexpr bool cwLatchShouldAge(bool radioTransmitting, long long gapMs,
+// A transmission that is NOT ours — attributed to another client, or a tune
+// carrier — does not hold the over: the composite is false for it, so the
+// stopwatch alone decides and the over ends at the hang exactly as if the
+// radio were at RX. Residual, accepted: a foreign transmission the radio does
+// not attribute (tx_client_handle absent) parses as owned and keeps the
+// latch — the pre-attribution behaviour, stated in the PR.
+constexpr bool cwLatchShouldAge(bool ourTxActive, long long gapMs,
                                 long long hangMs)
 {
-    return !radioTransmitting && gapMs > hangMs;
+    return !ourTxActive && gapMs > hangMs;
 }
 
 // Whether an over's END should arm the recorder's idle-stop countdown. The

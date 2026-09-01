@@ -183,6 +183,11 @@ public:
     // than each keeping its own idea of who is recording. See
     // CwRecordGate.h for why mic-capture state is not an input.
     TxRecorderSource txRecorderSource() const {
+        // The first input stays the RAW any-owner interlock, deliberately not
+        // cwOverTxActive: the Mic-vs-None distinction only matters while the
+        // recorder's MOX-gated TX gate is open, which a foreign transmission
+        // never opens — so narrowing it here would change nothing and would
+        // break the two-input contract the test pins (#4281).
         return AetherSDR::txRecorderSource(
             m_radioTransmitting.load(std::memory_order_acquire),
             // "our CW over is in progress" = our keyer fired AND the radio has
@@ -200,6 +205,28 @@ public:
     }
     void setQsoRecordingActive(bool on) {
         m_qsoRecordingActive.store(on, std::memory_order_release);
+    }
+    // Mirror of "the TX slice's mode is a CW mode" (VoiceModeGate isCwMode),
+    // pushed by MainWindow::updateKeyerAvailability() on every mode change and
+    // TX-slice reassignment. Gates the over latch: RadioModel::sendCwKey has
+    // no mode gate (TCI/MIDI/HID/serial key edges arrive in any mode), so
+    // without this a brushed paddle during an SSB over latches the CW over
+    // machinery and hands the rest of the voice over to the record pump
+    // (#4281). Leaving a CW mode ends any over in flight: both latches clear,
+    // and the pump's next tick sees ownership drop and closes the recorder's
+    // CW gate — so a voice over begun within the old hang records the mic.
+    void setTxModeCw(bool cw) {
+        const bool was = m_txModeIsCw.exchange(cw, std::memory_order_acq_rel);
+        if (was && !cw) {
+            m_cwKeyedThisOver.store(false, std::memory_order_release);
+            m_cwOverHadTx.store(false, std::memory_order_release);
+        }
+    }
+    // Mirror of TransmitModel's tune state (optimistic-local, then status-
+    // reconciled). A tune carrier raises the interlock as an owned TX but is
+    // not a CW over; cwOverTxActive excludes it (#4281).
+    void setTuneActive(bool tuning) {
+        m_tuneActive.store(tuning, std::memory_order_release);
     }
     bool kiwiSdrAudioTransmitMuted() const;
     bool hasKiwiSdrAudioSource(const QString& sourceId) const;
@@ -243,7 +270,9 @@ public:
     void setDaxTxUseRadioRoute(bool on);
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
-    void setRadioTransmitting(bool tx);  // raw interlock state (regardless of TX ownership)
+    // Raw interlock state plus its tx_client_handle attribution, delivered as
+    // one snapshot (the parse stores ownership before emitting the signal).
+    void setRadioTransmitting(bool tx, bool ownedByUs);
     // Self-marshals onto the AudioEngine thread; safe from any caller.
     Q_INVOKABLE void clearTxAccumulators();
     Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
@@ -1065,6 +1094,15 @@ private:
     // element's own duration as part of the gap, so the over ran long by up to
     // 3 units. See cwOverHangMs() and onCwRecordPump (#4281).
     std::atomic<int64_t> m_cwLastKeyEdgeNs{0};
+    // The inputs cwOverTxActive() composes so the over machinery tracks OUR
+    // transmission, not the whole radio's (#4281): the interlock's
+    // tx_client_handle attribution (radios that report no handle parse as
+    // ours — RadioModel's permissive default, so the composite degrades to
+    // any-owner rather than dropping our own over), the TX slice's CW-mode
+    // mirror, and the tune-carrier mirror.
+    std::atomic<bool>  m_radioTxOwnedByUs{true};
+    std::atomic<bool>  m_txModeIsCw{false};
+    std::atomic<bool>  m_tuneActive{false};
     // Local keyer speed, mirrored from TransmitModel::cwSpeed so the pump can
     // size the over-hang in dit units rather than wall-clock milliseconds.
     std::atomic<int>   m_cwWpm{20};
