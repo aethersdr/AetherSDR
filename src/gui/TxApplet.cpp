@@ -57,6 +57,14 @@ enum class IndicatorState {
     Active,
 };
 
+static IndicatorState indicatorState(bool available, bool active)
+{
+    if (!available) {
+        return IndicatorState::Unavailable;
+    }
+    return active ? IndicatorState::Active : IndicatorState::Inactive;
+}
+
 static void setIndicatorState(QLabel* lbl, IndicatorState state,
                               const QColor& color = QColor(0x00, 0xc0, 0x40))
 {
@@ -641,40 +649,32 @@ void TxApplet::syncAtuIndicators()
         m_atuTunedFreqMhz = -1.0;
     }
 
-    const auto tunerIndicatorState = [this](bool active) {
-        if (!m_radioHasTuner) {
-            return IndicatorState::Unavailable;
-        }
-        return active ? IndicatorState::Active : IndicatorState::Inactive;
-    };
-
     // Success — green when tune was successful
     setIndicatorState(m_successInd,
-        tunerIndicatorState(status == ATUStatus::Successful || status == ATUStatus::OK));
+        indicatorState(m_radioHasTuner,
+                       status == ATUStatus::Successful || status == ATUStatus::OK));
 
     // Byp — orange when in bypass
     setIndicatorState(m_bypInd,
-        tunerIndicatorState(status == ATUStatus::Bypass
-                            || status == ATUStatus::ManualBypass),
+        indicatorState(m_radioHasTuner,
+                       status == ATUStatus::Bypass
+                           || status == ATUStatus::ManualBypass),
         QColor(0xd0, 0x90, 0x00));
 
     // Mem — green when using memory
-    const IndicatorState memoryState = !m_radioHasTunerMemories
-        ? IndicatorState::Unavailable
-        : (m_model->usingMemory() ? IndicatorState::Active : IndicatorState::Inactive);
-    setIndicatorState(m_memInd, memoryState);
+    setIndicatorState(m_memInd,
+        indicatorState(m_radioHasTunerMemories, m_model->usingMemory()));
 
     // APD indicators — mutually exclusive states, all off when APD disabled
     // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
     const bool apdOn  = m_model->apdEnabled();
     const bool eqActv = m_model->apdEqualizerActive();
     const bool config = m_model->apdConfigurable();
-    setIndicatorState(m_activeInd, apdOn && eqActv
-        ? IndicatorState::Active : IndicatorState::Inactive);
-    setIndicatorState(m_availInd, apdOn && !eqActv && config
-        ? IndicatorState::Active : IndicatorState::Inactive);
-    setIndicatorState(m_calInd, apdOn && !eqActv && !config
-        ? IndicatorState::Active : IndicatorState::Inactive);
+    setIndicatorState(m_activeInd, indicatorState(true, apdOn && eqActv));
+    setIndicatorState(m_availInd,
+        indicatorState(true, apdOn && !eqActv && config));
+    setIndicatorState(m_calInd,
+        indicatorState(true, apdOn && !eqActv && !config));
 
     // ATU / MEM buttons — active styling follows radio readback only.
     {
@@ -787,9 +787,9 @@ void TxApplet::showAtuContextMenu(const QPoint& pos)
     const bool memOn = m_model && m_model->memoriesEnabled();
     preTune->setEnabled(m_radioHasTunerMemories && memOn);
     if (!m_radioHasTunerMemories) {
-        preTune->setToolTip("ATU memory controls are unavailable for this radio.");
+        preTune->setToolTip(tr("ATU memory controls are unavailable for this radio"));
     } else if (!memOn) {
-        preTune->setToolTip("Enable MEM before running the pre-tune sweep.");
+        preTune->setToolTip(tr("Enable MEM before running the pre-tune sweep"));
     }
     connect(preTune, &QAction::triggered, this, &TxApplet::openPreTuneDialog);
 

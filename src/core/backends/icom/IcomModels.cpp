@@ -338,17 +338,9 @@ constexpr std::array<FeatureEvidence, 14> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide does not declare an antenna tuner"},
 }};
 
-constexpr std::array<FeatureEvidence, 1> kIc7300Evidence{{
+constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
     {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
-     "IC-7300 CI-V Reference Guide, command 1C 01"},
-}};
-constexpr std::array<FeatureEvidence, 1> kIc7610Evidence{{
-    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
-     "IC-7610 CI-V Reference Guide, command 1C 01"},
-}};
-constexpr std::array<FeatureEvidence, 1> kIc785xEvidence{{
-    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
-     "IC-7850/IC-7851 CI-V Reference Guide, command 1C 01"},
+     "IC-7300, IC-7610, and IC-7850/IC-7851 CI-V Reference Guides, command 1C 01"},
 }};
 
 }  // namespace
@@ -681,9 +673,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .attenuatorSteps = kHfAttenuatorSteps,
     };
     static const IcomModelProfile kUnprofiled{};
-    static const IcomModelProfile kIc7300Profile{.features = kIc7300Evidence};
-    static const IcomModelProfile kIc7610Profile{.features = kIc7610Evidence};
-    static const IcomModelProfile kIc785xProfile{.features = kIc785xEvidence};
+    static const IcomModelProfile kTunerOnlyProfile{
+        .guideRevision = "model-specific CI-V Reference Guide",
+        .features = kTunerOnlyEvidence,
+    };
 
     switch (model.civAddress) {
     case 0xA4:
@@ -692,12 +685,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         return kIc9700Profile;
     case 0xB6:
         return kIc7300Mk2Profile;
-    case 0x94:
-        return kIc7300Profile;
-    case 0x98:
-        return kIc7610Profile;
-    case 0x8E:
-        return kIc785xProfile;
+    case 0x94: // IC-7300
+    case 0x98: // IC-7610
+    case 0x8E: // IC-7850 / IC-7851
+        return kTunerOnlyProfile;
     default:
         return kUnprofiled;
     }

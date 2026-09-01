@@ -184,6 +184,7 @@ private:
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
     void reassertPanPreampWireStep(int step);
+    [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start);
     bool queueTunerReadIfSupported(std::uint8_t address,
                                    IcomCivScheduler::Priority priority);

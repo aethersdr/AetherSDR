@@ -4327,7 +4327,7 @@ void IcomCivBackend::setAtu(bool start)
 
 bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
 {
-    if (!m_model || !profileFor(*m_model).supports(IcomFeature::AntennaTuner)) {
+    if (!tunerSupported()) {
         return false;
     }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
@@ -4337,10 +4337,15 @@ bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
     return true;
 }
 
+bool IcomCivBackend::tunerSupported() const
+{
+    return m_model && profileFor(*m_model).supports(IcomFeature::AntennaTuner);
+}
+
 bool IcomCivBackend::queueTunerReadIfSupported(
     std::uint8_t address, IcomCivScheduler::Priority priority)
 {
-    if (!m_model || !profileFor(*m_model).supports(IcomFeature::AntennaTuner)) {
+    if (!tunerSupported()) {
         return false;
     }
     const std::vector<std::uint8_t> frame = cmdReadTuner(address);
@@ -5647,13 +5652,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
         // an operator with an AH-705 can reach it without the TUNE button
         // running an ATU that may not be attached.
-        if (!m_model || !profileFor(*m_model).supports(IcomFeature::AntennaTuner)) {
+        if (!sendTunerCommandIfSupported(true)) {
             emit extensionError(requestId, QStringLiteral("antenna tuner unsupported"));
             return;
         }
-        sendUserCommand(buildFrameSub(m_session ? m_session->civAddress() : 0xA4,
-                                      cmd::kControl, control::kTuner,
-                                      std::array<std::uint8_t, 1>{0x02}));
         emit extensionResult(requestId, true);
         return;
     }
