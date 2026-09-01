@@ -591,6 +591,55 @@ int main()
               "reverse above forward clamps to a very high SWR, not negative");
     }
 
+    // ---- Direct I2C writes on the external bus (I2C2 / addr 0x3d) ----
+    {
+        const Cc w = ccI2c2Write(0x1D, 4, 0xAB);
+        // C0 is the bus address SHIFTED LEFT ONE, like every other C0 constant:
+        // 0x3d << 1 == 0x7A. Bit 0 stays clear so withMox() owns keying, and
+        // bit 7 (RQST) stays clear so the radio sends no reply.
+        check(w[0] == 0x7A, "I2C2 write C0 is addr 0x3d << 1");
+        check((w[0] & 0x01) == 0, "I2C2 write leaves MOX to withMox()");
+        check((w[0] & 0x80) == 0, "I2C2 write does NOT set RQST (no reply wanted)");
+        check(w[1] == 0x06, "I2C2 write cookie is 0x06");
+        check(w[2] == 0x9D, "C2 is stop-bit | 7-bit chip address");
+        check(w[3] == 4, "C3 is the register number");
+        check(w[4] == 0xAB, "C4 is the data byte");
+
+        // A caller who passes an already-shifted 8-bit I2C address must not be
+        // able to clear the stop bit.
+        check(ccI2c2Write(0x9D, 0, 0)[2] == 0x9D, "chip address masked to 7 bits");
+    }
+
+    // ---- IO board transmit-frequency batch ----
+    {
+        // 14.074 MHz = 0x00_00_D6_C0_90. Five bytes, MSB (always 0 on HF) first.
+        const auto banks = ccIoBoardTxFrequency(14'074'000ull);
+        check(banks.size() == 5, "five banks, one per frequency register");
+        const std::uint8_t wantReg[5]  = {0, 1, 2, 3, 4};
+        const std::uint8_t wantData[5] = {0x00, 0x00, 0xD6, 0xC0, 0x90};
+        for (std::size_t i = 0; i < 5; ++i) {
+            check(banks[i][3] == wantReg[i], "register order ascends 0..4");
+            check(banks[i][4] == wantData[i], "big-endian byte split");
+            check(banks[i][0] == 0x7A && banks[i][1] == 0x06 && banks[i][2] == 0x9D,
+                  "every bank addresses the IO board on I2C2");
+        }
+        // The LSB register COMMITS on the board, so it must be sent last. If
+        // this ever flips, the board latches a frequency built from four new
+        // bytes and one stale one.
+        check(banks[4][3] == 4, "LSB register is written LAST (it commits)");
+
+        // Reassembling the way the Pico firmware does must return the input.
+        std::uint64_t rebuilt = 0;
+        for (std::size_t i = 0; i < 5; ++i)
+            rebuilt = (rebuilt << 8) | banks[i][4];
+        check(rebuilt == 14'074'000ull, "round-trips through the firmware's assembly");
+
+        // Top byte is real: a value above 32 bits must not be truncated.
+        const auto high = ccIoBoardTxFrequency(0x11'22'33'44'55ull);
+        check(high[0][4] == 0x11 && high[4][4] == 0x55,
+              "all 40 bits reach the wire");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_metis_protocol_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

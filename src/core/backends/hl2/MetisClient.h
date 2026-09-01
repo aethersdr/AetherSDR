@@ -160,6 +160,26 @@ public:
     // recorded from this declaration, and `std::uint8_t` does not normalize to
     // the same string as `unsigned char`.
     Q_INVOKABLE void setBandFilter(int ocFilterByte);
+    // Push the TRANSMIT frequency to the HL2 IO Board (I2C2 chip 0x1D) so an
+    // attached amplifier, antenna relay or transverter follows the band.
+    //
+    // Five one-shot banks, LSB last, because that register is what commits the
+    // value on the board — see ccIoBoardTxFrequency(), which owns the ordering.
+    // They ride m_oneShot rather than the rotation for the same reason the
+    // filter byte does: an amplifier still switched to the previous band when
+    // the operator keys is the failure that matters, and the deque both
+    // preserves order and drains one bank per EP2 frame (~2.6 ms at 48 kHz),
+    // so all five land in about 13 ms.
+    //
+    // SENT UNCONDITIONALLY, with no "do you have an IO board" setting, on the
+    // same reasoning the J16 filter byte is driven blind: a chip that is not on
+    // the bus NACKs its address, the gateware's i2c_master raises missed_ack
+    // and moves on. Costing an absent board nothing is what makes the setting
+    // unnecessary, and a setting defaulted off is a support burden — the
+    // symptom of forgetting it is an amplifier on the wrong band.
+    //
+    // quint64, not std::uint32_t: the board's field is 40 bits wide.
+    Q_INVOKABLE void setIoBoardTxFrequencyHz(quint64 hz);
     [[nodiscard]] std::uint8_t bandFilter() const noexcept { return m_params.ocFilterByte; }
     // Queue a one-shot filter-pipeline reset (MetisProtocol kC0Sync) to be sent
     // on the next EP2 frame, ahead of the round robin.
@@ -374,6 +394,13 @@ private:
     // radio in that order, and neither should wait up to three frames for the
     // rotation to come back around.
     std::deque<Cc> m_oneShot;           // which register pair to send next
+    // Last transmit frequency handed to the IO board, and whether one ever was.
+    // A separate flag rather than a 0 sentinel: 0 Hz is not a plausible tuned
+    // frequency, but "never sent" still has to survive a radio that legitimately
+    // reports it, and the first push after connect must go out even if the
+    // backend's throttle happens to compute the same value it had before.
+    quint64 m_ioBoardTxFreqHz = 0;
+    bool m_ioBoardTxFreqSent = false;
     std::uint32_t m_expectedRxSeq = 0;   // for EP6 drop detection
     bool m_haveRxSeq = false;
     quint64 m_drops = 0;

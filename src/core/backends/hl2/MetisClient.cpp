@@ -228,6 +228,14 @@ bool MetisClient::start(const Params& params)
     m_haveRxSeq = false;
     m_drops = 0;
     m_linkUp = false;
+    // This object OUTLIVES a connect: Hl2Backend builds it in its constructor
+    // and deletes it in its destructor, so without this the dedupe would carry
+    // a frequency across a disconnect and suppress the first push of the next
+    // session. The IO board may have been power-cycled in between, and nothing
+    // in the protocol can be asked what it currently holds -- the same reason
+    // the band filter is re-primed at every connect rather than trusted.
+    m_ioBoardTxFreqSent = false;
+    m_ioBoardTxFreqHz = 0;
 
     m_socket = new QUdpSocket(this);
     if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
@@ -528,6 +536,27 @@ void MetisClient::setBandFilter(int ocFilterByte)
     // same gesture, and waiting for the round robin would leave the relays on
     // the old band for up to three EP2 frames.
     m_oneShot.push_back(m_ccConfig);
+}
+
+void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
+{
+    if (m_ioBoardTxFreqSent && hz == m_ioBoardTxFreqHz)
+        return;                       // board already holds this frequency
+    m_ioBoardTxFreqSent = true;
+    m_ioBoardTxFreqHz = hz;
+    // INFO, not debug, and for the same reason the band filter is: there is no
+    // readback. The board never answers -- we deliberately do not set RQST --
+    // so this line is the only record of what an amplifier was told to switch
+    // to, and a support log captured after a mis-keying has to already have it.
+    qCInfo(lcHl2).nospace()
+        << "HL2 IO board: TX frequency -> "
+        << QString::number(static_cast<double>(hz) / 1.0e6, 'f', 6)
+        << " MHz (I2C2 chip 0x1D, 5 banks)";
+    // Order is the batch's, not ours -- see ccIoBoardTxFrequency(). Appending
+    // in sequence is the whole contract: the deque preserves it, and the last
+    // bank is the one that makes the board latch.
+    for (const Cc& bank : ccIoBoardTxFrequency(hz))
+        m_oneShot.push_back(bank);
 }
 
 void MetisClient::requestPipelineReset()

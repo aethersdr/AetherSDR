@@ -143,6 +143,15 @@ private:
     // frequency. Idempotent and change-gated, so it is safe to call from every
     // path that can move the dial.
     void applyBandFilter(const char* reason);
+    // Push the transmit frequency to the HL2 IO Board, throttled.
+    //
+    // Called from applyBandFilter() so it inherits every trigger that can move
+    // a band — tune, TX slice, key/unkey, pan, add/close receiver — but from
+    // ABOVE that function's `oc == m_ocFilterByte` early return, because the
+    // two have different resolutions. The filter byte is one of seven relays
+    // and does not change between 7.100 and 7.200 MHz; the IO board wants the
+    // frequency itself and does.
+    void applyIoBoardFrequency();
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band
@@ -587,6 +596,20 @@ private:
     static constexpr int kBandwidthThrottleMs = 150;
     QTimer* m_bandwidthThrottle = nullptr;
     double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
+
+    // The IO board's README asks for at most one frequency update every 0.5 s,
+    // and only on change. Leading edge applies IMMEDIATELY, so an operator who
+    // changes band and keys straight away finds the amplifier already switched;
+    // anything arriving inside the cooldown is coalesced and the LAST value
+    // applied when it expires.
+    //
+    // Coalesce-and-apply, never drop: a VFO wheel delivers ~10 tune events a
+    // second, and simply discarding those inside the window would leave the
+    // amplifier on the old band whenever the operator stopped turning mid-
+    // cooldown — the one moment they are most likely to key.
+    static constexpr int kIoBoardThrottleMs = 500;
+    QTimer* m_ioBoardThrottle = nullptr;
+    quint64 m_pendingIoBoardHz = 0;      // 0 = nothing coalesced
 
     // Has this connect already derived the passband from the mode? (#4484)
     //

@@ -156,6 +156,36 @@ Cc ccTxDrive(int level, bool paEnable) noexcept
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
 }
 
+Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
+{
+    // The chip address is MASKED to 7 bits rather than asserted, because C2
+    // bit 7 is the stop flag: an 8-bit I2C address passed by a caller who
+    // pre-shifted it would otherwise clear the stop bit and leave the bus
+    // held between transactions.
+    return {kC0I2c2,
+            kI2cCookieWrite,
+            static_cast<std::uint8_t>(kI2cStopAtEnd | (chip & 0x7F)),
+            reg,
+            data};
+}
+
+std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept
+{
+    std::array<Cc, kIoBoardTxFreqBanks> out{};
+    for (std::size_t i = 0; i < kIoBoardTxFreqBanks; ++i) {
+        const auto reg = static_cast<std::uint8_t>(kIoBoardRegTxFreqMsb + i);
+        // Register 0 carries bits 39:32 and register 4 bits 7:0, so the shift
+        // counts DOWN as the register number counts up. Writing this as
+        // (8 * i) would invert the byte order and hand the board a frequency
+        // in the wrong endianness, which reads as a wildly wrong band rather
+        // than as a small error.
+        const unsigned shift = 8u * static_cast<unsigned>(kIoBoardRegTxFreqLsb - reg);
+        out[i] = ccI2c2Write(kIoBoardI2cAddr, reg,
+                             static_cast<std::uint8_t>((hz >> shift) & 0xFFu));
+    }
+    return out;
+}
+
 void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
                   std::span<const std::complex<float>> iq) noexcept
 {

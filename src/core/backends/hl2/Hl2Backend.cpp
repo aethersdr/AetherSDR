@@ -465,6 +465,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         pushInitialState();
         emitAllSliceState();
         defineMeters();
+        // Tell the IO board where we came up. applyBandFilter() is NOT called on
+        // this path — the connect-time filter byte is primed straight into
+        // MetisClient::Params instead — so without this the board would hold
+        // whatever the last session left it, and an amplifier would stay on that
+        // band until the operator's first retune. Placed after pushInitialState()
+        // so the receiver frequencies it reads are the restored ones.
+        applyIoBoardFrequency();
         // At connect there is one receiver, so this is always "not wide" — but
         // it is published rather than assumed, so the indicator starts from a
         // stated value instead of whatever the widget happened to hold.
@@ -4954,10 +4961,72 @@ double Hl2Backend::temperatureCelsius(int raw)
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
 }
 
+void Hl2Backend::applyIoBoardFrequency()
+{
+    if (!m_metis || m_rx.empty())
+        return;
+
+    // The TRANSMIT receiver's frequency — NOT the agree-or-bypass answer the
+    // filter board gets. The IO board switches amplifiers, antenna relays and
+    // transverters, all of which must follow where the operator will RADIATE.
+    // Receive slices parked on other bands are irrelevant to that, and the
+    // bypass result (kOcNone) is a relay pattern with no frequency to offer.
+    const Receiver* txRx = rx(m_txDdc);
+    const double hz = txRx ? txRx->sliceFreqHz : m_rx[0].sliceFreqHz;
+    if (!(hz > 0.0))
+        return;                 // also rejects NaN, which a comparison to <= 0 would not
+
+    // sliceFreqHz is TRUE-RF and the board's field wants true RF: it compares
+    // against band edges to pick a relay. The frequency-calibration scaling in
+    // ncoCommandHz() exists to correct the HL2's own reference and belongs only
+    // on values going to an NCO register — applying it here would hand the
+    // board a slightly wrong frequency for no reason.
+    const auto target = static_cast<quint64>(hz + 0.5);
+
+    if (!m_ioBoardThrottle) {
+        m_ioBoardThrottle = new QTimer(this);
+        m_ioBoardThrottle->setSingleShot(true);
+        m_ioBoardThrottle->setInterval(kIoBoardThrottleMs);
+        connect(m_ioBoardThrottle, &QTimer::timeout, this, [this] {
+            if (m_pendingIoBoardHz == 0)
+                return;                  // cooldown expired with nothing waiting
+            if (!m_connected) {
+                // Disconnected inside the cooldown. Dropping it matters because
+                // m_oneShot is NOT cleared by stop(): a bank queued now would
+                // sit there and go out as the first thing the NEXT session
+                // sends, briefly pointing an amplifier at the band this one
+                // ended on. linkUp() pushes the real frequency anyway.
+                m_pendingIoBoardHz = 0;
+                return;
+            }
+            const quint64 pending = m_pendingIoBoardHz;
+            m_pendingIoBoardHz = 0;
+            QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
+                                      Qt::QueuedConnection, Q_ARG(quint64, pending));
+            // Re-arm: a tune still in progress must keep coalescing.
+            m_ioBoardThrottle->start();
+        });
+    }
+
+    if (m_ioBoardThrottle->isActive()) {
+        m_pendingIoBoardHz = target;     // superseded by any later request
+        return;
+    }
+
+    QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
+                              Qt::QueuedConnection, Q_ARG(quint64, target));
+    m_ioBoardThrottle->start();
+}
+
 void Hl2Backend::applyBandFilter(const char* reason)
 {
     if (!m_metis || m_rx.empty())
         return;
+
+    // BEFORE the filter-byte comparison below, deliberately. The relay pattern
+    // is unchanged across a move from 7.100 to 7.200 MHz and this function
+    // returns early for it, but the IO board still needs the new frequency.
+    applyIoBoardFrequency();
 
     // ONE filter board, N receivers.
     //
