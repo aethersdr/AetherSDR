@@ -453,6 +453,66 @@ static void testModes()
         const auto [lo, hi] = passbandForModeAndFilter("SAM", 2);
         check(hi - lo == 6000, "SAM FIL2 is 6 kHz wide, not the 3 kHz SSB fallback");
     }
+
+    // CLICKING ANY FIL BUTTON RECALLS ITS FACTORY SHAPE. These are the exact
+    // edges setSliceFilterPreset feeds back through the width + centred-PBT
+    // writer, including when the requested slot is already selected. Cover all
+    // three identities and every mode family exercised by the live sweep.
+    const auto checkRecall = [](const std::string& mode, int presetId,
+                                int expectedLow, int expectedHigh) {
+        bool dataMode = false;
+        const std::optional<CivMode> wireMode = modeFromNeutral(mode, dataMode);
+        check(wireMode.has_value(), "recall mode maps to CI-V");
+        if (!wireMode) {
+            return;
+        }
+        const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
+            kIc705, mode, *wireMode, dataMode, presetId, true);
+        check(plan.has_value(), "FIL recall plan exists");
+        if (!plan) {
+            return;
+        }
+        const std::string recallName = mode + " FIL" + std::to_string(presetId);
+        check(plan->lowHz == expectedLow && plan->highHz == expectedHigh,
+              (recallName + " recalls its factory width and centred passband").c_str());
+        check(plan->pbtCode == kPbtCentreCode,
+              (recallName + " recall centres Twin PBT").c_str());
+        check(plan->commands.size() == 4,
+              (recallName
+               + " recall selects, resets width, and centres both PBTs").c_str());
+        if (plan->commands.size() != 4) {
+            return;
+        }
+        check(plan->commands[0]
+                  == cmdSetVfoMode(kIc705, *wireMode, dataMode, presetId),
+              "recall selects the requested FIL identity first");
+        const std::optional<std::uint8_t> widthCode =
+            filterWidthCodeFor(mode, expectedHigh - expectedLow);
+        check(widthCode.has_value(), "factory recall width has a CI-V code");
+        if (!widthCode) {
+            return;
+        }
+        check(plan->commands[1] == cmdSetFilterWidth(kIc705, *widthCode),
+              "recall writes the factory filter width");
+        check(plan->commands[2]
+                  == cmdSetLevel(kIc705, level::kPbtInner, kPbtCentreCode),
+              "recall centres inner PBT");
+        check(plan->commands[3]
+                  == cmdSetLevel(kIc705, level::kPbtOuter, kPbtCentreCode),
+              "recall centres outer PBT");
+    };
+    checkRecall("USB", 1, 0, 3000);
+    checkRecall("USB", 2, 300, 2700);
+    checkRecall("USB", 3, 600, 2400);
+    checkRecall("LSB", 1, -3000, 0);
+    checkRecall("LSB", 2, -2700, -300);
+    checkRecall("LSB", 3, -2400, -600);
+    checkRecall("AM", 1, -4500, 4500);
+    checkRecall("AM", 2, -3000, 3000);
+    checkRecall("AM", 3, -1500, 1500);
+    checkRecall("CW", 1, -600, 600);
+    checkRecall("CW", 2, -250, 250);
+    checkRecall("CW", 3, -125, 125);
 }
 
 static void testCommands()

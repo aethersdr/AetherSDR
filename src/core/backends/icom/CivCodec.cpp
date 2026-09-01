@@ -507,6 +507,39 @@ std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter
                                  : std::pair<int, int>{low, high};
 }
 
+std::optional<FilterPresetRecallPlan> filterPresetRecallPlan(
+    std::uint8_t to, const std::string& ladderMode, CivMode wireMode,
+    bool dataMode, int presetId, bool useVfoMode)
+{
+    const std::vector<FilterPresetState> presets = filterPresetsForMode(ladderMode);
+    if (presetId < 1 || presetId > static_cast<int>(presets.size())) {
+        return std::nullopt;
+    }
+
+    FilterPresetRecallPlan plan;
+    plan.commands.push_back(useVfoMode
+        ? cmdSetVfoMode(to, wireMode, dataMode, presetId)
+        : cmdSetMode(to, wireMode, presetId));
+
+    plan.widthHz = presets[static_cast<std::size_t>(presetId - 1)].widthHz;
+    plan.pbtCode = kPbtCentreCode;
+    const PassbandEdges centred = passbandFromWidthAndPbt(
+        passbandCentreHz(ladderMode, plan.widthHz), plan.widthHz,
+        plan.pbtCode, plan.pbtCode);
+    plan.lowHz = centred.lowHz;
+    plan.highHz = centred.highHz;
+
+    const std::optional<std::uint8_t> widthCode =
+        filterWidthCodeFor(ladderMode, plan.widthHz);
+    if (!widthCode) {
+        return std::nullopt;
+    }
+    plan.commands.push_back(cmdSetFilterWidth(to, *widthCode));
+    plan.commands.push_back(cmdSetLevel(to, level::kPbtInner, plan.pbtCode));
+    plan.commands.push_back(cmdSetLevel(to, level::kPbtOuter, plan.pbtCode));
+    return plan;
+}
+
 // ---------------------------------------------------------------------------
 // IF filter width (1A 03), Twin PBT (14 07 / 14 08)
 // ---------------------------------------------------------------------------

@@ -3840,32 +3840,38 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
 
 void IcomCivBackend::setSliceFilterPreset(int, int presetId)
 {
-    const int slotCount = static_cast<int>(
-        filterPresetsForMode(currentLadderMode().toStdString()).size());
-    if (presetId < 1 || presetId > slotCount) {
+    const std::string ladder = currentLadderMode().toStdString();
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
+        addr, ladder, m_mode, m_dataMode, presetId,
+        profileFor(*m_model).supports(IcomFeature::VfoMode));
+    if (!plan) {
         return;
     }
-
-    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
-    m_filter = presetId;
-    // Command 26 preserves the radio's DATA flag while selecting FILn.
-    if (profileFor(*m_model).supports(IcomFeature::VfoMode)) {
-        sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, presetId));
-    } else {
-        sendUserCommand(cmdSetMode(addr, m_mode, presetId));
+    for (const std::vector<std::uint8_t>& command : plan->commands) {
+        sendUserCommand(command);
     }
 
-    // The selected slot's real width is learned from the confirmation/readback.
-    // Until then publish the official mode fallback, never the previous slot's
-    // mutable width.
-    m_ifWidthHz = 0;
-    SliceDelta d;
-    const auto [low, high] =
-        passbandForModeAndFilter(currentLadderMode().toStdString(), presetId);
-    d.filterLow = low;
-    d.filterHigh = high;
-    emit sliceChanged(sliceId(), d);
+    // A filter button is a PRESET RECALL, not merely a slot selector. This is
+    // also how the Flex buttons behave: after an operator drags the skirts,
+    // clicking the active button reapplies its stored passband. Icom remembers
+    // a mutable width and Twin-PBT position inside each FIL slot, so selecting
+    // FIL2 alone would immediately read the customised shape back and appear
+    // to do nothing. The recall plan therefore follows the slot-select command
+    // with the mode's factory 1A 03 width and centred 14 07/08 PBT writes.
+    // Radio readback remains authoritative and corrects any value it quantises.
+    m_filter = presetId;
+    m_ifWidthHz = plan->widthHz;
+    m_ifWidthMode = m_mode;
+    m_ifWidthData = m_dataMode;
+    m_ifWidthSlot = m_filter;
+    m_pbtInner = plan->pbtCode;
+    m_pbtOuter = plan->pbtCode;
     publishCapabilities();
+    SliceDelta d;
+    d.filterLow = plan->lowHz;
+    d.filterHigh = plan->highHz;
+    emit sliceChanged(sliceId(), d);
 }
 
 void IcomCivBackend::setTxFilter(int lowHz, int highHz)
