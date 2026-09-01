@@ -4869,7 +4869,39 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)
+            ++m_adcOverloadEdges;
+    }
+    // Rate-limited, not merely edge-gated. The edge gate above is necessary and
+    // was never sufficient: the comparator genuinely chatters on a strong band,
+    // so nearly every telemetry sample is an edge and one message repeats at the
+    // full telemetry cadence (see the members' comment in the header for the
+    // rate, and for why the historical figure there is not repeated as a
+    // current one).
+    //
+    // Deliberately OUTSIDE the edge test, and this is the whole reason the two
+    // are separate: a burst that stops must still report its tally. Flushing
+    // only on the next edge would hold the count until the band goes loud
+    // again, which could be hours away or never. publishTelemetry runs on every
+    // telemetry update, so the window closes on time whether or not the
+    // condition is still happening.
+    //
+    // Reported rather than dropped because the rate IS the severity here — a
+    // flag that sets once is a hint, one that sets on every sample for a minute
+    // is a front end being slammed.
+    if (m_adcOverloadEdges > 0
+        && (!m_adcOverloadClock.isValid()
+            || m_adcOverloadClock.hasExpired(kAdcOverloadWarnIntervalMs))) {
+        // More than one transition means the clock is valid: the first ever
+        // transition always reports immediately, so anything counted beyond it
+        // was counted against a running window.
+        if (m_adcOverloadEdges > 1)
+            qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate"
+                       << "(" << m_adcOverloadEdges << "times in"
+                       << m_adcOverloadClock.elapsed() << "ms)";
+        else
             qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate";
+        m_adcOverloadClock.restart();
+        m_adcOverloadEdges = 0;
     }
 }
 

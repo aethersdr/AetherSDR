@@ -645,6 +645,27 @@ private:
     quint64 m_linkRxPacketsAtLastTick = 0;
     static constexpr int kLinkStatsIntervalMs = 1000;
     bool m_adcOverload = false;
+    // The overload bit is a per-frame sample of a level comparator, not an
+    // event: on a strong band it dithers, so the edge gate in publishTelemetry
+    // sees an edge nearly every time it looks. docs/HERMES.md 15.7 recorded
+    // ~133 warnings/second on the MW broadcast band, flushing the log ring.
+    //
+    // That figure is stale and deliberately not repeated as a present-tense
+    // claim: MetisClient has since coalesced telemetryUpdated to 10 Hz (#4449),
+    // which caps this at ~10/s however hard the comparator chatters. What
+    // remains is one message repeating ten times a second for as long as the
+    // band stays strong — no longer ring-flushing, still enough to bury the
+    // lines around it over a session.
+    //
+    // So the edge gate stays and a rate limit sits behind it: warn on the first
+    // transition, then at most once per window, carrying the count of
+    // transitions the window swallowed. Note what that count is and is not — it
+    // counts the transitions SEEN, at the 10 Hz telemetry cadence, not
+    // comparator edges, which are sampled far below their true rate and always
+    // were.
+    QElapsedTimer m_adcOverloadClock;
+    int m_adcOverloadEdges = 0;
+    static constexpr qint64 kAdcOverloadWarnIntervalMs = 10000;
     bool m_keyed = false;
     bool m_tuning = false;
     bool m_cwAutoKeyed = false;
