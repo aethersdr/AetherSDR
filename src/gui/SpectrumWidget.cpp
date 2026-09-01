@@ -7073,11 +7073,10 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     const qreal seconds = m_connectionAnimationClock.elapsed() / 1000.0;
     const qreal towerHeight = qMin(available.height() * 0.27, 90.0);
     const qreal towerWidth = towerHeight * 0.34;
-    // This is connection state, not spectrum data. During bootstrap the radio
-    // may still publish a provisional 0 MHz centre, so frequency-anchoring the
-    // artwork shoves it against the left edge and clips its captions. Keep the
-    // complete status composition centred in the visible panadapter.
-    const qreal centerX = available.center().x();
+    const qreal anchorX = static_cast<qreal>(mhzToX(m_centerMhz));
+    const qreal centerX = qBound(available.left() + towerWidth * 1.5,
+                                 anchorX,
+                                 available.right() - towerWidth * 1.5);
     const qreal baseY = available.top() + available.height() * 0.66;
     const qreal topY = baseY - towerHeight;
     const qreal phase = std::fmod(seconds * 0.7, 1.0);
@@ -7194,8 +7193,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     QFontMetricsF subtitleFm(subtitleFont);
 
     const qreal titleY = baseY + towerHeight * 0.18;
-    const QRectF titleRect(available.left(), titleY,
-                           available.width(), titleFm.height() + 6.0);
+    const QRectF titleRect(available.left(), titleY, available.width(), titleFm.height() + 6.0);
     const QRectF subtitleRect(available.left(), titleRect.bottom() + 4.0,
                               available.width(), subtitleFm.height() + 4.0);
 
