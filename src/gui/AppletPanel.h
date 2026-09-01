@@ -64,6 +64,7 @@ class ProfileSwitcherApplet;
 class HealthApplet;
 class MqttApplet;
 class KiwiSdrApplet;
+class AetherGateApplet;
 class FavoritesPickerDialog;
 #ifdef HAVE_RADE
 class RadeApplet;
@@ -157,6 +158,7 @@ public:
     ProfileSwitcherApplet* profileSwitcherApplet() { return m_profApplet; }
     HealthApplet* healthApplet() { return m_healthApplet; }
     KiwiSdrApplet* kiwiSdrApplet() { return m_kiwiSdrApplet; }
+    AetherGateApplet* aetherGateApplet() { return m_aetherGateApplet; }
 #ifdef HAVE_RADE
     RadeApplet*   radeApplet()   { return m_radeApplet; }
 #endif
@@ -188,6 +190,7 @@ public:
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
+    void setAetherGateVisible(bool visible);
 
     // Show/hide the ShackSwitch applet based on device presence.
     void setShackSwitchVisible(bool visible);
@@ -431,6 +434,7 @@ private:
     ProfileSwitcherApplet* m_profApplet{nullptr};
     HealthApplet* m_healthApplet{nullptr};
     KiwiSdrApplet* m_kiwiSdrApplet{nullptr};
+    AetherGateApplet* m_aetherGateApplet{nullptr};
 #ifdef HAVE_RADE
     RadeApplet*  m_radeApplet{nullptr};
 #endif

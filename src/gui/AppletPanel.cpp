@@ -42,6 +42,7 @@
 #include "ProfileSwitcherApplet.h"
 #include "HealthApplet.h"
 #include "KiwiSdrApplet.h"
+#include "AetherGateApplet.h"
 #ifdef HAVE_RADE
 #include "RadeApplet.h"
 #endif
@@ -978,6 +979,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_appletOrder.append(makeEntry("KSDR", "KiwiSDR", m_kiwiSdrApplet, false,
                                    m_drawer, m_drawerLayout));
 
+    // Aether-gate device controls.  Hardware-conditional like AG/SS rather
+    // than always-present like KSDR/GHE: on a real Flex there is no gate and
+    // never will be, so the button would be permanently dead weight in the
+    // bar.  Unlike AG/SS the detection is the applet's own — it probes the
+    // gate's control port and reports back through gatePresenceChanged(),
+    // which MainWindow wires to updateHardwareAvailability().  That is why the
+    // applet keeps probing while hidden (see AetherGateApplet::poll).
+    m_aetherGateApplet = new AetherGateApplet;
+    {
+        auto entry = makeEntry("GATE", "Aether-gate", m_aetherGateApplet, false,
+                               m_drawer, m_drawerLayout);
+        markHardwareConditional("GATE");
+        m_appletOrder.append(entry);
+    }
+
 #ifdef HAVE_RADE
     m_radeApplet = new RadeApplet;
     m_appletOrder.append(makeEntry("RADE", "RADE Status", m_radeApplet, false, m_drawer, m_drawerLayout));
@@ -1751,6 +1767,15 @@ void AppletPanel::setVkampVisible(bool visible)
 void AppletPanel::setAgVisible(bool visible)
 {
     updateHardwareAvailability("AG", "Applet_AG", visible);
+    applyBarLayout();
+}
+
+// Driven by AetherGateApplet::gatePresenceChanged rather than by the radio's
+// capability table: the gate is a bridge process sitting beside the radio, not
+// something the radio knows about or reports.
+void AppletPanel::setAetherGateVisible(bool visible)
+{
+    updateHardwareAvailability("GATE", "Applet_GATE", visible);
     applyBarLayout();
 }
 

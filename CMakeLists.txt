@@ -976,6 +976,7 @@ set(GUI_SOURCES
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
     src/gui/KiwiSdrApplet.cpp
+    src/gui/AetherGateApplet.cpp
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/FavoritesPickerDialog.cpp
     src/gui/RxApplet.cpp

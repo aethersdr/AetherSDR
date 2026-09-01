@@ -43,6 +43,7 @@
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
+#include "AetherGateApplet.h"
 #include "ProfileSwitcherApplet.h"
 #include "SMeterWidget.h"
 #include "TunerApplet.h"
@@ -6638,6 +6639,26 @@ void MainWindow::wireMeters()
 
     // ── PROF applet: Global / TX / Mic profile switcher (#3376) ─────────────
     m_appletPanel->profileSwitcherApplet()->setRadioModel(&m_radioModel);
+
+    // ── GATE applet: Aether-gate device controls ───────────────────────────
+    // The applet reaches the gate at the RADIO's address, so whether there is
+    // a gate — and which one — is a property of the current connection, not of
+    // the app.  Re-seed on every connect so a session that moves from a real
+    // Flex to a bridged RSPdx (or back) re-probes instead of showing the
+    // previous radio's controls.  Presence is the applet's own discovery, so
+    // it drives the bar button rather than the capability table.
+    if (auto* gate = m_appletPanel->aetherGateApplet()) {
+        gate->setRadioModel(&m_radioModel);
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, gate,
+                [this, gate](bool connected) {
+                    if (connected)
+                        gate->setRadioModel(&m_radioModel);
+                });
+        connect(gate, &AetherGateApplet::gatePresenceChanged, this,
+                [this](bool present) {
+                    m_appletPanel->setAetherGateVisible(present);
+                });
+    }
 
     // ── HLTH applet: same meter model — derives antenna-health state from
     //    SWR / power trends across radio / tuner / amp sources.
