@@ -8261,10 +8261,16 @@ void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point 
     // Stamp BOTH edges. The over ends a fixed number of dit units after the last
     // edge; timing that from key-down alone would add the element's own duration
     // (up to 3 units for a dah) to every measurement and hold the over open that
-    // much longer, which costs receive audio (#4281).
+    // much longer, which costs receive audio (#4281). Stamp the SCHEDULED
+    // instant, not wall-clock delivery: both sidetone generators render this
+    // edge at `when` (#4890), so under GUI/audio-thread load — #3623's exact
+    // condition — a wake-time stamp lands late and silently stretches the hang
+    // past its 8-unit budget while the audio follows the schedule. Unscheduled
+    // callers default `when` to now() at the call site (see the declaration),
+    // so nothing changes for them.
     m_cwLastKeyEdgeNs.store(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count(),
+            when.time_since_epoch()).count(),
         std::memory_order_release);
 }
 

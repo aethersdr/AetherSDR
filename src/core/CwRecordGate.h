@@ -44,8 +44,12 @@ constexpr TxRecorderSource txRecorderSource(bool radioTransmitting,
     // The over is the unit of ownership, not the element. The latch spans it:
     // set on our first key-down, aged out by the pump once the elements stop
     // AND the radio is back at RX (cwLatchShouldAge).
-    if (cwKeyedThisOver)   return TxRecorderSource::CwSidetone;
-    if (radioTransmitting) return TxRecorderSource::Mic;
+    if (cwKeyedThisOver) {
+        return TxRecorderSource::CwSidetone;
+    }
+    if (radioTransmitting) {
+        return TxRecorderSource::Mic;
+    }
     return TxRecorderSource::None;
 }
 
@@ -60,15 +64,6 @@ constexpr bool micTapOwnsRecorder(TxRecorderSource s)
     return s != TxRecorderSource::CwSidetone;
 }
 
-// Whether the pump should spend the render at all. Ownership above answers
-// WHOSE audio belongs in the file; this adds the orthogonal question of whether
-// there IS a file — with none open, QsoRecorder::feedTxAudio discards every
-// block, so rendering is pure waste on the audio thread (#4281).
-//
-// Deliberately a SEPARATE function rather than a third parameter to
-// txRecorderSource(): ownership must stay a two-input contract, because the
-// defect this file exists to prevent was exactly an extra input smuggled into
-// that decision. The test pins that shape.
 // How long after the last CW key EDGE the over is considered finished.
 //
 // Must outlast the longest silence WITHIN an over — the inter-word gap, 7 dit
@@ -104,6 +99,15 @@ constexpr long long cwOverHangMs(int mirrorWpm, int overrideWpm)
         : cwOverHangMs(mirrorWpm);
 }
 
+// Whether the pump should spend the render at all. Ownership above answers
+// WHOSE audio belongs in the file; this adds the orthogonal question of whether
+// there IS a file — with none open, QsoRecorder::feedTxAudio discards every
+// block, so rendering is pure waste on the audio thread (#4281).
+//
+// Deliberately a SEPARATE function rather than a third parameter to
+// txRecorderSource(): ownership must stay a two-input contract, because the
+// defect this file exists to prevent was exactly an extra input smuggled into
+// that decision. The test pins that shape.
 constexpr bool cwRecordPumpShouldRender(TxRecorderSource s, bool recordingOpen)
 {
     return cwRecordPumpOwnsRecorder(s) && recordingOpen;

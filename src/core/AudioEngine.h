@@ -195,14 +195,16 @@ public:
             m_cwKeyedThisOver.load(std::memory_order_acquire)
                 && m_cwOverHadTx.load(std::memory_order_acquire));
     }
-    // Whether a Client-Side recording is open, so the CW record pump can skip
-    // rendering samples nothing will store (#4281). Orthogonal to ownership
-    // above: that answers WHOSE audio belongs in the file, this answers whether
-    // there is a file. Stored from QsoRecorder's start/stop signals.
     // Mirror of TransmitModel::cwSpeed, used only to size the CW over-hang.
     void setCwWpm(int wpm) {
-        if (wpm > 0) m_cwWpm.store(wpm, std::memory_order_relaxed);
+        if (wpm > 0) {
+            m_cwWpm.store(wpm, std::memory_order_relaxed);
+        }
     }
+    // Whether a Client-Side recording is open, so the CW record pump can skip
+    // rendering samples nothing will store (#4281). Orthogonal to ownership:
+    // that answers WHOSE audio belongs in the file, this answers whether there
+    // is a file. Stored from QsoRecorder's start/stop signals.
     void setQsoRecordingActive(bool on) {
         m_qsoRecordingActive.store(on, std::memory_order_release);
     }
@@ -1088,10 +1090,12 @@ private:
     std::unique_ptr<CwSidetoneGenerator> m_cwRecordSidetone;
     std::vector<float> m_cwRecordSidetoneScratch;       // int16<->float render scratch
     // CW record pump state (#2539). The pump free-runs on the audio thread;
-    // m_cwKeyedThisOver latches when our keyer fires (set in setCwKeyDown, reset
-    // on the radio TX→RX edge) so the pump excludes voice/DAX/tune overs that
-    // never key the sidetone. m_cwPumpElapsed drives wall-clock-accurate frame
-    // counts so morse timing in the recording matches real time.
+    // m_cwKeyedThisOver latches when our keyer fires in a CW mode (set in
+    // setCwKeyDown, aged out by the pump via cwLatchShouldAge — NOT reset on
+    // the radio TX→RX edge, which break-in drops in every inter-element gap,
+    // #4281) so the pump excludes voice/DAX/tune overs that never key the
+    // sidetone. m_cwPumpElapsed drives wall-clock-accurate frame counts so
+    // morse timing in the recording matches real time.
     QTimer*            m_cwRecordPump{nullptr};
     QElapsedTimer      m_cwPumpElapsed;
     bool               m_cwPumpActive{false};            // audio-thread only

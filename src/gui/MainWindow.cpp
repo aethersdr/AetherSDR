@@ -36,6 +36,7 @@
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
+#include "core/CwRecordGate.h"        // micTapOwnsRecorder — carried explicitly (AGENTS.md, #3532)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
@@ -1699,6 +1700,9 @@ MainWindow::MainWindow(QWidget* parent)
     // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
             m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+        // Evaluated at queued-delivery time on the recorder's thread, so blocks
+        // already in flight when ownership flips are gated by the NEW owner —
+        // bounded (tens of ms) leakage in both directions at over boundaries.
         if (!micTapOwnsRecorder(m_audio->txRecorderSource())) return;
         m_qsoRecorder->feedTxAudio(pcm);
     });
@@ -1730,7 +1734,7 @@ MainWindow::MainWindow(QWidget* parent)
     // rather than a fixed wall-clock value (#4281).
     m_audio->setCwWpm(m_radioModel.transmitModel().cwSpeed());
     connect(&m_radioModel.transmitModel(), &TransmitModel::cwSpeedChanged,
-            m_audio, [this](int wpm) { m_audio->setCwWpm(wpm); });
+            m_audio, [ae = m_audio](int wpm) { ae->setCwWpm(wpm); });
     // Tune carriers raise the interlock as an owned TX but are not a CW over:
     // mirror tune state so cwOverTxActive can exclude them (#4281).
     // TransmitModel sets its flag optimistically before the tune command is
