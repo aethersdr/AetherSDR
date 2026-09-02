@@ -2973,16 +2973,46 @@ else()
 endif()
 
 # Stage 3's headless boundary is structural: neither the engine library nor
-# its daemon may acquire the desktop widget dependency. Keep this assertion at
-# the end of the completed target graph so every later conditional link is
-# caught at configure time rather than only on a release artifact.
-get_target_property(_aethercore_links aethercore LINK_LIBRARIES)
-get_target_property(_aethercore_interface_links aethercore INTERFACE_LINK_LIBRARIES)
-get_target_property(_aetherd_links aetherd LINK_LIBRARIES)
-if("${_aethercore_links};${_aethercore_interface_links};${_aetherd_links}"
-        MATCHES "Qt6::Widgets")
-    message(FATAL_ERROR "aethercore/aetherd must not link Qt6::Widgets")
-endif()
-unset(_aethercore_links)
-unset(_aethercore_interface_links)
-unset(_aetherd_links)
+# its daemon may acquire the desktop widget dependency. Walk the complete
+# target graph so an interface/helper library cannot hide QtWidgets from a
+# direct LINK_LIBRARIES property check.
+function(aether_assert_no_qtwidgets root_target)
+    set(_pending_targets "${root_target}")
+    set(_visited_targets)
+    while(_pending_targets)
+        list(POP_FRONT _pending_targets _current_target)
+        if(_current_target IN_LIST _visited_targets)
+            continue()
+        endif()
+        list(APPEND _visited_targets "${_current_target}")
+
+        foreach(_link_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(_target_links "${_current_target}" "${_link_property}")
+            if(NOT _target_links OR "${_target_links}" MATCHES "-NOTFOUND$")
+                continue()
+            endif()
+            foreach(_target_link IN LISTS _target_links)
+                if("${_target_link}" MATCHES "(^|[^A-Za-z0-9_])Qt6::Widgets([^A-Za-z0-9_]|$)")
+                    message(FATAL_ERROR
+                        "${root_target} must not link Qt6::Widgets "
+                        "(reached through ${_current_target})")
+                endif()
+
+                # Link entries may wrap targets in generator expressions such
+                # as $<LINK_ONLY:target>. Extract candidate tokens and enqueue
+                # only names that CMake recognizes as actual targets.
+                string(REGEX MATCHALL "[A-Za-z0-9_.+-]+(::[A-Za-z0-9_.+-]+)?"
+                    _candidate_targets "${_target_link}")
+                foreach(_candidate_target IN LISTS _candidate_targets)
+                    if(TARGET "${_candidate_target}"
+                            AND NOT _candidate_target IN_LIST _visited_targets)
+                        list(APPEND _pending_targets "${_candidate_target}")
+                    endif()
+                endforeach()
+            endforeach()
+        endforeach()
+    endwhile()
+endfunction()
+
+aether_assert_no_qtwidgets(aethercore)
+aether_assert_no_qtwidgets(aetherd)

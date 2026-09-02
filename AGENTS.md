@@ -467,10 +467,11 @@ The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 - **EB2** — no `core/`/`models/` file may use QtWidgets (a shrinking
   tracked-legacy set warns, new usage errors).
 - **EB3** — no file **above the radio seam** (all of `src/gui/`,
-  `src/core/`, `src/models/` **except** the backend tree
-  `src/core/backends/`) may include a **vendor header** — the
-  family-specific wire classes the RFC keeps behind `IRadioBackend`
-  (SmartSDR/FlexLib + KiwiSDR; the headers tagged `vendor(...)` in
+  `src/core/`, `src/models/`, plus the root app-shell files `src/main.cpp`
+  and `src/MacStartupAbortGuard.{h,cpp}`, **except** the backend tree
+  `src/core/backends/`) may include a **vendor header** — any radio-family-
+  specific wire class the RFC keeps behind `IRadioBackend` (currently Flex,
+  Kiwi, HL2, Sim, Icom, ANAN, and RTL; the headers tagged `vendor(...)` in
   `docs/architecture/aetherd-touchpoint-tags.json`). Only `vendor(...)` is
   EB3-gated: a standalone *accessory* device's own transport (the 4O3A
   antenna switch, the Tgxl/Pgxl direct sockets) is `peripheral(...)`, a
