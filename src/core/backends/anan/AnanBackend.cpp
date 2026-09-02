@@ -287,6 +287,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hostModulates = true;        // client-side WDSP, like the HL2
     c.takesTxAudioOverSeam = true; // moot while canTransmit is false
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
+    c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
     c.hasAmplifier = false;
     c.hasRadioSideDsp = false;     // DSP is engine-side (AnanRxDsp), not firmware
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
