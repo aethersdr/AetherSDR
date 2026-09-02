@@ -10,6 +10,7 @@
 
 #include "core/backends/anan/AnanDiscovery.h"
 #include "core/backends/hl2/Hl2Discovery.h"
+#include "core/RtlSdrDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
@@ -1012,6 +1013,8 @@ private:
     // openHPSDR Protocol 2 discovery for the ANAN-G2. Feeds the same
     // ConnectionPanel slots as m_discovery, tagged family="anan".
     anan::AnanDiscovery m_ananDiscovery;
+    // Local USB discovery for RTL-SDR devices, tagged family="rtl".
+    RtlSdrDiscovery m_rtlDiscovery;
     // Radio sessions (#3445 Camp B / #3351). Each session owns the full
     // per-radio aggregate; today there is exactly one. The vector sits at
     // the old `RadioModel m_radioModel` member position so destruction

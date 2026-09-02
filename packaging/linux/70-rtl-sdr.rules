@@ -1,0 +1,8 @@
+# AetherSDR - RTL-SDR (RTL2832U) USB access for the active local user.
+# uaccess hands the node to whoever owns the active local session, so no
+# static group membership is required. Covers the Realtek reference IDs and
+# the common rebrands; see librtlsdr's own rtl-sdr.rules for the full list.
+ACTION!="remove", SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="usb", ATTRS{idVendor}=="0ccd", ATTRS{idProduct}=="00a9", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="usb", ATTRS{idVendor}=="1f4d", ATTRS{idProduct}=="b803", TAG+="uaccess"

@@ -94,6 +94,12 @@ jobs:
       - name: Ensure ccache is present
         run: command -v ccache || (apt-get update && apt-get install -y ccache)
 
+      # Keep the PR gate honest while the rolling CI image catches up with a
+      # Dockerfile dependency change. This is a no-op once the image contains
+      # librtlsdr-dev, and ensures rtl_backend_test exists on this exact head.
+      - name: Ensure RTL-SDR build dependency is present
+        run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
+
       # RESTORE on every run, SAVE only on main — see "Compiler-cache strategy"
       # at the bottom of this file for the measurements behind the split.
       - name: Restore ccache objects
@@ -309,6 +315,14 @@ jobs:
       # exercising six four-second AM/SAM audio bursts through the real HL2 DSP.
       - name: Test HL2 AM/SAM DC blocker
         run: ctest --test-dir build -R "^hl2_am_dcblock_test$" --no-tests=error --output-on-failure
+
+      # rtl_backend_test exercises the RTL-SDR backend's gain reset, state
+      # validation, sample-rate clamping, DDC output, and discovery stub — things that
+      # can regress silently because the backend is an optional dependency.
+      # The CI image carries librtlsdr-dev, so the backend and its test are
+      # always built here. ~0.1 s, no hardware or event loop.
+      - name: Test RTL-SDR backend
+        run: ctest --test-dir build -R "^rtl_backend_test$" --no-tests=error --output-on-failure
 
       # ulanzi_mapping_migration_test was on this gate (added by #4834) and is
       # not any more. Unlike hl2_am_dcblock_test above it was not costing
@@ -755,7 +769,7 @@ jobs:
         # per-PR macOS check on a rolling Qt (6.11.1 today) while the DMG ships
         # 6.8.3, i.e. CI green would say nothing about the artifact.
         run: |
-          brew install ninja fftw portaudio hidapi \
+          brew install ninja fftw portaudio hidapi librtlsdr \
             autoconf automake libtool
 
       # ~1.3 GB downloaded on every PR otherwise, and it showed: this job went

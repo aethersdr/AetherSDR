@@ -62,6 +62,7 @@ option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cp
 option(ASR_USE_PREBUILT_WHISPER_GPU
     "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
+option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -2254,11 +2255,73 @@ else()
         endif()
     endif()
 endif()
+
+# RTL-SDR hardware backend — IRadioBackend implementor (family "rtl")
+if(PkgConfig_FOUND)
+    pkg_check_modules(RTLSDR IMPORTED_TARGET librtlsdr)
+    pkg_check_modules(RTL_FFTW3F IMPORTED_TARGET fftw3f)
+endif()
+
+# vcpkg / Homebrew / hand-built installs ship no .pc file. Fall back to a
+# plain header+library probe so the switch below is reachable on every
+# platform, not only the pkg-config ones.
+if(ENABLE_RTL AND NOT RTLSDR_FOUND)
+    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h)
+    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr)
+    if(RTLSDR_INCLUDE_DIR AND RTLSDR_LIBRARY)
+        add_library(RtlSdr::RtlSdr UNKNOWN IMPORTED)
+        set_target_properties(RtlSdr::RtlSdr PROPERTIES
+            IMPORTED_LOCATION "${RTLSDR_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${RTLSDR_INCLUDE_DIR}")
+        set(RTLSDR_FOUND TRUE)
+        set(RTLSDR_TARGET RtlSdr::RtlSdr)
+    endif()
+else()
+    set(RTLSDR_TARGET PkgConfig::RTLSDR)
+endif()
+
+if(ENABLE_RTL AND NOT RTL_FFTW3F_FOUND)
+    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h)
+    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3)
+    if(RTL_FFTW3F_INCLUDE_DIR AND RTL_FFTW3F_LIBRARY)
+        add_library(RtlFftw3f::RtlFftw3f UNKNOWN IMPORTED)
+        set_target_properties(RtlFftw3f::RtlFftw3f PROPERTIES
+            IMPORTED_LOCATION "${RTL_FFTW3F_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${RTL_FFTW3F_INCLUDE_DIR}")
+        set(RTL_FFTW3F_FOUND TRUE)
+        set(RTL_FFTW3F_TARGET RtlFftw3f::RtlFftw3f)
+    endif()
+else()
+    set(RTL_FFTW3F_TARGET PkgConfig::RTL_FFTW3F)
+endif()
+
+if(NOT ENABLE_RTL)
+    message(STATUS "RTL-SDR ... disabled by ENABLE_RTL=OFF")
+elseif(RTLSDR_FOUND AND RTL_FFTW3F_FOUND)
+    message(STATUS "RTL-SDR ... found with fftw3f — RtlSdrBackend enabled")
+    set(AETHER_BACKEND_RTL ON)
+    target_compile_definitions(aethercore PUBLIC AETHER_BACKEND_RTL)
+    target_link_libraries(aethercore PRIVATE ${RTLSDR_TARGET} ${RTL_FFTW3F_TARGET})
+    target_sources(aethercore PRIVATE
+        src/core/backends/rtl/RtlSdrBackend.cpp
+        src/core/backends/rtl/RtlSdrBackend.h
+        src/core/backends/rtl/RtlSdrWorker.cpp
+        src/core/backends/rtl/RtlSdrWorker.h
+        src/core/backends/rtl/RtlSdrDdc.cpp
+        src/core/backends/rtl/RtlSdrDdc.h)
+elseif(RTLSDR_FOUND AND NOT RTL_FFTW3F_FOUND)
+    message(STATUS "RTL-SDR ... disabled — librtlsdr found but fftw3f missing. Install fftw3f (e.g. libfftw3-dev), or configure with -DENABLE_RTL=OFF.")
+else()
+    message(STATUS "RTL-SDR ... disabled — librtlsdr not found")
+endif()
+
 # Ulanzi Dial backend — one per platform.  All three implementations
 # expose the same Qt signal contract (see UlanziDialBackend.h); the
 # mapper dialog and MainWindow dispatcher are unchanged across
 # platforms.  See #3232 for the design.
 target_sources(aethercore PRIVATE
+    src/core/RtlSdrDiscovery.cpp    # RTL-SDR discovery — compiled unconditionally, stubbed internally when librtlsdr absent
+    src/core/RtlSdrDiscovery.h
     src/core/UlanziDialBackend.h    # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
     src/core/UlanziChordDecoder.cpp # chord decode shared by all three backends (ulanzi_chord_decoder_test)
     src/core/UlanziChordDecoder.h
@@ -2849,6 +2912,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND AETHER_BACKEND_RTL)
+        install(FILES packaging/linux/70-rtl-sdr.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications

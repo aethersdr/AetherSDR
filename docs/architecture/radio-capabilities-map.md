@@ -104,6 +104,23 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
 | `notchMinWidthHz` / `notchMaxWidthHz` | 10 / 6000 | 50 / 6000 | 0 / 0 | `SpectrumWidget::setNotchCapabilities` | Clamps drag-resize and the width presets. HL2's floor is set by the RX filter length and WDSP **silently widens** anything narrower, so a UI offering less draws a notch narrower than the one being heard |
 
+### RTL-SDR experimental profile
+
+RTL-SDR is receive-only and mostly inherits the false/empty capability
+defaults. Its non-default declarations are kept separately so adding the
+experimental family does not duplicate or stale the main cross-family table.
+
+| Field | RTL-SDR value | Effect |
+|---|---|---|
+| `family` / `model` / `manufacturer` | `"rtl"` / USB product / USB vendor (fallback `"Realtek"`) | Identifies the local device in the shared radio model and status bar |
+| `tuningMinHz` / `tuningMaxHz` | 24 kHz / 1.766 GHz | Bounds tune requests; frequencies below 24 MHz select Q-branch direct sampling |
+| `sampleRatesHz` | 225001, 250000, 300000, 1000000, 1536000, 1843200, 2000000, 2400000, 3000000 | Publishes only legal `librtlsdr` detents |
+| `canTransmit` / `txPowerMaxWatts` / `hostModulates` | false / 0 / false | Fails closed on every transmit path and never opens the microphone |
+| `maxSlices` / `maxPanadapters` | 1 / 1 | Matches the single in-process DDC |
+| `persistsMemories` / `hasSupplyVoltageTelemetry` / `hasMultiClientSessions` | false / false / false | Avoids fabricating radio-side services or telemetry |
+| `clientSettingsDomains` | Tuning\|Passband\|SpanRate\|RfGain\|Memories | Restores only state the USB receiver cannot persist itself |
+| `extensionNamespaces` | `["rtl"]` | Declares gain, PPM, direct-sampling, offset-tuning, and sample-rate controls |
+
 `MainWindow::applyCapabilitiesToUi()` is the single fan-out for UI visibility. It
 is bound to `RadioModel::capabilitiesChanged`, which fires on both connection
 edges and on any mid-session revision by the backend. Add a capability by adding
