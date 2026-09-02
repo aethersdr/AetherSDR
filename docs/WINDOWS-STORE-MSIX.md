@@ -116,8 +116,10 @@ The Windows installer workflow produces this automatically:
    flattens them beside `AetherSDR.pdb` in `symbols/`. This is important:
    `deploy/` feeds the portable ZIP, Inno installer, and MSIX, none of which
    should ship PDB payload files.
-4. `create-msix.ps1 -CreateUpload -RequirePdb -SymbolDir symbols` places all
-   architecture-matching PDBs at the root of `<package>.appxsym`, then places
+4. `create-msix.ps1 -CreateUpload -RequirePdb` consumes the staged application
+   PDB and dependency PDBs. Pass `-PdbPath symbols\AetherSDR.pdb` and
+   `-SymbolDir symbols` so both inputs describe the same verified symbol set.
+   The script places the PDBs at the root of `<package>.appxsym`, then places
    that `.appxsym` beside the `.msix` at the root of `<package>.msixupload`.
    This mirrors Visual Studio's single-architecture Store upload layout; there
    is no extra `symbols/` directory inside either archive. Microsoft documents
@@ -237,10 +239,10 @@ On a `v*` tag push the workflow:
 3. `msstore reconfigure` authenticates from the four GitHub secrets.
 4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
    `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
-   --verbose --noCommit` — staging a **draft**. `--noCommit` is the safety gate
-   that keeps it out of certification. A maintainer reviews the pending
-   submission in Partner Center and clicks **Submit to Store** to start
-   certification. **CI never publishes to the live channel on its own.**
+   --noCommit` — staging a **draft**. `--noCommit` is the safety gate that keeps
+   it out of certification. A maintainer reviews the pending submission in
+   Partner Center and clicks **Submit to Store** to start certification. **CI
+   never publishes to the live channel on its own.**
 
 Guard rails (all three must pass before Partner Center is touched):
 
@@ -260,11 +262,12 @@ have a regression where omitting `--uploadTimeout` supplies a zero-second Azure
 blob network timeout, producing the characteristic `Uploading Bundle to Azure
 blob: 0%` failure and exit code `-1`
 ([microsoft/msstore-cli#162](https://github.com/microsoft/msstore-cli/issues/162)).
-The script uses the documented workaround of 300 seconds and enables
-`--verbose` so any future upload failure retains its underlying exception in
-the CI log. The affected CLI is pinned to prevent `latest` from silently
-changing publish behavior; advance that pin only after validating a released
-version containing
+The script uses the documented workaround of 300 seconds. It deliberately
+leaves verbose logging disabled because Actions logs are public and expanded
+authentication or upload diagnostics could expose derived credentials that
+GitHub cannot mask by their registered secret values. The affected CLI is
+pinned to prevent `latest` from silently changing publish behavior; advance
+that pin only after validating a released version containing
 [microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163).
 
 ### One-time setup (maintainer, outside the repo)

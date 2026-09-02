@@ -362,7 +362,8 @@ jobs:
       # The staging step above is a hard gate: it verifies every deployed Qt
       # DLL/plugin has its same-named PDB before removing symbols from deploy/.
       # Re-check the high-value symbols independently so a packaging refactor
-      # cannot silently shrink the Store symbol surface.
+      # cannot silently shrink the Store symbol surface. Keep this list in sync
+      # with check-symbol-package.ps1's default RequiredPdbs list.
       - name: Verify required debug symbols present
         run: |
           $required = @("AetherSDR.pdb", "Qt6Core.pdb", "Qt6Gui.pdb", "Qt6Multimedia.pdb", "Qt6Network.pdb", "Qt6Widgets.pdb", "qwindows.pdb", "windowsmediaplugin.pdb")

@@ -90,8 +90,7 @@ $publishArgs = @(
     "-id",
     $ProductId,
     "--uploadTimeout",
-    $UploadTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture),
-    "--verbose"
+    $UploadTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 )
 if (-not $Commit) {
     # --noCommit (-nc) uploads the package but keeps the submission in DRAFT
