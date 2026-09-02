@@ -2377,15 +2377,18 @@ differently, because only the snapshot is macOS-specific:
   a refusal rather than as a success carrying no data.
 - `devices ulanzi-start` and `devices ulanzi-stop` **do** run on these
   platforms and return `ok:true` with `operation`, `enabled`, and `queued`.
-  `supported:false` still appears and refers to the *snapshot*, not the
-  operation.
+  No `supported` field appears on a lifecycle reply: no snapshot was asked
+  for, so there is nothing for it to describe.
 
-`queued` reports whether the call was posted to another thread rather than run
-inline. It is `true` on Linux and Windows, where the backend lives on the
-ExtControllers thread, so the reply is an acknowledgement that the request was
-accepted -- not a statement that it has completed. On macOS the backend stays
-on the main thread alongside the bridge handler, so the call runs inline and
-the returned snapshot reflects the state *after* it.
+`queued` is present on every platform and reports whether the call was posted
+to another thread rather than run inline. It is `true` on Linux and Windows,
+where the backend lives on the ExtControllers thread, so the reply is an
+acknowledgement that the request was accepted -- not a statement that it has
+completed. On macOS the backend stays on the main thread alongside the bridge
+handler, so the call runs inline, `queued` is `false`, and the returned
+snapshot reflects the state *after* it. `queued` is also `false` if the
+backend's thread is no longer running (shutdown): Qt drops calls posted to a
+finished thread, so the reply does not claim one was accepted.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak

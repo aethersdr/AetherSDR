@@ -2677,10 +2677,30 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                    == QLatin1String("True");
         };
 
+        // "accepted", not "done": where the backend lives on another thread
+        // (ExtControllers on Linux/Windows) the call above was POSTED to it
+        // and has not run yet, so the reply is an acknowledgement rather than
+        // a statement of completion. Reported on EVERY platform so a script
+        // can read one field without a platform branch -- it is simply false
+        // on macOS, where the call ran inline. Derived from the backend's
+        // actual thread rather than hardcoded, so it stays honest if the
+        // threading decision in MainWindow_Controllers.cpp ever changes.
+        //
+        // The thread must also still be RUNNING: a QObject whose thread has
+        // finished (shutdown) still reports that thread, and Qt silently
+        // drops calls posted to it. Without this guard the reply would say
+        // queued:true for a call that will never run -- the ok-means-nothing
+        // shape this handler exists to remove. Same idiom as the MIDI
+        // dispatch in MainWindow_Controllers.cpp and AutomationServer.
+        QThread* backendThread = m_dialBackend->thread();
+        const bool queued = backendThread && backendThread->isRunning()
+                            && backendThread != QThread::currentThread();
+
 #ifdef Q_OS_MAC
         QJsonObject snapshot = m_dialBackend->diagnostics();
         snapshot[QStringLiteral("operation")] = diagnostic;
         snapshot[QStringLiteral("enabled")] = dialEnabled();
+        snapshot[QStringLiteral("queued")] = queued;
         return snapshot;
 #else
         // No diagnostics() on the Linux/Windows backends yet, so a bare
@@ -2690,7 +2710,10 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // and only the separate supported:false said otherwise.
         //
         // A lifecycle call is different: it really did run, so it reports
-        // ok:true and carries what these backends can honestly answer.
+        // ok:true and carries what these backends can honestly answer. It
+        // does NOT carry supported:false -- no snapshot was asked for, and a
+        // script that reads `supported` as "did this work" would abort on a
+        // start that actually ran. That field belongs only on the refusal.
         if (diagnostic == QLatin1String("ulanzi")) {
             return QJsonObject{
                 {QStringLiteral("ok"), false},
@@ -2705,16 +2728,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         result[QStringLiteral("ok")] = true;
         result[QStringLiteral("diagnostic")] = QStringLiteral("ulanzi");
         result[QStringLiteral("operation")] = diagnostic;
-        result[QStringLiteral("supported")] = false;  // the SNAPSHOT, not the operation
-        // "accepted", not "done": on these platforms the backend lives on the
-        // ExtControllers thread, so the call above was posted to it and has not
-        // run yet. Reporting isConnected() here would describe the state BEFORE
-        // the request and read as a failed command -- the same ok-means-nothing
-        // confusion this change exists to remove. Derived from the backend's
-        // actual thread rather than hardcoded, so it stays honest if the
-        // threading decision in MainWindow_Controllers.cpp ever changes.
-        result[QStringLiteral("queued")] =
-            m_dialBackend->thread() != QThread::currentThread();
+        // Reporting isConnected() here would describe the state BEFORE the
+        // queued request and read as a failed command, so it is left out.
+        result[QStringLiteral("queued")] = queued;
         result[QStringLiteral("enabled")] = dialEnabled();
         return result;
 #endif
