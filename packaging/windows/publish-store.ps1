@@ -39,8 +39,11 @@
 
 .PARAMETER UploadTimeoutSeconds
     Network timeout, in seconds, for each Azure blob upload request. Defaults
-    to 300. This is always passed explicitly because msstore CLI v0.4.0 and
-    v0.4.1 incorrectly use zero when --uploadTimeout is omitted.
+    to 300. The CLI sets no StorageTransferOptions, so a .msixupload under
+    256 MiB is sent as a single PUT and this timeout has to cover the entire
+    transfer rather than one chunk. At ~200 MB the CLI's own 100 s default
+    would require a sustained ~2 MB/s for the whole upload, so this is passed
+    explicitly as a deliberate value.
 
 .PARAMETER Commit
     Send the submission straight to certification instead of staging a draft.

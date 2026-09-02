@@ -235,7 +235,7 @@ On a `v*` tag push the workflow:
 1. Builds `AetherSDR.exe`, runs `windeployqt`, packages the MSIX, and creates
    the `.msixupload` (existing steps).
 2. The pinned `microsoft/microsoft-store-apppublisher` action puts the pinned
-   `msstore` CLI v0.4.1 on PATH and the workflow logs `msstore --version`.
+   `msstore` CLI v0.4.2 on PATH and the workflow logs `msstore --version`.
 3. `msstore reconfigure` authenticates from the four GitHub secrets.
 4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
    `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
@@ -257,18 +257,28 @@ If the MSIX packaging step (which is `continue-on-error`) produced no
 `.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
 otherwise-successful release red.
 
-The upload timeout is deliberately explicit. `msstore` CLI v0.4.0 and v0.4.1
-have a regression where omitting `--uploadTimeout` supplies a zero-second Azure
-blob network timeout, producing the characteristic `Uploading Bundle to Azure
-blob: 0%` failure and exit code `-1`
+The upload timeout is deliberately explicit, and stays that way — but it is no
+longer a bug workaround. `msstore` CLI v0.4.0 and v0.4.1 had a regression where
+omitting `--uploadTimeout` supplied a zero-second Azure blob network timeout,
+producing the characteristic `Uploading Bundle to Azure blob: 0%` failure and
+exit code `-1`
 ([microsoft/msstore-cli#162](https://github.com/microsoft/msstore-cli/issues/162)).
-The script uses the documented workaround of 300 seconds. It deliberately
-leaves verbose logging disabled because Actions logs are public and expanded
-authentication or upload diagnostics could expose derived credentials that
-GitHub cannot mask by their registered secret values. The affected CLI is
-pinned to prevent `latest` from silently changing publish behavior; advance
-that pin only after validating a released version containing
-[microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163).
+That is fixed by
+[microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163)
+and released in v0.4.2, which the pin above now names, so omitting the option
+would correctly yield the documented 100 s default.
+
+300 seconds is kept because 100 s is genuinely too short for this package. The
+CLI sets no `StorageTransferOptions`, so a `.msixupload` under 256 MiB is
+uploaded as a **single PUT** and the network timeout has to cover the whole
+transfer rather than an individual chunk. AetherSDR's upload is ~200 MB, which
+at 100 s would demand a sustained ~2 MB/s for the entire request.
+
+The workflow deliberately leaves verbose logging disabled because Actions logs
+are public and expanded authentication or upload diagnostics could expose
+derived credentials that GitHub cannot mask by their registered secret values.
+The CLI stays pinned to prevent `latest` from silently changing publish
+behavior.
 
 ### One-time setup (maintainer, outside the repo)
 
