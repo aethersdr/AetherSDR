@@ -3008,17 +3008,18 @@ function(aether_assert_no_qtwidgets root_target)
                         "(reached through ${_current_target})")
                 endif()
 
-                # Link entries may wrap targets in generator expressions such
-                # as $<LINK_ONLY:target>. Extract candidate tokens and enqueue
-                # only names that CMake recognizes as actual targets.
-                string(REGEX MATCHALL "[A-Za-z0-9_.+-]+(::[A-Za-z0-9_.+-]+)?"
-                    _candidate_targets "${_target_link}")
-                foreach(_candidate_target IN LISTS _candidate_targets)
-                    if(TARGET "${_candidate_target}"
-                            AND NOT _candidate_target IN_LIST _visited_targets)
-                        list(APPEND _pending_targets "${_candidate_target}")
-                    endif()
-                endforeach()
+                # Follow real target-valued entries only. Tokenizing arbitrary
+                # generator expressions can manufacture reverse edges from
+                # TARGET_PROPERTY metadata. LINK_ONLY is the one wrapper CMake
+                # adds for a static library's private link dependencies.
+                set(_candidate_target "${_target_link}")
+                if("${_target_link}" MATCHES "^\\$<LINK_ONLY:([^>]+)>$")
+                    set(_candidate_target "${CMAKE_MATCH_1}")
+                endif()
+                if(TARGET "${_candidate_target}"
+                        AND NOT _candidate_target IN_LIST _visited_targets)
+                    list(APPEND _pending_targets "${_candidate_target}")
+                endif()
             endforeach()
         endforeach()
     endwhile()
