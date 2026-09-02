@@ -540,6 +540,14 @@ void MetisClient::setBandFilter(int ocFilterByte)
 
 void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
 {
+    // DEFENCE IN DEPTH against a bank outliving its session. m_oneShot is not
+    // cleared by start() or stop(), so anything queued while the stream is down
+    // becomes the first thing the NEXT connect transmits -- pointing an
+    // amplifier at the band the previous session ended on. Hl2Backend already
+    // refuses to schedule while disconnected; this is the wire's own refusal,
+    // so a future caller that misses that guard cannot reintroduce the hazard.
+    if (!m_running)
+        return;
     if (m_ioBoardTxFreqSent && hz == m_ioBoardTxFreqHz)
         return;                       // board already holds this frequency
     m_ioBoardTxFreqSent = true;

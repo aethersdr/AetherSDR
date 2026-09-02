@@ -406,6 +406,16 @@ Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
 // instead of in a loop at each call site that could be reversed by someone who
 // reasonably assumed little-endian.
 inline constexpr std::size_t kIoBoardTxFreqBanks = 5;
+// These three constants are NOT independent: one loop below indexes registers
+// with a shift of 8 * (kIoBoardRegTxFreqLsb - reg). Raise the bank count
+// without moving the LSB register and the last iteration subtracts past zero in
+// unsigned arithmetic — an 8 * 255 shift, undefined, putting a garbage byte on
+// a wire that moves an amplifier's band relay. Tie them together so that edit
+// fails to compile rather than reaching hardware.
+static_assert(kIoBoardTxFreqBanks
+                  == static_cast<std::size_t>(kIoBoardRegTxFreqLsb
+                                              - kIoBoardRegTxFreqMsb + 1),
+              "IO board frequency bank count must span Msb..Lsb exactly");
 std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
 // Set MOX (C0 bit 0) on a C&C bank. Keying is per-FRAME, so this is applied to
 // whichever bank is being sent rather than to one dedicated register.

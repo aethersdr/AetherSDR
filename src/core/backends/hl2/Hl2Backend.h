@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2IoBoardPolicy.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -152,6 +153,13 @@ private:
     // and does not change between 7.100 and 7.200 MHz; the IO board wants the
     // frequency itself and does.
     void applyIoBoardFrequency();
+    // The single point at which either edge of the IO-board throttle reaches
+    // the wire, so the disconnected guard cannot be present on one path and
+    // missing on the other. Returns false when the push was refused.
+    [[nodiscard]] bool sendIoBoardFrequency(quint64 hz);
+    // Drop the IO-board schedule on linkDown: armed timer, coalesced value and
+    // remembered band all describe a session and must not survive one.
+    void resetIoBoardSchedule();
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band
@@ -610,6 +618,16 @@ private:
     static constexpr int kIoBoardThrottleMs = 500;
     QTimer* m_ioBoardThrottle = nullptr;
     quint64 m_pendingIoBoardHz = 0;      // 0 = nothing coalesced
+    // The band the IO board was last told about, as a bandKeyForHz() key.
+    // Empty means "no session has told it anything", which is also the state
+    // reset() restores — so the first push after any connect is treated as a
+    // band change and takes the leading edge rather than being coalesced.
+    //
+    // Tracked SEPARATELY from m_currentBandKey (the per-band memory's notion):
+    // that one follows the operator's tuning for LNA/drive recall and moves on
+    // paths this does not, and conflating "what the operator is on" with "what
+    // the amplifier has been told" is how the two silently diverge.
+    QString m_ioBoardBandKey;
 
     // Has this connect already derived the passband from the mode? (#4484)
     //

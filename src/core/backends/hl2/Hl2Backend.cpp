@@ -481,6 +481,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         if (m_connected) {
             m_connected = false;
             m_linkStatsTimer->stop();
+            resetIoBoardSchedule();
             emit disconnected();
         }
     });
@@ -496,6 +497,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
         m_connected = false;
         m_linkStatsTimer->stop();
+        resetIoBoardSchedule();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -4983,6 +4985,11 @@ void Hl2Backend::applyIoBoardFrequency()
     // board a slightly wrong frequency for no reason.
     const auto target = static_cast<quint64>(hz + 0.5);
 
+    // The band, from the same bandKeyForHz() table the per-band memory uses, so
+    // "which band is this" has exactly one answer in this backend.
+    const QString targetBand = bandKeyForHz(hz);
+    const bool bandChanged = (targetBand != m_ioBoardBandKey);
+
     if (!m_ioBoardThrottle) {
         m_ioBoardThrottle = new QTimer(this);
         m_ioBoardThrottle->setSingleShot(true);
@@ -4990,32 +4997,83 @@ void Hl2Backend::applyIoBoardFrequency()
         connect(m_ioBoardThrottle, &QTimer::timeout, this, [this] {
             if (m_pendingIoBoardHz == 0)
                 return;                  // cooldown expired with nothing waiting
-            if (!m_connected) {
-                // Disconnected inside the cooldown. Dropping it matters because
-                // m_oneShot is NOT cleared by stop(): a bank queued now would
-                // sit there and go out as the first thing the NEXT session
-                // sends, briefly pointing an amplifier at the band this one
-                // ended on. linkUp() pushes the real frequency anyway.
-                m_pendingIoBoardHz = 0;
-                return;
-            }
             const quint64 pending = m_pendingIoBoardHz;
             m_pendingIoBoardHz = 0;
-            QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
-                                      Qt::QueuedConnection, Q_ARG(quint64, pending));
+            if (!sendIoBoardFrequency(pending))
+                return;                  // disconnected: nothing to re-arm for
             // Re-arm: a tune still in progress must keep coalescing.
             m_ioBoardThrottle->start();
         });
     }
 
-    if (m_ioBoardThrottle->isActive()) {
+    // The whole decision, in one place, from a policy the suite can exercise
+    // without a radio — see Hl2IoBoardPolicy.h for why each condition sits
+    // where it does. m_tuning counts as keyed: TUNE radiates.
+    switch (ioBoardAction(m_connected, m_keyed || m_tuning,
+                          m_ioBoardThrottle->isActive(), bandChanged)) {
+    case IoBoardAction::DropDisconnected:
+        m_pendingIoBoardHz = 0;
+        return;
+    case IoBoardAction::DeferKeyed:
+        // Deliberately not stashed: unkey re-runs this path and recomputes.
+        return;
+    case IoBoardAction::Coalesce:
         m_pendingIoBoardHz = target;     // superseded by any later request
         return;
+    case IoBoardAction::Send:
+        break;
     }
 
-    QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
-                              Qt::QueuedConnection, Q_ARG(quint64, target));
+    if (!sendIoBoardFrequency(target))
+        return;
+    m_ioBoardBandKey = targetBand;
+    // Restarted rather than left running, so the cooldown is measured from the
+    // push that actually went out — a band change mid-sweep resets the window
+    // instead of inheriting the remainder of the previous one.
     m_ioBoardThrottle->start();
+}
+
+bool Hl2Backend::sendIoBoardFrequency(quint64 hz)
+{
+    // THE ONE PLACE either edge of the throttle reaches the wire.
+    //
+    // It exists because the guard below was originally written into the
+    // trailing edge only, and the leading edge — the commoner path — silently
+    // lacked it. Two call sites that must agree about a hardware safety
+    // condition is one call site too many, so both now go through here and the
+    // asymmetry cannot come back.
+    //
+    // WHY DISCONNECTED MATTERS: MetisClient::m_oneShot is not cleared by
+    // start() or stop(), and unlike the filter byte the IO-board frequency is
+    // not re-primed through Params. A bank queued while down therefore survives
+    // as the FIRST thing the next session transmits, briefly pointing an
+    // amplifier at the band this session ended on. linkUp() pushes the real
+    // frequency immediately afterwards, so dropping it here loses nothing.
+    if (!m_connected) {
+        m_pendingIoBoardHz = 0;
+        return false;
+    }
+    QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
+                              Qt::QueuedConnection, Q_ARG(quint64, hz));
+    return true;
+}
+
+void Hl2Backend::resetIoBoardSchedule()
+{
+    // Called on linkDown. The timer's armed/pending state is about a session:
+    // left running across a disconnect, a reconnect inside the residual window
+    // takes the coalescing branch and stores the connect-time frequency as
+    // PENDING instead of pushing it — delaying the board by up to the cooldown
+    // at exactly the moment linkUp() intends an immediate push.
+    //
+    // The band key is cleared too, so the first push of the next session is
+    // always treated as a band change and takes the leading edge. Assuming the
+    // previous session's band still applies is precisely the assumption that
+    // cannot be made across a disconnect.
+    if (m_ioBoardThrottle)
+        m_ioBoardThrottle->stop();
+    m_pendingIoBoardHz = 0;
+    m_ioBoardBandKey.clear();
 }
 
 void Hl2Backend::applyBandFilter(const char* reason)
