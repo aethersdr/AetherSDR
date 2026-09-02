@@ -43,9 +43,8 @@ void report(const char* name, bool ok, const std::string& detail = {})
     }
 }
 
-// Puts the panel on the manual page with the Icom family selected and no
-// credentials staged — the state a first launch after a credential loss is in.
-void selectIcomManualFamily(ConnectionPanel& panel)
+// Puts the panel on the manual page with the given family selected.
+void selectManualFamily(ConnectionPanel& panel, const char* family)
 {
     if (auto* manualMode =
             panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"))) {
@@ -53,12 +52,18 @@ void selectIcomManualFamily(ConnectionPanel& panel)
     }
     auto* radioType =
         panel.findChild<QComboBox*>(QStringLiteral("connectionManualRadioType"));
-    const int icomIndex = radioType
-        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyIcom))
-        : -1;
-    if (radioType && icomIndex >= 0) {
-        radioType->setCurrentIndex(icomIndex);
+    const int index = radioType ? radioType->findData(QString::fromLatin1(family)) : -1;
+    if (radioType && index >= 0) {
+        radioType->setCurrentIndex(index);
     }
+    QApplication::processEvents();
+}
+
+// Icom with no credentials staged — the state a first launch after a
+// credential loss is in, and a bail that needs no network at all.
+void selectIcomManualFamily(ConnectionPanel& panel)
+{
+    selectManualFamily(panel, ConnectionPanel::kFamilyIcom);
     if (auto* user =
             panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomUser"))) {
         user->clear();
@@ -89,6 +94,36 @@ void checkStartupBailIsReportedUpward()
                                          : spy.at(0).at(0).toString();
     report("reported reason is non-empty for the operator",
            !reason.trimmed().isEmpty(),
+           reason.toStdString());
+}
+
+// The HL2 arm bails after a directed Metis probe rather than before it, so it
+// is the path a wiring gap would most plausibly hide in: a saved Hermes-Lite 2
+// that is powered off at boot must hand the window back like any other bail.
+//
+// This row sends one discovery datagram from an ephemeral UDP port to
+// TEST-NET-1 (RFC 5737, never routable) and waits out the probe's own 600 ms
+// deadline. There is no peer. Whether the datagram is dropped, refused by the
+// local network stack, or the socket cannot bind at all, every one of those
+// outcomes is a startup bail and must report upward — so the assertion holds
+// regardless of the runner's network.
+void checkHl2NoAnswerStartupBailIsReportedUpward()
+{
+    ConnectionPanel panel;
+    selectManualFamily(panel, ConnectionPanel::kFamilyHl2);
+
+    QSignalSpy spy(&panel, &ConnectionPanel::startupConnectUnavailable);
+    panel.probeRadio(QStringLiteral("192.0.2.10"), /*restoreSavedFamily=*/true);
+    QApplication::processEvents();
+
+    report("startup HL2 probe with no answer reports upward",
+           spy.count() == 1,
+           "emitted " + std::to_string(spy.count()) + " time(s)");
+
+    const QString reason = spy.isEmpty() ? QString()
+                                         : spy.at(0).at(0).toString();
+    report("HL2 reason names the address that did not answer",
+           reason.contains(QStringLiteral("192.0.2.10")),
            reason.toStdString());
 }
 
@@ -148,6 +183,7 @@ int main(int argc, char** argv)
     std::printf("Startup auto-connect lockout harness\n\n");
 
     checkStartupBailIsReportedUpward();
+    checkHl2NoAnswerStartupBailIsReportedUpward();
     checkInteractiveBailStaysSilent();
     checkLatchDoesNotLeakIntoInteractiveProbe();
 

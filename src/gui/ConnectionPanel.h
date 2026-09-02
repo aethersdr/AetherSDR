@@ -54,10 +54,6 @@ public:
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip, bool restoreSavedFamily = false);
-    // Reports a startup-probe bail upward as startupConnectUnavailable, and
-    // returns whether this was in fact a startup probe. No-op for interactive
-    // and automation probes, whose operator can already read setManualMessage.
-    bool reportStartupProbeFailure(const QString& reason);
 
     // Radio families the "Connect by IP" page can dial. The manual page can no
     // longer guess: a FlexRadio answers TCP/4992 and a Hermes-Lite 2 answers
@@ -192,6 +188,13 @@ private:
     };
     Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
+    // Reports a startup-probe bail upward as startupConnectUnavailable. Every
+    // probeRadio() exit that does not end in a connect request calls this —
+    // including the ones inside probeHermesLite2() and probeFlexRadio() — so
+    // that a saved radio which cannot be reached, for whatever reason, hands
+    // the window back. No-op for interactive and automation probes, whose
+    // operator can already read setManualMessage.
+    void reportStartupProbeFailure(const QString& reason);
     void resetManualConnectButton();
     // Re-activate the body layout after a page change. The overlap this used to
     // guard against — the Advanced section expanding, or the result line
@@ -308,6 +311,10 @@ private:
     bool         m_manualConnectPending{false};
     // Set for the duration of a startup probe (probeRadio's restoreSavedFamily
     // call), which is the one probe with no operator watching the manual page.
+    // Cleared in three distinct places, none redundant: by
+    // reportStartupProbeFailure() once a bail has been handed up, by
+    // setConnected(true) when the probe led to a real connection, and by
+    // onManualConnectClicked() when the operator takes over mid-flight.
     bool         m_startupProbe{false};
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry

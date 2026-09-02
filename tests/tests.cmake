@@ -3645,6 +3645,11 @@ set_tests_properties(connection_panel_size_test PROPERTIES
 
 # A startup auto-connect that gives up must reopen the connection dialog rather
 # than leave the "Looking for your radio…" overlay up with no way back.
+#
+# Socket disclosure: the HL2 row lets ConnectionPanel::probeHermesLite2() bind
+# an ephemeral UDP port (0) on 0.0.0.0 and send one Metis discovery datagram to
+# 192.0.2.10 (TEST-NET-1). No peer, no listener; bounded by the probe's own
+# 600 ms deadline. A bind failure is itself a bail the test accepts.
 add_executable(startup_autoconnect_lockout_test
     tests/startup_autoconnect_lockout_test.cpp
     src/gui/ConnectionPanel.cpp

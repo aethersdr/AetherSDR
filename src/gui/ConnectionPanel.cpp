@@ -2507,7 +2507,7 @@ void ConnectionPanel::onManualAdvancedToggled(bool checked)
     m_manualAdvancedWidget->setVisible(checked);
 }
 
-bool ConnectionPanel::reportStartupProbeFailure(const QString& reason)
+void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
 {
     // A startup probe is the one probe with nobody reading the manual page.
     // MainWindow has covered the window with "Looking for your radio…", and it
@@ -2516,10 +2516,9 @@ bool ConnectionPanel::reportStartupProbeFailure(const QString& reason)
     // dialog that will never open. The operator is left with a spinner and no
     // route back to the connection UI. Hand the reason up instead.
     if (!m_startupProbe)
-        return false;
+        return;
     m_startupProbe = false;
     emit startupConnectUnavailable(reason);
-    return true;
 }
 
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
@@ -2530,7 +2529,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 
     // Latched, not assigned: the Icom keychain read below re-enters probeRadio()
     // without restoreSavedFamily, and that second pass is still the same startup
-    // attempt. Cleared on a proven connect and by onManualConnectClicked().
+    // attempt. Cleared when a bail is reported, on a proven connect, and by
+    // onManualConnectClicked().
     if (restoreSavedFamily)
         m_startupProbe = true;
 
@@ -2752,6 +2752,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                     QStringLiteral("Could not resolve \"%1\". Check the name, or enter the "
                                    "radio's IP address instead.").arg(trimmedIp),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("Could not resolve \"%1\".").arg(trimmedIp));
                 return;
             }
             resolved = hostInfo.addresses().first();
@@ -2796,7 +2798,11 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                "radio is powered, idle, and reachable on UDP port 1024.")
                     .arg(trimmedIp),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("No Hermes-Lite 2 answered at %1.").arg(trimmedIp));
         } else if (probe == Hl2ProbeResult::NotAttempted) {
+            // probeHermesLite2() has already reported its own reason, upward
+            // included; only the button needs restoring here.
             resetManualConnectButton();
         }
         return;
@@ -2865,11 +2871,15 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 QStringLiteral("AetherSDR could not use that VPN source path. "
                                "Try Auto or choose another path."),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("The saved source path for this radio is unavailable."));
         } else {
             setManualMessage(
                 QStringLiteral("Could not open a UDP socket to probe for a "
                                "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not open a UDP socket to reach the Hermes-Lite 2."));
         }
         return Hl2ProbeResult::NotAttempted;
     }
@@ -2907,6 +2917,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     : QStringLiteral("“%1” has no IPv4 address, and a Hermes-Lite 2 "
                                      "is reachable over IPv4 only.").arg(ip),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not resolve “%1” to an IPv4 address.").arg(ip));
             return Hl2ProbeResult::NotAttempted;
         }
     }
@@ -2922,6 +2934,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
             QStringLiteral("Could not send a discovery request to %1: %2")
                 .arg(dest.toString(), hpsdr.errorString()),
             true);
+        reportStartupProbeFailure(
+            QStringLiteral("Could not send a discovery request to %1.").arg(dest.toString()));
         return Hl2ProbeResult::NotAttempted;
     }
 
@@ -2982,6 +2996,9 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
                                    "and can't be shared.").arg(ip),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("The Hermes-Lite 2 at %1 is in use by another client.")
+                        .arg(ip));
                 return Hl2ProbeResult::Answered;
             }
 
@@ -3018,6 +3035,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
+        reportStartupProbeFailure(
+            QStringLiteral("The saved source path for this radio is unavailable."));
         return;
     }
 
@@ -3035,6 +3054,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                                "address and try Advanced only if your VPN exposes multiple adapters.")
                     .arg(trimmedIp),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("No radio responded at %1.").arg(trimmedIp));
         }
     });
 
@@ -3192,6 +3213,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
+        reportStartupProbeFailure(
+            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString()));
     });
 }
 
