@@ -4891,13 +4891,29 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     if (m_adcOverloadEdges > 0
         && (!m_adcOverloadClock.isValid()
             || m_adcOverloadClock.hasExpired(kAdcOverloadWarnIntervalMs))) {
-        // More than one transition means the clock is valid: the first ever
-        // transition always reports immediately, so anything counted beyond it
-        // was counted against a running window.
+        // Why reading elapsed() here is safe: more than one transition implies
+        // the clock is valid. This flush is unconditional on every telemetry
+        // update and the counter rises by at most one per update, so the first
+        // transition after an invalid clock always flushes in the same call and
+        // resets the count. The count can only exceed one against a running
+        // window.
+        //
+        // What the single-transition branch does NOT mean. It is not "this is
+        // the first overload ever" — it is "exactly one transition was seen in
+        // this window". That lone transition may have arrived at any point since
+        // the window opened, so a bare message can lag the event by up to
+        // kAdcOverloadWarnIntervalMs. Accepted deliberately: it is the cost of
+        // the rate limit, one transition is a hint rather than an emergency, and
+        // an isolated overload after a quiet period still reports immediately
+        // because the clock is long expired by then.
         if (m_adcOverloadEdges > 1)
-            qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate"
-                       << "(" << m_adcOverloadEdges << "times in"
-                       << m_adcOverloadClock.elapsed() << "ms)";
+            // noquote + one composed string: streaming "(" as its own item makes
+            // QDebug insert a space after it and print "( 51 times in 10000 ms)".
+            qWarning().noquote()
+                << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate"
+                << QStringLiteral("(%1 times in %2 ms)")
+                       .arg(m_adcOverloadEdges)
+                       .arg(m_adcOverloadClock.elapsed());
         else
             qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate";
         m_adcOverloadClock.restart();
