@@ -744,6 +744,8 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/LpMeterProtocol.cpp
+    src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -965,6 +967,7 @@ set(GUI_SOURCES
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
     src/gui/VkampApplet.cpp
+    src/gui/LpMeterApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp

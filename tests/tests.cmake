@@ -2006,6 +2006,14 @@ target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
+add_executable(lp100a_protocol_test
+    tests/lp100a_protocol_test.cpp
+    src/core/LpMeterProtocol.cpp
+)
+target_include_directories(lp100a_protocol_test PRIVATE src)
+target_link_libraries(lp100a_protocol_test PRIVATE Qt6::Core)
+add_test(NAME lp100a_protocol_test COMMAND lp100a_protocol_test)
+
 add_executable(spe_protocol_test
     tests/spe_protocol_test.cpp
     src/core/SpeProtocol.cpp
@@ -3525,6 +3533,15 @@ add_executable(memory_field_values_test
 target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
+
+add_executable(ctcss_tone_label_test
+    tests/ctcss_tone_label_test.cpp
+)
+target_include_directories(ctcss_tone_label_test PRIVATE src)
+target_link_libraries(ctcss_tone_label_test PRIVATE Qt6::Widgets)
+add_test(NAME ctcss_tone_label_test COMMAND ctcss_tone_label_test)
+set_tests_properties(ctcss_tone_label_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(local_memory_store_test
     tests/local_memory_store_test.cpp

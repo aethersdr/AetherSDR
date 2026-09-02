@@ -392,6 +392,20 @@ jobs:
           test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "9"
           ctest --test-dir build -R "$ICOM_GATE" --no-tests=error --output-on-failure
 
+      # The CTCSS list is a shared RX/VFO presentation surface used by every
+      # backend that publishes FM tone controls. This test renders the custom
+      # item delegate and verifies the popup row cap. The existing focused
+      # wiring contract pins both full-desktop consumers to the shared
+      # population, label and style paths; merely building either test would
+      # not exercise those claims on a pull request.
+      - name: Test shared CTCSS tone presentation
+        env:
+          QT_QPA_PLATFORM: offscreen
+          CTCSS_PRESENTATION_GATE: "^(ctcss_tone_label_test|fm_tone_presentation_contract)$"
+        run: |
+          test "$(ctest --test-dir build -N -R "$CTCSS_PRESENTATION_GATE" | sed -n 's/^Total Tests: //p')" = "2"
+          ctest --test-dir build -R "$CTCSS_PRESENTATION_GATE" --no-tests=error --output-on-failure
+
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
       # without anyone noticing, because nothing made the hit rate visible.

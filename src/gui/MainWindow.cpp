@@ -3266,7 +3266,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
     showOrRaisePersistent(m_radioSetupDialog,
                           &m_radioModel, m_audio,
                           &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
+                          &m_lpMeterConn);
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -3774,6 +3775,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // this function returns, leaving the amp holding a stale half-open
     // connection instead of seeing a clean close.
     m_vkampConn.disconnect();
+    // The LP-100A is likewise independent of the radio lifecycle and may be
+    // connected through a shared ser2net proxy. Close it explicitly while
+    // the event loop is still live instead of relying on member destruction.
+    m_lpMeterConn.disconnect();
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands

@@ -39,6 +39,13 @@ context that would otherwise live in tribal knowledge.
   a dedicated `SpeConnection`/`SpeApplet` pair with a polled ASCII/CSV
   status protocol.
 
+- [`lp-100a-wattmeter-design.md`](lp-100a-wattmeter-design.md) — design note
+  for TelePost LP-100A wattmeter support (serial or ser2net), a peripheral
+  *instrument* rather than an amplifier: a dedicated `LpMeterConnection`/
+  `LpMeterApplet` pair. Read it for the two protocol facts that look like
+  implementation gaps — phase carries no sign on the wire, and a record is not
+  a coherent snapshot — and for the shared-transport poll gate.
+
 - [`radio-capabilities-map.md`](radio-capabilities-map.md) — every
   `RadioCapabilities` field, what each backend declares, and where the value is
   read. Read before adding a field: the struct defaults to `false`, so a

@@ -293,6 +293,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/LpMeterConnection.h": {
+  "tag": "peripheral(lp100a)",
+  "note": "Direct serial/ser2net client for the TelePost LP-100A digital vector RF wattmeter — a standalone RS-232 instrument with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Poll-only (the meter never pushes), and the transport is commonly shared with other polling clients, so the poll loop is gated rather than free-running. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/lp-100a-wattmeter-design.md.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/MacMicPermission.h": {
   "tag": "ui-support",
   "note": "macOS mic permission dialog at app startup; OS permission plumbing, no radio state \u2014 belongs in the client app",

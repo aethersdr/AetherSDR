@@ -1,6 +1,6 @@
 #include "VfoWidget.h"
 #include "FmTonePresentation.h"
-#include "core/CtcssTones.h"
+#include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
@@ -2322,25 +2322,21 @@ void VfoWidget::buildTabContent()
             // Tone value — from core/CtcssTones.h, the same table the RX
             // applet's dropdown and the automation bridge's `slice tone`
             // validation use. This list used to be a third hand-typed copy of
-            // the same 41 doubles; the values agreed, which is exactly how a
+            // the same 50 doubles; the values agreed, which is exactly how a
             // copy survives long enough to stop agreeing.
             m_fmToneValueCmb = new GuardedComboBox;
             m_fmToneValueCmb->setAccessibleName("FM tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
-                m_fmToneValueCmb->addItem(QString::number(t.frequency, 'f', 1),
-                                           QString::number(t.frequency, 'f', 1));
-            }
-            AetherSDR::applyComboStyle(m_fmToneValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_fmToneValueCmb);
+            AetherSDR::applyComboStyle(
+                m_fmToneValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
 
             m_fmToneRxValueCmb = new GuardedComboBox;
             m_fmToneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                m_fmToneRxValueCmb->addItem(frequency, frequency);
-            }
-            AetherSDR::applyComboStyle(m_fmToneRxValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_fmToneRxValueCmb);
+            AetherSDR::applyComboStyle(
+                m_fmToneRxValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_fmToneRxValueCmb->setVisible(false);
             m_fmToneRxContainer = new QWidget;
             auto* toneRxRow = new QHBoxLayout(m_fmToneRxContainer);
@@ -6285,13 +6281,10 @@ void VfoWidget::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < m_fmToneValueCmb->count(); ++i) {
-        const QString frequency = m_fmToneValueCmb->itemData(i).toString();
-        m_fmToneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, frequency));
-        m_fmToneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, frequency));
-    }
+    configureCtcssToneComboLabels(
+        m_fmToneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_fmToneRxValueCmb, presentation, FmToneRole::Rx);
     const bool modeEligible = m_slice && hasFmToneControls(m_slice->mode());
     const QString selected = m_slice
         ? m_slice->fmToneMode() : m_fmToneModeCmb->currentData().toString();
