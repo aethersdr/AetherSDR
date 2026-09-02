@@ -771,6 +771,13 @@ void AnanBackend::beginRateChange(int newRateKsps)
     // build to another thread alone would do nothing if the old
     // stop-before-build ordering were kept, since the session would still
     // sit torn down for however long the build takes either way.
+    // Remember what is ACTUALLY running before overwriting it. On the
+    // failure path below, the old channel and old session keep running at
+    // this rate (finishRateChange()'s own comment) while these two fields
+    // would otherwise keep describing a rate that never landed -- and
+    // emitPanState() reports from m_pendingDspConfig, so every consumer of
+    // pan bandwidth would be told the change succeeded.
+    m_preRateChangeKsps = m_pendingParams.ddc0RateKsps;
     m_pendingParams.ddc0RateKsps = newRateKsps;
     m_pendingDspConfig.inputSampleRateHz = newRateKsps * 1000;
     // Refresh from CURRENT live operator state, not connectRadio()'s
@@ -822,6 +829,17 @@ void AnanBackend::finishRateChange(quint64 generation, bool ok, const QString& e
         return;   // superseded by a newer rate change/connect/disconnect
 
     if (!ok) {
+        // Roll the reported rate back to the one still running BEFORE
+        // emitting pan state. AnanDroopCalibrator infers "the rate landed"
+        // from pan bandwidth reaching its target; told the failed rate had
+        // landed, it would measure the OLD rate's spectrum into the NEW
+        // rate's correction table and persist it -- one rate's droop curve
+        // applied to another rate's bins, which is exactly the cross-rate
+        // corruption anan_rxdsp_handedness_test's Group 6 exists to prevent.
+        if (m_preRateChangeKsps > 0) {
+            m_pendingParams.ddc0RateKsps = m_preRateChangeKsps;
+            m_pendingDspConfig.inputSampleRateHz = m_preRateChangeKsps * 1000;
+        }
         emit connectionError(error);
         // Safe to clear m_rateChanging immediately here, unlike
         // startP2ClientSession()'s own failure branch below: the OLD

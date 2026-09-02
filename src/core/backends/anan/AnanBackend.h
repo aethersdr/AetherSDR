@@ -272,6 +272,12 @@ private:
     // `start` action guards on settingsScope().radioId().isEmpty()
     // explicitly, matching freqcal's own guard, rather than trusting isValid().
     QString m_radioSerial;
+
+    // The DDC0 rate actually running, captured at the top of
+    // beginRateChange() before the pending fields are overwritten, so
+    // finishRateChange()'s failure path can put them back. 0 until the first
+    // rate change. See beginRateChange()'s own comment.
+    int m_preRateChangeKsps = 0;
 };
 
 }  // namespace AetherSDR::anan
