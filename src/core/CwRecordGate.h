@@ -82,9 +82,10 @@ constexpr long long cwOverHangMs(int wpm)
 // The over-scoped variant. The hang must outlast the longest silence WITHIN
 // the over, and that silence is the inter-word gap at the SLOWEST speed being
 // keyed — which is not always the mirror's speed: CWX keys at CwxModel's own
-// per-segment wpm, independent of TransmitModel::cwSpeed. A 15 WPM macro
-// against a 30 WPM mirror put a 560 ms word gap against a 320 ms hang, so the
-// latch aged inside every word gap and the over split per word (#4281).
+// per-segment wpm, independent of TransmitModel::cwSpeed. A 15 WPM segment
+// against a 30 WPM mirror would put a 560 ms word gap against a 320 ms hang,
+// so the latch would age inside every word gap and split the over per word
+// (#4281).
 //
 // overrideWpm carries the slowest speed announced for the CURRENT over
 // (min-tracked as CWX segments announce; 0 = no override, a paddle over).

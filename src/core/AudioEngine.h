@@ -233,10 +233,11 @@ public:
     }
     // A speed our keyer will send THIS over at, min-tracked into the over-hang
     // (#4281): CWX keys at CwxModel's own per-segment wpm, independent of the
-    // TransmitModel::cwSpeed mirror, and a 15 WPM macro against a 30 WPM
-    // mirror aged the latch inside every 560 ms word gap (hang: 320 ms). All
-    // of a message's segments announce at send time, so min-tracking sizes
-    // the hang from the message's slowest speed; see cwOverHangMs(int, int).
+    // TransmitModel::cwSpeed mirror, and a 15 WPM segment against a 30 WPM
+    // mirror would age the latch inside every 560 ms word gap (hang: 320 ms).
+    // All of a message's segments announce at send time, so min-tracking
+    // sizes the hang from the message's slowest speed; see
+    // cwOverHangMs(int, int).
     void noteCwOverSpeed(int wpm) {
         if (wpm <= 0) {
             return;

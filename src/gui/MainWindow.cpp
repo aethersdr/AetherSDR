@@ -1703,7 +1703,9 @@ MainWindow::MainWindow(QWidget* parent)
         // Evaluated at queued-delivery time on the recorder's thread, so blocks
         // already in flight when ownership flips are gated by the NEW owner —
         // bounded (tens of ms) leakage in both directions at over boundaries.
-        if (!micTapOwnsRecorder(m_audio->txRecorderSource())) return;
+        if (!micTapOwnsRecorder(m_audio->txRecorderSource())) {
+            return;
+        }
         m_qsoRecorder->feedTxAudio(pcm);
     });
     // Host-modulated backends (HL2) take their transmit audio from the SAME tap

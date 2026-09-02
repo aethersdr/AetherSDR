@@ -1177,12 +1177,14 @@ void MainWindow::wireRadioModel()
             // The over-hang must outlast THIS over's slowest inter-word gap,
             // and CWX keys at its own per-segment speed, independent of the
             // TransmitModel::cwSpeed mirror that sizes the hang — a 15 WPM
-            // macro against a 30 WPM mirror aged the latch inside every word
-            // gap and split the over per word (#4281). Every segment of a
+            // segment against a 30 WPM mirror would age the latch inside every
+            // word gap and split the over per word (#4281). Every segment of a
             // message announces here at send time, so min-tracking them sizes
             // the hang from the message's slowest speed; the pump clears the
             // override when the over ends.
-            if (m_audio) m_audio->noteCwOverSpeed(wpm);
+            if (m_audio) {
+                m_audio->noteCwOverSpeed(wpm);
+            }
             if (m_cwxLocalKeyer) m_cwxLocalKeyer->start(text, wpm);
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionCancelled,
