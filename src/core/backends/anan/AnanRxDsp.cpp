@@ -221,8 +221,24 @@ void AnanRxDsp::setDroopCorrectionTable(int rateKsps, const std::vector<float>& 
     m_droopTables[rateKsps] = t;
 }
 
+void AnanRxDsp::setDroopCorrectionBypassed(bool bypassed)
+{
+    m_droopBypassed = bypassed;
+}
+
+void AnanRxDsp::clearDroopCorrectionTables()
+{
+    m_droopTables.clear();
+}
+
 const DroopCorrectionTable& AnanRxDsp::droopTableForRate(int rateKsps) const noexcept
 {
+    // Returning the kDroopCorrectionZero OBJECT (not a zero-valued copy) is
+    // what also suppresses the edge fade in processIqBlock(), which tests
+    // identity against exactly this address -- see
+    // setDroopCorrectionBypassed()'s comment.
+    if (m_droopBypassed)
+        return kDroopCorrectionZero;
     const auto it = m_droopTables.constFind(rateKsps);
     return it != m_droopTables.constEnd() ? it.value() : kDroopCorrectionZero;
 }

@@ -7920,6 +7920,15 @@ QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& v
                                       "before calibrating"));
         }
         cal.start();
+        // start() refuses (no active panadapter) by emitting error() and
+        // returning, leaving the phase Idle. Reporting ok:true with
+        // running:false there makes the refusal invisible to automation --
+        // the #5263 loud-drop shape: a script would sit polling `status` for
+        // a sweep that was never going to begin.
+        if (!cal.isRunning()) {
+            return err(QStringLiteral("droopcal: sweep did not start -- no active "
+                                      "panadapter to sweep"));
+        }
         return report();
     }
     if (verb == QLatin1String("stop")) {
@@ -7927,7 +7936,20 @@ QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& v
         return report();
     }
     if (verb == QLatin1String("apply")) {
+        // applyResult() completes synchronously (AnanBackend's droop.apply
+        // handler has no device round trip), reporting any refusal -- no
+        // radio connected, a write the settings store declined, a stored row
+        // with a newer schema -- through error() just before finished(false).
+        // Capturing it here is what keeps `droopcal apply` from answering
+        // ok:true for a correction that was never saved.
+        QString failure;
+        const QMetaObject::Connection conn =
+            QObject::connect(&cal, &AnanDroopCalibrator::error, &cal,
+                             [&failure](const QString& reason) { failure = reason; });
         cal.applyResult();
+        QObject::disconnect(conn);
+        if (!failure.isEmpty())
+            return err(QStringLiteral("droopcal: %1").arg(failure));
         return report();
     }
 

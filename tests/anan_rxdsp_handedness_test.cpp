@@ -41,6 +41,7 @@
 #include <QCoreApplication>
 
 #include <cmath>
+#include <functional>
 #include <complex>
 #include <cstdio>
 #include <numbers>
@@ -614,6 +615,140 @@ int main(int argc, char** argv)
               "after a live rate change, the emitted frame's non-tail bins use the NEW "
               "rate's (96 ksps) droop table -- proving m_config.inputSampleRateHz was "
               "updated by the rebuild, not left stale at the connect-time 48 ksps");
+    }
+
+    // ---- Group 7: the sweep bypass, and forgetting a radio's tables ----
+    // Two lifecycle rules the droop feature depends on, both invisible to
+    // Groups 5 and 6 because both of those only ever measure the armed path.
+    //
+    // (a) BYPASS. AnanDroopCalibrator taps the same spectrumReady bins the
+    //     panadapter paints, so it measures its own corrected output unless
+    //     the correction is suspended for the sweep. The subtle half is the
+    //     EDGE FADE: processIqBlock() decides whether to fade by testing
+    //     `&droopTable != &kDroopCorrectionZero`, an IDENTITY test -- so
+    //     "bypass" implemented as "push an all-zero table" would store a
+    //     copy, keep failing that test, and leave the synthetic fade running
+    //     to be measured as if it were hardware droop. The pin below is
+    //     therefore equality with the RAW reference across the WHOLE frame,
+    //     tails included, not just the non-tail bins the other groups check.
+    //
+    // (b) CLEAR. m_droopTables outlives any one connection (this object is
+    //     constructed once per backend), so a second radio in the same
+    //     session would render through the first one's corrections. Clearing
+    //     must return the same rate to the true zero path -- again including
+    //     the fade, for the same identity reason.
+    //
+    // Each case needs its OWN AnanRxDsp: smoothSpectrumBins() passes only the
+    // FIRST emitted frame through untouched (m_smoothedBins starts empty),
+    // and a comparison against a raw reference is only exact on that frame.
+    {
+        constexpr int kFft = 1024;
+        constexpr int kRateKsps = 48;
+
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = kRateKsps * 1000;
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.fftSize = kFft;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 2900.0;
+        cfg.agcMode = 0;
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;
+
+        // Non-uniform and non-zero, so "suppressed" cannot pass by accident.
+        DroopCorrectionTable syntheticTable{};
+        for (std::size_t k = 0; k < syntheticTable.size(); ++k)
+            syntheticTable[k] = 5.5f + 0.02f * static_cast<float>(k % 40);
+        const std::vector<float> tableVec(syntheticTable.begin(), syntheticTable.end());
+
+        const std::vector<std::complex<float>> iq = makeTone(kFft, 41.0, /*conjugate=*/false);
+
+        // The raw reference: the same conjugation convention processIqBlock()
+        // uses, through a standalone AnanSpectrum with no AnanRxDsp involved.
+        std::vector<std::complex<float>> conjugated(iq.size());
+        for (std::size_t k = 0; k < iq.size(); ++k)
+            conjugated[k] = std::conj(iq[k]);
+        AnanSpectrum refSpectrum(kFft);
+        std::vector<float> rawBins;
+        check(refSpectrum.process(conjugated, rawBins) == 1,
+              "bypass test: reference AnanSpectrum produces exactly one frame");
+
+        // Captures the first emitted frame from a freshly configured AnanRxDsp
+        // after `arrange` has had its way with the droop tables.
+        const auto firstFrameWith = [&](const std::function<void(AnanRxDsp&)>& arrange) {
+            AnanRxDsp dsp;
+            std::string err;
+            check(dsp.configure(cfg, &err),
+                  err.empty() ? "bypass test: configure() succeeds" : err.c_str());
+            dsp.setDroopCorrectionTable(kRateKsps, tableVec);
+            arrange(dsp);
+            std::vector<float> emitted;
+            bool got = false;
+            const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+                [&](const std::vector<float>& bins) {
+                    if (!got) { emitted = bins; got = true; }
+                });
+            dsp.processIqBlock(iq);
+            QObject::disconnect(conn);
+            check(got, "bypass test: processIqBlock() emits one spectrum frame");
+            return emitted;
+        };
+
+        // `report` only for the checks that EXPECT equality -- the negative
+        // controls below call this too, and printing their first differing
+        // bin would decorate a fully passing run with what looks like failure
+        // output.
+        const auto equalsRawEverywhere = [&](const std::vector<float>& emitted,
+                                             bool report) {
+            if (emitted.size() != rawBins.size())
+                return false;
+            bool equal = true;
+            for (std::size_t k = 0; k < emitted.size(); ++k) {
+                if (std::fabs(emitted[k] - rawBins[k]) > 1.0e-4f) {
+                    if (!report)
+                        return false;
+                    equal = false;
+                    std::fprintf(stderr, "  bin %zu: emitted=%.6f raw=%.6f\n",
+                                 k, emitted[k], rawBins[k]);
+                    break;
+                }
+            }
+            return equal;
+        };
+
+        // Control: armed, the table really does change the bins. Without this
+        // the two suppression checks below would pass on a broken table push.
+        const std::vector<float> armed = firstFrameWith([](AnanRxDsp&) {});
+        check(!equalsRawEverywhere(armed, /*report=*/false),
+              "control: with the table armed, the emitted frame differs from raw");
+
+        const std::vector<float> bypassed =
+            firstFrameWith([](AnanRxDsp& d) { d.setDroopCorrectionBypassed(true); });
+        check(equalsRawEverywhere(bypassed, /*report=*/true),
+              "with the correction bypassed, the emitted frame equals the raw FFT bins "
+              "across the WHOLE frame -- neither the per-bin correction nor the edge "
+              "fade survives, so a calibration sweep measures the radio and not its "
+              "own corrected output");
+
+        const std::vector<float> cleared =
+            firstFrameWith([](AnanRxDsp& d) { d.clearDroopCorrectionTables(); });
+        check(equalsRawEverywhere(cleared, /*report=*/true),
+              "after clearDroopCorrectionTables(), the same rate falls back to the true "
+              "zero path (fade included) -- a second radio in one session cannot inherit "
+              "the first one's corrections");
+
+        // The bypass is a sweep property, not a table property: lifting it
+        // must bring the SAME tables back without re-pushing them.
+        const std::vector<float> restored = firstFrameWith([](AnanRxDsp& d) {
+            d.setDroopCorrectionBypassed(true);
+            d.setDroopCorrectionBypassed(false);
+        });
+        check(!equalsRawEverywhere(restored, /*report=*/false) && restored == armed,
+              "lifting the bypass restores the identical corrected frame -- the tables "
+              "were hidden, never discarded, so an aborted sweep cannot lose a "
+              "calibration");
     }
 
     if (g_failures == 0)

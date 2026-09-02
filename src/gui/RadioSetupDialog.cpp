@@ -3573,13 +3573,23 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     QPointer<QPushButton> applyGuard(applyBtn);
     QPointer<QPushButton> cancelGuard(cancelBtn);
 
-    connect(&cal, &AnanDroopCalibrator::started, this, [startStopGuard, statusGuard, &cal] {
-        if (startStopGuard)
-            startStopGuard->setText(QStringLiteral("Stop"));
-        if (statusGuard)
-            statusGuard->setText(QStringLiteral("Sweeping — rate 1 of %1…")
-                                     .arg(cal.totalRates()));
-    });
+    // error() is always followed by finished(false) — an aborted sweep and a
+    // refused Apply both report the reason and then wind down. Without this
+    // latch the finished handler's generic text overwrites the specific
+    // reason the operator actually needs, so "Error: no spectrum frame at 768
+    // ksps…" would flash and be replaced by "Sweep complete — review the
+    // result below". Cleared wherever a new operation starts.
+    auto errorLatch = std::make_shared<bool>(false);
+
+    connect(&cal, &AnanDroopCalibrator::started, this,
+        [startStopGuard, statusGuard, errorLatch, &cal] {
+            *errorLatch = false;
+            if (startStopGuard)
+                startStopGuard->setText(QStringLiteral("Stop"));
+            if (statusGuard)
+                statusGuard->setText(QStringLiteral("Sweeping — rate 1 of %1…")
+                                         .arg(cal.totalRates()));
+        });
     connect(&cal, &AnanDroopCalibrator::progress, this,
         [progressGuard, statusGuard](int rateIndex, int totalRates, int percent) {
             if (progressGuard)
@@ -3590,10 +3600,14 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
             }
         });
     connect(&cal, &AnanDroopCalibrator::finished, this,
-        [startStopGuard, statusGuard, applyGuard, cancelGuard, refreshSummary, &cal](bool applied) {
+        [startStopGuard, statusGuard, applyGuard, cancelGuard, refreshSummary, errorLatch,
+         &cal](bool applied) {
             if (startStopGuard)
                 startStopGuard->setText(QStringLiteral("Start Sweep"));
-            if (statusGuard) {
+            // "live and saved" only when the backend confirmed BOTH — see
+            // AnanDroopCalibrator::applyResult(), which no longer reports
+            // success for a radio that went away or a write the store refused.
+            if (statusGuard && !*errorLatch) {
                 statusGuard->setText(applied
                     ? QStringLiteral("Applied — the measured correction is now live and saved.")
                     : (cal.hasResult()
@@ -3606,18 +3620,24 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
                 cancelGuard->setEnabled(cal.hasResult());
             refreshSummary();
         });
-    connect(&cal, &AnanDroopCalibrator::error, this, [statusGuard](const QString& reason) {
-        if (statusGuard)
-            statusGuard->setText(QStringLiteral("Error: %1").arg(reason));
-    });
+    connect(&cal, &AnanDroopCalibrator::error, this,
+        [statusGuard, errorLatch](const QString& reason) {
+            *errorLatch = true;
+            if (statusGuard)
+                statusGuard->setText(QStringLiteral("Error: %1").arg(reason));
+        });
 
-    connect(startStopBtn, &QPushButton::clicked, this, [&cal] {
+    connect(startStopBtn, &QPushButton::clicked, this, [&cal, errorLatch] {
+        *errorLatch = false;
         if (cal.isRunning())
             cal.stop();
         else
             cal.start();
     });
-    connect(applyBtn, &QPushButton::clicked, this, [&cal] { cal.applyResult(); });
+    connect(applyBtn, &QPushButton::clicked, this, [&cal, errorLatch] {
+        *errorLatch = false;
+        cal.applyResult();
+    });
     connect(cancelBtn, &QPushButton::clicked, this,
         [&cal, applyGuard, cancelGuard, refreshSummary, statusGuard] {
             cal.clear();

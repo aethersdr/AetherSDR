@@ -177,6 +177,35 @@ public:
     // need.
     Q_INVOKABLE void setDroopCorrectionTable(int rateKsps, const std::vector<float>& table);
 
+    // Suspends droop correction WITHOUT discarding the measured tables, so
+    // AnanDroopCalibrator can measure the radio instead of measuring its own
+    // output. The sweep taps the same spectrumReady bins the panadapter
+    // paints; with correction live, the second sweep an operator runs sees an
+    // already-flattened curve, computes a near-zero table from it, and Apply
+    // persists that over the good one.
+    //
+    // A bypass FLAG rather than "push kDroopCorrectionZero for each rate":
+    // pushing a zero-valued table through setDroopCorrectionTable() stores a
+    // COPY, so droopTableForRate() no longer returns the kDroopCorrectionZero
+    // object itself and processIqBlock()'s `&droopTable != &kDroopCorrectionZero`
+    // identity test still reads true -- the synthetic 12 dB edge fade would
+    // stay on and be measured as if it were hardware droop. Routing the
+    // bypass through droopTableForRate() keeps both suppressions on the one
+    // switch they were always meant to share. It is also non-destructive: an
+    // abort, a disconnect, or a crash mid-sweep cannot lose a calibration
+    // that was only ever hidden, never overwritten.
+    Q_INVOKABLE void setDroopCorrectionBypassed(bool bypassed);
+    [[nodiscard]] bool droopCorrectionBypassed() const noexcept { return m_droopBypassed; }
+
+    // Forgets every measured table. This object is constructed ONCE and
+    // survives disconnect/reconnect, while the tables are per-RADIO -- so
+    // without this, calibrated G2 #1 -> disconnect -> G2 #2 renders #2's
+    // spectrum through #1's per-bin corrections (plus the edge fade on top),
+    // with the Droop tab showing nothing, since it reads the calibrator's
+    // measuredTables() and those are empty. AnanBackend calls this on
+    // disconnect and again before seeding a fresh connect's tables.
+    Q_INVOKABLE void clearDroopCorrectionTables();
+
     // Exposes the active channel for testing installChannel()'s reapply
     // behaviour (mode/filter/AGC/shift surviving a rebuild swap) without a
     // live radio -- matches WdspChannel's own *ForTest accessor convention.
@@ -307,6 +336,10 @@ private:
     // and the correction is applied to m_bins after the FFT, independent of
     // which WdspChannel produced the IQ that fed it.
     QMap<int, DroopCorrectionTable> m_droopTables;
+    // See setDroopCorrectionBypassed(). Deliberately NOT cleared by
+    // clearDroopCorrectionTables(): "am I mid-sweep" is a property of the
+    // sweep, not of which tables happen to be loaded.
+    bool m_droopBypassed = false;
     [[nodiscard]] const DroopCorrectionTable& droopTableForRate(int rateKsps) const noexcept;
 };
 

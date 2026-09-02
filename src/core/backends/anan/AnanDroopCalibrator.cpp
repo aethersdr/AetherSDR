@@ -1,7 +1,10 @@
 #include "core/backends/anan/AnanDroopCalibrator.h"
 
+#include "core/backends/IRadioBackend.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
+
+#include "core/AppSettings.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -106,6 +109,44 @@ QMap<int, anan::DroopCorrectionTable> AnanDroopCalibrator::loadTables(
     return tables;
 }
 
+QString AnanDroopCalibrator::saveTables(const RadioSettingsScope& scope,
+                                       const QMap<int, anan::DroopCorrectionTable>& tables)
+{
+    if (tables.isEmpty())
+        return QStringLiteral("no valid correction table to save");
+    if (!scope.isValid())
+        return QStringLiteral("no settings scope for this radio");
+
+    int storedSchema = 0;
+    // featureExact(), not feature(): this is a WRITER judging the row it is
+    // about to replace, and feature()'s exact-radio -> family-wide fallback
+    // would silently fold a shared default into this radio's own row
+    // (PR #4614 review). An absent row reads back as schema 0.
+    QJsonObject doc = scope.featureExact(QLatin1String(kFeature), &storedSchema);
+    if (storedSchema > kSchemaVersion) {
+        return QStringLiteral("stored calibration is schema v%1, newer than this "
+                              "build understands (v%2) -- refusing to overwrite it")
+            .arg(storedSchema)
+            .arg(kSchemaVersion);
+    }
+
+    for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
+        QJsonArray arr;
+        for (const float v : it.value())
+            arr.append(static_cast<double>(v));
+        doc.insert(QString::number(it.key()), arr);
+    }
+
+    // setFeature() refuses while the store is not ReadyToSave. Reporting that
+    // as success is the #4621 failure shape -- nothing reads a correction
+    // table back off the radio, so the operator would only discover it on the
+    // next connect, as a droop that quietly returned.
+    if (!scope.setFeature(QLatin1String(kFeature), kSchemaVersion, doc))
+        return QStringLiteral("the settings store refused the write");
+    AppSettings::instance().save();
+    return {};
+}
+
 // ---- sweep control --------------------------------------------------------
 
 void AnanDroopCalibrator::start()
@@ -128,6 +169,10 @@ void AnanDroopCalibrator::start()
     m_pendingCaptures.clear();
     m_haveLatestFrame = false;
     m_rateIdx = 0;
+
+    // BEFORE the tap is connected and before the first rate is requested:
+    // every frame this sweep ever sees must be uncorrected.
+    setDspBypass(true);
 
     m_clock.start();
     m_spectrumConn = connect(m_radio, &RadioModel::panFeedSpectrumReady,
@@ -153,6 +198,19 @@ void AnanDroopCalibrator::applyResult()
     if (isRunning() || m_measuredTables.isEmpty() || !m_radio)
         return;
 
+    IRadioBackend* backend = m_radio->backend();
+    if (!backend) {
+        // invokeBackendExtension() is a documented no-op with nothing
+        // connected, so this is the exact case that used to print
+        // "Applied -- the measured correction is now live and saved" over a
+        // radio that had gone away. The measurements are KEPT: reconnecting
+        // and pressing Apply again is a real recovery.
+        emit error(QStringLiteral("no radio connected -- the measured correction "
+                                  "was not applied or saved"));
+        emit finished(false);
+        return;
+    }
+
     QVariantMap byRate;
     for (auto it = m_measuredTables.constBegin(); it != m_measuredTables.constEnd(); ++it) {
         QVariantList list;
@@ -161,10 +219,46 @@ void AnanDroopCalibrator::applyResult()
             list.append(static_cast<double>(v));
         byRate.insert(QString::number(it.key()), list);
     }
-    // Fire-and-forget (requestId 0): completes locally, same as
-    // Hl2Backend's freqcal.set -- no device round trip to await.
+
+    // Correlated, not fire-and-forget. AnanBackend's droop.apply handler
+    // completes LOCALLY -- no device round trip, same as Hl2Backend's
+    // freqcal.set -- so it emits its reply synchronously, inside the invoke
+    // below, over a same-thread direct connection. Connecting first and
+    // reading the flags after the call returns is therefore deterministic
+    // rather than a race, and needs no timer: if nothing answered, the seam
+    // did not behave as documented and that is itself reportable. The id only
+    // has to be unique within that one synchronous window.
+    const quint64 requestId = ++m_applyRequestId;
+    bool replied = false;
+    QString failure;
+    const QMetaObject::Connection okConn = connect(
+        backend, &IRadioBackend::extensionResult, this,
+        [&replied, requestId](quint64 id, const QVariant&) {
+            if (id == requestId)
+                replied = true;
+        });
+    const QMetaObject::Connection errConn = connect(
+        backend, &IRadioBackend::extensionError, this,
+        [&replied, &failure, requestId](quint64 id, const QString& reason) {
+            if (id == requestId) {
+                replied = true;
+                failure = reason;
+            }
+        });
+
     m_radio->invokeBackendExtension(QStringLiteral("anan"), QStringLiteral("droop.apply"),
-                                    0, QVariant(byRate));
+                                    requestId, QVariant(byRate));
+
+    QObject::disconnect(okConn);
+    QObject::disconnect(errConn);
+
+    if (!replied)
+        failure = QStringLiteral("the backend did not answer the apply request");
+    if (!failure.isEmpty()) {
+        emit error(failure);
+        emit finished(false);
+        return;
+    }
     emit finished(true);
 }
 
@@ -177,6 +271,18 @@ void AnanDroopCalibrator::clear()
 }
 
 // ---- phase state machine --------------------------------------------------
+
+void AnanDroopCalibrator::setDspBypass(bool bypassed)
+{
+    if (!m_radio)
+        return;
+    // Fire-and-forget (requestId 0): the handler completes locally and there
+    // is nothing to await. AnanBackend also clears the flag on disconnect, so
+    // a radio that vanishes mid-sweep -- where this call reaches nothing --
+    // still comes back with correction live.
+    m_radio->invokeBackendExtension(QStringLiteral("anan"),
+                                    QStringLiteral("droop.bypass"), 0, bypassed);
+}
 
 void AnanDroopCalibrator::requestCurrentRate()
 {
@@ -196,6 +302,12 @@ void AnanDroopCalibrator::finishSweep(bool applied)
 {
     QObject::disconnect(m_spectrumConn);
     m_pollTimer.stop();
+    // Every exit from a sweep comes through here -- completion, stop(), and
+    // abortSweep() alike -- so the correction is restored on all of them.
+    // Non-destructive by construction: the tables were hidden, never
+    // overwritten, so there is nothing to restore FROM and no window in which
+    // a crash could lose them.
+    setDspBypass(false);
     if (m_radio && m_originalRateKsps > 0)
         m_radio->setPanBandwidth(m_originalRateKsps / 1000.0);   // best-effort, fire-and-forget
     m_phase = Phase::Idle;
@@ -241,17 +353,38 @@ void AnanDroopCalibrator::advance()
     case Phase::Settling:
         if (now - m_phaseStartedAtMs >= kPostLandSettleMs) {
             m_phase = Phase::Sampling;
-            m_lastSampleAtMs = 0;   // capture immediately on the first Sampling tick
+            m_phaseStartedAtMs = now;   // also the stall deadline -- see Sampling
+            m_lastSampleAtMs = 0;       // capture immediately on the first Sampling tick
+            // Drop whatever frame is in hand. It may predate the settle
+            // window, or even the rate change -- frames for the PREVIOUS rate
+            // are still in flight when this phase begins, and one of those
+            // measured into this rate's table is the cross-rate corruption
+            // the whole per-rate keying exists to prevent.
+            m_haveLatestFrame = false;
         }
         break;
 
     case Phase::Sampling: {
-        if (!m_haveLatestFrame)
+        if (!m_haveLatestFrame) {
+            // The only unbounded wait in the machine used to be right here.
+            if (now - m_phaseStartedAtMs >= kSampleStallTimeoutMs) {
+                abortSweep(QStringLiteral("no spectrum frame at %1 ksps for %2 s "
+                                          "-- is the panadapter running?")
+                              .arg(currentTargetRateKsps())
+                              .arg(kSampleStallTimeoutMs / 1000));
+            }
             break;
+        }
         if (m_lastSampleAtMs != 0 && now - m_lastSampleAtMs < kSampleSpacingMs)
             break;
         m_lastSampleAtMs = now;
+        m_phaseStartedAtMs = now;   // progress resets the stall deadline
         m_pendingCaptures.push_back(m_latestFrame);
+        // Require a genuinely NEW frame for the next capture. Without this the
+        // 8-sample median can be eight copies of one frame whenever the
+        // spectrum FPS is below 1000/kSampleSpacingMs, which defeats the
+        // outlier rejection medianPowerCurve() exists to provide.
+        m_haveLatestFrame = false;
         emit rateSampled(currentTargetRateKsps(), m_pendingCaptures.size());
 
         const float rateProgress =

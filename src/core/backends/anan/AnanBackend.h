@@ -4,6 +4,7 @@
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/P2Client.h"
 
+#include <QMap>
 #include <QString>
 #include <QThread>
 #include <QTimer>
@@ -140,6 +141,15 @@ private:
     // see its own definition comment for the retry-window fix folded in
     // here too.
     void finishRateChange(quint64 generation, bool ok, const QString& error);
+
+    // Identity guard for the droop-calibration write, in front of
+    // AnanDroopCalibrator::saveTables() (which owns the merge, the schema
+    // guard and the codec). Returns an empty string on success, or the
+    // operator-facing reason it did not persist -- never void: the caller
+    // reports the outcome to the dialog and the bridge, which both used to
+    // claim success regardless.
+    [[nodiscard]] QString persistDroopTables(
+        const QMap<int, anan::DroopCorrectionTable>& tables);
     // If a zoom request arrived while a previous one was still in flight
     // (m_pendingBandwidthKsps != 0), starts it now. Called from every path
     // that clears m_rateChanging -- linkUp success and both finishDspSetup()
