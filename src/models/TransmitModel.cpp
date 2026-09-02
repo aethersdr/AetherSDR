@@ -67,6 +67,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool phoneChanged = false;
     bool filterCutoffChanged = false;
     bool cwPitchChanged_ = false;
+    bool cwSpeedChanged_ = false;
 
     // ── Core transmit ──
     // rf_power / tune_power emit inline (like max_power_level below): the
@@ -88,7 +89,13 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     micChanged |= assign(d.micLevel, m_micLevel);
     micChanged |= assign(d.micAcc, m_micAcc);
     micChanged |= assign(d.speechProcEnable, m_speechProcEnable);
-    micChanged |= assign(d.speechProcLevel, m_speechProcLevel);
+    if (d.speechProcLevel) {
+        const int level = qBound(0, *d.speechProcLevel, m_speechProcLevelMaximum);
+        if (m_speechProcLevel != level) {
+            m_speechProcLevel = level;
+            micChanged = true;
+        }
+    }
     // compander/dexp are aliased: one wire value drives BOTH member pairs (the
     // compander → mic side and the dexp → phone side). Bespoke — one optional,
     // two members, two flags.
@@ -119,7 +126,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
+    if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
@@ -154,6 +161,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
+    if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
     // ── ATU (own emit; model owns the enum parse) ──
     {
@@ -268,6 +276,15 @@ void TransmitModel::setHasTuner(bool present)
         return;
     m_hasTuner = present;
     emit hasTunerChanged(present);
+}
+
+void TransmitModel::setHasTunerMemories(bool present)
+{
+    if (m_hasTunerMemories == present) {
+        return;
+    }
+    m_hasTunerMemories = present;
+    emit hasTunerMemoriesChanged(present);
 }
 
 void TransmitModel::setRfPower(int power)
@@ -495,18 +512,34 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
 
 void TransmitModel::setSpeechProcessorLevel(int level)
 {
-    // NOR=0, DX=1, DX+=2 (pcap confirmed: speech_processor_level, not compander_level).
-    // Optimistic update: radio does not echo in incremental status.
-    level = qBound(0, level, 2);
+    // Flex uses NOR=0, DX=1, DX+=2 (pcap confirmed:
+    // speech_processor_level, not compander_level). A backend capability may
+    // widen the normalized domain for an evidenced continuous control.
+    // Optimistic update: Flex does not echo in incremental status.
+    level = qBound(0, level, m_speechProcLevelMaximum);
     m_speechProcLevel = level;
     emit micStateChanged();
     emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_level=%1").arg(level));
 }
 
+void TransmitModel::setSpeechProcessorLevelMaximum(int maximum)
+{
+    maximum = qBound(2, maximum, 100);
+    if (m_speechProcLevelMaximum == maximum) {
+        return;
+    }
+    m_speechProcLevelMaximum = maximum;
+    const int bounded = qBound(0, m_speechProcLevel, maximum);
+    if (bounded != m_speechProcLevel) {
+        m_speechProcLevel = bounded;
+        emit micStateChanged();
+    }
+}
+
 bool TransmitModel::applySpeechProcessorState(bool on, int level)
 {
-    level = qBound(0, level, 2);
+    level = qBound(0, level, m_speechProcLevelMaximum);
     if (m_speechProcEnable == on && m_speechProcLevel == level) {
         return false;
     }
@@ -655,18 +688,18 @@ void TransmitModel::setDexpLevel(int level)
 // command (Principle II).
 void TransmitModel::setTxFilterLow(int hz)
 {
-    setTxFilter(qBound(0, hz, 10000), m_txFilterHigh);
+    setTxFilter(qBound(kTxFilterMinHz, hz, kTxFilterMaxHz), m_txFilterHigh);
 }
 
 void TransmitModel::setTxFilterHigh(int hz)
 {
-    setTxFilter(m_txFilterLow, qBound(0, hz, 10000));
+    setTxFilter(m_txFilterLow, qBound(kTxFilterMinHz, hz, kTxFilterMaxHz));
 }
 
 void TransmitModel::setTxFilter(int lowHz, int highHz)
 {
-    lowHz = qBound(0, lowHz, 9950);
-    highHz = qBound(lowHz + 50, highHz, 10000);
+    lowHz  = qBound(kTxFilterMinHz, lowHz, kTxFilterMaxHz - kTxFilterMinWidthHz);
+    highHz = qBound(lowHz + kTxFilterMinWidthHz, highHz, kTxFilterMaxHz);
     if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
         m_txFilterLow = lowHz;
         m_txFilterHigh = highHz;
@@ -686,7 +719,9 @@ void TransmitModel::setCwSpeed(int wpm)
     if (m_cwSpeed != wpm) {
         m_cwSpeed = wpm;
         emit phoneStateChanged();
+        emit cwSpeedChanged(m_cwSpeed);
     }
+    emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));
 }
 
@@ -698,6 +733,7 @@ void TransmitModel::setCwPitch(int hz)
         emit phoneStateChanged();
         emit cwPitchChanged(hz);
     }
+    emit cwPitchCommandIssued(hz);
     emit commandReady(QString("cw pitch %1").arg(hz));
 }
 
@@ -707,6 +743,7 @@ void TransmitModel::setCwBreakIn(bool on)
         m_cwBreakIn = on;
         emit phoneStateChanged();
     }
+    emit cwBreakInCommandIssued(on);
     emit commandReady(QString("cw break_in %1").arg(on ? 1 : 0));
 }
 

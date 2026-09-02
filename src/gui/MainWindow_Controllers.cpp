@@ -38,6 +38,7 @@
 #include "UlanziDialMapperDialog.h"
 #include "RxApplet.h"
 #include "SpectrumWidget.h"
+#include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
 
@@ -230,6 +231,11 @@ QString flexControlButtonAction(int button, int action)
 
 void MainWindow::showFlexControlDialog()
 {
+    if (m_radioModel.isConnected()
+        && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
+        return;
+    }
+
     const bool wasFresh = !m_flexControlDialog;
     showOrRaisePersistent(m_flexControlDialog);
     if (wasFresh && m_flexControlDialog) {
@@ -283,6 +289,20 @@ void MainWindow::showFlexControlDialog()
                 m_flexControlDialog->setPhysicalReady(false);
 #endif
         });
+#ifdef HAVE_SERIALPORT
+        connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
+                this, [this] {
+            if (m_radioModel.isConnected()
+                && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
+                return;
+            }
+            // Same deep-link pattern as Settings → USB Cables… (#4940), but
+            // scrolled onto the FlexControl Tuning Knob group itself rather
+            // than just landing on top of the page (PR #5157 review).
+            if (RadioSetupDialog* dlg = openRadioSetupPage())
+                dlg->revealFlexControlSettings();
+        });
+#endif
         connect(m_flexControlDialog, &FlexControlDialog::physicalDisconnectRequested,
                 this, [this] {
 #ifdef HAVE_SERIALPORT
@@ -490,6 +510,15 @@ void MainWindow::handleFlexControlButton(int button, int action)
         setFlexControlHardwareIndicator(button);
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
+            // Same gate the CwxF* macros carry below: split creates its TX
+            // slice with Flex wire text, which a backend with no command plane
+            // drops — a hardware button that silently does nothing. Refuse and
+            // log; the binding stays assignable (M0, #5263).
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "SplitActiveSlice ignored:"
+                                   << "this backend takes no Flex slice-create command";
+                return;
+            }
             if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
             auto* s = activeSlice();
             if (!s) return;
@@ -511,9 +540,10 @@ void MainWindow::handleFlexControlButton(int button, int action)
         // `cwx send` into a backend with no such verb is the "silently does
         // nothing" report, not a working control. The action stays assignable —
         // the binding is operator-scoped and outlives any one radio.
-        if (!m_radioModel.hasRadioSideCwKeyer()) {
+        if (!m_radioModel.hasRadioSideCwKeyer()
+            || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
-                          << "ignored: radio has no radio-side CW keyer";
+                          << "ignored: radio has no stored text-keyer macros";
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);
@@ -1009,6 +1039,14 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         applyMasterVolume(next);
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
+            // Same refusal as the FlexControl split above: no command plane,
+            // no Flex slice-create — refuse loudly instead of a dead hardware
+            // button (M0, #5263).
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
+                                   << "this backend takes no Flex slice-create command";
+                return;
+            }
             auto* s = activeSlice();
             if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
                 QString panId = s->panId().isEmpty()
@@ -1436,6 +1474,65 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         }
     } else if (actionId == "WheelApf") {
         if (auto* s = activeSlice()) {
+            // #4658: the level only reaches audio while the APF filter is in
+            // circuit. Writing apf_level into a disengaged filter — and showing
+            // an "APF 42" overlay that reads as the radio acknowledging it — is
+            // the controller-side twin of the GUI slider defect (#4658, fixed
+            // for the slider by #4660). No-op here and tell the operator why,
+            // mirroring the slider's greyed-with-reason treatment. The notice
+            // goes on the slice's panadapter as a transient card, NOT the
+            // status bar (#4649: a QStatusBar temporary message hides every
+            // permanent widget — TX indicator, PA temperature — for its whole
+            // duration, and a spinning dead knob would retrigger it
+            // continuously); the status bar is only the no-panadapter
+            // (null-pan) fallback. That reaches every controller family (FlexControl,
+            // RC-28, Ulanzi, the virtual wheel); a TMate 2 additionally gets
+            // it on its own display. Minimal mode shows neither surface —
+            // a slice-level signal consumed by the applet panel is the
+            // follow-up for that layout. ToggleApf remains the way in.
+            // APF is CW-only: the DSP grid does not even mount the button in
+            // other modes (VfoWidget hides m_apfBtn unless isCw), so a hint
+            // to "turn APF on" there would point at nothing. Stay silent.
+            if (!isCwMode(s->mode()))
+                return;
+            if (!s->apfOn()) {
+                // One notice per window, not one per detent: a timed card is
+                // not deduplicated by the overlay (its re-assert early-out is
+                // for untimed cards only), so each re-upsert would re-sort it
+                // to the top of the stack and relayout the others under a
+                // spinning knob — the #4649 objection, moved to a better
+                // surface. Show once, then stay quiet until it has expired.
+                constexpr int kApfOffHintMs = 1500;
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                if (nowMs < m_apfOffHintUntilMs)
+                    return;
+                m_apfOffHintUntilMs = nowMs + kApfOffHintMs;
+                if (SpectrumWidget* sw = spectrumForSlice(s)) {
+                    // Own id and Info tone: this is a control hint, not a
+                    // warning, and it must neither evict nor be evicted by
+                    // the TX-filter ("txfilter.audio-loss") or interlock
+                    // cards — re-keying only replaces an earlier APF hint.
+                    PanadapterOverlayMessage card;
+                    card.id = QStringLiteral("apf.level-off");
+                    card.title = QStringLiteral("APF level");
+                    card.detail = QStringLiteral("Turn APF on first");
+                    card.timeoutMs = kApfOffHintMs;
+                    card.dismissible = true;
+                    card.tone = PanadapterOverlayMessageTone::Info;
+                    sw->upsertOverlayMessage(std::move(card));
+                } else {
+                    // Null-pan edge only: spectrumForSlice() still returns a
+                    // (hidden) widget in minimal mode, so that layout lands in
+                    // the branch above with nothing on screen — see the
+                    // comment at the top of this block.
+                    statusBar()->showMessage(
+                        QStringLiteral("APF level: turn APF on first"), kApfOffHintMs);
+                }
+#ifdef HAVE_HIDAPI
+                triggerTMate2TextOverlay(QStringLiteral("APF OFF"));
+#endif
+                return;
+            }
             const int next = std::clamp(s->apfLevel() + steps, 0, 100);
             s->setApfLevel(next);
 #ifdef HAVE_HIDAPI
@@ -2056,12 +2153,32 @@ void MainWindow::registerMidiParams()
     }
 
     // ── Global ──────────────────────────────────────────────────────────
+    // The mixer verbs drive the RADIO's lineout/headphone hardware outputs, a
+    // Flex command-plane feature — on a backend without one the command is
+    // dropped, which made a mapped MIDI volume knob silently dead. Refuse and
+    // log instead (M0, #5263). Rerouting these to the client-side master
+    // volume would change what the knob MEANS on Flex, so that stays an M4
+    // conversion decision, not a gate.
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v))); },
+        [this](float v) {
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.masterVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
+                return;
+            }
+            m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+        },
         [this]() -> float { return m_radioModel.lineoutGain(); });
 
     reg("global.hpVolume", "Headphone Volume", "Global", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v))); },
+        [this](float v) {
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.hpVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
+                return;
+            }
+            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
+        },
         [this]() -> float { return m_radioModel.headphoneGain(); });
 
     reg("global.masterMute", "Master Mute", "Global", P::Toggle, 0, 1,

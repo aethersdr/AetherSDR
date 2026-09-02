@@ -375,7 +375,8 @@ and are reported privately rather than demonstrated against public radios.
 3. **Read-only service:** implement negotiation, auth, snapshots, revisions,
    subscriptions, limits and read-only resources over the local transport.
 4. **Non-TX control:** add authenticated typed connect/slice/pan methods and
-   prove authoritative echo behavior across Flex, HL2, Icom and Sim.
+   prove authoritative echo behavior across every supported backend, currently
+   Flex, HL2, Icom, Sim, ANAN and RTL-SDR.
 5. **Stage 4 TX funnel:** migrate every emission-capable path to the arbiter,
    with deterministic denial/unkey tests and TX disabled in normal automation.
 6. **Remote and packaging:** enable the bounded WebSocket transport only after

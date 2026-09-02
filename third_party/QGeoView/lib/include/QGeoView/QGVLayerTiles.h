@@ -21,6 +21,7 @@
 #include "QGVLayer.h"
 
 #include <QElapsedTimer>
+#include <QTimer>
 
 class QGV_LIB_DECL QGVLayerTiles : public QGVLayer
 {
@@ -70,6 +71,7 @@ private:
     QMap<int, QMap<QGV::GeoTilePos, QGVDrawItem*>> mIndex;
 
     QElapsedTimer mLastAnimation;
+    QTimer mCameraUpdateTimer;
     bool mHorizontalWrapEnabled = false;
 
     struct

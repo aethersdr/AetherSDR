@@ -18,13 +18,17 @@
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QObject>
+#include <QTimer>
 #include <QUdpSocket>
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <map>
+#include <tuple>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR::icom::test {
@@ -171,6 +175,7 @@ class FakeIc705 : public QObject {
 public:
     explicit FakeIc705(QObject* parent = nullptr) : QObject(parent)
     {
+        m_clock.start();
         m_control = new FakeStream(0xAAAA0001,
                                    [this](FakeStream& s, const QByteArray& b) { control(s, b); },
                                    this);
@@ -193,6 +198,10 @@ public:
     [[nodiscard]] std::uint8_t announcedRxCodec() const { return m_announcedRxCodec; }
     [[nodiscard]] int authCount() const { return m_authCount; }
     [[nodiscard]] bool serialOpened() const { return m_serialOpened; }
+    [[nodiscard]] const std::vector<qint64>& serialRestartTimesMs() const
+    {
+        return m_serialRestartTimesMs;
+    }
     [[nodiscard]] bool sawUsernameObfuscated() const { return m_usernameObfuscated; }
     [[nodiscard]] int civCommandsSeen() const { return m_civCommands; }
     // What the radio currently holds for a 1A 05 leaf — the persisted-state
@@ -229,6 +238,7 @@ public:
     void setRejectRenewalsAfter(int accepted) { m_acceptRenewals = accepted; }
     void setReissueInitialTokenOnNextLogin(bool on) { m_reissueNextInitialToken = on; }
     void setAuthFailureOnLogin(bool on) { m_authFailureOnLogin = on; }
+    void setHoldLoginReply(bool on) { m_holdLoginReply = on; }
     // The PREVIOUS session's teardown status, delivered on the new control
     // association before this session has a stream grant to protect it. At
     // that point the lifecycle exception does not apply yet, so the header
@@ -250,6 +260,11 @@ public:
     // shape of the stall this exists to reproduce: `isConnected()` stays true,
     // link statistics keep climbing, and the command plane is dead.
     void setCivSilent(bool silent) { m_civSilent = silent; }
+    void setCivRestartRecovery(bool recovers, int frequencyReplyDelayMs = 0)
+    {
+        m_civRestartRecovers = recovers;
+        m_restartFrequencyReplyDelayMs = std::max(0, frequencyReplyDelayMs);
+    }
 
     // ---- BE A DIFFERENT ICOM ------------------------------------------------
     //
@@ -279,6 +294,38 @@ public:
         m_name = std::move(name);
         if (m_name.size() > kMaxNameBytes)
             m_name.resize(kMaxNameBytes);
+    }
+
+    void frontPanelFrequency(std::uint64_t hz)
+    {
+        m_frequencyHz = hz;
+        std::vector<std::uint8_t> frame{0xFE, 0xFE, kControllerAddress, m_addr,
+                                        cmd::kSetFreqTrx};
+        const std::vector<std::uint8_t> bcd = encodeFreq(hz);
+        frame.insert(frame.end(), bcd.begin(), bcd.end());
+        frame.push_back(kCivEom);
+        pushCiv(frame);
+    }
+
+    // Front-panel repeater edits are deliberately silent here. CI-V
+    // Transceive does not reliably announce these fields, so the backend's
+    // bounded control reconciliation must discover them on the next link tick.
+    void frontPanelRepeater(RepeaterOffsetDirection direction, int offsetHz,
+                            bool toneOn, double toneHz)
+    {
+        m_repeaterOffsetDirection = direction;
+        m_repeaterOffsetHz = offsetHz;
+        m_functions[func::kRepeaterTone] = toneOn ? 1 : 0;
+        m_repeaterToneHz = toneHz;
+    }
+
+    // Silent like a short front-panel hold can be when CI-V Transceive is off;
+    // the client's bounded poll must still discover both edges.
+    void frontPanelTransmitFrequencyCheck(bool on) { m_transmitFrequencyCheck = on; }
+
+    void setClearRepeaterToneOnFrequencyWrite(bool on)
+    {
+        m_clearRepeaterToneOnFrequencyWrite = on;
     }
 
     // A SECOND DEVICE ON THE BUS. Icom's own RS-BA1 server can front a serial
@@ -353,6 +400,9 @@ private:
                                                   + 0x40);
             const std::uint16_t tokenRequestId = getLe16(b, 0x1a);
             m_loginTokenRequestIds.push_back(tokenRequestId);
+            if (m_holdLoginReply) {
+                return;
+            }
             if (m_authFailureOnLogin) {
                 auto status = s.frame(kLenStatus, 0x00, m_seq++);
                 status[0x30] = status[0x31] = status[0x32] = status[0x33] = 0xff;
@@ -488,7 +538,18 @@ private:
     {
         const auto marker = static_cast<std::uint8_t>(b[0x10]);
         if (b.size() == 0x16 && marker == 0xc0) {
-            m_serialOpened = static_cast<std::uint8_t>(b[0x15]) == 0x05;
+            const std::uint8_t operation = static_cast<std::uint8_t>(b[0x15]);
+            if (operation == 0x05) {
+                m_serialOpened = true;
+            } else if (operation == 0x00) {
+                m_serialOpened = false;
+            } else if (operation == 0x04) {
+                m_serialRestartTimesMs.push_back(m_clock.elapsed());
+                if (m_civRestartRecovers) {
+                    m_civSilent = false;
+                    m_nextFrequencyReplyDelayMs = m_restartFrequencyReplyDelayMs;
+                }
+            }
             return;
         }
         if (marker != 0xc1)
@@ -540,12 +601,36 @@ private:
         // Answer a read-frequency with the radio's frequency, addressed BACK to
         // the controller.
         if (frame->cmd == cmd::kReadFreq) {
-            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress, kIc705Addr,
+            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress, m_addr,
                                             cmd::kReadFreq};
-            const auto bcd = encodeFreq(kRadioFrequencyHz);
+            const auto bcd = encodeFreq(m_frequencyHz);
             reply.insert(reply.end(), bcd.begin(), bcd.end());
             reply.push_back(kCivEom);
-            pushCiv(reply);
+            const int delayMs = std::exchange(m_nextFrequencyReplyDelayMs, 0);
+            if (delayMs > 0) {
+                QTimer::singleShot(delayMs, this,
+                                   [this, reply = std::move(reply)]() {
+                                       pushCiv(reply);
+                                   });
+            } else {
+                pushCiv(reply);
+            }
+            return;
+        }
+        if (frame->cmd == cmd::kSetFreq) {
+            const std::optional<std::uint64_t> hz = decodeFreq(frame->data);
+            if (!hz) {
+                return;
+            }
+            m_frequencyHz = *hz;
+            if (m_clearRepeaterToneOnFrequencyWrite) {
+                // IC-705 firmware behavior documented by Hamlib: a frequency
+                // change can clear repeater tone. A recall test must therefore
+                // prove the enable is written after tuning, not merely inspect
+                // the order of frames that a permissive fake would accept.
+                m_functions[func::kRepeaterTone] = 0;
+            }
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
         // ---- READS ANSWERED FROM PERSISTED STATE ------------------------
@@ -560,6 +645,12 @@ private:
         // A read is the command with NO payload byte. The set form carries one,
         // and answering that with a value would be a radio talking back to its
         // own command.
+        if (frame->cmd == cmd::kFunction && frame->hasSub
+            && frame->sub == repeaterAccess::kFunction && frame->data.empty()) {
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kFunction,
+                     repeaterAccess::kFunction, m_repeaterAccess, kCivEom});
+            return;
+        }
         if (frame->cmd == cmd::kFunction && frame->hasSub && frame->data.empty()) {
             auto it = m_functions.find(frame->sub);
             if (it != m_functions.end()) {
@@ -590,6 +681,90 @@ private:
         }
         if (frame->cmd == cmd::kFunction && frame->hasSub && !frame->data.empty()) {
             m_functions[frame->sub] = frame->data.front();
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kDuplex) {
+            if (frame->data.empty()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kDuplex,
+                         static_cast<std::uint8_t>(m_repeaterOffsetDirection), kCivEom});
+                return;
+            }
+            const std::optional<RepeaterOffsetDirection> direction =
+                decodeRepeaterOffsetDirection(frame->data);
+            if (!direction) {
+                return;
+            }
+            m_repeaterOffsetDirection = *direction;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kReadRepeaterOffset) {
+            std::vector<std::uint8_t> reply =
+                cmdSetRepeaterOffset(kControllerAddress, m_repeaterOffsetHz);
+            reply[3] = m_addr;
+            reply[4] = cmd::kReadRepeaterOffset;
+            pushCiv(reply);
+            return;
+        }
+        if (frame->cmd == cmd::kSetRepeaterOffset) {
+            const std::optional<int> offsetHz = decodeRepeaterOffsetHz(frame->data);
+            if (!offsetHz) {
+                return;
+            }
+            m_repeaterOffsetHz = *offsetHz;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kTone && frame->hasSub && frame->sub == 0x00) {
+            if (frame->data.empty()) {
+                std::vector<std::uint8_t> reply =
+                    cmdSetRepeaterTone(kControllerAddress, m_repeaterToneHz);
+                reply[3] = m_addr;
+                pushCiv(reply);
+                return;
+            }
+            const std::optional<double> toneHz = decodeRepeaterToneHz(frame->data);
+            if (!toneHz) {
+                return;
+            }
+            m_repeaterToneHz = *toneHz;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kTone && frame->hasSub && frame->data.empty()
+            && (frame->sub == repeaterTone::kRxCtcss
+                || frame->sub == repeaterTone::kDtcs)) {
+            const int value = frame->sub == repeaterTone::kRxCtcss
+                ? static_cast<int>(std::lround(m_repeaterRxToneHz * 10.0))
+                : m_repeaterDtcsCode;
+            const std::uint8_t polarity = frame->sub == repeaterTone::kDtcs
+                ? static_cast<std::uint8_t>((m_repeaterDtcsTxReverse ? 0x10 : 0x00)
+                                            | (m_repeaterDtcsRxReverse ? 0x01 : 0x00))
+                : 0x00;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kTone,
+                     frame->sub, polarity,
+                     encodeBcdByte((value / 100) % 100),
+                     encodeBcdByte(value % 100), kCivEom});
+            return;
+        }
+        // ---- 1A 03 IF FILTER WIDTH ---------------------------------------
+        //
+        // ONE BCD BYTE, and its meaning depends on the mode — code 40 is
+        // 3.6 kHz in SSB and out of range in RTTY. The fake stores the CODE
+        // rather than Hz, exactly as the radio does, so a client that decodes
+        // it against the wrong mode gets the wrong width here too instead of
+        // being quietly rescued by a fake that stored the answer.
+        if (frame->cmd == cmd::kSetting && frame->hasSub
+            && frame->sub == settingSub::kFilterWidth) {
+            if (frame->data.empty()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                         settingSub::kFilterWidth, currentWidthCode(), kCivEom});
+                return;
+            }
+            // A WRITE REDEFINES THE SELECTED SLOT IN THE CURRENT MODE, exactly
+            // as the radio's own filter knob does — not a global width.
+            m_filterWidths[{m_mode, m_dataOn, m_filter}] = frame->data.front();
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
@@ -715,6 +890,30 @@ private:
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kXfc) {
+            if (frame->data.empty()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kControl,
+                         control::kXfc,
+                         static_cast<std::uint8_t>(m_transmitFrequencyCheck ? 1 : 0),
+                         kCivEom});
+                return;
+            }
+            m_transmitFrequencyCheck = frame->data.front() != 0;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kReadTxFreq && frame->data.empty()) {
+            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress,
+                                            m_addr, cmd::kControl,
+                                            control::kReadTxFreq};
+            const std::vector<std::uint8_t> encoded = encodeFreq(m_txFrequencyHz);
+            reply.insert(reply.end(), encoded.begin(), encoded.end());
+            reply.push_back(kCivEom);
+            pushCiv(reply);
+            return;
+        }
 
         // Everything else is acknowledged.
         pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
@@ -734,9 +933,38 @@ public:
         {func::kCompressor, 1},      // PROC ON
         {func::kMonitorFn, 1},       // monitor ON
         {func::kVox, 1},             // VOX ON
+        {func::kBreakIn, 2},         // full break-in
         {func::kPreamp, 2},          // P.AMP2
         {func::kAgc, 3},             // SLOW
+        {func::kRepeaterTone, 1},    // CTCSS TX ON
+        // SSB TX bandwidth slot: MID. Deliberately NOT WIDE, so a client that
+        // routes the edge read/write to slot 0 by default reads the wrong SET
+        // item here rather than being accidentally right.
+        {func::kTxBandwidth, 1},
     };
+    // The IF width, as a BCD code, PER (mode, DATA, slot) — which is how the
+    // real radio stores it, and the distinction a fixture must reproduce.
+    //
+    // A SINGLE SHARED CODE HID A LIVE BUG. With one global width the client
+    // could carry the previous mode's width across a mode change and still
+    // match the fixture, so the test passed while a real IC-7300MK2 drew AM's
+    // 9 kHz window over every SSB filter. Different codes per context are what
+    // make that failure visible here.
+    std::map<std::tuple<std::uint8_t, bool, std::uint8_t>, std::uint8_t> m_filterWidths{
+        {{0x01, false, 1}, 0x34},   // USB   FIL1 -> code 34 = 3000 Hz
+        {{0x01, true,  1}, 0x40},   // USB-D FIL1 -> code 40 = 3600 Hz
+        {{0x00, false, 1}, 0x34},   // LSB   FIL1 -> 3000 Hz
+        {{0x02, false, 1}, 0x44},   // AM    FIL1 -> code 44 = 9000 Hz
+        {{0x03, false, 1}, 0x11},   // CW    FIL1 -> code 11 = 700 Hz
+    };
+    std::uint8_t m_filterWidthFallback = 0x18;   // code 18 -> 1400 Hz
+
+    [[nodiscard]] std::uint8_t currentWidthCode() const
+    {
+        auto it = m_filterWidths.find({m_mode, m_dataOn, m_filter});
+        return it == m_filterWidths.end() ? m_filterWidthFallback : it->second;
+    }
+
     std::map<std::uint8_t, int> m_levels{
         {level::kAf, 128},        // ~50 %
         {level::kRf, 255},        // 100 %
@@ -748,6 +976,13 @@ public:
         {level::kCompLevel, 102}, // ~40 %
         {level::kNotchPos, 128},  // ~50 %
         {level::kVoxGain, 204},   // ~80 %
+        // TWIN PBT, both at CENTRE. Seeded at 128 rather than left absent so a
+        // client that reads them gets an answer — an unanswered read looks the
+        // same as a centred passband on screen and would hide the difference.
+        {level::kPbtInner, 128},
+        {level::kPbtOuter, 128},
+        {level::kCwPitch, 128},   // ~601 Hz
+        {level::kKeySpeed, 134},  // ~28 WPM
     };
     // 1A 05 SET-menu leaves, by DECIMAL item number. The IC-705's DATA OFF MOD
     // starts at USB (0x01) rather than the WLAN (0x03) this client wants: an
@@ -757,6 +992,14 @@ public:
     std::map<int, std::uint8_t> m_settings{
         {118, 0x01},   // DATA OFF MOD = USB
         {119, 0x03},   // DATA MOD     = WLAN
+        // TX passband edges, IC-705 numbering. One packed BCD byte: high digit
+        // indexes the low-edge table (100/200/300/500), low digit the high-edge
+        // table (2500/2700/2800/2900). Each slot holds a DIFFERENT pair so a
+        // client reading the wrong one is visibly wrong rather than plausible.
+        {19, 0x00},    // WIDE  = 100 .. 2500
+        {20, 0x21},    // MID   = 300 .. 2700
+        {21, 0x32},    // NAR   = 500 .. 2800
+        {22, 0x13},    // SSB-D = 200 .. 2900
         {116, 0x80},   // USB MOD level
         {117, 0x80},   // WLAN MOD level
     };
@@ -767,6 +1010,15 @@ public:
     std::uint8_t m_filter = 2;
     bool m_dataOn = true;
     bool m_refuseDataMode = false;
+    RepeaterOffsetDirection m_repeaterOffsetDirection = RepeaterOffsetDirection::Down;
+    int m_repeaterOffsetHz = 600'000;
+    double m_repeaterToneHz = 88.5;
+    std::uint8_t m_repeaterAccess = 0x03;
+    double m_repeaterRxToneHz = 67.0;
+    int m_repeaterDtcsCode = 23;
+    bool m_repeaterDtcsTxReverse = false;
+    bool m_repeaterDtcsRxReverse = true;
+    std::uint64_t m_txFrequencyHz = 448'425'600;
 
     // Simulate the operator turning the MODE knob: the radio pushes an
     // unsolicited 01 (which cannot carry DATA) and nothing else. Following the
@@ -785,6 +1037,7 @@ public:
     bool m_xitOn = false;
     std::uint8_t m_tunerState = 0x01;   // matched
     bool m_ptt = false;
+    bool m_transmitFrequencyCheck = false;
     // Force what 1C 00 REPORTS, regardless of what it is told. While set, PTT
     // writes are still acknowledged but do not move m_ptt — the radio insists
     // on this state. Clear it (std::nullopt) to go back to an obedient radio.
@@ -821,17 +1074,25 @@ private:
     std::uint16_t m_audioInner = 1;
     // WHICH Icom this is. Defaults to the IC-705 the suite was written against.
     std::uint8_t  m_addr = kIc705Addr;
+    std::uint64_t m_frequencyHz = kRadioFrequencyHz;
     std::uint8_t  m_secondAddr = 0;
     bool          m_civEcho = false;
+    bool          m_clearRepeaterToneOnFrequencyWrite = false;
     std::string   m_name = "IC-705";
     std::uint8_t  m_civSeq = 0;
     std::vector<CivFrame> m_civLog;
     bool m_sentCaps = false;
     bool m_serialOpened = false;
+    QElapsedTimer m_clock;
+    std::vector<qint64> m_serialRestartTimesMs;
     bool m_usernameObfuscated = false;
     int m_authCount = 0;
     int m_civCommands = 0;
     bool m_civSilent = false;
+    bool m_civRestartRecovers = false;
+    int m_restartFrequencyReplyDelayMs = 0;
+    int m_nextFrequencyReplyDelayMs = 0;
+    bool m_holdLoginReply = false;
     bool m_injectStaleGrant = false;
     bool m_sentPrematureGrant = false;
     bool m_reissueNextInitialToken = false;

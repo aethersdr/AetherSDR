@@ -46,6 +46,14 @@ public:
     static quint16 audioPort();
     static void setPorts(quint16 control, quint16 serial, quint16 audio);
 
+    // Connect-by-IP NAT convenience: the public forwards are one sequential
+    // triplet (control, CI-V, audio). The highest valid base is 65533 so the
+    // derived audio port remains inside the UDP port range.
+    static quint16 defaultBasePort();
+    static quint16 maximumBasePort();
+    static bool usesDefaultPorts();
+    static void setBasePort(quint16 basePort);
+
     // The radio's CI-V address. Seeded here and CORRECTED at runtime from the
     // 0x19 0x00 reply — never trusted as final, because the address is
     // user-changeable and several Icom models speak this same transport.

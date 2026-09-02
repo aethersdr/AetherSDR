@@ -59,6 +59,33 @@ public:
         write(o);
     }
 
+    // The overlay button rail belongs to the client-side display layout. Keep
+    // one value per stable pan slot inside the feature-owned Display document;
+    // radio-assigned pan IDs are not stable across sessions.
+    static bool panMenuExpanded(int panSlotIndex)
+    {
+        if (!isValidPanSlotIndex(panSlotIndex)) {
+            return true;
+        }
+        const QJsonObject slotStates =
+            readObj().value("panMenuExpanded").toObject();
+        return slotStates.value(QString::number(panSlotIndex))
+                   .toString("True") == "True";
+    }
+
+    static void setPanMenuExpanded(int panSlotIndex, bool expanded)
+    {
+        if (!isValidPanSlotIndex(panSlotIndex)) {
+            return;
+        }
+        QJsonObject o = readObj();
+        QJsonObject slotStates = o.value("panMenuExpanded").toObject();
+        slotStates[QString::number(panSlotIndex)] =
+            expanded ? QStringLiteral("True") : QStringLiteral("False");
+        o["panMenuExpanded"] = slotStates;
+        write(o);
+    }
+
     // VFO meter view: false = standard S-meter, true = SmartMTR component.
     // Global (not per-slice) — see MeterViewController for the live-broadcast
     // layer that fans this choice out to every open VFO flag.
@@ -192,6 +219,12 @@ public:
     }
 
 private:
+    static bool isValidPanSlotIndex(int panSlotIndex)
+    {
+        constexpr int kPanSlotCount = 4;
+        return panSlotIndex >= 0 && panSlotIndex < kPanSlotCount;
+    }
+
     static QJsonObject readObj()
     {
         const QString json =

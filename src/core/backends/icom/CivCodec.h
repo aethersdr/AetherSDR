@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -143,6 +144,11 @@ inline constexpr std::size_t kFreqBytes = 5;
 [[nodiscard]] std::vector<std::uint8_t> encodeFreq(std::uint64_t hz,
                                                     std::size_t bytes = kFreqBytes);
 [[nodiscard]] std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd);
+// Use at command boundaries whose protocol shape declares an exact number of
+// frequency bytes. Generic decodeFreq() intentionally supports multiple Icom
+// models and therefore cannot enforce a command's arity by itself.
+[[nodiscard]] std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes);
 
 // A scope EDGE frequency, which can be NEGATIVE.
 //
@@ -185,12 +191,17 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C; // 100 Hz units, LE BCD
+inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
+inline constexpr std::uint8_t kDuplex       = 0x0F;   // 10 simplex, 11 down, 12 up
 inline constexpr std::uint8_t kLevel        = 0x14;   // sub-addressed levels
 inline constexpr std::uint8_t kMeter        = 0x15;   // sub-addressed meters
 inline constexpr std::uint8_t kFunction     = 0x16;   // sub-addressed on/off functions
+inline constexpr std::uint8_t kCwMessage    = 0x17;   // up to 30 ASCII characters; FF aborts
 inline constexpr std::uint8_t kPower        = 0x18;   // 00 off, 01 on
 inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceiver ID
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
+inline constexpr std::uint8_t kTone         = 0x1B;   // sub 00: repeater CTCSS frequency
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
 inline constexpr std::uint8_t kScope        = 0x27;
 // The attenuator, and it is NOT sub-addressed like 0x14/0x16 — the single
@@ -219,6 +230,10 @@ inline constexpr std::uint8_t kTuneOffset   = 0x21;
 inline constexpr std::uint8_t kVfoMode      = 0x26;
 }  // namespace cmd
 
+[[nodiscard]] std::vector<std::uint8_t> cmdSendCwMessage(
+    std::uint8_t to, std::string_view ascii);
+[[nodiscard]] std::vector<std::uint8_t> cmdAbortCwMessage(std::uint8_t to);
+
 // The subcommand of 0x26 is the VFO it addresses.
 //
 // SELECTED ONLY, today. The unselected VFO is where split lives, and modelling
@@ -246,6 +261,17 @@ inline constexpr std::uint8_t kNbLevel   = 0x12;
 // frequency, and not a depth. It moves with the filter, which is why the
 // seam carries this as a percentage rather than Hz.
 inline constexpr std::uint8_t kNotchPos  = 0x0D;
+// TWIN PBT — the two ends of the IF passband, 0000..0255 with 0128 at the
+// centre. NOT a width and NOT a frequency: each is a SHIFT, and how many Hz a
+// step is worth depends on the IF width currently in circuit (see pbtShiftHz).
+//
+// The pair is what makes an Icom's passband resizable at all. 1A 03 sets the
+// WIDTH symmetrically about the filter centre; moving both PBTs together slides
+// that window without changing it, and moving them apart narrows it from the
+// inside. Low-cut and high-cut are therefore not two commands on an Icom —
+// they are one width plus one shift, which is what setSliceFilter decomposes.
+inline constexpr std::uint8_t kPbtInner  = 0x07;
+inline constexpr std::uint8_t kPbtOuter  = 0x08;
 // VOX gain — the trigger threshold. NOT the delay: the guide puts VOX DELAY in
 // the SET menu at 1A 05 0359 (00..20), and 14 17 is the ANTI-vox gain, which is
 // a different control again.
@@ -272,6 +298,8 @@ inline constexpr std::uint8_t kAgc           = 0x12;   // 01 fast, 02 mid, 03 sl
 inline constexpr std::uint8_t kNoiseBlanker  = 0x22;
 inline constexpr std::uint8_t kNoiseReduce   = 0x40;
 inline constexpr std::uint8_t kAutoNotch     = 0x41;
+inline constexpr std::uint8_t kRepeaterTone  = 0x42;
+inline constexpr std::uint8_t kRepeaterAccess = 0x5D;
 inline constexpr std::uint8_t kCompressor    = 0x44;
 inline constexpr std::uint8_t kMonitorFn     = 0x45;
 inline constexpr std::uint8_t kVox           = 0x46;
@@ -280,6 +308,14 @@ inline constexpr std::uint8_t kManualNotch   = 0x48;
 // no seam verb carries a notch width, and overwriting the operator's own
 // choice would be worse than not offering it.
 inline constexpr std::uint8_t kManualNotchWidth = 0x57;
+// 00 SHARP, 01 SOFT — the DSP filter skirt for the operating band.
+inline constexpr std::uint8_t kIfFilterShape = 0x56;
+// WHICH SSB TRANSMIT BANDWIDTH IS IN CIRCUIT: 00 WIDE, 01 MID, 02 NAR. It
+// selects one of three SET-menu slots; the EDGES themselves live in those slots
+// (see ModelTxBandwidth), and which slot the radio uses also depends on whether
+// the speech compressor is on. So this alone never tells you the passband —
+// it tells you which stored passband to read.
+inline constexpr std::uint8_t kTxBandwidth   = 0x58;
 inline constexpr std::uint8_t kBreakIn       = 0x47;   // 00 off, 01 semi, 02 full
 inline constexpr std::uint8_t kDialLock      = 0x50;
 }  // namespace func
@@ -296,11 +332,31 @@ namespace setting {
 inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
 }  // namespace setting
 
+// The SUBCOMMANDS of 0x1A. 0x05 is the SET menu everything above reaches
+// through; 0x03 is a command in its own right and NOT a menu item.
+namespace settingSub {
+inline constexpr std::uint8_t kFilterWidth = 0x03;   // the IF width, in circuit now
+inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET menu
+}  // namespace settingSub
+
 // Read or write a 1A 05 SET-menu item. `item` is the DECIMAL menu number as
 // printed in the guide (118, 119, ...); it is encoded as two BCD bytes.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item);
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item,
                                                         std::uint8_t value);
+// SET-menu levels use the same two-byte 0000..0255 BCD payload as command 14,
+// unlike the one-byte enums written by cmdWriteSetting().
+[[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
+                                                             int value);
+
+// Four zero-padded decimal IPv4 octets, each encoded in two BCD bytes, as used
+// by the Icom SET-menu network registers. Invalid BCD and octets >255 fail.
+[[nodiscard]] std::optional<std::array<std::uint8_t, 4>>
+decodeNetworkAddress(std::span<const std::uint8_t> data);
+[[nodiscard]] std::optional<std::array<std::uint8_t, 4>>
+subnetMaskFromBcdPrefix(std::uint8_t raw);
+[[nodiscard]] std::optional<std::string>
+decodeNetworkName(std::span<const std::uint8_t> data);
 
 // Command 0x21 — RIT and dTX (which is what Icom calls XIT).
 namespace tuneOffset {
@@ -320,6 +376,22 @@ inline constexpr std::uint8_t kTuner = 0x01;
 inline constexpr std::uint8_t kXfc   = 0x02;
 inline constexpr std::uint8_t kReadTxFreq = 0x03;
 }  // namespace control
+
+namespace repeaterAccess {
+inline constexpr std::uint8_t kFunction = 0x5D;
+}  // namespace repeaterAccess
+
+namespace repeaterTone {
+inline constexpr std::uint8_t kTxCtcss = 0x00;
+inline constexpr std::uint8_t kRxCtcss = 0x01;
+inline constexpr std::uint8_t kDtcs    = 0x02;
+}  // namespace repeaterTone
+
+struct RepeaterToneRegister {
+    int value = 0;
+    bool txReverse = false;
+    bool rxReverse = false;
+};
 
 namespace scope {
 inline constexpr std::uint8_t kWaveData    = 0x00;
@@ -412,6 +484,121 @@ struct VfoModeState {
                                                           int filter);
 
 // ---------------------------------------------------------------------------
+// IF filter WIDTH (1A 03) — the actual passband, not the slot that holds it
+// ---------------------------------------------------------------------------
+//
+// THREE DIFFERENT THINGS, AND THE BUG IS ALWAYS CONFLATING TWO OF THEM:
+//
+//   * the SLOT      — FIL1/FIL2/FIL3, chosen with 0x26 (or 0x06). Three
+//                     buttons. Says nothing about how wide any of them is.
+//   * the WIDTH     — 1A 03, the Hz the SELECTED slot is currently defined as.
+//                     The operator can redefine it from the front panel and
+//                     from here, per mode, and the radio remembers it.
+//   * the PBT SHIFT — 14 07 / 14 08, where that width sits relative to the
+//                     carrier, and how much of it is cut away from the inside.
+//
+// Everything before this read the slot and INFERRED the width from a table of
+// factory defaults. That is right on a radio nobody has touched and wrong on
+// every other one: an operator who redefined FIL1 to 2.8 kHz got a passband
+// drawn at 3.0 kHz, a filter button labelled 3.0k, and no way to tell.
+//
+// The width codes come straight from the guides (identical on IC-705 and
+// IC-7300MK2, and on every current Icom):
+//
+//   SSB / CW        codes 00..09 -> 50..500 Hz (50 Hz),  10..40 -> 600..3600 Hz (100 Hz)
+//   RTTY            codes 00..09 -> 50..500 Hz (50 Hz),  10..31 -> 600..2700 Hz (100 Hz)
+//   AM              codes 00..49 -> 200..10000 Hz (200 Hz)
+//   FM / DV / WFM   NO SETTABLE WIDTH — three fixed slots, 1A 03 does not apply
+//
+// NOTE THE GAP between code 09 (500 Hz) and code 10 (600 Hz): 550 Hz is not a
+// width this radio has. wfview decodes code 10 as 550 Hz because its branch is
+// `code <= 10`; that off-by-one is why the tables here are generated from ONE
+// function and the encoder searches it rather than inverting it by arithmetic.
+
+// Which of the three code tables a mode uses. Fixed means the mode has no
+// settable width at all.
+enum class WidthClass : std::uint8_t { Ssb, Rtty, Am, Fixed };
+[[nodiscard]] WidthClass widthClassFor(const std::string& mode) noexcept;
+
+// The Hz that width code means in that mode, or nullopt when the code is
+// outside the mode's table (or the mode has no settable width). VALIDATES
+// rather than clamps: these bytes arrive from the network, and a code the
+// table does not define is a frame we have mis-parsed, not a narrow filter.
+[[nodiscard]] std::optional<int> filterWidthHzFromCode(const std::string& mode,
+                                                        std::uint8_t code) noexcept;
+
+// The code whose width is NEAREST to `hz`. Returns nullopt for a mode with no
+// settable width. Searches the decode table, so encode and decode cannot drift.
+[[nodiscard]] std::optional<std::uint8_t> filterWidthCodeFor(const std::string& mode,
+                                                              int hz) noexcept;
+
+// The narrowest and widest this mode can reach, and the step at the wide end.
+// {0, 0, 0} means the mode has no settable width — the caller must not offer a
+// resize control for it.
+struct FilterWidthLimits {
+    int minHz = 0;
+    int maxHz = 0;
+    int coarseStepHz = 0;   // the step above 500 Hz; below that it is 50 Hz
+};
+[[nodiscard]] FilterWidthLimits filterWidthLimitsFor(const std::string& mode) noexcept;
+
+[[nodiscard]] std::vector<std::uint8_t> cmdReadFilterWidth(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetFilterWidth(std::uint8_t to, std::uint8_t code);
+
+// ---------------------------------------------------------------------------
+// Twin PBT (14 07 / 14 08)
+// ---------------------------------------------------------------------------
+
+inline constexpr int kPbtCentreCode = 128;
+// Codes either side of centre. 0000..0255 with 0128 centred is 128 below and
+// 127 above, so the usable symmetric span is 127 — using 128 would make the
+// two directions disagree by one step at full deflection.
+inline constexpr int kPbtSpanCodes  = 127;
+
+// How many Hz that PBT code is worth. SCALED BY THE WIDTH IN CIRCUIT: full
+// deflection moves the passband by one whole width, so the same code means
+// 3.6 kHz in wide SSB and 250 Hz in narrow CW. A converter that assumed a
+// fixed Hz-per-step would be right in exactly one filter.
+[[nodiscard]] int pbtShiftHz(int code, int widthHz) noexcept;
+
+// The inverse, clamped to 0..255. Returns kPbtCentreCode for a zero or
+// unusable width rather than dividing by it.
+[[nodiscard]] int pbtCodeForShiftHz(int shiftHz, int widthHz) noexcept;
+
+// What the operator actually hears, given the width in circuit and both PBT
+// positions. Moving the pair TOGETHER slides the passband; moving them APART
+// narrows it from the inside — which is the only way an Icom produces an
+// asymmetric response, and the reason width alone can never describe one.
+//
+// `centreHz` is where this mode puts the passband centre relative to the
+// carrier, signed in SliceModel's convention (see passbandCentreHz).
+struct PassbandEdges {
+    int lowHz = 0;
+    int highHz = 0;
+};
+[[nodiscard]] PassbandEdges passbandFromWidthAndPbt(int centreHz, int widthHz,
+                                                     int innerCode, int outerCode) noexcept;
+
+// Where this mode's passband is CENTRED relative to the carrier, signed.
+//
+// NOT the low edge. An Icom narrows and widens its SSB filter symmetrically
+// about a fixed centre — which is why the radio's own scope offers "Filter
+// Center" and "Carrier Point" as two different things to centre the display on
+// (1A 05 01 39 on the IC-7300MK2). Pinning the low edge at 300 Hz instead, as
+// this backend used to, is right at exactly one width (2.4 kHz, where the two
+// models agree) and wrong at every other: at 1.8 kHz it drew 300..2100 where
+// the radio was actually passing 600..2400.
+//
+// `widthHz` is needed for the conservative RTTY fallback: the radio's actual
+// mark frequency is configurable (SET 0050) and is not modeled yet, so RTTY
+// retains the legacy 150 Hz carrier-side edge instead of inventing a mark.
+//
+// 1500 Hz for SSB is the figure wfview uses for every Icom
+// (receiverwidget.cpp, manufIcom). CW is centred on the pitch, and AetherSDR's
+// slice frequency in CW already IS the pitch, so its centre is zero here.
+[[nodiscard]] int passbandCentreHz(const std::string& mode, int widthHz) noexcept;
+
+// ---------------------------------------------------------------------------
 // Command builders
 // ---------------------------------------------------------------------------
 
@@ -440,11 +627,60 @@ struct VfoModeState {
 [[nodiscard]] std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which,
                                                         int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetTransmitFrequencyCheck(std::uint8_t to,
+                                                                     bool on);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequencyCheck(std::uint8_t to);
 // Attenuator. `db` is the dB figure the radio prints (0 or 20 on an
 // IC-705), encoded as one BCD byte. The read form carries no payload.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
+enum class RepeaterOffsetDirection : std::uint8_t {
+    Simplex = 0x10,
+    Down = 0x11,
+    Up = 0x12,
+};
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffsetDirection(
+    std::uint8_t to, RepeaterOffsetDirection direction);
+[[nodiscard]] std::optional<RepeaterOffsetDirection> decodeRepeaterOffsetDirection(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to,
+                                                             int offsetHz);
+[[nodiscard]] std::optional<int> decodeRepeaterOffsetHz(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to,
+                                                           double toneHz);
+[[nodiscard]] std::optional<double> decodeRepeaterToneHz(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
+[[nodiscard]] std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload);
+// Normalized radio-state token for each documented IC-9700 16 5D value.
+// Empty means reserved/unknown. Kept here with the wire decoder so socket-free
+// protocol tests can pin every value without a fake radio session.
+[[nodiscard]] std::string_view repeaterAccessModeName(std::uint8_t value) noexcept;
+[[nodiscard]] std::optional<std::uint8_t> repeaterAccessModeValue(
+    std::string_view name) noexcept;
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which, int value,
+    bool txReverse = false, bool rxReverse = false);
+[[nodiscard]] std::optional<std::vector<std::uint8_t>>
+repeaterToneConfirmationForWrite(std::uint8_t to, const CivFrame& write);
+[[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to,
+                                                        std::uint8_t which,
+                                                        double toneHz);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
+                                                             std::uint8_t mode);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);

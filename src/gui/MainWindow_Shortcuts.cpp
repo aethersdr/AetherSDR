@@ -15,6 +15,9 @@
 
 #include "MainWindow.h"
 
+#include <QApplication>
+#include <QKeyEvent>
+
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "AppletPanel.h"
@@ -36,7 +39,9 @@
 #include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
+#include "models/BandDefs.h"
 #include "models/SliceModel.h"
+#include "workspace/WorkspaceController.h"
 
 #include <QAbstractSlider>
 #include <QJsonObject>
@@ -52,6 +57,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 
 namespace AetherSDR {
@@ -667,7 +673,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (!m_radioModel.isConnected()) return true;
         int maxPans = m_radioModel.maxPanadapters();
         // Determine current layout from actual pan count, not saved setting
-        int activePanCount = m_panStack ? m_panStack->count() : 1;
+        const bool canvasEnabled = m_workspaceController
+            && m_workspaceController->isEnabled();
+        int activePanCount = canvasEnabled
+            ? m_workspaceController->activeMainPanIdsForLayout().size()
+            : (m_panStack ? m_panStack->count() : 1);
         QString currentLayout = "1";
         if (activePanCount >= 2)
             currentLayout = AppSettings::instance()
@@ -676,9 +686,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
             const QString layoutId = dlg.selectedLayout();
             const int requestedPanCount = panCountForLayoutId(layoutId);
-            const int currentSliceCount = static_cast<int>(m_radioModel.slices().size());
-            if (requestedPanCount > activePanCount
-                    && currentSliceCount >= m_radioModel.maxSlices()) {
+            const int additionalPans = qMax(0, requestedPanCount - activePanCount);
+            const int globalPanCount = m_panStack ? m_panStack->count() : 0;
+            if (globalPanCount + additionalPans > m_radioModel.maxPanadapters()) {
                 showPanadapterSliceCapacityMessage();
                 return true;
             }
@@ -782,19 +792,32 @@ void MainWindow::registerShortcutActions()
         });
 
     // ── Band ────────────────────────────────────────────────────────────
-    struct BandDef { const char* id; const char* name; double mhz; };
-    static const BandDef bands[] = {
-        {"band_160m", "160m", 1.900}, {"band_80m", "80m", 3.800},
-        {"band_60m", "60m", 5.357},   {"band_40m", "40m", 7.200},
-        {"band_30m", "30m", 10.125},  {"band_20m", "20m", 14.225},
-        {"band_17m", "17m", 18.118},  {"band_15m", "15m", 21.300},
-        {"band_12m", "12m", 24.940},  {"band_10m", "10m", 28.400},
-        {"band_6m",  "6m",  50.125},  {"band_2m",  "2m",  146.000},
+    // Sourced from the canonical kBands (BandDefs.h) rather than a local
+    // copy so freq/mode can never drift from the UI's BAND_GRID again
+    // (#4967 review). This list intentionally names only the 12 bands that
+    // have always had shortcut/MIDI bindings — it is not "every kBands
+    // entry" and adding to it means adding a new shortcut, not just data.
+    static constexpr const char* kShortcutBandNames[] = {
+        "160m", "80m", "60m", "40m", "30m", "20m",
+        "17m",  "15m", "12m", "10m", "6m",  "2m",
     };
-    for (const auto& b : bands) {
-        double freq = b.mhz;
-        m_shortcutManager.registerAction(b.id, b.name, "Band",
-            QKeySequence(), [this, freq]() {
+    for (const char* name : kShortcutBandNames) {
+        const auto it = std::find_if(std::begin(kBands), std::end(kBands),
+            [name](const BandDef& b) { return std::strcmp(b.name, name) == 0; });
+        // kShortcutBandNames is a fixed, hand-checked list, so a miss means
+        // it fell out of sync with kBands — fail loudly in dev/CI builds
+        // rather than silently dropping a shortcut. Still guarded for
+        // release builds, where Q_ASSERT_X compiles out.
+        Q_ASSERT_X(it != std::end(kBands), "registerBandShortcuts",
+                   "kShortcutBandNames entry missing from kBands");
+        if (it == std::end(kBands))
+            continue;
+        QString bandName = QString::fromLatin1(it->name);
+        double freq = it->defaultFreqMhz;
+        QString mode = QString::fromLatin1(it->defaultMode);
+        const QString id = QStringLiteral("band_%1").arg(bandName);
+        m_shortcutManager.registerAction(id, bandName, "Band",
+            QKeySequence(), [this, bandName, freq, mode]() {
                 if (!m_radioModel.isConnected()) return;
                 auto* s = activeSlice();
                 if (!s) return;
@@ -802,17 +825,7 @@ void MainWindow::registerShortcutActions()
                     s->notifyTuneBlockedByLock();
                     return;
                 }
-                TuneCenteringResult result;
-                if (auto* pan = m_radioModel.panadapter(s->panId())) {
-                    result.oldCenterMhz = pan->centerMhz();
-                    result.bandwidthMhz = pan->bandwidthMhz();
-                }
-                result.newCenterMhz = freq;
-                result.followRevealTriggered = true;
-                result.hardCenterUsed = true;
-                logTunePolicyDecision("band-shortcut", TuneIntent::AbsoluteJump,
-                                      s->frequency(), freq, result);
-                s->tuneAndRecenter(freq);
+                selectBand(s->panId(), bandName, freq, mode);
             });
     }
 
@@ -1293,6 +1306,65 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
     }
     a->handler();
     return a->keysTx ? ShortcutFireTxOk : ShortcutFireOk;
+}
+
+int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx)
+{
+    // Resolve an action id to its CURRENT binding first, so a rebind moves the
+    // injected key with it (#3879); fall back to a literal sequence such as
+    // "Ctrl+T" so a test can drive the modifier-tolerant release branch on
+    // purpose. (#5079)
+    QKeySequence seq;
+    const ShortcutManager::Action* a = m_shortcutManager.action(spec);
+    if (a && !a->currentKey.isEmpty()) {
+        seq = a->currentKey;
+    } else if (a) {
+        // The id exists but has no binding (the CW momentary ids ship
+        // unbound): say so, rather than "not a known action id".
+        return KeyInjectUnbound;
+    } else {
+        seq = QKeySequence::fromString(spec, QKeySequence::PortableText);
+        // fromString() parses unrecognised text into a non-empty sequence whose
+        // key is Qt::Key_unknown, so isEmpty() alone would let garbage through.
+        if (seq.isEmpty() || seq[0].key() == Qt::Key_unknown)
+            return KeyInjectUnknownKey;
+        a = m_shortcutManager.actionForKey(seq);
+    }
+
+    // A multi-chord sequence ("Ctrl+K, Ctrl+B") would be silently truncated
+    // to its first chord by the seq[0] injection below — reject it instead,
+    // so the verb never reports ok/consumed for chords it did not deliver.
+    // The momentary family is single-chord by construction. (#5079)
+    if (seq.count() > 1)
+        return KeyInjectUnknownKey;
+
+    // TX gate on the PRESS only. Blocking a release would leave the transmitter
+    // keyed with no way to drop it — the failure failSafeMomentaryKeyingToRx
+    // exists to prevent. A release is always safe to deliver.
+    const bool keysTx = a && a->keysTx;
+    if (press && keysTx && !allowTx)
+        return KeyInjectTxBlocked;
+
+    const QKeyCombination kc = seq[0];
+    QKeyEvent ev(press ? QEvent::KeyPress : QEvent::KeyRelease,
+                 kc.key(), kc.keyboardModifiers(), QString(), /*autorep=*/false);
+
+    // Send (not post) to the main window itself, never to the focus widget.
+    // Filters installed on qApp run for events delivered to any object, so
+    // this still walks the same eventFilter path a real key takes —
+    // synchronously, so isAccepted() is meaningful on return — and the
+    // momentary handlers do not look at the receiver. Delivering to the
+    // focus widget instead would let an unbound key reach a widget that keys
+    // TX on its own (a focused ATU/CWX/APRS button clicks on Space; a
+    // dialog's default button on Return), bypassing the action-level gate
+    // above — the widget-marker guard `invoke` honours (aetherTxKeying) would
+    // be skipped. A synthesized edge that only the filter can see cannot
+    // click anything. Nothing goes through the window manager, so
+    // focus-stealing prevention cannot defeat it. (Constitution VI)
+    QApplication::sendEvent(this, &ev);
+    if (!ev.isAccepted())
+        return KeyInjectNotConsumed;
+    return (press && keysTx) ? KeyInjectTxOk : KeyInjectOk;
 }
 
 void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)

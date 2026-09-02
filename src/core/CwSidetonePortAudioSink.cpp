@@ -1,4 +1,5 @@
 #include "CwSidetonePortAudioSink.h"
+#include "CwSidetoneDeviceMatch.h"
 #include "CwSidetoneGenerator.h"
 #include "LogManager.h"
 
@@ -15,15 +16,16 @@ namespace AetherSDR {
 
 namespace {
 
-QString normalizedDeviceName(QString name)
+// Resolve the operator's explicit Qt output selection to a PortAudio device.
+// The name rule lives in CwSidetoneDeviceMatch.h so it is testable without
+// hardware.  `partialMatchName` (optional) receives the PortAudio name when
+// the result came from a PARTIAL match rather than an exact one, so the
+// caller can report the substitution in the sidetone summary instead of it
+// living in one warning line (#5123).
+PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
+                                        QString* partialMatchName = nullptr)
 {
-    return name.simplified().toCaseFolded();
-}
-
-PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
-{
-    const QString target = normalizedDeviceName(device.description());
-    if (target.isEmpty())
+    if (device.description().trimmed().isEmpty())
         return paNoDevice;
 
     const PaDeviceIndex count = Pa_GetDeviceCount();
@@ -46,11 +48,11 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
             continue;
 
         const QString rawName = QString::fromUtf8(info->name);
-        const QString candidate = normalizedDeviceName(rawName);
-        if (candidate == target)
+        const DeviceNameMatch kind = classifyDeviceNameMatch(rawName, device.description());
+        if (kind == DeviceNameMatch::Exact)
             return i;
 
-        if (candidate.contains(target) || target.contains(candidate)) {
+        if (kind == DeviceNameMatch::Partial) {
             // paInDevelopment (0) is used as a safe "unknown" sentinel when
             // Pa_GetHostApiInfo returns null — it will never equal paWASAPI.
             PaHostApiTypeId apiType = paInDevelopment;
@@ -60,15 +62,34 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
         }
     }
 
-    if (partials.isEmpty())
+    if (partials.isEmpty()) {
+        // Name every output-capable candidate so field reports show what was
+        // available to match, not just that nothing did (#4978). Failure-path
+        // only — the second enumeration costs nothing on a successful match.
+        QStringList candidates;
+        for (PaDeviceIndex i = 0; i < count; ++i) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+            if (!info || info->maxOutputChannels <= 0 || !info->name)
+                continue;
+            const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+            candidates << QStringLiteral("\"%1\" [%2]")
+                              .arg(QString::fromUtf8(info->name),
+                                   api && api->name ? QString::fromUtf8(api->name)
+                                                    : QStringLiteral("?"));
+        }
+        qCWarning(lcAudio) << "CwSidetonePortAudioSink: no PortAudio output matches"
+                           << device.description()
+                           << "- candidates:" << qUtf8Printable(candidates.join(QStringLiteral(", ")));
         return paNoDevice;
+    }
 
     if (partials.size() == 1) {
+        if (partialMatchName)
+            *partialMatchName = partials[0].rawName;
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                            << device.description()
-                           << "partially matched PortAudio output"
-                           << partials[0].rawName
-                           << "by name substring";
+                           << "only partially matched PortAudio output"
+                           << partials[0].rawName;
         return partials[0].idx;
     }
 
@@ -91,48 +112,41 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
     }
 #endif
 
+    QStringList matchedNames;
+    for (const Candidate& c : partials)
+        matchedNames << QStringLiteral("\"%1\"").arg(c.rawName);
     qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                        << device.description()
-                       << "matched multiple PortAudio outputs";
+                       << "matched multiple PortAudio outputs:"
+                       << qUtf8Printable(matchedNames.join(QStringLiteral(", ")));
     return paNoDevice;
 }
 
 PaDeviceIndex defaultPortAudioOutputDevice()
 {
+    // No JACK preference here: a default selection must land on the same
+    // output the rest of the app's audio uses (Pa_GetDefaultOutputDevice —
+    // the ALSA `default` route on Linux, which follows the system mixer).
+    // Preferring a reachable JACK server's device would silently split the
+    // sidetone from RX audio; routing INTO a JACK graph should be an
+    // explicit selection (see #4978's escape-hatch follow-up), not a
+    // side effect of leaving the device unset.
     PaDeviceIndex devIdx = paNoDevice;
-#ifdef Q_OS_LINUX
-    {
-        const PaHostApiIndex apiCount = Pa_GetHostApiCount();
-        for (PaHostApiIndex i = 0; i < apiCount; ++i) {
-            const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
-            if (!api || !api->name) continue;
-            if (qstrncmp(api->name, "JACK", 4) == 0
-                && api->defaultOutputDevice != paNoDevice) {
-                devIdx = api->defaultOutputDevice;
-                qCInfo(lcAudio) << "CwSidetonePortAudioSink: using JACK host API"
-                                << "(device" << devIdx << ")";
-                break;
-            }
-        }
-    }
-#endif
 #ifdef Q_OS_WIN
     // Pa_GetDefaultOutputDevice() on Windows typically returns an MME device
     // (the first enumerated host API), which has 50–150 ms OS-level buffering.
     // Prefer WASAPI shared mode (~10 ms) to reduce CW timing jitter on fast
-    // keying. Mirrors the Linux JACK preference above. (#3193)
-    if (devIdx == paNoDevice) {
-        const PaHostApiIndex apiCount = Pa_GetHostApiCount();
-        for (PaHostApiIndex i = 0; i < apiCount; ++i) {
-            const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
-            if (!api || !api->name) continue;
-            if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
-                && api->defaultOutputDevice != paNoDevice) {
-                devIdx = api->defaultOutputDevice;
-                qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
-                                << "(device" << devIdx << ")";
-                break;
-            }
+    // keying. (#3193)
+    const PaHostApiIndex apiCount = Pa_GetHostApiCount();
+    for (PaHostApiIndex i = 0; i < apiCount; ++i) {
+        const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
+        if (!api || !api->name) continue;
+        if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
+            && api->defaultOutputDevice != paNoDevice) {
+            devIdx = api->defaultOutputDevice;
+            qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
+                            << "(device" << devIdx << ")";
+            break;
         }
     }
 #endif
@@ -192,9 +206,10 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         m_paInitialized = true;
     }
 
+    QString partialMatchName;
     PaDeviceIndex devIdx = device.isNull()
         ? defaultPortAudioOutputDevice()
-        : findPortAudioOutputDevice(device);
+        : findPortAudioOutputDevice(device, &partialMatchName);
     if (!device.isNull() && devIdx == paNoDevice) {
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                            << device.description()
@@ -212,23 +227,31 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         return false;
     }
     if (!device.isNull()) {
-        qCWarning(lcAudio) << "CwSidetonePortAudioSink: matched selected Qt output"
-                           << device.description()
-                           << "to PortAudio output" << devInfo->name;
-    }
-    m_deviceDescription = QString::fromLocal8Bit(devInfo->name ? devInfo->name : "");
-
-    // Detect JACK-host-API selection from defaultPortAudioOutputDevice() so the
-    // summary logger sees it as a backend-substituted fallback. (The selection
-    // itself happens inside the namespace-scope helper, which can't touch
-    // member state directly.)
-    if (device.isNull()) {
-        const PaHostApiInfo* api = Pa_GetHostApiInfo(devInfo->hostApi);
-        if (api && api->name && qstrncmp(api->name, "JACK", 4) == 0) {
-            m_fallbackOccurred = true;
-            m_fallbackReason = QStringLiteral("backend selected JACK default output");
+        if (partialMatchName.isEmpty()) {
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: matched selected Qt output"
+                               << device.description()
+                               << "to PortAudio output" << devInfo->name;
+        } else {
+            // Not "matched": the operator did not pick this device (#5123).
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: opening PortAudio output"
+                               << devInfo->name
+                               << "in place of selected Qt output"
+                               << device.description()
+                               << "(partial name match)";
         }
     }
+    if (!partialMatchName.isEmpty()) {
+        // A partial name match is a substitution the operator did not make;
+        // surface it in the summary and the support bundle, not only in the
+        // warning above (#5123).
+        m_fallbackOccurred = true;
+        const QString detail = QStringLiteral("selected \"%1\" resolved by partial name match to \"%2\"")
+                                   .arg(device.description(), partialMatchName);
+        m_fallbackReason = m_fallbackReason.isEmpty()
+            ? detail
+            : m_fallbackReason + QStringLiteral("; ") + detail;
+    }
+    m_deviceDescription = QString::fromLocal8Bit(devInfo->name ? devInfo->name : "");
 
     // Prefer 48 kHz; fall back to the device's native rate only if the
     // device explicitly rejects 48 kHz.

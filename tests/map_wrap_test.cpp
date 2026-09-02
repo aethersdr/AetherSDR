@@ -98,6 +98,26 @@ int main(int argc, char** argv)
     ok &= expect(centerErrorPixels <= 1.0,
                  "wide wrapped camera should reach the dateline without scene clamping");
 
+    // Horizontal repetition must not make the finite Web Mercator surface
+    // vertically pannable. At both poles the viewport edge should stop at the
+    // projection edge rather than exposing the empty QGraphicsScene canvas.
+    map.geoView()->setVerticalBoundsEnabled(true);
+    map.cameraTo(QGVCameraActions(&map)
+                     .scaleTo(wholeWorldScale * 2.0)
+                     .moveTo(QPointF(world.center().x(),
+                                     world.top() - world.height())),
+                 false);
+    QRectF boundedView = map.getCamera().projRect();
+    ok &= expect(boundedView.top() >= world.top() - 1.0,
+                 "northward pan must stop at the projection boundary");
+    map.cameraTo(QGVCameraActions(&map)
+                     .moveTo(QPointF(world.center().x(),
+                                     world.bottom() + world.height())),
+                 false);
+    boundedView = map.getCamera().projRect();
+    ok &= expect(boundedView.bottom() <= world.bottom() + 1.0,
+                 "southward pan must stop at the projection boundary");
+
     // Zoom symmetry: n notches in followed by n notches out must land back on
     // the scale we started from. Upstream's asymmetric in/out exponents lost
     // ~11% per round trip, so the operator drifted away from their own view

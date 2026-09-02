@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.8.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,7 @@ option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cp
 option(ASR_USE_PREBUILT_WHISPER_GPU
     "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
+option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -134,6 +135,8 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
+    OpenGL
+    OpenGLWidgets
     Network
     Multimedia
     Test
@@ -622,8 +625,16 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
+    src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
+    src/core/backends/anan/P2Client.cpp      # aetherd ANAN P2 Phase 1b (UDP wire + DDC0 ingest)
+    src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)
+    src/core/backends/anan/AnanSpectrum.cpp  # aetherd ANAN P2 Phase 1b (FFT panadapter, FFTW)
+    src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
+    src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
+    src/core/backends/icom/IcomMemoryCodec.cpp # profile-gated Icom radio memories (1A 00)
     src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
     src/core/backends/icom/IcomSession.cpp   # IcomCIV Phase 0 (handshake orchestration)
     src/core/backends/icom/IcomScope.cpp     # IcomCIV Phase 2 (0x27 waveform -> panadapter)
@@ -687,6 +698,7 @@ set(CORE_SOURCES
     src/core/AetherClockEngine.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -732,6 +744,8 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/LpMeterProtocol.cpp
+    src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -768,6 +782,10 @@ set(CORE_SOURCES
     src/core/LogManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
+    src/core/SystemInfo.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/ThreadName.cpp
+    src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
     src/core/FlexControlManager.cpp
@@ -853,6 +871,7 @@ set(MODEL_SOURCES
     src/models/BandPlanManager.cpp
     src/models/XvtrPolicy.cpp
     src/models/AntennaGeniusModel.cpp
+    src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
 )
 
@@ -881,9 +900,13 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
+    src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
-    src/gui/map/MapPathItem.cpp
+    src/gui/map/MapPathBatchItem.cpp
+    src/gui/map/MapTerminatorItem.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
@@ -909,6 +932,7 @@ set(GUI_SOURCES
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
+    src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
@@ -942,6 +966,7 @@ set(GUI_SOURCES
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
     src/gui/VkampApplet.cpp
+    src/gui/LpMeterApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1059,6 +1084,7 @@ set(GUI_SOURCES
     src/gui/PhaseKnob.cpp
     src/gui/AntennaGeniusApplet.cpp
     src/gui/ShackSwitchApplet.cpp
+    src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
@@ -1583,6 +1609,13 @@ if (ENABLE_ASR)
             set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
             set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
             message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+            # The pack is produced by a stock in-tree build (GGML_NATIVE=OFF →
+            # ggml's fixed x86-64 feature set; MSVC /arch:AVX2 additionally
+            # implies FMA+F16C). Recorded here for the startup inventory
+            # (#4986) because the GGML_* options that would say so only exist
+            # when ggml's own CMake runs — which this branch skips. Re-derive
+            # if the pack is ever rebuilt with different ISA settings.
+            set(_aether_prebuilt_ggml_baseline "SSE42,AVX,AVX2,FMA,F16C,BMI2")
         else()
             # Build whisper/ggml as static objects, not .so's.
             set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
@@ -1978,6 +2011,9 @@ target_link_libraries(aethercore PUBLIC
     aether_sqlite3
     Qt6::Core
     Qt6::Concurrent
+    # Transitive aetherd debt: BandPlanManager and DxccColorProvider expose
+    # QColor in their public data surfaces. Stage 3 forbids QtWidgets; moving
+    # these presentation types out of aethercore is a later burndown step.
     Qt6::Gui
     Qt6::Network
     Qt6::Multimedia
@@ -1988,6 +2024,8 @@ target_link_libraries(aethercore PUBLIC
 
 target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
@@ -2255,11 +2293,73 @@ else()
         endif()
     endif()
 endif()
+
+# RTL-SDR hardware backend — IRadioBackend implementor (family "rtl")
+if(PkgConfig_FOUND)
+    pkg_check_modules(RTLSDR IMPORTED_TARGET librtlsdr)
+    pkg_check_modules(RTL_FFTW3F IMPORTED_TARGET fftw3f)
+endif()
+
+# vcpkg / Homebrew / hand-built installs ship no .pc file. Fall back to a
+# plain header+library probe so the switch below is reachable on every
+# platform, not only the pkg-config ones.
+if(ENABLE_RTL AND NOT RTLSDR_FOUND)
+    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h)
+    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr)
+    if(RTLSDR_INCLUDE_DIR AND RTLSDR_LIBRARY)
+        add_library(RtlSdr::RtlSdr UNKNOWN IMPORTED)
+        set_target_properties(RtlSdr::RtlSdr PROPERTIES
+            IMPORTED_LOCATION "${RTLSDR_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${RTLSDR_INCLUDE_DIR}")
+        set(RTLSDR_FOUND TRUE)
+        set(RTLSDR_TARGET RtlSdr::RtlSdr)
+    endif()
+else()
+    set(RTLSDR_TARGET PkgConfig::RTLSDR)
+endif()
+
+if(ENABLE_RTL AND NOT RTL_FFTW3F_FOUND)
+    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h)
+    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3)
+    if(RTL_FFTW3F_INCLUDE_DIR AND RTL_FFTW3F_LIBRARY)
+        add_library(RtlFftw3f::RtlFftw3f UNKNOWN IMPORTED)
+        set_target_properties(RtlFftw3f::RtlFftw3f PROPERTIES
+            IMPORTED_LOCATION "${RTL_FFTW3F_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${RTL_FFTW3F_INCLUDE_DIR}")
+        set(RTL_FFTW3F_FOUND TRUE)
+        set(RTL_FFTW3F_TARGET RtlFftw3f::RtlFftw3f)
+    endif()
+else()
+    set(RTL_FFTW3F_TARGET PkgConfig::RTL_FFTW3F)
+endif()
+
+if(NOT ENABLE_RTL)
+    message(STATUS "RTL-SDR ... disabled by ENABLE_RTL=OFF")
+elseif(RTLSDR_FOUND AND RTL_FFTW3F_FOUND)
+    message(STATUS "RTL-SDR ... found with fftw3f — RtlSdrBackend enabled")
+    set(AETHER_BACKEND_RTL ON)
+    target_compile_definitions(aethercore PUBLIC AETHER_BACKEND_RTL)
+    target_link_libraries(aethercore PRIVATE ${RTLSDR_TARGET} ${RTL_FFTW3F_TARGET})
+    target_sources(aethercore PRIVATE
+        src/core/backends/rtl/RtlSdrBackend.cpp
+        src/core/backends/rtl/RtlSdrBackend.h
+        src/core/backends/rtl/RtlSdrWorker.cpp
+        src/core/backends/rtl/RtlSdrWorker.h
+        src/core/backends/rtl/RtlSdrDdc.cpp
+        src/core/backends/rtl/RtlSdrDdc.h)
+elseif(RTLSDR_FOUND AND NOT RTL_FFTW3F_FOUND)
+    message(STATUS "RTL-SDR ... disabled — librtlsdr found but fftw3f missing. Install fftw3f (e.g. libfftw3-dev), or configure with -DENABLE_RTL=OFF.")
+else()
+    message(STATUS "RTL-SDR ... disabled — librtlsdr not found")
+endif()
+
 # Ulanzi Dial backend — one per platform.  All three implementations
 # expose the same Qt signal contract (see UlanziDialBackend.h); the
 # mapper dialog and MainWindow dispatcher are unchanged across
 # platforms.  See #3232 for the design.
 target_sources(aethercore PRIVATE
+    src/core/RtlSdrDiscovery.cpp    # RTL-SDR discovery — compiled unconditionally, stubbed internally when librtlsdr absent
+    src/core/RtlSdrDiscovery.h
     src/core/UlanziDialBackend.h    # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
     src/core/UlanziChordDecoder.cpp # chord decode shared by all three backends (ulanzi_chord_decoder_test)
     src/core/UlanziChordDecoder.h
@@ -2732,6 +2832,50 @@ target_compile_definitions(aethercore PUBLIC
     AETHERSDR_VERSION="${PROJECT_VERSION}"
 )
 
+# Expose the vendored ggml CPU ISA baseline to code (#4986) so the startup
+# inventory can compare it against the running CPU: GGML_NATIVE is forced OFF
+# above, which in ggml's build system enables this fixed feature set on
+# x86-64 (third_party/whisper.cpp/ggml/CMakeLists.txt, INS_ENB). On MSVC,
+# FMA/F16C have no separate options — /arch:AVX2 implies both — so the list
+# names only the options that exist. Left undefined on system-libwhisper
+# builds (their baseline is the distro's choice and unknowable here) and on
+# non-x86 hosts (all options default OFF there), which the code reports as
+# "unknown"/skips.
+set(_aether_ggml_baseline_str "")
+if (NOT ENABLE_ASR)
+    # No speech engine in this binary — never record a baseline, even if a
+    # stale cache still carries GGML_* entries from an earlier ASR configure
+    # (which would otherwise arm an ASR warning in an ASR-less build).
+elseif (DEFINED _aether_prebuilt_ggml_baseline)
+    # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
+    # the baseline comes from the pack's recorded build settings above.
+    set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
+elseif (USE_SYSTEM_LIBWHISPER)
+    # Distro libwhisper: its ISA baseline is the packager's choice and not
+    # knowable here. Explicit, not implied by GGML_* being unset — those are
+    # cache entries and survive a reconfigure from the vendored engine.
+elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
+    # x86 targets only: ggml defines these options unguarded on every
+    # architecture (INS_ENB defaults them ON whenever GGML_NATIVE is forced
+    # OFF on a native build), so on ARM they sit ON in the cache while the
+    # compile ignores them — scanning them there would stamp an x86 baseline
+    # into an ARM binary.
+    set(_aether_ggml_baseline "")
+    foreach(_aether_isa SSE42 AVX AVX2 FMA F16C BMI2)
+        if (DEFINED GGML_${_aether_isa} AND GGML_${_aether_isa})
+            list(APPEND _aether_ggml_baseline ${_aether_isa})
+        endif()
+    endforeach()
+    list(JOIN _aether_ggml_baseline "," _aether_ggml_baseline_str)
+else()
+    set(_aether_ggml_baseline_str "")
+endif()
+if (NOT _aether_ggml_baseline_str STREQUAL "")
+    target_compile_definitions(aethercore PUBLIC
+        AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}"
+    )
+endif()
+
 # Compiler warnings — same flags for both first-party targets. Vendored
 # sources compiled into aethercore keep their per-source -w COMPILE_FLAGS,
 # which land after these target options and win (unchanged from monolith).
@@ -2805,6 +2949,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND AETHER_BACKEND_RTL)
+        install(FILES packaging/linux/70-rtl-sdr.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications

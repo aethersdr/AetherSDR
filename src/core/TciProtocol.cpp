@@ -1122,10 +1122,11 @@ QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool /*isSet*/)
     if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
-    if (wpm < 5 || wpm > 100) return {};
-    QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) {
+        return {};
+    }
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("cw_macros_speed:%1;").arg(wpm);
@@ -1138,8 +1139,7 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
     // cw_msg:text — send CW macro text
     QString text = args.join(',');  // rejoin in case text had commas
     if (text.isEmpty()) return {};
-    QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         // Capability check runs HERE, on the model's thread, not in the caller:
         // this method is driven by the TCI client socket and RadioModel state is
         // not ours to read from it.
@@ -1148,7 +1148,12 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
                                 "CW keyer";
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        const QString rejection = model->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcCat) << "TCI: cw_msg ignored:" << rejection;
+            return;
+        }
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1617,19 +1622,65 @@ QString TciProtocol::cmdSpotClear()
 
 // ── CW macros ──────────────────────────────────────────────────────────────
 
+// See the contract on cwMacrosTextFromArgs() in TciProtocol.h for why numeric
+// first arguments fail closed while non-numeric ones retain compatibility.
+QString TciProtocol::cwMacrosTextFromArgs(const QStringList& args, int trxCount)
+{
+    if (args.isEmpty()) {
+        return {};
+    }
+    if (trxCount < 1) {
+        trxCount = 1;
+    }
+
+    // A base-10 integer in the receiver slot is always an address. If it no
+    // longer names a live advertised receiver, fail closed rather than
+    // reinterpreting it as text and putting the stale index on the air.
+    //
+    // args.join(',') on the TAIL, not on everything: the join is what lets a
+    // message legitimately CONTAIN commas (`cw_macros:0,CQ,CQ` keys "CQ,CQ"),
+    // which is why the original code joined at all. Only the index was wrong.
+    int trx = 0;
+    if (argToInt(args, 0, trx)) {
+        if (trx < 0 || trx >= trxCount) {
+            return {};
+        }
+        return args.mid(1).join(',');
+    }
+    return args.join(',');
+}
+
 QString TciProtocol::cmdCwMacros(const QStringList& args)
 {
-    if (!m_model || args.isEmpty()) return {};
-    QString text = args.join(',');
-    if (text.isEmpty()) return {};
-    QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    if (!m_model || args.isEmpty()) {
+        return {};
+    }
+
+    // TciServer and RadioModel share the GUI thread. Resolve against the
+    // receiver map now, while handling the command, so slice churn cannot
+    // change how the same wire message is interpreted one event-loop turn
+    // later. Only validated text crosses the queued boundary.
+    const int trxCount = m_trxMap ? m_trxMap->trxCount(m_model)
+                                  : static_cast<int>(m_model->slices().size());
+    const QString text = cwMacrosTextFromArgs(args, trxCount);
+    if (text.isEmpty()) {
+        qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 empty text or "
+                            "invalid receiver index";
+        return {};
+    }
+
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         if (!model->hasRadioSideCwKeyer()) {
             qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 radio has no "
                                 "radio-side CW keyer";
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        const QString rejection = model->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcCat) << "TCI: cw_macros ignored:" << rejection;
+            return;
+        }
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1638,8 +1689,10 @@ QString TciProtocol::cmdCwMacrosStop()
 {
     if (!m_model) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model]() {
-        if (!model->hasRadioSideCwKeyer()) return;
-        model->sendCmdPublic("cwx clear", nullptr);
+        if (!model->hasRadioSideCwKeyer()) {
+            return;
+        }
+        model->cwxModel().clearBuffer();
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1767,10 +1820,9 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool /*isSet*/)
     if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
-    if (wpm < 5 || wpm > 100) return {};
-    QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) return {};
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("cw_keyer_speed:%1;").arg(wpm);
     return {};

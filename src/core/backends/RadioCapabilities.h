@@ -1,12 +1,45 @@
 #pragma once
 
 #include <QFlags>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QVector>
 #include <QVariantMap>
 
 namespace AetherSDR {
+
+struct TxPowerBand {
+    double lowHz = 0.0;
+    double highHz = 0.0;
+    double maxWatts = 0.0;
+};
+
+// A backend-declared native band. The canonical name remains the model/UI key;
+// the limits let clients present hardware-specific coverage without guessing
+// from a family/model string or overloading a transmit-power capability.
+struct DeclaredBandRange {
+    QString name;
+    double lowHz = 0.0;
+    double highHz = 0.0;
+
+    bool operator==(const DeclaredBandRange&) const = default;
+};
+
+enum class FmTonePresentation {
+    Legacy,
+    Hidden,
+    Ctcss,
+};
+
+[[nodiscard]] inline const QStringList& legacyFmToneModes()
+{
+    static const QStringList modes{
+        QStringLiteral("off"),
+        QStringLiteral("ctcss_tx"),
+    };
+    return modes;
+}
 
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
@@ -25,9 +58,12 @@ namespace AetherSDR {
 // surfaced to clients. A FlexBackend may seed this FROM ModelCapabilities, but
 // the two are distinct concepts (derived-from-name vs reported-by-backend).
 //
-// ADDING A FIELD: every field below defaults to false/0/empty, so a backend
-// that omits one silently declares the feature ABSENT — set it explicitly in
-// FlexBackend, Hl2Backend AND SimBackend. Then record it in
+// ADDING A FIELD: feature-presence fields default to false/0/empty, so a
+// backend that omits one silently declares the feature ABSENT. Shape fields
+// that describe an already-established control instead default to the legacy
+// shape (for example PROC's 0..2 domain), avoiding a disconnected or older
+// backend briefly losing an existing surface. In both cases, set the field
+// explicitly in every backend implementation. Then record it in
 // docs/architecture/radio-capabilities-map.md, which maps every field to the
 // code that reads it (and lists the ones nothing reads yet). A capability no
 // consumer reads looks identical, from here, to one that works.
@@ -68,6 +104,12 @@ struct RadioCapabilities {
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
 
+    // Optional per-band native coverage. Empty means "not reported" and keeps
+    // canonical band labels. This is distinct from txPowerBands: receive-only
+    // radios and bands still need honest presentation even when no PA rating
+    // exists.
+    QVector<DeclaredBandRange> declaredBandRanges;
+
     // Manual notch filters (a Flex TNF) the radio can hold at once. ZERO is the
     // load-bearing default: it means "this radio cannot notch", and the UI then
     // omits the +TNF button and the panadapter's add/remove entries entirely.
@@ -104,6 +146,27 @@ struct RadioCapabilities {
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
 
+    // Optional per-frequency ceilings for radios whose PA rating changes by
+    // band. Empty means txPowerMaxWatts applies everywhere. The ranges are
+    // inclusive and expressed in Hz, matching the tuning fields above.
+    QVector<TxPowerBand> txPowerBands;
+
+    // Whether forward-power telemetry needs client-side attack/decay
+    // ballistics. True preserves the established Flex presentation. A backend
+    // whose telemetry already carries a stable indicated value can disable the
+    // second response layer so consumers reflect each authoritative sample.
+    bool forwardPowerRequiresSmoothing = false;
+
+    [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
+    {
+        for (const TxPowerBand& band : txPowerBands) {
+            if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+                return band.maxWatts;
+            }
+        }
+        return txPowerMaxWatts;
+    }
+
     // Modes this radio DEMODULATES BUT WILL NOT TRANSMIT IN, in AetherSDR's
     // neutral vocabulary (the same strings SliceModel carries).
     //
@@ -120,6 +183,14 @@ struct RadioCapabilities {
     // rollback a backend cannot perform for itself, because a backend cannot
     // reach TransmitModel (#5106 review).
     QStringList receiveOnlyModes;
+
+    // FM tone presentation is explicit so a vendor-specific model can expose
+    // its proven CTCSS/DTCS registers without changing another radio family's
+    // controls. fmToneModes is the authoritative per-model mode vocabulary.
+    // Hidden is the safe default; established backends opt into Legacy.
+    FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
+    QStringList fmToneModes;
+    QList<int> fmDtcsCodes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
@@ -162,6 +233,18 @@ struct RadioCapabilities {
     // being written into a radio that silently drops them. A backend only sets
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
+
+    // Whether the radio-backed memory store accepts mutations and native
+    // recalls. These are deliberately separate from persistsMemories: an
+    // initial backend may prove that it can enumerate radio-owned channels
+    // before it is safe to overwrite them, and may expose those channels as
+    // tune presets without putting the radio into its vendor Memory mode.
+    bool canWriteMemories = false;
+    bool canApplyMemories = false;
+    bool canRefreshMemories = false;
+    QStringList memoryGroups;
+    QString memoryGroupColumnTitle = QStringLiteral("Group");
+    bool memoryRefreshRequiresGroup = false;
 
     // Domains of OPERATING STATE this client persists and restores because the
     // radio cannot (RFC #4603 proposal B). Constitution Principle III assigns
@@ -207,7 +290,28 @@ struct RadioCapabilities {
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
-    bool hasTuner = false;         // antenna tuner / ATU
+    // The radio exposes an authoritative, client-settable dial lock. This is
+    // distinct from AetherSDR's local per-slice tuning guard: a radio-side
+    // lock may be global and may also follow front-panel changes.
+    bool hasRadioDialLock = false;
+    bool hasRemoteOnControl = false; // client can configure wake-on-network
+    bool canUpgradeFirmware = false; // client can upload radio firmware
+    bool hasSmartLink = false;       // client has the SmartLink/WAN service and pin store
+    bool hasLicenseInfo = false;     // radio exposes SmartSDR entitlement details
+    bool hasClientNetworkConfig = false; // client may write the radio's IP configuration
+    bool hasFlexControlIntegration = false; // FlexControl/AetherControl verbs are supported
+    bool hasAudioCompression = false; // selectable compressed radio-audio transport
+    bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
+    // The radio's streaming data plane uses VITA-49. This currently gates the
+    // receive-socket buffer and network MTU controls; it describes the transport,
+    // not the vendor or only one stream direction.
+    bool usesVita49Transport = false;
+    // The backend can read the radio's own IP configuration rather than only
+    // knowing the address selected by the client.
+    bool hasNetworkConfigurationReadback = false;
+    bool hasPrivateIpConnectionPolicy = false; // SmartSDR private-IP enforcement setting
+    bool hasTuner = false;         // antenna tuner / ATU matching control
+    bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
@@ -262,6 +366,20 @@ struct RadioCapabilities {
     // tone. A radio can have either, both or neither.
     bool hasManualNotch = false;
 
+    // Inclusive upper bound of the radio's speech-processor level control.
+    // Flex-shaped controls use 0..2 (NOR/DX/DX+); a model with an evidenced
+    // continuous control publishes a maximum greater than 2. The minimum is
+    // always zero. The legacy-shape default is intentional; see ADDING A FIELD.
+    int speechProcessorLevelMaximum = 2;
+    QString speechProcessorLabel = QStringLiteral("PROC");
+
+    // The radio can temporarily monitor the transmit frequency while the
+    // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
+    // persistent repeater-reverse setting: releasing it returns reception to
+    // the normal frequency. The UI therefore renders a momentary button and
+    // follows the radio's reported state in both directions.
+    bool hasTransmitFrequencyCheck = false;
+
     // The radio reports the PA supply-voltage rail as telemetry — the value the
     // status bar renders directly under the PA temperature. A radio that never
     // reports the rail declares false and that readout goes away, instead of
@@ -280,6 +398,26 @@ struct RadioCapabilities {
     // genuinely having a PA. It already means something other than this.
     bool hasSupplyVoltageTelemetry = false;
 
+    // The radio reports PA temperature as live telemetry. False means the
+    // Radio Vitals applet omits the temperature gauge and its unit selector
+    // instead of presenting an instrument that can never receive a sample.
+    // This is independent of supply voltage: a backend may support either,
+    // both, or neither telemetry source.
+    bool hasPaTemperatureTelemetry = false;
+
+    // The radio reports PA drain current as calibrated live telemetry. The
+    // Radio Vitals applet may reuse its PA-instrument row for this only when
+    // PA temperature is unavailable; the capability is deliberately separate
+    // because some radios define PACURRENT with an unusable/clipped range.
+    bool hasPaCurrentTelemetry = false;
+
+    // The radio reports main-fan speed as live telemetry. False means the
+    // Radio Vitals applet omits the fan gauge instead of presenting an
+    // instrument that can never receive a sample. This is independent of PA
+    // temperature and supply voltage: each telemetry source is declared on
+    // its own evidence.
+    bool hasMainFanTelemetry = false;
+
     // The radio exposes SELECTABLE HARDWARE microphone inputs — the Phone
     // applet's MIC / BAL / LINE / ACC choices, which are FlexRadio's front and
     // rear connectors.
@@ -296,6 +434,13 @@ struct RadioCapabilities {
     // hear network audio produces a transmission with no modulation, which
     // looks like a hardware fault.
     bool hasSelectableMicInputs = false;
+
+    // Whether the radio implements the downward-expander control surfaced as
+    // DEXP in the Phone applet. This is deliberately narrower than
+    // hasRadioSideDsp: receive-side DSP does not imply a TX compander command.
+    // False hides the complete row rather than leaving an optimistic control
+    // with no authoritative command path.
+    bool hasDownwardExpander = false;
 
     // Transmit audio reaches this backend through IRadioBackend::submitTxAudio
     // rather than through a Flex DAX/VITA-49 stream.
@@ -328,6 +473,27 @@ struct RadioCapabilities {
     // advertise the real, discrete set rather than let a continuous-looking
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
+
+    // Whether the radio implements the independent TX low/high cutoff controls
+    // presented by PhoneApplet. False hides the complete control row rather
+    // than offering controls whose writes the backend cannot honour.
+    bool hasTxFilterControls = false;
+
+    // The TRANSMIT passband edges this radio can actually reach, in Hz,
+    // ASCENDING. Empty means continuous — the Phone applet's low/high cut
+    // steppers keep their own 50 Hz granularity and every value they show is a
+    // value the transmitter has.
+    //
+    // NON-EMPTY IS A HARD LIST, NOT A HINT. An Icom does not have continuous TX
+    // cut at all: it stores a handful of low edges and a handful of high edges
+    // and nothing between them exists. Left continuous, the steppers walked
+    // 50 Hz at a time through values the radio silently rounded away — twelve
+    // clicks to move the low cut from 100 to 200 Hz, eleven of which changed
+    // the label and nothing else. The two lists are independent because the
+    // radios treat them independently: an IC-7300MK2 has six low edges and four
+    // high ones.
+    QList<int> txFilterLowEdgesHz;
+    QList<int> txFilterHighEdgesHz;
 
     // The RADIO stores named configuration profiles (global / TX / mic) that a
     // client can list, load and save. The seam already carries ProfileDelta and
@@ -393,6 +559,19 @@ struct RadioCapabilities {
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
 
+    // The DDC's own CIC/half-band decimation chain rolls off amplitude
+    // toward the extreme edges of the panadapter bandwidth -- real,
+    // bench-measured attenuation baked into the sampled data itself, not a
+    // display artifact. True for ANAN-G2, the first (and so far only) DDC-
+    // based backend in this app; Flex/HL2/Icom/Kiwi all report false, since
+    // none of their receive chains have this shape. A capability flag
+    // rather than a family-string check at the one call site
+    // (MainWindow::onConnectionStateChanged(), which drives
+    // SpectrumWidget::setPanEdgeTaperEnabled()) so a future DDC backend
+    // gets the same cosmetic edge fade automatically instead of needing
+    // its own family added to a hardcoded list.
+    bool hasDdcPanEdgeRolloff = false;
+
     // NO hasTrackingNotchFilters HERE, deliberately. TNF looks like it belongs
     // beside the three below — TnfModel's whole surface is `tnf create/remove/
     // set` and `sub tnf all`, so it passes the "does the control only emit a
@@ -431,6 +610,24 @@ struct RadioCapabilities {
     // place to put the text.
     bool hasRadioSideCwKeyer = false;
 
+    // Shape of that text keyer. These fields keep shared callers honest when
+    // two radios both accept text but expose different surrounding contracts:
+    // Flex CWX has a progress counter, stored F-key macros, live typing and
+    // per-word speed changes; the verified Icom CI-V command 17 path has none
+    // of those and accepts one documented 30-character message at a time.
+    QString cwTextKeyerName{QStringLiteral("CWX")};
+    int cwTextMinWpm = 5;
+    int cwTextMaxWpm = 100;
+    int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
+    // Empty means the backend accepts its existing command-plane character
+    // contract. Non-empty lets protocol adapters reject text synchronously
+    // instead of reporting success for a message the radio will alter/refuse.
+    QString cwTextAllowedCharacters;
+    bool cwTextHasProgress = true;
+    bool cwTextHasStoredMacros = true;
+    bool cwTextSupportsLive = true;
+    bool cwTextSupportsSpeedModifiers = true;
+
     // The RADIO records and plays back voice-keyer messages from its own store
     // (`dvk` verbs). True for a Flex; false for a backend with no recorder.
     //
@@ -462,6 +659,17 @@ struct RadioCapabilities {
     // configuration UI goes away.
     bool hasMultiClientSessions = false;
 
+    // SpotHub spots must stay in the client's SpotModel rather than being
+    // published through the radio's command plane. True for a backend whose
+    // radio protocol has no compatible spot service and which explicitly
+    // chooses the existing passive-local fallback. False preserves the
+    // operator's Passive toggle and every existing radio-publication path.
+    //
+    // This is intentionally a backend policy, not a `family == "icom"` check
+    // above the seam. It lets Icom declare its CI-V limitation without
+    // changing Flex, HL2, or Sim spot behavior.
+    bool alwaysUseClientSideSpots = false;
+
     // The RADIO reports its own position/time from an on-board GNSS receiver, so
     // a client can offer a live GPS readout and the station-location dashboard
     // it feeds.
@@ -473,6 +681,14 @@ struct RadioCapabilities {
     // what it is. That distinction is why the flag is named for the receiver
     // rather than for the dashboard it happens to drive today.
     bool hasGpsLocation = false;
+
+    // The radio contains GPS/GNSS hardware and therefore has a meaningful GPS
+    // setup surface. This is deliberately separate from hasGpsLocation: an
+    // IC-705 has an internal GPS receiver, but CI-V does not expose its live
+    // position/time data to this client. The hardware page is still truthful;
+    // a live station-location readout is not.
+    bool hasGpsHardware = false;
+    bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile

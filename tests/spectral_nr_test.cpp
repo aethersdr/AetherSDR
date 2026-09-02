@@ -8,6 +8,7 @@
 #include "core/SpectralNR.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1045,7 +1046,7 @@ void test_filtered_receiver_noise_release()
         input[i] = static_cast<float>(sample);
     }
 
-    for (const int npeMethod : {0, 1}) {
+    for (const int npeMethod : {0, 1, 2}) {
         const std::vector<float> output = processWithGeometry(
             input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
             npeMethod, false, 0.35f);
@@ -1178,6 +1179,30 @@ double projectedSignalGainDb(const std::vector<float>& clean,
     return 20.0 * std::log10(std::max(std::abs(gain), 1e-20));
 }
 
+double projectedResidualDbfs(const std::vector<float>& clean,
+                             const std::vector<float>& output,
+                             int firstSample,
+                             int lastSample,
+                             int latencySamples)
+{
+    double cleanEnergy = 0.0;
+    double outputCleanDot = 0.0;
+    for (int i = firstSample; i < lastSample; ++i) {
+        cleanEnergy += static_cast<double>(clean[i]) * clean[i];
+        outputCleanDot += static_cast<double>(output[i + latencySamples])
+                        * clean[i];
+    }
+    const double gain = outputCleanDot / std::max(cleanEnergy, 1e-20);
+    double residualEnergy = 0.0;
+    for (int i = firstSample; i < lastSample; ++i) {
+        const double residual = output[i + latencySamples] - gain * clean[i];
+        residualEnergy += residual * residual;
+    }
+    const double meanResidual = residualEnergy
+        / std::max(1, lastSample - firstSample);
+    return 10.0 * std::log10(std::max(meanResidual, 1e-20));
+}
+
 void test_quick_reply_after_speech_release()
 {
     constexpr int sampleRate = 24000;
@@ -1286,6 +1311,1045 @@ void test_weak_reply_after_speech_release()
                 firstGainDb, replyGainDb, steadyNoiseGainDb);
     report("post_speech_release: release does not add weak-speech attenuation",
            replyGainDb >= steadyNoiseGainDb - 3.0);
+}
+
+void test_continuous_common_mode_agc_recovery()
+{
+    // This is deliberately not speech-gated: the radio's post-demodulated
+    // AGC can recover after a delayed pause or change floor gradually. The
+    // first rise is small, then a second rise takes 2.5 seconds to reach 6 dB.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int totalSamples = 12 * sampleRate;
+    constexpr int smallRiseStart = 3 * sampleRate + sampleRate / 4;
+    constexpr int largeRiseStart = 6 * sampleRate;
+    std::vector<float> input(totalSamples);
+    std::uint32_t randomState = 0x636d6f64u;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        double amplitude = 0.030;
+        if (i >= smallRiseStart) {
+            const double progress = std::clamp(
+                static_cast<double>(i - smallRiseStart) / (2.5 * sampleRate),
+                0.0, 1.0);
+            amplitude *= 1.0 + 0.35 * progress;
+        }
+        if (i >= largeRiseStart) {
+            const double progress = std::clamp(
+                static_cast<double>(i - largeRiseStart) / (2.5 * sampleRate),
+                0.0, 1.0);
+            amplitude *= 1.0 + 0.48 * progress;
+        }
+        input[i] = static_cast<float>(amplitude * white);
+    }
+
+    double worstSmallRiseDb = -std::numeric_limits<double>::infinity();
+    double worstLargeRiseDb = -std::numeric_limits<double>::infinity();
+    for (const int npeMethod : {0, 1}) {
+        const std::vector<float> output = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const double baselineDbfs = outputRmsDbfs(
+            output, 2 * sampleRate, 5 * sampleRate / 2, fftSize);
+        const double smallRiseDbfs = outputRmsDbfs(
+            output, 5 * sampleRate, 11 * sampleRate / 2, fftSize);
+        const double largeRiseDbfs = outputRmsDbfs(
+            output, 10 * sampleRate, 21 * sampleRate / 2, fftSize);
+        const double inputRiseDb = outputRmsDbfs(
+            input, 10 * sampleRate, 21 * sampleRate / 2, 0)
+            - outputRmsDbfs(input, 2 * sampleRate, 5 * sampleRate / 2, 0);
+        const char* methodName = npeMethod == 0 ? "OSMS" : "MMSE";
+        std::printf(" continuous AGC %s: input rise %+.2f dB, small residual "
+                    "%+.2f dB, large residual %+.2f dB\n",
+                    methodName, inputRiseDb, smallRiseDbfs - baselineDbfs,
+                    largeRiseDbfs - baselineDbfs);
+        worstSmallRiseDb = std::max(worstSmallRiseDb,
+                                    smallRiseDbfs - baselineDbfs);
+        worstLargeRiseDb = std::max(worstLargeRiseDb,
+                                    largeRiseDbfs - baselineDbfs);
+    }
+    report("continuous_agc: delayed gradual smaller common-mode rise is bounded",
+           worstSmallRiseDb < 2.5);
+    report("continuous_agc: OSMS and MMSE suppress the delayed 6 dB rise",
+           worstLargeRiseDb < 3.0);
+}
+
+void test_residual_reference_ignores_user_smoothing()
+{
+    // Gain smoothing controls the audible mask trajectory, not calibration of
+    // the pre-AGC residual target. At the maximum setting, using that same EMA
+    // for startup calibration leaves nearly all of reset-time unity behind.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int totalSamples = 11 * sampleRate;
+    constexpr int agcRise = 7 * sampleRate;
+    std::vector<float> input(totalSamples);
+    std::uint32_t randomState = 0x736d6f6fu;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        input[i] = static_cast<float>((i < agcRise ? 0.025 : 0.050) * white);
+    }
+
+    for (const int npeMethod : {0, 1}) {
+        const std::vector<float> defaultOutput = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.85f,
+            npeMethod, false, 0.35f);
+        const std::vector<float> maximumOutput = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.9999f,
+            npeMethod, false, 0.35f);
+        const double defaultDbfs = outputRmsDbfs(
+            defaultOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double maximumDbfs = outputRmsDbfs(
+            maximumOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double excess = maximumDbfs - defaultDbfs;
+        const char* methodName = npeMethod == 0 ? "OSMS" : "MMSE";
+        std::printf(" smoothing independence %s: default %.2f dBFS, "
+                    "maximum %.2f dBFS, excess %+.2f dB\n",
+                    methodName, defaultDbfs, maximumDbfs, excess);
+        const std::string testName = std::string("gain_smoothing: ")
+            + methodName + " maximum smoothing does not bypass residual cap";
+        report(testName.c_str(), excess < 0.50);
+    }
+}
+
+void test_residual_reference_uses_live_gain_controls()
+{
+    // The AGC residual target must not capture whichever Naturalness and
+    // Reduction values happened to be selected during the startup ramp.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int totalSamples = 11 * sampleRate;
+    constexpr int settingsChange = 4 * sampleRate;
+    constexpr int agcRise = 7 * sampleRate;
+    constexpr int blockSize = 73;
+    constexpr float finalFloor = 0.12f;
+    constexpr float finalMaximum = 0.70f;
+
+    std::vector<float> input(totalSamples);
+    std::uint32_t randomState = 0x6f726465u;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        const double amplitude = i < agcRise ? 0.025 : 0.050;
+        input[i] = static_cast<float>(amplitude * white);
+    }
+
+    // The review finding was reproduced on the two configured NPE paths whose
+    // settled residual is governed by this reference (OSMS and MMSE).
+    for (const int npeMethod : {0, 1}) {
+        SpectralNR preset(fftSize, sampleRate, 4);
+        preset.setGainMethod(2);
+        preset.setNpeMethod(npeMethod);
+        preset.setGainFloor(finalFloor);
+        preset.setGainMax(finalMaximum);
+
+        SpectralNR changed(fftSize, sampleRate, 4);
+        changed.setGainMethod(2);
+        changed.setNpeMethod(npeMethod);
+
+        std::vector<float> presetOutput(totalSamples);
+        std::vector<float> changedOutput(totalSamples);
+        for (int offset = 0; offset < totalSamples; offset += blockSize) {
+            if (offset >= settingsChange
+                && changed.gainFloor() != finalFloor) {
+                changed.setGainFloor(finalFloor);
+                changed.setGainMax(finalMaximum);
+            }
+            const int count = std::min(blockSize, totalSamples - offset);
+            preset.process(input.data() + offset,
+                           presetOutput.data() + offset, count);
+            changed.process(input.data() + offset,
+                            changedOutput.data() + offset, count);
+        }
+
+        const double presetDbfs = outputRmsDbfs(
+            presetOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double changedDbfs = outputRmsDbfs(
+            changedOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double difference = std::abs(changedDbfs - presetDbfs);
+        const char* methodName = npeMethod == 0 ? "OSMS" : "MMSE";
+        std::printf(" live controls %s: preset %.2f dBFS, changed %.2f dBFS, "
+                    "delta %.2f dB\n",
+                    methodName, presetDbfs, changedDbfs, difference);
+        const std::string testName = std::string("gain_control_order: ")
+            + methodName + " residual is independent of startup settings";
+        report(testName.c_str(), difference < 0.50);
+    }
+}
+
+void test_subtle_common_mode_agc_invariance()
+{
+    // AGC-T can move the post-demodulated noise floor by less than a decibel.
+    // Repeating exactly the same noise realization at each level isolates that
+    // coherent gain change from ordinary finite-window RMS variance. Alternating
+    // raised and baseline segments also exposes slow reference absorption.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int segmentSeconds = 4;
+    constexpr int segmentSamples = segmentSeconds * sampleRate;
+    constexpr int warmupSamples = 8 * sampleRate;
+    constexpr std::array<double, 4> riseDb = {0.10, 0.25, 0.50, 1.00};
+    constexpr int segmentCount = 2 * static_cast<int>(riseDb.size()) + 1;
+    constexpr int totalSamples = warmupSamples
+        + segmentCount * segmentSamples;
+    const double lowPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 3000.0 / sampleRate);
+    const double highPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 200.0 / sampleRate);
+
+    for (const bool colored : {false, true}) {
+        std::vector<float> repeatedNoise(segmentSamples);
+        std::uint32_t randomState = colored ? 0x7362616eu : 0x7363616cu;
+        double lowPass1 = 0.0;
+        double lowPass2 = 0.0;
+        double lowPass3 = 0.0;
+        double lowPass4 = 0.0;
+        double lowFrequency = 0.0;
+        for (int i = 0; i < segmentSamples; ++i) {
+            randomState = 1664525u * randomState + 1013904223u;
+            const double white =
+                2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+            lowPass1 += lowPassAlpha * (white - lowPass1);
+            lowPass2 += lowPassAlpha * (lowPass1 - lowPass2);
+            lowPass3 += lowPassAlpha * (lowPass2 - lowPass3);
+            lowPass4 += lowPassAlpha * (lowPass3 - lowPass4);
+            lowFrequency += highPassAlpha * (lowPass4 - lowFrequency);
+            const double noise = colored
+                ? 2.5 * (lowPass4 - lowFrequency)
+                : white;
+            repeatedNoise[i] = static_cast<float>(0.030 * noise);
+        }
+
+        std::vector<float> input(totalSamples);
+        for (int i = 0; i < warmupSamples; ++i) {
+            input[i] = repeatedNoise[i % segmentSamples];
+        }
+        for (int segment = 0; segment < segmentCount; ++segment) {
+            const bool raised = segment % 2 != 0;
+            const double amplitudeScale = raised
+                ? std::pow(10.0, riseDb[(segment - 1) / 2] / 20.0)
+                : 1.0;
+            for (int i = 0; i < segmentSamples; ++i) {
+                input[warmupSamples + segment * segmentSamples + i] =
+                    static_cast<float>(amplitudeScale * repeatedNoise[i]);
+            }
+        }
+
+        double worstSteadyExcess = 0.0;
+        double worstReturnError = 0.0;
+        for (const int npeMethod : {0, 1, 2}) {
+            const std::vector<float> output = processWithGeometry(
+                input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
+                npeMethod, false, 0.35f);
+            const char* methodName = npeMethod == 0 ? "OSMS"
+                : npeMethod == 1 ? "MMSE" : "NSTAT";
+            for (int rise = 0; rise < static_cast<int>(riseDb.size()); ++rise) {
+                const int beforeStart = warmupSamples
+                    + (2 * rise) * segmentSamples;
+                const int raisedStart = warmupSamples
+                    + (2 * rise + 1) * segmentSamples;
+                const int afterStart = warmupSamples
+                    + (2 * rise + 2) * segmentSamples;
+                const int measureOffset = 2 * sampleRate;
+                const int measureEndOffset = 7 * sampleRate / 2;
+                const double beforeDbfs = outputRmsDbfs(
+                    output, beforeStart + measureOffset,
+                    beforeStart + measureEndOffset, fftSize);
+                const double raisedDbfs = outputRmsDbfs(
+                    output, raisedStart + measureOffset,
+                    raisedStart + measureEndOffset, fftSize);
+                const double afterDbfs = outputRmsDbfs(
+                    output, afterStart + measureOffset,
+                    afterStart + measureEndOffset, fftSize);
+                const double baselineDbfs = 0.5 * (beforeDbfs + afterDbfs);
+                const double steadyExcess = raisedDbfs - baselineDbfs;
+                const double returnError = afterDbfs - beforeDbfs;
+                std::printf(" subtle AGC %-7s %s %+.2f dB: residual %+.3f dB, "
+                            "return %+.3f dB\n",
+                            colored ? "colored" : "white", methodName,
+                            riseDb[rise], steadyExcess, returnError);
+                const double allowedExcess = std::min(
+                    0.50, std::max(0.12, 0.70 * riseDb[rise]));
+                worstSteadyExcess = std::max(
+                    worstSteadyExcess, steadyExcess - allowedExcess);
+                worstReturnError = std::max(
+                    worstReturnError, std::abs(returnError));
+            }
+        }
+        const std::string prefix = colored
+            ? "subtle_agc: colored" : "subtle_agc: white";
+        report((prefix + " coherent rises preserve the residual target").c_str(),
+               worstSteadyExcess <= 0.0);
+        report((prefix + " level returns do not drift the residual target").c_str(),
+               worstReturnError < 0.25);
+    }
+}
+
+void test_common_mode_return_to_starting_scale()
+{
+    // NR2 can be enabled while receiver AGC is already at its louder state.
+    // Dropping to a quieter state scales the estimator histories downward.
+    // Returning to the original level must remain visible to the residual
+    // controller while those histories naturally readapt.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int segmentSamples = 4 * sampleRate;
+    constexpr int segmentCount = 5;
+    constexpr int totalSamples = segmentCount * segmentSamples;
+    constexpr double highAmplitude = 0.040;
+    constexpr double lowAmplitude = 0.020;
+
+    std::vector<float> repeatedNoise(segmentSamples);
+    std::uint32_t randomState = 0x686c686cu;
+    for (int i = 0; i < segmentSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        repeatedNoise[i] = static_cast<float>(
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0);
+    }
+
+    std::vector<float> input(totalSamples);
+    // High (startup) -> low -> high -> low -> high exercises repeated returns
+    // without restarting NR2.
+    constexpr std::array<double, segmentCount> amplitudes = {
+        highAmplitude, lowAmplitude, highAmplitude, lowAmplitude, highAmplitude
+    };
+    for (int segment = 0; segment < segmentCount; ++segment) {
+        for (int i = 0; i < segmentSamples; ++i) {
+            input[segment * segmentSamples + i] = static_cast<float>(
+                amplitudes[segment] * repeatedNoise[i]);
+        }
+    }
+
+    double worstReturnRiseDb = -std::numeric_limits<double>::infinity();
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> output = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const double initialHighDbfs = outputRmsDbfs(
+            output, 2 * sampleRate, 7 * sampleRate / 2, fftSize);
+        const double firstReturnDbfs = outputRmsDbfs(
+            output, 10 * sampleRate, 23 * sampleRate / 2, fftSize);
+        const double secondReturnDbfs = outputRmsDbfs(
+            output, 18 * sampleRate, 39 * sampleRate / 2, fftSize);
+        const double firstRiseDb = firstReturnDbfs - initialHighDbfs;
+        const double secondRiseDb = secondReturnDbfs - initialHighDbfs;
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" return-to-start %s: first %+.3f dB, second %+.3f dB\n",
+                    methodName, firstRiseDb, secondRiseDb);
+        worstReturnRiseDb = std::max(
+            worstReturnRiseDb, std::max(firstRiseDb, secondRiseDb));
+    }
+    report("continuous_agc: returning to the initial loud state preserves residual level",
+           worstReturnRiseDb < 0.25);
+}
+
+void test_stochastic_low_depth_agc_breathing()
+{
+    // Live receiver noise is stochastic rather than an exactly repeated FFT
+    // realization. A slow, sub-dB high state must not create a positive
+    // residual-noise bloom at the NR2 output.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int totalSamples = 24 * sampleRate;
+    constexpr double breathingDb = 0.50;
+    constexpr double breathingHz = 0.25;
+    std::vector<float> input(totalSamples);
+    std::uint32_t randomState = 0x62726561u;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        const double phase = 2.0 * std::numbers::pi * breathingHz * i
+            / sampleRate;
+        const double amplitude = 0.030 * std::pow(
+            10.0, breathingDb * std::sin(phase) / 20.0);
+        input[i] = static_cast<float>(amplitude * white);
+    }
+
+    double worstOutputSwingDb = -std::numeric_limits<double>::infinity();
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> output = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        double highEnergy = 0.0;
+        double lowEnergy = 0.0;
+        int highCount = 0;
+        int lowCount = 0;
+        for (int i = 8 * sampleRate; i < totalSamples - fftSize; ++i) {
+            const double phase = 2.0 * std::numbers::pi * breathingHz * i
+                / sampleRate;
+            const double modulation = std::sin(phase);
+            const double sample = output[i + fftSize];
+            if (modulation >= 0.70) {
+                highEnergy += sample * sample;
+                ++highCount;
+            } else if (modulation <= -0.70) {
+                lowEnergy += sample * sample;
+                ++lowCount;
+            }
+        }
+        const double outputSwingDb = 10.0 * std::log10(
+            std::max(highEnergy / std::max(highCount, 1), 1e-20)
+            / std::max(lowEnergy / std::max(lowCount, 1), 1e-20));
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" stochastic breathing %s: output swing %+.3f dB\n",
+                    methodName, outputSwingDb);
+        worstOutputSwingDb = std::max(worstOutputSwingDb, outputSwingDb);
+    }
+    report("continuous_agc: stochastic sub-dB high states do not bloom",
+           worstOutputSwingDb < 0.50);
+}
+
+void test_silence_to_wanted_signal_reseed()
+{
+    // Squelch and digital sources can deliver exact zeroes long enough for the
+    // common-mode reference to mature without any usable energy. The first
+    // wanted signal must seed that empty reference without being interpreted
+    // as a receiver-AGC noise rise on the following frames.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int signalStart = 3 * sampleRate;
+    constexpr int totalSamples = 8 * sampleRate;
+    std::vector<float> speech(totalSamples, 0.0f);
+    std::vector<float> tone(totalSamples, 0.0f);
+    std::vector<float> noise(totalSamples, 0.0f);
+    std::vector<float> narrowNoise(totalSamples, 0.0f);
+    std::uint32_t noiseState = 0x73696c65u;
+    const double lowPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 3000.0 / sampleRate);
+    const double highPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 200.0 / sampleRate);
+    double lowPass1 = 0.0;
+    double lowPass2 = 0.0;
+    double lowPass3 = 0.0;
+    double lowPass4 = 0.0;
+    double lowFrequency = 0.0;
+    const double narrowAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 70.0 / sampleRate);
+    double narrowBaseband = 0.0;
+    double narrowPhase = 0.0;
+    double speechPhase = 0.0;
+    double tonePhase = 0.0;
+    for (int i = signalStart; i < totalSamples; ++i) {
+        noiseState = 1664525u * noiseState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(noiseState) / 4294967295.0 - 1.0;
+        lowPass1 += lowPassAlpha * (white - lowPass1);
+        lowPass2 += lowPassAlpha * (lowPass1 - lowPass2);
+        lowPass3 += lowPassAlpha * (lowPass2 - lowPass3);
+        lowPass4 += lowPassAlpha * (lowPass3 - lowPass4);
+        lowFrequency += highPassAlpha * (lowPass4 - lowFrequency);
+        const double bandNoise = 2.5 * (lowPass4 - lowFrequency);
+        narrowBaseband += narrowAlpha * (white - narrowBaseband);
+        narrowPhase += 2.0 * std::numbers::pi * 1100.0 / sampleRate;
+        speechPhase += 2.0 * std::numbers::pi * 180.0 / sampleRate;
+        tonePhase += 2.0 * std::numbers::pi * 1150.0 / sampleRate;
+        speech[i] = static_cast<float>(
+            0.30 * std::sin(speechPhase)
+            + 0.14 * std::sin(2.0 * speechPhase)
+            + 0.07 * std::sin(4.0 * speechPhase));
+        tone[i] = static_cast<float>(0.12 * std::sin(tonePhase));
+        noise[i] = static_cast<float>(0.030 * bandNoise);
+        narrowNoise[i] = static_cast<float>(
+            0.20 * narrowBaseband * std::cos(narrowPhase));
+    }
+
+    double worstSpeechFadeDb = 0.0;
+    double worstSpeechLateGainDb = 0.0;
+    double worstToneFadeDb = 0.0;
+    double worstToneLateGainDb = 0.0;
+    double leastNoiseSuppressionDb =
+        -std::numeric_limits<double>::infinity();
+    double narrowNoiseGainDb[3]{};
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> speechOutput = processWithGeometry(
+            speech, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const std::vector<float> toneOutput = processWithGeometry(
+            tone, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const std::vector<float> noiseOutput = processWithGeometry(
+            noise, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const std::vector<float> narrowNoiseOutput = processWithGeometry(
+            narrowNoise, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const double speechEarlyGainDb = projectedSignalGainDb(
+            speech, speechOutput, signalStart + sampleRate / 4,
+            signalStart + 3 * sampleRate / 4, fftSize);
+        const double speechLateGainDb = projectedSignalGainDb(
+            speech, speechOutput, 6 * sampleRate, 7 * sampleRate, fftSize);
+        const double toneEarlyGainDb = projectedSignalGainDb(
+            tone, toneOutput, signalStart + sampleRate / 4,
+            signalStart + 3 * sampleRate / 4, fftSize);
+        const double toneLateGainDb = projectedSignalGainDb(
+            tone, toneOutput, 6 * sampleRate, 7 * sampleRate, fftSize);
+        const double noiseLateGainDb = outputRmsDbfs(
+            noiseOutput, 6 * sampleRate, 7 * sampleRate, fftSize)
+            - outputRmsDbfs(noise, 6 * sampleRate, 7 * sampleRate, 0);
+        narrowNoiseGainDb[npeMethod] = outputRmsDbfs(
+            narrowNoiseOutput, 6 * sampleRate, 7 * sampleRate, fftSize)
+            - outputRmsDbfs(narrowNoise, 6 * sampleRate, 7 * sampleRate, 0);
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" silence reseed %s: speech %+.2f/%+.2f dB, "
+                    "tone %+.2f/%+.2f dB, noise %+.2f dB, narrow %+.2f dB\n",
+                    methodName, speechEarlyGainDb, speechLateGainDb,
+                    toneEarlyGainDb, toneLateGainDb, noiseLateGainDb,
+                    narrowNoiseGainDb[npeMethod]);
+        worstSpeechFadeDb = std::min(
+            worstSpeechFadeDb, speechLateGainDb - speechEarlyGainDb);
+        worstSpeechLateGainDb = std::min(
+            worstSpeechLateGainDb, speechLateGainDb);
+        worstToneFadeDb = std::min(
+            worstToneFadeDb, toneLateGainDb - toneEarlyGainDb);
+        worstToneLateGainDb = std::min(worstToneLateGainDb, toneLateGainDb);
+        leastNoiseSuppressionDb = std::max(
+            leastNoiseSuppressionDb, noiseLateGainDb);
+    }
+    report("continuous_agc: speech after mature silence remains audible",
+           worstSpeechFadeDb > -3.0 && worstSpeechLateGainDb > -12.0);
+    report("continuous_agc: tone after mature silence remains audible",
+           worstToneFadeDb > -3.0 && worstToneLateGainDb > -6.0);
+    report("continuous_agc: noise after mature silence re-enables suppression",
+           leastNoiseSuppressionDb < -3.0);
+    // NPE methods estimate the floor differently and do not promise a fixed
+    // attenuation ranking. FFT/library rounding can legitimately swap MMSE
+    // and NSTAT at this very low residual. The contract here is that colored
+    // noise cannot bypass suppression after exact-silence recovery; the
+    // dedicated NPE comparison above verifies that the methods stay distinct.
+    report("continuous_agc: colored noise reacquires configured suppression",
+           narrowNoiseGainDb[0] < -20.0
+               && narrowNoiseGainDb[1] < -20.0
+               && narrowNoiseGainDb[2] < -20.0);
+}
+
+void test_silence_to_mixed_signal_balance()
+{
+    // Real receiver audio never presents isolated clean speech: the wanted
+    // signal and the AGC-raised static occupy the same FFT bins. A recovery
+    // path that protects speech by opening those bins can therefore preserve
+    // the projection while audibly raising the residual noise. Exercise that
+    // mixed condition after a mature exact-zero reference.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int signalStart = 3 * sampleRate;
+    constexpr int signalEnd = 11 * sampleRate;
+    constexpr int totalSamples = 14 * sampleRate;
+    std::vector<float> speech(totalSamples, 0.0f);
+    std::vector<float> tone(totalSamples, 0.0f);
+    std::vector<float> noise(totalSamples, 0.0f);
+    std::vector<float> speechAndNoise(totalSamples, 0.0f);
+    std::vector<float> toneAndNoise(totalSamples, 0.0f);
+    std::uint32_t randomState = 0x6d697865u;
+    const double lowPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 3000.0 / sampleRate);
+    const double highPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 200.0 / sampleRate);
+    double lowPass1 = 0.0;
+    double lowPass2 = 0.0;
+    double lowPass3 = 0.0;
+    double lowPass4 = 0.0;
+    double lowFrequency = 0.0;
+    double speechPhase = 0.0;
+    double tonePhase = 0.0;
+    for (int i = signalStart; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        lowPass1 += lowPassAlpha * (white - lowPass1);
+        lowPass2 += lowPassAlpha * (lowPass1 - lowPass2);
+        lowPass3 += lowPassAlpha * (lowPass2 - lowPass3);
+        lowPass4 += lowPassAlpha * (lowPass3 - lowPass4);
+        lowFrequency += highPassAlpha * (lowPass4 - lowFrequency);
+        noise[i] = static_cast<float>(
+            0.030 * 2.5 * (lowPass4 - lowFrequency));
+        if (i < signalEnd) {
+            speechPhase += 2.0 * std::numbers::pi * 180.0 / sampleRate;
+            tonePhase += 2.0 * std::numbers::pi * 1150.0 / sampleRate;
+            speech[i] = static_cast<float>(
+                0.30 * std::sin(speechPhase)
+                + 0.14 * std::sin(2.0 * speechPhase)
+                + 0.07 * std::sin(4.0 * speechPhase));
+            tone[i] = static_cast<float>(0.12 * std::sin(tonePhase));
+        }
+        speechAndNoise[i] = speech[i] + noise[i];
+        toneAndNoise[i] = tone[i] + noise[i];
+    }
+
+    double worstSpeechLateGainDb = 0.0;
+    double worstSpeechDriftDb = 0.0;
+    double worstToneLateGainDb = 0.0;
+    double worstToneDriftDb = 0.0;
+    double loudestConfiguredEarlyResidualDbfs =
+        -std::numeric_limits<double>::infinity();
+    std::array<double, 3> postSpeechDbfsByMethod{};
+    std::array<double, 3> postSpeechRiseDbByMethod{};
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> speechOutput = processWithGeometry(
+            speechAndNoise, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const std::vector<float> toneOutput = processWithGeometry(
+            toneAndNoise, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const std::vector<float> noiseOutput = processWithGeometry(
+            noise, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const int earlyStart = signalStart + sampleRate / 4;
+        const int earlyEnd = signalStart + 3 * sampleRate / 4;
+        const int lateStart = signalEnd - sampleRate;
+        const int lateEnd = signalEnd - sampleRate / 4;
+        const int postStart = signalEnd + sampleRate / 5;
+        const int postEnd = signalEnd + sampleRate / 2;
+        const double speechEarlyGainDb = projectedSignalGainDb(
+            speech, speechOutput, earlyStart, earlyEnd, fftSize);
+        const double speechLateGainDb = projectedSignalGainDb(
+            speech, speechOutput, lateStart, lateEnd, fftSize);
+        const double toneEarlyGainDb = projectedSignalGainDb(
+            tone, toneOutput, earlyStart, earlyEnd, fftSize);
+        const double toneLateGainDb = projectedSignalGainDb(
+            tone, toneOutput, lateStart, lateEnd, fftSize);
+        const double speechEarlyResidualDbfs = projectedResidualDbfs(
+            speech, speechOutput, earlyStart, earlyEnd, fftSize);
+        const double speechLateResidualDbfs = projectedResidualDbfs(
+            speech, speechOutput, lateStart, lateEnd, fftSize);
+        const double toneEarlyResidualDbfs = projectedResidualDbfs(
+            tone, toneOutput, earlyStart, earlyEnd, fftSize);
+        const double postSpeechDbfs = outputRmsDbfs(
+            speechOutput, postStart, postEnd, fftSize);
+        const double noiseControlDbfs = outputRmsDbfs(
+            noiseOutput, postStart, postEnd, fftSize);
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" mixed balance %s: speech %+.2f/%+.2f dB, "
+                    "residual %.2f/%.2f dBFS, tone %+.2f/%+.2f dB, "
+                    "tone residual %.2f dBFS, post %.2f/%.2f dBFS "
+                    "(%+.2f dB)\n",
+                    methodName, speechEarlyGainDb, speechLateGainDb,
+                    speechEarlyResidualDbfs, speechLateResidualDbfs,
+                    toneEarlyGainDb, toneLateGainDb, toneEarlyResidualDbfs,
+                    postSpeechDbfs, noiseControlDbfs,
+                    postSpeechDbfs - noiseControlDbfs);
+        worstSpeechLateGainDb = std::min(
+            worstSpeechLateGainDb, speechLateGainDb);
+        worstSpeechDriftDb = std::min(
+            worstSpeechDriftDb, speechLateGainDb - speechEarlyGainDb);
+        worstToneLateGainDb = std::min(worstToneLateGainDb, toneLateGainDb);
+        worstToneDriftDb = std::min(
+            worstToneDriftDb, toneLateGainDb - toneEarlyGainDb);
+        if (npeMethod != 2) {
+            loudestConfiguredEarlyResidualDbfs = std::max(
+                loudestConfiguredEarlyResidualDbfs,
+                speechEarlyResidualDbfs);
+        }
+        postSpeechDbfsByMethod[npeMethod] = postSpeechDbfs;
+        postSpeechRiseDbByMethod[npeMethod] =
+            postSpeechDbfs - noiseControlDbfs;
+    }
+    report("mixed_reseed: speech remains audible without late fade",
+           worstSpeechLateGainDb > -3.0 && worstSpeechDriftDb > -2.0);
+    report("mixed_reseed: tone remains audible without late fade",
+           worstToneLateGainDb > -3.0 && worstToneDriftDb > -2.0);
+    report("mixed_reseed: configured estimators retain pre-blocker quiet onset",
+           loudestConfiguredEarlyResidualDbfs <= -39.25);
+    // Compare against an independently seeded noise-only run so a permissive
+    // absolute threshold cannot hide state-dependent release noise. Below
+    // -70 dBFS the synthetic result is already over 15 dB quieter than the
+    // pre-fix regression, so do not amplify numerical-floor differences by
+    // demanding an arbitrary raw dB ratio there.
+    bool postSpeechTailBounded = true;
+    for (const int npeMethod : {0, 1, 2}) {
+        postSpeechTailBounded = postSpeechTailBounded
+            && (postSpeechRiseDbByMethod[npeMethod] <= 3.0
+                || postSpeechDbfsByMethod[npeMethod] <= -70.0);
+    }
+    report("mixed_reseed: post-speech residual matches control or stays below -70 dBFS",
+           postSpeechTailBounded);
+}
+
+void test_silence_recovery_weak_reply_with_carrier()
+{
+    // A carrier can legitimately keep one bin ambiguous after the recovered
+    // noise floor is stable. The validity map must still be reversible in
+    // other bins so a later non-tonal reply is not held under the residual
+    // cap merely because the global recovery context remains active.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int signalStart = 3 * sampleRate;
+    constexpr int initialSpeechEnd = 5 * sampleRate;
+    constexpr int replyStart = 7 * sampleRate;
+    constexpr int replyEnd = 10 * sampleRate;
+    constexpr int totalSamples = 12 * sampleRate;
+    std::vector<float> reply(totalSamples, 0.0f);
+    std::vector<float> recoveredInput(totalSamples, 0.0f);
+    std::vector<float> releasedCarrierControl(totalSamples, 0.0f);
+    std::uint32_t noiseState = 0x63617272u;
+    std::uint32_t replyState = 0x7265706cu;
+    const double noiseAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 2800.0 / sampleRate);
+    const double replyAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 2400.0 / sampleRate);
+    double filteredNoise = 0.0;
+    double filteredReply = 0.0;
+    double carrierPhase = 0.0;
+    double speechPhase = 0.0;
+    for (int i = 0; i < totalSamples; ++i) {
+        noiseState = 1664525u * noiseState + 1013904223u;
+        replyState = 1664525u * replyState + 1013904223u;
+        const double whiteNoise =
+            2.0 * static_cast<double>(noiseState) / 4294967295.0 - 1.0;
+        const double whiteReply =
+            2.0 * static_cast<double>(replyState) / 4294967295.0 - 1.0;
+        filteredNoise += noiseAlpha * (whiteNoise - filteredNoise);
+        filteredReply += replyAlpha * (whiteReply - filteredReply);
+        carrierPhase += 2.0 * std::numbers::pi * 1150.0 / sampleRate;
+        speechPhase += 2.0 * std::numbers::pi * 180.0 / sampleRate;
+        const double carrier = 0.08 * std::sin(carrierPhase);
+        const double noise = 0.030 * filteredNoise;
+        double initialSpeech = 0.0;
+        if (i >= signalStart && i < initialSpeechEnd) {
+            initialSpeech = 0.20 * std::sin(speechPhase)
+                + 0.10 * std::sin(2.0 * speechPhase)
+                + 0.05 * std::sin(4.0 * speechPhase);
+        }
+        if (i >= replyStart && i < replyEnd) {
+            const double t = static_cast<double>(i - replyStart) / sampleRate;
+            const double syllabicEnvelope = 0.45 + 0.55
+                * std::sin(2.0 * std::numbers::pi * 2.7 * t)
+                * std::sin(2.0 * std::numbers::pi * 2.7 * t);
+            const double f0 = 135.0 + 12.0 * std::sin(
+                2.0 * std::numbers::pi * 0.43 * t);
+            double replySample = 0.025 * filteredReply;
+            for (int harmonic = 1; harmonic * f0 < 2800.0; ++harmonic) {
+                replySample += 0.055 / std::sqrt(harmonic)
+                    * std::sin(2.0 * std::numbers::pi * harmonic * f0 * t);
+            }
+            reply[i] = static_cast<float>(
+                syllabicEnvelope * replySample);
+        }
+        const float active = static_cast<float>(
+            noise + carrier + initialSpeech + reply[i]);
+        if (i >= signalStart) {
+            recoveredInput[i] = active;
+            releasedCarrierControl[i] = static_cast<float>(
+                noise + (i < initialSpeechEnd ? carrier : 0.0)
+                + initialSpeech + reply[i]);
+        }
+    }
+
+    double worstReplyDeltaDb = 0.0;
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> recoveredOutput = processWithGeometry(
+            recoveredInput, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const std::vector<float> controlOutput = processWithGeometry(
+            releasedCarrierControl, fftSize, 4, 73, 0.00f, true, 2, 0.85f,
+            npeMethod, false, 0.20f);
+        const double recoveredGainDb = projectedSignalGainDb(
+            reply, recoveredOutput, replyStart + sampleRate / 2,
+            replyEnd - sampleRate / 2, fftSize);
+        const double controlGainDb = projectedSignalGainDb(
+            reply, controlOutput, replyStart + sampleRate / 2,
+            replyEnd - sampleRate / 2, fftSize);
+        const double replyDeltaDb = recoveredGainDb - controlGainDb;
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" carrier reply %s: gain %+.2f/%+.2f dB, delta %+.2f dB\n",
+                    methodName, recoveredGainDb, controlGainDb, replyDeltaDb);
+        worstReplyDeltaDb = std::min(worstReplyDeltaDb, replyDeltaDb);
+    }
+    report("mixed_reseed: carrier does not lock out a later non-tonal reply",
+           worstReplyDeltaDb > -3.0);
+}
+
+void test_common_mode_speech_and_tone_guards()
+{
+    // Fixed noise with a tone, structured speech, and a quick reply. None is
+    // a broadband common-mode scale change, so the correction must not close
+    // wanted bins while their noise floor is unchanged.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int toneStart = 3 * sampleRate;
+    constexpr int toneEnd = 9 * sampleRate / 2;
+    constexpr int speechStart = 5 * sampleRate;
+    constexpr int speechEnd = 6 * sampleRate;
+    constexpr int replyStart = speechEnd + sampleRate / 4;
+    constexpr int replyEnd = 8 * sampleRate;
+    constexpr int totalSamples = 9 * sampleRate;
+    std::vector<float> clean(totalSamples, 0.0f);
+    std::vector<float> input(totalSamples, 0.0f);
+    std::uint32_t randomState = 0x67756172u;
+    double tonePhase = 0.0;
+    double speechPhase = 0.0;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        if (i >= toneStart && i < toneEnd) {
+            tonePhase += 2.0 * std::numbers::pi * 1150.0 / sampleRate;
+            clean[i] = static_cast<float>(0.24 * std::sin(tonePhase));
+        }
+        const bool speech = (i >= speechStart && i < speechEnd)
+            || (i >= replyStart && i < replyEnd);
+        if (speech) {
+            speechPhase += 2.0 * std::numbers::pi * 180.0 / sampleRate;
+            clean[i] += static_cast<float>(0.30 * std::sin(speechPhase)
+                + 0.14 * std::sin(2.0 * speechPhase)
+                + 0.07 * std::sin(4.0 * speechPhase));
+        }
+        input[i] = clean[i] + static_cast<float>(0.030 * white);
+    }
+
+    const std::vector<float> output = processWithGeometry(
+        input, fftSize, 4, 73, 0.00f, true, 2, 0.90f, 0, false, 0.35f);
+    const double toneGainDb = projectedSignalGainDb(
+        clean, output, toneStart + sampleRate / 2, toneEnd - sampleRate / 4,
+        fftSize);
+    const double speechGainDb = projectedSignalGainDb(
+        clean, output, speechStart + sampleRate / 4, speechEnd - sampleRate / 5,
+        fftSize);
+    const double replyGainDb = projectedSignalGainDb(
+        clean, output, replyStart + sampleRate / 10, replyStart + 4 * sampleRate / 10,
+        fftSize);
+    std::printf(" common-mode guards: tone %+.2f dB, speech %+.2f dB, "
+                "quick reply %+.2f dB\n",
+                toneGainDb, speechGainDb, replyGainDb);
+    report("continuous_agc: tone is not classified as common-mode noise",
+           toneGainDb > -12.0);
+    report("continuous_agc: unchanged-noise speech preserves a quick reply",
+           replyGainDb >= speechGainDb - 3.0);
+
+    // A tone that begins after a large receiver-gain step must also survive.
+    // This is the converse of the stationary-noise test: it prevents the
+    // common-mode correction from passing by simply capping every outlier.
+    constexpr int steppedRiseStart = 3 * sampleRate;
+    constexpr int steppedToneStart = 4 * sampleRate;
+    constexpr int steppedToneEnd = 8 * sampleRate;
+    std::vector<float> steppedClean(totalSamples, 0.0f);
+    std::vector<float> steppedInput(totalSamples, 0.0f);
+    std::vector<float> steppedControl(totalSamples, 0.0f);
+    std::uint32_t steppedNoiseState = 0x746f6e65u;
+    double steppedTonePhase = 0.0;
+    for (int i = 0; i < totalSamples; ++i) {
+        steppedNoiseState = 1664525u * steppedNoiseState + 1013904223u;
+        const double steppedNoise =
+            2.0 * static_cast<double>(steppedNoiseState) / 4294967295.0 - 1.0;
+        if (i >= steppedToneStart && i < steppedToneEnd) {
+            steppedTonePhase += 2.0 * std::numbers::pi * 1150.0 / sampleRate;
+            steppedClean[i] = static_cast<float>(
+                0.12 * std::sin(steppedTonePhase));
+        }
+        const double steppedNoiseAmplitude =
+            i < steppedRiseStart ? 0.003 : 0.030;
+        steppedInput[i] = steppedClean[i]
+            + static_cast<float>(steppedNoiseAmplitude * steppedNoise);
+        steppedControl[i] = steppedClean[i]
+            + static_cast<float>(0.030 * steppedNoise);
+    }
+
+    double worstSteppedToneDeltaDb = 0.0;
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> steppedOutput = processWithGeometry(
+            steppedInput, fftSize, 4, 73, 0.00f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const std::vector<float> steppedControlOutput = processWithGeometry(
+            steppedControl, fftSize, 4, 73, 0.00f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const double steppedToneGainDb = projectedSignalGainDb(
+            steppedClean, steppedOutput,
+            steppedToneStart + sampleRate / 5,
+            steppedToneEnd - sampleRate / 2, fftSize);
+        const double steppedControlGainDb = projectedSignalGainDb(
+            steppedClean, steppedControlOutput,
+            steppedToneStart + sampleRate / 5,
+            steppedToneEnd - sampleRate / 2, fftSize);
+        const double steppedToneDeltaDb =
+            steppedToneGainDb - steppedControlGainDb;
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" stepped tone %s: gain %+.2f/%+.2f dB, delta %+.2f dB\n",
+                    methodName, steppedToneGainDb, steppedControlGainDb,
+                    steppedToneDeltaDb);
+        worstSteppedToneDeltaDb = std::min(
+            worstSteppedToneDeltaDb, steppedToneDeltaDb);
+    }
+    report("continuous_agc: tone after a large scale rise matches control",
+           worstSteppedToneDeltaDb > -3.0);
+}
+
+void test_sustained_speech_after_common_mode_rise()
+{
+    // Live RX validation exposed a failure the short speech guard missed: an
+    // AGC gain change followed by several seconds of dense speech could be
+    // mistaken for scaled noise and fade toward silence. Exercise voiced and
+    // aperiodic speech energy long enough to catch that state drift.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int riseStart = 3 * sampleRate;
+    constexpr int speechStart = 4 * sampleRate;
+    constexpr int speechEnd = 12 * sampleRate;
+    constexpr int totalSamples = 14 * sampleRate;
+    std::vector<float> clean(totalSamples, 0.0f);
+    std::vector<float> input(totalSamples, 0.0f);
+    std::vector<float> raisedControl(totalSamples, 0.0f);
+    std::vector<float> bandNoiseSignal(totalSamples, 0.0f);
+    std::uint32_t noiseState = 0x61676373u;
+    std::uint32_t speechState = 0x73706565u;
+    const double lowPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 3000.0 / sampleRate);
+    const double highPassAlpha = 1.0 - std::exp(
+        -2.0 * std::numbers::pi * 200.0 / sampleRate);
+    double lowPass1 = 0.0;
+    double lowPass2 = 0.0;
+    double lowPass3 = 0.0;
+    double lowPass4 = 0.0;
+    double lowFrequency = 0.0;
+    for (int i = 0; i < totalSamples; ++i) {
+        noiseState = 1664525u * noiseState + 1013904223u;
+        speechState = 1664525u * speechState + 1013904223u;
+        const double whiteNoise =
+            2.0 * static_cast<double>(noiseState) / 4294967295.0 - 1.0;
+        lowPass1 += lowPassAlpha * (whiteNoise - lowPass1);
+        lowPass2 += lowPassAlpha * (lowPass1 - lowPass2);
+        lowPass3 += lowPassAlpha * (lowPass2 - lowPass3);
+        lowPass4 += lowPassAlpha * (lowPass3 - lowPass4);
+        lowFrequency += highPassAlpha * (lowPass4 - lowFrequency);
+        const double bandNoise = 2.5 * (lowPass4 - lowFrequency);
+        bandNoiseSignal[i] = static_cast<float>(bandNoise);
+        const double aperiodic =
+            2.0 * static_cast<double>(speechState) / 4294967295.0 - 1.0;
+        const double noiseAmplitude = i < riseStart ? 0.003 : 0.030;
+        if (i >= speechStart && i < speechEnd) {
+            const double t = static_cast<double>(i - speechStart) / sampleRate;
+            const double f0 = 115.0 + 18.0 * std::sin(
+                2.0 * std::numbers::pi * 0.37 * t);
+            const double envelope = 0.72 + 0.28 * std::sin(
+                2.0 * std::numbers::pi * 2.3 * t)
+                * std::sin(2.0 * std::numbers::pi * 2.3 * t);
+            double speech = 0.055 * aperiodic;
+            for (int harmonic = 2; harmonic * f0 < 3000.0; ++harmonic) {
+                speech += 0.12 / std::sqrt(harmonic)
+                    * std::sin(2.0 * std::numbers::pi * harmonic * f0 * t);
+            }
+            clean[i] = static_cast<float>(envelope * speech);
+        }
+        input[i] = clean[i]
+            + static_cast<float>(noiseAmplitude * bandNoise);
+        raisedControl[i] = clean[i]
+            + static_cast<float>(0.030 * bandNoise);
+    }
+
+    constexpr double kWeakSpeechScale = 0.20;
+    std::vector<float> weakClean(totalSamples, 0.0f);
+    std::vector<float> weakInput(totalSamples, 0.0f);
+    std::vector<float> weakControl(totalSamples, 0.0f);
+    for (int i = 0; i < totalSamples; ++i) {
+        weakClean[i] = static_cast<float>(kWeakSpeechScale * clean[i]);
+        const double noiseAmplitude = i < riseStart ? 0.003 : 0.030;
+        weakInput[i] = weakClean[i]
+            + static_cast<float>(noiseAmplitude * bandNoiseSignal[i]);
+        weakControl[i] = weakClean[i]
+            + static_cast<float>(0.030 * bandNoiseSignal[i]);
+    }
+
+    double worstRelativeFadeDb = 0.0;
+    double worstSpeechDeltaDb = 0.0;
+    double worstLateGainDb = 0.0;
+    double worstResidualRiseDb = 0.0;
+    double worstWeakRelativeFadeDb = 0.0;
+    double worstWeakSpeechDeltaDb = 0.0;
+    for (const int npeMethod : {0, 1, 2}) {
+        const std::vector<float> output = processWithGeometry(
+            input, fftSize, 4, 73, 0.00f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const std::vector<float> controlOutput = processWithGeometry(
+            raisedControl, fftSize, 4, 73, 0.00f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const std::vector<float> weakOutput = processWithGeometry(
+            weakInput, fftSize, 4, 73, 0.00f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const std::vector<float> weakControlOutput = processWithGeometry(
+            weakControl, fftSize, 4, 73, 0.00f, true, 2, 0.90f,
+            npeMethod, false, 0.35f);
+        const double earlyGainDb = projectedSignalGainDb(
+            clean, output, speechStart + sampleRate / 2,
+            speechStart + 3 * sampleRate / 2, fftSize);
+        const double lateGainDb = projectedSignalGainDb(
+            clean, output, speechEnd - 3 * sampleRate / 2,
+            speechEnd - sampleRate / 2, fftSize);
+        const double controlEarlyGainDb = projectedSignalGainDb(
+            clean, controlOutput, speechStart + sampleRate / 2,
+            speechStart + 3 * sampleRate / 2, fftSize);
+        const double controlLateGainDb = projectedSignalGainDb(
+            clean, controlOutput, speechEnd - 3 * sampleRate / 2,
+            speechEnd - sampleRate / 2, fftSize);
+        const double relativeFadeDb = (lateGainDb - earlyGainDb)
+            - (controlLateGainDb - controlEarlyGainDb);
+        const double speechDeltaDb = std::min(
+            earlyGainDb - controlEarlyGainDb,
+            lateGainDb - controlLateGainDb);
+        const double baselineResidualDb = outputRmsDbfs(
+            output, 2 * sampleRate, riseStart - sampleRate / 4, fftSize);
+        const double postSpeechResidualDb = outputRmsDbfs(
+            output, speechEnd + sampleRate / 2,
+            speechEnd + 3 * sampleRate / 2, fftSize);
+        const double residualRiseDb = postSpeechResidualDb - baselineResidualDb;
+        const double weakEarlyGainDb = projectedSignalGainDb(
+            weakClean, weakOutput, speechStart + sampleRate / 2,
+            speechStart + 3 * sampleRate / 2, fftSize);
+        const double weakLateGainDb = projectedSignalGainDb(
+            weakClean, weakOutput, speechEnd - 3 * sampleRate / 2,
+            speechEnd - sampleRate / 2, fftSize);
+        const double weakControlEarlyGainDb = projectedSignalGainDb(
+            weakClean, weakControlOutput, speechStart + sampleRate / 2,
+            speechStart + 3 * sampleRate / 2, fftSize);
+        const double weakControlLateGainDb = projectedSignalGainDb(
+            weakClean, weakControlOutput, speechEnd - 3 * sampleRate / 2,
+            speechEnd - sampleRate / 2, fftSize);
+        const double weakRelativeFadeDb =
+            (weakLateGainDb - weakEarlyGainDb)
+            - (weakControlLateGainDb - weakControlEarlyGainDb);
+        const double weakSpeechDeltaDb = std::min(
+            weakEarlyGainDb - weakControlEarlyGainDb,
+            weakLateGainDb - weakControlLateGainDb);
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" sustained speech %s: early %+.2f/%+.2f dB, "
+                    "late %+.2f/%+.2f dB, relative drift %+.2f dB, "
+                    "residual rise %+.2f dB\n",
+                    methodName, earlyGainDb, controlEarlyGainDb,
+                    lateGainDb, controlLateGainDb, relativeFadeDb,
+                    residualRiseDb);
+        std::printf(" weak sustained %s: early %+.2f/%+.2f dB, "
+                    "late %+.2f/%+.2f dB, relative drift %+.2f dB\n",
+                    methodName, weakEarlyGainDb, weakControlEarlyGainDb,
+                    weakLateGainDb, weakControlLateGainDb,
+                    weakRelativeFadeDb);
+        worstRelativeFadeDb = std::min(worstRelativeFadeDb, relativeFadeDb);
+        worstSpeechDeltaDb = std::min(worstSpeechDeltaDb, speechDeltaDb);
+        worstLateGainDb = std::min(worstLateGainDb, lateGainDb);
+        worstResidualRiseDb = std::max(worstResidualRiseDb, residualRiseDb);
+        worstWeakRelativeFadeDb = std::min(
+            worstWeakRelativeFadeDb, weakRelativeFadeDb);
+        worstWeakSpeechDeltaDb = std::min(
+            worstWeakSpeechDeltaDb, weakSpeechDeltaDb);
+    }
+    report("continuous_agc: sustained speech does not fade after a scale rise",
+           worstRelativeFadeDb > -3.0 && worstSpeechDeltaDb > -3.0);
+    report("continuous_agc: sustained speech remains intelligible after a scale rise",
+           worstLateGainDb > -12.0);
+    report("continuous_agc: post-speech residual stays near the pre-rise target",
+           worstResidualRiseDb < 2.0);
+    report("continuous_agc: weak sustained speech tracks the raised-noise control",
+           worstWeakRelativeFadeDb > -3.0
+               && worstWeakSpeechDeltaDb > -3.0);
 }
 
 std::vector<float> processStereoSharedMaskWithBlockSize(
@@ -1528,6 +2592,39 @@ int main()
 
     std::printf("\n-- NR2 filtered receiver-noise release --\n");
     test_filtered_receiver_noise_release();
+
+    std::printf("\n-- NR2 continuous common-mode AGC recovery --\n");
+    test_continuous_common_mode_agc_recovery();
+
+    std::printf("\n-- NR2 live gain-control order independence --\n");
+    test_residual_reference_uses_live_gain_controls();
+
+    std::printf("\n-- NR2 residual-reference smoothing independence --\n");
+    test_residual_reference_ignores_user_smoothing();
+
+    std::printf("\n-- NR2 subtle common-mode AGC invariance --\n");
+    test_subtle_common_mode_agc_invariance();
+
+    std::printf("\n-- NR2 common-mode return to starting scale --\n");
+    test_common_mode_return_to_starting_scale();
+
+    std::printf("\n-- NR2 stochastic low-depth AGC breathing --\n");
+    test_stochastic_low_depth_agc_breathing();
+
+    std::printf("\n-- NR2 mature-silence reference reseed --\n");
+    test_silence_to_wanted_signal_reseed();
+
+    std::printf("\n-- NR2 mature-silence mixed-signal balance --\n");
+    test_silence_to_mixed_signal_balance();
+
+    std::printf("\n-- NR2 carrier-held recovery weak reply --\n");
+    test_silence_recovery_weak_reply_with_carrier();
+
+    std::printf("\n-- NR2 common-mode speech/tone guards --\n");
+    test_common_mode_speech_and_tone_guards();
+
+    std::printf("\n-- NR2 sustained speech after common-mode rise --\n");
+    test_sustained_speech_after_common_mode_rise();
 
     std::printf("\n-- NR2 live NPE switching --\n");
     test_npe_switch_transients();

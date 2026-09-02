@@ -103,7 +103,8 @@ KNOWN_WIDGETS_LEGACY = {
 # grows a vendor family but this checker keeps permitting it.
 VENDOR_TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.json"
 # Sanity floor guards against the audit being moved, gutted, or parsed with a
-# changed schema. The live vocabulary now spans Flex, Kiwi, HL2, Sim and Icom;
+# changed schema. The live vocabulary now spans Flex, Kiwi, HL2, Sim, Icom,
+# ANAN and RTL;
 # deliberate reclassification can lower it, so keep the floor conservative.
 VENDOR_STEMS_FLOOR = 15
 
@@ -161,15 +162,17 @@ VENDOR_INCLUDE_RE = re.compile(
 # change must document that evidence, and it requires explicit maintainer
 # review. After classification, the expanded set is shrink-only again.
 #
-# Re-baselined for the previously untagged HL2/Sim/Icom backend surfaces. These
-# entries freeze coupling that predates classification; they are burndown
-# targets, not waivers. New code must not add to them.
+# Re-baselined for previously untagged HL2/Sim/Icom/ANAN/RTL backend surfaces.
+# The ANAN/RTL includes below are present on upstream/main at b1499334, before
+# their vocabulary classification in this PR. These entries freeze coupling
+# that predates classification; they are burndown targets, not waivers. New
+# code must not add to them.
 KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/core/TciProtocol.cpp": ["DaxIqModel"],
     "src/core/TciServer.cpp": ["DaxIqModel", "StreamStatus"],
     "src/core/WfmDemodulator.cpp": ["DaxIqModel"],
     "src/gui/Ax25HfPacketDecodeDialog.cpp": ["DaxTxPolicy"],
-    "src/gui/ConnectionPanel.cpp": ["Hl2Discovery", "IcomModels", "MetisProtocol", "SimBackend"],
+    "src/gui/ConnectionPanel.cpp": ["AnanDiscovery", "Hl2Discovery", "IcomModels", "MetisProtocol", "P2Protocol", "SimBackend"],
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
     "src/gui/DemoApplet.cpp": ["NoiseMixer"],
@@ -177,7 +180,7 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/KiwiPublicReceiverPicker.h": ["KiwiPublicDirectory"],
     "src/gui/KiwiSdrApplet.h": ["KiwiSdrClient"],
     "src/gui/MainWindow.cpp": ["DvkWavTransfer", "Hl2Backend", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
-    "src/gui/MainWindow.h": ["Hl2Discovery", "SmartLinkClient", "WanConnection"],
+    "src/gui/MainWindow.h": ["AnanDiscovery", "Hl2Discovery", "RtlSdrDiscovery", "SmartLinkClient", "WanConnection"],
     "src/gui/MainWindowHelpers.cpp": ["PanadapterStream", "SmartLinkClient"],
     "src/gui/MainWindow_Controllers.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_KiwiSdr.cpp": ["KiwiSdrClient", "KiwiSdrManager", "KiwiSdrProtocol"],

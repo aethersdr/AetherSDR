@@ -56,6 +56,7 @@ public:
     bool    micAcc()                const { return m_micAcc; }
     bool    speechProcessorEnable() const { return m_speechProcEnable; }
     int     speechProcessorLevel()  const { return m_speechProcLevel; }
+    int     speechProcessorLevelMaximum() const { return m_speechProcLevelMaximum; }
     bool    companderOn()           const { return m_companderOn; }
     int     companderLevel()        const { return m_companderLevel; }
     bool    daxOn()                 const { return m_daxOn; }
@@ -73,6 +74,20 @@ public:
     int     amCarrierLevel() const { return m_amCarrierLevel; }
     bool    dexpOn()         const { return m_dexpOn; }
     int     dexpLevel()      const { return m_dexpLevel; }
+    // TX filter bounds.  ACCESSORS, not bare constants, deliberately: every
+    // backend shares this range today, but a radio that declares its own
+    // passband limits should be able to narrow it without any caller
+    // changing — the GUI already asks rather than assumes.
+    //
+    // FlexBackend clamps to the same range on the wire, which is where a
+    // radio-specific limit properly belongs; this is the client-side mirror.
+    static constexpr int kTxFilterMinHz      = 0;
+    static constexpr int kTxFilterMaxHz      = 10000;
+    static constexpr int kTxFilterMinWidthHz = 50;
+    int txFilterMinHz()      const { return kTxFilterMinHz; }
+    int txFilterMaxHz()      const { return kTxFilterMaxHz; }
+    int txFilterMinWidthHz() const { return kTxFilterMinWidthHz; }
+
     int     txFilterLow()    const { return m_txFilterLow; }
     int     txFilterHigh()   const { return m_txFilterHigh; }
 
@@ -193,6 +208,10 @@ public:
     // than briefly greying out a control that does exist.
     void setHasTuner(bool present);
     [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
+    // Independent from matching: Flex exposes radio-side ATU memory recall
+    // and database operations, while an Icom 1C 01 tuner path does not.
+    void setHasTunerMemories(bool present);
+    [[nodiscard]] bool hasTunerMemories() const { return m_hasTunerMemories; }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -239,6 +258,7 @@ public:
     void setMicAcc(bool on);
     void setSpeechProcessorEnable(bool on);
     void setSpeechProcessorLevel(int level);
+    void setSpeechProcessorLevelMaximum(int maximum);
     // Adopt speech-processor state that did NOT come from this model — the
     // client-side compressor on a host-modulating backend, where PROC drives our
     // own DSP and the operator can also reach that same compressor through the
@@ -304,6 +324,7 @@ signals:
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
     void hasTunerChanged(bool present);
+    void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
@@ -354,6 +375,12 @@ signals:
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
+    void cwSpeedChanged(int wpm);
+    // Operator intent only. Radio status applied through applyStatus() never
+    // emits these, so a CI-V readback cannot loop straight back into a write.
+    void cwPitchCommandIssued(int hz);
+    void cwSpeedCommandIssued(int wpm);
+    void cwBreakInCommandIssued(bool on);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();
@@ -402,6 +429,7 @@ private:
     int    m_rfPower{100};
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
+    bool   m_hasTunerMemories{true};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};
@@ -414,6 +442,7 @@ private:
     bool    m_micAcc{false};
     bool    m_speechProcEnable{false};
     int     m_speechProcLevel{0};
+    int     m_speechProcLevelMaximum{2};
     bool    m_companderOn{false};
     int     m_companderLevel{0};
     bool    m_daxOn{false};

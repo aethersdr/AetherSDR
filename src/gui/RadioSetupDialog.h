@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "RadioSetupIpConfigPresentation.h"
 
 #include <QHash>
 #include <QVector>
@@ -34,6 +35,7 @@ class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
 class VkampConnection;
+class LpMeterConnection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -48,8 +50,14 @@ public:
                               AcomConnection* acom = nullptr,
                               SpeConnection* spe = nullptr,
                               VkampConnection* vkamp = nullptr,
+                              LpMeterConnection* lpMeter = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
+    // Like selectTab("Serial & Controllers"), but also scrolls the page so
+    // the FlexControl Tuning Knob group is actually in view instead of just
+    // landing at the top of a long, scroll-wrapped page (#4940 follow-up —
+    // PR #5157 review).
+    void revealFlexControlSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
 
@@ -90,6 +98,11 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
+    bool isCapabilityPageAvailable(const QTreeWidgetItem* item) const;
+    bool isGpsSetupAvailable() const;
+    bool isGpsPage(const QTreeWidgetItem* item) const;
+    void updateRadioCapabilityVisibility();
     QWidget* buildRadioTab();
     QWidget* buildNetworkTab();
     QGroupBox* buildIpConfigGroup();
@@ -145,6 +158,7 @@ private:
     AcomConnection* m_acom{nullptr};
     SpeConnection* m_spe{nullptr};
     VkampConnection* m_vkamp{nullptr};
+    LpMeterConnection* m_lpMeter{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};
@@ -154,9 +168,36 @@ private:
     // Stashed by the search filter and committed on Enter, so typing highlights
     // the match without eagerly building deferred, hardware-probing pages.
     QTreeWidgetItem* m_searchFirstMatch{nullptr};
+    int m_filtersPageIndex{-1};
+    int m_smartLinkPageIndex{-1};
+    int m_gpsPageIndex{-1};
+    QWidget* m_flexControlInfoField{nullptr};
+    QWidget* m_multiFlexInfoField{nullptr};
+    QWidget* m_remoteOnInfoField{nullptr};
+    QWidget* m_rebootInfoField{nullptr};
+    QGroupBox* m_licenseInfoGroup{nullptr};
+    QGroupBox* m_firmwareUpdateGroup{nullptr};
+    QLabel* m_firmwareDisclaimer{nullptr};
+    QGroupBox* m_networkIdentityGroup{nullptr};
+    QWidget* m_vitaReceiveBufferLabel{nullptr};
+    QWidget* m_vitaReceiveBufferControls{nullptr};
+    QWidget* m_vitaReceiveBufferStatus{nullptr};
+    QWidget* m_networkMtuLabel{nullptr};
+    QWidget* m_networkMtuControl{nullptr};
+    QWidget* m_privateIpPolicyLabel{nullptr};
+    QWidget* m_privateIpPolicyControl{nullptr};
+    QPushButton* m_ipDhcpButton{nullptr};
+    QPushButton* m_ipStaticButton{nullptr};
+    QLineEdit* m_staticIpEdit{nullptr};
+    QLineEdit* m_staticMaskEdit{nullptr};
+    QLineEdit* m_staticGatewayEdit{nullptr};
+    QPushButton* m_ipApplyButton{nullptr};
+    IpConfigPresentationState m_ipConfigPresentation;
+    QGroupBox* m_audioCompressionGroup{nullptr};
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};
+    QGroupBox* m_flexControlGroup{nullptr};
     QPushButton* m_flexControlDetectButton{nullptr};
     QPushButton* m_flexControlCloseButton{nullptr};
     QCheckBox* m_flexControlInvertCheck{nullptr};

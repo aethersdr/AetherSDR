@@ -1,4 +1,5 @@
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
 #include <algorithm>
 #include <cctype>
@@ -63,6 +64,7 @@ bool commandHasSubcommand(std::uint8_t command)
     case cmd::kPower:
     case cmd::kReadId:
     case cmd::kSetting:
+    case cmd::kTone:
     case cmd::kControl:
     case cmd::kScope:
     // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
@@ -227,6 +229,15 @@ std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd)
     return hz;
 }
 
+std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes)
+{
+    if (bcd.size() != expectedBytes) {
+        return std::nullopt;
+    }
+    return decodeFreq(bcd);
+}
+
 std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd)
 {
     if (bcd.empty() || bcd.size() > 8)
@@ -331,7 +342,7 @@ std::string modeToNeutral(CivMode mode, bool dataMode)
     case CivMode::Lsb:  return dataMode ? "DIGL" : "LSB";
     case CivMode::Usb:  return dataMode ? "DIGU" : "USB";
     case CivMode::Am:   return "AM";
-    case CivMode::Cw:   return "CWU";
+    case CivMode::Cw:   return "CW";
     case CivMode::CwR:  return "CWL";
     // Symmetric with Lsb/Usb above: the DATA flag is what distinguishes FM-D
     // from FM, and returning plain "FM" for both made the round trip lossy. A
@@ -473,6 +484,154 @@ std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter
 }
 
 // ---------------------------------------------------------------------------
+// IF filter width (1A 03), Twin PBT (14 07 / 14 08)
+// ---------------------------------------------------------------------------
+
+WidthClass widthClassFor(const std::string& mode) noexcept
+{
+    const std::string u = upperMode(mode);
+    // FM AND ITS RELATIVES HAVE NO SETTABLE WIDTH. 1A 03 simply does not apply
+    // there — the three FM slots are fixed at 15/10/7 kHz in the radio, and
+    // sending a width code in FM either does nothing or lands in whatever mode
+    // the radio was in last. Offering a resize control for FM would be a slider
+    // wired to nothing, which is exactly what this whole change is removing.
+    if (u == "FM" || u == "NFM" || u == "DFM" || u == "WFM" || u == "DV" || u == "DSTAR")
+        return WidthClass::Fixed;
+    if (u == "AM" || u == "SAM")
+        return WidthClass::Am;
+    if (u == "RTTY" || u == "RTTYR")
+        return WidthClass::Rtty;
+    return WidthClass::Ssb;   // LSB/USB/DIGL/DIGU/CW/CWU/CWL
+}
+
+std::optional<int> filterWidthHzFromCode(const std::string& mode, std::uint8_t code) noexcept
+{
+    switch (widthClassFor(mode)) {
+    case WidthClass::Fixed:
+        return std::nullopt;
+    case WidthClass::Am:
+        if (code > 49)
+            return std::nullopt;
+        return 200 + static_cast<int>(code) * 200;
+    case WidthClass::Rtty:
+        if (code <= 9)
+            return 50 + static_cast<int>(code) * 50;
+        if (code <= 31)
+            return 600 + (static_cast<int>(code) - 10) * 100;
+        return std::nullopt;
+    case WidthClass::Ssb:
+        if (code <= 9)
+            return 50 + static_cast<int>(code) * 50;
+        if (code <= 40)
+            return 600 + (static_cast<int>(code) - 10) * 100;
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint8_t> filterWidthCodeFor(const std::string& mode, int hz) noexcept
+{
+    if (widthClassFor(mode) == WidthClass::Fixed)
+        return std::nullopt;
+    // SEARCH THE DECODER, do not invert it. Two arithmetic branches that must
+    // agree across a discontinuity (the 500 Hz -> 600 Hz gap) is precisely the
+    // shape wfview got wrong, and the table is 50 entries. Nearest wins; a tie
+    // takes the WIDER code, because the request that lands exactly between two
+    // widths came from a drag and losing audio is more noticeable than keeping
+    // 50 Hz of it.
+    std::optional<std::uint8_t> best;
+    int bestDelta = 0;
+    for (int code = 0; code <= 49; ++code) {
+        const auto w = filterWidthHzFromCode(mode, static_cast<std::uint8_t>(code));
+        if (!w)
+            continue;
+        const int delta = std::abs(*w - hz);
+        if (!best || delta <= bestDelta) {
+            best = static_cast<std::uint8_t>(code);
+            bestDelta = delta;
+        }
+    }
+    return best;
+}
+
+FilterWidthLimits filterWidthLimitsFor(const std::string& mode) noexcept
+{
+    switch (widthClassFor(mode)) {
+    case WidthClass::Fixed: return {0, 0, 0};
+    case WidthClass::Am:    return {200, 10000, 200};
+    case WidthClass::Rtty:  return {50, 2700, 100};
+    case WidthClass::Ssb:   return {50, 3600, 100};
+    }
+    return {0, 0, 0};
+}
+
+std::vector<std::uint8_t> cmdReadFilterWidth(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kSetting, settingSub::kFilterWidth);
+}
+
+std::vector<std::uint8_t> cmdSetFilterWidth(std::uint8_t to, std::uint8_t code)
+{
+    // ONE BCD BYTE carrying the code as its own decimal value: code 40 goes on
+    // the wire as 0x40, not 0x28. Sending the binary value instead reaches a
+    // different, valid width and the radio accepts it without complaint.
+    const std::array<std::uint8_t, 1> body{encodeBcdByte(std::clamp<int>(code, 0, 49))};
+    return buildFrameSub(to, cmd::kSetting, settingSub::kFilterWidth, body);
+}
+
+int pbtShiftHz(int code, int widthHz) noexcept
+{
+    if (widthHz <= 0)
+        return 0;
+    const int offset = std::clamp(code, 0, 255) - kPbtCentreCode;
+    return static_cast<int>(std::lround(static_cast<double>(offset) * widthHz
+                                        / static_cast<double>(kPbtSpanCodes)));
+}
+
+int pbtCodeForShiftHz(int shiftHz, int widthHz) noexcept
+{
+    if (widthHz <= 0)
+        return kPbtCentreCode;
+    const double steps = static_cast<double>(shiftHz) * kPbtSpanCodes
+                       / static_cast<double>(widthHz);
+    return std::clamp(kPbtCentreCode + static_cast<int>(std::lround(steps)), 0, 255);
+}
+
+PassbandEdges passbandFromWidthAndPbt(int centreHz, int widthHz, int innerCode,
+                                       int outerCode) noexcept
+{
+    if (widthHz <= 0)
+        return {centreHz, centreHz};
+    const int inner = pbtShiftHz(innerCode, widthHz);
+    const int outer = pbtShiftHz(outerCode, widthHz);
+    // TOGETHER SLIDES, APART NARROWS. The mean is where the window ended up;
+    // the separation is how much of it the two edges have eaten from inside.
+    const int shift = (inner + outer) / 2;
+    const int effective = std::max(0, widthHz - std::abs(inner - outer));
+    const int centre = centreHz + shift;
+    return {centre - effective / 2, centre + effective / 2};
+}
+
+int passbandCentreHz(const std::string& mode, int widthHz) noexcept
+{
+    const std::string u = upperMode(mode);
+    // CW's slice frequency IS the tone (see passbandForModeAndFilter), so the
+    // passband is centred on it and the offset here is zero.
+    if (u == "CW" || u == "CWU" || u == "CWL")
+        return 0;
+    if (!isSingleSideband(mode))
+        return 0;   // AM, SAM, FM, WFM straddle the carrier
+    // The RTTY mark frequency is configurable (SET 0050: 1275/1615/2125 Hz)
+    // and has not been read into this model. Preserve the previous conservative
+    // geometry with its carrier-side edge at 150 Hz; 1000 Hz is not a valid
+    // mark value and would present an invented passband as radio truth.
+    const int centre = (u == "RTTY" || u == "RTTYR")
+        ? 150 + std::max(0, widthHz) / 2
+        : 1500;
+    return isLowerSideband(mode) ? -centre : centre;
+}
+
+// ---------------------------------------------------------------------------
 // Command builders
 // ---------------------------------------------------------------------------
 
@@ -539,6 +698,20 @@ std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int v
     return buildFrameSub(to, cmd::kLevel, which, bcd);
 }
 
+std::vector<std::uint8_t> cmdSendCwMessage(std::uint8_t to, std::string_view ascii)
+{
+    const std::size_t count = std::min<std::size_t>(ascii.size(), 30);
+    const std::span<const std::uint8_t> body{
+        reinterpret_cast<const std::uint8_t*>(ascii.data()), count};
+    return buildFrame(to, cmd::kCwMessage, body);
+}
+
+std::vector<std::uint8_t> cmdAbortCwMessage(std::uint8_t to)
+{
+    const std::array<std::uint8_t, 1> body{0xFF};
+    return buildFrame(to, cmd::kCwMessage, body);
+}
+
 std::vector<std::uint8_t> cmdReadMeter(std::uint8_t to, std::uint8_t which)
 {
     return buildFrameSub(to, cmd::kMeter, which);
@@ -572,6 +745,238 @@ std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
     return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
+std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kDuplex);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffsetDirection(
+    std::uint8_t to, RepeaterOffsetDirection direction)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(direction)};
+    return buildFrame(to, cmd::kDuplex, body);
+}
+
+std::optional<RepeaterOffsetDirection> decodeRepeaterOffsetDirection(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload.front()) {
+    case 0x10: return RepeaterOffsetDirection::Simplex;
+    case 0x11: return RepeaterOffsetDirection::Down;
+    case 0x12: return RepeaterOffsetDirection::Up;
+    default: return std::nullopt;
+    }
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kReadRepeaterOffset);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to, int offsetHz)
+{
+    // Three little-endian BCD bytes in 100 Hz units.  600 kHz is 6000 units,
+    // and therefore 00 60 00 on the wire — the same pair ordering as a
+    // frequency, with two fewer bytes and coarser resolution.
+    const int units = std::clamp(static_cast<int>(std::lround(offsetHz / 100.0)),
+                                 0, 999999);
+    const std::array<std::uint8_t, 3> body{
+        encodeBcdByte(units % 100),
+        encodeBcdByte((units / 100) % 100),
+        encodeBcdByte((units / 10000) % 100),
+    };
+    return buildFrame(to, cmd::kSetRepeaterOffset, body);
+}
+
+std::optional<int> decodeRepeaterOffsetHz(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload) {
+        if ((byte & 0x0F) > 9 || ((byte >> 4) & 0x0F) > 9) {
+            return std::nullopt;
+        }
+    }
+    const int units = decodeBcdByte(payload[0])
+        + decodeBcdByte(payload[1]) * 100
+        + decodeBcdByte(payload[2]) * 10000;
+    return units * 100;
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to)
+{
+    return cmdReadRepeaterToneRegister(to, repeaterTone::kTxCtcss);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
+{
+    return cmdSetCtcssTone(to, repeaterTone::kTxCtcss, toneHz);
+}
+
+std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
+                                          double toneHz)
+{
+    // The guide fixes the first two digits at zero and allows 000.0..299.9 Hz.
+    // Carry tenths of a hertz as six big-endian BCD digits: 88.5 -> 00 08 85.
+    const int tenths = std::clamp(static_cast<int>(std::lround(toneHz * 10.0)),
+                                  0, 2999);
+    const std::array<std::uint8_t, 3> body{
+        0x00,
+        encodeBcdByte((tenths / 100) % 100),
+        encodeBcdByte(tenths % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse)
+{
+    if (!isCanonicalDtcsCode(code)) {
+        return {};
+    }
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte(code / 100),
+        encodeBcdByte(code % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, repeaterTone::kDtcs, body);
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return cmdReadFunction(to, func::kRepeaterAccess);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to, std::uint8_t mode)
+{
+    return cmdSetFunction(to, func::kRepeaterAccess, mode);
+}
+
+std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3 || payload[0] != 0x00) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload.subspan(1)) {
+        if ((byte & 0x0F) > 9 || ((byte >> 4) & 0x0F) > 9) {
+            return std::nullopt;
+        }
+    }
+    const int tenths = decodeBcdByte(payload[1]) * 100
+        + decodeBcdByte(payload[2]);
+    if (tenths > 2999) {
+        return std::nullopt;
+    }
+    return static_cast<double>(tenths) / 10.0;
+}
+
+std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload[0]) {
+    case 0x00:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x09:
+        return payload[0];
+    default:
+        return std::nullopt;
+    }
+}
+
+std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
+{
+    switch (value) {
+    case 0x00: return "off";
+    case 0x01: return "ctcss_tx";
+    case 0x02: return "ctcss_rx";
+    case 0x03: return "dtcs_txrx";
+    case 0x06: return "dtcs_tx";
+    case 0x07: return "ctcss_tx_dtcs_rx";
+    case 0x08: return "dtcs_tx_ctcss_rx";
+    case 0x09: return "ctcss_txrx";
+    default:   return {};
+    }
+}
+
+std::optional<std::uint8_t> repeaterAccessModeValue(std::string_view name) noexcept
+{
+    constexpr std::array<std::uint8_t, 8> kValues{
+        0x00, 0x01, 0x02, 0x03, 0x06, 0x07, 0x08, 0x09};
+    for (const std::uint8_t value : kValues) {
+        if (repeaterAccessModeName(value) == name) {
+            return value;
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which, int value,
+    bool txReverse, bool rxReverse)
+{
+    const int bounded = std::clamp(value, 0, 9999);
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte((bounded / 100) % 100),
+        encodeBcdByte(bounded % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::optional<std::vector<std::uint8_t>> repeaterToneConfirmationForWrite(
+    std::uint8_t to, const CivFrame& write)
+{
+    if (write.cmd != cmd::kTone || !write.hasSub || write.data.empty()
+        || (write.sub != repeaterTone::kTxCtcss
+            && write.sub != repeaterTone::kRxCtcss
+            && write.sub != repeaterTone::kDtcs)) {
+        return std::nullopt;
+    }
+    return cmdReadRepeaterToneRegister(to, write.sub);
+}
+
+std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload)
+{
+    const auto validBcd = [](std::uint8_t byte) {
+        return (byte & 0x0F) <= 9 && ((byte >> 4) & 0x0F) <= 9;
+    };
+    if (payload.size() != 3 || (payload[0] & 0xEE) != 0
+        || !validBcd(payload[1]) || !validBcd(payload[2])) {
+        return std::nullopt;
+    }
+    return RepeaterToneRegister{
+        decodeBcdByte(payload[1]) * 100 + decodeBcdByte(payload[2]),
+        (payload[0] & 0x10) != 0,
+        (payload[0] & 0x01) != 0,
+    };
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kReadTxFreq);
+}
+
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
 {
     return buildFrameSub(to, cmd::kTuneOffset, sub);
@@ -594,6 +999,17 @@ std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit)
 {
     const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(transmit ? 0x01 : 0x00)};
     return buildFrameSub(to, cmd::kControl, control::kPtt, body);
+}
+
+std::vector<std::uint8_t> cmdSetTransmitFrequencyCheck(std::uint8_t to, bool on)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(on ? 0x01 : 0x00)};
+    return buildFrameSub(to, cmd::kControl, control::kXfc, body);
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequencyCheck(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kXfc);
 }
 
 std::vector<std::uint8_t> cmdReadId(std::uint8_t to)
@@ -701,6 +1117,75 @@ std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item, std::uint8_
     const auto bcd = settingItemBcd(item);
     const std::array<std::uint8_t, 3> body{bcd[0], bcd[1], value};
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
+std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int value)
+{
+    const auto itemBcd = settingItemBcd(item);
+    const auto levelBcd = encodeLevel(std::clamp(value, 0, 255));
+    const std::array<std::uint8_t, 4> body{
+        itemBcd[0], itemBcd[1], levelBcd[0], levelBcd[1]};
+    return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+decodeNetworkAddress(std::span<const std::uint8_t> data)
+{
+    if (data.size() != 8) {
+        return std::nullopt;
+    }
+    std::array<std::uint8_t, 4> octets{};
+    for (std::size_t i = 0; i < data.size(); i += 2) {
+        const std::uint8_t high = data[i];
+        const std::uint8_t low = data[i + 1];
+        if ((high & 0x0f) > 9 || ((high >> 4) & 0x0f) > 9
+            || (low & 0x0f) > 9 || ((low >> 4) & 0x0f) > 9) {
+            return std::nullopt;
+        }
+        const int value = decodeBcdByte(high) * 100 + decodeBcdByte(low);
+        if (value > 255) {
+            return std::nullopt;
+        }
+        octets[i / 2] = static_cast<std::uint8_t>(value);
+    }
+    return octets;
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+subnetMaskFromBcdPrefix(std::uint8_t raw)
+{
+    if ((raw & 0x0f) > 9 || ((raw >> 4) & 0x0f) > 9) {
+        return std::nullopt;
+    }
+    const int prefix = decodeBcdByte(raw);
+    if (prefix < 1 || prefix > 30) {
+        return std::nullopt;
+    }
+    const std::uint32_t mask = 0xffffffffU << (32 - prefix);
+    return std::array<std::uint8_t, 4>{
+        static_cast<std::uint8_t>((mask >> 24) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 16) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 8) & 0xffU),
+        static_cast<std::uint8_t>(mask & 0xffU)};
+}
+
+std::optional<std::string> decodeNetworkName(std::span<const std::uint8_t> data)
+{
+    if (data.size() > 15) {
+        return std::nullopt;
+    }
+    std::string name;
+    name.reserve(data.size());
+    for (std::uint8_t byte : data) {
+        if (byte < 0x20 || byte > 0x7e) {
+            return std::nullopt;
+        }
+        name.push_back(static_cast<char>(byte));
+    }
+    while (!name.empty() && name.back() == ' ') {
+        name.pop_back();
+    }
+    return name;
 }
 
 std::vector<std::uint8_t> cmdTuneOffsetHz(std::uint8_t to, int hz)
