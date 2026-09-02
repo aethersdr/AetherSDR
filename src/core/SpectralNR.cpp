@@ -523,16 +523,11 @@ void SpectralNR::setNpeMethod(int method)
 
 void SpectralNR::reset()
 {
-    resetTransientState();
+    resetTransient();
     resetNoiseEstimate();
 }
 
 void SpectralNR::resetTransient()
-{
-    resetTransientState();
-}
-
-void SpectralNR::resetTransientState()
 {
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
@@ -560,6 +555,17 @@ void SpectralNR::resetTransientState()
     // so a retained value could only live for one frame. Flushing keeps the
     // recalibration deterministic — and post-TX the receiver AGC state that
     // these references describe is exactly what may have changed.
+    //
+    // What this cannot preserve is a level step that straddles the gap. NR2
+    // sees post-AGC audio on every path (the radio's AGC for a Flex, WDSP's
+    // inside Hl2RxDsp for an HL2), and the first post-TX frame re-seeds
+    // m_commonReferencePsd from the post-TX spectrum (detectCommonModeScale),
+    // so the scale corrector never observes the step and scalePowerHistory()
+    // will not rescale the retained noise estimate for it. The fallout is
+    // bounded rather than corrected: minimum statistics re-levels a floor that
+    // is now too high within a few frames, and one that is too low within one
+    // window (m_U * m_V frames, ~1.5 s) — no slower than the full reset()
+    // this path replaced. Pinned by the ±6 dB step rows in spectral_nr_test.
     std::fill(m_commonWantedProtected.begin(),
               m_commonWantedProtected.end(), 0);
     std::fill(m_commonReferencePsd.begin(),

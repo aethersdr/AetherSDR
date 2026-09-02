@@ -312,7 +312,6 @@ private:
 
     // ── Internal methods ───────────────────────────────────────────────
     void initWindow();
-    void resetTransientState();
     void resetNoiseEstimate();
     void processFrame();
     bool updateMaskFromCurrentFrame();
