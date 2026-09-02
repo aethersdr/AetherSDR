@@ -3503,12 +3503,24 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     auto* startStopBtn = new QPushButton("Start Sweep");
     themed(startStopBtn, kButton);
     startStopBtn->setFixedWidth(120);
+    // Description, NOT accessibleName: this button's text toggles between
+    // "Start Sweep" and "Stop", and a screen reader takes a button's name
+    // from its text unless one is set explicitly. A fixed name here would
+    // freeze the announcement at "Start sweep" while the button actually
+    // reads "Stop" -- worse than saying nothing. The description supplements
+    // the live text instead of replacing it.
+    startStopBtn->setAccessibleDescription(QStringLiteral(
+        "Steps the radio through every DDC0 sample rate and measures the "
+        "panadapter's edge droop at each one. Takes several minutes."));
 
     auto* progressBar = new QProgressBar;
     progressBar->setRange(0, 100);
     progressBar->setValue(0);
     progressBar->setTextVisible(false);
     progressBar->setFixedHeight(startStopBtn->sizeHint().height());
+    // setTextVisible(false) leaves this with no text at all, so without a
+    // name it is announced as an unlabelled progress bar.
+    progressBar->setAccessibleName(QStringLiteral("Droop sweep progress"));
 
     auto* rowLayout = new QHBoxLayout;
     rowLayout->addWidget(startStopBtn);
@@ -3518,6 +3530,11 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     auto* statusLbl = new QLabel("Idle — no sweep has been run this session.");
     themed(statusLbl, kLabel);
     statusLbl->setWordWrap(true);
+    // Same reasoning as the Start button, for the same reason in reverse: a
+    // QLabel's accessible name IS its text, and this label's text is the
+    // live sweep status (including the failure reasons the calibrator
+    // reports). Naming it would hide exactly the content worth hearing.
+    statusLbl->setAccessibleDescription(QStringLiteral("Droop sweep status"));
     gvb->addWidget(statusLbl);
 
     auto* summaryLbl = new QLabel;
@@ -3525,12 +3542,17 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
         "QLabel { color: {{color.text.secondary}}; font-size: 11px; "
         "font-family: monospace; }"));
     summaryLbl->setWordWrap(true);
+    summaryLbl->setAccessibleDescription(QStringLiteral(
+        "Measured correction per DDC0 rate"));
     gvb->addWidget(summaryLbl);
 
     auto* applyBtn = new QPushButton("Apply");
     themed(applyBtn, kButton);
     applyBtn->setFixedWidth(90);
     applyBtn->setEnabled(false);
+    // Static text, so a name is safe here -- and needed: "Apply" and
+    // "Discard" alone say nothing about what is being applied or discarded.
+    applyBtn->setAccessibleName(QStringLiteral("Apply the measured droop correction"));
     applyBtn->setToolTip(QStringLiteral(
         "Push the measured tables live and save them for this radio"));
 
@@ -3538,6 +3560,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     themed(cancelBtn, kButton);
     cancelBtn->setFixedWidth(90);
     cancelBtn->setEnabled(false);
+    cancelBtn->setAccessibleName(QStringLiteral("Discard the measured droop correction"));
     cancelBtn->setToolTip(QStringLiteral("Drop the measured (not yet applied) result"));
 
     auto* applyRow = new QHBoxLayout;

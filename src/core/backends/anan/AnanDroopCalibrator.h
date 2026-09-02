@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/anan/AnanDroopCorrection.h"
+#include "core/backends/anan/P2Protocol.h"   // kDdc0RatesKsps
 #include "core/RadioSettingsScope.h"
 
 #include <QElapsedTimer>
@@ -189,7 +190,9 @@ private:
     // AnanRxDsp::setDroopCorrectionBypassed().
     void setDspBypass(bool bypassed);
 
-    static constexpr std::array<int, 6> kRatesKsps{48, 96, 192, 384, 768, 1536};
+    // The sweep covers every rate the radio has, in the order it has them --
+    // see anan::kDdc0RatesKsps for why the set is spelled in exactly one place.
+    static constexpr auto& kRatesKsps = anan::kDdc0RatesKsps;
     static constexpr int kSamplesPerRate = 8;
     static constexpr int kSampleSpacingMs = 300;
     static constexpr int kRateWaitTimeoutMs = 90'000;  // "~a minute cold" + margin

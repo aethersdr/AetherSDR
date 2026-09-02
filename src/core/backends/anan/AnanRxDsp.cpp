@@ -212,7 +212,7 @@ void AnanRxDsp::setDroopCorrectionTable(int rateKsps, const std::vector<float>& 
     if (table.size() != kDroopCorrectionFftSize)
         return;
     bool valid = false;
-    for (const int r : {48, 96, 192, 384, 768, 1536})
+    for (const int r : kDdc0RatesKsps)
         valid |= (r == rateKsps);
     if (!valid)
         return;

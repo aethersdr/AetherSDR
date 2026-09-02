@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/backends/anan/AnanDroopCorrection.h"
+#include "core/backends/anan/P2Protocol.h"   // kDdc0RatesKsps
 #include "core/backends/anan/AnanSpectrum.h"
 #include "core/dsp/WdspChannel.h"
 

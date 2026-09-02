@@ -172,7 +172,9 @@ AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
         // unlike Hl2Backend's own two call sites, there is no second place
         // this needs to be re-derived from. Bounds match
         // capabilities().sampleRatesHz's own endpoints (48-1536 ksps).
-        emit panBandwidthLimitsChanged(kPanId, 48'000.0 / 1.0e6, 1'536'000.0 / 1.0e6);
+        emit panBandwidthLimitsChanged(kPanId,
+                                      kDdc0RatesKsps.front() * 1000.0 / 1.0e6,
+                                      kDdc0RatesKsps.back() * 1000.0 / 1.0e6);
         if (wasRateChange) {
             // Audio was muted in beginRateChange(), BEFORE this session's
             // session even started -- see that function's comment for why
@@ -285,7 +287,8 @@ RadioCapabilities AnanBackend::capabilities() const
     c.model = QStringLiteral("ANAN-G2");
     c.maxSlices = 1;
     c.maxPanadapters = 1;
-    c.sampleRatesHz = {48000, 96000, 192000, 384000, 768000, 1536000};
+    for (const int ksps : kDdc0RatesKsps)
+        c.sampleRatesHz.append(ksps * 1000);
     // Not reported -- no verified G2 tuning range (RFC: "I have not fetched
     // the Apache Labs G2 manual"). RadioCapabilities.h's own convention:
     // both zero means "not reported", not a guess.
@@ -702,12 +705,11 @@ int AnanBackend::nearestDdc0RateKsps(int requestedKsps) noexcept
     // under ratio distance -- the equivalent equidistant point is
     // 96*sqrt(2) =~ 135.76 ksps, not an integer any real zoom request lands
     // on -- so no tie-break is needed here, matching the HL2 version exactly.
-    static constexpr std::array<int, 6> kRatesKsps = {48, 96, 192, 384, 768, 1536};
     if (requestedKsps <= 0)
-        return kRatesKsps.front();
-    int best = kRatesKsps.front();
+        return kDdc0RatesKsps.front();
+    int best = kDdc0RatesKsps.front();
     double bestDistance = std::numeric_limits<double>::infinity();
-    for (const int r : kRatesKsps) {
+    for (const int r : kDdc0RatesKsps) {
         const double distance = std::abs(std::log(static_cast<double>(requestedKsps) / r));
         if (distance < bestDistance) {
             bestDistance = distance;
