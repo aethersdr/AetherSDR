@@ -16,9 +16,10 @@ namespace AetherSDR {
 // True when w is actually on screen for the user — visible AND not minimized.
 [[nodiscard]] bool windowIsShowing(const QWidget* w);
 
-// Bring w to the front, un-minimizing it first if needed.  showNormal() is
-// guarded on isMinimized() because calling it unconditionally would clear a
-// Maximized or FullScreen window (#3918).
+// Bring w to the front, un-minimizing it first if needed.  Only the Minimized
+// bit is cleared, so a Maximized or FullScreen window keeps that state — both
+// when it is merely raised and when it is restored from the taskbar/Dock
+// (#3918).  showNormal() would drop it in either case.
 void showAndRaiseWindow(QWidget* w);
 
 } // namespace AetherSDR

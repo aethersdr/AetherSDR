@@ -9384,10 +9384,11 @@ void MainWindow::toggleAetherialStrip()
     // the next press called show(), which restores it straight back to
     // minimized.  The strip could then only be recovered from the taskbar/Dock,
     // never from its own button.
-    if (windowIsShowing(m_aetherialStrip))
+    if (windowIsShowing(m_aetherialStrip)) {
         m_aetherialStrip->hide();
-    else
+    } else {
         showAndRaiseWindow(m_aetherialStrip);
+    }
 }
 
 void MainWindow::toggleMinimalModeFromAction()

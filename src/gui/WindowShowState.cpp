@@ -13,11 +13,13 @@ void showAndRaiseWindow(QWidget* w)
 {
     if (!w)
         return;
-    // showNormal() only for a minimized window — see the header note on #3918.
-    if (w->isMinimized())
-        w->showNormal();
-    else
-        w->show();
+    // Clear ONLY the minimized bit.  showNormal() would also clear Maximized
+    // and FullScreen, so a strip that was maximized, then minimized, would come
+    // back at normal size (#3918).  On a hidden widget this is a pending state
+    // that show() applies; on a visible one it takes effect immediately and
+    // show() is a no-op.
+    w->setWindowState(w->windowState() & ~Qt::WindowMinimized);
+    w->show();
     w->raise();
     w->activateWindow();
 }

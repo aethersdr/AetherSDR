@@ -103,6 +103,19 @@ int main(int argc, char** argv)
         app.processEvents();
         report("showAndRaiseWindow keeps a maximized window maximized",
                w.isMaximized());
+
+        // --- Case 8: the reopen path itself must not drop maximize.  This is
+        // what showNormal() got wrong: it clears Minimized AND Maximized, so a
+        // maximized strip that was minimized came back at normal size.
+        w.showMinimized();
+        app.processEvents();
+        report("Qt: minimizing keeps the Maximized bit alongside Minimized",
+               w.isMinimized() && (w.windowState() & Qt::WindowMaximized));
+        toggle(&w);
+        app.processEvents();
+        report("toggle restores a minimized-from-maximized window",
+               windowIsShowing(&w));
+        report("restored window is still maximized", w.isMaximized());
     } else {
         // Some platforms decline to maximize; the guard is still pinned by
         // case 6, so skip rather than fail on a platform quirk.

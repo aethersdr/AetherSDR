@@ -12,6 +12,7 @@
 
 #include "NetReminderBanner.h"
 #include "NetSchedulerDialog.h"
+#include "WindowShowState.h"
 
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -222,13 +223,9 @@ void MainWindow::onNetReminderDue(const NetEntry& entry, const QDateTime& occurr
                             break;
                         }
                     }
-                    // Bring the window forward without disturbing its state.
-                    // showNormal() would clear a Maximized/FullScreen window
-                    // (#3918) — only un-minimize if actually minimized.
-                    if (isMinimized())
-                        showNormal();
-                    raise();
-                    activateWindow();
+                    // Bring the window forward without disturbing its
+                    // Maximized/FullScreen state (#3918).
+                    showAndRaiseWindow(this);
                 });
     }
     m_netReminderBanner->showReminder(entry.id, headline, detail, canTune);
@@ -243,10 +240,7 @@ void MainWindow::onNetReminderDue(const NetEntry& entry, const QDateTime& occurr
         m_trayIcon->show();
         connect(m_trayIcon, &QSystemTrayIcon::messageClicked, this, [this] {
             // Raise without un-maximizing the window (#3918).
-            if (isMinimized())
-                showNormal();
-            raise();
-            activateWindow();
+            showAndRaiseWindow(this);
         });
     }
     if (m_trayIcon) {
