@@ -267,16 +267,6 @@ void TxApplet::buildUI()
             "QPushButton:hover { background: #204060; }"
             "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
             "border: 1px solid #2a3040; }";
-        // Put :checked before the shared :disabled rule so a checked control
-        // whose capability disappears still renders unavailable, not active.
-        const QString tunerBtnStyle = QStringLiteral(
-                "QPushButton:checked {"
-                " background: {{color.toggle.success.background.checked}};"
-                " color: {{color.toggle.success.foreground.checked}};"
-                " border: 1px solid {{color.toggle.success.border.checked}};"
-                " }")
-            + QString::fromLatin1(btnStyle);
-
         m_tuneBtn = new QPushButton("TUNE");
         markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
         m_tuneBtn->setStyleSheet(btnStyle);
@@ -317,7 +307,7 @@ void TxApplet::buildUI()
         row->addWidget(m_atuBtn);
 
         m_memBtn = new QPushButton("MEM");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_memBtn, tunerBtnStyle);
+        m_memBtn->setStyleSheet(btnStyle);
         m_memBtn->setCheckable(true);
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_memBtn->setFixedHeight(22);
