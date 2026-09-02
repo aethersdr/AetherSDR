@@ -2986,6 +2986,16 @@ function(aether_assert_no_qtwidgets root_target)
         endif()
         list(APPEND _visited_targets "${_current_target}")
 
+        # Imported packages are leaves for this project-ownership assertion.
+        # Their generator-expression metadata can mention consumer targets and
+        # is not a reliable forward dependency graph. Qt6::Widgets is still
+        # caught when a project target links it directly; project-owned helper
+        # and interface targets are traversed recursively.
+        get_target_property(_target_is_imported "${_current_target}" IMPORTED)
+        if(_target_is_imported)
+            continue()
+        endif()
+
         foreach(_link_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
             get_target_property(_target_links "${_current_target}" "${_link_property}")
             if(NOT _target_links OR "${_target_links}" MATCHES "-NOTFOUND$")
