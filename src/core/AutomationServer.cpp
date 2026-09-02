@@ -3287,9 +3287,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         // rfgain branch already splits the joined value and handles both shapes,
         // so the handler was right and only the parser choice was wrong.
         add("pan", {},
-            "pan <create|add|remove|close|center|rfgain|bandwidth|float|dock> [value] — "
-            "float/dock drive PanadapterStack's real reparent path (#4864); "
-            "bandwidth requests a DDC0 rate change in ksps and returns once ISSUED, not once it lands",
+            "pan <create|add|remove|close|center|rfgain|float|dock> [value] — "
+            "float/dock drive PanadapterStack's real reparent path (#4864)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
@@ -3513,8 +3512,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("radiocert", {},
-            "radiocert <tune|rx|tx|meters|spectrum|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key); "
-            "spectrum captures one FFT frame for calibration tooling and does not key",
+            "radiocert <tune|rx|tx|meters|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key)",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doRadioCert(a.action, a.value);
@@ -8407,7 +8405,6 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
     else if (phase == QLatin1String("rx"))     opts.phase = RadioCertification::Phase::Rx;
     else if (phase == QLatin1String("tx"))     opts.phase = RadioCertification::Phase::Tx;
     else if (phase == QLatin1String("meters")) opts.phase = RadioCertification::Phase::Meters;
-    else if (phase == QLatin1String("spectrum")) opts.phase = RadioCertification::Phase::Spectrum;
     else if (phase == QLatin1String("all"))    opts.phase = RadioCertification::Phase::All;
     else
         // FAIL CLOSED. An unrecognised phase used to leave opts.phase at its
@@ -8415,7 +8412,7 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
         // `radiocert`, or a typo like `radiocert reciever`, silently started a
         // multi-minute transmit sequence nobody asked for.
         return err(QStringLiteral(
-            "radiocert: unknown phase '%1' — expected tune|rx|tx|meters|spectrum|all. "
+            "radiocert: unknown phase '%1' — expected tune|rx|tx|meters|all. "
             "Refusing to default to 'all', which keys the transmitter")
             .arg(phaseArg.trimmed()));
 
@@ -10421,30 +10418,6 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("rfgain")},
                            {QStringLiteral("panId"), target},
                            {QStringLiteral("gain"), gain}, {QStringLiteral("requested"), true}};
-    }
-
-    if (action == QLatin1String("bandwidth") || action == QLatin1String("bw")) {
-        // `pan bandwidth <ksps>`. Added for the same "hidden control needs a
-        // direct verb" reason as rfgain above, plus a bring-up-tooling need:
-        // tools/anan_droop_calibration.py drives a full sweep across a
-        // DDC-stepped radio's fixed rate set (ANAN-G2: 48/96/192/384/768/
-        // 1536 ksps) and there was no bridge verb to select a rate directly
-        // — only the zoom buttons, which snap to the nearest of a few fixed
-        // steps and give no way to target a SPECIFIC rate by value.
-        //
-        // FIRE-AND-FORGET: on a DDC-stepped radio a rate change can take up
-        // to ~a minute cold (AnanRxDsp::buildChannel(), a never-before-used
-        // rate/block-size combination in this process), so this returns once
-        // the request is ISSUED, not once it lands. Poll
-        // `get_state model=pan property=bandwidthMhz` or use `wait_for` to
-        // know when it actually took.
-        bool okKsps = false;
-        const double ksps = arg.trimmed().toDouble(&okKsps);
-        if (!okKsps || ksps <= 0.0)
-            return err(QStringLiteral("pan bandwidth requires a positive rate in ksps"));
-        radio->setPanBandwidth(ksps / 1000.0);
-        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("bandwidth")},
-                           {QStringLiteral("requestedKsps"), ksps}, {QStringLiteral("requested"), true}};
     }
 
     if (action == QLatin1String("float") || action == QLatin1String("dock")) {

@@ -27,9 +27,8 @@ class RadioModel;
 // feature document, kFeature/kSchemaVersion, a pure static load function)
 // mirrors Hl2FreqCal. Family-agnostic mechanically -- it drives
 // RadioModel::setPanBandwidth() and taps RadioModel::panFeedSpectrumReady
-// only, the same generic surface RadioCertification::stageSpectrum()
-// already uses -- and is exposed only for ANAN via
-// RadioCapabilities::hostDroopCalibration.
+// only, both generic RadioModel surfaces -- and is exposed only for ANAN
+// via RadioCapabilities::hostDroopCalibration.
 //
 // Owned by RadioModel (RadioModel::droopCalibrator()), not dialog-
 // constructed like AgcTCalibrator: invokeBackendExtension() is a
@@ -57,8 +56,8 @@ public:
 
     // ---- pure math (static, unit-testable without a live radio) ----
     // Ported directly from this feature's original offline prototype
-    // (formerly tools/anan_droop_calibration.py, since superseded by this
-    // in-app engine) -- same algorithm, same reasoning, now C++.
+    // (a throwaway offline script, never in this tree, since superseded by
+    // this in-app engine) -- same algorithm, same reasoning, now C++.
     using Curve = std::array<float, anan::kDroopCorrectionFftSize>;
 
     // Combines N per-capture dB curves into one, per bin, via the MEDIAN

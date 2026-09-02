@@ -956,88 +956,6 @@ void RadioCertification::stageTuning(const Options& o)
            QStringLiteral("docs/HERMES.md 14.1 — connect-time state"));
 }
 
-void RadioCertification::stageSpectrum(const Options& o)
-{
-    // Data capture, not a verdict -- see Phase::Spectrum's own comment. Tunes
-    // to o.frequencyMhz and grabs exactly one live spectrum frame at
-    // whatever DDC0 rate/bandwidth the pan is CURRENTLY at. It does NOT
-    // change rate itself -- a rate change on a DDC-stepped radio can take up
-    // to ~a minute cold (AnanRxDsp::buildChannel()), and folding a wait for
-    // that into this stage would make it an outlier against every other
-    // stage's few-second budget. Drive the rate with the `pan bandwidth
-    // <ksps>` bridge verb and confirm it landed (get_state / wait_for)
-    // BEFORE calling `radiocert spectrum`.
-    //
-    // EVERY CALL MUST PASS AN EXPLICIT freqMhz. Options::frequencyMhz
-    // defaults to 14.200 and doRadioCert() only overrides it when a value is
-    // supplied -- an omitted argument silently re-tunes to the default on
-    // every call, which would corrupt a same-frequency averaging sweep.
-    if (!m_radio)
-        return;
-    auto* slice = m_radio->slice(0);
-    if (!slice)
-        return;
-
-    if (o.frequencyMhz > 0.0) {
-        slice->setFrequency(o.frequencyMhz);
-        spin(600);
-    }
-
-    const QString panId = m_radio->panId();
-    PanadapterModel* pan = panId.isEmpty() ? nullptr : m_radio->panadapter(panId);
-
-    // Captured at the panFeedSpectrumReady boundary -- the exact signal the
-    // panadapter paints from -- rather than reaching into AnanRxDsp directly,
-    // so a calibration capture and what the operator sees agree by
-    // construction (see tools/anan_droop_calibration.py for how these
-    // captures get turned into a correction table).
-    QVector<float> bins;
-    quint32 streamId = 0;
-    qint64 tsNs = 0;
-    bool captured = false;
-    QMetaObject::Connection conn = QObject::connect(
-        m_radio, &RadioModel::panFeedSpectrumReady, m_radio,
-        [&](quint32 id, const QVector<float>& b, qint64 ts) {
-            if (captured)
-                return;   // keep the FIRST frame after arming, not the latest
-            streamId = id;
-            bins = b;
-            tsNs = ts;
-            captured = true;
-        });
-    for (int waited = 0; waited < 3000 && !captured; waited += 100)
-        spin(100);
-    QObject::disconnect(conn);
-
-    QJsonObject m;
-    m[QStringLiteral("captured")] = captured;
-    m[QStringLiteral("streamId")] = static_cast<qint64>(streamId);
-    m[QStringLiteral("tsNs")] = static_cast<double>(tsNs);
-    m[QStringLiteral("centerMhz")] = pan ? pan->centerMhz() : slice->frequency();
-    m[QStringLiteral("ddc0RateKsps")] =
-        pan ? static_cast<int>(pan->bandwidthMhz() * 1000.0 + 0.5) : 0;
-    m[QStringLiteral("fftSize")] = static_cast<int>(bins.size());
-    QJsonArray arr;
-    for (const float v : bins)
-        arr.append(static_cast<double>(v));
-    m[QStringLiteral("binsDbm")] = arr;
-
-    record(QStringLiteral("spectrum"),
-           QStringLiteral("One FFT frame at the current DDC0 rate, for offline calibration capture"),
-           m,
-           QStringLiteral(
-               "Captures RadioModel::panFeedSpectrumReady verbatim -- the same "
-               "bins the panadapter paints. tools/anan_droop_calibration.py "
-               "issues this repeatedly across frequency and rate and averages "
-               "offline; this stage takes no average of its own. Change the "
-               "DDC0 rate with the `pan bandwidth <ksps>` verb and wait for it "
-               "to land BEFORE calling this -- a rate change can take up to "
-               "~a minute cold, and this stage stays a few-second capture."),
-           captured ? QString() : QStringLiteral("no spectrum frame arrived within 3 s"),
-           QStringLiteral("reference/saturn/New_protocol_FPGA_Block_diagrams.pdf "
-                          "'Receiver(3)'; AnanSpectrum::computeFrame()"));
-}
-
 void RadioCertification::stageModeMap()
 {
     // A mode name the backend does not recognise falls through to a default —
@@ -1986,8 +1904,6 @@ QJsonObject RadioCertification::run(const Options& o)
     const bool doRx   = all || o.phase == Phase::Rx;
     const bool doTx   = all || o.phase == Phase::Tx;
     const bool doMet  = all || o.phase == Phase::Meters;
-    // NOT folded into `all` -- see Phase::Spectrum's own comment.
-    const bool doSpectrum = o.phase == Phase::Spectrum;
 
     // RECEIVE FIRST WHEN BOTH ARE SELECTED, and not for tidiness. The wire's
     // handedness is ONE fact that both directions consume, and transmit cannot
@@ -2055,10 +1971,6 @@ QJsonObject RadioCertification::run(const Options& o)
         stageMeterScale(o);
         stageControlEffect(o);
         stageMeterInventory();
-    }
-
-    if (doSpectrum) {
-        stageSpectrum(o);
     }
 
     // Unkey, restore and re-tune all happen in `epilogue` above.
@@ -2129,12 +2041,11 @@ QJsonObject RadioCertification::run(const Options& o)
         {QStringLiteral("ok"), true},
         {QStringLiteral("kind"), QStringLiteral("radio-bringup-diagnostic")},
         {QStringLiteral("phase"),
-             o.phase == Phase::Tune     ? QStringLiteral("tune")
-           : o.phase == Phase::Rx       ? QStringLiteral("rx")
-           : o.phase == Phase::Tx       ? QStringLiteral("tx")
-           : o.phase == Phase::Meters   ? QStringLiteral("meters")
-           : o.phase == Phase::Spectrum ? QStringLiteral("spectrum")
-                                        : QStringLiteral("all")},
+             o.phase == Phase::Tune   ? QStringLiteral("tune")
+           : o.phase == Phase::Rx     ? QStringLiteral("rx")
+           : o.phase == Phase::Tx     ? QStringLiteral("tx")
+           : o.phase == Phase::Meters ? QStringLiteral("meters")
+                                      : QStringLiteral("all")},
         {QStringLiteral("note"), QStringLiteral(
             "Diagnostic only — this deliberately does not pass or fail. Read the "
             "concerns, then the measurements.")},

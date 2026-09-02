@@ -1,6 +1,6 @@
 // Pure-math unit tests for AnanDroopCalibrator -- no live radio needed.
 // Ports the test cases from this feature's original offline prototype
-// (formerly tools/test_anan_droop_calibration.py, since superseded by this
+// (a throwaway offline script, never in this tree, since superseded by this
 // in-app engine): outlier rejection via median, central-window reference,
 // and clamp behavior at the cap.
 

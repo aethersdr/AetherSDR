@@ -13942,12 +13942,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             if (m_edgeTaperEnabled) {
                 // 0.09 (9% margin per side) -- derived, not guessed: once
                 // AnanDroopCorrection applies a real per-bin dB correction
-                // (measured by tools/anan_droop_calibration.py) to most of
+                // (measured by AnanDroopCalibrator's sweep) to most of
                 // the span, this fade only needs to cover the residual
                 // sliver where that correction was CLAMPED -- i.e. the bins
                 // close enough to the CIC null that boosting them further
                 // would amplify noise, not recover signal, so they stay
-                // genuinely uncorrected. The calibration script reported a
+                // genuinely uncorrected. The sweep reported a
                 // clamped fraction of ~0.079-0.082 across all 6 DDC0 rates
                 // (consistent, since it's the same relative filter shape at
                 // every rate) -- 0.09 is that worst case plus a small
