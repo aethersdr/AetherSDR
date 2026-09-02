@@ -227,5 +227,67 @@ int main(int argc, char** argv)
               "frequency the radio rejected");
     }
 
+    // AN UNMATCHED FA MUST NOT FIRE THE CORRECTION.
+    //
+    // The regression this pins: gating only on `lastCompletedKey == "frequency"`
+    // is wrong, because observe() sets that key ONLY when a frame matches the
+    // in-flight transaction. An unmatched FA returns Observation::Unmatched and
+    // leaves the key at its previous value — and since frequency writes are the
+    // most common transaction, the key is usually "frequency" from the last real
+    // tune. So a stray or duplicate NG, or an NG for a transaction that already
+    // expired, would fire the block with NO frequency write refused: a false
+    // "the radio refused the tune" toast and a redundant re-assert.
+    //
+    // That is the lying-indicator failure this fix exists to remove, inverted —
+    // which is why it gets its own row rather than being left to the Accepted
+    // path above (that one passes either way, with or without the gate).
+    {
+        constexpr std::uint64_t kHeldHz = 145'030'000;
+        IcomCivBackend strayBackend;
+        std::vector<double> published;
+        QObject::connect(&strayBackend, &IRadioBackend::sliceChanged, &app,
+                         [&published](int, const SliceDelta& delta) {
+                             if (delta.frequency)
+                                 published.push_back(*delta.frequency);
+                         });
+        QStringList warnings;
+        QObject::connect(&strayBackend, &IRadioBackend::configurationWarning,
+                         &app, [&warnings](const QString& w) { warnings << w; });
+
+        IcomCivBackendTestAccess::prepareOutstandingFrequencyWrite(
+            strayBackend, *ic705, kGeneration, kHeldHz);
+
+        CivFrame refused;
+        refused.to = kControllerAddress;
+        refused.from = ic705->civAddress;
+        refused.cmd = kCivNg;
+
+        // First FA: matches the in-flight write, retires it, corrects the
+        // display. This is the legitimate case and it must still work.
+        IcomCivBackendTestAccess::deliver(strayBackend, refused, kGeneration);
+        QCoreApplication::processEvents();
+        const std::size_t afterReal = published.size();
+        const int warningsAfterReal = warnings.size();
+
+        check(afterReal == 1 && warningsAfterReal == 1,
+              "the matched FA still corrects exactly once");
+
+        // Second FA: nothing is in flight now, so observe() returns Unmatched
+        // and leaves lastCompletedKey at "frequency" from the write above.
+        // Under the old predicate this fires again; under the Accepted gate it
+        // must do nothing at all.
+        check(IcomCivBackendTestAccess::lastCompletedKey(strayBackend)
+                  == "frequency",
+              "the stale key really does still read \"frequency\"");
+
+        IcomCivBackendTestAccess::deliver(strayBackend, refused, kGeneration);
+        QCoreApplication::processEvents();
+
+        check(published.size() == afterReal,
+              "an unmatched FA republishes NOTHING (no redundant re-assert)");
+        check(warnings.size() == warningsAfterReal,
+              "an unmatched FA does not tell the operator a tune was refused");
+    }
+
     return failures == 0 ? 0 : 1;
 }

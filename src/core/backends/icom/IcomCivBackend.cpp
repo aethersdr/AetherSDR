@@ -1878,7 +1878,22 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     // that is the case with hardware evidence and a known-good restoration
     // value (m_frequencyHz, which is radio-authoritative). Other refused
     // writes are a separate question and are left alone rather than guessed at.
-    if (frame.isNg() && m_civScheduler.stats().lastCompletedKey == "frequency"
+    // ⚠ BOTH halves of the predicate are load-bearing, and `lastCompletedKey`
+    // alone is NOT enough. observe() sets it only when a frame MATCHES the
+    // in-flight transaction; an unmatched FA returns Observation::Unmatched and
+    // leaves the key at its previous value. Frequency writes are the most
+    // common transaction, so `lastCompletedKey == "frequency"` is usually true
+    // from the last real tune — and a later stray or duplicate NG, or an NG for
+    // a transaction that already expired, would fire this block with no
+    // frequency write refused at all: a false "the radio refused the tune"
+    // toast plus a redundant re-assert. That is precisely the lying-indicator
+    // failure this block exists to remove, inverted.
+    //
+    // Observation::Accepted is the signal that THIS frame completed the
+    // in-flight transaction; the key then says WHICH transaction it was.
+    if (frame.isNg()
+        && observation == IcomCivScheduler::Observation::Accepted
+        && m_civScheduler.stats().lastCompletedKey == "frequency"
         && m_frequencyHz != 0) {
         // Re-assert the radio's real VFO one event-loop turn later, exactly as
         // the out-of-band gate in setSliceFrequency() and the refused mode in
@@ -1894,11 +1909,19 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             delta.frequency = actualMhz;
             emit sliceChanged(sliceId(), delta);
         });
-        emit configurationWarning(
-            tr("The radio refused the tune. It is still on %1 MHz — on this "
-               "model a receiver cannot move to a band the other receiver "
-               "already holds.")
-                .arg(actualMhz, 0, 'f', 6));
+        // The dual-receiver explanation is TRUE ONLY WHERE THERE ARE TWO.
+        // This block fires on every Icom model, so an IC-705 refusing a write
+        // for some other reason was being handed a reason that cannot apply to
+        // it. State the refusal generically and append the cause only where the
+        // profile actually has a second receiver to collide with.
+        QString why = tr("The radio refused the tune. It is still on %1 MHz.")
+                          .arg(actualMhz, 0, 'f', 6);
+        if (m_model && m_model->receivers > 1) {
+            why += QLatin1Char(' ');
+            why += tr("On this model a receiver cannot move to a band the "
+                      "other receiver already holds.");
+        }
+        emit configurationWarning(why);
     }
 
     noteControlSeen(frame.cmd, frame.sub, frame.hasSub);
