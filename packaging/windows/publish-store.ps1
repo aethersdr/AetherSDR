@@ -101,8 +101,7 @@ $publishArgs = @(
     "-id",
     $ProductId,
     "--uploadTimeout",
-    $UploadTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture),
-    "--verbose"
+    $UploadTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 )
 if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
     $publishArgs += @("--flightId", $FlightId)

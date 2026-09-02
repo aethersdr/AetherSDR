@@ -237,10 +237,10 @@ On a `v*` tag push the workflow:
 3. `msstore reconfigure` authenticates from the four GitHub secrets.
 4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
    `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
-   --verbose --noCommit` — staging a **draft**. `--noCommit` is the safety gate
-   that keeps it out of certification. A maintainer reviews the pending
-   submission in Partner Center and clicks **Submit to Store** to start
-   certification. **CI never publishes to the live channel on its own.**
+   --noCommit` — staging a **draft**. `--noCommit` is the safety gate that keeps
+   it out of certification. A maintainer reviews the pending submission in
+   Partner Center and clicks **Submit to Store** to start certification. **CI
+   never publishes to the live channel on its own.**
 
 Guard rails (all three must pass before Partner Center is touched):
 
@@ -260,11 +260,12 @@ have a regression where omitting `--uploadTimeout` supplies a zero-second Azure
 blob network timeout, producing the characteristic `Uploading Bundle to Azure
 blob: 0%` failure and exit code `-1`
 ([microsoft/msstore-cli#162](https://github.com/microsoft/msstore-cli/issues/162)).
-The script uses the documented workaround of 300 seconds and enables
-`--verbose` so any future upload failure retains its underlying exception in
-the CI log. The affected CLI is pinned to prevent `latest` from silently
-changing publish behavior; advance that pin only after validating a released
-version containing
+The script uses the documented workaround of 300 seconds. It deliberately
+leaves verbose logging disabled because Actions logs are public and expanded
+authentication or upload diagnostics could expose derived credentials that
+GitHub cannot mask by their registered secret values. The affected CLI is
+pinned to prevent `latest` from silently changing publish behavior; advance
+that pin only after validating a released version containing
 [microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163).
 
 ### One-time setup (maintainer, outside the repo)
@@ -350,6 +351,8 @@ The manual flight path is isolated from production:
   a missing flight ID fails the job rather than falling back to production;
 - the flight ID is passed explicitly as `--flightId`, and `-Commit` omits
   `--noCommit`, so Partner Center starts ingestion/certification automatically.
+- the shared publisher keeps `--verbose` disabled so the public flight log does
+  not expand authentication or upload diagnostics.
 
 Create the package flight and its known-user group in Partner Center first,
 then add the flight ID as the repository Actions secret
