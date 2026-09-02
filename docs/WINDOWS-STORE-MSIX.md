@@ -98,8 +98,8 @@ Not fully automatable until account setup:
 Microsoft Store crash reports in Partner Center only resolve to a symbolized
 stack trace if the submitted `.msixupload` carries matching debug symbols.
 There is no separate "upload symbols" step in Partner Center — the symbols
-travel *inside* the upload package as a `.appxsym` file (a zip of the PDB),
-which Partner Center auto-ingests on submission.
+travel *inside* the upload package as a `.appxsym` file (a zip of PDBs), which
+Partner Center ingests with the submission.
 
 The Windows installer workflow produces this automatically:
 
@@ -108,15 +108,44 @@ The Windows installer workflow produces this automatically:
    `build/AetherSDR.pdb` would never exist. `RelWithDebInfo` keeps the same
    `-O2` optimization level (only the inliner threshold, `/Ob1` vs. `/Ob2`,
    differs) while producing a full PDB.
-2. `create-msix.ps1 -CreateUpload -RequirePdb` zips `build/AetherSDR.pdb` into
-   `<package>.appxsym` (`New-AppxSym`) and bundles it alongside the `.msix`
-   into `<package>.msixupload` (`New-MsixUpload`). `-RequirePdb` makes the
-   step fail the build if no PDB was found, instead of silently shipping a
-   symbol-less upload package — CI passes it; local dev builds can omit it.
-3. CI uploads `build/AetherSDR.pdb` as its own **Windows-Symbols** artifact
-   (90-day retention) and the standalone `.appxsym` alongside the other
-   Windows-Installer artifacts, so a maintainer can pull matching symbols for
-   local WinDbg/Visual Studio debugging without unzipping a `.msixupload`.
+2. The Qt install includes the base `debug_info` archive plus each deployed
+   add-on's `.debug_information` companion. `windeployqt --pdb` copies PDBs
+   only for the exact Qt DLLs and plugins selected for the runtime payload.
+3. `stage-debug-symbols.ps1` verifies that every deployed Qt DLL/plugin has
+   its same-named PDB beside it. It then moves those PDBs out of `deploy/` and
+   flattens them beside `AetherSDR.pdb` in `symbols/`. This is important:
+   `deploy/` feeds the portable ZIP, Inno installer, and MSIX, none of which
+   should ship PDB payload files.
+4. `create-msix.ps1 -CreateUpload -RequirePdb` consumes the staged application
+   PDB and dependency PDBs. Pass `-PdbPath symbols\AetherSDR.pdb` and
+   `-SymbolDir symbols` so both inputs describe the same verified symbol set.
+   The script places the PDBs at the root of `<package>.appxsym`, then places
+   that `.appxsym` beside the `.msix` at the root of `<package>.msixupload`.
+   This mirrors Visual Studio's single-architecture Store upload layout; there
+   is no extra `symbols/` directory inside either archive. Microsoft documents
+   the outer upload/symbol relationship in its
+   [MSIX package requirements](https://learn.microsoft.com/windows/apps/publish/publish-your-app/msix/app-package-requirements),
+   and a Microsoft WinUI engineer's
+   [manual packaging walkthrough](https://github.com/microsoft/microsoft-ui-xaml/discussions/9121)
+   shows all PDBs for one architecture together in one flat `.appxsym`.
+5. `check-symbol-package.ps1` opens both archives and verifies the topology,
+   required AetherSDR/Qt/Windows Multimedia PDBs, and that the `.appxsym`
+   embedded in `.msixupload` is byte-identical to the verified standalone
+   file.
+6. CI uploads the complete `symbols/` directory as **Windows-Symbols** with a
+   SHA-256 manifest (90-day retention), and uploads the standalone `.appxsym`
+   alongside the other Windows-Installer artifacts. Maintainers therefore get
+   the same AetherSDR and Qt PDB set for local WinDbg/Visual Studio debugging
+   without unpacking a `.msixupload`.
+
+The Qt-provided PDBs are packaged unchanged. `windeployqt` selects them from
+the same exact Qt installation that supplied the deployed DLLs; `pdbcopy` is
+not needed to discover or match them. If Partner Center later requires
+public-only/stripped copies, that can be added as a separate transformation
+without changing this archive topology. Store acceptance alone does not prove
+that third-party Qt symbols were indexed, so confirm the first qualifying
+Health report for this package version resolves Qt function names rather than
+only `Qt6*.dll+offset`.
 
 Submitting the `.msixupload` to Partner Center (manually today, or via the
 automated draft-staging flow below) is the only "publish" step needed —
@@ -133,27 +162,28 @@ works cross-platform against the same PDB:
    `%LOCALAPPDATA%\CrashDumps\AetherSDR.exe.<pid>.dmp` (enable full dumps via
    the `HKLM\...\Windows Error Reporting\LocalDumps` key, `DumpType=2`). Store
    Partner Center TSVs are unsymbolized — always request the `.dmp`.
-2. **Get the matching PDB** — it must be the *exact* build that crashed or the
-   debug-id won't match. Pull the `Windows-Symbols` artifact from the
+2. **Get the matching PDBs** — they must be from the *exact* build that crashed
+   or the debug-ids won't match. Pull the `Windows-Symbols` artifact from the
    `windows-installer.yml` CI run for that tag/branch:
    `gh run download <run-id> -R aethersdr/AetherSDR -n Windows-Symbols`.
 3. **Convert + walk.** [`dump_syms`](https://github.com/mozilla/dump_syms)
-   turns the PDB into a Breakpad `.sym`; `minidump-stackwalk` walks the dump
-   and matches modules by debug-id:
+   turns each needed PDB into a Breakpad `.sym`; `minidump-stackwalk` walks
+   the dump and matches modules by debug-id:
    ```sh
    dump_syms --store ./symbols AetherSDR.pdb          # → symbols/AetherSDR.pdb/<id>/AetherSDR.sym
+   dump_syms --store ./symbols Qt6Multimedia.pdb      # matching Qt frames
    minidump-stackwalk --human --symbols-path ./symbols \
      --symbols-url https://msdl.microsoft.com/download/symbols \
      AetherSDR.exe.<pid>.dmp
    ```
-   Our frames symbolize from the `.sym`; the `--symbols-url` resolves Windows
-   system DLLs. Third-party GPU/driver frames (e.g. Intel `igd10iumd64.dll`)
-   stay as `module+offset` — usually enough, since the value is in *our*
-   caller frames leading into the driver. If the crashing thread won't unwind
-   past a driver frame (no CFI), fall back to a manual stack scan: parse the
-   dump's `Memory64ListStream`, find the region containing the thread's `rsp`,
-   and scan 8-byte-aligned values for pointers into `AetherSDR.exe` (resolve
-   offsets against the `.sym` `FUNC` table).
+   AetherSDR and packaged Qt frames symbolize from those `.sym` files; the
+   `--symbols-url` resolves Windows system DLLs. Other third-party GPU/driver
+   frames (e.g. Intel `igd10iumd64.dll`) stay as `module+offset` — usually
+   enough, since the value is in our caller frames leading into the driver. If
+   the crashing thread won't unwind past a driver frame (no CFI), fall back to
+   a manual stack scan: parse the dump's `Memory64ListStream`, find the region
+   containing the thread's `rsp`, and scan 8-byte-aligned values for pointers
+   into `AetherSDR.exe` (resolve offsets against the `.sym` `FUNC` table).
 
 ## Known WACK Follow-Ups
 
@@ -204,14 +234,15 @@ On a `v*` tag push the workflow:
 
 1. Builds `AetherSDR.exe`, runs `windeployqt`, packages the MSIX, and creates
    the `.msixupload` (existing steps).
-2. `microsoft/microsoft-store-apppublisher@v1.1` puts the `msstore` CLI on PATH.
+2. The pinned `microsoft/microsoft-store-apppublisher` action puts the pinned
+   `msstore` CLI v0.4.1 on PATH and the workflow logs `msstore --version`.
 3. `msstore reconfigure` authenticates from the four GitHub secrets.
 4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
-   `msstore publish <pkg>.msixupload -id <ProductId> --noCommit` — staging a
-   **draft**. `--noCommit` is the safety gate that keeps it out of
-   certification. A maintainer reviews the pending submission in Partner Center
-   and clicks **Submit to Store** to start certification. **CI never publishes
-   to the live channel on its own.**
+   `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
+   --noCommit` — staging a **draft**. `--noCommit` is the safety gate that keeps
+   it out of certification. A maintainer reviews the pending submission in
+   Partner Center and clicks **Submit to Store** to start certification. **CI
+   never publishes to the live channel on its own.**
 
 Guard rails (all three must pass before Partner Center is touched):
 
@@ -225,6 +256,19 @@ Guard rails (all three must pass before Partner Center is touched):
 If the MSIX packaging step (which is `continue-on-error`) produced no
 `.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
 otherwise-successful release red.
+
+The upload timeout is deliberately explicit. `msstore` CLI v0.4.0 and v0.4.1
+have a regression where omitting `--uploadTimeout` supplies a zero-second Azure
+blob network timeout, producing the characteristic `Uploading Bundle to Azure
+blob: 0%` failure and exit code `-1`
+([microsoft/msstore-cli#162](https://github.com/microsoft/msstore-cli/issues/162)).
+The script uses the documented workaround of 300 seconds. It deliberately
+leaves verbose logging disabled because Actions logs are public and expanded
+authentication or upload diagnostics could expose derived credentials that
+GitHub cannot mask by their registered secret values. The affected CLI is
+pinned to prevent `latest` from silently changing publish behavior; advance
+that pin only after validating a released version containing
+[microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163).
 
 ### One-time setup (maintainer, outside the repo)
 
