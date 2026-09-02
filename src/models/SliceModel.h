@@ -108,6 +108,11 @@ public:
     int     receiveAgcThreshold() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveAgcThreshold
                                               : m_agcThreshold; }
+    // The AGC-T threshold's span on this slice: 0..100 on a Flex slice, the
+    // external receiver's dB span while it replaces the slice audio. Owned
+    // here so callers above the radio seam need no vendor header (#5384).
+    int     receiveAgcThresholdMinimum() const;
+    int     receiveAgcThresholdMaximum() const;
     int     agcOffLevel()  const { return m_agcOffLevel; }
     int     flexAgcOffLevel() const { return m_agcOffLevel; }
     int     receiveAgcOffLevel() const { return m_externalReceiveAudioReplacement

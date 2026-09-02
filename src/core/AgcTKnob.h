@@ -14,11 +14,10 @@
 //
 // Ranges: `agc_off_level` is 0..100 on every backend
 // (SliceModel::setAgcOffLevel clamps there for the Flex and external paths
-// alike); the threshold keeps its per-backend span -- 0..100 on a Flex slice,
-// KiwiSdrProtocol's dB span while an external receiver replaces the slice
-// audio.
+// alike); the threshold keeps its per-backend span, which SliceModel reports
+// (0..100 on a Flex slice, the external receiver's dB span while it replaces
+// the slice audio) -- so nothing above the radio seam names a vendor header.
 
-#include "core/KiwiSdrProtocol.h"
 #include "models/SliceModel.h"
 
 #include <QString>
@@ -39,9 +38,7 @@ inline int minimum(const SliceModel* slice)
     if (usesOffLevel(slice)) {
         return 0;
     }
-    return slice && slice->externalReceiveReplacementActive()
-        ? KiwiSdrProtocol::kAgcThresholdMinDb
-        : 0;
+    return slice ? slice->receiveAgcThresholdMinimum() : 0;
 }
 
 inline int maximum(const SliceModel* slice)
@@ -49,9 +46,7 @@ inline int maximum(const SliceModel* slice)
     if (usesOffLevel(slice)) {
         return 100;
     }
-    return slice && slice->externalReceiveReplacementActive()
-        ? KiwiSdrProtocol::kAgcThresholdMaxDb
-        : 100;
+    return slice ? slice->receiveAgcThresholdMaximum() : 100;
 }
 
 // The knob's current value, read from whichever property the mode selects.

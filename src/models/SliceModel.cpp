@@ -562,6 +562,16 @@ void SliceModel::setAgcMode(const QString& mode)
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
 }
 
+int SliceModel::receiveAgcThresholdMinimum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMinDb : 0;
+}
+
+int SliceModel::receiveAgcThresholdMaximum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMaxDb : 100;
+}
+
 void SliceModel::setAgcThreshold(int value)
 {
     if (m_externalReceiveAudioReplacement) {
