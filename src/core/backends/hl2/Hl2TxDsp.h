@@ -90,6 +90,14 @@ public:
     // Linear gain applied to the audio before modulation. 1.0 = unity.
     Q_INVOKABLE void setMicGain(double linear);
     [[nodiscard]] double micGain() const noexcept { return m_micGain; }
+
+    // The configuration this modulator is RUNNING, for the DSP read-back verb.
+    //
+    // Unlike the receive side there is no WDSP channel behind this, so there is
+    // no lower level to query: Hl2TxDsp is a hand-written phasing modulator and
+    // this struct IS its state. A read of it is therefore level 4 in the
+    // read-back sense, not a weaker stand-in for one.
+    [[nodiscard]] const Config& config() const noexcept { return m_config; }
     // Gain the ALC is currently applying, in dB. 0 means unity.
     [[nodiscard]] double alcGainDb() const noexcept;
 

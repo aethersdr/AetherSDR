@@ -3802,6 +3802,118 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
+namespace {
+
+// WDSP's AGC mode integer as the string the bridge and the operator use, so a
+// read-back can be compared against what was asked for without the reader
+// having to know WDSP's enumeration.
+QString agcModeName(int wdspMode)
+{
+    switch (wdspMode) {
+    case 0:  return QStringLiteral("off");
+    case 1:  return QStringLiteral("long");
+    case 2:  return QStringLiteral("slow");
+    case 3:  return QStringLiteral("med");
+    case 4:  return QStringLiteral("fast");
+    default: return QStringLiteral("unknown(%1)").arg(wdspMode);
+    }
+}
+
+}  // namespace
+
+// What the DSP is actually configured with. See IRadioBackend::dspChains().
+//
+// Gathered on the I/O thread, because that is where both chains live and this
+// is called from the GUI thread. Same shape as AutomationServer's
+// dspSnapshotOnObjectThread(): a same-thread fast path, otherwise a blocking
+// queued invocation. A failed invocation returns empty rather than a
+// half-filled list — "we could not ask" and "it answered zero" must not look
+// alike, which is the same rule healthSnapshot() follows.
+QVariantList Hl2Backend::dspChains() const
+{
+    const auto gather = [this]() -> QVariantList {
+        QVariantList chains;
+
+        for (int i = 0; i < static_cast<int>(m_rx.size()); ++i) {
+            const Receiver& r = m_rx[static_cast<std::size_t>(i)];
+            QVariantMap e;
+            e[QStringLiteral("chain")] = QStringLiteral("rx-wdsp");
+            e[QStringLiteral("receiver")] = i;
+            if (!r.dsp || !r.dsp->isConfigured()) {
+                // Reported as present-but-unconfigured rather than omitted: a
+                // receiver that exists with no channel behind it is exactly the
+                // state worth seeing.
+                e[QStringLiteral("level")] = QStringLiteral("not-configured");
+                chains.append(e);
+                continue;
+            }
+            const WdspChannel::Config* c = r.dsp->channelConfig();
+            if (!c) {
+                e[QStringLiteral("level")] = QStringLiteral("not-configured");
+                chains.append(e);
+                continue;
+            }
+            // "channel-config" and not "dsp": these are the values the channel
+            // was OPENED with, after any clamping or refusal. That is one level
+            // below the model and one above a query into WDSP itself, and the
+            // difference decides what a mismatch proves.
+            e[QStringLiteral("level")] = QStringLiteral("channel-config");
+            e[QStringLiteral("inputRateHz")] = c->inputSampleRate;
+            e[QStringLiteral("dspRateHz")] = c->dspSampleRate;
+            e[QStringLiteral("outputRateHz")] = c->outputSampleRate;
+            e[QStringLiteral("inputBlockSize")] = static_cast<int>(c->inputBlockSize);
+            e[QStringLiteral("dspBlockSize")] = static_cast<int>(c->dspBlockSize);
+            e[QStringLiteral("outputBlockSize")] =
+                static_cast<int>(r.dsp->channelOutputBlockSize());
+            e[QStringLiteral("filterLowHz")] = c->filterLowHz;
+            e[QStringLiteral("filterHighHz")] = c->filterHighHz;
+            e[QStringLiteral("agcMode")] = agcModeName(c->agcMode);
+            e[QStringLiteral("agcMaxGainDb")] = c->maximumAgcGainDb;
+            e[QStringLiteral("agcSlopeDb")] = c->agcSlopeDb;
+            e[QStringLiteral("agcFixedGainDb")] = c->agcFixedGainDb;
+            // Level 4 where it exists: these two ask WDSP itself rather than
+            // reading the config, and are marked so a reader can tell.
+            e[QStringLiteral("wdspNotchCount")] = r.dsp->wdspNotchCount();
+            e[QStringLiteral("appliedNoiseBlanker")] =
+                r.dsp->appliedNoiseBlankerEnabled();
+            chains.append(e);
+        }
+
+        if (m_txDsp) {
+            const Hl2TxDsp::Config& t = m_txDsp->config();
+            QVariantMap e;
+            e[QStringLiteral("chain")] = QStringLiteral("hl2-tx");
+            // Level 4 by construction: there is no WDSP channel on transmit,
+            // so this struct is the modulator's state rather than a record of
+            // what it was asked for.
+            e[QStringLiteral("level")] = QStringLiteral("dsp-config");
+            e[QStringLiteral("inputRateHz")] = t.inputSampleRateHz;
+            e[QStringLiteral("outputRateHz")] = t.outputSampleRateHz;
+            e[QStringLiteral("dspBlockSize")] = t.dspBlockSize;
+            e[QStringLiteral("filterLowHz")] = t.filterLowHz;
+            e[QStringLiteral("filterHighHz")] = t.filterHighHz;
+            e[QStringLiteral("alcEnabled")] = t.alcEnabled;
+            e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
+            e[QStringLiteral("alcMaxGainDb")] = t.alcMaxGainDb;
+            e[QStringLiteral("alcAttackSec")] = t.alcAttackSec;
+            e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;
+            e[QStringLiteral("alcHoldBelowDbfs")] = t.alcHoldBelowDbfs;
+            e[QStringLiteral("micGainLinear")] = m_txDsp->micGain();
+            chains.append(e);
+        }
+        return chains;
+    };
+
+    if (!m_txDsp || m_txDsp->thread() == QThread::currentThread())
+        return gather();
+
+    QVariantList out;
+    const bool invoked = QMetaObject::invokeMethod(
+        m_txDsp, [&out, &gather]() { out = gather(); },
+        Qt::BlockingQueuedConnection);
+    return invoked ? out : QVariantList{};
+}
+
 void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                                  const QVariant& arg)
 {
