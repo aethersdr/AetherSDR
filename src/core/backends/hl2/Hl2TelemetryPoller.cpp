@@ -1,10 +1,43 @@
 #include "core/backends/hl2/Hl2TelemetryPoller.h"
 
+#include "core/backends/hl2/Hl2Discovery.h"   // macToSerial
+
 #include <QNetworkDatagram>
 #include <QTimer>
 #include <QUdpSocket>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#endif
+
 namespace AetherSDR::hl2 {
+
+namespace {
+
+// QUdpSocket does not enable SO_BROADCAST itself. Lifted from Hl2Discovery.cpp
+// rather than shared, for the same reason AnanDiscovery duplicates it: three
+// lines of platform glue behind a header is a worse trade than three lines
+// repeated, and the alternative is a utility header that exists for one call.
+void enableBroadcast(QUdpSocket& s) noexcept
+{
+    const qintptr fd = s.socketDescriptor();
+    if (fd < 0)
+        return;
+    const int on = 1;
+#ifdef Q_OS_WIN
+    ::setsockopt(static_cast<SOCKET>(fd), SOL_SOCKET, SO_BROADCAST,
+                 reinterpret_cast<const char*>(&on), sizeof(on));
+#else
+    ::setsockopt(static_cast<int>(fd), SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
+#endif
+}
+
+}  // namespace
 
 Hl2TelemetryPoller::Hl2TelemetryPoller(QObject* parent)
     : QObject(parent)
@@ -16,11 +49,17 @@ Hl2TelemetryPoller::Hl2TelemetryPoller(QObject* parent)
 
 Hl2TelemetryPoller::~Hl2TelemetryPoller() = default;
 
+void Hl2TelemetryPoller::setExpectedSerial(const QString& serial)
+{
+    m_expectedSerial = serial;
+}
+
 void Hl2TelemetryPoller::setTarget(const QHostAddress& addr)
 {
     if (m_target == addr)
         return;
     m_target = addr;
+    m_lastResponder = QHostAddress();
     // A new radio's counters are not the old radio's. Anything a consumer is
     // showing belongs to the previous target until the next reply arrives.
     m_unanswered = 0;
@@ -56,7 +95,9 @@ int Hl2TelemetryPoller::currentIntervalMs() const noexcept
 
 void Hl2TelemetryPoller::applyCadence()
 {
-    const int interval = m_target.isNull() ? 0 : currentIntervalMs();
+    // A null target is not a reason to stop -- it selects broadcast. Only the
+    // cadence rule decides whether to poll.
+    const int interval = currentIntervalMs();
 
     if (interval <= 0) {
         m_timer->stop();
@@ -79,6 +120,12 @@ void Hl2TelemetryPoller::applyCadence()
         // stream has stopped, and sharing its socket would tie the instrument to
         // the thing it is measuring.
         connect(m_socket, &QUdpSocket::readyRead, this, &Hl2TelemetryPoller::onReadyRead);
+        // Bind before setting SO_BROADCAST: the option goes on a real
+        // descriptor, and an unbound QUdpSocket has none yet (socketDescriptor()
+        // returns -1 and the call silently does nothing). Hl2Discovery makes the
+        // same ordering explicit for the same reason.
+        m_socket->bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress);
+        enableBroadcast(*m_socket);
     }
 
     m_timer->start(interval);
@@ -87,7 +134,7 @@ void Hl2TelemetryPoller::applyCadence()
 
 void Hl2TelemetryPoller::onPollTimer()
 {
-    if (!m_socket || m_target.isNull())
+    if (!m_socket)
         return;
 
     // A poll that went unanswered is a fact about the radio, and it has to be
@@ -99,9 +146,16 @@ void Hl2TelemetryPoller::onPollTimer()
     }
 
     const auto pkt = discoveryRequest();
+    // Unicast once a radio is known -- from connectRadio(), or from whichever
+    // one answered a previous broadcast. Broadcast only while we know none:
+    // narrowing to unicast as soon as possible keeps this off every other
+    // machine's socket.
+    const QHostAddress dest = !m_target.isNull()      ? m_target
+                            : !m_lastResponder.isNull() ? m_lastResponder
+                                                        : QHostAddress::Broadcast;
     m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
                             static_cast<qint64>(pkt.size()),
-                            m_target, kAltPort);
+                            dest, kAltPort);
     m_sinceRequest.restart();
 }
 
@@ -109,10 +163,10 @@ void Hl2TelemetryPoller::onReadyRead()
 {
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
-        // Only the radio we asked. An unsolicited datagram from elsewhere on the
-        // subnet is not telemetry about this radio, and rendering it as such
-        // would be worse than showing nothing.
-        if (dg.senderAddress() != m_target)
+        // When a target is set, only that radio. A datagram from elsewhere on
+        // the subnet is not telemetry about this radio, and rendering it as
+        // such would be worse than showing nothing.
+        if (!m_target.isNull() && dg.senderAddress() != m_target)
             continue;
 
         const QByteArray data = dg.data();
@@ -121,6 +175,14 @@ void Hl2TelemetryPoller::onReadyRead()
              static_cast<std::size_t>(data.size())});
         if (!reply || !reply->isHermesLite2())
             continue;
+        // With no target set, a broadcast can be answered by more than one
+        // radio. Accepting the first is right for a single-radio bench and
+        // wrong the moment there are two, so a caller that knows which radio it
+        // means sets the serial and this drops the rest.
+        if (!m_expectedSerial.isEmpty()
+            && Hl2Discovery::macToSerial(reply->mac) != m_expectedSerial)
+            continue;
+        m_lastResponder = dg.senderAddress();
 
         const qint64 age = m_sinceRequest.isValid() ? m_sinceRequest.elapsed() : 0;
         m_sinceRequest.invalidate();

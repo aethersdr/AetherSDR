@@ -51,11 +51,14 @@ enum class Hl2LinkState {
 
 // Milliseconds between polls, or 0 for "do not poll at all".
 //
-// `surfaceVisible` is whether anything is actually displaying the telemetry.
-// It is consulted ONLY in NotConnected: polling a radio nobody is looking at is
-// pure wire cost, but a stalled stream must keep being diagnosed whether or not
-// the operator has the panel open, because the reason to poll then is the fault
-// and not the panel.
+// `surfaceVisible` is whether anything is actually reading the telemetry.
+//
+// It gates the two DISPLAY states and neither of the fault states. Polling a
+// radio nobody is looking at is pure wire cost, and in HeldByOther those
+// packets land in another operator's session, which makes an unwatched poll
+// there worse than merely wasteful. A stalled stream is the opposite case: it
+// is diagnosed whether or not a panel is open, because the reason to poll then
+// is the fault and not the panel.
 [[nodiscard]] constexpr int hl2PollIntervalMs(Hl2LinkState state,
                                               bool surfaceVisible) noexcept
 {
@@ -69,9 +72,16 @@ enum class Hl2LinkState {
         // silent and cannot report its own silence.
         return 500;
     case Hl2LinkState::HeldByOther:
-        // 1 Hz. A status display, not a meter — and every one of these packets
-        // lands in somebody else's session.
-        return 1000;
+        // 1 Hz while something is reading, silent otherwise. A status display,
+        // not a meter — and every one of these packets lands in somebody
+        // else's session, so an unwatched poll here is not just wasted, it is
+        // traffic aimed at an operator who did not ask for it.
+        //
+        // This was unconditional when the rule was first written, and wiring it
+        // up showed why that was wrong: the state latches on as soon as any
+        // in-use radio answers, so the app would have polled a stranger's
+        // session forever with nothing on screen.
+        return surfaceVisible ? 1000 : 0;
     case Hl2LinkState::NotConnected:
         return surfaceVisible ? 1000 : 0;
     }

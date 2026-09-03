@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QObject>
+#include <QString>
 
 class QTimer;
 class QUdpSocket;
@@ -50,8 +51,25 @@ public:
     explicit Hl2TelemetryPoller(QObject* parent = nullptr);
     ~Hl2TelemetryPoller() override;
 
-    // The radio to poll. Polling stops if this is null.
+    // The radio to poll.
+    //
+    // A null address does NOT mean "stop": it means "we do not know which radio
+    // yet", and the poller falls back to broadcasting the same EF FE 02 to the
+    // subnet, exactly as Hl2Discovery does on 1024. That is the case this
+    // feature is for -- the app is not connected, so nothing has told it an
+    // address, and the radio it wants to read is the one somebody else is
+    // using. Requiring a caller to supply the address first would mean routing
+    // discovery results down into the backend purely to enable a feature whose
+    // whole point is working when the app is not connected to anything.
+    //
+    // The cadence rule still decides whether anything is sent at all, so a
+    // broadcast only happens when the rule already says to poll.
     void setTarget(const QHostAddress& addr);
+    // Restrict replies to one radio, by the serial Hl2Discovery::macToSerial
+    // produces. Empty accepts the first HL2 that answers, which is right for a
+    // single-radio bench and wrong the moment there are two -- so a caller that
+    // knows which radio it means should say so.
+    void setExpectedSerial(const QString& serial);
     void setLinkState(LinkState s);
     // Whether anything is actually looking at the telemetry. Only consulted in
     // NotConnected: polling a radio nobody is watching is pure wire cost.
@@ -62,6 +80,11 @@ public:
     // Public so a diagnostics surface can show the operator what it is doing
     // rather than leaving the cadence invisible.
     [[nodiscard]] int currentIntervalMs() const noexcept;
+
+    // The address the last accepted reply came from. Null until one has. Lets a
+    // caller learn the radio's address from the poller rather than the other
+    // way round.
+    [[nodiscard]] QHostAddress lastResponder() const noexcept { return m_lastResponder; }
 
 signals:
     // A reply arrived and parsed. Carries the whole DiscoveryReply because the
@@ -90,7 +113,9 @@ private:
 
     QUdpSocket* m_socket = nullptr;
     QTimer* m_timer = nullptr;
-    QHostAddress m_target;
+    QHostAddress m_target;          // null = broadcast and take what answers
+    QHostAddress m_lastResponder;
+    QString m_expectedSerial;
     LinkState m_state = LinkState::NotConnected;
     bool m_surfaceVisible = false;
     int m_unanswered = 0;
