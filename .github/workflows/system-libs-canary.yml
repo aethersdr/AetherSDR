@@ -150,6 +150,18 @@ jobs:
         run: |
           cmake --build build -j$(nproc)
 
+      # Socket-free runtime guard for the one system-library substitution with
+      # security behavior re-established by our wrapper rather than pkg-config.
+      # The count assertion prevents a renamed/deregistered scenario from
+      # silently shrinking this filtered canary to zero tests.
+      - name: Test system SQLite settings hardening
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ctest --test-dir build -N --no-tests=error -R '^app_settings_safety_database-file-permissions$' | tee /tmp/sqlite-hardening-tests.txt
+          grep -q 'Total Tests: 1' /tmp/sqlite-hardening-tests.txt
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^app_settings_safety_database-file-permissions$'
+
       # Same reason as the equivalent steps in ci.yml: #1963 disabled the
       # Windows compiler cache for three months because nothing surfaced the
       # hit rate. A "Hits 0" line here means the launcher was dropped.
