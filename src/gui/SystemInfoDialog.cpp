@@ -530,7 +530,10 @@ QWidget* SystemInfoDialog::buildMemoryTab()
         QStringLiteral("Peak resident memory"),
         QStringLiteral("The highest resident figure the OS has recorded for this "
                        "process since it started. It only goes up, which is why "
-                       "the chart plots the current figure beside it."));
+                       "the chart plots the current figure beside it. On macOS the "
+                       "peak is of the resident size, a different accounting from "
+                       "the physical footprint shown as Resident, so it can sit well "
+                       "above it."));
     m_memoryPrivate = makeReadout(
         QStringLiteral("Private"), QStringLiteral("systemInfoMemoryPrivate"),
         QStringLiteral("Private memory"),
