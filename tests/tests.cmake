@@ -4420,6 +4420,16 @@ target_link_libraries(system_info_collector_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(system_info_collector_test PROPERTIES AUTOMOC ON)
 add_test(NAME system_info_collector_test COMMAND system_info_collector_test)
 
+# #2554 (Memory tab): the dialog's bounded memory history and the chart slicing it
+# shares with NetworkDiagnosticsDialog (1 s raw to 5 min, bucket averages beyond).
+# Header-only class; pure logic, constructed samples; no widget, no socket.
+add_executable(memory_history_ring_test
+    tests/memory_history_ring_test.cpp
+)
+target_include_directories(memory_history_ring_test PRIVATE src)
+target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
+add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
+
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host
 # self-consistency of the detection. Compiled with the same baseline define as
