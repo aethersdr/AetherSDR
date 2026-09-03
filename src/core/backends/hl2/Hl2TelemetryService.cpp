@@ -24,6 +24,7 @@ struct Hl2TelemetryService::Impl {
     QElapsedTimer at;          // when `reply` arrived
     int unanswered = 0;
     QElapsedTimer demand;      // when the snapshot was last read
+    int linkStateUpdates = 0;  // proof that something drives this
 };
 
 Hl2TelemetryService::Hl2TelemetryService(QObject* parent)
@@ -81,8 +82,14 @@ void Hl2TelemetryService::setAllowBroadcastFallback(bool allow)
     d->poller->setAllowBroadcastFallback(allow);
 }
 
+int Hl2TelemetryService::linkStateUpdateCount() const noexcept
+{
+    return d->linkStateUpdates;
+}
+
 void Hl2TelemetryService::setLinkState(Hl2LinkState state)
 {
+    ++d->linkStateUpdates;
     d->state = state;
     d->poller->setLinkState(state);
 }

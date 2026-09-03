@@ -56,6 +56,17 @@ public:
     // exists, the model's connection state otherwise. The cadence rule turns
     // this into an interval; this class does not restate it.
     void setLinkState(Hl2LinkState state);
+    // How many times a link state has been pushed in. Exists so a test can ask
+    // the question that matters and cannot be asked any other way: is anything
+    // DRIVING this periodically?
+    //
+    // The tick that drives it was deleted once already, by a refactor whose
+    // regex swallowed it along with the code beside it. Nothing noticed: the
+    // cadence rule was still correct, its unit test still passed, and the
+    // poller simply kept polling through a live stream because nobody ever
+    // told it one had started. A counter is a cheap thing to expose; a rule
+    // nobody asks is an expensive thing to ship.
+    [[nodiscard]] int linkStateUpdateCount() const noexcept;
 
     // Reading the health snapshot IS the demand signal — it is the one thing
     // every consumer does, so no consumer can forget to announce itself. Call
