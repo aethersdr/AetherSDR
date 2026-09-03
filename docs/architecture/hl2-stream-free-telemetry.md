@@ -97,16 +97,21 @@ thing that matters:
 
 - Port 1025 sustains **~86 Hz with zero losses**, round trip 0.6 ms median /
   9.1 ms worst. **M** (`hl2-lab` FACTS, `reference-tx/docs/telemetry-bandwidth.md`)
-- **How fast the radio refreshes those fields is NOT known.** With no RF the
-  ADC fields dither across 3–4 codes, so timing their changes measures the
-  dither. The data is consistent with anything from ~10 Hz upward. **A**
+- **The radio refreshes these fields at 15.6 Hz while idle**, and at one
+  conversion per two EP6 packets (~190 Hz at 48 kHz, 1 RX) while streaming.
+  **R** — read from the gateware's own divider chain rather than measured; see
+  `hl2-lab/streams/hl2-telemetry/docs/telemetry-refresh-rate.md`. This replaces
+  the earlier "~10 Hz or faster, unestablished" bound, which came from timing
+  changes in a dithering field. Note the second branch is not a property of the
+  radio: while another client streams, the converter is clocked by *their*
+  packet rate.
 - The in-band path already publishes at 10 Hz (`kTelemetryMinIntervalMs`). **R**
 
 So "how fast *can* we poll" is answered and irrelevant. The question is how fast
 is *useful*, and above the refresh rate the answer is: not at all — extra polls
-return the same reading and buy nothing but wire contention. Since the refresh
-rate is unestablished from ~10 Hz down, **any cadence above 10 Hz is spending
-EP6 slots for information the radio may not have regenerated.**
+return **the same conversion**, provably, not probably. The states we actually
+poll in are the idle ones, so 15.6 Hz is the ceiling that binds: **any cadence
+above it is spending IQ slots to re-read a number the radio has not regenerated.**
 
 ### The rule
 
@@ -116,8 +121,14 @@ EP6 slots for information the radio may not have regenerated.**
 |---|---|---|
 | we hold the stream and EP6 is arriving | **do not poll at all** | the in-band path already delivers the same fields, in the same units, at 10 Hz. A poll adds contention for zero new information |
 | we hold the stream and EP6 has stopped | **2 Hz** | this is the case item #15 exists for. The instrument must keep reading exactly when the thing it shares a socket with has failed |
-| another client holds the radio | **1 Hz** | a status display, not a meter. Nobody acts on sub-second PA temperature, and this poll lands in someone else's session |
-| idle / not connected | **1 Hz while a telemetry surface is visible, never otherwise** | polling a radio nobody is looking at is pure cost |
+| another client holds the radio | **1 Hz while something is reading, never otherwise** | a status display, not a meter. And these packets land in someone else's session, so an unwatched poll here is traffic aimed at an operator who did not ask for it |
+| idle / not connected | **1 Hz while something is reading, never otherwise** | polling a radio nobody is looking at is pure cost |
+
+The two display states are demand-gated; neither fault state is. A fault is
+diagnosed whether or not a panel is open. (`HeldByOther` was unconditional in
+the first draft; wiring it up showed that the state latches on as soon as any
+in-use radio answers, so an idle app would have polled a stranger's session
+forever with nothing on screen.)
 
 Two things this rule gets right that a single timer would not. It makes the
 poller's *duty* the complement of the in-band path's, so the two never compete
@@ -125,10 +136,12 @@ for the same wire at the same time. And it puts the highest cadence in the
 failure case rather than the healthy one — which is the opposite of what a
 "refresh every N ms" timer does, and the whole point of §1's last row.
 
-**Not established, and it bounds all of the above:** the radio's actual refresh
-rate. If it is measured and turns out to be well above 10 Hz, the stalled-stream
-row is worth revisiting. Nothing else changes, because nothing else is limited
-by the radio.
+**Settled since this was written:** the refresh rate, by reading the divider
+chain rather than measuring a dithering field — 15.6 Hz idle, ≥190 Hz
+streaming. The cadence above stands, and now for a derived reason rather than a
+bounded one: 1 Hz sees roughly one conversion in sixteen, which is all a 1 Hz
+display can show, and 15.6 Hz is a hard ceiling on any future "make it more
+responsive" change to the idle states.
 
 ## 4. Which source wins, and the state that must not collapse
 
@@ -159,7 +172,12 @@ The specific traps already known:
   poller cannot clear it. It is not a count either: `rxclip` is a sticky rail
   latch added as a *level*, so a few clock edges saturate it. **R** Any surface
   showing it must pair it with the streaming state, and **must never derive a
-  rate** — the window length in wall-clock terms is unestablished. **A**
+  rate**. The window is now readable — `rxclrstatus` toggles every `clk_ctrl`
+  cycle and crosses via `sync_pulse`, so `rxclip` is cleared every **400 ns**
+  (**R**) — but `rxclip` returns through a plain `sync`, a level, into a 2.5 MHz
+  domain, so a 400 ns assertion is sampled by a 400 ns clock and **hits can be
+  missed at the crossing** (**A**, marginal timing the source cannot settle).
+  That is a third reason against a rate, not a weaker one.
 - **`0x03` in the status byte is `run` OR a gateware flash erase having just
   finished** (`usopenhpsdr1.v:266`), and `0x04` is a flash write in progress.
   **R** Harmless while nobody flashes over Ethernet; named so it is not
@@ -206,8 +224,10 @@ Nothing in this design sends `EF FE 05`, and nothing in it needs to.
 
 - **Nothing here is measured** except the two figures explicitly marked **M**,
   both from `reference-tx`'s bandwidth run rather than from this code.
-- The radio's telemetry **refresh rate** (§3) — the one number that would let
-  the cadence be derived rather than argued.
+- ~~The radio's telemetry **refresh rate**~~ — **settled by reading**, not by a
+  run: 15.6 Hz idle, ≥190 Hz streaming. See
+  `hl2-lab/streams/hl2-telemetry/docs/telemetry-refresh-rate.md`. Config B no
+  longer needs to measure it, and the cadence is now derived rather than argued.
 - The **wire cost of a poll during streaming** (§3) — bounded by inference from
   packet sizes, not measured.
 - The **`rxclip` window** in wall-clock terms (§4), without which no clip rate
