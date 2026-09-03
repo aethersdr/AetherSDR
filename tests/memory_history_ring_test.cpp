@@ -131,7 +131,16 @@ int main(int argc, char** argv)
             }
         }
         EXPECT_TRUE(allAveraged, "every full bucket averages to exactly 200 MB (last-sample-wins reads 150 or 250)");
-        EXPECT_TRUE(pts.first().x() >= 0.0 && pts.last().x() <= 3600.0, "x stays inside the window");
+        // Points sit at the bucket CENTRE, as NetworkDiagnosticsDialog places its
+        // own: the cutoff is bucket-aligned, so every x is 6 s past a 12 s edge.
+        bool allCentred = true;
+        for (const QPointF& p : pts) {
+            if (std::fabs(std::fmod(p.x() * 1000.0, 12000.0) - 6000.0) > 1e-6) {
+                allCentred = false;
+            }
+        }
+        EXPECT_TRUE(allCentred, "bucket points sit at the bucket centre (start would read 0 past the edge)");
+        EXPECT_TRUE(pts.first().x() >= 0.0 && pts.last().x() <= 3600.0 + 6.0, "x stays inside the window (last centre may overhang by half a bucket)");
     }
 
     // 6. The line-break threshold follows the bucket: 4.5 s at raw resolution,
@@ -145,6 +154,32 @@ int main(int argc, char** argv)
         EXPECT_TRUE(MemoryHistoryRing::connectGapSecondsFor(60 * 60)
                         > static_cast<double>(MemoryHistoryRing::bucketMsFor(60 * 60)) / 1000.0,
                     "the threshold always exceeds one bucket, so consecutive bucket points connect");
+    }
+
+    // 7. What the platform could not fill is not plotted: an invalid record, or a
+    //    field left at zero (Windows never reports virtual; Linux may leave private
+    //    at zero — MemoryTelemetry.cpp). Zero is never a real reading, so it means
+    //    "unset" and draws nothing rather than a line along the floor.
+    {
+        MemoryHistoryRing ring;
+        MemoryHistoryRing::Record good = at(kT0, 300);
+        MemoryHistoryRing::Record invalid = at(kT0 + 1500, 300);
+        invalid.valid = false;
+        MemoryHistoryRing::Record noPrivate = at(kT0 + 3000, 300);
+        noPrivate.privateBytes = 0;
+        ring.push(good);
+        ring.push(invalid);
+        ring.push(noPrivate);
+        const qint64 now = kT0 + 3000;
+        // The bucketed path snaps the window end DOWN to a 12 s edge and skips
+        // anything after it (as NetworkDiagnosticsDialog::updateCharts() does), so
+        // for that call `now` is the next edge past the newest record.
+        const qint64 nowAligned = ((now / 12000) + 1) * 12000;
+        EXPECT_EQ(ring.size(), 3);                                               // kept: the count is honest
+        EXPECT_EQ(ring.series(Field::Resident, 60, now).size(), 2);              // invalid skipped
+        EXPECT_EQ(ring.series(Field::Private, 60, now).size(), 1);               // invalid + zero skipped
+        EXPECT_EQ(ring.series(Field::Private, 60 * 60, nowAligned).size(), 1);   // bucketed path skips too
+        EXPECT_EQ(ring.series(Field::Resident, 60 * 60, nowAligned).size(), 1);  // both valid records share one bucket
     }
 
     if (g_failures) {

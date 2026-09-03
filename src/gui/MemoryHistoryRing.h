@@ -15,9 +15,13 @@
 //
 // Slicing follows NetworkDiagnosticsDialog::updateCharts() so the two dialogs'
 // charts read alike: raw points at one-second resolution up to five minutes,
-// bucket averages of max(5 s, range / 300) beyond, x = seconds since the
-// window's cutoff, which is what TimeSeriesGraphWidget::setSeries() expects
-// alongside its rangeSeconds.
+// bucket averages of max(5 s, range / 300) beyond placed at the bucket centre,
+// x = seconds since the window's cutoff, which is what
+// TimeSeriesGraphWidget::setSeries() expects alongside its rangeSeconds.
+// A record the platform could not fill is not plotted: an invalid sample, or
+// a field left at zero (Windows never reports virtualBytes, Linux leaves
+// privateBytes at zero without /proc/self/smaps_rollup — MemoryTelemetry.cpp).
+// Zero is never a real reading for any of the four fields, so it means "unset".
 
 #include <QPointF>
 #include <QString>
@@ -93,7 +97,7 @@ public:
         if (bucketMs <= 1000) {
             points.reserve(static_cast<int>(m_samples.size()));
             for (const Record& s : m_samples) {
-                if (s.wallMs < cutoffMs || s.wallMs > endMs) {
+                if (s.wallMs < cutoffMs || s.wallMs > endMs || !plottable(s, field)) {
                     continue;
                 }
                 points.push_back(QPointF(static_cast<double>(s.wallMs - cutoffMs) / 1000.0,
@@ -107,14 +111,16 @@ public:
         int    count = 0;
         auto flush = [&]() {
             if (count > 0) {
-                points.push_back(QPointF(static_cast<double>(bucketStart - cutoffMs) / 1000.0,
-                                         sum / count));
+                // Bucket centre, as the network dialog places its own.
+                points.push_back(QPointF(
+                    static_cast<double>(bucketStart + bucketMs / 2 - cutoffMs) / 1000.0,
+                    sum / count));
             }
             sum = 0.0;
             count = 0;
         };
         for (const Record& s : m_samples) {
-            if (s.wallMs < cutoffMs || s.wallMs > endMs) {
+            if (s.wallMs < cutoffMs || s.wallMs > endMs || !plottable(s, field)) {
                 continue;
             }
             const qint64 start = (s.wallMs / bucketMs) * bucketMs;
@@ -140,6 +146,10 @@ public:
     }
 
     static double megabytes(quint64 bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); }
+
+    // A reading the platform actually produced: valid, and the field non-zero
+    // (see the header comment — zero means the platform left it unset).
+    static bool plottable(const Record& s, Field field) { return s.valid && valueOf(s, field) > 0; }
 
     static quint64 valueOf(const Record& s, Field field)
     {

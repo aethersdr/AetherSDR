@@ -6,6 +6,7 @@
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 
+#include <QAccessible>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -556,7 +557,8 @@ QWidget* SystemInfoDialog::buildMemoryTab()
     m_memoryGraph->setToolTip(
         QStringLiteral("Resident, private and peak memory over the selected "
                        "timeframe, sampled every %1 ms while this dialog is "
-                       "open. A break in a line is time the dialog was hidden. "
+                       "open. A break in a line is time with no samples: the dialog "
+                       "hidden, the machine asleep, or a late tick. "
                        "Click a legend entry to show that series alone.")
             .arg(SystemInfoCollector::kSampleIntervalMs));
     layout->addWidget(m_memoryGraph, 1);
@@ -595,18 +597,36 @@ void SystemInfoDialog::refreshMemoryChart()
         return;
     }
     if (m_memorySummary != nullptr) {
+        // An invalid sample names no metric: on Linux residentMetric is set even
+        // when the VmRSS read failed (MemoryTelemetry.cpp), and "VmRSS" over four
+        // dashes would still read as a measurement.
         m_memorySummary->setText(
             latest->valid
                 ? QStringLiteral("Resident = %1 · %2 samples")
                       .arg(memoryMetricLabel(latest->residentMetric))
                       .arg(m_memoryRing->size())
-                : QStringLiteral("Process memory: %1")
-                      .arg(memoryMetricLabel(latest->residentMetric)));
+                : QStringLiteral("Process memory: not available on this platform"));
     }
-    if (m_memoryResident != nullptr) m_memoryResident->setText(megabytesText(latest->residentBytes));
-    if (m_memoryPeak != nullptr)     m_memoryPeak->setText(megabytesText(latest->peakResidentBytes));
-    if (m_memoryPrivate != nullptr)  m_memoryPrivate->setText(megabytesText(latest->privateBytes));
-    if (m_memoryVirtual != nullptr)  m_memoryVirtual->setText(megabytesText(latest->virtualBytes));
+    // A field the platform left at zero is not a measurement — Windows never
+    // fills virtualBytes, Linux leaves privateBytes at zero without
+    // /proc/self/smaps_rollup, an invalid sample fills nothing — so it reads
+    // "—", never "0.0 MB". Each readout then announces its new value the way
+    // docs/a11y.md asks for live values (name = caption + value, NameChanged);
+    // at 1.5 s this is far below the rate the doc says to throttle.
+    const auto show = [&](QLabel* label, const QString& caption, quint64 bytes) {
+        if (label == nullptr) {
+            return;
+        }
+        label->setText(latest->valid && bytes > 0 ? megabytesText(bytes)
+                                                  : QStringLiteral("\u2014"));
+        label->setAccessibleName(QStringLiteral("%1 %2").arg(caption, label->text()));
+        QAccessibleEvent event(label, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    };
+    show(m_memoryResident, QStringLiteral("Resident memory"), latest->residentBytes);
+    show(m_memoryPeak, QStringLiteral("Peak resident memory"), latest->peakResidentBytes);
+    show(m_memoryPrivate, QStringLiteral("Private memory"), latest->privateBytes);
+    show(m_memoryVirtual, QStringLiteral("Virtual address space"), latest->virtualBytes);
 
     if (m_memoryGraph == nullptr) {
         return;

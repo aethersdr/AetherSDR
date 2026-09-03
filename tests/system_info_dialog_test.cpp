@@ -22,6 +22,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QDir>
 #include <QFile>
 #include <QLocale>
@@ -552,8 +553,47 @@ int main(int argc, char** argv)
         QCoreApplication::processEvents();
         memoryDialog.hide();
         QCoreApplication::processEvents();
+        // show() starts the real collector thread, so a slow runner (sanitizer
+        // lane) can land a third sample before hide(): "kept" means at least
+        // the two we drove, not exactly two.
+        const auto sampleCount = [](const QString& text) {
+            const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("(\\d+) samples")).match(text);
+            return m.hasMatch() ? m.captured(1).toInt() : -1;
+        };
         report("hiding the dialog keeps the memory history",
-               summary != nullptr && summary->text().contains(QLatin1String("2 samples")));
+               summary != nullptr && sampleCount(summary->text()) >= 2);
+
+        // A field the platform never fills reads as a dash, not "0.0 MB". The
+        // shape is SOURCED: MemoryTelemetry.cpp's Windows branch fills resident,
+        // peak and private from GetProcessMemoryInfo and never assigns
+        // virtualBytes (read 2026-09-03); the byte values are CONSTRUCTED.
+        MemorySample windowsShaped = first;
+        windowsShaped.wallMs += 3000;
+        windowsShaped.residentMetric = QStringLiteral("workingSet");
+        windowsShaped.virtualBytes = 0;
+        report("a Windows-shaped sample is accepted", driveMemory(windowsShaped));
+        report("an unset field reads as a dash, the others as values",
+               virt != nullptr && virt->text() == QStringLiteral("\u2014")
+                   && resident->text() == QStringLiteral("200.0 MB"));
+        report("the summary names the working set",
+               summary != nullptr && summary->text().contains(QLatin1String("working set")));
+        report("a readout announces its value (docs/a11y.md live-value rule)",
+               resident->accessibleName() == QStringLiteral("Resident memory 200.0 MB")
+                   && virt->accessibleName() == QStringLiteral("Virtual address space \u2014"));
+
+        // An invalid sample — the Linux VmRSS-read-failed shape, where
+        // MemoryTelemetry.cpp still sets residentMetric — shows four dashes and
+        // a summary that names no metric. Values CONSTRUCTED (all zero).
+        MemorySample invalid;
+        invalid.wallMs = windowsShaped.wallMs + 1500;
+        invalid.valid = false;
+        invalid.residentMetric = QStringLiteral("vmRss");
+        report("an invalid sample is accepted", driveMemory(invalid));
+        report("an invalid sample reads as four dashes",
+               resident->text() == QStringLiteral("\u2014") && peak->text() == QStringLiteral("\u2014")
+                   && priv->text() == QStringLiteral("\u2014") && virt->text() == QStringLiteral("\u2014"));
+        report("an invalid sample's summary names no metric",
+               summary != nullptr && summary->text() == QStringLiteral("Process memory: not available on this platform"));
     }
 
     // The history outlives the dialog when MainWindow hands one in: the
