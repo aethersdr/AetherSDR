@@ -70,7 +70,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
 | `core/KiwiSdrClient.h` | 2 | vendor(kiwi) — KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself | unconverted |
 | `core/KiwiSdrManager.h` | 8 | vendor(kiwi) — KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension. | unconverted |
-| `core/KiwiSdrProtocol.h` | 9 | vendor(kiwi) — KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting | unconverted |
+| `core/KiwiSdrProtocol.h` | 8 | vendor(kiwi) — KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting | unconverted |
 | `core/KiwiSdrTxMutePolicy.h` | 2 | mixed(kiwi) — Pure latch (no Kiwi wire types, header-only) encoding KiwiSDR-specific TX-mute semantics: release the mute on this client's optimistic local unkey, but keep gating transmissions this client never keyed (VOX, CAT, hardware PTT, other clients) on the radio-reported interlock. Generic shape, family-specific law. | unconverted |
 | `core/LocationAddressResolver.h` | 1 | ui-support — Reverse-geocoding helper backing the GPS location dialog. Network/OS plumbing; no radio state. | unconverted |
 | `core/LogManager.h` | 31 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
