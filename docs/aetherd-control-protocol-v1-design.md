@@ -91,9 +91,13 @@ The server answers with either an ordinary error or:
 }
 ```
 
-The server chooses the highest mutually supported version.  Unsupported
-versions return `protocol.version_unsupported` and close the connection.  The
-handshake must complete within 5 seconds and no other method is accepted first.
+The initial `hello` always uses the baseline v1 envelope (`"v": 1`), including
+when a client also supports future protocol versions.  Negotiable versions are
+advertised only through `params.versions`; a pre-negotiation envelope with any
+other `v` is invalid.  The server chooses the highest mutually supported
+version from `params.versions`.  Unsupported advertised versions return
+`protocol.version_unsupported` and close the connection.  The handshake must
+complete within 5 seconds and no other method is accepted first.
 Authentication material is write-only to the verifier: it is never included in
 diagnostic objects, errors, metrics, settings, support bundles, or logs.
 
@@ -132,6 +136,8 @@ Success returns exactly one `result`; failure returns exactly one `error`:
 
 `id` is a client-chosen string of 1–64 printable ASCII characters and must be
 unique among that session's pending requests.  The server echoes it verbatim.
+Errors raised before a valid request ID can be correlated (for example, a
+handshake timeout or transport limit) omit `id` entirely.
 Unknown top-level or parameter fields are rejected so a misspelled safety field
 cannot be silently ignored.  Method success means the intent passed validation
 and was accepted by the engine; authoritative state is established by the

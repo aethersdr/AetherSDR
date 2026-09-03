@@ -16,6 +16,8 @@ class QLocalSocket;
 namespace AetherSDR::control {
 
 class LocalControlServer final : public QObject {
+    Q_OBJECT
+
 public:
     static constexpr int kMaxClients = 8;
     static constexpr int kHandshakeTimeoutMs = 5000;

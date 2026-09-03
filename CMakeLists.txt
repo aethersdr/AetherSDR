@@ -2019,7 +2019,9 @@ target_include_directories(aethercore PUBLIC
 )
 
 # Engine dependency surface. Desktop-only implementations are compiled by the
-# AetherSDR executable, so aethercore must not link QtWidgets.
+# AetherSDR executable, so aethercore must not link QtWidgets. Because aetherd
+# links the engine archive, it currently inherits this runtime surface too;
+# narrowing those transitive dependencies is later RFC burndown work.
 target_link_libraries(aethercore PUBLIC
     aether_sqlite3
     Qt6::Core

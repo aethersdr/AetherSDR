@@ -59,6 +59,13 @@ bool testEnvelopeFailures()
         return false;
     }
 
+    const ParseResult futureFraming = ControlProtocolCodec::parseRequest(
+        R"({"v":2,"id":"x","method":"hello","params":{"versions":[1,2]}})");
+    if (!check(hasError(futureFraming, QStringLiteral("protocol.invalid_envelope")),
+               "the initial hello must use the baseline v1 envelope")) {
+        return false;
+    }
+
     const ParseResult helloSession = ControlProtocolCodec::parseRequest(
         R"({"v":1,"id":"x","sessionId":"s","method":"hello","params":{}})");
     return check(hasError(helloSession, QStringLiteral("protocol.invalid_envelope")),
@@ -222,11 +229,19 @@ bool testResponseShapes()
                                {{QStringLiteral("field"), QStringLiteral("hz")}}, false};
     const QJsonObject failure = ControlProtocolCodec::errorResponse(QStringLiteral("r2"), source);
     const QJsonObject body = failure.value(QStringLiteral("error")).toObject();
-    return check(body.value(QStringLiteral("code")).toString()
+    if (!check(failure.value(QStringLiteral("id")).toString() == QStringLiteral("r2"),
+               "a correlated error response must preserve its request id")
+        || !check(body.value(QStringLiteral("code")).toString()
                      == QStringLiteral("request.out_of_range")
                  && body.value(QStringLiteral("data")).toObject()
                         .value(QStringLiteral("field")).toString() == QStringLiteral("hz"),
-                 "error response must preserve stable code and safe data");
+                 "error response must preserve stable code and safe data")) {
+        return false;
+    }
+
+    const QJsonObject uncorrelated = ControlProtocolCodec::errorResponse({}, source);
+    return check(!uncorrelated.contains(QStringLiteral("id")),
+                 "an uncorrelated error response must omit the request id");
 }
 
 } // namespace

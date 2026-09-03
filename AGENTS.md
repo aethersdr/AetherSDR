@@ -458,7 +458,7 @@ duplicate to Qt. The same shape exists on the spectrum side.
 |---|---|---|
 | `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Gui/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it is a burndown target. **Never `gui/` or QtWidgets**; the remaining EB2 warnings are source-location debt compiled only by the desktop target |
 | `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
-| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + Qt Core/Network. Qt Gui currently arrives transitively through `aethercore` because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing that edge is a burndown target. **Never QtWidgets** |
+| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + direct Qt Core/Network links. It currently inherits the engine's public/private runtime surface, including Qt Concurrent, Gui, Multimedia, SerialPort, WebSockets, DBus, and qtkeychain when those optional dependencies are enabled. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it and narrowing the other transitive edges are burndown targets. **Never QtWidgets** |
 
 The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 `static-checks.yml`, `--strict`) by three ratchets:
@@ -519,7 +519,11 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker.
+  editing the checker. The only permitted rebaseline is an intentional
+  vocabulary-classification change: every newly tracked include must be proven
+  to predate that classification against the merge base, the evidence must be
+  documented, and a maintainer must explicitly review the rebaseline. The
+  expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -531,9 +535,10 @@ you:
 - **Removing coupling (the goal).** When you convert a file's radio access
   to the seam and drop a vendor include, **remove that stem from the
   file's row** in `KNOWN_VENDOR_INCLUDE_BASELINE` (delete the row when it
-  empties). The set only shrinks — never add a stem or a row to make a
-  build pass. If EB3 blocks you and the include is genuinely unavoidable,
-  that's a design conversation for a maintainer, not a baseline edit.
+  empties). Outside the documented vocabulary-classification carveout above,
+  the set only shrinks — never add a stem or a row to make a build pass. If EB3
+  blocks you and the include is genuinely unavoidable, that's a design
+  conversation for a maintainer, not a baseline edit.
 - **`src/gui/**` is in the CI trigger** for `static-checks.yml` now
   (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
   still caught.

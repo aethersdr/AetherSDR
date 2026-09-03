@@ -113,7 +113,10 @@ bool contains(const QJsonArray& values, const QString& expected)
 bool runProtocolTest()
 {
     LocalControlServer server;
-    if (!check(server.listen(uniqueName(QStringLiteral("aetherd-protocol-"))),
+    if (!check(QString::fromLatin1(server.metaObject()->className())
+                   == QStringLiteral("AetherSDR::control::LocalControlServer"),
+               "local server must expose its own Qt meta-object")
+        || !check(server.listen(uniqueName(QStringLiteral("aetherd-protocol-"))),
                "local server must listen")) {
         return false;
     }
@@ -252,8 +255,41 @@ bool runHelloValidationTest()
     QJsonObject params = malformedVersions.value(QStringLiteral("params")).toObject();
     params.insert(QStringLiteral("versions"), QJsonArray{1.5});
     malformedVersions.insert(QStringLiteral("params"), params);
-    return check(rejectedHello(malformedVersions, QStringLiteral("request.invalid_params")),
-                 "malformed versions must not be treated as merely unsupported");
+    if (!check(rejectedHello(malformedVersions, QStringLiteral("request.invalid_params")),
+               "malformed versions must not be treated as merely unsupported")) {
+        return false;
+    }
+
+    QJsonObject unsupportedVersion = helloRequest();
+    params = unsupportedVersion.value(QStringLiteral("params")).toObject();
+    params.insert(QStringLiteral("versions"), QJsonArray{2});
+    unsupportedVersion.insert(QStringLiteral("params"), params);
+    return check(rejectedHello(unsupportedVersion,
+                               QStringLiteral("protocol.version_unsupported")),
+                 "a v1 bootstrap with no mutually supported version must be rejected");
+}
+
+bool runMalformedInputTest()
+{
+    LocalControlServer server;
+    if (!check(server.listen(uniqueName(QStringLiteral("aetherd-invalid-json-"))),
+               "invalid-JSON server must listen")) {
+        return false;
+    }
+    QLocalSocket socket;
+    if (!check(connectSocket(&socket, server), "invalid-JSON client must connect")) {
+        return false;
+    }
+    socket.write(QByteArrayLiteral("{not-json}\n"));
+    socket.flush();
+    const QJsonObject response = readResponse(&socket);
+    return check(errorCode(response) == QStringLiteral("protocol.invalid_json"),
+                 "invalid JSON must receive the declared parse error")
+        && check(!response.contains(QStringLiteral("id")),
+                 "an uncorrelated parse error must omit the request id")
+        && check(waitUntil([&socket] {
+            return socket.state() == QLocalSocket::UnconnectedState;
+        }), "invalid JSON before hello must disconnect the client");
 }
 
 bool runHandshakeTimeoutTest()
@@ -272,6 +308,8 @@ bool runHandshakeTimeoutTest()
     const QJsonObject response = readResponse(&socket);
     return check(errorCode(response) == QStringLiteral("engine.timeout"),
                  "idle client must receive a handshake timeout")
+        && check(!response.contains(QStringLiteral("id")),
+                 "an uncorrelated handshake timeout must omit the request id")
         && check(waitUntil([&socket] {
             return socket.state() == QLocalSocket::UnconnectedState;
         }), "idle client must be disconnected after handshake timeout");
@@ -324,9 +362,34 @@ bool runClientLimitTest()
     const QJsonObject response = readResponse(&rejected);
     return check(errorCode(response) == QStringLiteral("transport.limit_exceeded"),
                  "excess client must receive the declared limit error")
+        && check(!response.contains(QStringLiteral("id")),
+                 "an uncorrelated client-limit error must omit the request id")
         && check(waitUntil([&rejected] {
             return rejected.state() == QLocalSocket::UnconnectedState;
         }), "excess client must be disconnected");
+}
+
+bool runOversizedInputTest()
+{
+    LocalControlServer server;
+    if (!check(server.listen(uniqueName(QStringLiteral("aetherd-input-limit-"))),
+               "input-limit server must listen")) {
+        return false;
+    }
+    QLocalSocket socket;
+    if (!check(connectSocket(&socket, server), "input-limit client must connect")) {
+        return false;
+    }
+    socket.write(QByteArray(ProtocolLimits::kMaxMessageBytes + 1, 'x'));
+    socket.flush();
+    const QJsonObject response = readResponse(&socket);
+    return check(errorCode(response) == QStringLiteral("transport.limit_exceeded"),
+                 "an oversized input frame must receive the declared limit error")
+        && check(!response.contains(QStringLiteral("id")),
+                 "an uncorrelated input-limit error must omit the request id")
+        && check(waitUntil([&socket] {
+            return socket.state() == QLocalSocket::UnconnectedState;
+        }), "an oversized input frame must disconnect the client");
 }
 
 bool runBackpressureTest()
@@ -433,9 +496,11 @@ int main(int argc, char* argv[])
     }
     return runProtocolTest()
         && runHelloValidationTest()
+        && runMalformedInputTest()
         && runHandshakeTimeoutTest()
         && runHandshakeTimeoutBackpressureTest()
         && runClientLimitTest()
+        && runOversizedInputTest()
         && runBackpressureTest()
         && runStaleEndpointTest()
         && runCrashRecoveryTest()

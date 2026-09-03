@@ -78,8 +78,8 @@ target_link_libraries(control_protocol_codec_test PRIVATE Qt6::Core)
 add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
 
 # Current-user local transport plus the first-request handshake. This test
-# exercises the production server and proves that the Stage-3 surface grants
-# observation only; no control or transmit capability may appear.
+# binds the production QLocalServer socket and proves that the Stage-3 surface
+# grants observation only; no control or transmit capability may appear.
 add_executable(local_control_server_test
     tests/local_control_server_test.cpp
 )
@@ -4333,28 +4333,6 @@ foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
     endif()
 endforeach()
 
-# GUI harnesses that link aethercore used to receive ThemeManager,
-# SettingsHelpers, and ShortcutManager accidentally from that engine archive.
-# Preserve their declared desktop dependency after the Stage-3 split without
-# exposing desktop support to engine-only tests.
-get_property(_aether_desktop_test_candidates DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
-foreach(_desktop_test IN LISTS _aether_desktop_test_candidates)
-    get_target_property(_desktop_test_type ${_desktop_test} TYPE)
-    if(NOT _desktop_test_type STREQUAL "EXECUTABLE")
-        continue()
-    endif()
-    get_target_property(_desktop_test_links ${_desktop_test} LINK_LIBRARIES)
-    if(";${_desktop_test_links};" MATCHES ";aethercore;"
-            AND ";${_desktop_test_links};" MATCHES ";Qt6::Widgets;"
-            AND NOT ";${_desktop_test_links};" MATCHES ";aetherdesktop_support;")
-        target_link_libraries(${_desktop_test} PRIVATE aetherdesktop_support)
-    endif()
-endforeach()
-unset(_aether_desktop_test_candidates)
-unset(_desktop_test)
-unset(_desktop_test_type)
-unset(_desktop_test_links)
-
 # ── FFTW planner bound for the HL2 / WDSP tests ─────────────────────────────
 #
 # WDSP builds every FFT with FFTW_PATIENT. The first OpenChannel in a cold
@@ -4440,6 +4418,28 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+# GUI harnesses that link aethercore used to receive ThemeManager,
+# SettingsHelpers, and ShortcutManager accidentally from that engine archive.
+# Run this retrofit only after every test target has been declared, preserving
+# their desktop dependency without exposing desktop support to engine-only tests.
+get_property(_aether_desktop_test_candidates DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_desktop_test IN LISTS _aether_desktop_test_candidates)
+    get_target_property(_desktop_test_type ${_desktop_test} TYPE)
+    if(NOT _desktop_test_type STREQUAL "EXECUTABLE")
+        continue()
+    endif()
+    get_target_property(_desktop_test_links ${_desktop_test} LINK_LIBRARIES)
+    if(";${_desktop_test_links};" MATCHES ";aethercore;"
+            AND ";${_desktop_test_links};" MATCHES ";Qt6::Widgets;"
+            AND NOT ";${_desktop_test_links};" MATCHES ";aetherdesktop_support;")
+        target_link_libraries(${_desktop_test} PRIVATE aetherdesktop_support)
+    endif()
+endforeach()
+unset(_aether_desktop_test_candidates)
+unset(_desktop_test)
+unset(_desktop_test_type)
+unset(_desktop_test_links)
 
 
 # The isolation TU, compiled once and linked into every test target below. An

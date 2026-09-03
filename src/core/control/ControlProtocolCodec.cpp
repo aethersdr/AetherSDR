@@ -421,9 +421,12 @@ QJsonObject ControlProtocolCodec::errorResponse(
     if (!protocolError.data.isEmpty()) {
         body.insert(QStringLiteral("data"), protocolError.data);
     }
-    return {{QStringLiteral("v"), 1},
-            {QStringLiteral("id"), id},
-            {QStringLiteral("error"), body}};
+    QJsonObject response{{QStringLiteral("v"), 1},
+                         {QStringLiteral("error"), body}};
+    if (!id.isEmpty()) {
+        response.insert(QStringLiteral("id"), id);
+    }
+    return response;
 }
 
 } // namespace AetherSDR::control
