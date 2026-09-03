@@ -137,6 +137,7 @@ class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
 class NetworkDiagnosticsHistory;
+class MemoryHistoryRing;
 class WhatsNewDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
@@ -1037,6 +1038,11 @@ private:
     QByteArray        m_knownDefaultAudioOutputId;
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
+    // The Runtime Monitor's memory history (#2554), owned here for the same
+    // reason the network history is: the dialog is WA_DeleteOnClose and a
+    // trend chart that forgot everything on Close would not be a trend.
+    // Filled only while the dialog is open (sampling follows visibility).
+    std::unique_ptr<MemoryHistoryRing> m_memoryHistory;
     QsoRecorder*      m_qsoRecorder{nullptr};
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new

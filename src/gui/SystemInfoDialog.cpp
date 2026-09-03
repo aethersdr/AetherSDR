@@ -112,7 +112,7 @@ QString stateText(ThreadRunState state)
 
 }  // namespace
 
-SystemInfoDialog::SystemInfoDialog(QWidget* parent)
+SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, QWidget* parent)
     // Title tracks the menu entry — see MainWindow_Menus.cpp for why it is not
     // "System Info". The geometry KEY deliberately does not follow: it is a
     // settings id, and changing it would silently discard the saved window
@@ -121,6 +121,9 @@ SystemInfoDialog::SystemInfoDialog(QWidget* parent)
     : PersistentDialog(QStringLiteral("Runtime Monitor"),
                        QStringLiteral("SystemInfoDialogGeometry"), parent)
 {
+    if (history != nullptr) {
+        m_memoryRing = history;
+    }
     auto* layout = new QVBoxLayout(bodyWidget());
     auto* tabs = new QTabWidget(bodyWidget());
     tabs->addTab(buildThreadsTab(), QStringLiteral("Threads"));
@@ -135,6 +138,10 @@ SystemInfoDialog::SystemInfoDialog(QWidget* parent)
     connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
     buttonRow->addWidget(closeButton);
     layout->addLayout(buttonRow);
+
+    // A reopened dialog shows the history it was handed before the first new
+    // sample arrives; with an empty ring this is a no-op.
+    refreshMemoryChart();
 
     resize(900, 600);
 }
@@ -415,8 +422,9 @@ void SystemInfoDialog::stopSampling()
     // hidden, so a ring carried across that gap would describe a minute nobody
     // observed.
     m_ring.clear();
-    // m_memoryRing deliberately stays: see its declaration. The chart shows
-    // the gap instead of pretending the minute was observed.
+    // The memory ring deliberately stays (and, injected, outlives this dialog):
+    // see its declaration. The chart shows the gap instead of pretending the
+    // minute was observed.
 
     // The alert goes with it. A red summary line left standing over a table
     // that stopped updating claims a thread is saturating a core right now,
@@ -557,7 +565,7 @@ int SystemInfoDialog::selectedMemoryRangeSeconds() const
 
 void SystemInfoDialog::applyMemorySample(const MemorySample& sample)
 {
-    m_memoryRing.push(sample);
+    m_memoryRing->push(sample);
     refreshMemoryChart();
 }
 
@@ -565,7 +573,7 @@ void SystemInfoDialog::refreshMemoryChart()
 {
     // Readouts come from the ring, not the argument, so a sample that never
     // reached the history cannot look as though it did.
-    const MemorySample* latest = m_memoryRing.latest();
+    const MemorySample* latest = m_memoryRing->latest();
     if (latest == nullptr) {
         return;
     }
@@ -574,7 +582,7 @@ void SystemInfoDialog::refreshMemoryChart()
             latest->valid
                 ? QStringLiteral("Resident = %1 · %2 samples")
                       .arg(memoryMetricLabel(latest->residentMetric))
-                      .arg(m_memoryRing.size())
+                      .arg(m_memoryRing->size())
                 : QStringLiteral("Process memory: %1")
                       .arg(memoryMetricLabel(latest->residentMetric)));
     }
@@ -598,7 +606,7 @@ void SystemInfoDialog::refreshMemoryChart()
     using Field = MemoryHistoryRing::Field;
     auto series = [&](const QString& label, const QColor& color, Field field) {
         TimeSeriesGraphWidget::Series s{label, color, {}, QStringLiteral(" MB")};
-        s.points = m_memoryRing.series(field, rangeSeconds, nowMs);
+        s.points = m_memoryRing->series(field, rangeSeconds, nowMs);
         s.maxConnectGapSeconds = gapSeconds;
         return s;
     };

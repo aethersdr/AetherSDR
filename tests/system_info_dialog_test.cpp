@@ -556,6 +556,37 @@ int main(int argc, char** argv)
                summary != nullptr && summary->text().contains(QLatin1String("2 samples")));
     }
 
+    // The history outlives the dialog when MainWindow hands one in: the
+    // dialog is WA_DeleteOnClose, so Close would otherwise take the trend with
+    // it (found on the demo: "3 samples" after Close and reopen).
+    {
+        MemoryHistoryRing shared;
+        MemorySample s;
+        s.wallMs = 1'700'000'000'000;
+        s.valid = true;
+        s.residentMetric = QStringLiteral("vmRss");
+        s.residentBytes = 300ull * 1024 * 1024;
+        {
+            SystemInfoDialog first(&shared);
+            QMetaObject::invokeMethod(&first, "applyMemorySample", Qt::DirectConnection,
+                                      Q_ARG(AetherSDR::MemorySample, s));
+            s.wallMs += 1500;
+            QMetaObject::invokeMethod(&first, "applyMemorySample", Qt::DirectConnection,
+                                      Q_ARG(AetherSDR::MemorySample, s));
+            report("samples driven into the first dialog land in the shared ring", shared.size() == 2);
+        }   // first is destroyed here, as Close does
+        SystemInfoDialog second(&shared);
+        auto* summary2 = second.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        auto* resident2 = second.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
+        report("a reopened dialog shows the history it was handed, before any new sample",
+               summary2 != nullptr && summary2->text().contains(QLatin1String("2 samples"))
+                   && resident2 != nullptr && resident2->text() == QStringLiteral("300.0 MB"));
+        SystemInfoDialog own;
+        auto* summaryOwn = own.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        report("a dialog given no history starts with its own empty ring",
+               summaryOwn != nullptr && summaryOwn->text() == QStringLiteral("Sampling…"));
+    }
+
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"
                                         : "system_info_dialog_test: FAILURES");
     return g_failures == 0 ? 0 : 1;
