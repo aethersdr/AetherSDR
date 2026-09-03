@@ -3936,14 +3936,22 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("ptt", QStringLiteral("PTT (radio)"), m_telemetry.ptt);
     put("keyed", QStringLiteral("Keyed (app)"), m_keyed);
     put("tuning", QStringLiteral("Tune carrier"), m_tuning);
-    // "The most important number in the protocol" (oracle §6): the depth of the
-    // FPGA's transmit sample buffer. Drifting up means we are sending faster
-    // than the radio consumes; drifting down is an impending underrun.
-    put("txFifoCount", QStringLiteral("TX FIFO depth"), opt(m_telemetry.txFifoCount));
-    put("txFifoUnderflow", QStringLiteral("TX FIFO underflow"),
-        opt(m_telemetry.txFifoUnderflow));
-    put("txFifoOverflow", QStringLiteral("TX FIFO overflow"),
-        opt(m_telemetry.txFifoOverflow));
+    // The FPGA's transmit sample buffer. The oracle calls its depth "the most
+    // important number in the protocol"; the gateware at 883a338 does not send
+    // a depth. It sends the TOP 7 BITS of the fill level and one fault flag
+    // (fifos.v:100-110) — so this reads as a level out of 127, not a count, and
+    // the label says so rather than inviting the reader to treat 64 as samples.
+    // Rising means we are sending faster than the radio consumes; falling is an
+    // impending underrun. See MetisProtocol.cpp's apply() for the full layout
+    // and for what the previous three rows here got wrong.
+    put("txFifoFillMsbs", QStringLiteral("TX FIFO fill (0-127, coarse)"),
+        opt(m_telemetry.txFifoFillMsbs));
+    // ONE bit for TWO faults: ran empty, or writes blocked after filling. The
+    // gateware does not distinguish them, so this must not be split into an
+    // underflow row and an overflow row — the two rows that stood here reported
+    // opposite faults for the same flag depending on fill-level bit 6.
+    put("txFifoRecovery", QStringLiteral("TX pacing fault (under OR overrun)"),
+        opt(m_telemetry.txFifoRecovery));
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
@@ -4879,14 +4887,14 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve)";
     }
-    // TX IQ FIFO depth — the oracle calls this the most important number in the
-    // protocol. A queue-fed transmission can starve the radio's buffer in a way
-    // a per-packet generated tone never can, so this is what distinguishes
-    // "the audio is wrong" from "the audio never arrived".
-    if (m_keyed && t.txFifoCount)
-        qCDebug(lcHl2Tx) << "HL2 fifo:" << *t.txFifoCount
-                         << "under" << t.txFifoUnderflow.value_or(false)
-                         << "over" << t.txFifoOverflow.value_or(false);
+    // TX IQ FIFO — a queue-fed transmission can starve the radio's buffer in a
+    // way a per-packet generated tone never can, so this is what distinguishes
+    // "the audio is wrong" from "the audio never arrived". `fill` is the top 7
+    // bits of the level, 0-127, not a sample count; `pacingFault` is the one
+    // flag the gateware sends for both underrun and blocked writes.
+    if (m_keyed && t.txFifoFillMsbs)
+        qCDebug(lcHl2Tx) << "HL2 fifo: fill" << *t.txFifoFillMsbs << "/127"
+                         << "pacingFault" << t.txFifoRecovery.value_or(false);
     if (t.temperatureRaw) {
         const double c = temperatureCelsius(*t.temperatureRaw);
         // The instrumentation ADC's low bits are noisy enough that the displayed

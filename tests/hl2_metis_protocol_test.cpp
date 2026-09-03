@@ -623,35 +623,45 @@ int main()
             return frame(0x00, (1u << 25) | (std::uint32_t(dsiqStatus) << 8) | 0x15u);
         };
 
-        // Recovery flag set, FIFO empty. The old decode reports a depth of 128
-        // for an empty FIFO, because it reads the flag as bit 7 of a count.
-        t.apply(*parseEp6Response(raddr0(0x80).data()));
-        check(t.txFifoCount.value_or(-1) == 0x00,
-              "dsiq_status 0x80: fill level is 0 — the set bit is the flag, not a count");
-        check(t.txFifoUnderflow.value_or(true) == false,
-              "dsiq_status 0x80: gateware claims no underflow — it has no such bit");
+        Hl2Telemetry f;
+        check(!f.txFifoFillMsbs.has_value() && !f.txFifoRecovery.has_value(),
+              "FIFO status starts unknown, not empty-and-healthy");
 
-        // Same flag, a fill level with bit 6 set. The old decode flips its
-        // verdict from 'underflow' to 'overflow' purely on a fill-level bit —
-        // two opposite diagnoses of one recovery event, chosen by how full the
-        // FIFO happened to be.
-        t.apply(*parseEp6Response(raddr0(0xC0).data()));
-        check(t.txFifoCount.value_or(-1) == 0x40,
+        // Recovery flag set, FIFO empty. The old decode reported a depth of 128
+        // for an empty FIFO, because it read the flag as bit 7 of a count.
+        f.apply(*parseEp6Response(raddr0(0x80).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x00,
+              "dsiq_status 0x80: fill level is 0 — the set bit is the flag, not a count");
+        check(f.txFifoRecovery.value_or(false), "dsiq_status 0x80: recovery flag from bit 7");
+
+        // Same flag, a fill level with bit 6 set. The old decode flipped its
+        // verdict from 'underflow' to 'overflow' purely on this fill-level bit
+        // — two opposite diagnoses of one recovery event, chosen by how full
+        // the FIFO happened to be. Now it is one flag either way, and the fill
+        // level is read separately from it.
+        f.apply(*parseEp6Response(raddr0(0xC0).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x40,
               "dsiq_status 0xC0: fill level is 0x40, not 0xC0");
-        check(t.txFifoOverflow.value_or(true) == false,
-              "dsiq_status 0xC0: gateware claims no overflow — it has no such bit");
+        check(f.txFifoRecovery.value_or(false),
+              "dsiq_status 0xC0: same recovery flag as 0x80, not a different fault");
 
         // Flag clear across the full range of the fill field.
-        t.apply(*parseEp6Response(raddr0(0x7F).data()));
-        check(t.txFifoCount.value_or(-1) == 0x7F, "dsiq_status 0x7F: fill level saturates at 127");
-        t.apply(*parseEp6Response(raddr0(0x00).data()));
-        check(t.txFifoCount.value_or(-1) == 0x00, "dsiq_status 0x00: empty, no recovery");
+        f.apply(*parseEp6Response(raddr0(0x7F).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x7F, "dsiq_status 0x7F: fill saturates at 127");
+        check(f.txFifoRecovery.value_or(true) == false,
+              "dsiq_status 0x7F: a full FIFO is not by itself a recovery event");
+        f.apply(*parseEp6Response(raddr0(0x00).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x00, "dsiq_status 0x00: empty");
+        check(f.txFifoRecovery.value_or(true) == false, "dsiq_status 0x00: no recovery");
 
-        // The recovery flag itself has nowhere to go today. That is the third
-        // half of this defect: the one bit the gateware DOES carry — the only
-        // honest signal that TX pacing went wrong — is the one field the
-        // decode does not expose. The fix adds it; there is nothing to assert
-        // against until it does.
+        // The fill level must not borrow bits from its neighbours. RADDR 0
+        // carries the ADC-overload bit at 24 and the TX-inhibit bit at 25
+        // directly above the constant zero byte; a decode that widened past
+        // DATA[15:8] again would pick them up here.
+        f.apply(*parseEp6Response(frame(0x00, 0xFFFFFFFFu).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x7F,
+              "all-ones DATA: fill level still 7 bits, not widened into DATA[23:16]");
+        check(f.txFifoRecovery.value_or(false), "all-ones DATA: recovery flag set");
     }
 
     // ---- SWR ----

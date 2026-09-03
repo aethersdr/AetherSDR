@@ -387,9 +387,23 @@ struct Hl2Telemetry {
     std::optional<int>  firmwareVersion;
     std::optional<bool> adcOverload;
     std::optional<bool> txInhibited;      // register bit is ACTIVE LOW; decoded here
-    std::optional<int>  txFifoCount;
-    std::optional<bool> txFifoUnderflow;
-    std::optional<bool> txFifoOverflow;
+
+    // TX IQ FIFO status: DATA[15:8] of RADDR 0, the gateware's `dsiq_status`.
+    // Settled against the gateware at 883a338; see apply() for the layout and
+    // for what the old txFifoCount/txFifoUnderflow/txFifoOverflow got wrong.
+    //
+    // Coarse occupancy: the TOP 7 bits of the read-side fill level, 0..127
+    // (fifos.v:101, `rd_count <= rd_tlength[(rdbits-1):(rdbits-7)]`). NOT a
+    // sample count, and deliberately not converted to one — the words-to-
+    // samples mapping is an inference this layer has not established. #17's
+    // pacing servo needs that conversion; nothing else does.
+    std::optional<int>  txFifoFillMsbs;
+    // ONE flag for TWO faults: the FIFO ran empty (`rd_tvalidn`) OR its writes
+    // were blocked because it filled (`~allow_push`) — fifos.v:105-106. The
+    // gateware does not distinguish them, so neither do we. A consumer that
+    // wants to say which one happened cannot get it from this word, and must
+    // say "TX pacing fault" rather than pick a side.
+    std::optional<bool> txFifoRecovery;
     std::optional<int>  temperatureRaw;
     std::optional<int>  forwardPowerRaw;
     std::optional<int>  reversePowerRaw;
