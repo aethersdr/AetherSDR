@@ -236,6 +236,129 @@ int main()
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }
 
+    // ---- discovery reply: the telemetry it has always carried ----
+    //
+    // The 60 bytes the radio already sends at every discovery carry PA
+    // temperature, forward and reverse power, PA bias, PTT, ADC clip and the TX
+    // FIFO — and this parser has been reading offsets 0-10 and 19 and throwing
+    // the rest away. It is the same information the EP6 cycle carries, in the
+    // same raw units, but obtainable WITHOUT a stream: the only route that
+    // answers while another client holds the radio, and the only one that
+    // answers when the stream is broken. That is roadmap item #15, and settling
+    // that it needs nothing from item #13 is docs/gating.md in the lab.
+    //
+    // OFFSETS ARE PINNED TO THE GATEWARE, NOT TO A TOOL. usopenhpsdr1.v:261-307
+    // emits the reply from a DOWN-counting state, so
+    //
+    //     packet offset = 0x3B - dbyte_no
+    //
+    // anchored on two knowns this file already asserts: `6'h32: VERSION_MAJOR`
+    // is offset 9 and `6'h31: idhermeslite ? 8'h06 : 8'h01` is offset 10. The
+    // same arithmetic puts `6'h28: NR` at 0x13, which is the receiver-count
+    // offset the block above already pins independently.
+    //
+    // hermeslite.py (KF7O/N2ADR) decodes the same packet and agrees field for
+    // field — including composing the gateware version as r[0x09].r[0x15],
+    // which is `6'h32` and `6'h26`. It is the CROSS-CHECK, not the source: two
+    // decoders that share no code landing on the same map is evidence; one
+    // decoder copied into another is not.
+    {
+        auto put16 = [](std::uint8_t* p, std::uint16_t v) {
+            p[0] = static_cast<std::uint8_t>(v >> 8);
+            p[1] = static_cast<std::uint8_t>(v & 0xFF);
+        };
+
+        std::array<std::uint8_t, 60> t{};
+        t[0] = 0xEF; t[1] = 0xFE; t[2] = 0x02;
+        t[10] = 0x06;
+        t[19] = 0x04;
+
+        // 6'h24..6'h21 -> 0x17-0x1a: resp_data, the port-1025 command response.
+        t[0x17] = 0xDE; t[0x18] = 0xAD; t[0x19] = 0xBE; t[0x1a] = 0xEF;
+        // 6'h20 -> 0x1b: resp_control, assigned combinationally at control.v:899
+        // as {ext_cwkey, ptt_resp, pa_exttr, pa_inttr, tx_on, cw_on, clip_cnt}.
+        // 0xC9 = 1100 1001: ext_cwkey, ptt, no pa_exttr, no pa_inttr, tx_on,
+        // no cw_on, clip_cnt = 1.
+        t[0x1b] = 0xC9;
+        put16(&t[0x1c], 0x0ABC);      // temperature, 12 bits: top nibble is zero
+        put16(&t[0x1e], 0x0123);      // forward power
+        put16(&t[0x20], 0x0456);      // reverse power
+        put16(&t[0x22], 0x0789);      // PA bias current
+        t[0x24] = 0xC0;               // dsiq_status: recovery set, fill 0x40
+        t[0x25] = 0x5A;               // pkt_cnt
+        t[0x26] = 0x0A;               // {1'b0, tx_buffer_latency[6:0]} = 10 ms
+        t[0x27] = 0x00;               // cw_hang_time[7:0]
+        t[0x28] = 0x1F;               // {cw_hang[9:8], 1'b0, ptt_hang_time[4:0]}
+        t[0x29] = 0x44;               // {sample_rate, cmd_ptt, tx_wait, receivers}
+
+        const auto d = parseDiscoveryReply(t);
+        check(d.has_value(), "60-byte telemetry reply parses");
+
+        check(d && d->temperatureRaw.value_or(-1) == 0x0ABC,
+              "temperature from 0x1c-0x1d (gateware 6'h1f,6'h1e)");
+        check(d && d->forwardPowerRaw.value_or(-1) == 0x0123,
+              "forward power from 0x1e-0x1f (6'h1d,6'h1c)");
+        check(d && d->reversePowerRaw.value_or(-1) == 0x0456,
+              "reverse power from 0x20-0x21 (6'h1b,6'h1a)");
+        check(d && d->biasCurrentRaw.value_or(-1) == 0x0789,
+              "PA bias current from 0x22-0x23 (6'h19,6'h18)");
+
+        // Each of the four analogue fields is 12 bits with a zero top nibble,
+        // so a decode that read one byte too early or too late would pick up a
+        // neighbour's low byte and still look like a plausible reading. The
+        // four distinct values above are what makes that visible.
+        check(d && d->temperatureRaw != d->forwardPowerRaw
+                && d->forwardPowerRaw != d->reversePowerRaw
+                && d->reversePowerRaw != d->biasCurrentRaw,
+              "the four analogue fields do not alias each other");
+
+        check(d && d->ptt.value_or(false), "PTT from resp_control bit 6");
+        check(d && d->txOn.value_or(false), "tx_on from resp_control bit 3");
+        check(d && d->cwOn.value_or(true) == false, "cw_on clear from bit 2");
+        check(d && d->extCwKey.value_or(false), "ext_cwkey from bit 7");
+        check(d && d->paExtTr.value_or(true) == false, "pa_exttr clear from bit 5");
+        check(d && d->paIntTr.value_or(true) == false, "pa_inttr clear from bit 4");
+        check(d && d->adcClipCount.value_or(-1) == 1, "clip count from bits [1:0]");
+
+        // Same word, same layout, same meaning as the EP6 path decodes — so the
+        // stream-free reading and the in-band reading are the same quantity and
+        // can be compared without a conversion.
+        check(d && d->txFifoFillMsbs.value_or(-1) == 0x40,
+              "TX FIFO fill from 0x24[6:0], not the whole byte");
+        check(d && d->txFifoRecovery.value_or(false),
+              "TX FIFO recovery flag from 0x24[7]");
+
+        check(d && d->txBufferLatencyMs.value_or(-1) == 0x0A,
+              "tx_buffer_latency from 0x26[6:0]");
+        // ptt_hang_time = 31 is the value that DISABLES the gateware's PTT
+        // auto-unkey (softerhardware/Hermes-Lite2 #178), so it is exactly the
+        // one an application must be able to read. It must come from [4:0] and
+        // not swallow the cw_hang_time bits sharing the byte.
+        check(d && d->pttHangTimeMs.value_or(-1) == 31,
+              "ptt_hang_time from 0x28[4:0] — the value that disables auto-unkey");
+        t[0x28] = 0xC4;               // cw_hang_time[9:8] = 3, ptt_hang_time = 4
+        check(parseDiscoveryReply(t)->pttHangTimeMs.value_or(-1) == 4,
+              "ptt_hang_time ignores the cw_hang_time bits in the same byte");
+        t[0x28] = 0x1F;
+
+        check(d && d->responseData.value_or(0) == 0xDEADBEEFu,
+              "resp_data from 0x17-0x1a, big-endian");
+
+        // A short reply carries none of it, and must say so rather than read
+        // out of bounds or report zeros as readings. This is the distinction
+        // the whole struct is optional for: "the radio did not tell us" and
+        // "the radio told us zero" are different claims, and only one of them
+        // is a measurement.
+        std::array<std::uint8_t, 20> shortT{};
+        shortT[0] = 0xEF; shortT[1] = 0xFE; shortT[2] = 0x02; shortT[10] = 0x06;
+        const auto s = parseDiscoveryReply(shortT);
+        check(s.has_value(), "short reply still parses its header");
+        check(s && !s->temperatureRaw.has_value() && !s->forwardPowerRaw.has_value()
+                && !s->ptt.has_value() && !s->txFifoFillMsbs.has_value()
+                && !s->pttHangTimeMs.has_value(),
+              "short reply: telemetry is ABSENT, not zero");
+    }
+
     // ---- EP2 packet framing ----
     {
         const auto pkt = ep2Packet(0x01020304, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
