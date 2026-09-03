@@ -23,7 +23,7 @@
 using AetherSDR::hl2::fwdPeakHoldStep;
 using AetherSDR::hl2::micSliderToGainDb;
 using AetherSDR::hl2::micSliderToLinear;
-using AetherSDR::hl2::initialDrivePercent;
+using AetherSDR::hl2::comeUpDriveByte;
 
 namespace {
 
@@ -124,64 +124,41 @@ int main()
     check(near(fwdPeakHoldStep(6.0, 0.0, /*keyed=*/false, kRelease), 0.0),
           "unkeyed, the reading drops to the instantaneous sample at once");
 
-    // ---- What a session comes up at ----------------------------------------
+    // ---- What the wire is asserted at before a drive is chosen -------------
     //
-    // The regression this pins: on a fresh install the backend's
-    // m_rfPowerPercent and TransmitModel::m_rfPower both construct at 100, and
-    // RadioModel's connect push is value-identical to that — so setTxPower()'s
-    // change-gate correctly declines to record it while applyDrive() still
-    // writes it. The radio came up at drive 255 with the PA enabled and the
-    // first key-up was at full power.
+    // The regression: on a fresh install the backend's m_rfPowerPercent and
+    // TransmitModel::m_rfPower both construct at 100 and RadioModel's connect
+    // push is value-identical to that, so setTxPower()'s change-gate correctly
+    // declines to record it -- while applyDrive() still wrote it. The radio came
+    // up at drive 255 with the PA enabled.
     //
-    // Written so it FAILS on the old behaviour rather than merely passing on
-    // the new one: the fresh-install case asserts 0 and explicitly asserts NOT
-    // 100, which is what the code did before.
+    // The fix gates the WIRE, not the setpoint. Keeping the setpoint at its
+    // default is what preserves value-identity, and hl2_state_restore_test's
+    // "a virgin connect's default-100 push never claims the baseline" is the
+    // guard that proves seeding the setpoint instead would reintroduce #4619.
     {
-        constexpr int kAbsent = -1;
         constexpr int kMax = 255;
 
-        // Fresh install: no band entry, no baseline. The whole point.
-        check(initialDrivePercent(kAbsent, kAbsent) == 0,
-              "a fresh install comes up at drive 0");
-        check(initialDrivePercent(kAbsent, kAbsent) != 100,
-              "a fresh install does NOT come up at the model default of 100");
-        // ...and 0 means the PA is off, which is the property that matters:
-        // applyDrive maps percent onto 0..kTxDriveMax and
-        // MetisClient::setTxDriveLevel sends ccTxDrive(level, level > 0), so a
-        // zero percent is a zero byte is a clear PA-enable bit.
-        check(initialDrivePercent(kAbsent, kAbsent) * kMax / 100 == 0,
-              "that 0 reaches the wire as drive byte 0, so the PA bit is clear");
+        // Nothing chosen: the wire is 0 whatever the setpoint holds. 100 is the
+        // construction default and the value that used to reach the radio.
+        check(comeUpDriveByte(false, 100, kMax) == 0,
+              "with no drive chosen, a setpoint of 100 asserts drive byte 0");
+        check(comeUpDriveByte(false, 100, kMax) != 255,
+              "...and specifically NOT 255, which is what it used to send");
+        check(comeUpDriveByte(false, 55, kMax) == 0,
+              "with no drive chosen, any setpoint asserts 0");
+        // Byte 0 is what clears the PA-enable bit: MetisClient::setTxDriveLevel
+        // sends ccTxDrive(level, level > 0).
+        check(comeUpDriveByte(false, 100, kMax) == 0,
+              "a zero byte is what leaves the PA-enable bit clear");
 
-        // A restored station is untouched: the start band's own entry wins.
-        check(initialDrivePercent(90, 1) == 90,
-              "the start band's remembered drive wins over the baseline");
-        check(initialDrivePercent(65, 1) == 65, "and on another band, likewise");
-
-        // No entry for this band, but a baseline exists: the baseline applies.
-        // This is the only case defaultPercent governs.
-        check(initialDrivePercent(kAbsent, 1) == 1,
-              "with no band entry, the operator's baseline applies");
-        check(initialDrivePercent(kAbsent, 0) == 0,
-              "a baseline of 0 is honoured, not treated as absent");
-
-        // A stored 0 for the band is a real setting, not a missing one.
-        check(initialDrivePercent(0, 90) == 0,
-              "a band entry of 0 wins over a non-zero baseline");
-
-        // Out of range is clamped, never wrapped.
-        check(initialDrivePercent(140, kAbsent) == 100, "a high entry clamps");
-
-        // THE COUNTERFACTUAL, asserted rather than left in a commit message.
-        // Before this change a fresh install came up at the model's
-        // construction default of 100, and these two lines are what that meant
-        // on the wire. They are here so the regression is legible from the test
-        // itself: if someone restores the old behaviour, the first check above
-        // fails and these say what the consequence was.
-        constexpr int kOldComeUpPercent = 100;
-        check(kOldComeUpPercent * kMax / 100 == 255,
-              "the old come-up value of 100% was drive byte 255 (full)");
-        check((kOldComeUpPercent * kMax / 100) > 0,
-              "...and a non-zero byte sets the PA-enable bit, so the PA was on");
+        // Once chosen, the mapping is the ordinary one and is not disturbed.
+        check(comeUpDriveByte(true, 0,   kMax) == 0,   "chosen 0% -> byte 0");
+        check(comeUpDriveByte(true, 1,   kMax) == 2,   "chosen 1% -> byte 2");
+        check(comeUpDriveByte(true, 50,  kMax) == 127, "chosen 50% -> byte 127");
+        check(comeUpDriveByte(true, 100, kMax) == 255, "chosen 100% -> byte 255");
+        check(comeUpDriveByte(true, -5,  kMax) == 0,   "negative clamps to 0");
+        check(comeUpDriveByte(true, 140, kMax) == 255, "above 100 clamps to full");
     }
 
     if (g_failures == 0) {

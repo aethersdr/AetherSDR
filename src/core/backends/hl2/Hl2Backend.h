@@ -673,6 +673,10 @@ private:
     QMap<QString, int> m_driveByBand;
     int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
     int m_driveDefaultPercent = -1;  // <0: no restored default; leave drive alone
+    // Has a drive actually been CHOSEN -- by restored state or by the operator?
+    // Until it has, the wire is asserted at 0 regardless of the setpoint. See
+    // comeUpDriveByte() for why this is separate from m_rfPowerPercent.
+    bool m_driveChosen = false;
     QString m_currentBandKey;
     // True while band-memory / restore code drives setTxPower() itself: the
     // internal application must neither bootstrap the operator baseline nor

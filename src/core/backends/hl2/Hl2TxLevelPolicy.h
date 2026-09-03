@@ -70,40 +70,46 @@ namespace AetherSDR::hl2 {
     return std::pow(10.0, micSliderToGainDb(level) / 20.0);
 }
 
-// The drive a session must COME UP AT, before the operator has touched anything.
+// ---- Transmit drive: what the wire is asserted at before the operator chooses
+
+// The drive byte to assert while NO drive has been chosen yet.
 //
-// The radio retains whatever the last session left in its drive register and
-// never reports it, so the application is authoritative here (the same rule
-// pushInitialState() states for frequency). What it comes up at is therefore a
-// decision, and this is that decision in one place.
+// The setpoint and the value asserted on the wire are different things until
+// the operator has actually picked one, and conflating them is what put a
+// fresh install on the air at full power.
 //
-// The order is: the start band's own remembered drive, then the operator's
-// baseline for bands never visited, and then — when neither exists, which is
-// what a fresh install is — ZERO.
+// The trace, on main at 10a847b. connectRadio() claims the start band key
+// (Hl2Backend.cpp:1656) but its drive seed below is guarded by
+// `if (m_haveRestoredState)`, so on a fresh install m_rfPowerPercent stays at
+// its construction default of 100, as does TransmitModel::m_rfPower.
+// `emit connected()` (:434) is synchronous, so RadioModel's connect push calls
+// setTxPower(100); the change-gate sees 100 == 100 and CORRECTLY declines to
+// record it as operator intent -- and applyDrive() writes it anyway, so the
+// radio came up at drive 255 with the PA enabled and the first key-up was at
+// full power.
 //
-// Zero rather than the model's construction default. On a fresh install the
-// backend's m_rfPowerPercent and TransmitModel::m_rfPower both construct at
-// 100, and RadioModel's connect-time push is value-identical to that, so the
-// change-gate in setTxPower() correctly declines to record it as operator
-// intent — while applyDrive() still writes it to the wire. The radio came up at
-// drive 255 with the PA enabled, and the first key-up was at full power.
+// applyPerBandStateFor()'s "first visit to a band with no baseline gets 0"
+// cannot cover this: it early-returns when the band is already current
+// (:4481), and connectRadio claimed the start band before linkUp. So its
+// promise -- conservative once per band, rather than hot once per mistake --
+// held for every band except the one the session starts on.
 //
-// applyPerBandStateFor()'s "first visit to a band with no baseline gets 0" does
-// not cover this, and cannot: connectRadio() claims the start band key before
-// the link is up, so that function early-returns for the one band the session
-// starts on. Seeding here is what makes its promise — conservative once per
-// band, rather than hot once per mistake — true for the start band too.
-//
-// Both arguments are "percent, or negative for absent", matching
-// QHash::value(key, -1) and m_driveDefaultPercent's own sentinel.
-[[nodiscard]] constexpr int initialDrivePercent(int bandEntryPercent,
-                                                int baselinePercent) noexcept
+// WHY NOT SIMPLY SEED THE SETPOINT TO 0. Because that breaks a different
+// guarantee, and hl2_state_restore_test catches it: with the setpoint at 0 the
+// model-default push of 100 is no longer value-identical, so setTxPower()
+// reads it as operator intent and claims the baseline at 100 -- which is
+// exactly the defect #4619 fixed (Ozy311: the model-default push made the
+// deliberate 0 for unvisited bands unreachable). Keeping the setpoint at its
+// default preserves value-identity; gating the WIRE on whether a drive has been
+// chosen is what makes the come-up safe. The two properties are independent and
+// both are wanted.
+[[nodiscard]] constexpr int comeUpDriveByte(bool driveChosen, int percent,
+                                            int driveMax) noexcept
 {
-    if (bandEntryPercent >= 0)
-        return bandEntryPercent > 100 ? 100 : bandEntryPercent;
-    if (baselinePercent >= 0)
-        return baselinePercent > 100 ? 100 : baselinePercent;
-    return 0;
+    if (!driveChosen)
+        return 0;
+    const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    return clamped * driveMax / 100;
 }
 
 // ---- Forward-power peak hold -----------------------------------------------

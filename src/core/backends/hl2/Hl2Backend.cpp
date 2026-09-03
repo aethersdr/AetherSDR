@@ -1700,20 +1700,16 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // the stored per-band drive on every reconnect; Ozy311 traced the same
     // seam). With the model seeded, that push becomes a value-identical echo
     // — which setTxPower() now recognizes and declines to record.
-    //
-    // SEEDED UNCONDITIONALLY, not only when there is restored state. With the
-    // guard, a fresh install left m_rfPowerPercent at its construction default
-    // of 100 and the connect push wrote drive 255 with the PA enabled — see
-    // initialDrivePercent() for the full trace and for why
-    // applyPerBandStateFor()'s conservative-0 cannot cover the start band.
-    {
-        const int drive = initialDrivePercent(
-            m_haveRestoredState ? m_driveByBand.value(m_currentBandKey, -1) : -1,
-            m_haveRestoredState ? m_driveDefaultPercent : -1);
-        m_rfPowerPercent = drive;
-        TransmitDelta delta;
-        delta.rfPower = drive;
-        emit transmitChanged(delta);
+    if (m_haveRestoredState) {
+        const int drive =
+            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
+        if (drive >= 0) {
+            m_rfPowerPercent = drive;
+            m_driveChosen = true;   // restored state IS a choice
+            TransmitDelta delta;
+            delta.rfPower = drive;
+            emit transmitChanged(delta);
+        }
     }
 
     // ---- how many receivers ----
@@ -3596,8 +3592,11 @@ void Hl2Backend::applyDrive(int percent)
         setTxDriveLevel(0);
         return;
     }
-    const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
-    setTxDriveLevel(clamped * kTxDriveMax / 100);
+    // Until a drive has been chosen -- by restored state or by the operator --
+    // assert 0 on the wire whatever the setpoint says. The setpoint stays at its
+    // default so RadioModel's connect push remains value-identical and cannot be
+    // mistaken for operator intent (#4619); see comeUpDriveByte().
+    setTxDriveLevel(comeUpDriveByte(m_driveChosen, percent, kTxDriveMax));
 }
 
 std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
@@ -3783,6 +3782,7 @@ void Hl2Backend::setTxPower(int percent)
         // per-band tweaks don't move the baseline.
         if (m_driveDefaultPercent < 0)
             m_driveDefaultPercent = m_rfPowerPercent;
+        m_driveChosen = true;   // the operator has now chosen one
     }
     notifyOperatingStateChanged();
     if (m_tuning)
