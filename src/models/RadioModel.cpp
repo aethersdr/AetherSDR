@@ -4101,6 +4101,16 @@ void RadioModel::noteTelemetryDemand()
     m_hl2Telemetry.noteDemand();
 }
 
+void RadioModel::setTelemetryPollTarget(const QHostAddress& addr)
+{
+    m_hl2Telemetry.setTarget(addr);
+    // Deliberately does NOT touch m_backend, does not set m_family, and does
+    // not begin a connection. Aiming the read-only poller at a radio and
+    // connecting to it are different acts, and conflating them is what made
+    // this impossible to do safely against a radio somebody else was holding.
+    m_hl2Telemetry.noteDemand();
+}
+
 // Shared key-on guard for the paths that do NOT go through setTransmit().
 //
 // setTransmit() refuses a key on a backend reporting canTransmit=false before

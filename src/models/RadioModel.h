@@ -10,6 +10,8 @@
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
 #include "core/backends/hl2/Hl2TelemetryService.h"  // stream-free telemetry (#15)
+
+#include <QHostAddress>
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -320,6 +322,11 @@ public:
     // Reading the rows is the poller's demand signal, so a caller that only
     // wants to arm it (without rendering) can say so explicitly.
     void noteTelemetryDemand();
+    // Aim the stream-free poller at a radio WITHOUT connecting. A null address
+    // stops it. Read-only: the poller sends the EF FE 02 status request and
+    // nothing else, never START/STOP and never a register write, which is what
+    // makes it safe to point at a radio another operator is using.
+    void setTelemetryPollTarget(const QHostAddress& addr);
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty

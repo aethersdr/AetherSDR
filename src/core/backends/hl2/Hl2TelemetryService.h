@@ -47,6 +47,10 @@ public:
     // poller broadcasts rather than stopping — see Hl2TelemetryPoller.
     void setTarget(const QHostAddress& addr);
     void setExpectedMac(const std::array<std::uint8_t, 6>& mac);
+    // Opt in to broadcasting when no target is set. OFF by default -- a
+    // broadcast reaches the local segment, which on this bench is not where
+    // the radio is and is where the station receiver is.
+    void setAllowBroadcastFallback(bool allow);
 
     // What the IQ path is doing. Driven by whoever knows: the backend while one
     // exists, the model's connection state otherwise. The cadence rule turns

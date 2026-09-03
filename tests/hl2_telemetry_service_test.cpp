@@ -31,6 +31,8 @@
 #include "core/backends/hl2/Hl2TelemetryService.h"
 
 #include <QCoreApplication>
+#include <QNetworkDatagram>
+#include <QUdpSocket>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
@@ -133,6 +135,59 @@ int main(int argc, char** argv)
           "lastReply stays absent — never a default-constructed reply standing in for one");
     check(!rowValue(snap, "telemetryAgeMs").isValid(),
           "age is ABSENT with no reply, not 0 — zero would read as 'fresh'");
+
+    // ---- 6. WHERE the packets go, observed on a real socket ----
+    //
+    // Not "does it think it polled" but "did a datagram arrive at the address
+    // we named, and only there". This is the check that would have caught the
+    // bench's actual topology problem: the poller's broadcast fallback sends to
+    // the LOCAL SEGMENT, which here is the segment the ka9q station receiver
+    // sits on, while the radio under test is off-net behind a gateway and can
+    // never receive a broadcast at all. Inverted in both directions -- unable
+    // to reach the intended host, able to reach one that must not be polled.
+    //
+    // So the default is now: no target, no packets. A caller names the radio.
+    {
+        QUdpSocket listener;
+        const bool bound = listener.bind(QHostAddress::LocalHost, 1025,
+                                         QUdpSocket::ShareAddress);
+        check(bound, "test listener bound on 127.0.0.1:1025");
+
+        if (bound) {
+            // (a) NO TARGET -> NOTHING ON THE WIRE. The old default would have
+            // broadcast here.
+            Hl2TelemetryService silent;
+            silent.setLinkState(Hl2LinkState::NotConnected);
+            for (int i = 0; i < 6; ++i) { silent.noteDemand(); spin(500); }
+            check(!listener.hasPendingDatagrams(),
+                  "no target: the poller sends NOTHING, it does not broadcast");
+
+            // (b) TARGET NAMED -> a unicast poll arrives, at that address, and
+            // it is the EF FE 02 status request and nothing else.
+            Hl2TelemetryService aimed;
+            aimed.setTarget(QHostAddress::LocalHost);
+            aimed.setLinkState(Hl2LinkState::NotConnected);
+            bool sawRequest = false;
+            bool wrongSender = false;
+            for (int i = 0; i < 8 && !sawRequest; ++i) {
+                aimed.noteDemand();
+                spin(500);
+                while (listener.hasPendingDatagrams()) {
+                    const QNetworkDatagram dg = listener.receiveDatagram();
+                    const QByteArray d = dg.data();
+                    if (d.size() >= 3 && std::uint8_t(d[0]) == 0xEF
+                        && std::uint8_t(d[1]) == 0xFE && std::uint8_t(d[2]) == 0x02)
+                        sawRequest = true;
+                    else
+                        wrongSender = true;
+                }
+            }
+            check(sawRequest,
+                  "target named: a unicast EF FE 02 arrives AT THAT ADDRESS");
+            check(!wrongSender,
+                  "and nothing else is sent -- only the read-only status request");
+        }
+    }
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_service_test: all checks passed\n");

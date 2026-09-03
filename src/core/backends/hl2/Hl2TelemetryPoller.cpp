@@ -47,6 +47,11 @@ Hl2TelemetryPoller::Hl2TelemetryPoller(QObject* parent)
 
 Hl2TelemetryPoller::~Hl2TelemetryPoller() = default;
 
+void Hl2TelemetryPoller::setAllowBroadcastFallback(bool allow)
+{
+    m_allowBroadcast = allow;
+}
+
 void Hl2TelemetryPoller::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
 {
     m_expectedMac = mac;
@@ -135,22 +140,40 @@ void Hl2TelemetryPoller::onPollTimer()
     if (!m_socket)
         return;
 
+    // WHERE TO SEND IS DECIDED FIRST, because the answer may be NOWHERE and the
+    // bookkeeping below must not run for a poll that never happened.
+    //
+    // Unicast once a radio is known -- from setTarget(), from connectRadio(),
+    // or from whichever one answered a previous broadcast. With no target and
+    // no broadcast opt-in, send nothing: a broadcast reaches the LOCAL SEGMENT,
+    // which is not necessarily where the radio is and may be where something
+    // that must not be polled is. See setTarget.
+    QHostAddress dest;
+    if (!m_target.isNull())              dest = m_target;
+    else if (!m_lastResponder.isNull())  dest = m_lastResponder;
+    else if (m_allowBroadcast)           dest = QHostAddress::Broadcast;
+    else {
+        // Declining to send also retires any outstanding request: otherwise the
+        // next real poll would inherit a pending one and report an unanswered
+        // count for a datagram that was never on the wire.
+        m_sinceRequest.invalidate();
+        return;
+    }
+
     // A poll that went unanswered is a fact about the radio, and it has to be
     // counted at SEND time rather than on a timeout, because the absence of a
     // reply produces no event to hang a counter off. onReadyRead clears it.
+    //
+    // Counted only for polls actually sent. A count rising while nothing left
+    // the socket would say "the radio is not answering" about a radio nobody
+    // asked -- precisely the misreading that let a broadcast to the wrong
+    // segment look like a working no-reply case.
     if (m_sinceRequest.isValid()) {
         ++m_unanswered;
         emit pollUnanswered(m_unanswered);
     }
 
     const auto pkt = discoveryRequest();
-    // Unicast once a radio is known -- from connectRadio(), or from whichever
-    // one answered a previous broadcast. Broadcast only while we know none:
-    // narrowing to unicast as soon as possible keeps this off every other
-    // machine's socket.
-    const QHostAddress dest = !m_target.isNull()      ? m_target
-                            : !m_lastResponder.isNull() ? m_lastResponder
-                                                        : QHostAddress::Broadcast;
     m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
                             static_cast<qint64>(pkt.size()),
                             dest, kAltPort);

@@ -3558,6 +3558,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doHealth(); });
 
+        add("telemetry", {}, "telemetry target <ip> — aim the stream-free HL2 poller "
+                             "WITHOUT connecting (read-only; `telemetry target off` stops it)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTelemetry(a.action, a.value);
+            });
+
         add("log", {}, "log <categories|get|set|reset|tail|subscribe|unsubscribe> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) {
@@ -6556,6 +6563,56 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
 // diagnosis.
 //
 // Read-only and TX-safe: it keys nothing and changes nothing.
+QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (action != QStringLiteral("target"))
+        return err(QStringLiteral("telemetry requires an action (target)"));
+    if (value.isEmpty())
+        return err(QStringLiteral("telemetry target requires an IP, or 'off'"));
+
+    // WHY THIS VERB EXISTS, because "just connect first" is the obvious
+    // alternative and it is wrong.
+    //
+    // The stream-free poller's whole purpose is reading a radio we are NOT
+    // connected to -- typically because another client is holding it. The only
+    // way to give it an address used to be connectRadio(), which sets the
+    // target on its way to sending Metis START. Against a radio somebody else
+    // holds, that is a WRITE during their session: it risks disturbing the very
+    // stream the measurement is about, and "the holder was undisturbed" is a
+    // pass criterion of the run this serves.
+    //
+    // Discovery cannot supply it either. Discovery is a broadcast, so it only
+    // finds radios on the local segment; a radio behind a gateway is invisible
+    // to it, and the broadcast itself lands on whatever else shares that
+    // segment. On this bench that is exactly backwards -- the radio is off-net
+    // and the segment holds a receiver that must not be polled.
+    //
+    // So: name the radio, send nothing but read-only status requests to it, and
+    // never connect.
+    if (value.compare(QStringLiteral("off"), Qt::CaseInsensitive) == 0) {
+        m_radioModel->setTelemetryPollTarget(QHostAddress());
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("telemetry"), QStringLiteral("target")},
+                           {QStringLiteral("target"), QJsonValue::Null}};
+    }
+
+    const QHostAddress addr(value);
+    if (addr.isNull())
+        return err(QStringLiteral("telemetry target: '%1' is not an IP address").arg(value));
+
+    m_radioModel->setTelemetryPollTarget(addr);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("telemetry"), QStringLiteral("target")},
+                       {QStringLiteral("target"), addr.toString()},
+                       // Say plainly that nothing was connected, because the
+                       // caller's next question is always "did that grab the
+                       // radio?" and the answer must not require reading source.
+                       {QStringLiteral("connected"), m_radioModel->isConnected()},
+                       {QStringLiteral("readOnly"), true}};
+}
+
 QJsonObject AutomationServer::doHealth()
 {
     if (!m_radioModel)
