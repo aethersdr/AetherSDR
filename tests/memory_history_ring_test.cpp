@@ -65,9 +65,17 @@ int main(int argc, char** argv)
         EXPECT_EQ(ring.size(), MemoryHistoryRing::kCapacity);
         EXPECT_EQ(static_cast<int>(ring.latest()->residentBytes / (1024 * 1024)),
                   100 + MemoryHistoryRing::kCapacity + 4);
-        // the surviving oldest sample is i = 5
         const auto pts = ring.series(Field::Resident, 60 * 60, kT0 + (MemoryHistoryRing::kCapacity + 4) * 1500);
         EXPECT_TRUE(!pts.isEmpty(), "an hour of samples yields points");
+        // Eviction drops the OLDEST: i = 4 is gone, i = 5 survives. A raw one-minute
+        // window whose cutoff is exactly i = 4's timestamp must begin at i = 5 —
+        // x = 1.5 s past the cutoff, 105 MB — not at i = 4 (x = 0, 104 MB).
+        const auto edge = ring.series(Field::Resident, 60, kT0 + 4 * 1500 + 60 * 1000);
+        EXPECT_TRUE(!edge.isEmpty(), "a window over the eviction edge yields points");
+        if (!edge.isEmpty()) {
+            EXPECT_TRUE(std::fabs(edge.first().x() - 1.5) < 1e-9, "the surviving oldest sample is i = 5 (x = 1.5 s)");
+            EXPECT_TRUE(std::fabs(edge.first().y() - 105.0) < 1e-9, "i = 4 was evicted (105 MB, not 104)");
+        }
     }
 
     // 3. Window slicing at 1 s resolution: only samples inside the window, x
@@ -112,13 +120,17 @@ int main(int argc, char** argv)
         const qint64 now = kT0 + (n - 1) * 1500;
         const auto pts = ring.series(Field::Resident, 60 * 60, now);
         EXPECT_TRUE(pts.size() >= 290 && pts.size() <= 301, "an hour buckets to about 300 points");
+        // A full 12 s bucket holds exactly 8 consecutive samples — 4 × 150 and
+        // 4 × 250 — so its average is exactly 200. Only the first and last buckets
+        // can be partial. (A 51 MB tolerance here once admitted an unaveraged 150
+        // or 250 — found by mutation 2026-09-03 — hence the exact check.)
         bool allAveraged = true;
-        for (const QPointF& p : pts) {
-            if (std::fabs(p.y() - 200.0) > 51.0) {   // a full 12 s bucket holds 8 samples: 4×150 + 4×250
+        for (int i = 1; i + 1 < pts.size(); ++i) {
+            if (std::fabs(pts[i].y() - 200.0) > 1e-6) {
                 allAveraged = false;
             }
         }
-        EXPECT_TRUE(allAveraged, "bucket values are averages of their samples");
+        EXPECT_TRUE(allAveraged, "every full bucket averages to exactly 200 MB (last-sample-wins reads 150 or 250)");
         EXPECT_TRUE(pts.first().x() >= 0.0 && pts.last().x() <= 3600.0, "x stays inside the window");
     }
 

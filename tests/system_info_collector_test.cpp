@@ -70,8 +70,14 @@ int main(int argc, char** argv)
         if (sample.residentMetric != QStringLiteral("unsupported")) {
             EXPECT_TRUE(sample.valid, "a supported platform reports a valid sample");
             EXPECT_TRUE(sample.residentBytes > 0, "resident bytes are non-zero on a live process");
-            EXPECT_TRUE(sample.peakResidentBytes >= sample.residentBytes,
-                        "peak resident is at least the current resident set");
+            // Like with like only: on macOS peak is resident_size_peak while resident
+            // is phys_footprint — two accountings with no ordering between them —
+            // so the check is skipped there; workingSet and VmRSS compare with their
+            // own peaks.
+            if (sample.residentMetric != QStringLiteral("physicalFootprint")) {
+                EXPECT_TRUE(sample.peakResidentBytes >= sample.residentBytes,
+                            "peak resident is at least the current resident set");
+            }
         }
     }
 
