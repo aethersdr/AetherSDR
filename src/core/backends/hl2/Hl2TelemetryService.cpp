@@ -76,6 +76,11 @@ void Hl2TelemetryService::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
     d->poller->setExpectedMac(mac);
 }
 
+void Hl2TelemetryService::setAllowBroadcastFallback(bool allow)
+{
+    d->poller->setAllowBroadcastFallback(allow);
+}
+
 void Hl2TelemetryService::setLinkState(Hl2LinkState state)
 {
     d->state = state;

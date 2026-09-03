@@ -54,20 +54,28 @@ public:
     explicit Hl2TelemetryPoller(QObject* parent = nullptr);
     ~Hl2TelemetryPoller() override;
 
-    // The radio to poll.
+    // The radio to poll. REQUIRED: with no target and no broadcast fallback
+    // explicitly enabled, this poller sends nothing at all.
     //
-    // A null address does NOT mean "stop": it means "we do not know which radio
-    // yet", and the poller falls back to broadcasting the same EF FE 02 to the
-    // subnet, exactly as Hl2Discovery does on 1024. That is the case this
-    // feature is for -- the app is not connected, so nothing has told it an
-    // address, and the radio it wants to read is the one somebody else is
-    // using. Requiring a caller to supply the address first would mean routing
-    // discovery results down into the backend purely to enable a feature whose
-    // whole point is working when the app is not connected to anything.
+    // That default is deliberate and was changed after a real near-miss. A
+    // broadcast goes to the LOCAL SEGMENT, which on this bench is the segment
+    // the ka9q station receiver sits on (192.168.36.0/24) -- while the radio
+    // under test is off-net behind a gateway (192.168.8.2) and a broadcast can
+    // never reach it. So the fallback was simultaneously unable to poll the
+    // thing we meant and able to put packets near a host that must not be
+    // polled. Inverted in both directions.
     //
-    // The cadence rule still decides whether anything is sent at all, so a
-    // broadcast only happens when the rule already says to poll.
+    // It also produced a reading that looked correct for the wrong reason: an
+    // unanswered-poll count climbing steadily, which reads as "the radio is not
+    // replying" and was really "there is no radio on this segment at all".
+    //
+    // So: name the radio. An address is one line at the call site and removes a
+    // whole class of packet nobody asked for.
     void setTarget(const QHostAddress& addr);
+    // Opt IN to broadcasting when no target is known. Off by default; see
+    // setTarget. Only sensible where the radio is known to share a segment with
+    // the host AND nothing on that segment minds a discovery datagram.
+    void setAllowBroadcastFallback(bool allow);
     // Restrict replies to one radio, by its MAC.
     //
     // BYTES, not the formatted serial string. Comparing the six bytes the reply
@@ -126,6 +134,7 @@ private:
     QHostAddress m_target;          // null = broadcast and take what answers
     QHostAddress m_lastResponder;
     std::optional<std::array<std::uint8_t, 6>> m_expectedMac;
+    bool m_allowBroadcast = false;   // see setTarget for why this is the default
     LinkState m_state = LinkState::NotConnected;
     bool m_surfaceVisible = false;
     int m_unanswered = 0;

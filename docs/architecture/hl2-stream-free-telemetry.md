@@ -75,6 +75,36 @@ Consequence for this design: **the poller uses 1025.** Port 1024 would work only
 in the one case where we are the streaming host — which is precisely the case
 where we do not need it, because the in-band path is already running.
 
+### 2.1a The target must be NAMED — broadcast is opt-in, and off
+
+An earlier draft let a null target fall back to broadcasting, on the reasoning
+that the app should be able to find the radio the way `Hl2Discovery` does. On
+this bench that is wrong in both directions at once, and it was caught two
+minutes before a scheduled run:
+
+```
+host          192.168.36.55/24    broadcast -> 192.168.36.255
+ka9q station  192.168.36.38       SAME SEGMENT as the host
+radio (DUT)   192.168.8.2         OFF-NET, via gateway 192.168.36.1
+```
+
+A broadcast reaches the segment the **station receiver** is on, and can never
+reach the radio, which is behind a gateway. So the fallback could not poll the
+host we meant, and could put datagrams near a host that must not be polled.
+
+It also produced a reading that looked right for the wrong reason: an
+unanswered-poll count rising steadily, which reads as *"the radio is not
+replying"* and was really *"there is no radio on this segment at all"*. The
+number was correct; what it was **of** was not what anyone assumed. **A**
+→ **M** once the interfaces were read.
+
+So: **`setTarget()` is required, and `setAllowBroadcastFallback()` is off by
+default.** With neither, the poller sends nothing. Naming the radio is one line
+at the call site and removes a whole class of packet nobody asked for.
+
+`telemetry target <ip>` on the automation bridge supplies it without
+connecting — see §5.
+
 ### 2.2 It is a read, and stays one
 
 The poller sends exactly one packet type: `EF FE 02`. It never sends
@@ -196,11 +226,13 @@ Additive, and outside the region `Hl2Backend`'s transmit drive path occupies.
 1. **Done.** `parseDiscoveryReply` decodes `0x17`–`0x29` into optional fields on
    `DiscoveryReply`, with the gateware's offsets pinned by test against
    `usopenhpsdr1.v`'s own down-counter.
-2. **Next.** A small poller owning one UDP socket to `<radio>:1025`, sending
-   `EF FE 02` on the §3 schedule and emitting the parsed reply. It belongs
-   beside `Hl2Discovery` — same packet, same parser, different port and
-   lifetime — and not inside `MetisClient`, whose socket and thread belong to
-   the stream this is supposed to outlive.
+2. **Done.** `Hl2TelemetryPoller`, one UDP socket to `<radio>:1025`, sending
+   `EF FE 02` on the §3 schedule. Owned by `Hl2TelemetryService`, which is a
+   value member of `RadioModel` — **not** of `Hl2Backend`, which only exists
+   after a successful connect and so cannot host an instrument for the
+   no-connection case. `telemetry target <ip>` aims it without connecting,
+   because the only other way to supply an address was `connectRadio()`, and
+   that sends Metis START — a write during another operator's session.
 3. **Then.** A seam field carrying source and age, and the surface that renders
    it, including the "another client holds the radio" case which no existing
    readout has ever had to express.
