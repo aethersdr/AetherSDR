@@ -205,6 +205,10 @@ include DFNR; it is a manual prereq only for local dev builds. NR still
 works without it — RN2 (RNNoise) is bundled and always built, needing no
 setup.
 
+**RNNoise architecture check.** The `third_party/rnnoise/src/x86` sources and
+include directory belong only in x86 build graphs. After configuring any ARM
+build, `rg 'rnnoise/src/x86' <build-dir>/build.ninja` must find no matches.
+
 Full dependency list is in `README.md` — don't duplicate it here.
 
 ### Adding a test — declare it in `tests/tests.cmake`, not `CMakeLists.txt`
