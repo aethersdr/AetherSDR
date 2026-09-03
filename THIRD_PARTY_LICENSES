@@ -161,6 +161,26 @@ vendored, translated, or linked.
   into SpeProtocol.cpp's modelTable(). Author's own work, contributed under
   this project's license; no third-party rights involved.
 
+  The remote LCD mirror (SpeProtocol.cpp's Lcd namespace + gui/SpeLcdWidget)
+  decodes the display frame the amplifier answers to keystroke 0x80 — a
+  mechanism the spec's foreword advertises ("a perfect copy of the display
+  ... in less than 400 bytes") but does not document. The frame layout
+  (payload-length header, 95 FE type marker, 8x40 character matrix,
+  per-column inverse-video attribute bytes), the character-to-glyph mapping,
+  and the 256-glyph 6x8 font ROM in gui/SpeLcdFontRom.inc are carried from
+  the contributing author's own v2 control application (validated against a
+  real 1.5K-FA), which in turn ported them from:
+
+  expert-amp-server (FtlC-ian) — Go web server mirroring the SPE Expert LCD
+  in a browser; the origin of the display-frame decode and the font ROM.
+  License:  MIT
+  Source:   https://github.com/FtlC-ian/expert-amp-server
+
+  The C++ here is an original re-expression of those wire-format facts and
+  glyph tables (data, re-generated mechanically), not incorporated MIT code;
+  the attribution is carried regardless, matching the ACOM-Controller
+  cross-check precedent above.
+
 
 1. WDSP 2.00 — engine-side SDR DSP
 ----------------------------------

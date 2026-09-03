@@ -315,6 +315,66 @@ int main()
            Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffd"))
                == Rfc2217::OptionReply::None);
 
+    // ── LCD display frames (design note §11) — request framing, the
+    //    parser's dedicated display path, and the character/attribute
+    //    decode, against a hand-built 369-byte frame.
+    {
+        report("LCD request is the keystroke framing with code 0x80 + CR LF",
+               Lcd::buildRequest() == QByteArray::fromHex("5555550180800d0a"));
+
+        QByteArray raw = QByteArray::fromHex("aaaaaa6a0195fe0195");
+        report("hand-built header is exactly the data offset", raw.size() == Lcd::kDataOffset);
+        QByteArray body(Lcd::kRows * Lcd::kCols, '\0');
+        body[0] = 0x21;                    // font-ROM index for 'A' (ASCII − 0x20)
+        body[1] = static_cast<char>(0xE5); // outside both pass-through ranges
+        QByteArray attrs(Lcd::kCols, '\0');
+        attrs[0] = 0x03;                   // inverse video on column 0, rows 0 and 1
+        raw += body + attrs;
+        report("hand-built LCD frame is the documented 369 bytes",
+               raw.size() == Lcd::kFrameLenWithMarker);
+
+        QList<QByteArray> displays;
+        QList<Frame> frames;
+        FrameParser parser;
+        parser.setFrameCallback([&](const Frame& f) { frames.append(f); });
+        parser.setDisplayCallback([&](const QByteArray& d) { displays.append(d); });
+        parser.feed(raw.left(100));
+        report("no display frame emitted until all 369 bytes arrive",
+               displays.isEmpty());
+        parser.feed(raw.mid(100));
+        parser.feed(QByteArray::fromHex("aaaaaa010d0d"));  // an ACK right behind it
+        report("display frame handed out whole; the ACK behind it still parses",
+               displays.size() == 1
+                   && displays.at(0).size() == Lcd::kFrameLenWithMarker
+                   && frames.size() == 1);
+
+        const auto lcd = Lcd::decode(displays.value(0));
+        report("LCD frame decodes", lcd.has_value());
+        if (lcd) {
+            report("printable bytes pass through to the font ROM (0x21 = 'A')",
+                   lcd->chars[0][0] == 0x21);
+            report("a byte outside both pass-through ranges blanks",
+                   lcd->chars[0][1] == 0x60);
+            report("untouched cells read as the ROM's blank",
+                   lcd->chars[7][39] == 0x60);
+            report("attribute bit N flags inverse video on row N of that column",
+                   lcd->inverse[0][0] && lcd->inverse[1][0]
+                       && !lcd->inverse[2][0] && !lcd->inverse[0][1]);
+        }
+        report("a truncated display buffer is rejected rather than misread",
+               !Lcd::decode(raw.left(100)).has_value());
+
+        // A 0x6A length byte WITHOUT the 95 FE display marker must fall
+        // through to the CNT check and resync, not stall the parser.
+        QList<Frame> after;
+        FrameParser parser2;
+        parser2.setFrameCallback([&](const Frame& f) { after.append(f); });
+        parser2.feed(QByteArray::fromHex("aaaaaa6a00ff00")
+                     + QByteArray::fromHex("aaaaaa010909"));
+        report("6A without the display marker resyncs to the next real frame",
+               after.size() == 1 && static_cast<quint8>(after.at(0).data.at(0)) == 0x09);
+    }
+
     std::printf("\n%d SPE protocol test(s) failed.\n", g_failed);
     return g_failed == 0 ? 0 : 1;
 }
