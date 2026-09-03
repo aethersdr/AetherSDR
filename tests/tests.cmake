@@ -3948,6 +3948,14 @@ add_executable(hl2_tx_level_policy_test
 )
 target_include_directories(hl2_tx_level_policy_test PRIVATE src)
 add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
+# HL2 stream-free telemetry poll cadence -- pure header policy, no Qt, no socket.
+# The rule is the only part of the poller with a judgement in it; see
+# docs/architecture/hl2-stream-free-telemetry.md section 3 for the derivation.
+add_executable(hl2_telemetry_cadence_test
+    tests/hl2_telemetry_cadence_test.cpp
+)
+target_include_directories(hl2_telemetry_cadence_test PRIVATE src)
+add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
