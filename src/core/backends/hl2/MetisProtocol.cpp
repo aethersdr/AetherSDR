@@ -320,7 +320,22 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     if (pkt.size() < 11 || pkt[0] != 0xEF || pkt[1] != 0xFE)
         return std::nullopt;
     DiscoveryReply r;
-    r.streaming = (pkt[2] == 0x03);                      // 0x02 idle, 0x03 already sending
+    // 0x02 idle, 0x03 already sending. NOT only that: on the HL2 gateware at
+    // 883a338 this byte is
+    //
+    //   usopenhpsdr1.v:266
+    //   discover_data_next = usethasmi_erase_done ? 8'h03
+    //                      : (usethasmi_send_more ? 8'h04
+    //                      : (run ? 8'h03 : 8'h02));
+    //
+    // so 0x03 means "streaming" OR "a gateware flash erase just completed", and
+    // 0x04 — which nothing here decodes — means a flash write is in progress.
+    // Reading 0x03 as `streaming` is therefore a judgement, not what the byte
+    // says: an application that discovers while someone is flashing the radio
+    // will be told the radio is busy sending IQ. Harmless while nobody flashes
+    // over Ethernet, wrong the moment anybody does, and named here so the next
+    // reader does not have to re-derive it from the RTL.
+    r.streaming = (pkt[2] == 0x03);
     for (std::size_t i = 0; i < 6; ++i)
         r.mac[i] = pkt[3 + i];
     r.gatewareVersion = pkt[9];
