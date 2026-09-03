@@ -3900,6 +3900,11 @@ add_executable(hl2_tx_level_policy_test
 )
 target_include_directories(hl2_tx_level_policy_test PRIVATE src)
 add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
+add_executable(hl2_band_memory_test
+    tests/hl2_band_memory_test.cpp
+)
+target_include_directories(hl2_band_memory_test PRIVATE src)
+add_test(NAME hl2_band_memory_test COMMAND hl2_band_memory_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )

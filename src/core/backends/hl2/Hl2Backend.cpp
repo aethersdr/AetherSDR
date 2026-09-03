@@ -8,6 +8,7 @@
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -1686,11 +1687,27 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // Per-band memory (RFC #4603 PR 3): the session comes up with the start
     // band's remembered LNA. The explicit param still wins via the guard.
     m_currentBandKey = hl2::bandKeyForHz(startFreqHz);
-    if (m_haveRestoredState
-        && !request.params.contains(QStringLiteral("lnaGainDb"))) {
-        m_lnaGainDb = qBound(kLnaGainMinDb,
-                             m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
-                             kLnaGainMaxDb);
+    {
+        const bool paramPresent =
+            request.params.contains(QStringLiteral("lnaGainDb"));
+        const bool hasStored = m_lnaDbByBand.contains(m_currentBandKey);
+        const AetherSDR::hl2::ConnectLna seed = AetherSDR::hl2::connectLna(
+            m_haveRestoredState, hasStored,
+            m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
+            paramPresent,
+            request.params.value(QStringLiteral("lnaGainDb")).toInt(),
+            m_lnaDefaultDb, kLnaGainMinDb, kLnaGainMaxDb);
+        // Only take the live value when the policy actually had something to
+        // say: with no restored state and no param it returns the default,
+        // which must not stamp on a value the lines above already settled.
+        if (m_haveRestoredState || paramPresent)
+            m_lnaGainDb = seed.liveDb;
+        m_lnaSessionPin = seed.sessionPin;
+        if (m_lnaSessionPin)
+            qCInfo(lcHl2) << "HL2: lnaGainDb param pins" << m_lnaGainDb
+                          << "dB for this session;" << m_currentBandKey
+                          << "keeps its stored"
+                          << m_lnaDbByBand.value(m_currentBandKey) << "dB";
     }
     // Seed the DRIVE from the start band's memory and echo it upward NOW —
     // before linkUp — so TransmitModel carries the restored value when its
@@ -2881,6 +2898,9 @@ void Hl2Backend::setPanRfGain(const QString& panId, int gainDb)
     qCInfo(lcHl2) << "HL2 LNA gain:" << m_lnaGainDb << "dB (requested" << gainDb << ")";
 
     // The operator's gain belongs to the band they set it on (RFC #4603 PR 3).
+    // This is also what ends a session pin: the value is now the operator's
+    // own choice for this band, so the band memory is theirs to overwrite.
+    m_lnaSessionPin = false;
     if (!m_currentBandKey.isEmpty())
         m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
     notifyOperatingStateChanged();
@@ -4503,7 +4523,12 @@ void Hl2Backend::rememberCurrentBandState()
 {
     if (m_currentBandKey.isEmpty())
         return;
-    m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
+    m_lnaDbByBand.insert(
+        m_currentBandKey,
+        AetherSDR::hl2::bandMemoryWriteback(
+            m_lnaGainDb, m_lnaSessionPin,
+            m_lnaDbByBand.contains(m_currentBandKey),
+            m_lnaDbByBand.value(m_currentBandKey)));
     m_driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
 }
 
@@ -4518,6 +4543,10 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
     // review: the drive that makes 5 W on 80 m is not polite on 10 m, so a
     // band change must never carry the old band's drive along.
     rememberCurrentBandState();
+    // The pin described the START band's entry, and that entry has now been
+    // preserved past the only write that threatened it. Leaving the flag set
+    // would quietly make every later band non-recordable too.
+    m_lnaSessionPin = false;
     const QString oldBand = m_currentBandKey;
     m_currentBandKey = newBand;
 
