@@ -3188,6 +3188,16 @@ if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)
     add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
     # A missing simulator is an honest skip, never a passing TX proof.
     set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The DSP read-back against a real gateware implementation. Behind the same
+    # flag because it shares the fixture, though unlike the loopback test it
+    # never keys — every control it drives is receive-side.
+    add_executable(hl2_dsp_readback_sim_test tests/hl2_dsp_readback_sim_test.cpp)
+    target_include_directories(hl2_dsp_readback_sim_test PRIVATE src)
+    target_link_libraries(hl2_dsp_readback_sim_test
+        PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME hl2_dsp_readback_sim_test COMMAND hl2_dsp_readback_sim_test)
+    set_tests_properties(hl2_dsp_readback_sim_test PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
