@@ -18,6 +18,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -62,9 +63,10 @@ int main(int argc, char** argv)
     auto* tabs = dialog.findChild<QTabWidget*>();
     report("it has a tab widget", tabs != nullptr);
     if (tabs != nullptr) {
-        report("it has exactly two tabs", tabs->count() == 2);
+        report("it has exactly three tabs", tabs->count() == 3);
         report("first tab is Threads", tabs->tabText(0) == QLatin1String("Threads"));
-        report("second tab is Logs", tabs->tabText(1) == QLatin1String("Logs"));
+        report("second tab is Memory", tabs->tabText(1) == QLatin1String("Memory"));
+        report("third tab is Logs", tabs->tabText(2) == QLatin1String("Logs"));
     }
 
     auto* table = dialog.findChild<QTableWidget*>();
@@ -477,6 +479,81 @@ int main(int argc, char** argv)
         tailing.hide();
         QCoreApplication::processEvents();
         LogManager::instance().shutdownLogging();
+    }
+
+    // ── Memory tab (#2554 acceptance criterion 4) ──────────────────────────
+    // applyMemorySample is a slot so the tab can be driven without a collector
+    // or a worker thread. Bytes are CONSTRUCTED (routing and formatting only).
+    {
+        qRegisterMetaType<AetherSDR::MemorySample>("AetherSDR::MemorySample");
+        SystemInfoDialog memoryDialog;
+
+        auto* range = memoryDialog.findChild<QComboBox*>(QStringLiteral("systemInfoTimeframe"));
+        report("the Memory tab has a timeframe selector", range != nullptr);
+        if (range != nullptr) {
+            report("it offers the issue's four timeframes", range->count() == 4);
+            report("it defaults to 5 minutes", range->currentData().toInt() == 5 * 60);
+        }
+
+        auto* resident = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
+        auto* peak     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryPeak"));
+        auto* priv     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryPrivate"));
+        auto* virt     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryVirtual"));
+        auto* summary  = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        report("the four readouts exist",
+               resident != nullptr && peak != nullptr && priv != nullptr && virt != nullptr);
+        report("readouts start as a dash, not as zero",
+               resident != nullptr && resident->text() == QStringLiteral("\u2014"));
+
+        const auto driveMemory = [&memoryDialog](const MemorySample& sample) {
+            return QMetaObject::invokeMethod(&memoryDialog, "applyMemorySample",
+                                             Qt::DirectConnection,
+                                             Q_ARG(AetherSDR::MemorySample, sample));
+        };
+        MemorySample first;
+        first.wallMs = 1'700'000'000'000;
+        first.valid = true;
+        first.residentMetric = QStringLiteral("physicalFootprint");
+        first.residentBytes = 200ull * 1024 * 1024;
+        first.peakResidentBytes = 210ull * 1024 * 1024;
+        first.privateBytes = 150ull * 1024 * 1024;
+        first.virtualBytes = 8000ull * 1024 * 1024;
+        report("a memory sample can be driven into the dialog", driveMemory(first));
+        if (resident != nullptr) {
+            report("resident reads in MB with one decimal",
+                   resident->text() == QStringLiteral("200.0 MB"));
+            report("peak, private and virtual read from their own fields",
+                   peak->text() == QStringLiteral("210.0 MB")
+                       && priv->text() == QStringLiteral("150.0 MB")
+                       && virt->text() == QStringLiteral("8000.0 MB"));
+        }
+        report("the summary names the platform's resident metric",
+               summary != nullptr && summary->text().contains(QLatin1String("physical footprint")));
+
+        MemorySample second = first;
+        second.wallMs += 1500;
+        second.residentBytes = 180ull * 1024 * 1024;   // a chart must move DOWN as well as up
+        report("a second sample is accepted", driveMemory(second));
+        report("the readouts follow the newest sample down",
+               resident != nullptr && resident->text() == QStringLiteral("180.0 MB"));
+        report("the summary counts both samples",
+               summary != nullptr && summary->text().contains(QLatin1String("2 samples")));
+
+        if (range != nullptr) {
+            range->setCurrentIndex(3);   // 1 hour
+            report("changing the timeframe re-slices without disturbing the readouts",
+                   range->currentData().toInt() == 60 * 60
+                       && resident->text() == QStringLiteral("180.0 MB"));
+        }
+
+        // Hide/show keeps the history: the ring is dialog-lifetime (see the
+        // header comment), unlike the CPU ring that Peak clears.
+        memoryDialog.show();
+        QCoreApplication::processEvents();
+        memoryDialog.hide();
+        QCoreApplication::processEvents();
+        report("hiding the dialog keeps the memory history",
+               summary != nullptr && summary->text().contains(QLatin1String("2 samples")));
     }
 
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"

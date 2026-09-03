@@ -122,6 +122,19 @@ int main(int argc, char** argv)
         EXPECT_TRUE(pts.first().x() >= 0.0 && pts.last().x() <= 3600.0, "x stays inside the window");
     }
 
+    // 6. The line-break threshold follows the bucket: 4.5 s at raw resolution,
+    //    three buckets beyond five minutes (a fixed 4.5 s isolated every 12 s
+    //    bucket point of a one-hour view and drew nothing).
+    {
+        EXPECT_TRUE(std::fabs(MemoryHistoryRing::connectGapSecondsFor(60) - 4.5) < 1e-9, "1 min: three samples");
+        EXPECT_TRUE(std::fabs(MemoryHistoryRing::connectGapSecondsFor(5 * 60) - 4.5) < 1e-9, "5 min: three samples");
+        EXPECT_TRUE(std::fabs(MemoryHistoryRing::connectGapSecondsFor(15 * 60) - 15.0) < 1e-9, "15 min: three 5 s buckets");
+        EXPECT_TRUE(std::fabs(MemoryHistoryRing::connectGapSecondsFor(60 * 60) - 36.0) < 1e-9, "1 hour: three 12 s buckets");
+        EXPECT_TRUE(MemoryHistoryRing::connectGapSecondsFor(60 * 60)
+                        > static_cast<double>(MemoryHistoryRing::bucketMsFor(60 * 60)) / 1000.0,
+                    "the threshold always exceeds one bucket, so consecutive bucket points connect");
+    }
+
     if (g_failures) {
         std::fprintf(stderr, "memory_history_ring_test: %d failure(s)\n", g_failures);
         return 1;

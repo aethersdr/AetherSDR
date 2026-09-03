@@ -109,6 +109,17 @@ public:
         return points;
     }
 
+    // How far apart two chart points may be before the line breaks: three
+    // samples' worth at raw resolution, three buckets' worth once the range
+    // is bucketed. A fixed 4.5 s would isolate every 12 s bucket point of a
+    // one-hour view and draw nothing — the smoke that found it (2026-09-02).
+    static double connectGapSecondsFor(int rangeSeconds)
+    {
+        const qint64 stepMs = std::max<qint64>(SystemInfoCollector::kSampleIntervalMs,
+                                               bucketMsFor(rangeSeconds));
+        return 3.0 * static_cast<double>(stepMs) / 1000.0;
+    }
+
     static double megabytes(quint64 bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); }
 
     static quint64 valueOf(const MemorySample& s, Field field)

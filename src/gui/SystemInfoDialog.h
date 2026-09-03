@@ -3,6 +3,7 @@
 #include "PersistentDialog.h"
 #include "core/SystemInfo.h"
 #include "core/ThreadCpuRing.h"
+#include "MemoryHistoryRing.h"
 
 #include <QFile>
 #include <QHash>
@@ -11,6 +12,7 @@
 #include <QVector>
 
 class QCheckBox;
+class QComboBox;
 class QPushButton;
 class QHBoxLayout;
 class QLabel;
@@ -22,6 +24,7 @@ class QTimer;
 namespace AetherSDR {
 
 class SystemInfoCollector;
+class TimeSeriesGraphWidget;
 
 // Runtime diagnostics for AetherSDR itself (#2554).
 //
@@ -52,6 +55,11 @@ private slots:
     // reach.
     void applySample(const QVector<AetherSDR::ThreadCpuSample>& threads);
 
+    // The Memory tab's counterpart: one reading into the ring, the readouts
+    // and the chart refreshed from it. A slot for the same reason as
+    // applySample — a test hands it constructed samples and reads the labels.
+    void applyMemorySample(const AetherSDR::MemorySample& sample);
+
     // Acceptance criterion 3, in its minimal form: the summary line goes red
     // when a thread crosses 90 % of one core. A slot for the same reason
     // applySample is one — a test can raise the alert without a machine that
@@ -69,9 +77,12 @@ private slots:
 
 private:
     QWidget* buildThreadsTab();
+    QWidget* buildMemoryTab();
     QWidget* buildLogsTab();
 
     void applyAlertStyle();
+    void refreshMemoryChart();
+    int  selectedMemoryRangeSeconds() const;
 
     void startSampling();
     void stopSampling();
@@ -111,6 +122,19 @@ private:
     // connections compare the generation they were made under and drop what
     // no longer belongs to a live sampling run.
     quint64       m_samplingGeneration{0};
+
+    // Memory tab (#2554 acceptance criterion 4). The ring is NOT cleared when
+    // sampling stops: unlike Peak's "last 60 s", a trend chart is honest about
+    // a gap — the series break where nothing was sampled (maxConnectGapSeconds)
+    // — so history accrues for the life of the dialog while it is open.
+    MemoryHistoryRing     m_memoryRing;
+    TimeSeriesGraphWidget* m_memoryGraph{nullptr};
+    QComboBox*            m_memoryRange{nullptr};
+    QLabel*               m_memorySummary{nullptr};
+    QLabel*               m_memoryResident{nullptr};
+    QLabel*               m_memoryPeak{nullptr};
+    QLabel*               m_memoryPrivate{nullptr};
+    QLabel*               m_memoryVirtual{nullptr};
 
     // Logs tab
     QWidget*        m_logsPage{nullptr};   // parent for dynamically rebuilt filters
