@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include <QString>
+#include <QStringList>
 #include <optional>
 
 namespace AetherSDR {
@@ -219,6 +220,15 @@ public:
     // Falls back to the slice frequency while the pan is absent or its center
     // still holds the model placeholder (#3910, #3913 review).
     static long long ddsCenterHz(RadioModel* model, const SliceModel* slice);
+
+    // Extract the text from `cw_macros:<trx>,<text>` (#4997). A base-10
+    // integer first argument is always a receiver address: an in-range value
+    // is stripped and an out-of-range/stale value fails closed. A nonnumeric
+    // first argument is retained for compatibility with index-less clients.
+    // Public and pure so the boundary rule can be tested without a radio-side
+    // CW keyer; trxCount is the same dynamic count advertised to TCI clients.
+    [[nodiscard]] static QString cwMacrosTextFromArgs(const QStringList& args,
+                                                      int trxCount);
 
 private:
 

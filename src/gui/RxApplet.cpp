@@ -1,7 +1,8 @@
 #include "RxApplet.h"
-#include "core/CtcssTones.h"
+#include "gui/CtcssToneLabel.h"
 
 #include "gui/FilterStepMath.h"
+#include "gui/FmTonePresentation.h"
 #include "FilterPassbandWidget.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "FrequencyEntryParser.h"
@@ -279,16 +280,6 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
     if (mode.startsWith("FDV"))          return digSettings;  // FreeDV digital voice
     return ssbSettings;  // fallback for unknown modes
 }
-
-// ── Standard CTCSS tone table (EIA/TIA-603) ──────────────────────────────────
-
-// The tone table moved to core/CtcssTones.h so the automation bridge's
-// `slice tone` verb validates against the same set this dropdown offers
-// (#5102). Aliased rather than renamed at every use site.
-using CTCSSTone = AetherSDR::CtcssTone;
-static constexpr auto& CTCSS_TONES = AetherSDR::kCtcssTones;
-static constexpr int CTCSS_COUNT =
-    static_cast<int>(AetherSDR::kCtcssToneCount);
 
 // Small checkable button used throughout the applet.
 static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
@@ -705,9 +696,9 @@ void RxApplet::buildUI()
     {
         m_fmContainer = new QWidget;
         m_fmContainer->setVisible(false);
-        auto* fmLayout = new QVBoxLayout(m_fmContainer);
-        fmLayout->setContentsMargins(0, 0, 0, 0);
-        fmLayout->setSpacing(2);
+        m_fmLayout = new QVBoxLayout(m_fmContainer);
+        m_fmLayout->setContentsMargins(0, 0, 0, 0);
+        m_fmLayout->setSpacing(2);
 
         // Tone mode dropdown
         {
@@ -718,31 +709,24 @@ void RxApplet::buildUI()
             m_toneModeCmb->addItem("CTCSS TX", QString("ctcss_tx"));
             AetherSDR::applyComboStyle(m_toneModeCmb);
             row->addWidget(m_toneModeCmb, 1);
-            fmLayout->addLayout(row);
+            m_fmLayout->addLayout(row);
 
             connect(m_toneModeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int idx) {
                 if (m_toneModeCmb->signalsBlocked()) return;
                 const QString mode = m_toneModeCmb->itemData(idx).toString();
                 if (m_slice) m_slice->setFmToneMode(mode);
-                m_toneValueCmb->setEnabled(mode == "ctcss_tx");
             });
         }
 
         // CTCSS tone value dropdown
         {
             m_toneValueCmb = new GuardedComboBox;
-            for (int i = 0; i < CTCSS_COUNT; ++i) {
-                const auto& t = CTCSS_TONES[i];
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                const QString label = t.code > 0
-                    ? QString("%1 %2 %3").arg(t.code).arg(t.designation).arg(frequency)
-                    : frequency;
-                m_toneValueCmb->addItem(label, frequency);
-            }
-            AetherSDR::applyComboStyle(m_toneValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_toneValueCmb);
+            AetherSDR::applyComboStyle(
+                m_toneValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_toneValueCmb->setEnabled(false);  // enabled only when CTCSS TX
-            fmLayout->addWidget(m_toneValueCmb);
+            m_fmLayout->addWidget(m_toneValueCmb);
 
             connect(m_toneValueCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int idx) {
@@ -750,6 +734,60 @@ void RxApplet::buildUI()
                 if (m_slice)
                     m_slice->setFmToneValue(m_toneValueCmb->itemData(idx).toString());
             });
+
+            m_toneRxValueCmb = new GuardedComboBox;
+            AetherSDR::populateCtcssToneCombo(m_toneRxValueCmb);
+            m_toneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
+            AetherSDR::applyComboStyle(
+                m_toneRxValueCmb, AetherSDR::ctcssToneComboStyleRules());
+            m_toneRxValueCmb->setVisible(false);
+            m_fmLayout->addWidget(m_toneRxValueCmb);
+            connect(m_toneRxValueCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int idx) {
+                if (!m_toneRxValueCmb->signalsBlocked() && m_slice) {
+                    m_slice->setFmToneRxValue(m_toneRxValueCmb->itemData(idx).toString());
+                }
+            });
+
+            m_dtcsCodeCmb = new GuardedComboBox;
+            m_dtcsCodeCmb->setAccessibleName("DTCS code");
+            m_dtcsCodeCmb->setPlaceholderText("DTCS code");
+            AetherSDR::applyComboStyle(m_dtcsCodeCmb);
+            m_dtcsCodeCmb->setVisible(false);
+
+            m_dtcsPolarityCmb = new GuardedComboBox;
+            m_dtcsPolarityCmb->setAccessibleName("DTCS polarity");
+            m_dtcsPolarityCmb->setPlaceholderText("Polarity");
+            m_dtcsPolarityCmb->setCurrentIndex(-1);
+            AetherSDR::applyComboStyle(m_dtcsPolarityCmb);
+            m_dtcsPolarityCmb->setVisible(false);
+
+            m_dtcsContainer = new QWidget;
+            auto* dtcsRow = new QHBoxLayout(m_dtcsContainer);
+            dtcsRow->setContentsMargins(0, 0, 0, 0);
+            dtcsRow->setSpacing(4);
+            dtcsRow->addWidget(m_dtcsCodeCmb, 3);
+            dtcsRow->addWidget(m_dtcsPolarityCmb, 2);
+            m_dtcsContainer->setVisible(false);
+            m_fmLayout->addWidget(m_dtcsContainer);
+
+            const auto applyDtcs = [this]() {
+                if (!m_slice || m_dtcsCodeCmb->signalsBlocked()
+                    || m_dtcsPolarityCmb->signalsBlocked()
+                    || m_dtcsCodeCmb->currentIndex() < 0
+                    || m_dtcsPolarityCmb->currentIndex() < 0) {
+                    return;
+                }
+                const QString polarity = m_dtcsPolarityCmb->currentData().toString();
+                m_slice->setFmDtcs(m_dtcsCodeCmb->currentData().toInt(),
+                                   polarity.startsWith(QLatin1Char('R')),
+                                   polarity.endsWith(QLatin1Char('R')));
+            };
+            connect(m_dtcsCodeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [applyDtcs](int) { applyDtcs(); });
+            connect(m_dtcsPolarityCmb,
+                    QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [applyDtcs](int) { applyDtcs(); });
         }
 
         // Offset frequency
@@ -770,7 +808,7 @@ void RxApplet::buildUI()
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; padding: 1px 2px; }"
                 "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }");
             row->addWidget(m_offsetSpin, 1);
-            fmLayout->addLayout(row);
+            m_fmLayout->addLayout(row);
 
             connect(m_offsetSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                     this, [this](double val) {
@@ -836,7 +874,7 @@ void RxApplet::buildUI()
             m_revBtn->installEventFilter(this);
             row->addWidget(m_revBtn);
 
-            fmLayout->addLayout(row);
+            m_fmLayout->addLayout(row);
         }
 
         leftCol->addWidget(m_fmContainer);
@@ -1842,6 +1880,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool, const RadioCapabilities&) {
             configureRepeaterReverseControl();
+            configureFmToneControls();
         });
         connect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged, this,
                 [this](bool on) {
@@ -1878,6 +1917,98 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     }
     updateAntennaButtons();
     configureRepeaterReverseControl();
+    configureFmToneControls();
+}
+
+void RxApplet::configureFmToneControls()
+{
+    if (!m_toneModeCmb || !m_toneValueCmb || !m_toneRxValueCmb
+        || !m_dtcsCodeCmb || !m_dtcsPolarityCmb || !m_dtcsContainer
+        || !m_fmLayout) {
+        return;
+    }
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    const RadioCapabilities caps = connected
+        ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    const FmTonePresentation presentation = connected
+        ? caps.fmTonePresentation : FmTonePresentation::Legacy;
+    configureCtcssToneComboLabels(
+        m_toneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_toneRxValueCmb, presentation, FmToneRole::Rx);
+    const QString sliceMode = m_slice ? m_slice->mode() : QString();
+    const bool modeEligible = sliceMode == QLatin1String("FM")
+        || sliceMode == QLatin1String("NFM") || sliceMode == QLatin1String("DFM");
+    const QString selected = m_slice
+        ? m_slice->fmToneMode() : m_toneModeCmb->currentData().toString();
+    const QStringList modes = presentation == FmTonePresentation::Ctcss
+        ? caps.fmToneModes : legacyFmToneModes();
+    {
+        QSignalBlocker blocker(m_toneModeCmb);
+        m_toneModeCmb->clear();
+        for (const QString& mode : modes) {
+            m_toneModeCmb->addItem(fmToneModeDisplayLabel(mode), mode);
+        }
+        int index = m_toneModeCmb->findData(selected);
+        if (index < 0 && presentation != FmTonePresentation::Ctcss) {
+            index = m_toneModeCmb->findData(QStringLiteral("off"));
+        }
+        m_toneModeCmb->setCurrentIndex(index);
+    }
+    m_toneModeCmb->setVisible(modeEligible && presentation != FmTonePresentation::Hidden);
+    const QString mode = m_toneModeCmb->currentData().toString();
+    {
+        const int selectedCode = m_slice ? m_slice->fmDtcsCode()
+                                         : m_dtcsCodeCmb->currentData().toInt();
+        QSignalBlocker blocker(m_dtcsCodeCmb);
+        m_dtcsCodeCmb->clear();
+        const QString role = fmDtcsCodeRole(mode);
+        for (const int code : caps.fmDtcsCodes) {
+            m_dtcsCodeCmb->addItem(
+                QStringLiteral("%1: %2")
+                    .arg(role, QStringLiteral("%1").arg(code, 3, 10, QLatin1Char('0'))),
+                code);
+        }
+        const int index = m_dtcsCodeCmb->findData(selectedCode);
+        m_dtcsCodeCmb->setCurrentIndex(index);
+    }
+    const bool tx = fmToneUsesCtcssTx(mode);
+    const bool rx = fmToneUsesCtcssRx(mode);
+    const bool dtcs = fmToneUsesDtcs(mode);
+    const bool dtcsIsTx = fmToneUsesDtcsTx(mode);
+    m_fmLayout->removeWidget(m_dtcsContainer);
+    // Item 0 is always tone mode. TX occupies the next visible control slot;
+    // an RX-only DTCS row follows the fixed CTCSS TX/RX slots instead.
+    m_fmLayout->insertWidget(dtcsIsTx ? 1 : 3, m_dtcsContainer);
+    {
+        const bool txReverse = m_slice && m_slice->fmDtcsTxReverse();
+        const bool rxReverse = m_slice && m_slice->fmDtcsRxReverse();
+        const QString selectedPolarity = QStringLiteral("%1%2")
+            .arg(txReverse ? QLatin1Char('R') : QLatin1Char('N'))
+            .arg(rxReverse ? QLatin1Char('R') : QLatin1Char('N'));
+        QSignalBlocker blocker(m_dtcsPolarityCmb);
+        m_dtcsPolarityCmb->clear();
+        for (const FmDtcsPolarityChoice& choice
+             : fmDtcsPolarityChoices(mode, txReverse, rxReverse)) {
+            m_dtcsPolarityCmb->addItem(choice.label, choice.value);
+        }
+        m_dtcsPolarityCmb->setCurrentIndex(
+            m_dtcsPolarityCmb->findData(selectedPolarity));
+    }
+    m_toneValueCmb->setVisible(modeEligible && (presentation == FmTonePresentation::Legacy
+        || (presentation == FmTonePresentation::Ctcss && tx)));
+    m_toneValueCmb->setEnabled(tx);
+    m_toneRxValueCmb->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && rx);
+    m_toneRxValueCmb->setEnabled(rx);
+    m_dtcsCodeCmb->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && dtcs);
+    m_dtcsCodeCmb->setEnabled(dtcs);
+    m_dtcsPolarityCmb->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && dtcs);
+    m_dtcsPolarityCmb->setEnabled(dtcs);
+    m_dtcsContainer->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && dtcs);
 }
 
 bool RxApplet::usesTransmitFrequencyCheck() const
@@ -2461,13 +2592,13 @@ void RxApplet::connectSlice(SliceModel* s)
         QSignalBlocker b(m_toneModeCmb);
         int idx = m_toneModeCmb->findData(s->fmToneMode());
         if (idx >= 0) m_toneModeCmb->setCurrentIndex(idx);
-        m_toneValueCmb->setEnabled(s->fmToneMode() == "ctcss_tx");
+        configureFmToneControls();
     }
     connect(s, &SliceModel::fmToneModeChanged, this, [this](const QString& mode) {
         QSignalBlocker b(m_toneModeCmb);
         int idx = m_toneModeCmb->findData(mode);
         if (idx >= 0) m_toneModeCmb->setCurrentIndex(idx);
-        m_toneValueCmb->setEnabled(mode == "ctcss_tx");
+        configureFmToneControls();
     });
 
     // Tone value
@@ -2489,6 +2620,27 @@ void RxApplet::connectSlice(SliceModel* s)
             }
         }
     });
+    {
+        QSignalBlocker b(m_toneRxValueCmb);
+        const int idx = m_toneRxValueCmb->findData(s->fmToneRxValue());
+        if (idx >= 0) {
+            m_toneRxValueCmb->setCurrentIndex(idx);
+        }
+    }
+    connect(s, &SliceModel::fmToneRxValueChanged, this, [this](const QString& val) {
+        QSignalBlocker b(m_toneRxValueCmb);
+        const int idx = m_toneRxValueCmb->findData(val);
+        if (idx >= 0) {
+            m_toneRxValueCmb->setCurrentIndex(idx);
+        }
+    });
+    const auto syncDtcs = [this](int, bool, bool) {
+        // Rebuild mode-aware values from the radio echo so changing the visible
+        // polarity never overwrites the hidden direction's polarity bit.
+        configureFmToneControls();
+    };
+    syncDtcs(s->fmDtcsCode(), s->fmDtcsTxReverse(), s->fmDtcsRxReverse());
+    connect(s, &SliceModel::fmDtcsChanged, this, syncDtcs);
 
     // Repeater offset frequency
     {
@@ -2755,6 +2907,10 @@ void RxApplet::updateModeSettings(const QString& mode)
 
     // Show/hide FM vs SSB/CW controls
     m_fmContainer->setVisible(isFM);
+    // configureFmToneControls() explicitly hides individual children while a
+    // non-FM mode is active. Re-evaluate those child visibilities when the
+    // containing FM panel becomes eligible again (PR #5203 review).
+    configureFmToneControls();
     m_agcContainer->setVisible(!isFM);
     m_ritContainer->setVisible(!isFM);
     m_xitContainer->setVisible(!isFM);

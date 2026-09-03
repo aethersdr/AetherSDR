@@ -110,6 +110,21 @@ The receiver-index policy is only one half of the routing contract. Channel
    because dropping an unparseable stop would leave a keyed transmitter keyed.
    Those two fail closed rather than fail silent (Constitution VI).
 
+8. **`cw_macros` numeric receiver indexes fail closed.**
+   The spec form is `cw_macros:<trx>,<text>;`. A base-10 integer first
+   argument is always interpreted as a receiver address: an index in the
+   currently advertised `0..N-1` range is stripped before the text reaches
+   the radio, while an out-of-range, negative, or stale index drops the
+   command. It is never reinterpreted as CW text, because that would put the
+   address on the air (#4997).
+
+   A nonnumeric first argument is retained as text for compatibility with
+   clients that omit the index. This is deliberately asymmetric: an
+   index-less macro beginning with a decimal number is ambiguous on the wire,
+   so transmit safety and the documented receiver-prefixed form win. The
+   parser fails closed rather than risk either keying the address or silently
+   removing a legitimate numeric payload (Constitution VI/VII).
+
 ## Spot Click Notifications
 
 When a visible spot is clicked, AetherSDR broadcasts the click to every

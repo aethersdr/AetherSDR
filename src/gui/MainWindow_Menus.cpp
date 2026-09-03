@@ -122,6 +122,8 @@ void MainWindow::buildMenuBar()
     });
 
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
+    m_aetherControlAction = flexControlAction;
+    flexControlAction->setVisible(true); // capability-gated after connection
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
@@ -135,8 +137,14 @@ void MainWindow::buildMenuBar()
     // (MainWindow_Controllers.cpp) that offers the same deep-link from
     // inside the controller window.
     auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    m_flexControlKnobAction = flexControlKnobAction;
+    flexControlKnobAction->setVisible(true); // capability-gated after connection
     flexControlKnobAction->setMenuRole(QAction::NoRole);
     connect(flexControlKnobAction, &QAction::triggered, this, [this] {
+        if (m_radioModel.isConnected()
+            && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
+            return;
+        }
         if (RadioSetupDialog* dlg = openRadioSetupPage())
             dlg->revealFlexControlSettings();
     });
@@ -541,7 +549,7 @@ void MainWindow::buildMenuBar()
     });
     auto* multiFlexAction = settingsMenu->addAction("multiFLEX...");
     m_multiFlexAction = multiFlexAction;   // hidden by applyCapabilitiesToUi()
-                                           // on a single-client backend
+                                           // on every non-Flex family
     connect(multiFlexAction, &QAction::triggered,
             this, &MainWindow::showMultiFlexDialog);
     // m_titleBar connect deferred — see after TitleBar creation (~line 2530)
@@ -559,6 +567,10 @@ void MainWindow::buildMenuBar()
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
     // Uses QWidgetAction with QCheckBox so the menu stays open for multi-select.
     auto* tuneInhibitMenu = settingsMenu->addMenu("Inhibit during TUNE");
+    // Kept as a member so applyCapabilitiesToUi can dim it (with TX Band
+    // Settings) on backends with no Flex command plane — doctrine (#5263):
+    // dim, never hide.
+    m_tuneInhibitMenu = tuneInhibitMenu;
 
     auto& settings = AppSettings::instance();
     struct InhibitDef { const char* label; const char* key; };
@@ -1280,6 +1292,22 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
+    // Beside the other two diagnostic surfaces: Radio Health is the radio's
+    // own state, Slice Troubleshooting is one slice's path, System Info is this
+    // application's runtime (#2554).
+    // Not "System Info…", which acceptance criterion 1 in #2554 asks for:
+    // aether.sysinfo already carries the display label "System Info" in the
+    // category list next door in Help → Support (#4986), and two unrelated
+    // surfaces sharing one name is confusing in exactly the place an operator
+    // goes when they are already confused. The category shipped first, so the
+    // new arrival is the one that moves.
+    //
+    // "Runtime Monitor" rather than anything with "Diagnostics" in it: this
+    // menu already has Support & Diagnostics… one entry away, and trading one
+    // collision for a closer one is not a fix. It also stays accurate as the
+    // remaining tabs land — Overview, Memory, Painters all measure this app's
+    // own runtime, which is the scope the name claims.
+    helpMenu->addAction("Runtime Monitor...", this, [this]() { showSystemInfoDialog(); });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
             &m_radioModel, m_audio, this,

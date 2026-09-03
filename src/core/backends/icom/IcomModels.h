@@ -120,6 +120,11 @@ struct ModulationProfile {
     // 0x00 must not silently inherit this one's.
     std::uint8_t micValue = 0;
     std::span<const ModulationInputChoice> choices;
+    // Some network radios expose the level of the selected LAN modulation
+    // path separately from 14 0B (the physical microphone gain).  When true,
+    // the shared Phone level control follows that radio-owned LAN register
+    // while LAN is the active modulation source.
+    bool phoneLevelFollowsNetworkInput = false;
 };
 
 // The two PRs that motivated RFC #4984 expose different UI depths over a
@@ -249,6 +254,11 @@ struct IcomBand {
 // holes to refuse, so continuous models keep their untouched command path.
 [[nodiscard]] std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept;
 
+// Rated PA ceiling for the RF deck containing hz. Empty when the model has no
+// per-band ratings or hz is outside every documented deck.
+[[nodiscard]] std::optional<double> bandRatedPowerWatts(
+    const IcomModel& model, std::uint64_t hz) noexcept;
+
 // True when hz lies in a band this model can tune. Unknown models remain
 // permissive because they have no verified range to enforce.
 [[nodiscard]] bool supportsFrequency(const IcomModel& model,
@@ -268,12 +278,12 @@ struct IcomBand {
 // not model-dependent — see sMeterDbm().
 [[nodiscard]] double s9ReferenceFor(std::uint64_t hz) noexcept;
 
-// raw -> watts for this model's Po meter.
+// Model-owned curve for the Po meter. The output domain is declared by the
+// profile's MeterCalibrationProfile::powerConversion: normally native watts;
+// IC-9700 uniquely supplies relative percent for a below-seam derived estimate.
 //
-// EMPTY means we have no measured curve for this model, and the caller must
-// report PERCENT rather than inventing watts. That distinction is the whole
-// point: a power meter showing "50 W" derived from another radio's curve is a
-// number an operator will act on.
+// EMPTY means no evidence-backed curve exists and the caller must report the
+// generic relative indication rather than borrowing another radio's curve.
 [[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model);
 
 // The front-end stages this model offers, in register order (index 0 is OFF).
@@ -331,8 +341,29 @@ enum class IcomFeature : std::uint8_t {
     RxAntenna,
     FmRepeaterBasic,
     FmRepeaterExtended,
+    FmRepeaterExtendedReadback,
+    FmRepeaterCtcssRx,
     TxFrequencyCheck,
+    DialLock,
     CivDataRestart,
+    MemoryChannels,
+    AntennaTuner,
+};
+
+enum class MemoryDialect : std::uint8_t {
+    Ic705,
+    Ic7300Mk2,
+    Ic9700,
+};
+
+struct MemoryProfile {
+    MemoryDialect dialect;
+    int firstGroup = -1;
+    int lastGroup = -1;
+    int firstChannel = 1;
+    int lastChannel = 99;
+    bool requiresGroupSelection = false;
+    std::string_view groupColumnTitle = "Group";
 };
 
 enum class EvidenceKind : std::uint8_t {
@@ -374,8 +405,26 @@ struct RxAntennaProfile {
 };
 
 struct MeterCalibrationProfile {
+    enum class PowerConversion : std::uint8_t {
+        NativeWatts,
+        RelativePercentOfBandRating,
+    };
+
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
+    PowerConversion powerConversion = PowerConversion::NativeWatts;
+    // Opt into a forward-power face derived from this model's published
+    // txPowerMaxWatts even when it has one continuous tuning range. Keep this
+    // model-specific: a low-power face must not leak to sibling Icom profiles.
+    bool scaleForwardPowerToRatedOutput = false;
+    // UI exposure is narrower than wire decoding. Several Icom profiles have
+    // an Id calibration, but each model must be approved independently before
+    // Radio Vitals offers that instrument.
+    bool hasPaCurrentTelemetry = false;
+    // Live IC-705 and IC-7300MK2 evidence: SWR/ALC can return an isolated
+    // minimum between real keyed samples. Never lend that interpretation to a
+    // model whose own meter stream has not demonstrated it.
+    bool holdIsolatedTxMinimums = false;
     // True only after this model profile both documents and implements a PA
     // temperature meter. Kept model-specific so one Icom cannot lend an
     // unverified instrument to another merely because they share CI-V.
@@ -390,6 +439,15 @@ struct CivRecoveryProfile {
     int maxAttempts = 3;
 };
 
+// Model-owned 1A 05 register addresses for radio-authoritative network state.
+// These differ across Icom command tables and are absent from the IC-705 guide.
+struct NetworkConfigurationProfile {
+    int effectiveIpItem = -1;
+    int subnetMaskItem = -1;
+    int gatewayItem = -1;
+    int networkNameItem = -1;
+};
+
 // The immutable, backend-private capability profile from RFC #4984. IcomModel
 // remains transport/identity geometry; every command-table difference lives
 // here. Adding a radio is intentionally metadata-first and conservative: code
@@ -397,6 +455,9 @@ struct CivRecoveryProfile {
 // borrow another model's command shape or calibration.
 struct IcomModelProfile {
     bool supportedBringup = false;
+    bool hasGpsHardware = false;
+    int speechProcessorLevelMaximum = 2;
+    std::string_view speechProcessorLabel = "PROC";
     std::string_view guideRevision;
     std::span<const FeatureEvidence> features;
 
@@ -410,6 +471,8 @@ struct IcomModelProfile {
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;
     std::optional<CivRecoveryProfile> civRecovery;
+    std::optional<MemoryProfile> memory;
+    std::optional<NetworkConfigurationProfile> networkConfiguration;
     std::span<const std::string_view> preampLabels;
     std::span<const AttenStep> attenuatorSteps;
     std::span<const std::string_view> modes;

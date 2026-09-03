@@ -61,7 +61,12 @@ struct CurvePoint {
 // The IC-705's published curves. Each is documented at its definition with the
 // source it came from.
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc705();   // raw -> watts
+[[nodiscard]] std::span<const CurvePoint> powerCurveIc9700(); // raw -> relative percent
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc7300Mk2(); // raw -> watts
+// DERIVED watt estimate from a relative Po indication and the active RF deck's
+// published rating. This is not a calibrated directional power measurement.
+[[nodiscard]] double derivedPowerWatts(double relativePercent,
+                                       double bandRatedWatts);
 [[nodiscard]] std::span<const CurvePoint> swrCurve();          // raw -> SWR
 [[nodiscard]] std::span<const CurvePoint> compCurve();         // raw -> dB
 [[nodiscard]] std::span<const CurvePoint> vdCurve();           // raw -> volts
@@ -131,7 +136,7 @@ struct MeterSpec {
 enum class MeterCalibration : std::uint8_t {
     Uncalibrated,
     Ic705,
-    Ic9700Voltage,
+    Ic9700,
     Ic7300Mk2,
 };
 
@@ -171,8 +176,17 @@ public:
     void setVisible(MeterId id, bool visible);
     [[nodiscard]] bool isVisible(MeterId id) const;
 
-    void setTransmitting(bool tx) noexcept { m_transmitting = tx; }
+    void setTransmitting(bool tx) noexcept;
     [[nodiscard]] bool isTransmitting() const noexcept { return m_transmitting; }
+
+    // Icom's TX meters are polled one at a time. On the IC-705 and
+    // IC-7300MK2 an isolated 0000 reply can arrive between real SWR/ALC
+    // samples while keyed; publishing it makes the display fall toward its
+    // rest position and then jump back on the next sample. Hold that isolated
+    // minimum, but accept a sustained minimum so a real 1:1 SWR or zero ALC
+    // remains radio-authoritative.
+    [[nodiscard]] bool shouldPublish(MeterId id, int raw, std::int64_t nowMs,
+                                     bool holdIsolatedMinimums);
 
     // Which meters should be requested now. Marks each returned meter in
     // flight, so it will not be returned again until markAnswered() or the
@@ -200,6 +214,9 @@ public:
     static constexpr int kUserGuardMs = 80;
     // A lost reply must eventually be re-asked or the meter dies silently.
     static constexpr int kInFlightTimeoutMs = 1500;
+    // One complete 5 Hz TX-meter interval. The second consecutive minimum is
+    // therefore accepted; only the between-sample placeholder is suppressed.
+    static constexpr int kMinimumConfirmationMs = 200;
 
 private:
     struct State {
@@ -208,9 +225,12 @@ private:
         std::int64_t nextDueMs = 0;
         std::int64_t sentAtMs = 0;
         std::int64_t answeredAtMs = 0;
+        bool hasNonMinimumReading = false;
+        std::int64_t minimumCandidateSinceMs = -1;
     };
     [[nodiscard]] State& stateFor(MeterId id);
     [[nodiscard]] const State& stateFor(MeterId id) const;
+    void resetMinimumHolds() noexcept;
 
     std::array<State, 8> m_state{};
     bool m_transmitting = false;

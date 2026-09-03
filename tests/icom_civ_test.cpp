@@ -5,6 +5,7 @@
 // Pure protocol: no sockets, no Qt, no hardware.
 
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
 #include <cmath>
 #include <cstdio>
@@ -176,6 +177,102 @@ static void testFmRepeaterCommands()
           "100.0 Hz CTCSS decodes");
     check(!decodeRepeaterToneHz(std::array<std::uint8_t, 3>{0x01, 0x10, 0x00}),
           "invalid repeater tone prefix is rejected");
+    check(bytesAre(cmdReadRepeaterAccess(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x16, 0x5D, 0xFD}),
+          "IC-9700 extended access read is 16 5D");
+    check(decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x08}) == 0x08,
+           "documented mixed DTCS/TSQL access value decodes");
+    check(!decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x04}),
+           "reserved repeater access value is rejected");
+    const std::array<std::pair<std::uint8_t, std::string_view>, 8> accessModes{{
+        {0x00, "off"},
+        {0x01, "ctcss_tx"},
+        {0x02, "ctcss_rx"},
+        {0x03, "dtcs_txrx"},
+        {0x06, "dtcs_tx"},
+        {0x07, "ctcss_tx_dtcs_rx"},
+        {0x08, "dtcs_tx_ctcss_rx"},
+        {0x09, "ctcss_txrx"},
+    }};
+    for (const auto& [wireValue, expectedMode] : accessModes) {
+        check(repeaterAccessModeName(wireValue) == expectedMode,
+              "every documented 16 5D value keeps its radio-authoritative meaning");
+        check(repeaterAccessModeValue(expectedMode) == wireValue,
+              "every selectable repeater access mode round-trips to its wire value");
+    }
+    check(repeaterAccessModeName(0x04).empty(),
+          "reserved 16 5D value has no normalized state token");
+    check(!repeaterAccessModeValue("future_dtcs_mode"),
+          "unknown repeater access intent fails closed");
+    check(bytesAre(cmdReadRepeaterToneRegister(0xA2, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01, 0xFD}),
+          "IC-9700 RX CTCSS read is 1B 01");
+    check(bytesAre(cmdSetRepeaterToneRegister(
+                       0xA2, repeaterTone::kRxCtcss, 885),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01,
+                    0x00, 0x08, 0x85, 0xFD}),
+          "IC-9700 RX CTCSS write uses the extended 1B 01 register");
+    check(bytesAre(cmdSetRepeaterToneRegister(
+                       0xA2, repeaterTone::kDtcs, 23, true, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x02,
+                    0x10, 0x00, 0x23, 0xFD}),
+          "IC-9700 DTCS write preserves code and independent polarity");
+    for (const std::uint8_t registerId : {
+             repeaterTone::kTxCtcss, repeaterTone::kRxCtcss, repeaterTone::kDtcs}) {
+        const auto write = parseFrame(cmdSetRepeaterToneRegister(
+            0xA2, registerId, registerId == repeaterTone::kDtcs ? 23 : 885));
+        const auto confirmation = write
+            ? repeaterToneConfirmationForWrite(0xA2, *write) : std::nullopt;
+        check(confirmation
+                  && *confirmation == cmdReadRepeaterToneRegister(0xA2, registerId),
+              "every repeater tone write receives its matching radio readback");
+    }
+    const auto dtcs = decodeRepeaterToneRegister(
+        std::array<std::uint8_t, 3>{0x11, 0x00, 0x23});
+    check(dtcs && dtcs->value == 23 && dtcs->txReverse && dtcs->rxReverse,
+          "DTCS code and independent polarity bits decode");
+    check(bytesAre(cmdSetDtcsTone(0xA2, 23, true, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x02,
+                    0x10, 0x00, 0x23, 0xFD}),
+          "IC-9700 DTCS write preserves the leading zero and TX polarity");
+    check(cmdSetDtcsTone(0xA2, 1000, false, false).empty(),
+          "out-of-range DTCS code is refused before frame construction");
+    check(cmdSetDtcsTone(0xA2, 123, false, false).empty()
+              && cmdSetDtcsTone(0xA2, 888, false, false).empty(),
+          "non-standard and non-octal DTCS intent is refused by the encoder");
+    check(AetherSDR::kDtcsCodes.size() == 104
+              && AetherSDR::isCanonicalDtcsCode(23)
+              && AetherSDR::isCanonicalDtcsCode(754)
+              && !AetherSDR::isCanonicalDtcsCode(123),
+          "DTCS UI and backend share the standard 104-code vocabulary");
+    check(!decodeRepeaterToneRegister(
+              std::array<std::uint8_t, 3>{0x02, 0x00, 0x23}),
+          "reserved DTCS polarity bits are rejected");
+    check(!decodeRepeaterToneRegister(
+              std::array<std::uint8_t, 3>{0x00, 0x0A, 0x23}),
+          "non-BCD extended tone data is rejected");
+    const std::array<std::uint8_t, 5> txFrequency{
+        0x00, 0x56, 0x42, 0x48, 0x04};
+    check(decodeFreqExact(txFrequency, kFreqBytes) == 448'425'600ULL,
+          "IC-9700 transmit-frequency readback decodes at exact arity");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 4>{0x00, 0x56, 0x42, 0x48}, kFreqBytes),
+          "truncated transmit-frequency readback is rejected");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 6>{0x00, 0x56, 0x42, 0x48, 0x04, 0x00},
+              kFreqBytes),
+          "oversized transmit-frequency readback is rejected");
+    check(bytesAre(cmdSetRepeaterAccess(kIc705, 0x09),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x16, 0x5D, 0x09, 0xFD}),
+          "CTCSS TX/RX access selector write frame");
+    check(bytesAre(cmdReadRepeaterToneRegister(
+                       kIc705, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x1B, 0x01, 0xFD}),
+          "receive CTCSS tone read frame");
+    check(bytesAre(cmdSetCtcssTone(kIc705, repeaterTone::kRxCtcss, 103.5),
+                   {0xFE, 0xFE, kIc705, kControllerAddress,
+                    0x1B, 0x01, 0x00, 0x10, 0x35, 0xFD}),
+          "receive CTCSS tone write frame");
 }
 
 static void testReassembler()
@@ -353,6 +450,9 @@ static void testCommands()
     check(bytesAre(cmdReadTransmitFrequencyCheck(0xA2),
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x02, 0xFD}),
           "IC-9700 XFC read is 1C 02 with no payload");
+    check(bytesAre(cmdReadTransmitFrequency(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x03, 0xFD}),
+          "IC-9700 transmit-frequency read is 1C 03");
     check(bytesAre(cmdReadMeter(kIc705, meter::kSMeter),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x02, 0xFD}),
           "S-meter read is 15 02");
@@ -428,6 +528,13 @@ static void testCommands()
     check(bytesAre(cmdWriteSetting(0xB6, 84, 0x00),
                    {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x00, 0xFD}),
           "IC-7300MK2 PC Audio off restores MIC without touching DATA MOD 0085");
+    check(bytesAre(cmdReadSetting(0xA2, 114),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14, 0xFD}),
+          "IC-9700 LAN MOD level read is SET 0114");
+    check(bytesAre(cmdWriteSettingLevel(0xA2, 114, 26),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14,
+                    0x00, 0x26, 0xFD}),
+          "IC-9700 LAN MOD 10% writes the documented two-byte 0026 level");
 }
 
 // DATA mode — command 26.
@@ -671,6 +778,37 @@ static void testTwinPbt()
     check(cw.lowHz == -250 && cw.highHz == 250, "500 Hz CW is +/-250 about the tone");
 }
 
+static void testNetworkSettingDecoding()
+{
+    const std::array<std::uint8_t, 8> address{
+        0x01, 0x92, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    const auto decoded = decodeNetworkAddress(address);
+    check(decoded && *decoded == std::array<std::uint8_t, 4>{192, 168, 1, 42},
+          "SET-menu BCD network address decodes four decimal octets");
+    const auto mask = subnetMaskFromBcdPrefix(0x24);
+    check(mask && *mask == std::array<std::uint8_t, 4>{255, 255, 255, 0},
+          "SET-menu /24 prefix decodes to 255.255.255.0");
+
+    const std::array<std::uint8_t, 8> outOfRange{
+        0x02, 0x99, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    const std::array<std::uint8_t, 8> malformedBcd{
+        0x01, 0x9a, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    check(!decodeNetworkAddress(outOfRange),
+          "SET-menu network octets above 255 are rejected");
+    check(!decodeNetworkAddress(malformedBcd),
+          "SET-menu network values with non-BCD nibbles are rejected");
+    check(!subnetMaskFromBcdPrefix(0x00) && !subnetMaskFromBcdPrefix(0x31),
+          "SET-menu subnet prefixes outside the documented /1-/30 range are rejected");
+    const std::array<std::uint8_t, 9> networkName{
+        'S', 'h', 'a', 'c', 'k', 'R', 'a', 'd', 'i'};
+    const auto decodedName = decodeNetworkName(networkName);
+    check(decodedName && *decodedName == "ShackRadi",
+          "SET-menu Network Name decodes bounded printable ASCII");
+    const std::array<std::uint8_t, 2> invalidName{'A', 0x1f};
+    check(!decodeNetworkName(invalidName),
+          "SET-menu Network Name rejects control characters");
+}
+
 int main()
 {
     testFilterWidth();
@@ -683,6 +821,7 @@ int main()
     testCommands();
     testDataMode();
     testSubcommandPredicate();
+    testNetworkSettingDecoding();
 
     if (g_failures == 0)
         std::printf("icom_civ_test: all checks passed\n");

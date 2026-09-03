@@ -872,18 +872,6 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
     return v.data();
 }
 
-const char* wfSchemeName(WfColorScheme scheme)
-{
-    switch (scheme) {
-    case WfColorScheme::Grayscale: return "Grayscale";
-    case WfColorScheme::BlueGreen: return "Blue-Green";
-    case WfColorScheme::Fire:      return "Fire";
-    case WfColorScheme::Plasma:    return "Plasma";
-    case WfColorScheme::Purple:    return "Purple";
-    default:                       return "Default";
-    }
-}
-
 // Interpolate a normalized value t (0–1) through the given gradient stops.
 static QRgb interpolateGradient(float t, const WfGradientStop* stops, int n)
 {
@@ -2450,6 +2438,16 @@ QString SpectrumWidget::settingsKey(const QString& base) const
     return QString("%1_%2").arg(base).arg(m_panIndex);
 }
 
+void SpectrumWidget::setPanIndex(int idx)
+{
+    m_panIndex = idx;
+    // Let the overlay menu (the +RX/+TNF/Band/ANT/Display/Memory/DAX button
+    // rail) key its persisted collapsed/expanded state to this slot.
+    if (m_overlayMenu) {
+        m_overlayMenu->setPanSlotIndex(idx);
+    }
+}
+
 void SpectrumWidget::loadSettings()
 {
     auto& s = AppSettings::instance();
@@ -2741,6 +2739,9 @@ void SpectrumWidget::applyActiveVfoZOrder()
 
 void SpectrumWidget::setBandPlanManager(BandPlanManager* mgr) {
     m_bandPlanMgr = mgr;
+    if (m_overlayMenu) {
+        m_overlayMenu->setBandPlanManager(mgr);
+    }
     if (mgr) {
         connect(mgr, &BandPlanManager::planChanged, this, QOverload<>::of(&QWidget::update));
         connect(mgr, &BandPlanManager::kiwiDxSpotsChanged, this, [this]() {
@@ -13930,6 +13931,44 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
 
+            // Cosmetic fade over the outer margin of the spectrum trace and
+            // waterfall, toward the canvas background -- see
+            // setPanEdgeTaperEnabled()'s own comment for why this is drawn
+            // here (a pixel-only overlay, on top of everything below it)
+            // rather than as a bin crop. Drawn first in this layer so the
+            // freq scale, WNB/RF-gain indicators, etc. below still paint on
+            // top of it unaffected. Only the CONTENT width (excluding the
+            // dBm strip, which isn't spectrum data) is faded.
+            if (m_edgeTaperEnabled) {
+                // 0.05 (5% margin per side) -- the same proportion the
+                // now-reverted bin-crop attempt used, which the operator
+                // already confirmed looked good on the bench. A later,
+                // untested guess that HALVING it (2.5%) would look gentler
+                // was wrong -- the same opacity swing over half the pixel
+                // distance is a STEEPER ramp, which read as a harder visible
+                // edge, not a softer one. Back to the confirmed value.
+                static constexpr double kEdgeTaperFraction = 0.05;
+                const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
+                QColor bgOpaque = bg; bgOpaque.setAlpha(255);
+                QColor bgClear = bg; bgClear.setAlpha(0);
+                auto paintTaperedEdges = [&](const QRect& area, int contentW) {
+                    const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
+                    if (marginPx <= 0) return;
+                    QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
+                    left.setColorAt(0.0, bgOpaque);
+                    left.setColorAt(1.0, bgClear);
+                    p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
+                    const int rightContentEdge = area.left() + contentW;
+                    QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
+                    right.setColorAt(0.0, bgClear);
+                    right.setColorAt(1.0, bgOpaque);
+                    p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
+                              right);
+                };
+                paintTaperedEdges(specRect, specContentW);
+                paintTaperedEdges(wfRect, wfContentW);
+            }
+
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
@@ -15071,6 +15110,40 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     drawFreqScale(p, scaleRect);
     p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
     drawWaterfall(p, wfContentRect);
+
+    // Cosmetic fade over the outer margin of the spectrum trace and
+    // waterfall, toward the canvas background -- software-path mirror of
+    // renderGpuFrame()'s own overlay taper (see setPanEdgeTaperEnabled()'s
+    // own comment for why this exists and isn't a bin crop). Drawn here,
+    // after both content regions are fully painted but before the VFO
+    // flags/TNF/spot markers/SWR overlay below, so those stay fully
+    // visible on top of it, same ordering as the GPU path.
+    if (m_edgeTaperEnabled) {
+        // 0.05 (5% margin per side) -- see renderGpuFrame()'s own comment
+        // for why this exact fraction, and why guessing a gentler-looking
+        // smaller value was wrong.
+        static constexpr double kEdgeTaperFraction = 0.05;
+        const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
+        QColor bgOpaque = bg; bgOpaque.setAlpha(255);
+        QColor bgClear = bg; bgClear.setAlpha(0);
+        auto paintTaperedEdges = [&](const QRect& area, int contentW) {
+            const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
+            if (marginPx <= 0) return;
+            QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
+            left.setColorAt(0.0, bgOpaque);
+            left.setColorAt(1.0, bgClear);
+            p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
+            const int rightContentEdge = area.left() + contentW;
+            QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
+            right.setColorAt(0.0, bgClear);
+            right.setColorAt(1.0, bgOpaque);
+            p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
+                      right);
+        };
+        paintTaperedEdges(specRect, specContentRect.width());
+        paintTaperedEdges(wfRect, wfContentRect.width());
+    }
+
     repositionVfoFlags(specRect);
     if (is3D && m_threeDSliceDepth) {
         drawDssDepthGeometry(

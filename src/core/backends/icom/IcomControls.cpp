@@ -1,8 +1,21 @@
 #include "core/backends/icom/IcomControls.h"
 
+#include <algorithm>
 #include <array>
 
 namespace AetherSDR::icom {
+
+int speechProcessorRawLevel(int maximum, int level) noexcept
+{
+    const int bounded = std::clamp(level, 0, maximum);
+    if (maximum > 2) {
+        return (bounded * 255 + 99) / 100;
+    }
+    static constexpr std::array<int, 3> kProcLevels{3, 6, 9};
+    return kProcLevels[static_cast<std::size_t>(
+        std::clamp(bounded, 0, 2))] * 255 / 10;
+}
+
 namespace {
 
 // EVERY CI-V MESSAGE THIS BACKEND NAMES, wired or not.
@@ -116,6 +129,34 @@ constexpr std::array kSpecs = {
                 "Three big-endian BCD bytes in tenths of a hertz. This is the "
                 "tone parameter; 16 42 is the independent enable.",
                 IcomFeature::FmRepeaterBasic},
+    ControlSpec{"repeater.tone.rx", 0x1B, 0x01, true,
+                "Receive CTCSS frequency",
+                Plane::Slice, Encoding::Bcd6, Wiring::DecodeOnly,
+                0, 2999, "Hz", 0, 299,
+                "", "", true,
+                "IC-9700 extended readback only. Three BCD bytes in tenths of "
+                "a hertz; the reserved polarity byte must be zero.",
+                IcomFeature::FmRepeaterExtendedReadback},
+    ControlSpec{"repeater.dtcs", 0x1B, 0x02, true,
+                "DTCS code and polarity",
+                Plane::Slice, Encoding::Dtcs, Wiring::Both,
+                0, 999, "code", 0, 999,
+                "setSliceFmDtcs", "vfoFmToneContainer", true,
+                "IC-9700 extended control. Payload bit 4 is TX reverse "
+                "and bit 0 is RX reverse; all other polarity bits are rejected.",
+                IcomFeature::FmRepeaterExtendedReadback},
+    ControlSpec{"repeater.access.ctcss", 0x16, 0x5D, true,
+                "FM repeater access mode", Plane::Slice, Encoding::Enum, Wiring::Both,
+                0, 9, "enum", 0, 7, "setSliceFmToneMode", "vfoFmToneContainer", true,
+                "IC-9700 exposes the complete documented CTCSS, DTCS, and mixed "
+                "access vocabulary through the capability-gated FM tone UI.",
+                IcomFeature::FmRepeaterCtcssRx},
+    ControlSpec{"repeater.tone.rx", 0x1B, 0x01, true,
+                "Receive CTCSS frequency", Plane::Slice, Encoding::Bcd6, Wiring::Both,
+                0, 2999, "Hz", 0, 299, "setSliceFmToneRxValue", "vfoFmToneContainer", true,
+                "Three big-endian BCD bytes in tenths of a hertz. The wire encoding "
+                "spans 000.0-299.9; IC-9700 writes accept only the canonical CTCSS list.",
+                IcomFeature::FmRepeaterCtcssRx},
 
     // ---- Levels (0x14) --------------------------------------------------
     ControlSpec{"af.gain", 0x14, 0x01, true, "AF gain",
@@ -156,7 +197,10 @@ constexpr std::array kSpecs = {
     ControlSpec{"mic.gain", 0x14, 0x0B, true, "Mic gain",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
-                "setMicGain", "phoneMicSlider", true, ""},
+                "setMicGain", "phoneMicSlider", true,
+                "MODEL-CONDITIONAL: normally physical MIC gain 14 0B; on the "
+                "IC-9700 while LAN is the active MOD input, the same normalized "
+                "Phone control reads and writes model-owned SET 0114."},
     ControlSpec{"cw.speed", 0x14, 0x0C, true, "Keyer speed",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "wpm", 6, 48,
@@ -220,6 +264,14 @@ constexpr std::array kSpecs = {
                 "CTCSS transmit tone only. Written last during memory recall "
                 "because an IC-705 frequency change can clear the enable.",
                 IcomFeature::FmRepeaterBasic},
+    ControlSpec{"repeater.access", 0x16, 0x5D, true,
+                "FM repeater access selector",
+                Plane::Slice, Encoding::Enum, Wiring::DecodeOnly,
+                0, 9, "mode", 0, 9,
+                "", "", true,
+                "IC-9700 extended readback only. Values 00/01/02/03/06/07/08/09 "
+                "map to the active model profile's normalized access modes.",
+                IcomFeature::FmRepeaterExtendedReadback},
     ControlSpec{"comp", 0x16, 0x44, true, "Speech compressor",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -255,9 +307,12 @@ constexpr std::array kSpecs = {
                 0, 1, "on/off", 0, 1,
                 "setSliceManualNotch", "dspMNBtn", true, ""},
     ControlSpec{"dial.lock", 0x16, 0x50, true, "Dial lock",
-                Plane::Radio, Encoding::OnOff, Wiring::Declared,
+                Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used."},
+                "setRadioDialLock", "sliceLockButtons", true,
+                "IC-705, IC-7300MK2, and IC-9700 profile-gated; radio-global "
+                "readback is mirrored to every slice lock surface.",
+                IcomFeature::DialLock},
     ControlSpec{"notch.width", 0x16, 0x57, true, "Manual notch width",
                 Plane::Slice, Encoding::Enum, Wiring::Declared,
                 0, 2, "step", 0, 2,
@@ -298,9 +353,10 @@ constexpr std::array kSpecs = {
                 "setAtu", "txAtuBtn", true,
                 "NOT a tune carrier — it runs the model's internal or external "
                 "antenna-tuner matching cycle and it KEYS. There is no universal "
-                "attachment query, so capabilities().hasTuner follows canTransmit and the "
-                "button is honest about the OUTCOME (00 none / 01 matched / 02 "
-                "tuning) rather than about the hardware."},
+                "attachment query, so only exact model profiles with documented tuner "
+                "paths publish capabilities().hasTuner and send this command. The "
+                "shared button remains visible but unavailable otherwise.",
+                IcomFeature::AntennaTuner},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
                 Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -311,6 +367,14 @@ constexpr std::array kSpecs = {
                 "polled so front-panel XFC updates both repeater-control surfaces. "
                 "Excluded from scrub because asserting it changes the receive "
                 "frequency during the check.", IcomFeature::TxFrequencyCheck},
+    ControlSpec{"repeater.tx.frequency", 0x1C, 0x03, true,
+                "Transmit frequency readback",
+                Plane::Slice, Encoding::BcdFreq, Wiring::DecodeOnly,
+                0, 0, "Hz", 0, 0,
+                "", "", true,
+                "IC-9700 extended readback only. Refreshed on confirmed PTT "
+                "edges; it does not alter the shared RX frequency presentation.",
+                IcomFeature::FmRepeaterExtendedReadback},
 
     // ---- RIT / XIT (0x21) ------------------------------------------------
     ControlSpec{"rit.offset", 0x21, 0x00, true, "RIT / XIT offset",
@@ -455,6 +519,7 @@ std::string_view encodingName(Encoding e)
     case Encoding::ModeFilter: return "mode+filter";
     case Encoding::Bcd4:       return "bcd4";
     case Encoding::Bcd6:       return "bcd6";
+    case Encoding::Dtcs:       return "dtcs";
     }
     return "?";
 }

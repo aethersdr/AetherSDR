@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.8.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,6 +63,7 @@ option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cp
 option(ASR_USE_PREBUILT_WHISPER_GPU
     "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
+option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -135,6 +136,8 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
+    OpenGL
+    OpenGLWidgets
     Network
     Multimedia
     Test
@@ -620,8 +623,16 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
+    src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
+    src/core/backends/anan/P2Client.cpp      # aetherd ANAN P2 Phase 1b (UDP wire + DDC0 ingest)
+    src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)
+    src/core/backends/anan/AnanSpectrum.cpp  # aetherd ANAN P2 Phase 1b (FFT panadapter, FFTW)
+    src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
+    src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
+    src/core/backends/icom/IcomMemoryCodec.cpp # profile-gated Icom radio memories (1A 00)
     src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
     src/core/backends/icom/IcomSession.cpp   # IcomCIV Phase 0 (handshake orchestration)
     src/core/backends/icom/IcomScope.cpp     # IcomCIV Phase 2 (0x27 waveform -> panadapter)
@@ -688,6 +699,7 @@ set(CORE_SOURCES
     src/core/AetherClockEngine.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -734,6 +746,8 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/LpMeterProtocol.cpp
+    src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -771,6 +785,9 @@ set(CORE_SOURCES
     src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
+    src/core/SystemInfo.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/ThreadName.cpp
     src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
@@ -857,6 +874,7 @@ set(MODEL_SOURCES
     src/models/BandPlanManager.cpp
     src/models/XvtrPolicy.cpp
     src/models/AntennaGeniusModel.cpp
+    src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
 )
 
@@ -885,6 +903,8 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
@@ -915,6 +935,7 @@ set(GUI_SOURCES
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
+    src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
@@ -948,6 +969,7 @@ set(GUI_SOURCES
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
     src/gui/VkampApplet.cpp
+    src/gui/LpMeterApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1065,6 +1087,7 @@ set(GUI_SOURCES
     src/gui/PhaseKnob.cpp
     src/gui/AntennaGeniusApplet.cpp
     src/gui/ShackSwitchApplet.cpp
+    src/gui/GreenHeronApplet.cpp
     src/gui/TitleBar.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
@@ -1986,6 +2009,8 @@ target_link_libraries(aethercore PUBLIC
 
 target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
@@ -2243,11 +2268,73 @@ else()
         endif()
     endif()
 endif()
+
+# RTL-SDR hardware backend — IRadioBackend implementor (family "rtl")
+if(PkgConfig_FOUND)
+    pkg_check_modules(RTLSDR IMPORTED_TARGET librtlsdr)
+    pkg_check_modules(RTL_FFTW3F IMPORTED_TARGET fftw3f)
+endif()
+
+# vcpkg / Homebrew / hand-built installs ship no .pc file. Fall back to a
+# plain header+library probe so the switch below is reachable on every
+# platform, not only the pkg-config ones.
+if(ENABLE_RTL AND NOT RTLSDR_FOUND)
+    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h)
+    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr)
+    if(RTLSDR_INCLUDE_DIR AND RTLSDR_LIBRARY)
+        add_library(RtlSdr::RtlSdr UNKNOWN IMPORTED)
+        set_target_properties(RtlSdr::RtlSdr PROPERTIES
+            IMPORTED_LOCATION "${RTLSDR_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${RTLSDR_INCLUDE_DIR}")
+        set(RTLSDR_FOUND TRUE)
+        set(RTLSDR_TARGET RtlSdr::RtlSdr)
+    endif()
+else()
+    set(RTLSDR_TARGET PkgConfig::RTLSDR)
+endif()
+
+if(ENABLE_RTL AND NOT RTL_FFTW3F_FOUND)
+    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h)
+    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3)
+    if(RTL_FFTW3F_INCLUDE_DIR AND RTL_FFTW3F_LIBRARY)
+        add_library(RtlFftw3f::RtlFftw3f UNKNOWN IMPORTED)
+        set_target_properties(RtlFftw3f::RtlFftw3f PROPERTIES
+            IMPORTED_LOCATION "${RTL_FFTW3F_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${RTL_FFTW3F_INCLUDE_DIR}")
+        set(RTL_FFTW3F_FOUND TRUE)
+        set(RTL_FFTW3F_TARGET RtlFftw3f::RtlFftw3f)
+    endif()
+else()
+    set(RTL_FFTW3F_TARGET PkgConfig::RTL_FFTW3F)
+endif()
+
+if(NOT ENABLE_RTL)
+    message(STATUS "RTL-SDR ... disabled by ENABLE_RTL=OFF")
+elseif(RTLSDR_FOUND AND RTL_FFTW3F_FOUND)
+    message(STATUS "RTL-SDR ... found with fftw3f — RtlSdrBackend enabled")
+    set(AETHER_BACKEND_RTL ON)
+    target_compile_definitions(aethercore PUBLIC AETHER_BACKEND_RTL)
+    target_link_libraries(aethercore PRIVATE ${RTLSDR_TARGET} ${RTL_FFTW3F_TARGET})
+    target_sources(aethercore PRIVATE
+        src/core/backends/rtl/RtlSdrBackend.cpp
+        src/core/backends/rtl/RtlSdrBackend.h
+        src/core/backends/rtl/RtlSdrWorker.cpp
+        src/core/backends/rtl/RtlSdrWorker.h
+        src/core/backends/rtl/RtlSdrDdc.cpp
+        src/core/backends/rtl/RtlSdrDdc.h)
+elseif(RTLSDR_FOUND AND NOT RTL_FFTW3F_FOUND)
+    message(STATUS "RTL-SDR ... disabled — librtlsdr found but fftw3f missing. Install fftw3f (e.g. libfftw3-dev), or configure with -DENABLE_RTL=OFF.")
+else()
+    message(STATUS "RTL-SDR ... disabled — librtlsdr not found")
+endif()
+
 # Ulanzi Dial backend — one per platform.  All three implementations
 # expose the same Qt signal contract (see UlanziDialBackend.h); the
 # mapper dialog and MainWindow dispatcher are unchanged across
 # platforms.  See #3232 for the design.
 target_sources(aethercore PRIVATE
+    src/core/RtlSdrDiscovery.cpp    # RTL-SDR discovery — compiled unconditionally, stubbed internally when librtlsdr absent
+    src/core/RtlSdrDiscovery.h
     src/core/UlanziDialBackend.h    # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
     src/core/UlanziChordDecoder.cpp # chord decode shared by all three backends (ulanzi_chord_decoder_test)
     src/core/UlanziChordDecoder.h
@@ -2838,6 +2925,11 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    if(LINUX AND AETHER_BACKEND_RTL)
+        install(FILES packaging/linux/70-rtl-sdr.rules
+            DESTINATION lib/udev/rules.d
+        )
     endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications

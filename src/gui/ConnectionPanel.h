@@ -23,6 +23,7 @@
 class QVBoxLayout;
 class QScreen;
 class QScrollArea;
+class QSpinBox;
 
 namespace AetherSDR {
 
@@ -60,11 +61,18 @@ public:
     // we probe exactly that one. Values match RadioInfo::family.
     static constexpr const char* kFamilyFlex = "flex";
     static constexpr const char* kFamilyHl2  = "hl2";
+    // ANAN-G2 (openHPSDR Protocol 2, UDP/1024 discovery — same port number
+    // as HL2's Protocol 1, different wire format entirely). Probeable
+    // anonymously like HL2, no credentials needed.
+    static constexpr const char* kFamilyAnan = "anan";
     // Icom networked radios (IC-705 over WiFi, IC-7300MK2 over Ethernet, …).
     // Unlike the other two this family cannot be probed anonymously: the RS-BA1
     // handshake needs a username and password before the radio will answer with
     // anything useful, which is why the manual page grows credential fields.
     static constexpr const char* kFamilyIcom = "icom";
+    // RTL-SDR USB dongles (RTL2832U / R820T). USB-addressed (device index +
+    // serial), not network. Receive-only (Principle VI).
+    static constexpr const char* kFamilyRtl  = "rtl";
 
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;
@@ -182,6 +190,17 @@ private:
         NotAttempted,  // never got to ask — bind, resolve or send failed; reported here
     };
     Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
+    // Directed (unicast) openHPSDR Protocol 2 discovery against one host.
+    // Same three-outcome shape as Hl2ProbeResult and for the same reason —
+    // a separate enum rather than reusing Hl2ProbeResult, since an
+    // HL2-named type returned by an ANAN probe would read as a copy-paste
+    // mistake even though the values are identical.
+    enum class AnanProbeResult {
+        Answered,      // an ANAN-G2 replied; connect or refusal already reported
+        NoAnswer,      // nothing replied within the deadline; caller owns the message
+        NotAttempted,  // never got to ask — bind, resolve or send failed; reported here
+    };
+    AnanProbeResult probeAnan(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
     void resetManualConnectButton();
     // Re-activate the body layout after a page change. The overlap this used to
@@ -197,7 +216,8 @@ private:
     QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
-                           const QHostAddress& lastSuccessfulLocalIp);
+                           const QHostAddress& lastSuccessfulLocalIp,
+                           quint16 icomBasePort = 0);
     void saveLowBandwidthPreference(bool enabled);
     void setManualMessage(const QString& text, bool error = false);
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
@@ -253,6 +273,8 @@ private:
     // orphan labels behind.
     QWidget*     m_manualIcomUserRow{nullptr};
     QWidget*     m_manualIcomPassRow{nullptr};
+    QWidget*     m_manualIcomPortRow{nullptr};
+    QWidget*     m_manualIcomPortCustomRow{nullptr};
     QWidget*     m_manualIcomCivRow{nullptr};
     // The hex entry's own row, shown only for "Custom...". Separate from the
     // combo's row so the two can be hidden independently — the label column is
@@ -261,6 +283,8 @@ private:
     QWidget*     m_manualIcomCivCustomRow{nullptr};
     QLineEdit*   m_manualIcomUserEdit{nullptr};
     QLineEdit*   m_manualIcomPassEdit{nullptr};
+    QComboBox*   m_manualIcomPortCombo{nullptr};
+    QSpinBox*    m_manualIcomBasePortSpin{nullptr};
     // The model chooser. Non-editable: it enumerates a known set with an escape
     // hatch, which is populateSerialPortCombo's job, not m_manualIpCombo's
     // recent-values history.
@@ -268,6 +292,25 @@ private:
     QLineEdit*   m_manualIcomCivEdit{nullptr};
     void         populateIcomCivCombo();
     void         syncIcomCivCustomRow();
+    void         syncIcomPortCustomRow();
+    quint16      selectedIcomBasePort() const;
+    // ANAN-G2 connect-time settings. Shown only for family "anan" -- the row
+    // containers are held (matching the Icom rows above) so each hides as a
+    // unit. Selections persist via AnanSettings (Principle V) and reach the
+    // backend through populateFamilyParams() the same way Icom's CI-V
+    // address does, not through RadioInfo -- see that function's own comment.
+    QWidget*     m_manualAnanRateRow{nullptr};
+    QComboBox*   m_manualAnanRateCombo{nullptr};
+    QWidget*     m_manualAnanAdcRow{nullptr};
+    QComboBox*   m_manualAnanAdcCombo{nullptr};
+    QWidget*     m_manualAnanDitherRow{nullptr};
+    QCheckBox*   m_manualAnanDitherCheck{nullptr};
+    QWidget*     m_manualAnanRandomRow{nullptr};
+    QCheckBox*   m_manualAnanRandomCheck{nullptr};
+    QWidget*     m_manualAnanBypassAdc0Row{nullptr};
+    QCheckBox*   m_manualAnanBypassAdc0Check{nullptr};
+    QWidget*     m_manualAnanBypassAdc1Row{nullptr};
+    QCheckBox*   m_manualAnanBypassAdc1Check{nullptr};
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.
@@ -278,6 +321,7 @@ private:
     QString      m_pendingIcomPassword;
     QString      m_pendingIcomHost;
     QString      m_pendingIcomResolvedHost;
+    quint16      m_pendingIcomBasePort{0};
     RadioBindSettings m_pendingIcomBindSettings;
     QHostAddress m_pendingIcomSessionBindAddress;
     QLineEdit*   m_manualIpEdit{nullptr};

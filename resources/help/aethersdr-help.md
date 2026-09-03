@@ -93,6 +93,7 @@ This menu gives you both offline guidance and troubleshooting tools.
 - `Configuring Data Modes...`
 - `Contributing to AetherSDR...`
 - `Support...`
+- `Runtime Monitor...`
 - `Slice Troubleshooting...`
 - `What's New...`
 - `About AetherSDR`

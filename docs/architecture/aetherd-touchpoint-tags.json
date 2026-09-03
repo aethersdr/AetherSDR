@@ -239,6 +239,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/GreenHeronProtocol.h": {
+  "tag": "peripheral(greenheron)",
+  "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol \u2014 the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/HidEncoderManager.h": {
   "tag": "ui-support",
   "note": "USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state",
@@ -284,6 +290,12 @@
  "core/LogManager.h": {
   "tag": "ui-support",
   "note": "App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/LpMeterConnection.h": {
+  "tag": "peripheral(lp100a)",
+  "note": "Direct serial/ser2net client for the TelePost LP-100A digital vector RF wattmeter — a standalone RS-232 instrument with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Poll-only (the meter never pushes), and the transport is commonly shared with other polling clients, so the poll loop is gated rather than free-running. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/lp-100a-wattmeter-design.md.",
   "split": "",
   "confidence": "high"
  },
@@ -541,7 +553,7 @@
  },
  "core/SpotCommandPolicy.h": {
   "tag": "ui-support",
-  "note": "Settings-backed passive-spots toggle gating whether client emits spot-add cmds; pure AppSettings policy, no radio state",
+  "note": "Passive-spots policy gates spot-add commands from both the operator toggle and a backend-declared client-side fallback; no radio state",
   "split": "",
   "confidence": "medium"
  },
@@ -788,6 +800,12 @@
  "models/FlexWaveformModel.h": {
   "tag": "vendor(flex)",
   "note": "FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/GreenHeronModel.h": {
+  "tag": "peripheral(greenheron)",
+  "note": "Green Heron \"Everyware\" client \u2014 antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
   "split": "",
   "confidence": "high"
  },

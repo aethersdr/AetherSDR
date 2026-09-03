@@ -47,6 +47,7 @@ enum class Encoding : std::uint8_t {
     ModeFilter,  // mode byte + filter slot byte
     Bcd4,        // four BCD digits (a scope span, a SET-menu item)
     Bcd6,        // six BCD digits (repeater offset / CTCSS frequency)
+    Dtcs,        // polarity byte + three displayed BCD code digits
 };
 
 // Which model the value belongs to once it is across the seam. Says where to
@@ -124,6 +125,7 @@ struct ControlSpec {
 [[nodiscard]] bool controlSupported(const IcomModel& model,
                                     const IcomModelProfile& profile,
                                     const ControlSpec& spec) noexcept;
+[[nodiscard]] int speechProcessorRawLevel(int maximum, int level) noexcept;
 
 [[nodiscard]] std::string_view encodingName(Encoding e);
 [[nodiscard]] std::string_view planeName(Plane p);
