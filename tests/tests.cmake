@@ -827,8 +827,9 @@ add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
 
 # #5384: the controller-side AGC-T surfaces (parameter registry, FlexControl /
 # TMate2 wheel, keyboard steps) must follow the slice's AGC mode to
-# agc_off_level, as the GUI slider has since #1183. AgcTKnob against a real
-# SliceModel; no socket, no radio.
+# agc_off_level, as the GUI slider has since #1183. The decision lives on
+# SliceModel (agcTKnob* members), pinned against a real SliceModel; no socket,
+# no radio.
 add_executable(agc_t_control_test
     tests/agc_t_control_test.cpp
     src/models/SliceModel.cpp

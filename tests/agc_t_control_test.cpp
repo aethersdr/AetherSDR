@@ -2,14 +2,13 @@
 // Ulanzi parameter registry, the FlexControl/TMate2 wheel funnel, the keyboard
 // steps) must follow the slice's AGC mode: agc_off_level while AGC is off,
 // agc_threshold otherwise -- the split the GUI slider has honoured since #1183.
-// AgcTKnob (src/core/AgcTKnob.h) owns that decision; this pins it against a
-// real SliceModel. Pure model + header helper: no socket, no radio.
+// SliceModel's agcTKnob* members own that decision; this pins them against a
+// real SliceModel. Pure model: no socket, no radio.
 //
-// Mode strings are the wire values SliceModel compares against ("off" /
-// "slow" / "med" / "fast" -- SliceModel.h receiveAgcMode(), the agc_cycle
-// shortcut). Threshold / off-level numbers are CONSTRUCTED: they exercise
+// Mode strings are the wire vocabulary ("off" / "slow" / "med" / "fast" --
+// the docs/agc-t-calibration-design.md property table, and what RxApplet /
+// VfoWidget / the agc_cycle shortcut compare against). Threshold / off-level numbers are CONSTRUCTED: they exercise
 // routing only and stand for no captured radio state.
-#include "core/AgcTKnob.h"
 #include "core/KiwiSdrProtocol.h"
 #include "core/backends/SliceDelta.h"
 #include "models/SliceModel.h"
@@ -71,17 +70,17 @@ int main(int argc, char** argv)
         }));
         QSignalSpy cmds(&s, &SliceModel::commandReady);
 
-        EXPECT_TRUE(AgcTKnob::usesOffLevel(&s), "AGC off selects the off level");
-        EXPECT_EQ(AgcTKnob::level(&s), 10);
-        EXPECT_EQ(AgcTKnob::minimum(&s), 0);
-        EXPECT_EQ(AgcTKnob::maximum(&s), 100);
+        EXPECT_TRUE(s.agcTKnobUsesOffLevel(), "AGC off selects the off level");
+        EXPECT_EQ(s.agcTKnobLevel(), 10);
+        EXPECT_EQ(s.agcTKnobMinimum(), 0);
+        EXPECT_EQ(s.agcTKnobMaximum(), 100);
 
-        AgcTKnob::setLevel(&s, 40);
+        s.setAgcTKnobLevel(40);
         EXPECT_EQ(cmds.count(), 1);
         EXPECT_EQ(lastCommand(cmds), QStringLiteral("slice set 1 agc_off_level=40"));
         EXPECT_EQ(s.agcOffLevel(), 40);
         EXPECT_EQ(s.agcThreshold(), 50);
-        EXPECT_EQ(AgcTKnob::level(&s), 40);
+        EXPECT_EQ(s.agcTKnobLevel(), 40);
     }
 
     // 2. AGC slow / med / fast: the knob is agc_threshold. Writing it must
@@ -95,17 +94,17 @@ int main(int argc, char** argv)
         }));
         QSignalSpy cmds(&s, &SliceModel::commandReady);
 
-        EXPECT_TRUE(!AgcTKnob::usesOffLevel(&s), "AGC on selects the threshold");
-        EXPECT_EQ(AgcTKnob::level(&s), 50);
-        EXPECT_EQ(AgcTKnob::minimum(&s), 0);
-        EXPECT_EQ(AgcTKnob::maximum(&s), 100);
+        EXPECT_TRUE(!s.agcTKnobUsesOffLevel(), "AGC on selects the threshold");
+        EXPECT_EQ(s.agcTKnobLevel(), 50);
+        EXPECT_EQ(s.agcTKnobMinimum(), 0);
+        EXPECT_EQ(s.agcTKnobMaximum(), 100);
 
-        AgcTKnob::setLevel(&s, 30);
+        s.setAgcTKnobLevel(30);
         EXPECT_EQ(cmds.count(), 1);
         EXPECT_EQ(lastCommand(cmds), QStringLiteral("slice set 2 agc_threshold=30"));
         EXPECT_EQ(s.agcThreshold(), 30);
         EXPECT_EQ(s.agcOffLevel(), 10);
-        EXPECT_EQ(AgcTKnob::level(&s), 30);
+        EXPECT_EQ(s.agcTKnobLevel(), 30);
     }
 
     // 3. Mode flips re-route the same knob; each property keeps its own value
@@ -119,12 +118,12 @@ int main(int argc, char** argv)
         }));
         QSignalSpy cmds(&s, &SliceModel::commandReady);
 
-        AgcTKnob::setLevel(&s, 40);                       // off  -> off level 40
+        s.setAgcTKnobLevel(40);                       // off  -> off level 40
         s.applyChanges(delta([](SliceDelta& d) { d.agcMode = QStringLiteral("slow"); }));
-        EXPECT_EQ(AgcTKnob::level(&s), 50);               // knob now reads the threshold
-        AgcTKnob::setLevel(&s, 30);                       // slow -> threshold 30
+        EXPECT_EQ(s.agcTKnobLevel(), 50);               // knob now reads the threshold
+        s.setAgcTKnobLevel(30);                       // slow -> threshold 30
         s.applyChanges(delta([](SliceDelta& d) { d.agcMode = QStringLiteral("off"); }));
-        EXPECT_EQ(AgcTKnob::level(&s), 40);               // off level survived the detour
+        EXPECT_EQ(s.agcTKnobLevel(), 40);               // off level survived the detour
 
         EXPECT_EQ(cmds.count(), 2);
         EXPECT_EQ(cmds.at(0).at(0).toString(), QStringLiteral("slice set 3 agc_off_level=40"));
@@ -148,35 +147,26 @@ int main(int argc, char** argv)
         QSignalSpy cmds(&s, &SliceModel::commandReady);
 
         s.setAgcMode(QStringLiteral("off"));
-        EXPECT_TRUE(AgcTKnob::usesOffLevel(&s), "external AGC off selects the off level");
-        EXPECT_EQ(AgcTKnob::minimum(&s), 0);
-        EXPECT_EQ(AgcTKnob::maximum(&s), 100);
+        EXPECT_TRUE(s.agcTKnobUsesOffLevel(), "external AGC off selects the off level");
+        EXPECT_EQ(s.agcTKnobMinimum(), 0);
+        EXPECT_EQ(s.agcTKnobMaximum(), 100);
         const int before = cmds.count();
-        AgcTKnob::setLevel(&s, 40);
+        s.setAgcTKnobLevel(40);
         EXPECT_EQ(cmds.count(), before);                  // external: no Flex command
         EXPECT_EQ(s.receiveAgcOffLevel(), 40);
-        EXPECT_EQ(AgcTKnob::level(&s), 40);
+        EXPECT_EQ(s.agcTKnobLevel(), 40);
         EXPECT_EQ(s.agcOffLevel(), 10);                   // the Flex value is untouched
 
         s.setAgcMode(QStringLiteral("slow"));
-        EXPECT_TRUE(!AgcTKnob::usesOffLevel(&s), "external AGC on selects the threshold");
-        EXPECT_EQ(AgcTKnob::minimum(&s), KiwiSdrProtocol::kAgcThresholdMinDb);
-        EXPECT_EQ(AgcTKnob::maximum(&s), KiwiSdrProtocol::kAgcThresholdMaxDb);
+        EXPECT_TRUE(!s.agcTKnobUsesOffLevel(), "external AGC on selects the threshold");
+        EXPECT_EQ(s.agcTKnobMinimum(), KiwiSdrProtocol::kAgcThresholdMinDb);
+        EXPECT_EQ(s.agcTKnobMaximum(), KiwiSdrProtocol::kAgcThresholdMaxDb);
         const int before2 = cmds.count();
-        AgcTKnob::setLevel(&s, -20);
+        s.setAgcTKnobLevel(-20);
         EXPECT_EQ(cmds.count(), before2);
         EXPECT_EQ(s.receiveAgcThreshold(), -20);
-        EXPECT_EQ(AgcTKnob::level(&s), -20);
+        EXPECT_EQ(s.agcTKnobLevel(), -20);
         EXPECT_EQ(s.agcThreshold(), 50);                  // the Flex value is untouched
-    }
-
-    // 5. No slice: every helper is a safe no-op with the Flex defaults.
-    {
-        EXPECT_TRUE(!AgcTKnob::usesOffLevel(nullptr), "null slice is not 'off'");
-        EXPECT_EQ(AgcTKnob::level(nullptr), 0);
-        EXPECT_EQ(AgcTKnob::minimum(nullptr), 0);
-        EXPECT_EQ(AgcTKnob::maximum(nullptr), 100);
-        AgcTKnob::setLevel(nullptr, 40);
     }
 
     if (g_failures) {

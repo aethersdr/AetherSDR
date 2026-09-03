@@ -34,7 +34,6 @@
 #include "TitleBar.h"
 #include "VfoWidget.h"
 #include "MainWindowShortcutState.h"
-#include "core/AgcTKnob.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceFeature.h"
@@ -1132,15 +1131,15 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("agct_up", "AGC-T Up", "AGC",
         QKeySequence(), [this]() {
             if (auto* s = activeSlice()) {
-                AgcTKnob::setLevel(s, std::min(AgcTKnob::maximum(s),
-                                               AgcTKnob::level(s) + 5));
+                s->setAgcTKnobLevel(std::min(s->agcTKnobMaximum(),
+                                             s->agcTKnobLevel() + 5));
             }
         }, true);
     m_shortcutManager.registerAction("agct_down", "AGC-T Down", "AGC",
         QKeySequence(), [this]() {
             if (auto* s = activeSlice()) {
-                AgcTKnob::setLevel(s, std::max(AgcTKnob::minimum(s),
-                                               AgcTKnob::level(s) - 5));
+                s->setAgcTKnobLevel(std::max(s->agcTKnobMinimum(),
+                                             s->agcTKnobLevel() - 5));
             }
         }, true);
 
