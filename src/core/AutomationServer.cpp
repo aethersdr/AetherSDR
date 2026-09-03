@@ -6561,10 +6561,37 @@ QJsonObject AutomationServer::doHealth()
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
 
-    const IRadioBackend::HealthSnapshot snap = m_radioModel->backendHealthSnapshot();
+    // TWO SOURCES, merged, and the order matters.
+    //
+    // The backend answers only while one exists — it is constructed inside
+    // connectToRadio() — so on a disconnected app it contributes nothing. The
+    // stream-free telemetry service answers always, because its lifetime is the
+    // model's rather than a connection's. Reading `health` on an app that is
+    // not connected used to return zero rows for exactly that reason, in the
+    // state the stream-free feature exists to serve.
+    //
+    // The backend WINS on key collision: its readings are in-band, arrive at
+    // 10 Hz against the poller's 1-2 Hz, and their cadence is ours. The service
+    // fills the gaps and owns the source/age/unanswered rows that say which
+    // path spoke.
+    IRadioBackend::HealthSnapshot snap = m_radioModel->streamFreeTelemetryRows();
+    const IRadioBackend::HealthSnapshot backend = m_radioModel->backendHealthSnapshot();
+    for (const QString& key : backend.order) {
+        if (!snap.labels.contains(key))
+            snap.order.push_back(key);
+        if (const auto l = backend.labels.constFind(key); l != backend.labels.constEnd())
+            snap.labels.insert(key, *l);
+        if (const auto sec = backend.sections.constFind(key); sec != backend.sections.constEnd())
+            snap.sections.insert(key, *sec);
+        // A key the backend leaves out of `values` is "not reported by the
+        // radio", and must NOT overwrite a value the stream-free path does
+        // have. Overwriting with nothing is how a working reading becomes a
+        // dash.
+        if (const auto v = backend.values.constFind(key); v != backend.values.constEnd())
+            snap.values.insert(key, *v);
+    }
     if (snap.isEmpty()) {
-        // Not an error: a backend with nothing to report is a real state (no
-        // radio connected, or a family that publishes no health rows). Say which
+        // Still a real state: no backend AND nothing stream-free to say. Name it
         // rather than returning an empty object the caller has to guess about.
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("connected"), m_radioModel->isConnected()},

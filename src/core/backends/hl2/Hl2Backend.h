@@ -9,7 +9,8 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
-#include "core/backends/hl2/Hl2TelemetryPoller.h"  // stream-free telemetry (#15)
+#include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
+#include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -127,6 +128,9 @@ public:
     // rather than guessed here. A null address stops the poller and releases
     // its socket.
     void setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther);
+    // Injected by RadioModel, which owns it. Null is legitimate: a backend
+    // built before the service exists simply does not drive it.
+    void setTelemetryService(Hl2TelemetryService* svc) { m_telemetryService = svc; }
 
 signals:
     // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
@@ -223,7 +227,6 @@ private:
     // consulted. Called from publishLinkStats() (which already computes the
     // EP6-arriving signal on a fixed tick) and from connect/disconnect.
     void updateTelemetryPollState();
-    void onStreamFreeReading(const DiscoveryReply& reply, qint64 ageMs);
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
@@ -244,15 +247,10 @@ private:
     // path cannot: another client holds the radio, our stream has stalled, or
     // we are not connected. Its own socket, never MetisClient's — the point is
     // to keep working when that one has stopped.
-    Hl2TelemetryPoller* m_telemetryPoller = nullptr;
-    // The newest stream-free reply, and how old it was when it arrived.
-    // m_haveStreamFree stays false until one has actually landed, so the health
-    // rows can say "never read" rather than showing a default-constructed reply
-    // as if the radio had reported zeros.
-    DiscoveryReply m_streamFree;
-    bool m_haveStreamFree = false;
-    QElapsedTimer m_streamFreeAt;
-    int m_streamFreeUnanswered = 0;
+    // BORROWED, not owned. The service's lifetime is RadioModel's, because it
+    // has to answer when this backend does not exist -- which is the state the
+    // stream-free path is for. Owning it here was the original defect.
+    Hl2TelemetryService* m_telemetryService = nullptr;
     // What the picker last said about this radio. Only meaningful while we are
     // not connected: it is the difference between "idle radio nobody is using"
     // and "someone else's session", which is the case A-telemetry is about.
@@ -262,18 +260,6 @@ private:
     // reader ran second always saw "no new packets" and reported a healthy
     // link as stalled.
     quint64 m_linkRxPacketsAtPollCheck = 0;
-    // Reading the health snapshot IS the demand signal for the poller: it is
-    // the one thing every consumer does — the diagnostics dialog, the
-    // automation bridge's `health` verb, a harness — so it cannot be forgotten
-    // by one of them the way a separate "I am watching now" call would be. That
-    // is why healthSnapshot() is allowed to touch this despite being const;
-    // the alternative silently leaves the poller off for whichever consumer
-    // nobody remembered to wire.
-    mutable QElapsedTimer m_healthDemand;
-    // How long a health read keeps the poller interested once nothing is asking
-    // any more. Long enough that a 1 Hz consumer never sees a gap, short enough
-    // that a closed dialog stops the traffic promptly.
-    static constexpr qint64 kHealthDemandWindowMs = 5000;
     // How often the poll state is re-evaluated. Independent of the link-stats
     // cadence on purpose: see the timer's construction for why sharing that
     // one would silence the poller in exactly the states it is for.
