@@ -1,7 +1,5 @@
 #include "core/backends/hl2/Hl2TelemetryPoller.h"
 
-#include "core/backends/hl2/Hl2Discovery.h"   // macToSerial
-
 #include <QNetworkDatagram>
 #include <QTimer>
 #include <QUdpSocket>
@@ -49,9 +47,9 @@ Hl2TelemetryPoller::Hl2TelemetryPoller(QObject* parent)
 
 Hl2TelemetryPoller::~Hl2TelemetryPoller() = default;
 
-void Hl2TelemetryPoller::setExpectedSerial(const QString& serial)
+void Hl2TelemetryPoller::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
 {
-    m_expectedSerial = serial;
+    m_expectedMac = mac;
 }
 
 void Hl2TelemetryPoller::setTarget(const QHostAddress& addr)
@@ -179,8 +177,7 @@ void Hl2TelemetryPoller::onReadyRead()
         // radio. Accepting the first is right for a single-radio bench and
         // wrong the moment there are two, so a caller that knows which radio it
         // means sets the serial and this drops the rest.
-        if (!m_expectedSerial.isEmpty()
-            && Hl2Discovery::macToSerial(reply->mac) != m_expectedSerial)
+        if (m_expectedMac && reply->mac != *m_expectedMac)
             continue;
         m_lastResponder = dg.senderAddress();
 

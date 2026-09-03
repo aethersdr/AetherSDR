@@ -3,10 +3,13 @@
 #include "core/backends/hl2/Hl2TelemetryCadence.h"   // Hl2LinkState, hl2PollIntervalMs
 #include "core/backends/hl2/MetisProtocol.h"        // DiscoveryReply
 
+#include <array>
+#include <cstdint>
+#include <optional>
+
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QObject>
-#include <QString>
 
 class QTimer;
 class QUdpSocket;
@@ -65,11 +68,18 @@ public:
     // The cadence rule still decides whether anything is sent at all, so a
     // broadcast only happens when the rule already says to poll.
     void setTarget(const QHostAddress& addr);
-    // Restrict replies to one radio, by the serial Hl2Discovery::macToSerial
-    // produces. Empty accepts the first HL2 that answers, which is right for a
+    // Restrict replies to one radio, by its MAC.
+    //
+    // BYTES, not the formatted serial string. Comparing the six bytes the reply
+    // actually carries is exact and depends on no shared formatting convention;
+    // taking Hl2Discovery::macToSerial's string would make this agree with that
+    // function by construction, and drag the whole AppSettings layer into a
+    // socket class that has no business knowing about settings.
+    //
+    // Unset accepts the first HL2 that answers, which is right for a
     // single-radio bench and wrong the moment there are two -- so a caller that
     // knows which radio it means should say so.
-    void setExpectedSerial(const QString& serial);
+    void setExpectedMac(const std::array<std::uint8_t, 6>& mac);
     void setLinkState(LinkState s);
     // Whether anything is actually looking at the telemetry. Only consulted in
     // NotConnected: polling a radio nobody is watching is pure wire cost.
@@ -115,7 +125,7 @@ private:
     QTimer* m_timer = nullptr;
     QHostAddress m_target;          // null = broadcast and take what answers
     QHostAddress m_lastResponder;
-    QString m_expectedSerial;
+    std::optional<std::array<std::uint8_t, 6>> m_expectedMac;
     LinkState m_state = LinkState::NotConnected;
     bool m_surfaceVisible = false;
     int m_unanswered = 0;
