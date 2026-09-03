@@ -43,7 +43,7 @@
  },
  "core/BandStackSettings.h": {
   "tag": "universal",
-  "note": "Per-radio band-stack memories (freq/mode/filter/AGC/NB-NR) \u2014 canonical radio state; only the XML store is client-side",
+  "note": "Per-radio band-stack memories (freq/mode/filter/AGC/NB-NR) — canonical radio state; only the XML store is client-side",
   "split": "",
   "confidence": "high"
  },
@@ -103,13 +103,13 @@
  },
  "core/ClientGate.h": {
   "tag": "universal",
-  "note": "Client TX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters) \u2014 radio-agnostic engine DSP.",
+  "note": "Client TX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters) — radio-agnostic engine DSP.",
   "split": "",
   "confidence": "high"
  },
  "core/ClientPudu.h": {
   "tag": "universal",
-  "note": "Client-side TX audio exciter (PooDoo dual-band DSP) \u2014 engine TX DSP chain module, no radio-family coupling",
+  "note": "Client-side TX audio exciter (PooDoo dual-band DSP) — engine TX DSP chain module, no radio-family coupling",
   "split": "",
   "confidence": "high"
  },
@@ -145,7 +145,7 @@
  },
  "core/CommandParser.h": {
   "tag": "vendor(flex)",
-  "note": "Stateless parser/builder for SmartSDR TCP wire lines (V/H/C/R/S/M, FlexLib semantics) \u2014 pure Flex protocol.",
+  "note": "Stateless parser/builder for SmartSDR TCP wire lines (V/H/C/R/S/M, FlexLib semantics) — pure Flex protocol.",
   "split": "Generic MessageType/MessageSeverity enums extracted to core/RadioMessageTypes.h (vendor-free) so above-seam enum-only consumers decouple (EB3, #4087); the parser + ParsedMessage stay vendor(flex).",
   "confidence": "high"
  },
@@ -211,13 +211,13 @@
  },
  "core/FirmwareStager.h": {
   "tag": "vendor(flex)",
-  "note": "Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload \u2014 pure Flex",
+  "note": "Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex",
   "split": "",
   "confidence": "high"
  },
  "core/FirmwareUploader.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 \u2014 pure Flex protocol",
+  "note": "SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 — pure Flex protocol",
   "split": "",
   "confidence": "high"
  },
@@ -241,7 +241,7 @@
  },
  "core/GreenHeronProtocol.h": {
   "tag": "peripheral(greenheron)",
-  "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol \u2014 the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
+  "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol — the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
   "split": "",
   "confidence": "high"
  },
@@ -271,7 +271,7 @@
  },
  "core/KiwiSdrClient.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) \u2014 the kiwi backend itself",
+  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself",
   "split": "",
   "confidence": "high"
  },
@@ -301,7 +301,7 @@
  },
  "core/MacMicPermission.h": {
   "tag": "ui-support",
-  "note": "macOS mic permission dialog at app startup; OS permission plumbing, no radio state \u2014 belongs in the client app",
+  "note": "macOS mic permission dialog at app startup; OS permission plumbing, no radio state — belongs in the client app",
   "split": "",
   "confidence": "high"
  },
@@ -326,7 +326,7 @@
  "core/MemoryRecallPolicy.h": {
   "tag": "mixed(flex)",
   "note": "Memory-recall intent (offset/tone math) is core, but builders emit SmartSDR slice command strings (flex)",
-  "split": "memoryRepeaterTxOffsetFreq (repeater offset semantics) is core-profile; buildMemoryRecall*Command emit literal SmartSDR \"slice tune/set\" wire strings \u2014 flex encoding",
+  "split": "memoryRepeaterTxOffsetFreq (repeater offset semantics) is core-profile; buildMemoryRecall*Command emit literal SmartSDR \"slice tune/set\" wire strings — flex encoding",
   "confidence": "high"
  },
  "core/MidiControlManager.h": {
@@ -337,7 +337,7 @@
  },
  "core/MidiSettings.h": {
   "tag": "ui-support",
-  "note": "MIDI controller binding/profile persistence (XML files) \u2014 client input-device config, not radio state.",
+  "note": "MIDI controller binding/profile persistence (XML files) — client input-device config, not radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -367,7 +367,7 @@
  },
  "core/NetScheduleStore.h": {
   "tag": "ui-support",
-  "note": "Local JSON persistence of NetEntry, which its header calls operator-scoped client state \u2014 not radio state",
+  "note": "Local JSON persistence of NetEntry, which its header calls operator-scoped client state — not radio state",
   "split": "",
   "confidence": "high"
  },
@@ -385,7 +385,7 @@
  },
  "core/NetworkSettings.h": {
   "tag": "ui-support",
-  "note": "AppSettings JSON wrapper persisting VITA-49 SO_RCVBUF tuning; settings storage, not radio state \u2014 engine config knob, no protocol msg",
+  "note": "AppSettings JSON wrapper persisting VITA-49 SO_RCVBUF tuning; settings storage, not radio state — engine config knob, no protocol msg",
   "split": "",
   "confidence": "high"
  },
@@ -421,7 +421,7 @@
  },
  "core/PgxlConnection.h": {
   "tag": "peripheral(4o3a)",
-  "note": "Direct TCP client (port 9008) for the external 4O3A Power Genius XL (PGXL) amplifier \u2014 TELEMETRY-ONLY (statusUpdated: state/power/SWR/current/temp/\u2026); it has no operate/standby command. PGXL operate/standby is relayed through the radio (RadioModel::setAmpOperate \u2192 'amplifier set <handle> operate=\u2026'), which is also the only path for remote/SmartLink. So this header is a genuine local direct-transport peripheral(4o3a); the amp's radio-relay control lives in RadioModel (radio-side) and should split into a generic AmpModel + Flex relay behind FlexBackend \u2014 see #4094.",
+  "note": "Direct TCP client (port 9008) for the external 4O3A Power Genius XL (PGXL) amplifier — TELEMETRY-ONLY (statusUpdated: state/power/SWR/current/temp/…); it has no operate/standby command. PGXL operate/standby is relayed through the radio (RadioModel::setAmpOperate → 'amplifier set <handle> operate=…'), which is also the only path for remote/SmartLink. So this header is a genuine local direct-transport peripheral(4o3a); the amp's radio-relay control lives in RadioModel (radio-side) and should split into a generic AmpModel + Flex relay behind FlexBackend — see #4094.",
   "split": "",
   "confidence": "high"
  },
@@ -475,7 +475,7 @@
  },
  "core/RadioConnection.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR TCP text-protocol connection (commands/replies/status) \u2014 Flex wire protocol, per calibration anchor",
+  "note": "SmartSDR TCP text-protocol connection (commands/replies/status) — Flex wire protocol, per calibration anchor",
   "split": "",
   "confidence": "high"
  },
@@ -494,7 +494,7 @@
  "core/ReceivePresentationSync.h": {
   "tag": "mixed(flex)",
   "note": "Cross-source RX latency sync (queues + GCC-PHAT); mechanism is core, but API hardcodes Flex/KiwiSdr pair",
-  "split": "Core-profile: presentation delay queue, per-surface delay/due-time model, sync settings/status, GCC-PHAT audio delay estimator \u2014 all generalize to N sources. Vendor: hardcoded Flex/KiwiSdr source and reference enums, Flex-vs-Kiwi offset polarity, and flex/kiwi audio-pair selection (kiwiProfileId, flexSliceId) \u2014 should become generic source IDs with flex/kiwi bindings.",
+  "split": "Core-profile: presentation delay queue, per-surface delay/due-time model, sync settings/status, GCC-PHAT audio delay estimator — all generalize to N sources. Vendor: hardcoded Flex/KiwiSdr source and reference enums, Flex-vs-Kiwi offset polarity, and flex/kiwi audio-pair selection (kiwiProfileId, flexSliceId) — should become generic source IDs with flex/kiwi bindings.",
   "confidence": "high"
  },
  "core/RttyDecoder.h": {
@@ -517,7 +517,7 @@
  },
  "core/ShortcutManager.h": {
   "tag": "ui-support",
-  "note": "Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks \u2014 client input plumbing, no radio state.",
+  "note": "Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -553,7 +553,7 @@
  },
  "core/SpotCommandPolicy.h": {
   "tag": "ui-support",
-  "note": "Passive-spots policy gates spot-add commands from both the operator toggle and a backend-declared client-side fallback; no radio state",
+  "note": "Settings-backed passive-spots toggle gating whether client emits spot-add cmds; pure AppSettings policy, no radio state",
   "split": "",
   "confidence": "medium"
  },
@@ -565,7 +565,7 @@
  },
  "core/StreamStatus.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR stream-status parsing: client_handle ownership, DAX RX/TX orphan-stream firmware quirks \u2014 pure Flex wire logic",
+  "note": "SmartSDR stream-status parsing: client_handle ownership, DAX RX/TX orphan-stream firmware quirks — pure Flex wire logic",
   "split": "",
   "confidence": "high"
  },
@@ -589,7 +589,7 @@
  },
  "core/ThemeManager.h": {
   "tag": "ui-support",
-  "note": "Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) \u2014 pure client GUI plumbing, no radio state.",
+  "note": "Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -607,7 +607,7 @@
  },
  "core/UpdateChecker.h": {
   "tag": "ui-support",
-  "note": "App self-update checker polling GitHub releases API; pure client plumbing, no radio state \u2014 belongs in gui shell.",
+  "note": "App self-update checker polling GitHub releases API; pure client plumbing, no radio state — belongs in gui shell.",
   "split": "",
   "confidence": "high"
  },
@@ -649,7 +649,7 @@
  },
  "core/WaveformInstaller.h": {
   "tag": "vendor(flex)",
-  "note": "Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol \u2014 Flex-only ecosystem.",
+  "note": "Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol — Flex-only ecosystem.",
   "split": "",
   "confidence": "high"
  },
@@ -769,7 +769,7 @@
  },
  "models/BandSettings.h": {
   "tag": "universal",
-  "note": "Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) \u2014 band memories, no vendor fields",
+  "note": "Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields",
   "split": "",
   "confidence": "high"
  },
@@ -781,7 +781,7 @@
  },
  "models/DaxIqModel.h": {
   "tag": "vendor(flex)",
-  "note": "Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps \u2014 DAX is Flex-only",
+  "note": "Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps — DAX is Flex-only",
   "split": "",
   "confidence": "high"
  },
@@ -793,7 +793,7 @@
  },
  "models/EqualizerModel.h": {
   "tag": "universal",
-  "note": "8-band TX/RX audio EQ state (enable + band gains) \u2014 core capability; SmartSDR wire parsing/cmds move to flex adapter",
+  "note": "8-band TX/RX audio EQ state (enable + band gains) — core capability; SmartSDR wire parsing/cmds move to flex adapter",
   "split": "",
   "confidence": "high"
  },
@@ -805,13 +805,13 @@
  },
  "models/GreenHeronModel.h": {
   "tag": "peripheral(greenheron)",
-  "note": "Green Heron \"Everyware\" client \u2014 antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
+  "note": "Green Heron \"Everyware\" client — antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
   "split": "",
   "confidence": "high"
  },
  "models/MemoryEntry.h": {
   "tag": "universal",
-  "note": "POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) \u2014 canonical memories surface",
+  "note": "POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) — canonical memories surface",
   "split": "",
   "confidence": "high"
  },
@@ -871,7 +871,7 @@
  },
  "models/TnfModel.h": {
   "tag": "universal",
-  "note": "Tracking notch filter state (freq/width/depth/permanent, global enable) \u2014 generic DSP notch surface; kv parse is transport detail",
+  "note": "Tracking notch filter state (freq/width/depth/permanent, global enable) — generic DSP notch surface; kv parse is transport detail",
   "split": "",
   "confidence": "high"
  },
@@ -891,6 +891,390 @@
   "tag": "mixed(flex)",
   "note": "XVTR policy: transverter list/freq translation is core; waterfall-tile offset + FLEX model power clamps are flex",
   "split": "Core: Transverter struct, RF/IF frequency mapping intent. Flex: ModelCapabilities-based band-stack keys, waterfall tile offset matching, FLEX-64/6600 max-power dBm ranges.",
+  "confidence": "high"
+ },
+ "core/AcomProtocol.h": {
+  "tag": "peripheral(acom)",
+  "note": "ACOM S-series RS-232 amplifier wire protocol (framing, checksums, per-model power scaling) — the codec half of core/AcomConnection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as the Tgxl/Pgxl direct sockets: peripheral, NOT behind the IRadioBackend radio seam. Authority: the manufacturer's published 600S serial-protocol spec.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AetherClockEngine.h": {
+  "tag": "universal",
+  "note": "WWV/WWVB time-signal decode engine bound to an operator-chosen RX slice. Deliberately source-agnostic: the wiring layer injects a DAX-hold provider and any 24 kHz float32-stereo feed drives it, so the engine never touches a vendor stream class (its own header documents this as EB3 discipline). Canonical engine state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AetherClockSettings.h": {
+  "tag": "ui-support",
+  "note": "AetherClock persistence — one nested JSON blob under a single AppSettings key (Principle V). Client-side config plumbing; radio-authoritative state (slice frequency, mode, AGC) is deliberately never persisted here.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AetherDspModePolicy.h": {
+  "tag": "universal",
+  "note": "Pure policy deciding when AetherDSP must disable for a given mode or slice audio mix. Operates on canonical mode/mute/gain state only; no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AutomationBridgeSettings.h": {
+  "tag": "ui-support",
+  "note": "Owned configuration for the agent automation bridge (enabled / txAllowed / txAck / readOnly) under one nested key; the secret token lives in the OS keychain, not here. Dev and test tooling — same home decision as core/AutomationServer.h. NOTE for RFC §6: txAllowed() is read as a TX-guard input by BOTH AutomationServer and Hl2Backend, so this header is a step-4 consolidation target.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClockAlignmentFrame.h": {
+  "tag": "universal",
+  "note": "Frozen per-second alignment contract emitted by the AetherClock engine (cross-PR contract, PRD-A §5). Radio-agnostic decode output.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClockDiagnostics.h": {
+  "tag": "universal",
+  "note": "AetherClock ~1 Hz acquisition-telemetry snapshot (pre-lock funnel, verdict line, debug pane). Measured decode-chain quantities only, parallel to the frozen alignment contract; no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DigitalVoiceFeature.h": {
+  "tag": "universal",
+  "note": "Build-flag and availability filtering for digital-voice modes. Radio-agnostic mode-list logic over the DV registry.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DigitalVoiceModeRegistry.h": {
+  "tag": "universal",
+  "note": "Registry of digital-voice mode descriptors (id, settings id, display name, radio mode, underlying mode, waveform name). Canonical mode metadata; no wire coupling.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DigitalVoiceWaveformProcess.h": {
+  "tag": "mixed(flex)",
+  "note": "Supervisor for the host-side DV waveform helper process (ThumbDV) — QProcess lifecycle plus a UDP control/data path. The supervision half is universal, but the health surface it publishes counts Flex VITA sequence gaps, so the header is not vendor-neutral as it stands.",
+  "split": "Core (universal): helper-process lifecycle and state machine, endpoint configuration, start/stop/restart policy, turnaround timing. Flex extension: VITA sequence-gap counters (m_vitaSequenceGapsTotal / m_txVitaSequenceGapsTotal) — a DAX/VITA-49 stream fact that a backend should report through the seam rather than the waveform host reading it directly.",
+  "confidence": "high"
+ },
+ "core/DigitalVoiceWaveformSettings.h": {
+  "tag": "ui-support",
+  "note": "AppSettings-backed DV waveform configuration (backend selection, executable paths). Client-side persistence plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/HostVoiceChainPolicy.h": {
+  "tag": "mixed(flex)",
+  "note": "Decides when the Flex-shaped voice controls (PROC, 8-band graphic EQ) may write the SHARED ClientComp/ClientEq objects the Aetherial strip also edits — two surfaces onto one object, so 'may we write' has a wrong answer (#4609). Universal DSP-ownership question, answered today from Flex-shaped state.",
+  "split": "Core (universal): the chainOwned ownership bit and the write-arbitration predicates over a shared client DSP chain — any backend with two control surfaces onto one processor needs exactly this. Flex extension: the fact that the competing surface's state arrives from a Flex `eq`/`transmit` status (EqualizerModel/TransmitModel have no persistence of their own), which is what forces the bit to be process-local rather than restored.",
+  "confidence": "high"
+ },
+ "core/IssueReport.h": {
+  "tag": "ui-support",
+  "note": "Renders a pre-filled GitHub issue body from a SupportBundle snapshot, with PII redaction applied at the render boundary (GHSA-ccrg-j8cp-qhc4). Support and diagnostics tooling; not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/KiwiSdrTxMutePolicy.h": {
+  "tag": "mixed(kiwi)",
+  "note": "Pure latch (no Kiwi wire types, header-only) encoding KiwiSDR-specific TX-mute semantics: release the mute on this client's optimistic local unkey, but keep gating transmissions this client never keyed (VOX, CAT, hardware PTT, other clients) on the radio-reported interlock. Generic shape, family-specific law.",
+  "split": "Core (universal): the two-source TX-mute latch — local optimistic unkey vs authoritative radio interlock, resolved on the interlock's falling edge. Kiwi extension: that the muted audio source is a separate receive-only stream at all, which stops being a special case once the Kiwi path moves behind IRadioBackend (§5.5) and the mute becomes ordinary per-source TX policy.",
+  "confidence": "high"
+ },
+ "core/LocationAddressResolver.h": {
+  "tag": "ui-support",
+  "note": "Reverse-geocoding helper backing the GPS location dialog. Network/OS plumbing; no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/N1MMSpotClient.h": {
+  "tag": "universal",
+  "note": "UDP listener for N1MMSpot XML bandmap spots from contest loggers (N1MM+, DXLog), emitting explicit add/delete events (#2906). Radio-agnostic spot ingestion — 'SmartSDR-CAT compatible' names the third-party protocol it mimics, not a dependency on the radio wire.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/N1MMSpotParser.h": {
+  "tag": "universal",
+  "note": "Parser and value type for N1MM/DXLog spot documents, including the (dxcall, band) spot key. Radio-agnostic spot data.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RadioSettingsScope.h": {
+  "tag": "universal",
+  "note": "A (family, radioId) handle into the radio-scoped settings store (RFC #4603). Family-neutral by construction — Flex serial, HL2 MAC and Kiwi profile UUID all resolve through the same scope, with radio → family-wide → empty fallback. This is the shape radio-scoped state should keep after the protocol lands.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SettingsBootstrap.h": {
+  "tag": "ui-support",
+  "note": "Pre-QApplication settings access (RFC #4603) for the two consumers that need a value before the app object exists: the UiScale bootstrap and the RHI backend choice. Client startup plumbing.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SettingsCredentialPolicy.h": {
+  "tag": "ui-support",
+  "note": "The single source of truth for which settings names are credentials (RFC #4603 proposal E — credentials live only in QtKeychain, never in the settings store). Client security plumbing.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SettingsDatabase.h": {
+  "tag": "ui-support",
+  "note": "RAII wrapper around the vendored SQLite amalgamation backing the client settings store (RFC #4603); the only TU permitted to include sqlite3.h. Client persistence plumbing.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SettingsPaths.h": {
+  "tag": "ui-support",
+  "note": "Single source of truth for every path in the client settings store (RFC #4603), replacing three drifted hand-copies of the config-dir logic. Client persistence plumbing.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SettingsSanitizer.h": {
+  "tag": "ui-support",
+  "note": "Recursive secret-safe rendering of the settings store for the support bundle and `--config export` (RFC #4603). Diagnostics plumbing.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TimeFrameVoter.h": {
+  "tag": "universal",
+  "note": "Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/UlanziDialMappings.h": {
+  "tag": "ui-support",
+  "note": "Owner of the Ulanzi Dial's pill→action bindings in one feature-owned document (Principle V). A control surface's own configuration — it belongs to the peripheral, not to any radio — same home decision as the FlexControl USB knob.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WaterfallRate.h": {
+  "tag": "mixed(flex)",
+  "note": "The single definition of what the 1..100 'WtrFall Rate' control means (low is slow, high is fast). A universal display concept that carries TWO conversion laws, deliberately not the same function, because who turns rate into rows differs per family (#3104, #4606).",
+  "split": "Core (universal): the 1..100 control semantics and the local* law used by any backend that streams raw spectra and has no radio-side display engine (HL2, demo). Flex extension: the flex* law — a steeply non-linear conversion known only by measurement of a Flex display engine, plus the `line_duration` wire-name trap that runs the control backwards if a backend reads FlexLib's milliseconds literally. The flex* half belongs behind FlexBackend once pan geometry converts.",
+  "confidence": "high"
+ },
+ "core/WsprBeacon.h": {
+  "tag": "universal",
+  "note": "WSPR type-1 message encoder and sample-accurate continuous-phase 4-FSK generator (lock-free, allocation-free on the audio thread). Radio-agnostic engine DSP.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/IRadioBackend.h": {
+  "tag": "universal",
+  "note": "THE radio seam (RFC §5.5) — the canonical intent verbs, typed deltas and normalized signals every family implements. Universal by definition: the UI reaching this header is the seam working as designed, not coupling. Everything below it in core/backends/<family>/ is family-private.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2Discovery.h": {
+  "tag": "vendor(hl2)",
+  "note": "HPSDR Protocol 1 ('Metis') discovery for the Hermes-Lite 2, shaped to emit RadioInfo with family=\"hl2\" so the existing picker slots consume it unchanged. Family wire code that belongs below the seam; reached today from ConnectionPanel.cpp, MainWindow.h and RadioSetupDialog.cpp. Pre-existing coupling, frozen into the EB3 baseline — the fix is a family-neutral discovery aggregator behind IRadioBackend, not a wider baseline.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2EmergencyStop.h": {
+  "tag": "vendor(hl2)",
+  "note": "Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle — reproduced three times). Family wire behavior invoked from main.cpp's signal handler; pre-existing coupling, frozen into the EB3 baseline. Generalizes to an engine-level 'release every backend on fatal signal' hook.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/hl2/MetisProtocol.h": {
+  "tag": "vendor(hl2)",
+  "note": "HPSDR Protocol 1 ('Metis') wire primitives for the HL2 backend — register map, EP2/EP6 framing, LNA gain register. Family wire code below the seam; reached today from ConnectionPanel.cpp, frozen into the EB3 baseline. Authority: openHPSDR Protocol 1 plus the Hermes-Lite 2 gateware RTL (Principle I, per-backend).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/sim/NoiseMixer.h": {
+  "tag": "vendor(sim)",
+  "note": "Demo-mode synthetic AUDIO engine (RFC #4288 Phase 2b) — additive HF-noise and signal channels feeding SimBackend's audioFrameReady. Backend-internal generator reached from DemoApplet.cpp; family-specific below-seam code, frozen into the EB3 baseline. Demo-mode controls should reach it through an extension namespace, not the concrete type.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/sim/SimBackend.h": {
+  "tag": "vendor(sim)",
+  "note": "The synthetic demo backend (#4473) — a concrete IRadioBackend implementor that generates its own audio and spectrum, RX-only by construction (Principle VI). Reached today from ConnectionPanel.cpp, MainWindow.cpp and MainWindow_Session.cpp; pre-existing coupling, frozen into the EB3 baseline. The UI should select it through RadioModel::makeBackend()'s family string, never the concrete type.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/Ax25Connection.h": {
+  "tag": "universal",
+  "note": "Single-peer AX.25 v2.0 connected-mode (LAPB) data-link state machine, mod-8 sequence space, backing the Personal Mailbox System. Radio-agnostic packet layer above whatever modem or backend carries the audio.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/AetherClockModel.h": {
+  "tag": "universal",
+  "note": "Thin first-class AetherClock model with full Q_PROPERTY coverage (protocol-serializable, QML-ready), mirroring engine state over queued connections. Owns no DSP and has no vendor ties — one of only three models already shaped the way the protocol will want them.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/DStarModel.h": {
+  "tag": "universal",
+  "note": "D-STAR configuration and session state (callsigns, RPT1/RPT2 routing, modem/serial paths). Digital-voice state any backend carrying DV would present.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/DigitalVoiceWaveformHistory.h": {
+  "tag": "mixed(flex)",
+  "note": "Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters.",
+  "split": "Core (universal): sample-rate validity, turnaround mean, source block deficits, RX/TX validity — health facts any DV transport has. Flex extension: vitaSequenceGapsPerSecond / txVitaSequenceGapsPerSecond, which are DAX/VITA-49 stream facts that should arrive as a backend-reported stream-health delta through the seam.",
+  "confidence": "high"
+ },
+ "models/ModelCapabilities.h": {
+  "tag": "mixed(flex)",
+  "note": "Per-model capability table mirroring FlexLib ModelInfo.cs (RadioPlatform, has2Meters/has4Meters, loop A/B). This is the universal question 'what can this radio do', answered exclusively from a vendor table — and its band-availability half is precisely the band truth RFC §4.1 assigns to the capability descriptor. Consumed above the seam by SpectrumOverlayMenu, XvtrPolicy, WaveformInstallGate and MainWindow_Wiring.",
+  "split": "Core (universal): the capability question itself — tunable band set, transverter presence, extended-DSP availability — which belongs in core/backends/RadioCapabilities.h as backend-declared fields (RadioCapabilities has no band field today; adding one is the convergence step). Flex extension: the FlexLib platform taxonomy (Microburst/DeepEddy/BigBend/DragonFire) and the model-string table that derives it, which belong behind FlexBackend.",
+  "confidence": "high"
+ },
+ "models/Nr2SettingsModel.h": {
+  "tag": "universal",
+  "note": "Process-wide owner of client-side NR2 configuration as one versioned object (Principle V), so every editing surface shares state. Engine DSP configuration; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Rn2SettingsModel.h": {
+  "tag": "universal",
+  "note": "Process-wide owner of client-side RN2 configuration as one versioned object (Principle V). Engine DSP configuration; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/SliceLinkPolicy.h": {
+  "tag": "universal",
+  "note": "Pure decision logic for Slice Link (cross-panadapter VFO link) — echo classification on integer Hz, no QObject, no I/O, no model access. Canonical slice state only.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DisplayPresence.h": {
+  "tag": "ui-support",
+  "note": "Host display-presence probe used to choose the desktop Qt platform before QApplication; startup/rendering plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/EibiClient.h": {
+  "tag": "universal",
+  "note": "Radio-agnostic EiBi shortwave schedule downloader/parser that emits canonical DX spots; engine data service with no vendor protocol coupling.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MiniPanSettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ShutdownTrace.h": {
+  "tag": "ui-support",
+  "note": "Process-local shutdown diagnostics and support-log breadcrumbs; lifecycle plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SpeProtocol.h": {
+  "tag": "peripheral(spe)",
+  "note": "Wire codec for standalone SPE Expert amplifiers over serial/ser2net. The accessory connects independently of the radio and stays outside IRadioBackend, matching the ACOM/VKAMP peripheral precedent.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2Backend.h": {
+  "tag": "vendor(hl2)",
+  "note": "Concrete Hermes-Lite 2 IRadioBackend implementation: HPSDR/Metis transport plus HL2-owned RX/TX DSP. Family-specific implementation belongs below the radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2FreqCal.h": {
+  "tag": "mixed(hl2)",
+  "note": "Pure frequency-error math and radio-scoped persistence fused with the HL2 crystal/NCO model. Surface as a namespaced HL2 extension without treating generic calibration math as wire code.",
+  "split": "Core: bounded calibration math and persistence mechanics. HL2 extension: nominal clock, NCO correction semantics, zero-beat workflow and UI/automation verbs.",
+  "confidence": "high"
+ },
+ "core/backends/icom/IcomCredentials.h": {
+  "tag": "ui-support",
+  "note": "OS-keychain and process-session storage for an Icom network password. Credential plumbing shared by connection UI and backend, never a control-protocol field or radio-state resource.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/icom/IcomModels.h": {
+  "tag": "vendor(icom)",
+  "note": "Icom CI-V model identity, model-specific capability tables, and model-ID reply decoding. Family-specific knowledge belongs behind the Icom backend; the client should consume canonical capabilities.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/icom/IcomSettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side connection configuration for the Icom backend (host, username, ports and CI-V selection), with credentials explicitly excluded. Connection plumbing, not live radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CtcssTones.h": {
+  "tag": "universal",
+  "note": "Canonical CTCSS tone vocabulary shared by operator controls and automation validation. Radio-family-neutral state and validation data.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/LpMeterProtocol.h": {
+  "tag": "peripheral(lp100a)",
+  "note": "TelePost LP-100A serial protocol codec for a standalone external wattmeter. Accessory wire code outside the radio-family seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RtlSdrDiscovery.h": {
+  "tag": "vendor(rtl)",
+  "note": "RTL-SDR USB device discovery that emits the shared RadioInfo shape. Family-specific discovery belongs below the RTL backend seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SystemInfo.h": {
+  "tag": "ui-support",
+  "note": "Process-local per-thread CPU diagnostics and sampling math for the Runtime Monitor. Host observability plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SystemInfoCollector.h": {
+  "tag": "ui-support",
+  "note": "Worker that samples host thread CPU use for the Runtime Monitor dialog. Desktop diagnostics plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SystemInventory.h": {
+  "tag": "ui-support",
+  "note": "Startup and support-bundle inventory of host CPU, SIMD and RAM capabilities. Process diagnostics, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ThreadCpuRing.h": {
+  "tag": "ui-support",
+  "note": "Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/UlanziDialMacOSManager.h": {
+  "tag": "ui-support",
+  "note": "macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/ConnectionSharingPolicy.h": {
+  "tag": "universal",
+  "note": "Fail-closed discovery-time policy for whether a busy radio family permits another client. Canonical cross-family connection safety pending capability descriptors.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/RadioCapabilities.h": {
+  "tag": "universal",
+  "note": "Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/AnanDiscovery.h": {
+  "tag": "vendor(anan)",
+  "note": "openHPSDR Protocol 2 discovery and ANAN-G2 identity handling. Family-specific discovery belongs below the ANAN backend seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/AnanSettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side connection and ADC configuration for the ANAN backend. Persisted setup plumbing, not live radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/P2Protocol.h": {
+  "tag": "vendor(anan)",
+  "note": "openHPSDR Ethernet Protocol 2 wire primitives for the ANAN-G2 backend. Family protocol code belongs below the radio seam.",
+  "split": "",
   "confidence": "high"
  }
 }

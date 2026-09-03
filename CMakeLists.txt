@@ -26,6 +26,7 @@ option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
 option(USE_SYSTEM_LIBWHISPER   "Use system libwhisper"   OFF)
+option(USE_SYSTEM_SQLITE       "Use system sqlite3"      OFF)
 
 # Build features options
 
@@ -605,6 +606,9 @@ set(AETHER_SETTINGS_SOURCES
 )
 
 set(CORE_SOURCES
+    src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
+    src/core/control/ControlService.cpp       # aetherd v1 observe-only dispatch
+    src/core/control/LocalControlServer.cpp   # current-user local transport
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
@@ -650,9 +654,6 @@ set(CORE_SOURCES
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
     src/core/OccupiedRegion.cpp
-    src/core/SettingsHelpers.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
@@ -736,7 +737,6 @@ set(CORE_SOURCES
     src/core/TciRoutingState.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
-    src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
     src/core/AcomProtocol.cpp
@@ -781,7 +781,6 @@ set(CORE_SOURCES
     src/core/RADEEngine.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
     src/core/SystemInfo.cpp
@@ -1118,6 +1117,10 @@ set(RNNOISE_SOURCES
     ${RNNOISE_DIR}/src/rnnoise_tables.c
     ${RNNOISE_DIR}/src/parse_lpcnet_weights.c
 )
+set(RNNOISE_INCLUDE_DIRS
+    ${RNNOISE_DIR}/include
+    ${RNNOISE_DIR}/src
+)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
     list(APPEND RNNOISE_SOURCES
         ${RNNOISE_DIR}/src/x86/x86cpu.c
@@ -1125,11 +1128,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
         ${RNNOISE_DIR}/src/x86/nnet_sse4_1.c
         ${RNNOISE_DIR}/src/x86/nnet_avx2.c
     )
+    list(APPEND RNNOISE_INCLUDE_DIRS ${RNNOISE_DIR}/src/x86)
 endif()
 
 # Suppress warnings and set include paths for bundled C code
 set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
-    INCLUDE_DIRECTORIES "${RNNOISE_DIR}/include;${RNNOISE_DIR}/src;${RNNOISE_DIR}/src/x86"
+    INCLUDE_DIRECTORIES "${RNNOISE_INCLUDE_DIRS}"
 )
 # x86 RTCD (runtime CPU detection) + per-file SIMD flags
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
@@ -1217,29 +1221,41 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 # exists (the pre-QApplication bootstrap reads in main.cpp / GpuSelector).
 # The ONLY permitted consumer is src/core/SettingsDatabase.cpp — see
 # third_party/sqlite/README.md.
-add_library(aether_sqlite3 STATIC
-    third_party/sqlite/sqlite3.c
-)
-target_include_directories(aether_sqlite3 PUBLIC
-    ${CMAKE_SOURCE_DIR}/third_party/sqlite
-)
-target_compile_definitions(aether_sqlite3 PRIVATE
-    SQLITE_THREADSAFE=1              # serialized mode; AppSettings adds its own cache lock
-    SQLITE_DQS=0                     # no double-quoted string literals
-    SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 # NORMAL is durability-sufficient under WAL
-    SQLITE_DEFAULT_FILE_PERMISSIONS=0600  # settings dir is user-private (unix)
-    SQLITE_LIKE_DOESNT_MATCH_BLOBS
-    SQLITE_MAX_EXPR_DEPTH=0
-    SQLITE_OMIT_DEPRECATED
-    SQLITE_OMIT_LOAD_EXTENSION
-    SQLITE_OMIT_SHARED_CACHE
-)
-if(MSVC)
-    target_compile_options(aether_sqlite3 PRIVATE /w)
+if(USE_SYSTEM_SQLITE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET GLOBAL sqlite3>=3.33)
+
+    add_library(aether_sqlite3 ALIAS PkgConfig::sqlite3)
+    # The distro library doesn't carry the vendored target's hardening
+    # (below) at compile time; SettingsDatabase::open() re-establishes the
+    # two that matter — DQS rejection and owner-only file permissions — at
+    # runtime instead, unconditionally, on both paths. See third_party/sqlite/README.md.
+    message(STATUS "System SQLite ${sqlite3_VERSION} via pkg-config (settings store, RFC #4603)")
 else()
-    target_compile_options(aether_sqlite3 PRIVATE -w)
+    add_library(aether_sqlite3 STATIC
+        third_party/sqlite/sqlite3.c
+    )
+    target_include_directories(aether_sqlite3 PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/sqlite
+    )
+    target_compile_definitions(aether_sqlite3 PRIVATE
+        SQLITE_THREADSAFE=1              # serialized mode; AppSettings adds its own cache lock
+        SQLITE_DQS=0                     # no double-quoted string literals
+        SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 # NORMAL is durability-sufficient under WAL
+        SQLITE_DEFAULT_FILE_PERMISSIONS=0600  # settings dir is user-private (unix)
+        SQLITE_LIKE_DOESNT_MATCH_BLOBS
+        SQLITE_MAX_EXPR_DEPTH=0
+        SQLITE_OMIT_DEPRECATED
+        SQLITE_OMIT_LOAD_EXTENSION
+        SQLITE_OMIT_SHARED_CACHE
+    )
+    if(MSVC)
+        target_compile_options(aether_sqlite3 PRIVATE /w)
+    else()
+        target_compile_options(aether_sqlite3 PRIVATE -w)
+    endif()
+    message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
 endif()
-message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
 
 set(DFNR_RESOURCES "")
 if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
@@ -1282,13 +1298,40 @@ add_library(aethercore STATIC
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
 
+# Desktop-only implementations kept out of libaethercore. Their public headers
+# remain temporarily in src/core while call sites migrate. A library keeps the
+# desktop executable and the automation test harnesses on the same linkage path
+# without pulling QtWidgets into the headless engine.
+add_library(aetherdesktop_support STATIC
+    src/core/AutomationServer.cpp
+    src/core/SettingsHelpers.cpp
+    src/core/ShortcutManager.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+)
+target_link_libraries(aetherdesktop_support PUBLIC
+    aethercore
+    Qt6::Widgets
+)
+
 add_executable(AetherSDR
     src/main.cpp
     ${GUI_SOURCES}
     ${RESOURCES}
     ${DFNR_RESOURCES}
 )
-target_link_libraries(AetherSDR PRIVATE aethercore)
+target_link_libraries(AetherSDR PRIVATE
+    aetherdesktop_support
+)
+
+add_executable(aetherd
+    src/aetherd/main.cpp
+)
+target_link_libraries(aetherd PRIVATE
+    aethercore
+    Qt6::Core
+    Qt6::Network
+)
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
 # whisper.cpp is a self-contained CMake project exposing a `whisper` target
@@ -1975,18 +2018,18 @@ target_include_directories(aethercore PUBLIC
     ${CMAKE_SOURCE_DIR}/third_party/r8brain
 )
 
-# Engine dependency surface. Qt6::Widgets is still linked into the engine
-# because five core files use QtWidgets (TxKeyingMarker.h, ThemeManager.cpp,
-# AutomationServer.cpp, ShortcutManager.cpp, SettingsHelpers.cpp). These are
-# tracked as EB2 legacy in tools/check_engine_boundary.py (per-file baseline
-# counts that may only shrink) and split out in step 3 — AutomationServer's
-# widget-facing dumpTree/grab half is the bulk of it.
+# Engine dependency surface. Desktop-only implementations are compiled by the
+# AetherSDR executable, so aethercore must not link QtWidgets. Because aetherd
+# links the engine archive, it currently inherits this runtime surface too;
+# narrowing those transitive dependencies is later RFC burndown work.
 target_link_libraries(aethercore PUBLIC
     aether_sqlite3
     Qt6::Core
     Qt6::Concurrent
+    # Transitive aetherd debt: BandPlanManager and DxccColorProvider expose
+    # QColor in their public data surfaces. Stage 3 forbids QtWidgets; moving
+    # these presentation types out of aethercore is a later burndown step.
     Qt6::Gui
-    Qt6::Widgets
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
@@ -2069,10 +2112,10 @@ if(Qt6DBus_FOUND)
 endif()
 
 if(AETHER_GPU_SPECTRUM)
-    # PUBLIC on the engine: src/core/AutomationServer.cpp compiles QRhiWidget
-    # grab paths under #ifdef AETHER_GPU_SPECTRUM (QRhiWidget is public
-    # QtWidgets API on Qt 6.7+, so no GuiPrivate needed engine-side).
-    target_compile_definitions(aethercore PUBLIC AETHER_GPU_SPECTRUM)
+    # Desktop-only: SpectrumWidget and AutomationServer's grab paths compile
+    # QRhiWidget code. The headless engine has no GPU-widget surface.
+    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
+    target_compile_definitions(aetherdesktop_support PRIVATE AETHER_GPU_SPECTRUM)
 
     # Apply the manual private-include paths now that AetherSDR exists. Covers
     # Debian multi-arch and Windows/macOS aqt installs that lack the Qt6::GuiPrivate
@@ -2080,6 +2123,10 @@ if(AETHER_GPU_SPECTRUM)
     if(DEBIAN_GPU_FIX_REQUIRED)
         message(STATUS "Applying private QtGui include paths to AetherSDR (${DEBIAN_PRIVATE_INC})")
         target_include_directories(AetherSDR PRIVATE
+            "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
+            "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
+        )
+        target_include_directories(aetherdesktop_support PRIVATE
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
         )
@@ -2093,10 +2140,15 @@ if(AETHER_GPU_SPECTRUM)
             "${QT_FRAMEWORK_PRIVATE_INC}"
             "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
         )
+        target_include_directories(aetherdesktop_support PRIVATE
+            "${QT_FRAMEWORK_PRIVATE_INC}"
+            "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+        )
     endif()
 
     if(TARGET Qt6::GuiPrivate)
         target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
+        target_link_libraries(aetherdesktop_support PRIVATE Qt6::GuiPrivate)
     elseif(NOT DEBIAN_GPU_FIX_REQUIRED AND NOT QT_FRAMEWORK_PRIVATE_INC)
         # No GuiPrivate target and neither manual path applied — last resort:
         # locate the rhi/ headers within the Qt6::Gui include dirs. Qt's macOS
@@ -2112,6 +2164,7 @@ if(AETHER_GPU_SPECTRUM)
             foreach(_pd IN LISTS _priv_dirs)
                 if(EXISTS "${_pd}/rhi/qrhi.h")
                     target_include_directories(AetherSDR PRIVATE "${_pd}")
+                    target_include_directories(aetherdesktop_support PRIVATE "${_pd}")
                     message(STATUS "QRhi headers found at ${_pd}/rhi/")
                     break()
                 endif()
@@ -2841,7 +2894,7 @@ endif()
 # Compiler warnings — same flags for both first-party targets. Vendored
 # sources compiled into aethercore keep their per-source -w COMPILE_FLAGS,
 # which land after these target options and win (unchanged from monolith).
-foreach(_aether_tgt aethercore AetherSDR)
+foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
     if(MSVC)
         target_compile_options(${_aether_tgt} PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
     else()
@@ -2855,7 +2908,6 @@ foreach(_aether_tgt aethercore AetherSDR)
         )
     endif()
 endforeach()
-
 
 # ── Unit test harnesses ──────────────────────────────────────────────────────
 # MOVED: every test target is now declared in tests/tests.cmake, which cut this
@@ -2934,3 +2986,83 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
+
+# Stage 3's headless boundary is structural: neither the engine library nor
+# its daemon may acquire the desktop widget dependency. Walk the complete
+# target graph so an interface/helper library cannot hide QtWidgets from a
+# direct LINK_LIBRARIES property check.
+function(aether_assert_no_qtwidgets root_target)
+    set(_pending_targets "${root_target}")
+    set(_visited_targets)
+    while(_pending_targets)
+        list(POP_FRONT _pending_targets _current_target)
+        if(_current_target IN_LIST _visited_targets)
+            continue()
+        endif()
+        list(APPEND _visited_targets "${_current_target}")
+
+        # Imported packages are leaves for this project-ownership assertion.
+        # Their generator-expression metadata can mention consumer targets and
+        # is not a reliable forward dependency graph. Qt6::Widgets is still
+        # caught when a project target links it directly; project-owned helper
+        # and interface targets are traversed recursively.
+        get_target_property(_target_is_imported "${_current_target}" IMPORTED)
+        if(_target_is_imported)
+            continue()
+        endif()
+
+        foreach(_link_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(_target_links "${_current_target}" "${_link_property}")
+            if(NOT _target_links OR "${_target_links}" MATCHES "-NOTFOUND$")
+                continue()
+            endif()
+            foreach(_target_link IN LISTS _target_links)
+                if("${_target_link}" MATCHES "(^|[^A-Za-z0-9_])Qt6::Widgets([^A-Za-z0-9_]|$)")
+                    message(FATAL_ERROR
+                        "${root_target} must not link Qt6::Widgets "
+                        "(reached through ${_current_target})")
+                endif()
+
+                # Follow real target-valued entries only. Tokenizing arbitrary
+                # generator expressions can manufacture reverse edges from
+                # TARGET_PROPERTY metadata. LINK_ONLY is the one wrapper CMake
+                # adds for a static library's private link dependencies.
+                set(_candidate_target "${_target_link}")
+                if("${_target_link}" MATCHES "^\\$<LINK_ONLY:([^>]+)>$")
+                    set(_candidate_target "${CMAKE_MATCH_1}")
+                endif()
+                if(TARGET "${_candidate_target}"
+                        AND NOT _candidate_target IN_LIST _visited_targets)
+                    list(APPEND _pending_targets "${_candidate_target}")
+                endif()
+            endforeach()
+        endforeach()
+    endwhile()
+endfunction()
+
+aether_assert_no_qtwidgets(aethercore)
+aether_assert_no_qtwidgets(aetherd)
+
+# CPack Configuration
+string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
+
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "FlexRadio transceiver client")
+set(CPACK_PACKAGE_DESCRIPTION "AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines.
+Built from the ground up with Qt6 and C++20,
+it speaks the SmartSDR protocol natively and aims to
+replicate the full SmartSDR experience.")
+set(CPACK_PACKAGE_CONTACT "Jeremy KK7GWY <info@aethersdr.com>")
+set(CPACK_PACKAGE_VENDOR "AetherSDR Development Team")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://www.aethersdr.com/")
+# Deb
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SECTION "hamradio")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+# RPM
+set(CPACK_RPM_PACKAGE_NAME ${PROJECT_NAME_LOWER})
+set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_AUTOREQ ON)
+
+include(CPack)

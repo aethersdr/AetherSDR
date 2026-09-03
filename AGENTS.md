@@ -205,6 +205,10 @@ include DFNR; it is a manual prereq only for local dev builds. NR still
 works without it — RN2 (RNNoise) is bundled and always built, needing no
 setup.
 
+**RNNoise architecture check.** The `third_party/rnnoise/src/x86` sources and
+include directory belong only in x86 build graphs. After configuring any ARM
+build, `rg 'rnnoise/src/x86' <build-dir>/build.ninja` must find no matches.
+
 Full dependency list is in `README.md` — don't duplicate it here.
 
 ### Adding a test — declare it in `tests/tests.cmake`, not `CMakeLists.txt`
@@ -422,7 +426,7 @@ The accepted RFC at
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
-`IRadioBackend` (`src/core/backends/`) now has **four** implementors,
+`IRadioBackend` (`src/core/backends/`) now has **six** implementors,
 selected at connect time by a `family` string through `makeBackend()`:
 
 | Family | Backend | Notes |
@@ -431,9 +435,15 @@ selected at connect time by a `family` string through `makeBackend()`:
 | `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
 | `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
+| `anan` | `AnanBackend` (`src/core/backends/anan/`) | ANAN-G2 receive support over openHPSDR Ethernet Protocol 2; raw-IQ RX DSP runs in-client and TX remains absent by construction |
+| `rtl` | `RtlSdrBackend` (`src/core/backends/rtl/`) | RTL-SDR USB receive backend; raw-IQ RX DSP runs in-client and the backend is RX-only by construction |
 
-The versioned protocol (step 3+) has not landed — UI code still consumes
-models directly, and that remains correct.
+Step 3 is in progress: the normative v1 envelope contract, bounded codec,
+observe-only local handshake/capability service, and a QtWidgets-free
+`aetherd` skeleton have landed. Typed model resources, subscriptions,
+authenticated non-TX control, and the desktop adapter have not; UI code still
+consumes models directly, and that remains correct. No protocol TX method is
+advertised before the step-4 arbiter exists.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
@@ -450,8 +460,9 @@ duplicate to Qt. The same shape exists on the spectrum side.
 
 | Target | Contents | May link |
 |---|---|---|
-| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. **Never `gui/`; QtWidgets only via the tracked-legacy files below, shrinking to zero** |
+| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Gui/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it is a burndown target. **Never `gui/` or QtWidgets**; the remaining EB2 warnings are source-location debt compiled only by the desktop target |
 | `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
+| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + direct Qt Core/Network links. It currently inherits the engine's public/private runtime surface, including Qt Concurrent, Gui, Multimedia, SerialPort, WebSockets, DBus, and qtkeychain when those optional dependencies are enabled. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it and narrowing the other transitive edges are burndown targets. **Never QtWidgets** |
 
 The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 `static-checks.yml`, `--strict`) by three ratchets:
@@ -460,10 +471,11 @@ The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 - **EB2** — no `core/`/`models/` file may use QtWidgets (a shrinking
   tracked-legacy set warns, new usage errors).
 - **EB3** — no file **above the radio seam** (all of `src/gui/`,
-  `src/core/`, `src/models/` **except** the backend tree
-  `src/core/backends/`) may include a **vendor header** — the
-  family-specific wire classes the RFC keeps behind `IRadioBackend`
-  (SmartSDR/FlexLib + KiwiSDR; the headers tagged `vendor(...)` in
+  `src/core/`, `src/models/`, plus the root app-shell files `src/main.cpp`
+  and `src/MacStartupAbortGuard.{h,cpp}`, **except** the backend tree
+  `src/core/backends/`) may include a **vendor header** — any radio-family-
+  specific wire class the RFC keeps behind `IRadioBackend` (currently Flex,
+  Kiwi, HL2, Sim, Icom, ANAN, and RTL; the headers tagged `vendor(...)` in
   `docs/architecture/aetherd-touchpoint-tags.json`). Only `vendor(...)` is
   EB3-gated: a standalone *accessory* device's own transport (the 4O3A
   antenna switch, the Tgxl/Pgxl direct sockets) is `peripheral(...)`, a
@@ -511,7 +523,11 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker.
+  editing the checker. The only permitted rebaseline is an intentional
+  vocabulary-classification change: every newly tracked include must be proven
+  to predate that classification against the merge base, the evidence must be
+  documented, and a maintainer must explicitly review the rebaseline. The
+  expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -523,9 +539,10 @@ you:
 - **Removing coupling (the goal).** When you convert a file's radio access
   to the seam and drop a vendor include, **remove that stem from the
   file's row** in `KNOWN_VENDOR_INCLUDE_BASELINE` (delete the row when it
-  empties). The set only shrinks — never add a stem or a row to make a
-  build pass. If EB3 blocks you and the include is genuinely unavoidable,
-  that's a design conversation for a maintainer, not a baseline edit.
+  empties). Outside the documented vocabulary-classification carveout above,
+  the set only shrinks — never add a stem or a row to make a build pass. If EB3
+  blocks you and the include is genuinely unavoidable, that's a design
+  conversation for a maintainer, not a baseline edit.
 - **`src/gui/**` is in the CI trigger** for `static-checks.yml` now
   (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
   still caught.

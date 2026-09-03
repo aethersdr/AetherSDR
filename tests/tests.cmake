@@ -66,6 +66,28 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# ── AetherD control protocol tests ───────────────────────────────────────────
+# AetherD control protocol v1: transport-neutral envelope validation and
+# fail-closed structural limits. QtCore only; no daemon/socket/model dependency.
+add_executable(control_protocol_codec_test
+    tests/control_protocol_codec_test.cpp
+    src/core/control/ControlProtocolCodec.cpp
+)
+target_include_directories(control_protocol_codec_test PRIVATE src)
+target_link_libraries(control_protocol_codec_test PRIVATE Qt6::Core)
+add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
+
+# Current-user local transport plus the first-request handshake. This test
+# binds the production QLocalServer socket and proves that the Stage-3 surface
+# grants observation only; no control or transmit capability may appear.
+add_executable(local_control_server_test
+    tests/local_control_server_test.cpp
+)
+target_include_directories(local_control_server_test PRIVATE src)
+target_link_libraries(local_control_server_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME local_control_server_test COMMAND local_control_server_test)
+
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
 # DIGITAL_VOICE_WAVEFORM_DIR, CRDV_DIR and crdv::crdv are all defined by the time
@@ -949,6 +971,7 @@ foreach(APP_SETTINGS_SCENARIO
         save-before-load
         xml-import-parity
         first-run
+        database-file-permissions
         xml-import-tmp-promotion
         xml-import-bak-fallback
         xml-artifacts-unusable
@@ -4302,6 +4325,28 @@ foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     endif()
 endforeach()
 
+# AutomationServer is desktop support, not engine code. Keep every test that
+# instantiates the production bridge linked through the same desktop-only
+# library as AetherSDR so moving QtWidgets out of aethercore cannot silently
+# leave these harnesses with unresolved bridge symbols.
+set(AETHER_AUTOMATION_SERVER_TESTS
+    automation_server_gesture_test
+    automation_device_diagnostics_test
+    automation_json_id_test
+    automation_connect_family_test
+    automation_connect_wait_phase_test
+    automation_double_click_test
+    automation_drag_at_test
+    automation_tx_watchdog_test
+    automation_rn2_probe_test
+    tci_automation_test
+)
+foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
+    if(TARGET ${_automation_test})
+        target_link_libraries(${_automation_test} PRIVATE aetherdesktop_support)
+    endif()
+endforeach()
+
 # ── FFTW planner bound for the HL2 / WDSP tests ─────────────────────────────
 #
 # WDSP builds every FFT with FFTW_PATIENT. The first OpenChannel in a cold
@@ -4387,6 +4432,28 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+# GUI harnesses that link aethercore used to receive ThemeManager,
+# SettingsHelpers, and ShortcutManager accidentally from that engine archive.
+# Run this retrofit only after every test target has been declared, preserving
+# their desktop dependency without exposing desktop support to engine-only tests.
+get_property(_aether_desktop_test_candidates DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_desktop_test IN LISTS _aether_desktop_test_candidates)
+    get_target_property(_desktop_test_type ${_desktop_test} TYPE)
+    if(NOT _desktop_test_type STREQUAL "EXECUTABLE")
+        continue()
+    endif()
+    get_target_property(_desktop_test_links ${_desktop_test} LINK_LIBRARIES)
+    if(";${_desktop_test_links};" MATCHES ";aethercore;"
+            AND ";${_desktop_test_links};" MATCHES ";Qt6::Widgets;"
+            AND NOT ";${_desktop_test_links};" MATCHES ";aetherdesktop_support;")
+        target_link_libraries(${_desktop_test} PRIVATE aetherdesktop_support)
+    endif()
+endforeach()
+unset(_aether_desktop_test_candidates)
+unset(_desktop_test)
+unset(_desktop_test_type)
+unset(_desktop_test_links)
 
 
 # The isolation TU, compiled once and linked into every test target below. An
