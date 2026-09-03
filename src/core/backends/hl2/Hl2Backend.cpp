@@ -547,6 +547,33 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 
     connect(m_metis, &MetisClient::telemetryUpdated, this,
             [this](const Hl2Telemetry& t) { publishTelemetry(t); });
+
+    // Stream-free telemetry (roadmap #15). Lives on the GUI thread rather than
+    // the hl2-io thread on purpose: it polls at 1-2 Hz at most, it must outlive
+    // the stream's own machinery, and putting it beside MetisClient would tie
+    // the instrument's lifetime to the thing it is meant to observe failing.
+    m_telemetryPoller = new Hl2TelemetryPoller(this);
+    // Its own tick, started here and NEVER stopped -- deliberately not the
+    // link-stats timer, even though that one already computes the
+    // fresh-packets comparison this needs.
+    //
+    // m_linkStatsTimer stops on linkDown and on connectFailed, because a link
+    // that is down has no stats to publish. Driving the poll state from it
+    // would mean the poller stops being re-evaluated in precisely the three
+    // states it exists to serve: disconnected, failed to connect, and another
+    // client holding the radio. That is the same coupling this whole feature is
+    // an argument against -- an instrument whose liveness depends on the thing
+    // it is measuring -- and it would have been invisible, because the unit
+    // test pins the rule and the rule would have been right while nothing ever
+    // asked it.
+    auto* pollStateTimer = new QTimer(this);
+    pollStateTimer->setInterval(kTelemetryPollStateIntervalMs);
+    connect(pollStateTimer, &QTimer::timeout, this, &Hl2Backend::updateTelemetryPollState);
+    pollStateTimer->start();
+    connect(m_telemetryPoller, &Hl2TelemetryPoller::readingReceived,
+            this, &Hl2Backend::onStreamFreeReading);
+    connect(m_telemetryPoller, &Hl2TelemetryPoller::pollUnanswered, this,
+            [this](int consecutive) { m_streamFreeUnanswered = consecutive; });
     // Mirror the drop counter onto this thread so healthSnapshot() can read it
     // without touching an object that lives on the I/O thread.
     connect(m_metis, &MetisClient::dropsUpdated, this,
@@ -602,6 +629,61 @@ void Hl2Backend::publishLinkStats()
     s.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
     m_linkRxPacketsAtLastTick = m_link.rxPackets;
     emit linkStatsUpdated(s);
+}
+
+void Hl2Backend::updateTelemetryPollState()
+{
+    if (!m_telemetryPoller)
+        return;
+
+    // Reading the health snapshot is the demand signal — see the member's
+    // comment for why that is the read and not a separate call.
+    const bool wanted = m_healthDemand.isValid()
+                        && m_healthDemand.elapsed() < kHealthDemandWindowMs;
+
+    Hl2LinkState state;
+    if (!m_connected) {
+        state = m_pollTargetHeldByOther ? Hl2LinkState::HeldByOther
+                                        : Hl2LinkState::NotConnected;
+    } else if (m_link.rxPackets != m_linkRxPacketsAtPollCheck) {
+        state = Hl2LinkState::Streaming;
+    } else {
+        // Connected, and no EP6 arrived since the last tick. This is the case
+        // the whole feature exists for: the packets that carry the radio's
+        // state are the packets that stopped.
+        state = Hl2LinkState::StreamStalled;
+    }
+    m_linkRxPacketsAtPollCheck = m_link.rxPackets;
+
+    m_telemetryPoller->setSurfaceVisible(wanted);
+    m_telemetryPoller->setLinkState(state);
+}
+
+void Hl2Backend::setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther)
+{
+    m_pollTargetHeldByOther = heldByOther;
+    if (!m_telemetryPoller)
+        return;
+    if (addr.isNull()) {
+        // Whatever we last read belonged to the radio we are no longer pointed
+        // at. Forget it rather than letting a stale reading outlive its subject.
+        m_haveStreamFree = false;
+        m_streamFreeAt.invalidate();
+        m_streamFreeUnanswered = 0;
+    }
+    m_telemetryPoller->setTarget(addr);
+    updateTelemetryPollState();
+}
+
+void Hl2Backend::onStreamFreeReading(const DiscoveryReply& reply, qint64 /*ageMs*/)
+{
+    m_streamFree = reply;
+    m_haveStreamFree = true;
+    m_streamFreeUnanswered = 0;
+    // Age is measured from arrival here, not from the round trip the poller
+    // reported: what a reader needs to know is how stale the number on screen
+    // is, and that clock starts when we received it.
+    m_streamFreeAt.restart();
 }
 
 IRadioBackend::LinkStats Hl2Backend::linkStats() const
@@ -1600,6 +1682,15 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         return;
     }
 
+    // Point the stream-free poller at this radio now, before the stream exists.
+    // Not for the connected case -- the cadence rule polls at zero while EP6 is
+    // healthy -- but so the poller ALREADY knows the address when the stream
+    // later stalls. Discovering the target at the moment of failure would mean
+    // the one path meant to survive a broken stream depends on the machinery
+    // that just broke.
+    if (m_telemetryPoller)
+        setTelemetryPollTarget(host, /*heldByOther=*/false);
+
     // A connect arriving while the previous one's chains are still opening.
     // Reachable now that the build spans event-loop turns: the reconnect timer
     // or an operator picking a different radio both land here.
@@ -2192,6 +2283,14 @@ void Hl2Backend::disconnectRadio()
     // cancelled — WDSP's OpenChannel does not return early — so it runs to
     // completion on the I/O thread and finishDspSetup() releases what it built.
     ++m_connectGeneration;
+    // The stream-free poller keeps its target across a disconnect ON PURPOSE.
+    // The operator is most likely to want the radio's temperature and PTT state
+    // in the moments after a session ends badly, and that is exactly when the
+    // in-band path has nothing. The cadence rule decides whether it actually
+    // polls: NotConnected polls only while something is reading the health
+    // snapshot, so a disconnect the operator walks away from goes quiet on its
+    // own within kHealthDemandWindowMs.
+
     // And a connect PARKED BEHIND that build is stale for the same reason: the
     // operator has since asked to be disconnected. Leaving it here made
     // finishDspSetup()'s supersede branch re-drive it — a second full build
@@ -3915,6 +4014,44 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         return o ? QVariant(*o) : QVariant();
     };
 
+    // Reading this snapshot IS the demand signal for the stream-free poller.
+    // Every consumer does it -- the diagnostics dialog, the bridge's `health`
+    // verb, a harness -- so none of them can forget to say "I am watching now"
+    // the way a separate call would let them. See the member's comment.
+    m_healthDemand.restart();
+
+    // The readings below come from whichever path actually has them. The two
+    // sources carry the SAME quantities in the SAME raw units -- which is why
+    // MetisProtocol decodes both into comparable fields -- so this is a choice
+    // of source, never a conversion.
+    //
+    // In-band wins when it has a value: it is fresher (10 Hz against 1-2 Hz)
+    // and its cadence is ours. Stream-free fills in when in-band has nothing,
+    // which is exactly the disconnected, stalled, and held-by-another-client
+    // cases the poller exists for. The `telemetrySource` row below says which
+    // one answered, because an unattributed reading cannot be checked against
+    // anything.
+    Hl2Telemetry t = m_telemetry;
+    if (m_haveStreamFree) {
+        auto fill = [](auto& dst, const auto& src) { if (!dst && src) dst = src; };
+        fill(t.temperatureRaw,  m_streamFree.temperatureRaw);
+        fill(t.forwardPowerRaw, m_streamFree.forwardPowerRaw);
+        fill(t.reversePowerRaw, m_streamFree.reversePowerRaw);
+        fill(t.biasCurrentRaw,  m_streamFree.biasCurrentRaw);
+        fill(t.txFifoFillMsbs,  m_streamFree.txFifoFillMsbs);
+        fill(t.txFifoRecovery,  m_streamFree.txFifoRecovery);
+        if (!t.ptt && m_streamFree.ptt)
+            t.ptt = *m_streamFree.ptt;
+        // adcOverload is deliberately NOT filled from the stream-free reply.
+        // Its source there is a 2-bit counter that only an EP6 packet clears,
+        // so off-stream it latches at maximum after one historical clip and
+        // never comes back; and while ANOTHER client streams, it is being
+        // cleared on a cadence we neither see nor control. Either way the
+        // number would describe someone else's window, not the operator's.
+        // MetisProtocol.cpp and docs/architecture/hl2-stream-free-telemetry.md
+        // carry the full reasoning.
+    }
+
     section("connected", QStringLiteral("Radio"));
     put("connected", QStringLiteral("Connected"), m_connected);
     put("model", QStringLiteral("Model"), QStringLiteral("Hermes-Lite 2"));
@@ -3922,7 +4059,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // the running radio reports it — not the version string the discovery reply
     // carried, which is only ever seen by the radio picker before connecting.
     put("firmwareVersion", QStringLiteral("Firmware version"),
-        opt(m_telemetry.firmwareVersion));
+        opt(t.firmwareVersion));
 
     section("adcOverload", QStringLiteral("Converter"));
     put("adcOverload", QStringLiteral("ADC overload"), opt(m_telemetry.adcOverload));
@@ -3932,8 +4069,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // The register bit is ACTIVE LOW and MetisProtocol already decodes it, so
     // what is shown here is the plain-language sense: true means transmit is
     // being held off. Displaying the raw bit would read exactly backwards.
-    put("txInhibited", QStringLiteral("TX inhibited"), opt(m_telemetry.txInhibited));
-    put("ptt", QStringLiteral("PTT (radio)"), m_telemetry.ptt);
+    put("txInhibited", QStringLiteral("TX inhibited"), opt(t.txInhibited));
+    put("ptt", QStringLiteral("PTT (radio)"), t.ptt);
     put("keyed", QStringLiteral("Keyed (app)"), m_keyed);
     put("tuning", QStringLiteral("Tune carrier"), m_tuning);
     // The FPGA's transmit sample buffer. The oracle calls its depth "the most
@@ -3945,13 +4082,13 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // impending underrun. See MetisProtocol.cpp's apply() for the full layout
     // and for what the previous three rows here got wrong.
     put("txFifoFillMsbs", QStringLiteral("TX FIFO fill (0-127, coarse)"),
-        opt(m_telemetry.txFifoFillMsbs));
+        opt(t.txFifoFillMsbs));
     // ONE bit for TWO faults: ran empty, or writes blocked after filling. The
     // gateware does not distinguish them, so this must not be split into an
     // underflow row and an overflow row — the two rows that stood here reported
     // opposite faults for the same flag depending on fill-level bit 6.
     put("txFifoRecovery", QStringLiteral("TX pacing fault (under OR overrun)"),
-        opt(m_telemetry.txFifoRecovery));
+        opt(t.txFifoRecovery));
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
@@ -4058,16 +4195,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("temperatureC", QStringLiteral("PA temperature (°C)"),
         m_havePaTemp ? QVariant(m_paTempC) : QVariant());
     put("temperatureRaw", QStringLiteral("Temperature (raw counts)"),
-        opt(m_telemetry.temperatureRaw));
+        opt(t.temperatureRaw));
     put("biasCurrentRaw", QStringLiteral("PA bias current (raw counts)"),
-        opt(m_telemetry.biasCurrentRaw));
+        opt(t.biasCurrentRaw));
 
     section("forwardPowerRaw", QStringLiteral("Directional coupler (uncalibrated)"));
     put("forwardPowerRaw", QStringLiteral("Forward (raw counts)"),
-        opt(m_telemetry.forwardPowerRaw));
+        opt(t.forwardPowerRaw));
     put("forwardPowerW", QStringLiteral("Forward (W, approx — instantaneous)"),
-        m_telemetry.forwardPowerRaw
-            ? QVariant(directionalWatts(*m_telemetry.forwardPowerRaw)) : QVariant());
+        t.forwardPowerRaw
+            ? QVariant(directionalWatts(*t.forwardPowerRaw)) : QVariant());
     // The value the FWDPWR meter is actually driven from, next to the raw
     // instantaneous sample it is derived from. Both, because the difference
     // between them IS the diagnosis on SSB: a wide gap means the envelope is
@@ -4088,12 +4225,12 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // Assert on forwardPowerW, the instantaneous row above.
     put("forwardPowerPeakW",
         QStringLiteral("Forward (W, approx — peak HOLD, display only)"),
-        m_telemetry.forwardPowerRaw ? QVariant(m_fwdPeakWatts) : QVariant());
+        t.forwardPowerRaw ? QVariant(m_fwdPeakWatts) : QVariant());
     put("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),
-        opt(m_telemetry.reversePowerRaw));
+        opt(t.reversePowerRaw));
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
-        m_telemetry.reversePowerRaw
-            ? QVariant(directionalWatts(*m_telemetry.reversePowerRaw)) : QVariant());
+        t.reversePowerRaw
+            ? QVariant(directionalWatts(*t.reversePowerRaw)) : QVariant());
     // Meaningful without calibration — it is a ratio of two readings from the
     // same converter, so the unknown scale cancels. Absent below the noise
     // floor, where a ratio of two noise samples is not a mismatch reading.
@@ -4105,14 +4242,53 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // the shared constant, so the two surfaces cannot disagree.
     {
         QVariant swr;
-        if (m_telemetry.forwardPowerRaw && m_telemetry.reversePowerRaw
-            && *m_telemetry.forwardPowerRaw >= kMinForwardCountsForSwr) {
-            if (const auto v = swrFromRaw(*m_telemetry.forwardPowerRaw,
-                                          *m_telemetry.reversePowerRaw))
+        if (t.forwardPowerRaw && t.reversePowerRaw
+            && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
+            if (const auto v = swrFromRaw(*t.forwardPowerRaw,
+                                          *t.reversePowerRaw))
                 swr = *v;
         }
         put("swr", QStringLiteral("SWR"), swr);
     }
+
+    // ---- where these readings came from, and how old they are (#15) ----
+    //
+    // Without these three, every row above is unattributable. A temperature is
+    // the same number whether it arrived in-band a moment ago or over port 1025
+    // ninety seconds ago, and those support completely different actions.
+    section("telemetrySource", QStringLiteral("Telemetry source"));
+    // Which path produced the readings above. "in-band" is the EP6 C&C cycle
+    // and needs our own stream; "port-1025" is the stream-free poll, the only
+    // one that works while another client holds the radio; "none" is neither,
+    // and is NOT the same as a reading of zero.
+    //
+    // This tests the IN-BAND value, not the merged one. Testing `t` would be
+    // circular: `t` is in-band-or-stream-free by construction, so it is
+    // non-empty in both cases and the row would report "in-band" for readings
+    // that came off port 1025 -- the precise attribution error the row exists
+    // to prevent, and the one A-telemetry's evidence depends on not making.
+    put("telemetrySource", QStringLiteral("Source"),
+        (m_connected && m_telemetry.temperatureRaw) ? QStringLiteral("in-band")
+        : m_haveStreamFree                          ? QStringLiteral("port-1025")
+                                                    : QStringLiteral("none"));
+    // Age of the newest stream-free reply. Absent when there has never been
+    // one -- a frozen reading and a fresh reading render identically without
+    // this, and frozen is precisely the failure this feature exists to catch.
+    put("telemetryAgeMs", QStringLiteral("Stream-free reading age (ms)"),
+        (m_haveStreamFree && m_streamFreeAt.isValid())
+            ? QVariant(static_cast<qlonglong>(m_streamFreeAt.elapsed())) : QVariant());
+    // Consecutive polls sent with no reply. This is the third state: `null`
+    // above already means "the radio never reported this field", but without
+    // this row "we have asked and heard nothing" is indistinguishable from "we
+    // have never asked" -- one is a radio or network fault, the other is the
+    // poller being deliberately idle, and they want opposite responses.
+    put("telemetryUnanswered", QStringLiteral("Unanswered polls"),
+        m_telemetryPoller && m_telemetryPoller->currentIntervalMs() > 0
+            ? QVariant(m_streamFreeUnanswered) : QVariant());
+    // What the rule decided, so the cadence is visible rather than a mystery
+    // the operator has to infer from packet captures. 0 = deliberately silent.
+    put("telemetryPollMs", QStringLiteral("Poll interval (ms), 0 = not polling"),
+        m_telemetryPoller ? QVariant(m_telemetryPoller->currentIntervalMs()) : QVariant());
 
     section("bandFilter", QStringLiteral("Front end"));
     put("bandFilter", QStringLiteral("J16 filter byte"),

@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2TelemetryPoller.h"  // stream-free telemetry (#15)
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -117,6 +118,16 @@ public:
     HealthSnapshot healthSnapshot() const override;
     LinkStats linkStats() const override;
 
+    // Point the stream-free telemetry poller at a radio (roadmap #15).
+    //
+    // Separate from connectRadio() ON PURPOSE: the case this feature exists for
+    // is a radio we are NOT connected to, because somebody else has the stream.
+    // The caller that knows this is the picker — Hl2Discovery already parses
+    // the in-use flag out of the same reply — so `heldByOther` is passed in
+    // rather than guessed here. A null address stops the poller and releases
+    // its socket.
+    void setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther);
+
 signals:
     // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
     // on the IRadioBackend seam: WDSP is this backend's alone (a Flex
@@ -204,6 +215,15 @@ private:
     void seedReceiverAgc();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
+
+    // ---- stream-free telemetry (roadmap #15) ----
+    //
+    // Drive the poller's LinkState from what the IQ path is actually doing, so
+    // the cadence rule in Hl2TelemetryCadence.h is CONNECTED rather than merely
+    // consulted. Called from publishLinkStats() (which already computes the
+    // EP6-arriving signal on a fixed tick) and from connect/disconnect.
+    void updateTelemetryPollState();
+    void onStreamFreeReading(const DiscoveryReply& reply, qint64 ageMs);
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
@@ -217,6 +237,47 @@ private:
     MetisClient* m_metis = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
+
+    // ---- stream-free telemetry (roadmap #15) ----
+    //
+    // Reads the radio over the alternate control port while the in-band EP6
+    // path cannot: another client holds the radio, our stream has stalled, or
+    // we are not connected. Its own socket, never MetisClient's — the point is
+    // to keep working when that one has stopped.
+    Hl2TelemetryPoller* m_telemetryPoller = nullptr;
+    // The newest stream-free reply, and how old it was when it arrived.
+    // m_haveStreamFree stays false until one has actually landed, so the health
+    // rows can say "never read" rather than showing a default-constructed reply
+    // as if the radio had reported zeros.
+    DiscoveryReply m_streamFree;
+    bool m_haveStreamFree = false;
+    QElapsedTimer m_streamFreeAt;
+    int m_streamFreeUnanswered = 0;
+    // What the picker last said about this radio. Only meaningful while we are
+    // not connected: it is the difference between "idle radio nobody is using"
+    // and "someone else's session", which is the case A-telemetry is about.
+    bool m_pollTargetHeldByOther = false;
+    // Separate from m_linkRxPacketsAtLastTick, which publishLinkStats()
+    // CONSUMES for the heartbeat. Sharing one counter would mean whichever
+    // reader ran second always saw "no new packets" and reported a healthy
+    // link as stalled.
+    quint64 m_linkRxPacketsAtPollCheck = 0;
+    // Reading the health snapshot IS the demand signal for the poller: it is
+    // the one thing every consumer does — the diagnostics dialog, the
+    // automation bridge's `health` verb, a harness — so it cannot be forgotten
+    // by one of them the way a separate "I am watching now" call would be. That
+    // is why healthSnapshot() is allowed to touch this despite being const;
+    // the alternative silently leaves the poller off for whichever consumer
+    // nobody remembered to wire.
+    mutable QElapsedTimer m_healthDemand;
+    // How long a health read keeps the poller interested once nothing is asking
+    // any more. Long enough that a 1 Hz consumer never sees a gap, short enough
+    // that a closed dialog stops the traffic promptly.
+    static constexpr qint64 kHealthDemandWindowMs = 5000;
+    // How often the poll state is re-evaluated. Independent of the link-stats
+    // cadence on purpose: see the timer's construction for why sharing that
+    // one would silence the poller in exactly the states it is for.
+    static constexpr int kTelemetryPollStateIntervalMs = 1000;
 
     // ---- manual frequency calibration (Hl2FreqCal) ----
     //
