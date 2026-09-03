@@ -128,9 +128,13 @@ GUI refreshes readouts at 10 Hz anyway, and the reference application's
 Network mode expects a ser2net proxy in **raw or telnet** mode — unlike the
 ACOM (raw-only), both are supported and telnet is verified on real
 hardware: the validation station's ser2net runs `accepter: telnet`. The
-parser's sync-run resync shrugs off telnet negotiation, and the rare status
-frame whose checksum byte is 0xFF (which telnet IAC-escapes) is dropped and
-re-polled 100 ms later — harmless in a polled protocol. Remote power-ON (§4)
+parser's sync-run resync shrugs off telnet negotiation. LCD frames are
+checksum-validated after accepting either byte-exact raw data or telnet's
+doubled-IAC representation, so a glyph/attribute byte of 0xFF cannot corrupt
+the mirror. The rare Status frame whose checksum byte is 0xFF is still dropped
+and re-polled 100 ms later — harmless in a polled protocol. RFC 2217 replies
+are scanned only while an explicit negotiation is pending, and an escaped
+`FF FF FE 2C` payload cannot be mistaken for `IAC DONT 2C`. Remote power-ON (§4)
 is the one feature that needs more than telnet framing: it drives the proxy's
 control lines via RFC 2217, so that port must be
 `accepter: telnet(rfc2217=true),<port>`. Everything else — polling,
@@ -315,15 +319,18 @@ MIT-licensed expert-amp-server project) — is:
   polled at 600 ms (the field-proven cadence; the frame is ~5x a Status
   reply, and the mirror is for eyes, not telemetry).
 - **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
-  01 |` 320 character bytes (8 rows x 40 columns, row-major) + 40
-  attribute bytes (one per column, bit N = inverse video on row N) —
-  369 bytes; a 371-byte variant without the `01` marker carries the
-  same data at the same offset 9.
+  ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
+  columns, row-major) + 40 attribute bytes (one per column, bit N =
+  inverse video on row N) + a 2-byte little-endian checksum over the
+  362-byte payload — 371 bytes total. Character data starts at offset 9.
+  The layout and checksum are pinned to a captured real Expert 1.3K-FA
+  response reproduced in `spe_protocol_test`.
 - **Parsing**: `Spe::FrameParser` recognises the display header before
   the CNT plausibility check would reject `0x6A` as an implausible
-  count, and hands the raw frame to a dedicated callback; display
-  replies also count toward poll-liveness so LCD traffic cannot trip
-  the silence detector (§6).
+  count, accepts raw or telnet-IAC-escaped bytes, validates the checksum,
+  and hands the logical frame to a dedicated callback. Display replies
+  do not count as Status liveness: telemetry and its command gate still
+  go stale if Status stops while the LCD continues (§6).
 - **Rendering**: `SpeLcdWidget` maps character bytes into the
   amplifier's own 256-glyph 6x8 font ROM (`SpeLcdFontRom.inc`,
   mechanically generated), applies the inverse-video attributes, renders
@@ -334,4 +341,8 @@ MIT-licensed expert-amp-server project) — is:
 
 With the mirror on screen, the FRONT PANEL keys stop being blind — the
 operator navigates the amplifier's menu watching the amplifier's screen,
-which is what unlocked the §4 ruling change.
+which is what unlocked the §4 ruling change. Those keys remain disabled
+until the first checksum-valid display arrives and are disabled again after
+two missed 600 ms refreshes. Every acknowledged keystroke requests an
+immediate display refresh and resets the periodic cadence, so a fast menu
+sequence does not have to wait a full polling interval to show its result.

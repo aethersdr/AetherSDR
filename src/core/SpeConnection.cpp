@@ -15,11 +15,13 @@ SpeConnection::SpeConnection(QObject* parent)
 
     m_parser.setFrameCallback([this](const Spe::Frame& f) { onFrameReceived(f); });
     m_parser.setDisplayCallback([this](const QByteArray& raw) {
-        // A display reply is as good as a Status reply for liveness —
-        // count it so LCD-heavy traffic can't trip the silence detector.
-        m_statusSeenSinceTick = true;
-        if (const auto frame = Spe::Lcd::decode(raw))
+        // LCD freshness and Status liveness are deliberately independent:
+        // a moving display must not keep stale telemetry/buttons looking live.
+        if (const auto frame = Spe::Lcd::decode(raw)) {
             emit lcdFrameReceived(*frame);
+            setLcdFresh(true);
+            m_lcdStaleTimer.start();
+        }
     });
 
     // Retries every 5s indefinitely until the amp returns or the user
@@ -45,22 +47,49 @@ SpeConnection::SpeConnection(QObject* parent)
     connect(&m_powerOnTimer, &QTimer::timeout, this, &SpeConnection::powerOnStep);
 
     m_lcdTimer.setInterval(kLcdPollIntervalMs);
-    connect(&m_lcdTimer, &QTimer::timeout, this, [this]() {
-        sendRaw(Spe::Lcd::buildRequest());
+    connect(&m_lcdTimer, &QTimer::timeout, this, &SpeConnection::requestLcdFrame);
+
+    m_lcdStaleTimer.setSingleShot(true);
+    m_lcdStaleTimer.setInterval(kLcdStaleTimeoutMs);
+    connect(&m_lcdStaleTimer, &QTimer::timeout, this, [this]() {
+        setLcdFresh(false);
     });
 }
 
 void SpeConnection::setLcdPolling(bool on)
 {
-    if (on == m_lcdWanted)
+    if (on == m_lcdWanted) {
         return;
+    }
     m_lcdWanted = on;
     if (on && m_connected) {
-        sendRaw(Spe::Lcd::buildRequest());  // first refresh without the full wait
-        m_lcdTimer.start();
+        setLcdFresh(false);
+        requestLcdFrame();  // first refresh without the full wait
     } else {
         m_lcdTimer.stop();
+        m_lcdStaleTimer.stop();
+        setLcdFresh(false);
     }
+}
+
+void SpeConnection::requestLcdFrame()
+{
+    if (!m_lcdWanted || !m_connected) {
+        return;
+    }
+    sendRaw(Spe::Lcd::buildRequest());
+    // An ACK-triggered refresh resets the periodic cadence, avoiding an
+    // immediate duplicate request from the timer that may already be near due.
+    m_lcdTimer.start();
+}
+
+void SpeConnection::setLcdFresh(bool fresh)
+{
+    if (fresh == m_lcdFresh) {
+        return;
+    }
+    m_lcdFresh = fresh;
+    emit lcdFreshChanged(fresh);
 }
 
 QString SpeConnection::description() const
@@ -168,8 +197,11 @@ void SpeConnection::disconnect()
     m_reconnectTimer.stop();
     m_pollTimer.stop();
     m_lcdTimer.stop();
+    m_lcdStaleTimer.stop();
+    setLcdFresh(false);
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
+    m_rfc2217NegotiationPending = false;
     m_connected = false;
     teardownDevice();
     m_parser.reset();
@@ -204,15 +236,18 @@ void SpeConnection::onTransportUp()
     // must not be judged on the previous session's answer (nor on the
     // previous session's carried scan tail).
     m_comPortOption = Spe::Rfc2217::OptionReply::None;
+    m_rfc2217NegotiationPending = false;
     m_rfc2217Tail.clear();
+    setLcdFresh(false);
     qCInfo(lcTuner) << "SpeConnection: connected via" << description();
 
     // First poll immediately — the timer only fires after a full interval,
     // and the applet shouldn't sit blank for it.
     sendRaw(Spe::buildStatusRequest());
     m_pollTimer.start();
-    if (m_lcdWanted)
-        m_lcdTimer.start();
+    if (m_lcdWanted) {
+        requestLcdFrame();
+    }
 
     emit connected();
 }
@@ -223,8 +258,11 @@ void SpeConnection::onTransportDown()
     m_connected = false;
     m_pollTimer.stop();
     m_lcdTimer.stop();
+    m_lcdStaleTimer.stop();
+    setLcdFresh(false);
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
+    m_rfc2217NegotiationPending = false;
     m_parser.reset();
     if (wasConnected) {
         qCDebug(lcTuner) << "SpeConnection: disconnected";
@@ -268,11 +306,13 @@ void SpeConnection::onReadyRead()
     // per-chunk scan would miss it — reporting "never confirmed" against a
     // correctly configured proxy. Only the tail is carried, never re-scanning
     // whole chunks, so a reply can't be double-counted either.
-    if (m_mode == Mode::Network) {
+    if (m_mode == Mode::Network && m_rfc2217NegotiationPending) {
         const auto reply = Spe::Rfc2217::scanComPortOptionReply(m_rfc2217Tail + chunk);
         m_rfc2217Tail = chunk.right(2);
-        if (reply != Spe::Rfc2217::OptionReply::None && reply != m_comPortOption) {
+        if (reply != Spe::Rfc2217::OptionReply::None) {
             m_comPortOption = reply;
+            m_rfc2217NegotiationPending = false;
+            m_rfc2217Tail.clear();
             if (reply == Spe::Rfc2217::OptionReply::Accepted) {
                 qCInfo(lcTuner) << "SpeConnection: proxy accepted RFC 2217"
                                    " COM-port control — remote power-ON is"
@@ -319,6 +359,10 @@ void SpeConnection::onFrameReceived(const Spe::Frame& f)
         // within one poll interval.
         qCDebug(lcTuner) << "SpeConnection: ACK for command"
                           << QString::number(static_cast<quint8>(f.data.at(0)), 16);
+        // The keys are safe only beside a fresh mirror. Pull the resulting
+        // screen immediately instead of making a fast menu sequence wait up
+        // to the next 600 ms periodic refresh.
+        requestLcdFrame();
         return;
     }
 
@@ -375,6 +419,9 @@ void SpeConnection::powerOn()
     if (m_mode == Mode::Network) {
         // Ask the proxy to interpret RFC 2217 frames, then give it a moment
         // — the reference application's own working pacing.
+        m_comPortOption = Spe::Rfc2217::OptionReply::None;
+        m_rfc2217NegotiationPending = true;
+        m_rfc2217Tail.clear();
         sendRaw(Spe::Rfc2217::buildWillComPortOption());
         m_powerOnTimer.start(500);
     } else {
@@ -401,6 +448,8 @@ void SpeConnection::powerOnStep()
         case 2:
             setControlLines(true, false);
             m_powerOnStep = -1;
+            m_rfc2217NegotiationPending = false;
+            m_rfc2217Tail.clear();
             // Report what was actually confirmed rather than assuming. The
             // pulse is always sent: a proxy that ignores COM-port control
             // simply discards the SET-CONTROL frames (or, in raw mode,
@@ -438,6 +487,8 @@ void SpeConnection::powerOnStep()
             break;
         default:
             m_powerOnStep = -1;
+            m_rfc2217NegotiationPending = false;
+            m_rfc2217Tail.clear();
             break;
     }
 }

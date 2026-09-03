@@ -1,4 +1,5 @@
 #include "SpeLcdWidget.h"
+#include "core/ThemeManager.h"
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -24,14 +25,6 @@ const unsigned char kFontRom[256][8] = {
 #include "SpeLcdFontRom.inc"
 };
 
-// Hardware-depiction palette (QColor components, not theme material — the
-// widget renders a physical green LCD, like the analog meter faces keep
-// their own face colours).
-const QColor kGlassBg(0x10, 0x20, 0x10);
-const QColor kGlassFg(0xd6, 0xf5, 0xd6);
-const QColor kGlassDim(0x3a, 0x55, 0x3a);
-const QColor kBezelCol(0x22, 0x28, 0x22);
-
 }  // namespace
 
 SpeLcdWidget::SpeLcdWidget(QWidget* parent)
@@ -39,6 +32,11 @@ SpeLcdWidget::SpeLcdWidget(QWidget* parent)
 {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     setAccessibleName(tr("Amplifier front-panel display"));
+    auto& theme = ThemeManager::instance();
+    connect(&theme, &ThemeManager::themeChanged, this, [this]() {
+        renderFrame();
+        update();
+    });
     renderFrame();
 }
 
@@ -62,8 +60,9 @@ void SpeLcdWidget::setFrame(const Spe::Lcd::Frame& frame)
 
 void SpeLcdWidget::clear()
 {
-    if (!m_hasFrame)
+    if (!m_hasFrame) {
         return;
+    }
     m_frame = {};
     m_hasFrame = false;
     renderFrame();
@@ -74,9 +73,13 @@ void SpeLcdWidget::renderFrame()
 {
     // 1x render; paintEvent integer-scales it so glyph pixels stay square
     // and crisp at any window size.
-    if (m_image.isNull())
+    auto& theme = ThemeManager::instance();
+    const QColor glassBg = theme.color(this, QStringLiteral("color.spe.lcd.background"));
+    const QColor glassFg = theme.color(this, QStringLiteral("color.spe.lcd.foreground"));
+    if (m_image.isNull()) {
         m_image = QImage(kNativeW, kNativeH, QImage::Format_RGB32);
-    m_image.fill(kGlassBg);
+    }
+    m_image.fill(glassBg);
 
     for (int row = 0; row < kRows; ++row) {
         for (int col = 0; col < kCols; ++col) {
@@ -86,12 +89,13 @@ void SpeLcdWidget::renderFrame()
             const int y0 = row * kCellH;
             for (int y = 0; y < kCellH; ++y) {
                 unsigned char scan = glyph[y];
-                if (inv)
+                if (inv) {
                     scan = static_cast<unsigned char>(~scan);
+                }
                 QRgb* line = reinterpret_cast<QRgb*>(m_image.scanLine(y0 + y)) + x0;
                 for (int x = 0; x < kCellW; ++x) {
                     const bool on = scan & (1u << (kCellW - 1 - x));
-                    line[x] = (on ? kGlassFg : kGlassBg).rgb();
+                    line[x] = (on ? glassFg : glassBg).rgb();
                 }
             }
         }
@@ -102,28 +106,31 @@ void SpeLcdWidget::paintEvent(QPaintEvent* event)
 {
     Q_UNUSED(event);
     QPainter p(this);
+    auto& theme = ThemeManager::instance();
+    const QColor glassBg = theme.color(this, QStringLiteral("color.spe.lcd.background"));
 
     // Largest integer scale that fits inside the bezel.
     const int availW = width() - kBezel * 2;
     const int availH = height() - kBezel * 2;
     int scale = qMin(availW / kNativeW, availH / kNativeH);
-    if (scale < 1)
+    if (scale < 1) {
         scale = 1;
+    }
     const int w = kNativeW * scale;
     const int h = kNativeH * scale;
     const int x = (width() - w) / 2;
     const int y = (height() - h) / 2;
 
     p.setPen(Qt::NoPen);
-    p.setBrush(kBezelCol);
+    p.setBrush(theme.color(this, QStringLiteral("color.spe.lcd.bezel")));
     p.drawRoundedRect(x - kBezel, y - kBezel, w + kBezel * 2, h + kBezel * 2, 4, 4);
-    p.setBrush(kGlassBg);
+    p.setBrush(glassBg);
     p.drawRect(x - 2, y - 2, w + 4, h + 4);
 
     p.drawImage(QRect(x, y, w, h), m_image);
 
     if (!m_hasFrame) {
-        p.setPen(kGlassDim);
+        p.setPen(theme.color(this, QStringLiteral("color.spe.lcd.dim")));
         QFont f = p.font();
         f.setPointSize(9);
         p.setFont(f);

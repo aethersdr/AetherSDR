@@ -6428,6 +6428,10 @@ void MainWindow::wireMeters()
                 [this](const AetherSDR::Spe::Lcd::Frame& frame) {
             m_appletPanel->speApplet()->setLcdFrame(frame);
         });
+        connect(&m_speConn, &SpeConnection::lcdFreshChanged, this,
+                [this](bool fresh) {
+            m_appletPanel->speApplet()->setLcdFresh(fresh);
+        });
     }
 
     // Startup auto-connect from saved Peripherals settings — deliberately

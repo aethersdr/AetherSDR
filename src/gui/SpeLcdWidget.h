@@ -14,9 +14,8 @@ namespace AetherSDR {
 // SpeConnection::lcdFrameReceived; shown only in SpeApplet's floating
 // presentation (the docked rail has no room for it).
 //
-// The glass keeps the hardware's own green-on-dark palette regardless of
-// application theme — this widget depicts a physical display, the same way
-// the analog meter faces keep their face colours.
+// Dedicated semantic tokens preserve the hardware's green-on-dark palette
+// while keeping custom themes and live theme changes authoritative.
 class SpeLcdWidget : public QWidget {
     Q_OBJECT
 

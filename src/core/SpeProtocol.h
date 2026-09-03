@@ -55,9 +55,9 @@ enum class Key : quint8 {
     BandDown   = 0x02,
     BandUp     = 0x03,
     Antenna    = 0x04,
-    LMinus     = 0x05,  // manual ATU inductance — not exposed in v1 (KTerm territory)
+    LMinus     = 0x05,  // manual ATU inductance — floating LCD presentation only
     LPlus      = 0x06,
-    CMinus     = 0x07,  // manual ATU capacitance — not exposed in v1
+    CMinus     = 0x07,  // manual ATU capacitance — floating LCD presentation only
     CPlus      = 0x08,
     Tune       = 0x09,
     SwitchOff  = 0x0A,  // powers the amplifier down
@@ -181,11 +181,14 @@ QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
 // the contributing author's field-proven v2 control application against a
 // real 1.5K-FA. Host sends the standard keystroke-style packet with code
 // 0x80; the amplifier answers a display frame:
-//   AA AA AA | 6A 01 (payload length, LE) | 95 FE | 01 |
-//   320 character bytes (8 rows x 40 cols, row-major) |
-//   40 attribute bytes (one per column, bit N = inverse video on row N)
-// = 369 bytes total (a 371-byte variant without the 0x01 marker exists;
-// the character data sits at offset 9 in both). Character bytes map to the
+//   AA AA AA | 6A 01 (payload length, LE) | 95 FE |
+//   2-byte inverted flag word | 320 character bytes (8 rows x 40 cols) |
+//   40 attribute bytes (one per column, bit N = inverse video on row N) |
+//   2-byte little-endian payload checksum
+// = 371 bytes total. The 362-byte payload starts at the flag word and runs
+// through the attributes; the character data starts at offset 9. These
+// offsets and the checksum shape are pinned to a captured real frame in
+// spe_protocol_test. Character bytes map to the
 // amplifier's own font ROM: 0x00 -> blank, 0x01..0x7E and 0x80..0xDF pass
 // through, everything else blanks.
 namespace Lcd {
@@ -193,11 +196,13 @@ namespace Lcd {
 constexpr int kRows = 8;
 constexpr int kCols = 40;
 constexpr quint8 kRequestCode = 0x80;
-// Header bytes the FrameParser keys on, after the 3-byte sync run:
-// payload-length 0x016A, then the 95 FE frame-type marker.
-constexpr int kDataOffset = 9;
-constexpr int kFrameLenWithMarker = 369;   // ...6A 01 95 FE 01 + 320 + 40
-constexpr int kFrameLenBare       = 371;   // GETLCD variant
+constexpr int kPayloadOffset = 7;     // sync + length + 95 FE type marker
+constexpr int kPayloadLength = 362;   // flags + characters + attributes
+constexpr int kFlagLength = 2;
+constexpr int kDataOffset = kPayloadOffset + kFlagLength;
+constexpr int kAttributeOffset = kDataOffset + kRows * kCols;
+constexpr int kChecksumOffset = kPayloadOffset + kPayloadLength;
+constexpr int kFrameLength = kChecksumOffset + 2;
 
 QByteArray buildRequest();
 
@@ -208,8 +213,8 @@ struct Frame {
     bool   inverse[kRows][kCols] = {};
 };
 
-// Decodes a complete raw display frame (header included). Returns nullopt
-// when the buffer is shorter than the character matrix requires.
+// Decodes one complete, checksum-valid logical display frame (header
+// included). Returns nullopt for a wrong header, length, checksum, or size.
 std::optional<Frame> decode(const QByteArray& raw);
 
 }  // namespace Lcd
@@ -247,10 +252,9 @@ QByteArray buildSetControl(quint8 ctrl);
 enum class OptionReply { None, Accepted, Refused };
 
 // Scans a raw inbound chunk for that answer, returning the last one present.
-// Read-only: the negotiation bytes stay in the stream for FrameParser, whose
-// sync-run resync steps over them. A false positive would need the literal
-// sequence FF FD 2C inside a Status payload, which is ASCII CSV and cannot
-// contain 0xFF.
+// Doubled IAC bytes (FF FF) are escaped binary data, not a negotiation verb.
+// SpeConnection only scans while an explicit WILL request is outstanding, so
+// an unescaped raw-mode LCD payload cannot mutate the cached result later.
 OptionReply scanComPortOptionReply(const QByteArray& bytes);
 
 }  // namespace Rfc2217

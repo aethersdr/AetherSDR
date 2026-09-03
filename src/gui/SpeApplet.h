@@ -7,6 +7,7 @@
 #include <QTimer>
 
 class QLabel;
+class QSpacerItem;
 class QVBoxLayout;
 
 namespace AetherSDR {
@@ -88,6 +89,9 @@ public:
     // A decoded refresh of the amplifier's own front-panel LCD — rendered
     // in the floating presentation's display mirror (see SpeLcdWidget).
     void setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame);
+    // Separately tracks whether that mirror is recent enough to make the
+    // floating-only menu/manual-tuning keys safe to use.
+    void setLcdFresh(bool fresh);
 
 signals:
     void powerOnClicked();     // hardware power-ON pulse (works while the amp is silent)
@@ -160,6 +164,7 @@ private:
     // Floating layout only: the amp's LCD mirror and the FRONT PANEL group.
     SpeLcdWidget* m_lcd{nullptr};
     QWidget*     m_frontPanel{nullptr};
+    QSpacerItem* m_bottomStretch{nullptr};
     QPushButton* m_bandDownBtn{nullptr};
     QPushButton* m_bandUpBtn{nullptr};
     QPushButton* m_setBtn{nullptr};
@@ -170,6 +175,7 @@ private:
 
     QVBoxLayout* m_vbox{nullptr};
     bool m_floating{false};
+    bool m_lcdFresh{false};
     // applyModePill's no-op key: mode text + density, so a dock<->float
     // switch restyles the pill even when the mode itself is unchanged.
     QString m_lastPillKey;

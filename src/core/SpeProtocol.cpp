@@ -44,6 +44,67 @@ const QMap<QString, ModelSpec>& modelTable()
     return table;
 }
 
+enum class DisplayCandidateState { Incomplete, Invalid, Valid };
+
+struct DisplayCandidate {
+    DisplayCandidateState state{DisplayCandidateState::Incomplete};
+    QByteArray frame;
+    int consumed{0};
+};
+
+bool isValidDisplayFrame(const QByteArray& frame)
+{
+    if (frame.size() != Lcd::kFrameLength
+        || static_cast<quint8>(frame.at(0)) != kAmpSync
+        || static_cast<quint8>(frame.at(1)) != kAmpSync
+        || static_cast<quint8>(frame.at(2)) != kAmpSync
+        || static_cast<quint8>(frame.at(3)) != (Lcd::kPayloadLength & 0xFF)
+        || static_cast<quint8>(frame.at(4)) != ((Lcd::kPayloadLength >> 8) & 0xFF)
+        || static_cast<quint8>(frame.at(5)) != 0x95
+        || static_cast<quint8>(frame.at(6)) != 0xFE) {
+        return false;
+    }
+
+    const quint16 sum = dataSum(frame.mid(Lcd::kPayloadOffset, Lcd::kPayloadLength));
+    return static_cast<quint8>(frame.at(Lcd::kChecksumOffset)) == (sum & 0xFF)
+        && static_cast<quint8>(frame.at(Lcd::kChecksumOffset + 1)) == ((sum >> 8) & 0xFF);
+}
+
+DisplayCandidate readDisplayCandidate(const QByteArray& buffer, bool telnetEscaped)
+{
+    DisplayCandidate candidate;
+    candidate.frame.reserve(Lcd::kFrameLength);
+
+    int cursor = 0;
+    while (cursor < buffer.size() && candidate.frame.size() < Lcd::kFrameLength) {
+        const quint8 byte = static_cast<quint8>(buffer.at(cursor));
+        if (telnetEscaped && byte == 0xFF) {
+            if (cursor + 1 >= buffer.size()) {
+                return candidate;
+            }
+            if (static_cast<quint8>(buffer.at(cursor + 1)) != 0xFF) {
+                candidate.state = DisplayCandidateState::Invalid;
+                return candidate;
+            }
+            candidate.frame.append(static_cast<char>(0xFF));
+            cursor += 2;
+            continue;
+        }
+        candidate.frame.append(buffer.at(cursor));
+        ++cursor;
+    }
+
+    if (candidate.frame.size() < Lcd::kFrameLength) {
+        return candidate;
+    }
+
+    candidate.consumed = cursor;
+    candidate.state = isValidDisplayFrame(candidate.frame)
+        ? DisplayCandidateState::Valid
+        : DisplayCandidateState::Invalid;
+    return candidate;
+}
+
 }  // namespace
 
 QByteArray buildPacket(const QByteArray& data)
@@ -107,20 +168,42 @@ void FrameParser::feed(const QByteArray& bytes)
         // carry the 1-byte CNT, so they must be recognised before the CNT
         // plausibility check below rejects 0x6A (=106) as noise. Key on the
         // full length+type sequence 6A 01 95 FE — unambiguous against real
-        // CNT frames, whose CNT never exceeds kMaxDataLength.
+        // CNT frames, whose CNT never exceeds kMaxDataLength. Validate the
+        // captured 371-byte logical frame including its 16-bit checksum.
+        // A telnet-mode ser2net proxy doubles every literal 0xFF; try that
+        // decoding only after the raw candidate fails, so raw-mode binary
+        // frames containing adjacent 0xFF bytes remain byte-exact.
         if (static_cast<quint8>(m_buf.at(3)) == 0x6A) {
-            if (m_buf.size() < 8)
+            if (m_buf.size() < Lcd::kPayloadOffset) {
                 return;  // need the type marker bytes to classify
+            }
             if (static_cast<quint8>(m_buf.at(4)) == 0x01
                 && static_cast<quint8>(m_buf.at(5)) == 0x95
                 && static_cast<quint8>(m_buf.at(6)) == 0xFE) {
-                const int total = (static_cast<quint8>(m_buf.at(7)) == 0x01)
-                    ? Lcd::kFrameLenWithMarker : Lcd::kFrameLenBare;
-                if (m_buf.size() < total)
-                    return;  // wait for the rest of the display frame
-                if (m_onDisplay)
-                    m_onDisplay(m_buf.left(total));
-                m_buf.remove(0, total);
+                const DisplayCandidate raw = readDisplayCandidate(m_buf, false);
+                if (raw.state == DisplayCandidateState::Valid) {
+                    if (m_onDisplay) {
+                        m_onDisplay(raw.frame);
+                    }
+                    m_buf.remove(0, raw.consumed);
+                    continue;
+                }
+
+                const DisplayCandidate telnet = readDisplayCandidate(m_buf, true);
+                if (telnet.state == DisplayCandidateState::Valid) {
+                    if (m_onDisplay) {
+                        m_onDisplay(telnet.frame);
+                    }
+                    m_buf.remove(0, telnet.consumed);
+                    continue;
+                }
+                if (raw.state == DisplayCandidateState::Incomplete
+                    || telnet.state == DisplayCandidateState::Incomplete) {
+                    return;
+                }
+                if (!resyncToNextSync()) {
+                    return;
+                }
                 continue;
             }
             // 0x6A but not the display marker: fall through to the CNT
@@ -293,8 +376,9 @@ QByteArray buildRequest()
 
 std::optional<Frame> decode(const QByteArray& raw)
 {
-    if (raw.size() < kDataOffset + kRows * kCols)
+    if (!isValidDisplayFrame(raw)) {
         return std::nullopt;
+    }
 
     Frame f;
     for (int i = 0; i < kRows * kCols; ++i) {
@@ -302,18 +386,18 @@ std::optional<Frame> decode(const QByteArray& raw)
         // Field-proven mapping: 0x00 blanks, the printable and box-drawing
         // ranges pass straight through to the font ROM, the rest blanks.
         quint8 idx = 0x60;  // the ROM's blank cell
-        if ((v >= 0x01 && v <= 0x7E) || (v >= 0x80 && v <= 0xDF))
+        if ((v >= 0x01 && v <= 0x7E) || (v >= 0x80 && v <= 0xDF)) {
             idx = v;
+        }
         f.chars[i / kCols][i % kCols] = idx;
     }
 
     // One attribute byte per column; bit N flags inverse video on row N.
-    const int attrStart = kDataOffset + kRows * kCols;
-    const int attrAvail = qMin(kCols, raw.size() - attrStart);
-    for (int col = 0; col < attrAvail; ++col) {
-        const quint8 b = static_cast<quint8>(raw.at(attrStart + col));
-        for (int row = 0; row < kRows; ++row)
+    for (int col = 0; col < kCols; ++col) {
+        const quint8 b = static_cast<quint8>(raw.at(kAttributeOffset + col));
+        for (int row = 0; row < kRows; ++row) {
             f.inverse[row][col] = (b & (1u << row)) != 0;
+        }
     }
     return f;
 }
@@ -359,15 +443,25 @@ OptionReply scanComPortOptionReply(const QByteArray& bytes)
 {
     OptionReply result = OptionReply::None;
     for (int i = 0; i + 2 < bytes.size(); ++i) {
-        if (static_cast<quint8>(bytes.at(i)) != kIac)
+        if (static_cast<quint8>(bytes.at(i)) != kIac) {
             continue;
-        if (static_cast<quint8>(bytes.at(i + 2)) != kComPortOption)
+        }
+        // In telnet data, a literal 0xFF is escaped as FF FF. Skip the pair
+        // atomically; otherwise the second byte could be misread as the IAC
+        // of a fabricated `FF FE 2C` negotiation inside binary LCD data.
+        if (static_cast<quint8>(bytes.at(i + 1)) == kIac) {
+            ++i;
             continue;
+        }
+        if (static_cast<quint8>(bytes.at(i + 2)) != kComPortOption) {
+            continue;
+        }
         const quint8 verb = static_cast<quint8>(bytes.at(i + 1));
-        if (verb == kDo)
+        if (verb == kDo) {
             result = OptionReply::Accepted;
-        else if (verb == kDont)
+        } else if (verb == kDont) {
             result = OptionReply::Refused;
+        }
     }
     return result;
 }

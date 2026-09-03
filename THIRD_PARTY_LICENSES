@@ -203,10 +203,31 @@ vendored, translated, or linked.
   License:  MIT
   Source:   https://github.com/FtlC-ian/expert-amp-server
 
-  The C++ here is an original re-expression of those wire-format facts and
-  glyph tables (data, re-generated mechanically), not incorporated MIT code;
-  the attribution is carried regardless, matching the ACOM-Controller
-  cross-check precedent above.
+  The C++ parser and renderer are an original re-expression of the wire-format
+  facts. The glyph table and the captured frame embedded in the protocol test
+  are reproduced from expert-amp-server under its MIT license:
+
+  MIT License
+
+  Copyright (c) 2026 Ian Ferrell
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
 
 
 1. WDSP 2.00 — engine-side SDR DSP
@@ -572,4 +593,3 @@ overlay layer. Contains community-curated utility, beacon, broadcast, and DX spo
   Copyright (c) John Seamons and KiwiSDR community contributors
   License: GPL-2.0 / GPL-3.0 / LGPL-2.1 / MIT (per KiwiSDR repository root _LICENSE)
   Source:  https://github.com/jks-prv/KiwiSDR/blob/master/unix_env/kiwi.config/dist.dx_community.json
-

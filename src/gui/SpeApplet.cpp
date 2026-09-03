@@ -11,6 +11,7 @@
 #include <QGridLayout>
 #include <QFrame>
 #include <QLabel>
+#include <QSpacerItem>
 
 namespace AetherSDR {
 
@@ -307,13 +308,16 @@ SpeApplet::SpeApplet(QWidget* parent)
         fpGrid->setVerticalSpacing(6);
 
         m_bandDownBtn = makeFpBtn("BAND −");
+        m_bandDownBtn->setAccessibleName(tr("Manual band down"));
         m_bandDownBtn->setToolTip(tr("Manual band down — the amp normally follows"
                                      " the radio via CAT/RF sensing"));
         connect(m_bandDownBtn, &QPushButton::clicked, this, &SpeApplet::bandDownClicked);
         m_bandUpBtn = makeFpBtn("BAND +");
+        m_bandUpBtn->setAccessibleName(tr("Manual band up"));
         m_bandUpBtn->setToolTip(tr("Manual band up"));
         connect(m_bandUpBtn, &QPushButton::clicked, this, &SpeApplet::bandUpClicked);
         m_setBtn = makeFpBtn("SET");
+        m_setBtn->setAccessibleName(tr("Amplifier menu SET"));
         m_setBtn->setToolTip(tr("Front-panel SET key — confirms on the amplifier's"
                                 " own menu. Use with the amp's display in view."));
         connect(m_setBtn, &QPushButton::clicked, this, &SpeApplet::setKeyClicked);
@@ -322,15 +326,19 @@ SpeApplet::SpeApplet(QWidget* parent)
         fpGrid->addWidget(m_setBtn,      0, 2, 1, 2);
 
         m_lMinusBtn = makeFpBtn("L −");
+        m_lMinusBtn->setAccessibleName(tr("Manual ATU inductance step down"));
         m_lMinusBtn->setToolTip(tr("Manual ATU inductance step down"));
         connect(m_lMinusBtn, &QPushButton::clicked, this, &SpeApplet::lMinusClicked);
         m_lPlusBtn = makeFpBtn("L +");
+        m_lPlusBtn->setAccessibleName(tr("Manual ATU inductance step up"));
         m_lPlusBtn->setToolTip(tr("Manual ATU inductance step up"));
         connect(m_lPlusBtn, &QPushButton::clicked, this, &SpeApplet::lPlusClicked);
         m_cMinusBtn = makeFpBtn("C −");
+        m_cMinusBtn->setAccessibleName(tr("Manual ATU capacitance step down"));
         m_cMinusBtn->setToolTip(tr("Manual ATU capacitance step down"));
         connect(m_cMinusBtn, &QPushButton::clicked, this, &SpeApplet::cMinusClicked);
         m_cPlusBtn = makeFpBtn("C +");
+        m_cPlusBtn->setAccessibleName(tr("Manual ATU capacitance step up"));
         m_cPlusBtn->setToolTip(tr("Manual ATU capacitance step up"));
         connect(m_cPlusBtn, &QPushButton::clicked, this, &SpeApplet::cPlusClicked);
         fpGrid->addWidget(m_lMinusBtn, 1, 0);
@@ -342,10 +350,11 @@ SpeApplet::SpeApplet(QWidget* parent)
     }
     vbox->addWidget(m_frontPanel);
 
-    // Keeps every mode top-anchored: docked stays as tight as before, and a
-    // floating window parks its spare height below the content instead of
-    // stretching each row apart (the stretched look this replaces).
-    vbox->addStretch(1);
+    // A floating window parks spare height below the content instead of
+    // stretching each row apart. The spacer is fixed-height while docked so
+    // the shipped compact rail layout remains unchanged.
+    m_bottomStretch = new QSpacerItem(0, 0, QSizePolicy::Minimum, QSizePolicy::Fixed);
+    vbox->addItem(m_bottomStretch);
 
     // Label text throttle — matches AmpApplet/AcomApplet's 10 Hz readout
     // convention.
@@ -367,9 +376,11 @@ SpeApplet::SpeApplet(QWidget* parent)
 
 void SpeApplet::setFloating(bool floating)
 {
-    if (floating == m_floating)
+    if (floating == m_floating) {
         return;
+    }
     m_floating = floating;
+    setLcdFresh(false);
     applyDensity();
     // The LCD mirror only exists in the floating presentation — start (or
     // stop) the display polling to match.
@@ -379,6 +390,15 @@ void SpeApplet::setFloating(bool floating)
 void SpeApplet::setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame)
 {
     m_lcd->setFrame(frame);
+}
+
+void SpeApplet::setLcdFresh(bool fresh)
+{
+    m_lcdFresh = fresh;
+    if (!fresh) {
+        m_lcd->clear();
+    }
+    updateCommandsEnabled();
 }
 
 void SpeApplet::applyDensity()
@@ -405,16 +425,18 @@ void SpeApplet::applyDensity()
             ? "QLabel { color: {{color.text.primary}}; font-size: 13px; font-weight: bold; }"
             : "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }");
     }
-    for (auto* gauge : {m_pwrGauge, m_swrAntGauge, m_swrAtuGauge})
+    for (auto* gauge : {m_pwrGauge, m_swrAntGauge, m_swrAtuGauge}) {
         gauge->setFixedHeight(f ? 32 : 24);
+    }
 
     const char* telDocked =
         "QLabel { color: {{color.text.primary}}; font-size: 10px; }";
     const char* telFloating =
         "QLabel { color: {{color.text.primary}}; font-size: 12px; }";
     for (auto* lbl : {m_tempLabel, m_voltLabel, m_currLabel,
-                      m_bandLabel, m_antLabel, m_inputLabel})
+                      m_bandLabel, m_antLabel, m_inputLabel}) {
         theme.applyStyleSheet(lbl, f ? telFloating : telDocked);
+    }
 
     theme.applyStyleSheet(m_faultLabel, f
         ? "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"
@@ -422,8 +444,13 @@ void SpeApplet::applyDensity()
 
     // Command buttons get a comfortable hit target in the window.
     for (auto* btn : {m_onBtn, m_operateBtn, m_pwrLevelBtn, m_tuneBtn, m_offBtn,
-                      m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn})
+                      m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn}) {
         btn->setMinimumHeight(f ? 30 : 0);
+    }
+
+    m_bottomStretch->changeSize(0, 0, QSizePolicy::Minimum,
+                                f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+    m_vbox->invalidate();
 
     m_lcd->setVisible(f);
     m_frontPanel->setVisible(f);
@@ -550,8 +577,9 @@ void SpeApplet::applyModePill()
     // when the mode text itself is unchanged.
     const QString pill = pillText(state);
     const QString pillKey = pill + (m_floating ? QLatin1Char('F') : QLatin1Char('D'));
-    if (m_lastPillKey == pillKey)
+    if (m_lastPillKey == pillKey) {
         return;
+    }
     m_lastPillKey = pillKey;
     m_statusPill->setText(pill);
 
@@ -559,9 +587,10 @@ void SpeApplet::applyModePill()
     // The floating pill reads at window distance: same family colours, a
     // size up and roomier padding.
     QString pillStyle = ampPillStyle(state);
-    if (m_floating)
+    if (m_floating) {
         pillStyle += QStringLiteral(
             "QLabel { font-size: 12px; padding: 5px 14px; border-radius: 4px; }");
+    }
     theme.applyStyleSheet(m_statusPill, pillStyle);
     const bool operateActive = (state == AmpPillState::OperateRx || state == AmpPillState::OperateTx);
     // Short labels — OPERATE/STANDBY clip at default applet width.
@@ -609,10 +638,16 @@ void SpeApplet::updateCommandsEnabled()
     // buttons that silently do nothing.
     const bool enabled = m_connected && m_responding;
     for (auto* btn : {m_operateBtn, m_pwrLevelBtn, m_tuneBtn, m_offBtn,
-                      m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn,
-                      m_bandDownBtn, m_bandUpBtn, m_setBtn,
-                      m_lMinusBtn, m_lPlusBtn, m_cMinusBtn, m_cPlusBtn})
+                      m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn}) {
         btn->setEnabled(enabled);
+    }
+    // Menu/manual tuning controls are safe only while the LCD mirror beside
+    // them is current. Status can remain live while LCD replies stop.
+    const bool frontPanelEnabled = enabled && m_floating && m_lcdFresh;
+    for (auto* btn : {m_bandDownBtn, m_bandUpBtn, m_setBtn,
+                      m_lMinusBtn, m_lPlusBtn, m_cMinusBtn, m_cPlusBtn}) {
+        btn->setEnabled(frontPanelEnabled);
+    }
     // ON stays available whenever the transport is up — a silent amp is
     // exactly when it's needed.
     m_onBtn->setEnabled(m_connected);
@@ -620,6 +655,7 @@ void SpeApplet::updateCommandsEnabled()
 
 void SpeApplet::clearTelemetry()
 {
+    m_lcdFresh = false;
     m_lcd->clear();
     setFaultText(QString());
     m_bandLabel->hide();
