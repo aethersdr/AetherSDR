@@ -3956,6 +3956,19 @@ add_executable(hl2_telemetry_cadence_test
 )
 target_include_directories(hl2_telemetry_cadence_test PRIVATE src)
 add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
+# HL2 stream-free telemetry SERVICE -- must answer with no backend and no
+# connection, which is the state the whole feature exists for. Needs Qt (timer,
+# socket) but no aethercore and no radio: it polls 192.0.2.1, TEST-NET-1, which
+# is unroutable by RFC 5737 and can never answer.
+add_executable(hl2_telemetry_service_test
+    tests/hl2_telemetry_service_test.cpp
+    src/core/backends/hl2/Hl2TelemetryService.cpp
+    src/core/backends/hl2/Hl2TelemetryPoller.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+)
+target_include_directories(hl2_telemetry_service_test PRIVATE src)
+target_link_libraries(hl2_telemetry_service_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_telemetry_service_test COMMAND hl2_telemetry_service_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
