@@ -794,7 +794,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         // pattern as the PWR cross-needle above.
         if (ContainerWidget* container =
                 qobject_cast<ContainerWidget*>(entry.widget)) {
-            container->setDefaultFloatingSize(QSize(400, 560));
+            // Wide enough for the LCD mirror's 2x glass (480px + bezel).
+            container->setDefaultFloatingSize(QSize(540, 760));
             connect(container, &ContainerWidget::dockModeChanged,
                     m_speApplet,
                     [this](ContainerWidget::DockMode mode) {

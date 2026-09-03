@@ -74,6 +74,13 @@ public:
     void tune() { sendKey(Spe::Key::Tune); }
     void switchOff() { sendKey(Spe::Key::SwitchOff); }
 
+    // Remote LCD mirroring: while enabled (and connected) the amplifier's
+    // display is polled with the 0x80 request at kLcdPollIntervalMs and
+    // every decoded refresh arrives via lcdFrameReceived. Driven by the
+    // applet's floating state — the docked rail has no room for the LCD,
+    // so polling it there would be pure link noise.
+    void setLcdPolling(bool on);
+
     // Power the amplifier ON — a hardware pulse on the serial connector's
     // control lines, not a protocol command, so it works while the amp is
     // silent. Network mode drives the proxy's DTR/RTS via RFC 2217, which
@@ -100,6 +107,7 @@ signals:
     void disconnected();
     void connectionFailed(const QString& errorString);
     void statusUpdated(const AetherSDR::Spe::Status& status);
+    void lcdFrameReceived(const AetherSDR::Spe::Lcd::Frame& frame);
     // Fires on the first Status reply of a connection and again if the
     // reported ID ever changes (in practice: never mid-session). The GUI
     // applies gauge ranges and model-dependent layout from this.
@@ -153,6 +161,13 @@ private:
     // and its bar visibly stair-stepped, which this rate fixes.
     QTimer m_pollTimer;
     static constexpr int kPollIntervalMs = 100;
+
+    // LCD refresh poll — the field-proven application's cadence. Slower
+    // than the status poll on purpose: a display frame is ~369 bytes
+    // against Status's ~76, and the panel is for eyes, not telemetry.
+    QTimer m_lcdTimer;
+    bool   m_lcdWanted{false};
+    static constexpr int kLcdPollIntervalMs = 600;
 
     QString m_currentModelId;
 

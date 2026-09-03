@@ -1,6 +1,7 @@
 #include "SpeApplet.h"
 #include "AmpAppletStyles.h"
 #include "HGauge.h"
+#include "SpeLcdWidget.h"
 #include "core/ThemeManager.h"
 #include "core/TxKeyingMarker.h"
 #include "MeterSmoother.h"
@@ -94,6 +95,11 @@ SpeApplet::SpeApplet(QWidget* parent)
     headerRow->addStretch();
     headerRow->addWidget(m_statusPill, 0, Qt::AlignVCenter);
     vbox->addLayout(headerRow);
+
+    // ── LCD mirror (floating only) — the amplifier's own display, live ─────
+    m_lcd = new SpeLcdWidget(this);
+    m_lcd->hide();
+    vbox->addWidget(m_lcd);
 
     // ── PWR row ───────────────────────────────────────────────────────────
     m_pwrLabel = makeValueLabel(this);
@@ -365,6 +371,14 @@ void SpeApplet::setFloating(bool floating)
         return;
     m_floating = floating;
     applyDensity();
+    // The LCD mirror only exists in the floating presentation — start (or
+    // stop) the display polling to match.
+    emit lcdPollingWanted(floating);
+}
+
+void SpeApplet::setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame)
+{
+    m_lcd->setFrame(frame);
 }
 
 void SpeApplet::applyDensity()
@@ -411,6 +425,7 @@ void SpeApplet::applyDensity()
                       m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn})
         btn->setMinimumHeight(f ? 30 : 0);
 
+    m_lcd->setVisible(f);
     m_frontPanel->setVisible(f);
     applyModePill();
 }
@@ -605,6 +620,7 @@ void SpeApplet::updateCommandsEnabled()
 
 void SpeApplet::clearTelemetry()
 {
+    m_lcd->clear();
     setFaultText(QString());
     m_bandLabel->hide();
     m_antLabel->hide();

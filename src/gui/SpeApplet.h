@@ -12,6 +12,7 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 class HGauge;
+class SpeLcdWidget;
 
 // Dedicated applet for an SPE Expert linear amplifier (1.3K-FA/1.5K-FA/
 // 2K-FA) — a sibling of AcomApplet and AmpApplet (PGXL), not a variant of
@@ -84,6 +85,10 @@ public:
     // window. Driven by the container's dockModeChanged (see AppletPanel).
     void setFloating(bool floating);
 
+    // A decoded refresh of the amplifier's own front-panel LCD — rendered
+    // in the floating presentation's display mirror (see SpeLcdWidget).
+    void setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame);
+
 signals:
     void powerOnClicked();     // hardware power-ON pulse (works while the amp is silent)
     void operateClicked();     // OPERATE key — toggles STANDBY <-> OPERATE
@@ -102,6 +107,10 @@ signals:
     void lPlusClicked();       // L+ key
     void cMinusClicked();      // C− key — manual ATU capacitance step
     void cPlusClicked();       // C+ key
+    // The floating presentation wants the amplifier's LCD mirrored (and the
+    // docked one wants that polling stopped) — MainWindow routes this to
+    // SpeConnection::setLcdPolling.
+    void lcdPollingWanted(bool wanted);
 
 private:
     void updateValueLabels();  // 10 Hz throttled label text refresh
@@ -148,7 +157,8 @@ private:
     QPushButton* m_driveDownBtn{nullptr};
     QPushButton* m_driveUpBtn{nullptr};
 
-    // FRONT PANEL group — floating layout only.
+    // Floating layout only: the amp's LCD mirror and the FRONT PANEL group.
+    SpeLcdWidget* m_lcd{nullptr};
     QWidget*     m_frontPanel{nullptr};
     QPushButton* m_bandDownBtn{nullptr};
     QPushButton* m_bandUpBtn{nullptr};

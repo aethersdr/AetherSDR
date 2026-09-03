@@ -6416,6 +6416,14 @@ void MainWindow::wireMeters()
         connect(spe, &SpeApplet::cPlusClicked, this, [this]() {
             m_speConn.sendKey(AetherSDR::Spe::Key::CPlus);
         });
+        // LCD mirror: poll only while the floating presentation shows it.
+        connect(spe, &SpeApplet::lcdPollingWanted, this, [this](bool wanted) {
+            m_speConn.setLcdPolling(wanted);
+        });
+        connect(&m_speConn, &SpeConnection::lcdFrameReceived, this,
+                [this](const AetherSDR::Spe::Lcd::Frame& frame) {
+            m_appletPanel->speApplet()->setLcdFrame(frame);
+        });
     }
 
     // Startup auto-connect from saved Peripherals settings — deliberately

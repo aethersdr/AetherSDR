@@ -109,6 +109,11 @@ struct Frame {
 class FrameParser {
 public:
     void setFrameCallback(std::function<void(const Frame&)> cb) { m_onFrame = std::move(cb); }
+    // Raw LCD display frames (see the Lcd namespace below) use a different
+    // header shape than ACK/Status — the parser recognises them by their
+    // payload-length + type-marker bytes and hands the complete raw frame
+    // here instead of misreading the length field as a CNT byte.
+    void setDisplayCallback(std::function<void(const QByteArray&)> cb) { m_onDisplay = std::move(cb); }
     void feed(const QByteArray& bytes);
     void reset() { m_buf.clear(); }
 
@@ -120,6 +125,7 @@ private:
 
     QByteArray m_buf;
     std::function<void(const Frame&)> m_onFrame;
+    std::function<void(const QByteArray&)> m_onDisplay;
 };
 
 // ── Status string decode (spec §5) ───────────────────────────────────────
@@ -168,6 +174,45 @@ QString warningText(QChar code);
 QString alarmText(QChar code);
 
 QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
+
+// ── Remote LCD display (KTerm-style frame, request code 0x80) ────────────
+// The spec's foreword promises "a perfect copy of the display ... in less
+// than 400 bytes" but documents none of it; this decode is carried from
+// the contributing author's field-proven v2 control application against a
+// real 1.5K-FA. Host sends the standard keystroke-style packet with code
+// 0x80; the amplifier answers a display frame:
+//   AA AA AA | 6A 01 (payload length, LE) | 95 FE | 01 |
+//   320 character bytes (8 rows x 40 cols, row-major) |
+//   40 attribute bytes (one per column, bit N = inverse video on row N)
+// = 369 bytes total (a 371-byte variant without the 0x01 marker exists;
+// the character data sits at offset 9 in both). Character bytes map to the
+// amplifier's own font ROM: 0x00 -> blank, 0x01..0x7E and 0x80..0xDF pass
+// through, everything else blanks.
+namespace Lcd {
+
+constexpr int kRows = 8;
+constexpr int kCols = 40;
+constexpr quint8 kRequestCode = 0x80;
+// Header bytes the FrameParser keys on, after the 3-byte sync run:
+// payload-length 0x016A, then the 95 FE frame-type marker.
+constexpr int kDataOffset = 9;
+constexpr int kFrameLenWithMarker = 369;   // ...6A 01 95 FE 01 + 320 + 40
+constexpr int kFrameLenBare       = 371;   // GETLCD variant
+
+QByteArray buildRequest();
+
+// One decoded display refresh: font-ROM indices plus the per-cell
+// inverse-video attribute. Plain aggregate so it can cross a queued signal.
+struct Frame {
+    quint8 chars[kRows][kCols] = {};
+    bool   inverse[kRows][kCols] = {};
+};
+
+// Decodes a complete raw display frame (header included). Returns nullopt
+// when the buffer is shorter than the character matrix requires.
+std::optional<Frame> decode(const QByteArray& raw);
+
+}  // namespace Lcd
 
 // ── Remote power-ON (RFC 2217 Telnet COM-port control) ───────────────────
 
@@ -261,3 +306,4 @@ GaugeRange levelGaugeRange(const ModelSpec& spec, QChar level);
 }  // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::Spe::Status)
+Q_DECLARE_METATYPE(AetherSDR::Spe::Lcd::Frame)

@@ -103,6 +103,30 @@ void FrameParser::feed(const QByteArray& bytes)
             continue;
         }
 
+        // LCD display frames carry a 16-bit payload length where ACK/Status
+        // carry the 1-byte CNT, so they must be recognised before the CNT
+        // plausibility check below rejects 0x6A (=106) as noise. Key on the
+        // full length+type sequence 6A 01 95 FE — unambiguous against real
+        // CNT frames, whose CNT never exceeds kMaxDataLength.
+        if (static_cast<quint8>(m_buf.at(3)) == 0x6A) {
+            if (m_buf.size() < 8)
+                return;  // need the type marker bytes to classify
+            if (static_cast<quint8>(m_buf.at(4)) == 0x01
+                && static_cast<quint8>(m_buf.at(5)) == 0x95
+                && static_cast<quint8>(m_buf.at(6)) == 0xFE) {
+                const int total = (static_cast<quint8>(m_buf.at(7)) == 0x01)
+                    ? Lcd::kFrameLenWithMarker : Lcd::kFrameLenBare;
+                if (m_buf.size() < total)
+                    return;  // wait for the rest of the display frame
+                if (m_onDisplay)
+                    m_onDisplay(m_buf.left(total));
+                m_buf.remove(0, total);
+                continue;
+            }
+            // 0x6A but not the display marker: fall through to the CNT
+            // check, which rejects it and resyncs.
+        }
+
         const quint8 cnt = static_cast<quint8>(m_buf.at(3));
         if (cnt == 0 || cnt > kMaxDataLength) {
             if (!resyncToNextSync())
@@ -259,6 +283,42 @@ QString powerLevelName(QChar code)
         default:   return code.isNull() ? QString() : QString(code);
     }
 }
+
+namespace Lcd {
+
+QByteArray buildRequest()
+{
+    return buildPacket(QByteArray(1, static_cast<char>(kRequestCode)));
+}
+
+std::optional<Frame> decode(const QByteArray& raw)
+{
+    if (raw.size() < kDataOffset + kRows * kCols)
+        return std::nullopt;
+
+    Frame f;
+    for (int i = 0; i < kRows * kCols; ++i) {
+        const quint8 v = static_cast<quint8>(raw.at(kDataOffset + i));
+        // Field-proven mapping: 0x00 blanks, the printable and box-drawing
+        // ranges pass straight through to the font ROM, the rest blanks.
+        quint8 idx = 0x60;  // the ROM's blank cell
+        if ((v >= 0x01 && v <= 0x7E) || (v >= 0x80 && v <= 0xDF))
+            idx = v;
+        f.chars[i / kCols][i % kCols] = idx;
+    }
+
+    // One attribute byte per column; bit N flags inverse video on row N.
+    const int attrStart = kDataOffset + kRows * kCols;
+    const int attrAvail = qMin(kCols, raw.size() - attrStart);
+    for (int col = 0; col < attrAvail; ++col) {
+        const quint8 b = static_cast<quint8>(raw.at(attrStart + col));
+        for (int row = 0; row < kRows; ++row)
+            f.inverse[row][col] = (b & (1u << row)) != 0;
+    }
+    return f;
+}
+
+}  // namespace Lcd
 
 namespace Rfc2217 {
 

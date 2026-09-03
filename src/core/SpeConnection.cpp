@@ -14,6 +14,13 @@ SpeConnection::SpeConnection(QObject* parent)
     });
 
     m_parser.setFrameCallback([this](const Spe::Frame& f) { onFrameReceived(f); });
+    m_parser.setDisplayCallback([this](const QByteArray& raw) {
+        // A display reply is as good as a Status reply for liveness —
+        // count it so LCD-heavy traffic can't trip the silence detector.
+        m_statusSeenSinceTick = true;
+        if (const auto frame = Spe::Lcd::decode(raw))
+            emit lcdFrameReceived(*frame);
+    });
 
     // Retries every 5s indefinitely until the amp returns or the user
     // disconnects — same cadence as the other peripheral connections
@@ -36,6 +43,24 @@ SpeConnection::SpeConnection(QObject* parent)
 
     m_powerOnTimer.setSingleShot(true);
     connect(&m_powerOnTimer, &QTimer::timeout, this, &SpeConnection::powerOnStep);
+
+    m_lcdTimer.setInterval(kLcdPollIntervalMs);
+    connect(&m_lcdTimer, &QTimer::timeout, this, [this]() {
+        sendRaw(Spe::Lcd::buildRequest());
+    });
+}
+
+void SpeConnection::setLcdPolling(bool on)
+{
+    if (on == m_lcdWanted)
+        return;
+    m_lcdWanted = on;
+    if (on && m_connected) {
+        sendRaw(Spe::Lcd::buildRequest());  // first refresh without the full wait
+        m_lcdTimer.start();
+    } else {
+        m_lcdTimer.stop();
+    }
 }
 
 QString SpeConnection::description() const
@@ -142,6 +167,7 @@ void SpeConnection::disconnect()
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
+    m_lcdTimer.stop();
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
     m_connected = false;
@@ -185,6 +211,8 @@ void SpeConnection::onTransportUp()
     // and the applet shouldn't sit blank for it.
     sendRaw(Spe::buildStatusRequest());
     m_pollTimer.start();
+    if (m_lcdWanted)
+        m_lcdTimer.start();
 
     emit connected();
 }
@@ -194,6 +222,7 @@ void SpeConnection::onTransportDown()
     const bool wasConnected = m_connected;
     m_connected = false;
     m_pollTimer.stop();
+    m_lcdTimer.stop();
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
     m_parser.reset();
