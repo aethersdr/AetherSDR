@@ -186,6 +186,7 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/MainWindow_KiwiSdr.cpp": ["KiwiSdrClient", "KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/MainWindow_ReceiveSync.cpp": ["KiwiSdrManager"],
     "src/gui/MainWindow_Session.cpp": ["SimBackend"],
+    "src/gui/MainWindow_Shortcuts.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_Wiring.cpp": ["KiwiSdrManager", "KiwiSdrProtocol", "ProfileLoadCommand"],
     "src/gui/MemoryDialog.cpp": ["MemoryCsvCompat", "RadioConnection"],
     "src/gui/NetworkDiagnosticsDialog.h": ["PanadapterStream"],
