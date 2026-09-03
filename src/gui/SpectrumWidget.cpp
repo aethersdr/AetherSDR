@@ -8527,13 +8527,25 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // stamp given to appendHistoryRow() below, or remapHistoryRowInto() will
     // show the wrong signal at the wrong frequency later, not just a black
     // gap. See m_confirmedCenterMhz's own declaration comment.
-    const double panStartMhz = m_confirmedCenterMhz - m_confirmedBandwidthMhz / 2.0;
+    //
+    // Cropping to that viewport is only legitimate where this tile actually
+    // covers it -- true for a Flex tile, false for an exact-span sweep, and
+    // claiming coverage over the zero-filled remainder is what bakes black
+    // rectangles into retained history. Where the tile falls short, its own
+    // extent is authoritative and the row is laid out across the tile
+    // instead. See primaryRowFrameForNativeTile().
+    const FrequencyFrame primaryFrame = primaryRowFrameForNativeTile(
+        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz},
+        lowFreqMhz, highFreqMhz);
+    const double panStartMhz =
+        primaryFrame.centerMhz - primaryFrame.bandwidthMhz / 2.0;
 
     QVector<quint8> levels(destWidth, 0);
     QVector<quint8> supplementalLevels(destWidth, 0);
     if (tileBw > 0) {
         for (int x = 0; x < destWidth; ++x) {
-            const double freq = panStartMhz + (static_cast<double>(x) / destWidth) * m_confirmedBandwidthMhz;
+            const double freq = panStartMhz
+                + (static_cast<double>(x) / destWidth) * primaryFrame.bandwidthMhz;
             const double binF = (freq - lowFreqMhz) / tileBw;
             const int binIdx = static_cast<int>(binF);
             if (binIdx >= 0 && binIdx < srcSize) {
@@ -8574,11 +8586,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     const double incomingSupplementalBandwidthMhz =
         highFreqMhz - lowFreqMhz;
     const WaterfallBlankerFrameBundle incomingFrames{
-        // Confirmed geometry -- must match panStartMhz above. The
-        // supplemental frame is untouched: it's already derived from the
-        // tile's own real bounds (lowFreqMhz/highFreqMhz), not the
-        // on-screen guess.
-        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz},
+        // Must match panStartMhz above -- the row may only claim the span it
+        // was actually laid out across. The supplemental frame is untouched:
+        // it's already derived from the tile's own real bounds
+        // (lowFreqMhz/highFreqMhz), not the on-screen guess.
+        primaryFrame,
         FrequencyFrame{incomingSupplementalCenterMhz,
                        incomingSupplementalBandwidthMhz},
     };

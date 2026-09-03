@@ -79,6 +79,62 @@ struct FrequencyFrame {
     return requested.isValid() ? requested : confirmed;
 }
 
+// The frequency frame a native tile's PRIMARY waterfall row is laid out in,
+// and therefore the only span that row may claim.
+//
+// updateWaterfallRow() crops a tile to the viewport and rasterises it across
+// the row's pixels. That is correct for FlexRadio, whose community guidance
+// is that a tile extends BEYOND the panadapter edges -- every viewport pixel
+// has real bin data behind it, so cropping loses nothing and keeps the row at
+// full display resolution. An exact-span backend breaks the assumption:
+// IcomCivBackend::onCivFrame() emits each sweep's own centre/span through
+// panCenterBandwidthChanged() immediately before the bins, so
+// lowFreqMhz/highFreqMhz describe the exact data extent and nothing beyond
+// it.
+//
+// Crop such a tile to a viewport it does not cover and the uncovered columns
+// are zero-filled, yet the row still claims the whole viewport frame.
+// remapHistoryRowInto() tests the primary frame FIRST and only falls through
+// to the supplemental row for columns OUTSIDE it, so those zeros are
+// unreachable: the correctly framed supplemental row cannot repair them and
+// they stay black in retained history for good. Observed on an IC-7300MK2 as
+// wide black rectangles committed by every horizontal pan drag (jensenpat,
+// #5142 review).
+//
+// So crop only where the tile really does cover the viewport. Everywhere
+// else the producer's own extent is authoritative: the row spans the tile,
+// every pixel it claims has data behind it, and remapHistoryRowInto() places
+// it against whatever the viewport has since become -- which is what the
+// per-row frame stamp exists for.
+[[nodiscard]] inline FrequencyFrame primaryRowFrameForNativeTile(
+    const FrequencyFrame& viewport,
+    double tileLowMhz,
+    double tileHighMhz) noexcept
+{
+    const double tileSpanMhz = tileHighMhz - tileLowMhz;
+    if (!std::isfinite(tileLowMhz) || !std::isfinite(tileHighMhz)
+        || tileSpanMhz <= 0.0) {
+        // No usable producer extent -- nothing better to offer than the
+        // viewport, and the caller's rasterisation loop is skipped anyway.
+        return viewport;
+    }
+    const FrequencyFrame tileFrame{tileLowMhz + tileSpanMhz / 2.0, tileSpanMhz};
+    if (!viewport.isValid()) {
+        return tileFrame;
+    }
+    const double viewportStartMhz =
+        viewport.centerMhz - viewport.bandwidthMhz / 2.0;
+    const double viewportEndMhz = viewportStartMhz + viewport.bandwidthMhz;
+    // Absorbs float noise only. A tile falling short by even a fraction of a
+    // bin would zero-fill an edge column, and the producer frame costs
+    // nothing, so anything short of real coverage takes it.
+    constexpr double kCoverageToleranceMhz = 1e-9;
+    const bool coversViewport =
+        tileLowMhz <= viewportStartMhz + kCoverageToleranceMhz
+        && tileHighMhz >= viewportEndMhz - kCoverageToleranceMhz;
+    return coversViewport ? viewport : tileFrame;
+}
+
 // A native waterfall tile supplies two independently calibrated rows: the
 // viewport row and the full-tile supplemental row. A blanked row must keep
 // their capture frames paired with the matching pixels.
