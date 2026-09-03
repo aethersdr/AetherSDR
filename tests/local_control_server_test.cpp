@@ -153,7 +153,8 @@ bool runProtocolTest()
     if (!check(!sessionId.isEmpty(), "hello must create a sessionId")
         || !check(grants.size() == 1 && contains(grants, QStringLiteral("observe")),
                   "server must grant observe only")
-        || !check(contains(capabilities, QStringLiteral("server.read"))
+        || !check(capabilities.size() == 7
+                      && contains(capabilities, QStringLiteral("server.read"))
                       && contains(capabilities, QStringLiteral("radioSession.read"))
                       && contains(capabilities, QStringLiteral("slice.read"))
                       && contains(capabilities, QStringLiteral("panadapter.read"))

@@ -247,7 +247,6 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
         {QStringLiteral("grants"), QJsonArray{QStringLiteral("observe")}},
         {QStringLiteral("capabilities"), QJsonArray{
              QStringLiteral("server.read"),
-             QStringLiteral("radio.sessions"),
              QStringLiteral("radioSession.read"),
              QStringLiteral("slice.read"),
              QStringLiteral("panadapter.read"),

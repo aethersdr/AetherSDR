@@ -27,7 +27,7 @@ int main(int argc, char* argv[])
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     AetherSDR::control::LocalControlServer server;
-    AetherSDR::control::RadioResourceAdapter resources(
+    [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
         &radioSession.radioModel(), &server.resourceStore(),
         QStringLiteral("radio-1"));
     if (!server.listen(parser.value(socketOption))) {

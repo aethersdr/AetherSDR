@@ -17,6 +17,18 @@
 #endif
 
 namespace AetherSDR::control {
+namespace {
+
+QJsonObject serverValue(const QString& localTransport)
+{
+    return {{QStringLiteral("name"), QStringLiteral("aetherd")},
+            {QStringLiteral("buildVersion"), QStringLiteral(AETHERSDR_VERSION)},
+            {QStringLiteral("protocolVersions"), QJsonArray{1}},
+            {QStringLiteral("health"), QStringLiteral("ok")},
+            {QStringLiteral("localTransport"), localTransport}};
+}
+
+} // namespace
 
 struct LocalControlServer::Client {
     Client(ControlResourceStore* resources, qint64 maxQueuedOutputBytes)
@@ -39,11 +51,7 @@ LocalControlServer::LocalControlServer(QObject* parent, Limits limits)
 {
     m_resources.upsert(
         {QStringLiteral("server"), {}, {}},
-        {{QStringLiteral("name"), QStringLiteral("aetherd")},
-         {QStringLiteral("buildVersion"), QStringLiteral(AETHERSDR_VERSION)},
-         {QStringLiteral("protocolVersions"), QJsonArray{1}},
-         {QStringLiteral("health"), QStringLiteral("ok")},
-         {QStringLiteral("localTransport"), QStringLiteral("idle")}});
+        serverValue(QStringLiteral("idle")));
     m_server.setSocketOptions(QLocalServer::UserAccessOption);
     connect(&m_server, &QLocalServer::newConnection,
             this, [this] { acceptConnections(); });
@@ -93,11 +101,7 @@ bool LocalControlServer::listen(const QString& name)
     m_lock = std::move(lock);
     m_resources.upsert(
         {QStringLiteral("server"), {}, {}},
-        {{QStringLiteral("name"), QStringLiteral("aetherd")},
-         {QStringLiteral("buildVersion"), QStringLiteral(AETHERSDR_VERSION)},
-         {QStringLiteral("protocolVersions"), QJsonArray{1}},
-         {QStringLiteral("health"), QStringLiteral("ok")},
-         {QStringLiteral("localTransport"), QStringLiteral("listening")}});
+        serverValue(QStringLiteral("listening")));
     return true;
 }
 
@@ -119,11 +123,7 @@ void LocalControlServer::close()
     if (wasListening) {
         m_resources.upsert(
             {QStringLiteral("server"), {}, {}},
-            {{QStringLiteral("name"), QStringLiteral("aetherd")},
-             {QStringLiteral("buildVersion"), QStringLiteral(AETHERSDR_VERSION)},
-             {QStringLiteral("protocolVersions"), QJsonArray{1}},
-             {QStringLiteral("health"), QStringLiteral("ok")},
-             {QStringLiteral("localTransport"), QStringLiteral("stopped")}});
+            serverValue(QStringLiteral("stopped")));
     }
 }
 

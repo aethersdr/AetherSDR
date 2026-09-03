@@ -31,7 +31,9 @@ public:
 
 private:
     void attachSlice(SliceModel* slice);
+    void refreshSlice(SliceModel* slice);
     void attachPanadapter(PanadapterModel* panadapter);
+    void refreshPanadapter(PanadapterModel* panadapter);
     void clearDynamicResources();
     void publishRadioSession();
     void publishSlice(SliceModel* slice);

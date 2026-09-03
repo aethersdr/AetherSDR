@@ -98,13 +98,13 @@ RadioResourceAdapter::RadioResourceAdapter(
                              QString::number(sliceId)});
     });
     connect(m_radio, &RadioModel::slotOccupancyChanged, this, [this](int sliceId) {
-        attachSlice(m_radio->slice(sliceId));
+        refreshSlice(m_radio->slice(sliceId));
     });
 
     connect(m_radio, &RadioModel::panadapterAdded,
             this, &RadioResourceAdapter::attachPanadapter);
     connect(m_radio, &RadioModel::panadapterReclaimed,
-            this, &RadioResourceAdapter::attachPanadapter);
+            this, &RadioResourceAdapter::refreshPanadapter);
     connect(m_radio, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
                 PanadapterModel* removed = nullptr;
@@ -166,6 +166,18 @@ void RadioResourceAdapter::attachSlice(SliceModel* slice)
     publishSlice(slice);
 }
 
+void RadioResourceAdapter::refreshSlice(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    if (!m_slices.contains(slice)) {
+        attachSlice(slice);
+        return;
+    }
+    publishSlice(slice);
+}
+
 void RadioResourceAdapter::attachPanadapter(PanadapterModel* panadapter)
 {
     if (!panadapter || m_panadapters.contains(panadapter)) {
@@ -185,6 +197,18 @@ void RadioResourceAdapter::attachPanadapter(PanadapterModel* panadapter)
     connect(panadapter, &QObject::destroyed, this, [this, panadapter] {
         m_panadapters.remove(panadapter);
     });
+    publishPanadapter(panadapter);
+}
+
+void RadioResourceAdapter::refreshPanadapter(PanadapterModel* panadapter)
+{
+    if (!panadapter) {
+        return;
+    }
+    if (!m_panadapters.contains(panadapter)) {
+        attachPanadapter(panadapter);
+        return;
+    }
     publishPanadapter(panadapter);
 }
 

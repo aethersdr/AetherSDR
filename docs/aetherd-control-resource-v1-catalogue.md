@@ -28,7 +28,11 @@ an omitted `id` as an all-current-and-future selector for `radioSession`,
 
 ## Methods
 
-All methods require the negotiated session ID and the `observe` grant.
+All methods require the negotiated session ID. The initial current-user local
+endpoint grants `observe` to every negotiated session; because no other session
+type exists yet, this slice has no separate per-request grant branch. Explicit
+per-session grant mapping and checks arrive with authentication before another
+grant or remote session is exposed.
 
 ### `resource.get`
 

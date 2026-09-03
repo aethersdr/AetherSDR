@@ -237,8 +237,55 @@ bool testServiceSubscriptions()
           QJsonObject{{QStringLiteral("type"), QStringLiteral("slice")},
                       {QStringLiteral("radioSession"), QStringLiteral("radio-1")},
                       {QStringLiteral("typo"), QStringLiteral("0")}}}});
-    return check(errorCode(malformed) == QStringLiteral("request.invalid_params"),
-                 "unknown selector fields must fail closed");
+    if (!check(errorCode(malformed) == QStringLiteral("request.invalid_params"),
+               "unknown selector fields must fail closed")) {
+        return false;
+    }
+
+    const QJsonObject unknownSubscription = invoke(
+        &service, &first, QStringLiteral("unknown-unsub"),
+        QStringLiteral("resource.unsubscribe"),
+        {{QStringLiteral("subscription"), firstSubscription}});
+    if (!check(errorCode(unknownSubscription) == QStringLiteral("resource.not_found"),
+               "unsubscribing an unknown ID must return resource.not_found")) {
+        return false;
+    }
+
+    QJsonArray tooManySelectors;
+    for (int index = 0; index <= 64; ++index) {
+        tooManySelectors.append(sliceSelector.first());
+    }
+    const QJsonObject selectorLimit = invoke(
+        &service, &first, QStringLiteral("selector-limit"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), tooManySelectors}});
+    if (!check(errorCode(selectorLimit) == QStringLiteral("request.invalid_params"),
+               "a subscription must reject more than 64 selectors")) {
+        return false;
+    }
+
+    ControlSession limited(&store, 4096);
+    if (!check(negotiate(&service, &limited),
+               "subscription-limit client must negotiate")) {
+        return false;
+    }
+    for (int index = 0; index < ControlSession::kMaxSubscriptions; ++index) {
+        const QJsonObject accepted = invoke(
+            &service, &limited, QStringLiteral("limit-%1").arg(index),
+            QStringLiteral("resource.subscribe"),
+            {{QStringLiteral("resources"), sliceSelector}});
+        if (!check(accepted.value(QStringLiteral("result")).isObject(),
+                   "the declared number of subscriptions must be accepted")) {
+            return false;
+        }
+    }
+    const QJsonObject subscriptionLimit = invoke(
+        &service, &limited, QStringLiteral("limit-overflow"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), sliceSelector}});
+    return check(errorCode(subscriptionLimit)
+                     == QStringLiteral("transport.limit_exceeded"),
+                 "a client must reject subscription 65");
 }
 
 bool testOverflowRequiresResync()
@@ -409,6 +456,34 @@ bool testSimBackendEndToEnd()
                                      {"fps", "averageFrames", "weightedAverage",
                                       "weightedAverageKnown", "waterfallRate"}),
                "SimBackend resources must match the complete documented v1 schemas")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
+    const quint64 sliceRevision = store.get(sliceAddress)->revision;
+    QJsonObject staleSliceValue = sliceValue;
+    staleSliceValue.insert(QStringLiteral("owned"), false);
+    store.upsert(sliceAddress, staleSliceValue);
+    radio.slotOccupancyChanged(0);
+    const std::optional<ResourceSnapshot> refreshedSlice = store.get(sliceAddress);
+    if (!check(refreshedSlice && refreshedSlice->revision == sliceRevision + 2
+                   && refreshedSlice->value.value(QStringLiteral("owned")).toBool(),
+               "slot occupancy changes must republish RadioModel-derived ownership")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
+    const quint64 panRevision = store.get(panAddress)->revision;
+    QJsonObject stalePanValue = panValue;
+    stalePanValue.insert(QStringLiteral("centerKnown"),
+                         !panValue.value(QStringLiteral("centerKnown")).toBool());
+    store.upsert(panAddress, stalePanValue);
+    radio.panadapterReclaimed(radio.panadapter(QStringLiteral("0x40000000")));
+    const std::optional<ResourceSnapshot> refreshedPan = store.get(panAddress);
+    if (!check(refreshedPan && refreshedPan->revision == panRevision + 2
+                   && refreshedPan->value.value(QStringLiteral("centerKnown"))
+                          == panValue.value(QStringLiteral("centerKnown")),
+               "panadapter reclaim must republish canonical model state")) {
         radio.disconnectFromRadio();
         return false;
     }
