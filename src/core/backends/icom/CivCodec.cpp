@@ -1,4 +1,5 @@
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
 #include <algorithm>
 #include <cctype>
@@ -831,6 +832,21 @@ std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
     return buildFrameSub(to, cmd::kTone, which, body);
 }
 
+std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse)
+{
+    if (!isCanonicalDtcsCode(code)) {
+        return {};
+    }
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte(code / 100),
+        encodeBcdByte(code % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, repeaterTone::kDtcs, body);
+}
+
 std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
 {
     return cmdReadFunction(to, func::kRepeaterAccess);
@@ -895,10 +911,48 @@ std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
     }
 }
 
+std::optional<std::uint8_t> repeaterAccessModeValue(std::string_view name) noexcept
+{
+    constexpr std::array<std::uint8_t, 8> kValues{
+        0x00, 0x01, 0x02, 0x03, 0x06, 0x07, 0x08, 0x09};
+    for (const std::uint8_t value : kValues) {
+        if (repeaterAccessModeName(value) == name) {
+            return value;
+        }
+    }
+    return std::nullopt;
+}
+
 std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
     std::uint8_t to, std::uint8_t which)
 {
     return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which, int value,
+    bool txReverse, bool rxReverse)
+{
+    const int bounded = std::clamp(value, 0, 9999);
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte((bounded / 100) % 100),
+        encodeBcdByte(bounded % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::optional<std::vector<std::uint8_t>> repeaterToneConfirmationForWrite(
+    std::uint8_t to, const CivFrame& write)
+{
+    if (write.cmd != cmd::kTone || !write.hasSub || write.data.empty()
+        || (write.sub != repeaterTone::kTxCtcss
+            && write.sub != repeaterTone::kRxCtcss
+            && write.sub != repeaterTone::kDtcs)) {
+        return std::nullopt;
+    }
+    return cmdReadRepeaterToneRegister(to, write.sub);
 }
 
 std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
@@ -1072,6 +1126,66 @@ std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int va
     const std::array<std::uint8_t, 4> body{
         itemBcd[0], itemBcd[1], levelBcd[0], levelBcd[1]};
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+decodeNetworkAddress(std::span<const std::uint8_t> data)
+{
+    if (data.size() != 8) {
+        return std::nullopt;
+    }
+    std::array<std::uint8_t, 4> octets{};
+    for (std::size_t i = 0; i < data.size(); i += 2) {
+        const std::uint8_t high = data[i];
+        const std::uint8_t low = data[i + 1];
+        if ((high & 0x0f) > 9 || ((high >> 4) & 0x0f) > 9
+            || (low & 0x0f) > 9 || ((low >> 4) & 0x0f) > 9) {
+            return std::nullopt;
+        }
+        const int value = decodeBcdByte(high) * 100 + decodeBcdByte(low);
+        if (value > 255) {
+            return std::nullopt;
+        }
+        octets[i / 2] = static_cast<std::uint8_t>(value);
+    }
+    return octets;
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+subnetMaskFromBcdPrefix(std::uint8_t raw)
+{
+    if ((raw & 0x0f) > 9 || ((raw >> 4) & 0x0f) > 9) {
+        return std::nullopt;
+    }
+    const int prefix = decodeBcdByte(raw);
+    if (prefix < 1 || prefix > 30) {
+        return std::nullopt;
+    }
+    const std::uint32_t mask = 0xffffffffU << (32 - prefix);
+    return std::array<std::uint8_t, 4>{
+        static_cast<std::uint8_t>((mask >> 24) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 16) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 8) & 0xffU),
+        static_cast<std::uint8_t>(mask & 0xffU)};
+}
+
+std::optional<std::string> decodeNetworkName(std::span<const std::uint8_t> data)
+{
+    if (data.size() > 15) {
+        return std::nullopt;
+    }
+    std::string name;
+    name.reserve(data.size());
+    for (std::uint8_t byte : data) {
+        if (byte < 0x20 || byte > 0x7e) {
+            return std::nullopt;
+        }
+        name.push_back(static_cast<char>(byte));
+    }
+    while (!name.empty() && name.back() == ' ') {
+        name.pop_back();
+    }
+    return name;
 }
 
 std::vector<std::uint8_t> cmdTuneOffsetHz(std::uint8_t to, int hz)

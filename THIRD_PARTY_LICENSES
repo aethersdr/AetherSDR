@@ -136,6 +136,33 @@ AetherSDR.
   or text incorporated, figures only.
   Publisher: ACOM (manufacturer public documentation)
 
+The TelePost LP-100A wattmeter peripheral (see
+docs/architecture/lp-100a-wattmeter-design.md) implements TelePost's own
+published serial protocol — the single-byte command set, the ';'-framed record
+and its field order and semantics. These wire-protocol facts were consulted
+from the manufacturer's public documentation and re-implemented from scratch;
+no vendor code was used.
+  Source:   "RF Wattmeter LP-100A Operations Manual", TelePost Inc. (N8LP),
+            http://www.telepostinc.com/LP-100A-Op_Manual.pdf
+  Publisher: TelePost Inc. (manufacturer public documentation)
+
+  NOTE: the manual's printed example record is wrong about two things, both
+  corrected against real hardware rather than against the document: its Z field
+  is 4 characters where the wire sends 5 (zero-padded), and it lists five SWR
+  alarm values and two peak-hold modes where the hardware has six and three.
+
+  wt2p_lp100a / "LP100A OSD" (Cedrick Johnson, WT2P) — consulted only as a
+  secondary, practical cross-check on the port settings and the response field
+  order. No code incorporated.
+  License:  MIT
+  Source:   https://github.com/chibondking/wt2p_lp100a
+
+  A Node-RED flow authored by this project's own contributor and used to drive
+  the reference LP-100A for several years was consulted as a working example
+  of the protocol in practice. It is first-party material, not third-party, and
+  is recorded here only because the design note audits which of its behaviours
+  were adopted, improved on, or rejected.
+
 The SPE Expert amplifier peripheral (see
 docs/architecture/spe-expert-amplifier-design.md) implements SPE's USB/RS-232
 serial protocol — the command/data packet framing (sync run, count,

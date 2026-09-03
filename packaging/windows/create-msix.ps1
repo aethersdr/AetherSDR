@@ -10,6 +10,10 @@
     Store identity values are deliberately parameters/env vars so the repo can
     build development packages before Partner Center assigns the final package
     Name and Publisher.
+
+    When -CreateUpload is used, -PdbPath identifies the application PDB and
+    -SymbolDir can add dependency PDBs. All PDBs are flattened at the root of
+    the single-architecture .appxsym.
 #>
 
 [CmdletBinding()]
@@ -34,6 +38,7 @@ param(
 
     [string]$IconSource = "docs/assets/logo-circle.png",
     [string]$PdbPath = "build/AetherSDR.pdb",
+    [string]$SymbolDir,
     [switch]$CreateUpload,
     [switch]$ExcludeDfnrModel,
     [switch]$RequirePdb,
@@ -212,14 +217,28 @@ function New-AppInstallerUx {
 function New-AppxSym {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$InputPdbPath,
+        [string[]]$InputPdbPaths,
         [Parameter(Mandatory = $true)]
         [string]$OutputPath
     )
 
-    if (-not (Test-Path -LiteralPath $InputPdbPath)) {
-        Write-Host "No PDB found at $InputPdbPath; skipping .appxsym creation."
+    $existingPdbPaths = @($InputPdbPaths |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        ForEach-Object { (Get-Item -LiteralPath $_).FullName } |
+        Sort-Object -Unique)
+    if ($existingPdbPaths.Count -eq 0) {
+        Write-Host "No PDBs found; skipping .appxsym creation."
         return $null
+    }
+
+    $duplicateNames = @($existingPdbPaths |
+        Group-Object { [System.IO.Path]::GetFileName($_) } |
+        Where-Object { $_.Count -gt 1 })
+    if ($duplicateNames.Count -gt 0) {
+        $details = $duplicateNames | ForEach-Object {
+            "$($_.Name): $(($_.Group) -join ', ')"
+        }
+        throw "PDB names must be unique at the .appxsym archive root: $($details -join '; ')"
     }
 
     $stageDir = Join-Path ([System.IO.Path]::GetDirectoryName($OutputPath)) "appxsym-stage"
@@ -228,7 +247,11 @@ function New-AppxSym {
     }
     New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 
-    Copy-Item -LiteralPath $InputPdbPath -Destination (Join-Path $stageDir ([System.IO.Path]::GetFileName($InputPdbPath))) -Force
+    foreach ($pdbPath in $existingPdbPaths) {
+        # One .appxsym covers one architecture. Microsoft/Visual Studio place
+        # every architecture-matching PDB together at the archive root.
+        Copy-Item -LiteralPath $pdbPath -Destination (Join-Path $stageDir ([System.IO.Path]::GetFileName($pdbPath))) -Force
+    }
 
     $zipPath = "$OutputPath.zip"
     if (Test-Path -LiteralPath $zipPath) {
@@ -298,6 +321,7 @@ $resolvedPackageRoot = Resolve-InputPath $PackageRoot
 $resolvedOutputDir = Resolve-InputPath $OutputDir
 $resolvedIconSource = Resolve-InputPath $IconSource
 $resolvedPdbPath = Resolve-InputPath $PdbPath
+$resolvedSymbolDir = $(if ([string]::IsNullOrWhiteSpace($SymbolDir)) { $null } else { Resolve-InputPath $SymbolDir })
 
 if (-not (Test-Path -LiteralPath $resolvedDeployDir)) {
     throw "Deploy directory not found: $resolvedDeployDir"
@@ -469,9 +493,20 @@ else {
 
 $appxSymPath = $null
 if ($CreateUpload) {
-    $appxSymPath = New-AppxSym -InputPdbPath $resolvedPdbPath -OutputPath (Join-Path $resolvedOutputDir "$packageBaseName.appxsym")
+    if ($RequirePdb -and -not (Test-Path -LiteralPath $resolvedPdbPath -PathType Leaf)) {
+        throw "RequirePdb was specified but the application PDB was not found at $resolvedPdbPath."
+    }
+    $symbolPdbPaths = @($resolvedPdbPath)
+    if ($resolvedSymbolDir) {
+        if (-not (Test-Path -LiteralPath $resolvedSymbolDir -PathType Container)) {
+            throw "Symbol directory not found: $resolvedSymbolDir"
+        }
+        $symbolPdbPaths += @(Get-ChildItem -LiteralPath $resolvedSymbolDir -Recurse -File -Filter "*.pdb" |
+            ForEach-Object { $_.FullName })
+    }
+    $appxSymPath = New-AppxSym -InputPdbPaths $symbolPdbPaths -OutputPath (Join-Path $resolvedOutputDir "$packageBaseName.appxsym")
     if (-not $appxSymPath -and $RequirePdb) {
-        throw "RequirePdb was specified but no PDB was found at $resolvedPdbPath. The .msixupload would ship without crash symbols for Partner Center. Build with -DCMAKE_BUILD_TYPE=RelWithDebInfo (or otherwise ensure the PDB is emitted) before packaging, or drop -RequirePdb for a deliberately symbol-less dev package."
+        throw "RequirePdb was specified but no PDBs were found. The .msixupload would ship without crash symbols for Partner Center. Build with -DCMAKE_BUILD_TYPE=RelWithDebInfo and stage matching dependency symbols before packaging, or drop -RequirePdb for a deliberately symbol-less dev package."
     }
     $uploadPath = Join-Path $resolvedOutputDir "$packageBaseName.msixupload"
     New-MsixUpload -MsixPath $msixPath -AppxSymPath $appxSymPath -OutputPath $uploadPath

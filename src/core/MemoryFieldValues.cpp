@@ -1,5 +1,7 @@
 #include "MemoryFieldValues.h"
 
+#include <QSet>
+
 namespace AetherSDR::MemoryFields {
 
 QString sanitizeText(const QString& in)
@@ -88,15 +90,35 @@ QString offsetDirToDisplay(const QString& any)
 QString toneModeToWire(const QString& any)
 {
     const QString upper = sanitizeText(any).trimmed().toUpper();
-    if (upper == "OFF")      return "off";
-    if (upper == "CTCSS_TX") return "ctcss_tx";
+    static const QSet<QString> kKnownModes{
+        QStringLiteral("OFF"),
+        QStringLiteral("CTCSS_TX"),
+        QStringLiteral("CTCSS_RX"),
+        QStringLiteral("CTCSS_TXRX"),
+        QStringLiteral("DTCS_TX"),
+        QStringLiteral("DTCS_TXRX"),
+        QStringLiteral("CTCSS_TX_DTCS_RX"),
+        QStringLiteral("DTCS_TX_CTCSS_RX"),
+    };
+    if (kKnownModes.contains(upper)) {
+        return upper.toLower();
+    }
     return {};
 }
 
 QString toneModeToDisplay(const QString& any)
 {
     const QString upper = sanitizeText(any).trimmed().toUpper();
-    if (upper == "CTCSS_TX") return "CTCSS_TX";
+    static const QSet<QString> kKnownModes{
+        QStringLiteral("CTCSS_TX"),
+        QStringLiteral("CTCSS_RX"),
+        QStringLiteral("CTCSS_TXRX"),
+        QStringLiteral("DTCS_TX"),
+        QStringLiteral("DTCS_TXRX"),
+        QStringLiteral("CTCSS_TX_DTCS_RX"),
+        QStringLiteral("DTCS_TX_CTCSS_RX"),
+    };
+    if (kKnownModes.contains(upper)) return upper;
     return "OFF";
 }
 

@@ -113,6 +113,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomSession.h"
 
 #include "TestEventLoop.h"
 
@@ -132,6 +133,53 @@ struct IcomCivBackendTestAccess {
     static void selectModel(IcomCivBackend& backend, const IcomModel& model)
     {
         backend.m_model = &model;
+    }
+
+    static void deliverDialLock(IcomCivBackend& backend, int value)
+    {
+        backend.m_connected = true;
+        backend.m_sessionGeneration = 1;
+        CivFrame frame;
+        frame.cmd = cmd::kFunction;
+        frame.hasSub = true;
+        frame.sub = func::kDialLock;
+        frame.data = {static_cast<std::uint8_t>(value)};
+        backend.onCivFrame(frame, 1);
+    }
+
+    static void prepareDialLockWrite(IcomCivBackend& backend,
+                                     const IcomModel& model)
+    {
+        backend.m_model = &model;
+        backend.m_connected = true;
+        backend.m_session = std::make_unique<IcomSession>();
+        backend.m_session->setCivAddress(model.civAddress);
+    }
+
+    static QString lastOutboundCiv(const IcomCivBackend& backend)
+    {
+        return backend.m_lastOutboundCiv;
+    }
+
+    static std::uint8_t activeCivAddress(const IcomCivBackend& backend)
+    {
+        return backend.m_session ? backend.m_session->civAddress() : 0;
+    }
+
+    static bool queueTunerRead(IcomCivBackend& backend, std::uint8_t address,
+                               IcomCivScheduler::Priority priority)
+    {
+        return backend.queueTunerReadIfSupported(address, priority);
+    }
+
+    static bool sendTunerCommand(IcomCivBackend& backend, bool start)
+    {
+        return backend.sendTunerCommandIfSupported(start);
+    }
+
+    static std::size_t queuedRequestCount(const IcomCivBackend& backend)
+    {
+        return backend.m_civScheduler.m_queue.size();
     }
 };
 
@@ -260,6 +308,21 @@ int main(int argc, char** argv)
               "Flex declares hasMultiClientSessions (multiFLEX)");
         check(caps.hasGpsLocation,
               "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
+        check(caps.hasGpsHardware,
+              "Flex declares GPS hardware for Radio Setup presentation");
+        check(caps.canReboot && caps.hasRemoteOnControl && caps.canUpgradeFirmware,
+              "Flex preserves reboot, Remote On and firmware-upgrade controls");
+        check(caps.hasSmartLink && caps.hasLicenseInfo
+                  && caps.hasClientNetworkConfig
+                  && caps.hasFlexControlIntegration
+                  && caps.hasAudioCompression && caps.hasSharpFilters,
+              "Flex preserves every capability-gated Settings surface");
+        check(caps.usesVita49Transport,
+              "Flex exposes VITA-49 receive-buffer tuning");
+        check(caps.hasNetworkConfigurationReadback,
+              "Flex preserves radio network-information readback");
+        check(caps.hasPrivateIpConnectionPolicy,
+              "Flex preserves its private-IP connection policy control");
         // The one this field exists to protect: the struct default is false, so
         // adding the field without touching FlexBackend would silently delete a
         // readout that ships and works today.
@@ -324,6 +387,8 @@ int main(int argc, char** argv)
 
         check(!gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
               "connected GPSDO-less Flex hides the GPS stack");
+        check(!model.hasGpsSetupHardware(),
+              "GPSDO-less Flex hides the Settings GPS hardware surface");
 
         const auto applyOscillatorPresence = [&model](const char* key, bool present) {
             const QMap<QString, QString> status{
@@ -341,6 +406,8 @@ int main(int argc, char** argv)
               "GPSDO presence fixture reached RadioModel");
         check(model.hasGpsHardware(),
               "gpsdo_present=1 marks an optional 6000-series GPSDO present");
+        check(model.hasGpsSetupHardware(),
+              "optional Flex GPSDO enables the Settings GPS hardware surface");
         check(gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
               "connected optional-GPSDO Flex shows the GPS stack");
         check(applyOscillatorPresence("gpsdo_present", false),
@@ -364,6 +431,8 @@ int main(int argc, char** argv)
               "disconnect fixture reached RadioModel");
         check(!model.hasGpsHardware(),
               "GPS presence does not leak from the previous radio session");
+        check(!model.hasGpsSetupHardware(),
+              "Settings GPS presence does not leak from the previous Flex session");
     }
 
     // ---- HL2 declares none of them ---------------------------------------
@@ -379,8 +448,9 @@ int main(int argc, char** argv)
         check(caps.receiveOnlyModes.isEmpty(),
               "HL2 declares no receive-only modes — it modulates on this host, "
               "so there is no mode it hears and cannot send");
-        check(caps.txPowerBands.isEmpty(),
-              "HL2 explicitly leaves per-band TX power limits empty");
+        check(caps.txPowerBands.size() == 1
+                  && caps.txPowerMaxWattsAt(14'200'000.0) == 5.0,
+              "HL2 declares its continuous 5 W rated-output range");
         check(!caps.hasDaxStreams,
               "HL2 declares hasDaxStreams=false (one raw IQ feed, no stream plane)");
         check(!caps.hasExtendedDsp,
@@ -397,6 +467,22 @@ int main(int argc, char** argv)
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
         check(!caps.hasGpsLocation,
               "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
+        check(!caps.hasGpsHardware,
+              "HL2 declares hasGpsHardware=false");
+        check(!caps.canReboot && !caps.hasRemoteOnControl
+                  && !caps.canUpgradeFirmware,
+              "HL2 hides unsupported radio-management controls");
+        check(!caps.hasSmartLink && !caps.hasLicenseInfo
+                  && !caps.hasClientNetworkConfig
+                  && !caps.hasFlexControlIntegration
+                  && !caps.hasAudioCompression && !caps.hasSharpFilters,
+              "HL2 hides unsupported Flex Settings surfaces");
+        check(!caps.usesVita49Transport,
+              "HL2 hides Flex VITA-49 receive-buffer tuning");
+        check(!caps.hasNetworkConfigurationReadback,
+              "HL2 declares no radio network-configuration readback");
+        check(!caps.hasPrivateIpConnectionPolicy,
+              "HL2 hides the Flex private-IP connection policy");
         // PATEMP yes, "+13.8A" no. The temperature above the volts row is a
         // genuine HL2 reading and must keep working — this flag hides one label,
         // not the stack.
@@ -505,15 +591,73 @@ int main(int argc, char** argv)
             check(forwardedSpy.count() == 3
                       && forwardedSpy.last().value(0).toBool(),
                   "the same uninhibited down crosses the backend seam");
-            check(keyEdgeSpy.count() == 1,
-                  "an accepted down publishes one key-active edge");
+            // The iambic keyer drives the sidetone gate itself with the
+            // element's scheduled instant; sendCwKeyEdge must not echo it
+            // through cwKeyDownChanged (#4976).
+            check(keyEdgeSpy.count() == 0,
+                  "an accepted iambic down does not publish a key-active echo");
             model.sendCwKeyEdge(false);
+            check(keyEdgeSpy.count() == 0,
+                  "an accepted iambic up does not publish a key-active echo");
+            // Straight-key sources still publish: a following sendCwKey down
+            // emits even though the keyer edges touched the shared state.
+            // Note this holds because the two keyer edges above are
+            // BALANCED, leaving m_cwKeyActive false again — see the
+            // unbalanced case pinned below.
+            model.sendCwKey(true);
+            check(keyEdgeSpy.count() == 1
+                      && keyEdgeSpy.last().value(0).toBool(),
+                  "a straight-key down after balanced keyer edges publishes");
+            model.sendCwKey(false);
+
+            // Known limitation, pinned deliberately.  NOT a regression:
+            // `main` behaves identically, because sendCwKeyEdge set the
+            // same latch before #4976.  m_cwKeyActive is one bool shared by
+            // both entry points, so an UNBALANCED keyer edge leaves it set
+            // and the next straight-key down of the same polarity publishes
+            // nothing — the radio is keyed while the sidetone gate never
+            // hears the edge.  The interleave is reachable because
+            // straight-key sources are not gated on the iambic keyer
+            // running (TciProtocol's keyer:trx handler,
+            // MainWindow::setCwStraightKeyState) while paddle sources are.
+            // Giving sendCwKeyEdge its own edge-tracking bool is out of
+            // scope for #4976; this assertion is what flips when that
+            // decoupling lands.
+            const int publishedBeforeLatch = keyEdgeSpy.count();
+            model.sendCwKeyEdge(true);   // latches m_cwKeyActive, no echo
+            model.sendCwKey(true);       // prev == true, so nothing emits
+            check(keyEdgeSpy.count() == publishedBeforeLatch,
+                  "KNOWN LATCH: a straight-key down after an unbalanced "
+                  "keyer edge publishes nothing");
         }
     }
 
-    // ---- Icom publishes the IC-9700 power clamp without a socket ----------
+    // ---- Icom model capabilities and CI-V dial lock without a socket -------
     {
         using namespace AetherSDR::icom;
+        const IcomModel* ic705 = modelForName("IC-705");
+        check(ic705 != nullptr, "the IC-705 resolves from the Icom model table");
+        if (ic705) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic705);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 1
+                      && caps.txPowerMaxWattsAt(14'200'000.0) == 10.0,
+                  "IC-705 alone declares its continuous 10 W rated-output range");
+        }
+
+        const IcomModel* ic7300Mk2 = modelForName("IC-7300MK2");
+        check(ic7300Mk2 != nullptr,
+              "the IC-7300MK2 resolves from the Icom model table");
+        if (ic7300Mk2) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic7300Mk2);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.isEmpty()
+                      && caps.txPowerMaxWattsAt(14'200'000.0) == 100.0,
+                  "IC-7300MK2 retains its unbanded 100 W capability path");
+        }
+
         const IcomModel* ic9700 = modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
         // Guarded as a block: without the guard a failed lookup would run the
@@ -537,22 +681,169 @@ int main(int argc, char** argv)
                   "Icom declares the profiled IC-9700 supply-voltage telemetry");
             check(!caps.hasMainFanTelemetry,
                   "Icom declares no Main Fan telemetry family-wide");
+            check(!caps.hasTuner,
+                  "IC-9700 publishes tuner controls as unavailable");
+            check(!caps.hasTunerMemories,
+                  "IC-9700 publishes tuner-memory controls as unavailable");
+            const std::size_t queuedBefore =
+                IcomCivBackendTestAccess::queuedRequestCount(backend);
+            check(!IcomCivBackendTestAccess::queueTunerRead(
+                      backend, 0xA2, IcomCivScheduler::Priority::Maintenance)
+                      && !IcomCivBackendTestAccess::queueTunerRead(
+                          backend, 0xA2, IcomCivScheduler::Priority::Control)
+                      && IcomCivBackendTestAccess::queuedRequestCount(backend)
+                          == queuedBefore,
+                  "IC-9700 suppresses startup and periodic tuner reads");
+            check(!IcomCivBackendTestAccess::sendTunerCommand(backend, true)
+                      && !IcomCivBackendTestAccess::sendTunerCommand(backend, false),
+                  "IC-9700 suppresses ordinary tuner start and bypass writes");
+            QSignalSpy tunerErrorSpy(&backend, &IRadioBackend::extensionError);
+            backend.invokeExtension(QStringLiteral("icom"),
+                                    QStringLiteral("tuner.start"), 9700, {});
+            check(tunerErrorSpy.count() == 1
+                      && tunerErrorSpy.first().at(0).toULongLong() == 9700
+                      && tunerErrorSpy.first().at(1).toString()
+                          == QStringLiteral("antenna tuner unsupported"),
+                  "IC-9700 rejects the tuner extension before radio I/O");
             check(caps.speechProcessorLevelMaximum == 100
                       && caps.speechProcessorLabel == QStringLiteral("COMP"),
                   "IC-9700 alone declares the continuous COMP presentation");
+            check(caps.fmDtcsCodes.size() == 104
+                      && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
+                  "IC-9700 declares the complete DTCS operator vocabulary");
         }
 
-        for (const char* siblingName : {"IC-705", "IC-7300MK2"}) {
-            const IcomModel* sibling = modelForName(siblingName);
-            check(sibling != nullptr, "the protected sibling Icom model resolves");
+        {
+            const IcomModel* ic705 = modelForName("IC-705");
+            check(ic705 != nullptr, "the IC-705 model resolves");
+            if (ic705) {
+                IcomCivBackend backend;
+                IcomCivBackendTestAccess::selectModel(backend, *ic705);
+                const RadioCapabilities caps = backend.capabilities();
+                check(caps.speechProcessorLevelMaximum == 2
+                          && caps.speechProcessorLabel == QStringLiteral("PROC"),
+                      "IC-705 retains the legacy PROC presentation");
+                check(caps.fmDtcsCodes.size() == 104
+                          && caps.fmToneModes.contains(QStringLiteral("dtcs_txrx")),
+                      "IC-705 declares its documented DTCS operator vocabulary");
+            }
+        }
+
+        {
+            const IcomModel* sibling = modelForName("IC-7300MK2");
+            check(sibling != nullptr, "the protected IC-7300MK2 model resolves");
             if (sibling) {
                 IcomCivBackend backend;
                 IcomCivBackendTestAccess::selectModel(backend, *sibling);
                 const RadioCapabilities caps = backend.capabilities();
                 check(caps.speechProcessorLevelMaximum == 2
                           && caps.speechProcessorLabel == QStringLiteral("PROC"),
-                      "non-9700 Icom models retain the legacy PROC presentation");
+                      "IC-7300MK2 retains the legacy PROC presentation");
+                check(caps.fmDtcsCodes.isEmpty(),
+                      "Icom models without documented DTCS do not activate controls");
+                check(caps.hasTuner,
+                      "evidenced sibling Icom models retain tuner control");
+                check(!caps.hasTunerMemories,
+                      "Icom tuner support does not invent Flex ATU memories");
+                check(IcomCivBackendTestAccess::queueTunerRead(
+                          backend, sibling->civAddress,
+                          IcomCivScheduler::Priority::Maintenance)
+                          && IcomCivBackendTestAccess::sendTunerCommand(backend, true),
+                      "evidenced sibling profiles retain accepted tuner read/write paths");
             }
+        }
+
+        struct DialLockCase {
+            const char* modelName;
+            std::uint8_t civAddress;
+        };
+        constexpr DialLockCase dialLockCases[] = {
+            {"IC-705", 0xA4},
+            {"IC-7300MK2", 0xB6},
+            {"IC-9700", 0xA2},
+        };
+        for (const DialLockCase& lockCase : dialLockCases) {
+            const IcomModel* lockModel = modelForName(lockCase.modelName);
+            check(lockModel != nullptr,
+                  "the profiled dial-lock Icom model resolves");
+            if (!lockModel) {
+                continue;
+            }
+            check(lockModel->civAddress == lockCase.civAddress,
+                  "the dial-lock model retains its official CI-V address");
+            check(profileFor(*lockModel).supports(IcomFeature::DialLock),
+                  "the model profile attests CI-V dial-lock support");
+
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *lockModel);
+            check(backend.capabilities().hasRadioDialLock,
+                  "the profiled model publishes radio-authoritative dial lock");
+
+            IcomCivBackend lockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(lockWriter, *lockModel);
+            check(IcomCivBackendTestAccess::activeCivAddress(lockWriter)
+                      == lockCase.civAddress,
+                  "dial lock targets the selected model's CI-V address");
+            lockWriter.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(lockWriter)
+                      == QStringLiteral("16 50 01"),
+                  "dial lock sends CI-V 16 50 01");
+
+            IcomCivBackend unlockWriter;
+            IcomCivBackendTestAccess::prepareDialLockWrite(unlockWriter, *lockModel);
+            unlockWriter.setRadioDialLock(false);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(unlockWriter)
+                      == QStringLiteral("16 50 00"),
+                  "dial unlock sends CI-V 16 50 00");
+
+            QSignalSpy lockSpy(&backend, &IRadioBackend::radioDialLockChanged);
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.count() == 1 && lockSpy.takeFirst().at(0).toBool(),
+                  "dial-lock readback publishes the locked state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 1);
+            check(lockSpy.isEmpty(),
+                  "unchanged dial-lock polling does not republish state");
+            IcomCivBackendTestAccess::deliverDialLock(backend, 0);
+            check(lockSpy.count() == 1 && !lockSpy.takeFirst().at(0).toBool(),
+                  "front-panel unlock readback publishes the unlocked state");
+        }
+
+        const IcomModel* unprofiled = modelForName("IC-7610");
+        check(unprofiled != nullptr, "the unprofiled Icom model resolves");
+        if (unprofiled) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *unprofiled);
+            check(!backend.capabilities().hasRadioDialLock,
+                  "an unattested Icom model does not inherit dial lock");
+            IcomCivBackendTestAccess::prepareDialLockWrite(backend, *unprofiled);
+            backend.setRadioDialLock(true);
+            check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
+                  "an unattested Icom model emits no dial-lock command");
+        }
+    }
+
+    // ---- A radio-global dial lock reaches every slice surface ------------
+    {
+        RadioModel fanoutModel;
+        QString fixtureError;
+        check(fanoutModel.automationApplySliceFixture(0, QString(), &fixtureError),
+              "dial-lock fan-out fixture creates slice 0");
+        check(fanoutModel.automationApplySliceFixture(1, QString(), &fixtureError),
+              "dial-lock fan-out fixture creates slice 1");
+        SliceModel* first = fanoutModel.slice(0);
+        SliceModel* second = fanoutModel.slice(1);
+        check(first && second, "dial-lock fan-out fixture resolves both slices");
+        if (first && second) {
+            const bool invoked = QMetaObject::invokeMethod(
+                fanoutModel.backend(), "radioDialLockChanged",
+                Qt::DirectConnection, Q_ARG(bool, true));
+            check(invoked, "backend dial-lock signal is invokable through the seam");
+            check(first->isLocked() && second->isLocked(),
+                  "radio-authoritative lock fans out to every slice surface");
+            QMetaObject::invokeMethod(fanoutModel.backend(), "radioDialLockChanged",
+                                      Qt::DirectConnection, Q_ARG(bool, false));
+            check(!first->isLocked() && !second->isLocked(),
+                  "radio-authoritative unlock clears every slice surface");
         }
     }
 
@@ -594,6 +885,9 @@ int main(int argc, char** argv)
         check(caps.txPowerBands.isEmpty(),
               "Sim explicitly leaves per-band TX power limits empty");
         check(!caps.hasDaxStreams, "Sim declares hasDaxStreams=false");
+        check(!model.transmitModel().hasTuner()
+                  && !model.transmitModel().hasTunerMemories(),
+              "connected Sim propagates tuner and memory capabilities to the transmit model");
         check(!caps.hasExtendedDsp, "Sim declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
         check(!caps.hasRadioSideWaterfallAutoBlack,
@@ -604,12 +898,74 @@ int main(int argc, char** argv)
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
+        check(!caps.hasGpsHardware, "Sim declares hasGpsHardware=false");
+        check(!caps.canReboot && !caps.hasRemoteOnControl
+                  && !caps.canUpgradeFirmware,
+              "Sim hides unsupported radio-management controls");
+        check(!caps.hasSmartLink && !caps.hasLicenseInfo
+                  && !caps.hasClientNetworkConfig
+                  && !caps.hasFlexControlIntegration
+                  && !caps.hasAudioCompression && !caps.hasSharpFilters,
+              "Sim hides unsupported Flex Settings surfaces");
+        check(!caps.usesVita49Transport,
+              "Sim hides Flex VITA-49 receive-buffer tuning");
+        check(!caps.hasNetworkConfigurationReadback,
+              "Sim declares no radio network-configuration readback");
+        check(!caps.hasPrivateIpConnectionPolicy,
+              "Sim hides the Flex private-IP connection policy");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
         check(!caps.hasPaTemperatureTelemetry,
               "Sim declares hasPaTemperatureTelemetry=false");
         check(!caps.hasMainFanTelemetry,
               "Sim declares hasMainFanTelemetry=false");
+        check(caps.extensionNamespaces.contains(QStringLiteral("sim")),
+              "Sim declares the 'sim' extension namespace — the Demo Noise "
+              "tile gates on this handshake, not on the backend type "
+              "(M0, #5263)");
+
+        IRadioBackend* simBackend = model.backend();
+        QSignalSpy extensionResultSpy(simBackend, &IRadioBackend::extensionResult);
+        QSignalSpy extensionErrorSpy(simBackend, &IRadioBackend::extensionError);
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.enable"), 101,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("pink")},
+                        {QStringLiteral("on"), true}});
+        check(extensionResultSpy.count() == 1
+                  && extensionResultSpy.takeFirst().value(0).toULongLong() == 101,
+              "valid Demo Noise extension request returns its correlated result");
+        check(extensionErrorSpy.isEmpty(),
+              "valid Demo Noise extension request returns no error");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.preset"), 102,
+            QStringLiteral("not-a-preset"));
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 102,
+              "unknown Demo Noise preset returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise preset does not falsely report applied=true");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.level"), 103,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("not-a-channel")},
+                        {QStringLiteral("db"), -20.0}});
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 103,
+              "unknown Demo Noise channel returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise channel does not report applied=true");
+
+        simBackend->invokeExtension(
+            QStringLiteral("sim"), QStringLiteral("noise.knob"), 104,
+            QVariantMap{{QStringLiteral("ch"), QStringLiteral("birdie")},
+                        {QStringLiteral("knob"), QStringLiteral("unknown")},
+                        {QStringLiteral("v"), 700.0}});
+        check(extensionErrorSpy.count() == 1
+                  && extensionErrorSpy.takeFirst().value(0).toULongLong() == 104,
+              "unknown Demo Noise knob returns its correlated error");
+        check(extensionResultSpy.isEmpty(),
+              "unknown Demo Noise knob does not report applied=true");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
@@ -705,6 +1061,9 @@ int main(int argc, char** argv)
         check(relayFired,
               "relay: capabilitiesChanged fired on the disconnect edge");
         check(!model.isConnected(), "disconnected from the synthetic demo radio");
+        check(model.transmitModel().hasTuner()
+                  && model.transmitModel().hasTunerMemories(),
+              "disconnect restores permissive tuner and memory presentation");
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(uiWouldShow(model.isConnected(), caps.hasProfiles),
@@ -931,6 +1290,10 @@ int main(int argc, char** argv)
               "Sim keeps its existing operator-controlled spot behavior");
         check(icomCaps.alwaysUseClientSideSpots,
               "Icom forces SpotHub spots through the passive client model");
+        check(fresh.fmDtcsCodes.isEmpty() && flexCaps.fmDtcsCodes.isEmpty()
+                  && hl2Caps.fmDtcsCodes.isEmpty() && simCaps.fmDtcsCodes.isEmpty()
+                  && icomCaps.fmDtcsCodes.isEmpty(),
+              "DTCS defaults and backends without an active Icom profile stay empty");
         check(flexCaps.speechProcessorLevelMaximum == 2
                   && flexCaps.speechProcessorLabel == QStringLiteral("PROC"),
               "Flex retains the legacy PROC presentation");
@@ -954,6 +1317,15 @@ int main(int argc, char** argv)
               "Sim explicitly omits TX cutoff controls because it is RX-only");
         check(!icomCaps.hasTxFilterControls,
               "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(!icomCaps.hasTuner,
+              "an unidentified Icom cannot surface unverified tuner control");
+        check(!fresh.hasTunerMemories,
+              "RadioCapabilities defaults tuner memories to unavailable");
+        check(flexCaps.hasTunerMemories,
+              "Flex explicitly retains radio-side ATU memories");
+        check(!hl2Caps.hasTunerMemories && !simCaps.hasTunerMemories
+                  && !icomCaps.hasTunerMemories,
+              "non-Flex backends explicitly omit Flex-style ATU memories");
         check(uiWouldShow(/*connected=*/false, /*declared=*/false),
               "disconnected: the TX cutoff editor remains permissive");
 

@@ -44,13 +44,17 @@ GUI code knows a CI-V byte. The mapping is:
 | Repeater offset magnitude | read `0C`, write `0D`, 100 Hz units | Kept unsigned on the wire; the duplex direction determines the signed TX offset shown by the slice model. |
 | Transmit-frequency check | `1C 02 00/01` | Gated by the active model's `TxFrequencyCheck` evidence and FM repeater facet. XFC is momentary: press sends ON; release, window deactivation, control hide, and disconnect send OFF. A 250 ms readback poll catches front-panel changes without requiring CI-V Transceive. |
 
-The IC-9700 additionally activates a read-only extended snapshot (`16 5D`,
-`1B 01`, `1B 02`, and `1C 03`) through the model-specific
-`FmRepeaterExtendedReadback` facet. These values are retained in the Icom
-backend and available through its `repeater.state` extension; they do not
-change the shared FM applet, VFO controls, memory vocabulary, or the existing
-IC-705/IC-7300MK2 poll and write paths. The sanitized source trace and exact
-field provenance live in
+The IC-705 and IC-9700 additionally activate the extended snapshot (`16 5D`,
+`1B 01`, `1B 02`, and `1C 03`) through their model-specific
+`FmRepeaterExtendedReadback` facets. Both official CI-V guides define the same
+access-mode values and DTCS code/polarity register; IC-9700 also has preserved
+live-wire evidence. `16 5D`, receive CTCSS, and DTCS code/polarity are
+normalized into `SliceModel`; the shared FM applet and VFO consume the model
+profile's access-mode and DTCS-code capabilities without a radio-name check.
+Operator DTCS intent writes `1B 02`, while only the radio's confirmation
+updates model and diagnostic state. The IC-7300MK2 keeps its existing narrower
+activated path, and memory write vocabulary remains outside this phase. The
+sanitized IC-9700 source trace and exact field provenance live in
 `docs/data/icom-ic9700-fm-repeater-{evidence.json,live-trace.txt}`.
 
 The radio remains authoritative. Connect performs a snapshot of all four FM
@@ -208,9 +212,10 @@ something unexpected on one with an AH-705.
 
 CI-V transceive does not announce every front-panel change. The backend rotates
 read requests for RF/power/mic/MON/VOX/notch/preamp/attenuator/tuner state on
-the link timer. These are state observations, never a reason to replay a saved
-client value: both Icom models declare an empty `clientSettingsDomains`, so the
-radio remains authoritative across reconnects.
+the link timer. Tuner reads are omitted for profiles without an evidenced tuner
+command path, including the IC-9700. These are state observations, never a
+reason to replay a saved client value: supported Icom profiles declare an empty
+`clientSettingsDomains`, so the radio remains authoritative across reconnects.
 
 The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
 `12 00` with no data reads the selection, but the live B6 radio returned only a
@@ -255,7 +260,8 @@ caps.canTransmit            = true;
 caps.txPowerMaxWatts        = 10.0;
 caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
-caps.hasTuner               = false;           // no INTERNAL ATU; see note
+caps.hasTuner               = profile.supports(IcomFeature::AntennaTuner); // exact-model evidence
+caps.hasTunerMemories       = false;           // 1C 01 has no Flex-style memory API
 caps.hasSupplyVoltageTelemetry =
     hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
@@ -269,12 +275,15 @@ caps.canReboot              = false;           // see note
 caps.clientSettingsDomains  = {};              // radio remembers its own state
 ```
 
-**`hasTuner = false` is a judgement call, not a fact.** The IC-705 has no
-internal ATU, but `1C 01` controls an *external* AH-705 — and there is no command
-to detect whether one is attached. So the capability is unanswerable from the
-radio. False is the safer default (no tuner UI on a radio that probably has
-none); an operator with an AH-705 is better served by an explicit setting than by
-a control that appears unconditionally and silently fails.
+**`hasTuner` is exact-model command capability, not an attachment detector.**
+The IC-705 opts in because `1C 01` controls its supported external AH-705 path,
+even though attachment cannot be queried. The IC-7300MK2 opts in for its
+documented tuner path. The IC-9700 and unprofiled models fail closed: the
+backend omits tuner reads and writes. The shared Transmit applet remains stable
+across radios by keeping ATU and its indicators visible but dimming them to the
+unavailable state when this capability is false. Icom does not publish
+`hasTunerMemories`: MEM, its indicator, and memory-only menu actions remain
+visible but unavailable rather than inheriting Flex's separate memory API.
 
 **`canReboot = false` despite `18 00` / `18 01` existing.** Those turn the
 transceiver off and on — but over WiFi, powering off drops the WLAN interface,
@@ -390,7 +399,8 @@ fail closed. Radio truth wins again as soon as the bounded window expires.
 | overflow | 500 ms | RX and visible |
 | NR, NB, auto/manual notch state | 1000 ms | connected |
 | frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
-| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, RIT/XIT | 3000 ms | connected |
+| tuner | 3000 ms | connected and exact profile declares tuner control |
 
 #### State convergence is snapshot + transceive + polling
 
@@ -676,9 +686,14 @@ captures from our own radio.
 ## 9. Explicitly out of scope for phase 1
 
 - **IQ.** It does not exist on this radio. Not deferred — absent.
-- **Memory channels.** The radio stores 99 in 100 groups (`1A 00`) and the decode
-  is large and fiddly. Ship `persistsMemories = false` (client-side bank) and
-  revisit.
+- **Writable memory channels.** Initial IC-705, IC-7300MK2, and IC-9700 support
+  reads their model-specific ordinary-channel records with `1A 00`, exposes occupied
+  channels through the shared memory model, and permits tuning to the cached
+  channel state. Reads are button-only; IC-705 requires a selected group so a
+  click queues 100 requests rather than scanning its 10,000-address space.
+  Writing, adding, deleting, scan-edge, call, and satellite
+  memories remain deferred. Other Icom models continue to use the client-side
+  bank until their own published record layouts are implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.
@@ -817,8 +832,8 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Six constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, and
+**Five constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 57` manual-notch width, and
 `27 1E` scope fixed edges. Not all of them should be wired: the notch width
 is deliberately left to the operator's own choice, and the fixed edges are three
 saved presets per band that a pan drag must never overwrite. CW pitch is the one
@@ -1019,7 +1034,7 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
 | `16 48` | Manual notch | ✅ | ✗ constant only |
 | `16 4F` | Twin peak filter (RTTY) | ✗ | ✗ |
-| `16 50` | Dial lock | ✅ | ✗ constant only |
+| `16 50` | Dial lock | ✅ | ✅ IC-705/IC-7300MK2/IC-9700 profile-gated read/write + polling |
 | `16 56` | DSP IF filter SHARP/SOFT | ✗ | ✗ |
 | `16 57` | Manual notch width W/M/N | ✗ | ✗ |
 | `16 58` | SSB TX bandwidth W/M/N | ✗ | ✗ |

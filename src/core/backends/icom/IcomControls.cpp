@@ -139,17 +139,18 @@ constexpr std::array kSpecs = {
                 IcomFeature::FmRepeaterExtendedReadback},
     ControlSpec{"repeater.dtcs", 0x1B, 0x02, true,
                 "DTCS code and polarity",
-                Plane::Slice, Encoding::Bcd6, Wiring::DecodeOnly,
+                Plane::Slice, Encoding::Dtcs, Wiring::Both,
                 0, 999, "code", 0, 999,
-                "", "", true,
-                "IC-9700 extended readback only. Payload bit 4 is TX reverse "
+                "setSliceFmDtcs", "vfoFmToneContainer", true,
+                "IC-9700 extended control. Payload bit 4 is TX reverse "
                 "and bit 0 is RX reverse; all other polarity bits are rejected.",
                 IcomFeature::FmRepeaterExtendedReadback},
     ControlSpec{"repeater.access.ctcss", 0x16, 0x5D, true,
-                "CTCSS access mode", Plane::Slice, Encoding::Enum, Wiring::Both,
-                0, 9, "enum", 0, 3, "setSliceFmToneMode", "vfoFmToneContainer", true,
-                "IC-9700 CTCSS subset only: OFF, TX, RX and TX/RX. DTCS values "
-                "remain outside this control.", IcomFeature::FmRepeaterCtcssRx},
+                "FM repeater access mode", Plane::Slice, Encoding::Enum, Wiring::Both,
+                0, 9, "enum", 0, 7, "setSliceFmToneMode", "vfoFmToneContainer", true,
+                "IC-9700 exposes the complete documented CTCSS, DTCS, and mixed "
+                "access vocabulary through the capability-gated FM tone UI.",
+                IcomFeature::FmRepeaterCtcssRx},
     ControlSpec{"repeater.tone.rx", 0x1B, 0x01, true,
                 "Receive CTCSS frequency", Plane::Slice, Encoding::Bcd6, Wiring::Both,
                 0, 2999, "Hz", 0, 299, "setSliceFmToneRxValue", "vfoFmToneContainer", true,
@@ -306,9 +307,12 @@ constexpr std::array kSpecs = {
                 0, 1, "on/off", 0, 1,
                 "setSliceManualNotch", "dspMNBtn", true, ""},
     ControlSpec{"dial.lock", 0x16, 0x50, true, "Dial lock",
-                Plane::Radio, Encoding::OnOff, Wiring::Declared,
+                Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used."},
+                "setRadioDialLock", "sliceLockButtons", true,
+                "IC-705, IC-7300MK2, and IC-9700 profile-gated; radio-global "
+                "readback is mirrored to every slice lock surface.",
+                IcomFeature::DialLock},
     ControlSpec{"notch.width", 0x16, 0x57, true, "Manual notch width",
                 Plane::Slice, Encoding::Enum, Wiring::Declared,
                 0, 2, "step", 0, 2,
@@ -349,9 +353,10 @@ constexpr std::array kSpecs = {
                 "setAtu", "txAtuBtn", true,
                 "NOT a tune carrier — it runs the model's internal or external "
                 "antenna-tuner matching cycle and it KEYS. There is no universal "
-                "attachment query, so capabilities().hasTuner follows canTransmit and the "
-                "button is honest about the OUTCOME (00 none / 01 matched / 02 "
-                "tuning) rather than about the hardware."},
+                "attachment query, so only exact model profiles with documented tuner "
+                "paths publish capabilities().hasTuner and send this command. The "
+                "shared button remains visible but unavailable otherwise.",
+                IcomFeature::AntennaTuner},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
                 Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -514,6 +519,7 @@ std::string_view encodingName(Encoding e)
     case Encoding::ModeFilter: return "mode+filter";
     case Encoding::Bcd4:       return "bcd4";
     case Encoding::Bcd6:       return "bcd6";
+    case Encoding::Dtcs:       return "dtcs";
     }
     return "?";
 }

@@ -35,6 +35,7 @@ class DemoApplet;
 class AcomApplet;
 class SpeApplet;
 class VkampApplet;
+class LpMeterApplet;
 class TxApplet;
 class PhoneCwApplet;
 enum class MicMeterSessionState;
@@ -58,6 +59,7 @@ class TciApplet;
 class DaxIqApplet;
 class AntennaGeniusApplet;
 class ShackSwitchApplet;
+class GreenHeronApplet;
 class MeterApplet;
 class ProfileSwitcherApplet;
 class HealthApplet;
@@ -104,6 +106,7 @@ public:
     AcomApplet*   acomApplet()    { return m_acomApplet; }
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
+    LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -149,6 +152,9 @@ public:
     DaxIqApplet*    daxIqApplet()    { return m_daxIqApplet; }
     AntennaGeniusApplet* agApplet()  { return m_agApplet; }
     ShackSwitchApplet*   ssApplet()  { return m_ssApplet; }
+    // The GHE tile owns its own GreenHeronModel — see GreenHeronApplet.h for
+    // why this one is not handed a model by MainWindow.
+    GreenHeronApplet*    greenHeronApplet() const { return m_greenHeronApplet; }
     MeterApplet*  meterApplet()  { return m_meterApplet; }
     ProfileSwitcherApplet* profileSwitcherApplet() { return m_profApplet; }
     HealthApplet* healthApplet() { return m_healthApplet; }
@@ -181,6 +187,19 @@ public:
     // station can have a radio-relayed PGXL, a direct ACOM, and a direct
     // VK3AMP all present at once, each fully independent hardware.
     void setVkampVisible(bool visible);
+
+    // Show/hide the LP100 button and applet based on a direct LP-100A
+    // wattmeter connection. Independent of every amplifier applet: the
+    // LP-100A is an instrument, not an amplifier, and a station may have any
+    // combination of the two.
+    //
+    // Gated on the CONNECTION, matching ACOM/SPE/VKAMP. The "configured but
+    // powered off shows no tile" objection (#4944) does not bite here the way
+    // it does for those three, because LpMeterConnection deliberately does
+    // NOT drop the link when the meter stops answering — a wedged meter keeps
+    // its tile and shows NO DATA in it. Only a genuinely absent transport
+    // hides the tile.
+    void setLpMeterVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -394,6 +413,7 @@ private:
     SpeApplet*   m_speApplet{nullptr};
     QPushButton* m_speBtn{nullptr};
     VkampApplet* m_vkampApplet{nullptr};
+    LpMeterApplet* m_lpMeterApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
@@ -422,6 +442,7 @@ private:
     DaxIqApplet*   m_daxIqApplet{nullptr};
     AntennaGeniusApplet* m_agApplet{nullptr};
     ShackSwitchApplet*   m_ssApplet{nullptr};
+    GreenHeronApplet*    m_greenHeronApplet{nullptr};
     MeterApplet* m_meterApplet{nullptr};
     ProfileSwitcherApplet* m_profApplet{nullptr};
     HealthApplet* m_healthApplet{nullptr};

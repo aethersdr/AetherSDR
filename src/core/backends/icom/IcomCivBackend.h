@@ -19,6 +19,7 @@
 #include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomCivScheduler.h"
 #include "core/backends/icom/IcomMeters.h"
+#include "core/backends/icom/IcomMemoryCodec.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/IcomScope.h"
@@ -85,6 +86,7 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    void setRadioDialLock(bool locked) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
@@ -106,8 +108,12 @@ public:
     void setSliceFmToneMode(int sliceId, const QString& mode) override;
     void setSliceFmToneValue(int sliceId, double hz) override;
     void setSliceFmToneRxValue(int sliceId, double hz) override;
+    void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                        bool rxReverse) override;
     void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
     void setSliceFmRepeaterOffset(int sliceId, double hz) override;
+    bool applyMemoryRecallDetails(const MemoryRecallDetails& details) override;
+    void refreshMemories(const QString& group) override;
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start) override;
@@ -178,6 +184,10 @@ private:
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
     void reassertPanPreampWireStep(int step);
+    [[nodiscard]] bool tunerSupported() const;
+    bool sendTunerCommandIfSupported(bool start);
+    bool queueTunerReadIfSupported(std::uint8_t address,
+                                   IcomCivScheduler::Priority priority);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a
@@ -253,7 +263,8 @@ private:
     bool refuseKeyingInReceiveOnlyMode();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
-                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
+                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
+                   std::vector<std::uint8_t> replyDataPrefix = {});
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true);
@@ -269,6 +280,11 @@ private:
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    [[nodiscard]] QVariantList schedulerTransactionTrace(
+        std::size_t limit = 32) const;
+    [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,
+                                               const QString& reason) const;
+    void recordIncident(const QString& kind, const QString& reason);
     enum class SchedulerWaiterOutcome : std::uint8_t {
         Completed,
         TimedOut,
@@ -292,6 +308,10 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
+    int queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup);
+    void finishMemoryRefresh(bool success);
+    void finishMemoryRefreshWhenDrained(quint64 generation);
+    void publishExtendedRepeaterState();
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     void adoptReportedCivAddress(std::uint8_t reported);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
@@ -321,6 +341,10 @@ private:
     bool m_civAmbiguous = false;
     // Whether sendConnectReadBurst() has already run this session.
     bool m_connectBurstSent = false;
+    bool m_memoryRefreshActive = false;
+    quint64 m_memoryRefreshGeneration = 0;
+    QSet<int> m_memoryRefreshReplies;
+    int m_memoryRefreshTotal = 0;
     // The model the RS-BA1 handshake NAMED. Kept separately from m_model because
     // it is the third signal that separates "right radio, changed address" from
     // "wrong radio entirely" — see adoptReportedCivAddress().
@@ -386,6 +410,7 @@ private:
     bool m_xfcReleaseRequired = false;
     std::optional<bool> m_pendingPttIntent;
     qint64 m_pendingPttUntilMs = 0;
+    bool m_pttIncidentReported = false;
     bool m_overflow = false;
     double m_vdVolts = 0.0;
     double m_idAmps = 0.0;
@@ -508,6 +533,7 @@ private:
     std::optional<std::uint64_t> m_repeaterTxFrequencyHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
+    std::optional<bool> m_radioDialLocked;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //
@@ -617,11 +643,20 @@ private:
     quint64 m_schedulerTimeoutsReported = 0;
     quint64 m_schedulerCancelledRequests = 0;
     quint64 m_schedulerFailedRequests = 0;
+    bool m_civBacklogIncidentReported = false;
+
+    // Last structured incident survives a dropped session so support can read
+    // it after the sockets are gone. It is replaced only by a newer incident
+    // or a successfully connected new session.
+    QVariantMap m_lastIncident;
+    quint64 m_incidentSequence = 0;
+    qint64 m_connectedAtMs = 0;
 
     // CI-V stall detection. The transport can be healthy while the command
     // plane is dead — see onLinkTick — so these track the command plane alone.
     qint64  m_lastInboundCivAtMs = 0;
     QString m_lastOutboundCiv;      // the last frame we sent, as hex
+    QString m_lastOutboundCivKey;   // payload-free semantic transaction id
     qint64  m_lastOutboundCivAtMs = 0;
     bool    m_civStallReported = false;
     qint64  m_civRecoveryStartedAtMs = 0;

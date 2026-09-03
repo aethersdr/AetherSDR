@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFlags>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -62,7 +63,7 @@ enum class FmTonePresentation {
 // that describe an already-established control instead default to the legacy
 // shape (for example PROC's 0..2 domain), avoiding a disconnected or older
 // backend briefly losing an existing surface. In both cases, set the field
-// explicitly in FlexBackend, Hl2Backend AND SimBackend. Then record it in
+// explicitly in every backend implementation. Then record it in
 // docs/architecture/radio-capabilities-map.md, which maps every field to the
 // code that reads it (and lists the ones nothing reads yet). A capability no
 // consumer reads looks identical, from here, to one that works.
@@ -183,11 +184,13 @@ struct RadioCapabilities {
     // reach TransmitModel (#5106 review).
     QStringList receiveOnlyModes;
 
-    // CTCSS presentation is explicit so a vendor-specific model can expose
-    // its proven registers without changing another radio family's controls.
+    // FM tone presentation is explicit so a vendor-specific model can expose
+    // its proven CTCSS/DTCS registers without changing another radio family's
+    // controls. fmToneModes is the authoritative per-model mode vocabulary.
     // Hidden is the safe default; established backends opt into Legacy.
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
+    QList<int> fmDtcsCodes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
@@ -230,6 +233,18 @@ struct RadioCapabilities {
     // being written into a radio that silently drops them. A backend only sets
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
+
+    // Whether the radio-backed memory store accepts mutations and native
+    // recalls. These are deliberately separate from persistsMemories: an
+    // initial backend may prove that it can enumerate radio-owned channels
+    // before it is safe to overwrite them, and may expose those channels as
+    // tune presets without putting the radio into its vendor Memory mode.
+    bool canWriteMemories = false;
+    bool canApplyMemories = false;
+    bool canRefreshMemories = false;
+    QStringList memoryGroups;
+    QString memoryGroupColumnTitle = QStringLiteral("Group");
+    bool memoryRefreshRequiresGroup = false;
 
     // Domains of OPERATING STATE this client persists and restores because the
     // radio cannot (RFC #4603 proposal B). Constitution Principle III assigns
@@ -275,7 +290,28 @@ struct RadioCapabilities {
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
-    bool hasTuner = false;         // antenna tuner / ATU
+    // The radio exposes an authoritative, client-settable dial lock. This is
+    // distinct from AetherSDR's local per-slice tuning guard: a radio-side
+    // lock may be global and may also follow front-panel changes.
+    bool hasRadioDialLock = false;
+    bool hasRemoteOnControl = false; // client can configure wake-on-network
+    bool canUpgradeFirmware = false; // client can upload radio firmware
+    bool hasSmartLink = false;       // client has the SmartLink/WAN service and pin store
+    bool hasLicenseInfo = false;     // radio exposes SmartSDR entitlement details
+    bool hasClientNetworkConfig = false; // client may write the radio's IP configuration
+    bool hasFlexControlIntegration = false; // FlexControl/AetherControl verbs are supported
+    bool hasAudioCompression = false; // selectable compressed radio-audio transport
+    bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
+    // The radio's streaming data plane uses VITA-49. This currently gates the
+    // receive-socket buffer and network MTU controls; it describes the transport,
+    // not the vendor or only one stream direction.
+    bool usesVita49Transport = false;
+    // The backend can read the radio's own IP configuration rather than only
+    // knowing the address selected by the client.
+    bool hasNetworkConfigurationReadback = false;
+    bool hasPrivateIpConnectionPolicy = false; // SmartSDR private-IP enforcement setting
+    bool hasTuner = false;         // antenna tuner / ATU matching control
+    bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
@@ -523,6 +559,19 @@ struct RadioCapabilities {
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
 
+    // The DDC's own CIC/half-band decimation chain rolls off amplitude
+    // toward the extreme edges of the panadapter bandwidth -- real,
+    // bench-measured attenuation baked into the sampled data itself, not a
+    // display artifact. True for ANAN-G2, the first (and so far only) DDC-
+    // based backend in this app; Flex/HL2/Icom/Kiwi all report false, since
+    // none of their receive chains have this shape. A capability flag
+    // rather than a family-string check at the one call site
+    // (MainWindow::onConnectionStateChanged(), which drives
+    // SpectrumWidget::setPanEdgeTaperEnabled()) so a future DDC backend
+    // gets the same cosmetic edge fade automatically instead of needing
+    // its own family added to a hardcoded list.
+    bool hasDdcPanEdgeRolloff = false;
+
     // NO hasTrackingNotchFilters HERE, deliberately. TNF looks like it belongs
     // beside the three below — TnfModel's whole surface is `tnf create/remove/
     // set` and `sub tnf all`, so it passes the "does the control only emit a
@@ -632,6 +681,14 @@ struct RadioCapabilities {
     // what it is. That distinction is why the flag is named for the receiver
     // rather than for the dashboard it happens to drive today.
     bool hasGpsLocation = false;
+
+    // The radio contains GPS/GNSS hardware and therefore has a meaningful GPS
+    // setup surface. This is deliberately separate from hasGpsLocation: an
+    // IC-705 has an internal GPS receiver, but CI-V does not expose its live
+    // position/time data to this client. The hardware page is still truthful;
+    // a live station-location readout is not.
+    bool hasGpsHardware = false;
+    bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile

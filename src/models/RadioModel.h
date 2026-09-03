@@ -248,6 +248,7 @@ public:
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
     QString gateway()     const { return m_gateway; }
+    QString networkName() const { return m_networkName; }
     QString mac()         const { return m_mac; }
     bool    enforcePrivateIp() const { return m_enforcePrivateIp; }
 
@@ -505,6 +506,15 @@ public:
                || (!m_gpsStatus.isEmpty()
                    && m_gpsStatus != QLatin1String("Not Present"));
     }
+    // Settings needs a hardware-presence answer across families. Flex's backend
+    // declaration is intentionally coarse (the family can carry an optional
+    // GPSDO), so retain the live per-unit check above there. Other backends use
+    // their model profile for fixed hardware such as the IC-705's internal GPS.
+    bool hasGpsSetupHardware() const {
+        const RadioCapabilities caps = backendCapabilities();
+        return caps.hasGpsHardware
+               && (!caps.gpsHardwareRequiresPresence || hasGpsHardware());
+    }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
     bool    cwxActive()    const { return m_cwxActive; }
@@ -547,15 +557,15 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
-    // ── Local memory bank (radios with no memory slots of their own) ─────────
+    // ── Memory command routing ──────────────────────────────────────────────
     //
-    // Answer a `memory …` command out of the local bank. Returns the sequence
-    // number sendCmd() would have returned (non-zero — sendCommand() reads that
-    // as "dispatched"), or nullopt when the command is not one the bank owns
-    // and must take its normal path.
+    // Answer a `memory …` command from the local bank or the cached read-only
+    // radio view. Returns the sequence number sendCmd() would have returned
+    // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
+    // writable/native radio backend must take its normal path.
     // (spelled out rather than the ResponseCallback alias — that is declared
     // further down this class.)
-    std::optional<quint32> tryLocalMemoryCommand(
+    std::optional<quint32> tryMemoryCommand(
         const QString& command, const RadioConnection::ResponseCallback& cb);
     // Settle which store owns the memory cache for the session being started:
     // the local bank, or the radio's own slots.
@@ -567,7 +577,7 @@ public:
     // Apply a stored channel to the active slice. This is what `memory apply`
     // does on a Flex; with no radio to do it, the model drives SliceModel's
     // operator-issue setters so the change routes through the backend seam.
-    void recallLocalMemory(int index);
+    bool recallCachedMemory(int index);
     void createAudioStream();
     // An operator CLICK on the PC Audio button. On an Icom this asks the radio
     // to switch its voice-mode modulation input, which Principle II permits
@@ -621,6 +631,12 @@ public:
     // RadioCapabilities::persistsMemories, so a new backend gets the local bank
     // by default rather than writing channels into a radio that drops them.
     bool usesLocalMemoryBank() const;
+    // True when the active store accepts create/edit/remove. A radio-backed
+    // read-only snapshot (initial Icom support) returns false while the
+    // existing host bank and Flex radio return true.
+    bool memoriesWritable() const;
+    bool memoriesRefreshable() const;
+    void refreshMemories(const QString& group = QString());
     // The bank itself, for the automation bridge and tests. Empty and unread
     // until the first local memory command or connect.
     LocalMemoryBank& localMemoryBank() { return m_localMemories; }
@@ -779,6 +795,13 @@ public:
     // reconstruction input carries the intended rhythm rather than
     // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
     // schedule; send-time stamping is unchanged.
+    // Note the deliberate asymmetry with sendCwKey: this entry point does
+    // NOT emit cwKeyDownChanged.  It is the local iambic keyer's path, and
+    // that producer already drove the sidetone gate at the element's
+    // scheduled instant, so publishing here would queue a second,
+    // wall-clock-stamped edge for the same element (#4976).  m_cwKeyActive
+    // is tracked on both paths either way — it feeds the TX-ownership
+    // interlock.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
@@ -964,8 +987,15 @@ signals:
     // Emitted whenever the backend instance is (re)built — including the
     // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
     // m_backend is already destroyed and m_backend now points at the new one.
-    // Emitted whenever the local CW key transitions on/off — funnel for
-    // serial CTS/DSR, MIDI Gate, TCI key, CWX, and HID encoder sources.
+    // Emitted whenever a straight-key-shaped local CW source transitions
+    // on/off — the funnel for the serial CW-key line, the TCI `keyer:trx`
+    // command, and the MIDI Gate / keyboard / HID straight-key actions.
+    // All of them reach it through RadioModel::sendCwKey.
+    // NOT the local iambic keyer: sendCwKeyEdge deliberately does not
+    // publish here (#4976), because that producer already drove the
+    // sidetone gate at the element's own scheduled instant.  NOT CWX
+    // either — CwxLocalKeyer calls AudioEngine::setCwKeyDown directly and
+    // never touches RadioModel.
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
     // sidetone independent of the radio's own DAX-fed sidetone.
     void cwKeyDownChanged(bool down);
@@ -1095,6 +1125,9 @@ signals:
     void memoryChanged(int index);
     void memoryRemoved(int index);
     void memoriesCleared();
+    void memoryRefreshStarted(int total);
+    void memoryRefreshProgress(int completed, int total);
+    void memoryRefreshFinished(bool success, int completed, int total);
     void audioOutputChanged();
     // Emitted when multiFLEX is disabled and another client is already connected,
     // detected post-TCP-connect before client gui is sent. MainWindow should show
@@ -1136,6 +1169,9 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // A backend's explicit keyed-state readback, including unchanged answers
+    // hidden by the change-gated radioTransmittingChanged signal.
+    void radioTransmitConfirmed(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
     // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX)
     // and false otherwise. Deliberately excludes TUNE/two-tone/ATU carriers,
@@ -1156,6 +1192,12 @@ signals:
     void txFilterBlockingAudio(const QString& title,
                                const QString& detail,
                                const QString& panId);
+    // A Flex-syntax command was dropped because this backend has no command
+    // plane (HL2, Icom): the control that emitted it moved and nothing reached
+    // the radio — the HERMES §17 shape, made visible (M0, #5263). Emitted on
+    // EVERY drop; the UI's one-shot-per-session throttling is the consumer's
+    // job, so logs and any non-UI consumers can observe each occurrence.
+    void commandDropped(const QString& command);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);
@@ -1210,7 +1252,6 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
-
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
     // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit
     // tears down without pumping the event loop, so the queued
@@ -1545,6 +1586,13 @@ public:
     {
         handleSliceStatus(id, kvs, removed);
     }
+    // Feed a decoded status line straight into the router. Used to pin the TNF
+    // removal-status handling — the wire says the notch is gone, and the router
+    // must not upsert it back into TnfModel.
+    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
+    {
+        onStatusReceived(object, kvs);
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
@@ -1632,6 +1680,7 @@ private:
     QString     m_ip;
     QString     m_netmask;
     QString     m_gateway;
+    QString     m_networkName;
     QString     m_mac;
     bool        m_hasStaticIp{false};
     QString     m_staticIp;
@@ -1937,6 +1986,7 @@ private:
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
     bool               m_transmitFrequencyCheck{false};
+    std::optional<bool> m_radioDialLocked;
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};

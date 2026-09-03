@@ -2570,6 +2570,24 @@ needed).
 ← {"ok":true,"contractVersion":1,"routeOwner":"external",
    "splitRequested":false,"rxSliceId":4,"txSliceId":7,"ownsRoute":false,
    "routeTransitionInFlight":false,"pendingRoutes":[],
+   "ptt":{"owned":false,"requestedOn":false,"confirmedOn":false,
+          "unkeySettling":false,
+          "requestCount":84,"onRequestCount":42,"offRequestCount":42,
+          "acceptedOnCount":42,"confirmedOnCount":41,
+          "confirmationTimeoutCount":1,"lastRequestedOn":true,
+          "unkeySettleCount":6,"suppressedRekeyCount":2,
+          "unkeySettleTimeoutCount":0,
+          "lastRequestAgeMs":1270,"lastAcceptedAgeMs":1268,
+          "lastConfirmedAgeMs":16243,"lastOutcome":"confirmation-timeout",
+          "lastOutcomeAgeMs":20},
+   "lastDisconnect":{"contractVersion":1,"ageMs":520,
+      "closeCode":1006,"socketState":0,
+      "socketError":1,"socketErrorString":"The remote host closed the connection",
+      "connectionAgeMs":2577940,"lastTextRxAgeMs":53,"lastTextTxAgeMs":28,
+      "lastSocketErrorAgeMs":0,"lastRxCommand":"trx","lastTxCommand":"trx",
+      "ptt":{"owned":true,"requestedOn":false,"confirmedOn":true,
+             "unkeySettling":true,"generation":141,
+             "lastOutcome":"icom-unkey-transient-keyed"}},
    "endpoints":[
      {"trx":0,"sliceId":4,"panId":"0x40000000","frequencyHz":14074000,"tx":false},
      {"trx":1,"sliceId":7,"panId":"0x40000001","frequencyHz":14076000,"tx":true}
@@ -2590,6 +2608,29 @@ tci trace clear
 tci trace export /tmp/tci-trace.json
 tci routes
 ```
+
+The `ptt` counters and ages are payload-free and remain available without TCI
+wire tracing. If `onRequestCount` advances but `acceptedOnCount` does not, the
+request stopped in TCI routing or transmit preflight. If both advance but
+`confirmedOnCount` does not and `confirmationTimeoutCount` advances, TCI handed
+the request to the radio path but radio-authoritative keyed state never returned.
+Read that snapshot beside `civ incident`: together they distinguish WebSocket
+ingress, TCI routing, CI-V scheduling, the serial data pipe, the RS-BA1 lease,
+and broad UDP/socket loss.
+
+For Icom, `unkeySettleCount` counts the bounded TCI presentation barriers used
+after an owned unkey. A growing `suppressedRekeyCount` means delayed CI-V
+readback briefly said the radio was still keyed; AetherSDR kept that truth in
+the model/UI while withholding the transient TCI re-key. If no accepted CI-V
+PTT-off readback arrives within 500 ms, `unkeySettleTimeoutCount` advances,
+ownership is retained, and `trx:true` is published again. The optimistic local
+unkey edge never counts as radio confirmation.
+
+`lastDisconnect` survives after `clientCount` reaches zero. It retains the
+WebSocket close code/reason, socket error, session age, last text-message ages,
+and command names only (arguments and binary payloads are not retained). The
+nested PTT snapshot is taken before fail-closed disconnect cleanup, preserving
+whether the departing client owned a pending or confirmed transmit session.
 
 ### Multiple simulated clients
 
@@ -3148,7 +3189,7 @@ Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
 observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
 key or retune the radio.
 
-**`civ session`** reports the media lease independently of UDP link liveness:
+**`civ session`** reports the media lease and each independent UDP stream:
 
 ```json
 → {"cmd":"civ","action":"session"}
@@ -3161,13 +3202,23 @@ key or retune the radio.
    "acceptedRenewals":14,"reissuedTokens":1,"rejectedRenewals":0,
    "ignoredAuthReplies":0,"ignoredControlPackets":1,
    "initialMaintenanceMs":30000,"initialMaintenancePending":false,
-   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000}}
+   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000,
+   "transport":{
+     "control":{"rxPackets":921,"txPackets":460,"rttMs":21,
+                "lastRxAgeMs":14,"lastPayloadAgeMs":8123,"socketErrors":0},
+     "serial":{"rxPackets":4821,"txPackets":3370,"rttMs":24,
+               "lastRxAgeMs":11,"lastPayloadAgeMs":11,"socketErrors":0},
+     "audio":{"rxPackets":186402,"txPackets":92160,"rttMs":26,
+              "lastRxAgeMs":3,"lastPayloadAgeMs":3,"socketErrors":0}}}}
 ```
 
-Use this first when the panadapter, CI-V controls, and audio stop together while
-the outer UDP packet counters still move. A healthy result has a recent accepted
-token, response `0x00000000`, and no growing pending/rejected count. The health
-verb shows the same essentials under **RS-BA1 session**.
+Use this first when the panadapter, CI-V controls, and audio stop together. A
+healthy result has a recent accepted token, response `0x00000000`, no growing
+pending/rejected count, recent activity on all three streams, and no growing
+socket-error count. A live control stream beside a stale serial
+`lastPayloadAgeMs` isolates the CI-V data pipe from authentication and broad
+network loss. The health verb shows the lease essentials under **RS-BA1
+session**.
 
 The token-request ID is freshly randomized for each login. On an immediate
 reconnect the radio can answer the initial token request with `0xffffffff` and
@@ -3189,7 +3240,11 @@ producer in isolation:
    "idle":false,"slotMs":25,"readTimeoutMs":350,
    "queueDepth":3,"readInFlight":true,"inFlightKey":"meter.s",
    "queued":812,"dispatched":799,"coalesced":96,
-   "replies":796,"staleReplies":1,"timeouts":2,
+   "replies":796,"staleReplies":1,"lateReplies":1,"unmatchedFrames":3,
+   "timeouts":2,"responseSamples":797,"lastResponseMs":42,
+   "averageResponseMs":38.7,"maxResponseMs":361,
+   "lastResponseAgeMs":18,"lastCompletedKey":"meter.s",
+   "lastTimeoutKey":"control.nr",
    "pendingPttIntent":false}}
 ```
 
@@ -3211,6 +3266,31 @@ operator moves controls, means replies are routinely arriving after their
 transaction expired: read it alongside `queueDepth` and treat the pair, not
 `staleReplies` alone, as the congestion signal. Poll this read-only verb until
 `idle:true` when a test needs deterministic write/readback convergence.
+
+**`civ incident`** returns the last structured Icom incident captured during
+the current session, or a live snapshot if no incident has occurred. The same
+snapshot is written automatically as one `aether.icom.incident` warning when:
+
+- a key-on transaction times out, or the radio still reports unkeyed after its
+  confirmation window;
+- a CI-V timeout occurs with at least eight transactions queued;
+- no CI-V frame arrives for five seconds while the UDP transport remains up;
+- an established RS-BA1 session closes unexpectedly.
+
+The dossier joins the evidence needed to locate the failed layer: correlated
+lease renewal state, independent control/serial/audio packet activity and
+socket errors, scheduler latency aggregates, the last 32 payload-free
+transaction outcomes, and requested versus radio-published PTT. It deliberately
+contains no credentials, network endpoints, session IDs, raw CI-V payloads,
+frequencies, or operator text. This means ordinary support logs can retain it;
+turning on every-frame CI-V or RS-BA1 datagram logging is not required for the
+first reproduction.
+
+Each transaction row reports a semantic `key`, `priority`, `completion`,
+`queueWaitMs`, and `responseMs`. Completions distinguish normal, stale, late,
+late-stale, timed-out, emergency-displaced, and response-free commands. Use the
+per-stream ages to separate socket/transport silence from a live RS-BA1 outer
+session whose CI-V payload pipe alone stopped responding.
 
 **`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
 omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects

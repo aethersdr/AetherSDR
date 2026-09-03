@@ -1,6 +1,6 @@
 #include "VfoWidget.h"
 #include "FmTonePresentation.h"
-#include "core/CtcssTones.h"
+#include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
@@ -460,8 +460,19 @@ static const QString kModeBtn =
     "QPushButton:checked { background: #0070c0; color: #ffffff; border: 1px solid #0090e0; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
 
+// Shared :disabled rule: a stylesheet colour beats the disabled palette, so
+// a label in a disabled row stays bright unless the sheet says otherwise.
+// #5e6e7c is ~0.45 of makeOptLabel()'s #c8d8e8 over the flag background (a
+// lighter step, ~0.65, from kLabelStyle's #8aa8c0). Used by kLabelStyle and
+// by makeOptLabel() below. Note the rule only bites a label whose row is
+// disabled as a container: today that is the APF level row while APF is off
+// (#4658); rows that disable just their slider (SQL) keep a bright label.
+static const QString kDisabledLabelRule =
+    "QLabel:disabled { color: #5e6e7c; }";
+
 static const QString kLabelStyle =
-    "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
+    "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }"
+    + kDisabledLabelRule;
 
 // Meter-view selector buttons.  Unselected look matches the DSP NR/NB/ANF
 // toggles exactly (kDspToggle base + hover); the selected/checked look matches
@@ -1272,11 +1283,10 @@ void VfoWidget::buildUI()
         auto* lbl = new QLabel(text);
         // :disabled dims the label when its row is disabled — a render()-compatible
         // replacement for the old QGraphicsOpacityEffect (which QWidget::render()
-        // can't rasterize, so it blanked these rows in GPU flag sprites). #5e6e7c is
-        // ~0.45 of the normal text over the flag background.
+        // can't rasterize, so it blanked these rows in GPU flag sprites).
         lbl->setStyleSheet("QLabel { background: transparent; border: none; "
                            "color: #c8d8e8; font-size: 12px; }"
-                           "QLabel:disabled { color: #5e6e7c; }");
+                           + kDisabledLabelRule);
         return lbl;
     };
 
@@ -2055,7 +2065,7 @@ void VfoWidget::buildTabContent()
             apfVb->addWidget(lbl);
             m_apfSlider = new GuardedSlider(Qt::Horizontal);
             m_apfSlider->setAccessibleName("APF bandwidth");
-            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
+            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth. Enabled when APF is on in the DSP grid.");
             m_apfSlider->setRange(0, 100);
             m_apfSlider->setValue(50);
             applyPrimarySliderStyle(m_apfSlider);
@@ -2302,9 +2312,9 @@ void VfoWidget::buildTabContent()
 
             m_fmContainer = new QWidget;
             m_fmContainer->setObjectName("vfoFmDuplexContainer");
-            auto* fvb = new QVBoxLayout(m_fmContainer);
-            fvb->setContentsMargins(0, 0, 0, 0);
-            fvb->setSpacing(2);
+            m_fmLayout = new QVBoxLayout(m_fmContainer);
+            m_fmLayout->setContentsMargins(0, 0, 0, 0);
+            m_fmLayout->setSpacing(2);
 
             // Tone mode + tone value on one row
             m_fmToneContainer = new QWidget;
@@ -2322,28 +2332,29 @@ void VfoWidget::buildTabContent()
             // Tone value — from core/CtcssTones.h, the same table the RX
             // applet's dropdown and the automation bridge's `slice tone`
             // validation use. This list used to be a third hand-typed copy of
-            // the same 41 doubles; the values agreed, which is exactly how a
+            // the same 50 doubles; the values agreed, which is exactly how a
             // copy survives long enough to stop agreeing.
             m_fmToneValueCmb = new GuardedComboBox;
             m_fmToneValueCmb->setAccessibleName("FM tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
-                m_fmToneValueCmb->addItem(QString::number(t.frequency, 'f', 1),
-                                           QString::number(t.frequency, 'f', 1));
-            }
-            AetherSDR::applyComboStyle(m_fmToneValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_fmToneValueCmb);
+            AetherSDR::applyComboStyle(
+                m_fmToneValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
 
             m_fmToneRxValueCmb = new GuardedComboBox;
             m_fmToneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                m_fmToneRxValueCmb->addItem(frequency, frequency);
-            }
-            AetherSDR::applyComboStyle(m_fmToneRxValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_fmToneRxValueCmb);
+            AetherSDR::applyComboStyle(
+                m_fmToneRxValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_fmToneRxValueCmb->setVisible(false);
-            toneRow->addWidget(m_fmToneRxValueCmb, 1);
-            fvb->addWidget(m_fmToneContainer);
+            m_fmToneRxContainer = new QWidget;
+            auto* toneRxRow = new QHBoxLayout(m_fmToneRxContainer);
+            toneRxRow->setContentsMargins(0, 0, 0, 0);
+            toneRxRow->addWidget(m_fmToneRxValueCmb, 1);
+            m_fmToneRxContainer->setVisible(false);
+            m_fmLayout->addWidget(m_fmToneContainer);
+            m_fmLayout->addWidget(m_fmToneRxContainer);
 
             connect(m_fmToneModeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int idx) {
@@ -2364,6 +2375,50 @@ void VfoWidget::buildTabContent()
                 }
             });
 
+            m_fmDtcsCodeCmb = new GuardedComboBox;
+            m_fmDtcsCodeCmb->setAccessibleName("DTCS code");
+            m_fmDtcsCodeCmb->setPlaceholderText("DTCS code");
+            AetherSDR::applyComboStyle(m_fmDtcsCodeCmb);
+            m_fmDtcsCodeCmb->setVisible(false);
+
+            m_fmDtcsPolarityCmb = new GuardedComboBox;
+            m_fmDtcsPolarityCmb->setAccessibleName("DTCS polarity");
+            m_fmDtcsPolarityCmb->setPlaceholderText("Polarity");
+            m_fmDtcsPolarityCmb->setCurrentIndex(-1);
+            AetherSDR::applyComboStyle(m_fmDtcsPolarityCmb);
+            m_fmDtcsPolarityCmb->setVisible(false);
+
+            // DTCS needs both a code and a polarity. Keep those controls on a
+            // dedicated row so mixed CTCSS/DTCS modes do not compress four
+            // selectors into the slice applet's narrow width.
+            m_fmDtcsContainer = new QWidget;
+            auto* dtcsRow = new QHBoxLayout(m_fmDtcsContainer);
+            dtcsRow->setContentsMargins(0, 0, 0, 0);
+            dtcsRow->setSpacing(4);
+            dtcsRow->addWidget(m_fmDtcsCodeCmb, 3);
+            dtcsRow->addWidget(m_fmDtcsPolarityCmb, 2);
+            m_fmDtcsContainer->setVisible(false);
+            m_fmLayout->addWidget(m_fmDtcsContainer);
+
+            const auto applyDtcs = [this]() {
+                if (!m_slice || m_fmDtcsCodeCmb->signalsBlocked()
+                    || m_fmDtcsPolarityCmb->signalsBlocked()
+                    || m_fmDtcsCodeCmb->currentIndex() < 0
+                    || m_fmDtcsPolarityCmb->currentIndex() < 0) {
+                    return;
+                }
+                const QString polarity = m_fmDtcsPolarityCmb->currentData().toString();
+                m_slice->setFmDtcs(m_fmDtcsCodeCmb->currentData().toInt(),
+                                   polarity.startsWith(QLatin1Char('R')),
+                                   polarity.endsWith(QLatin1Char('R')));
+            };
+            connect(m_fmDtcsCodeCmb,
+                    QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [applyDtcs](int) { applyDtcs(); });
+            connect(m_fmDtcsPolarityCmb,
+                    QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [applyDtcs](int) { applyDtcs(); });
+
             // Offset row
             auto* offRow = new QHBoxLayout;
             offRow->setSpacing(4);
@@ -2380,7 +2435,7 @@ void VfoWidget::buildTabContent()
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; padding: 1px 2px; }"
                 "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }");
             offRow->addWidget(m_fmOffsetSpin, 1);
-            fvb->addLayout(offRow);
+            m_fmLayout->addLayout(offRow);
 
             connect(m_fmOffsetSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                     this, [this](double val) {
@@ -2452,7 +2507,7 @@ void VfoWidget::buildTabContent()
             m_fmRevBtn->installEventFilter(this);
             dirRow->addWidget(m_fmRevBtn);
 
-            fvb->addLayout(dirRow);
+            m_fmLayout->addLayout(dirRow);
 
             m_fmContainer->hide();
             dspVb->addWidget(m_fmContainer);
@@ -4762,6 +4817,8 @@ void VfoWidget::setSlice(SliceModel* slice)
             m_fmToneRxValueCmb->setCurrentIndex(idx);
         }
     });
+    connect(m_slice, &SliceModel::fmDtcsChanged, this,
+            [this](int, bool, bool) { configureFmToneControls(); });
     connect(m_slice, &SliceModel::repeaterOffsetDirChanged, this, [this](const QString& dir) {
         m_updatingFromModel = true;
         QSignalBlocker b1(m_fmOffsetDown), b2(m_fmSimplexBtn), b3(m_fmOffsetUp);
@@ -5074,7 +5131,8 @@ void VfoWidget::syncFromSlice()
     m_sqlSlider->setEnabled(!isDig && !isCw);
     if (isFm) {
         QSignalBlocker b1(m_fmToneModeCmb), b2(m_fmToneValueCmb), b3(m_fmOffsetSpin),
-            toneRxBlocker(m_fmToneRxValueCmb);
+            toneRxBlocker(m_fmToneRxValueCmb), dtcsBlocker(m_fmDtcsCodeCmb),
+            polarityBlocker(m_fmDtcsPolarityCmb);
         int tmIdx = m_fmToneModeCmb->findData(m_slice->fmToneMode());
         if (tmIdx >= 0) m_fmToneModeCmb->setCurrentIndex(tmIdx);
         configureFmToneControls();
@@ -5083,6 +5141,20 @@ void VfoWidget::syncFromSlice()
         const int rxIdx = m_fmToneRxValueCmb->findData(m_slice->fmToneRxValue());
         if (rxIdx >= 0) {
             m_fmToneRxValueCmb->setCurrentIndex(rxIdx);
+        }
+        const int dtcsIndex = m_fmDtcsCodeCmb->findData(m_slice->fmDtcsCode());
+        if (dtcsIndex < 0) {
+            m_fmDtcsCodeCmb->setCurrentIndex(-1);
+            m_fmDtcsPolarityCmb->setCurrentIndex(-1);
+        } else {
+            m_fmDtcsCodeCmb->setCurrentIndex(dtcsIndex);
+            const QString polarity = QStringLiteral("%1%2")
+                .arg(m_slice->fmDtcsTxReverse() ? QLatin1Char('R') : QLatin1Char('N'))
+                .arg(m_slice->fmDtcsRxReverse() ? QLatin1Char('R') : QLatin1Char('N'));
+            const int polarityIndex = m_fmDtcsPolarityCmb->findData(polarity);
+            if (polarityIndex >= 0) {
+                m_fmDtcsPolarityCmb->setCurrentIndex(polarityIndex);
+            }
         }
         m_fmOffsetSpin->setValue(m_slice->fmRepeaterOffsetFreq());
         QSignalBlocker b4(m_fmOffsetDown), b5(m_fmSimplexBtn), b6(m_fmOffsetUp);
@@ -6209,7 +6281,9 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
 void VfoWidget::configureFmToneControls()
 {
     if (!m_fmToneContainer || !m_fmToneModeCmb || !m_fmToneValueCmb
-        || !m_fmToneRxValueCmb) {
+        || !m_fmToneRxValueCmb || !m_fmDtcsCodeCmb
+        || !m_fmDtcsPolarityCmb || !m_fmToneRxContainer
+        || !m_fmDtcsContainer || !m_fmLayout) {
         return;
     }
     const bool connected = m_radioModel && m_radioModel->isConnected();
@@ -6217,13 +6291,10 @@ void VfoWidget::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < m_fmToneValueCmb->count(); ++i) {
-        const QString frequency = m_fmToneValueCmb->itemData(i).toString();
-        m_fmToneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, frequency));
-        m_fmToneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, frequency));
-    }
+    configureCtcssToneComboLabels(
+        m_fmToneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_fmToneRxValueCmb, presentation, FmToneRole::Rx);
     const bool modeEligible = m_slice && hasFmToneControls(m_slice->mode());
     const QString selected = m_slice
         ? m_slice->fmToneMode() : m_fmToneModeCmb->currentData().toString();
@@ -6233,11 +6304,7 @@ void VfoWidget::configureFmToneControls()
         QSignalBlocker blocker(m_fmToneModeCmb);
         m_fmToneModeCmb->clear();
         for (const QString& mode : modes) {
-            const QString label = mode == QLatin1String("off") ? QStringLiteral("Off")
-                : mode == QLatin1String("ctcss_tx") ? QStringLiteral("CTCSS TX")
-                : mode == QLatin1String("ctcss_rx") ? QStringLiteral("CTCSS RX")
-                : QStringLiteral("CTCSS TX/RX");
-            m_fmToneModeCmb->addItem(label, mode);
+            m_fmToneModeCmb->addItem(fmToneModeDisplayLabel(mode), mode);
         }
         int index = m_fmToneModeCmb->findData(selected);
         if (index < 0 && presentation != FmTonePresentation::Ctcss) {
@@ -6248,12 +6315,65 @@ void VfoWidget::configureFmToneControls()
     m_fmToneContainer->setVisible(modeEligible
         && presentation != FmTonePresentation::Hidden);
     const QString mode = m_fmToneModeCmb->currentData().toString();
-    const bool tx = mode == QLatin1String("ctcss_tx") || mode == QLatin1String("ctcss_txrx");
-    const bool rx = mode == QLatin1String("ctcss_rx") || mode == QLatin1String("ctcss_txrx");
-    m_fmToneValueCmb->setVisible(presentation == FmTonePresentation::Legacy || tx);
+    {
+        const int selectedCode = m_slice ? m_slice->fmDtcsCode()
+                                         : m_fmDtcsCodeCmb->currentData().toInt();
+        QSignalBlocker blocker(m_fmDtcsCodeCmb);
+        m_fmDtcsCodeCmb->clear();
+        const QString role = fmDtcsCodeRole(mode);
+        for (const int code : caps.fmDtcsCodes) {
+            m_fmDtcsCodeCmb->addItem(
+                QStringLiteral("%1: %2")
+                    .arg(role, QStringLiteral("%1").arg(code, 3, 10, QLatin1Char('0'))),
+                code);
+        }
+        const int index = m_fmDtcsCodeCmb->findData(selectedCode);
+        m_fmDtcsCodeCmb->setCurrentIndex(index);
+    }
+    const bool tx = fmToneUsesCtcssTx(mode);
+    const bool rx = fmToneUsesCtcssRx(mode);
+    const bool dtcs = fmToneUsesDtcs(mode);
+    const bool dtcsIsTx = fmToneUsesDtcsTx(mode);
+    m_fmLayout->removeWidget(m_fmToneRxContainer);
+    m_fmLayout->removeWidget(m_fmDtcsContainer);
+    if (dtcsIsTx) {
+        m_fmLayout->insertWidget(1, m_fmDtcsContainer);
+        m_fmLayout->insertWidget(2, m_fmToneRxContainer);
+    } else {
+        m_fmLayout->insertWidget(1, m_fmToneRxContainer);
+        m_fmLayout->insertWidget(2, m_fmDtcsContainer);
+    }
+    {
+        const bool txReverse = m_slice && m_slice->fmDtcsTxReverse();
+        const bool rxReverse = m_slice && m_slice->fmDtcsRxReverse();
+        const QString selectedPolarity = QStringLiteral("%1%2")
+            .arg(txReverse ? QLatin1Char('R') : QLatin1Char('N'))
+            .arg(rxReverse ? QLatin1Char('R') : QLatin1Char('N'));
+        QSignalBlocker blocker(m_fmDtcsPolarityCmb);
+        m_fmDtcsPolarityCmb->clear();
+        for (const FmDtcsPolarityChoice& choice
+             : fmDtcsPolarityChoices(mode, txReverse, rxReverse)) {
+            m_fmDtcsPolarityCmb->addItem(choice.label, choice.value);
+        }
+        m_fmDtcsPolarityCmb->setCurrentIndex(
+            m_fmDtcsPolarityCmb->findData(selectedPolarity));
+    }
+    m_fmToneValueCmb->setVisible(modeEligible
+        && (presentation == FmTonePresentation::Legacy || tx));
     m_fmToneValueCmb->setEnabled(tx);
-    m_fmToneRxValueCmb->setVisible(presentation == FmTonePresentation::Ctcss && rx);
+    m_fmToneRxValueCmb->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && rx);
     m_fmToneRxValueCmb->setEnabled(rx);
+    m_fmToneRxContainer->setVisible(
+        modeEligible && presentation == FmTonePresentation::Ctcss && rx);
+    m_fmDtcsCodeCmb->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && dtcs);
+    m_fmDtcsCodeCmb->setEnabled(dtcs);
+    m_fmDtcsPolarityCmb->setVisible(
+        modeEligible && presentation == FmTonePresentation::Ctcss && dtcs);
+    m_fmDtcsPolarityCmb->setEnabled(dtcs);
+    m_fmDtcsContainer->setVisible(
+        modeEligible && presentation == FmTonePresentation::Ctcss && dtcs);
 }
 
 bool VfoWidget::usesTransmitFrequencyCheck() const

@@ -9,6 +9,7 @@ namespace AetherSDR { class FilterPassbandWidget; }
 
 class QButtonGroup;
 class QHBoxLayout;
+class QVBoxLayout;
 class QGridLayout;
 class QPushButton;
 class QSlider;
@@ -262,9 +263,13 @@ private:
 
     // FM duplex/repeater controls (shown only in FM/NFM/DFM modes)
     QWidget*        m_fmContainer{nullptr};
+    QVBoxLayout*    m_fmLayout{nullptr};
     QComboBox*      m_toneModeCmb{nullptr};
     QComboBox*      m_toneValueCmb{nullptr};
     QComboBox*      m_toneRxValueCmb{nullptr};
+    QComboBox*      m_dtcsCodeCmb{nullptr};
+    QComboBox*      m_dtcsPolarityCmb{nullptr};
+    QWidget*        m_dtcsContainer{nullptr};
     QDoubleSpinBox* m_offsetSpin{nullptr};
     QPushButton*    m_offsetDown{nullptr};
     QPushButton*    m_simplexBtn{nullptr};
