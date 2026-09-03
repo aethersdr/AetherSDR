@@ -5,7 +5,6 @@
 #include "TimeSeriesGraphWidget.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
-#include "core/SystemInfoCollector.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -26,6 +25,12 @@
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
+
+// The gui-side ring repeats the collector's cadence rather than including the
+// core header (aetherd touchpoint burndown); this is where the two are pinned.
+static_assert(AetherSDR::MemoryHistoryRing::kSampleIntervalMs
+                  == AetherSDR::SystemInfoCollector::kSampleIntervalMs,
+              "MemoryHistoryRing::kSampleIntervalMs must match the collector's cadence");
 
 namespace AetherSDR {
 
@@ -565,7 +570,16 @@ int SystemInfoDialog::selectedMemoryRangeSeconds() const
 
 void SystemInfoDialog::applyMemorySample(const MemorySample& sample)
 {
-    m_memoryRing->push(sample);
+    // Flat copy into the ring's own record: the ring stays free of core includes.
+    MemoryHistoryRing::Record record;
+    record.wallMs = sample.wallMs;
+    record.valid = sample.valid;
+    record.residentMetric = sample.residentMetric;
+    record.residentBytes = sample.residentBytes;
+    record.peakResidentBytes = sample.peakResidentBytes;
+    record.privateBytes = sample.privateBytes;
+    record.virtualBytes = sample.virtualBytes;
+    m_memoryRing->push(record);
     refreshMemoryChart();
 }
 
@@ -573,7 +587,7 @@ void SystemInfoDialog::refreshMemoryChart()
 {
     // Readouts come from the ring, not the argument, so a sample that never
     // reached the history cannot look as though it did.
-    const MemorySample* latest = m_memoryRing->latest();
+    const MemoryHistoryRing::Record* latest = m_memoryRing->latest();
     if (latest == nullptr) {
         return;
     }

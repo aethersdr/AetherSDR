@@ -29,9 +29,9 @@ static int g_failures = 0;
     } \
 } while (0)
 
-static MemorySample at(qint64 wallMs, quint64 residentMb)
+static MemoryHistoryRing::Record at(qint64 wallMs, quint64 residentMb)
 {
-    MemorySample s;
+    MemoryHistoryRing::Record s;
     s.wallMs = wallMs;
     s.valid = true;
     s.residentMetric = QStringLiteral("vmRss");

@@ -2,6 +2,7 @@
 
 #include "PersistentDialog.h"
 #include "core/SystemInfo.h"
+#include "core/SystemInfoCollector.h"
 #include "core/ThreadCpuRing.h"
 #include "MemoryHistoryRing.h"
 
@@ -23,7 +24,6 @@ class QTimer;
 
 namespace AetherSDR {
 
-class SystemInfoCollector;
 class TimeSeriesGraphWidget;
 
 // Runtime diagnostics for AetherSDR itself (#2554).
