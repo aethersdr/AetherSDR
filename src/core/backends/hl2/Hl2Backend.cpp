@@ -1700,15 +1700,20 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // the stored per-band drive on every reconnect; Ozy311 traced the same
     // seam). With the model seeded, that push becomes a value-identical echo
     // — which setTxPower() now recognizes and declines to record.
-    if (m_haveRestoredState) {
-        const int drive =
-            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
-        if (drive >= 0) {
-            m_rfPowerPercent = drive;
-            TransmitDelta delta;
-            delta.rfPower = drive;
-            emit transmitChanged(delta);
-        }
+    //
+    // SEEDED UNCONDITIONALLY, not only when there is restored state. With the
+    // guard, a fresh install left m_rfPowerPercent at its construction default
+    // of 100 and the connect push wrote drive 255 with the PA enabled — see
+    // initialDrivePercent() for the full trace and for why
+    // applyPerBandStateFor()'s conservative-0 cannot cover the start band.
+    {
+        const int drive = initialDrivePercent(
+            m_haveRestoredState ? m_driveByBand.value(m_currentBandKey, -1) : -1,
+            m_haveRestoredState ? m_driveDefaultPercent : -1);
+        m_rfPowerPercent = drive;
+        TransmitDelta delta;
+        delta.rfPower = drive;
+        emit transmitChanged(delta);
     }
 
     // ---- how many receivers ----

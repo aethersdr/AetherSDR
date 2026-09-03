@@ -70,6 +70,42 @@ namespace AetherSDR::hl2 {
     return std::pow(10.0, micSliderToGainDb(level) / 20.0);
 }
 
+// The drive a session must COME UP AT, before the operator has touched anything.
+//
+// The radio retains whatever the last session left in its drive register and
+// never reports it, so the application is authoritative here (the same rule
+// pushInitialState() states for frequency). What it comes up at is therefore a
+// decision, and this is that decision in one place.
+//
+// The order is: the start band's own remembered drive, then the operator's
+// baseline for bands never visited, and then — when neither exists, which is
+// what a fresh install is — ZERO.
+//
+// Zero rather than the model's construction default. On a fresh install the
+// backend's m_rfPowerPercent and TransmitModel::m_rfPower both construct at
+// 100, and RadioModel's connect-time push is value-identical to that, so the
+// change-gate in setTxPower() correctly declines to record it as operator
+// intent — while applyDrive() still writes it to the wire. The radio came up at
+// drive 255 with the PA enabled, and the first key-up was at full power.
+//
+// applyPerBandStateFor()'s "first visit to a band with no baseline gets 0" does
+// not cover this, and cannot: connectRadio() claims the start band key before
+// the link is up, so that function early-returns for the one band the session
+// starts on. Seeding here is what makes its promise — conservative once per
+// band, rather than hot once per mistake — true for the start band too.
+//
+// Both arguments are "percent, or negative for absent", matching
+// QHash::value(key, -1) and m_driveDefaultPercent's own sentinel.
+[[nodiscard]] constexpr int initialDrivePercent(int bandEntryPercent,
+                                                int baselinePercent) noexcept
+{
+    if (bandEntryPercent >= 0)
+        return bandEntryPercent > 100 ? 100 : bandEntryPercent;
+    if (baselinePercent >= 0)
+        return baselinePercent > 100 ? 100 : baselinePercent;
+    return 0;
+}
+
 // ---- Forward-power peak hold -----------------------------------------------
 
 // One step of the transmit forward-power peak hold, in watts.
