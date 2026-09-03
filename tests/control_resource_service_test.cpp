@@ -1,0 +1,479 @@
+#include "core/RadioDiscovery.h"
+#include "core/backends/sim/SimBackend.h"
+#include "core/control/ControlResourceStore.h"
+#include "core/control/ControlService.h"
+#include "core/control/ControlSession.h"
+#include "core/control/RadioResourceAdapter.h"
+#include "models/RadioModel.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QSet>
+#include <QThread>
+#include <QtMath>
+
+#include <cstdio>
+#include <functional>
+#include <initializer_list>
+
+using namespace AetherSDR;
+using namespace AetherSDR::control;
+
+namespace {
+
+bool check(bool condition, const char* message)
+{
+    if (condition) {
+        return true;
+    }
+    std::fprintf(stderr, "%s\n", message);
+    return false;
+}
+
+bool hasExactlyKeys(const QJsonObject& object,
+                    std::initializer_list<const char*> expected)
+{
+    QSet<QString> expectedKeys;
+    for (const char* key : expected) {
+        expectedKeys.insert(QString::fromLatin1(key));
+    }
+    QSet<QString> actualKeys;
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        actualKeys.insert(it.key());
+    }
+    return actualKeys == expectedKeys;
+}
+
+bool waitUntil(const std::function<bool()>& predicate, int timeoutMs = 3000)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!predicate() && timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    return predicate();
+}
+
+QJsonObject invoke(ControlService* service, ControlSession* session,
+                   const QString& id, const QString& method,
+                   const QJsonObject& params)
+{
+    QJsonObject request{{QStringLiteral("v"), 1},
+                        {QStringLiteral("id"), id},
+                        {QStringLiteral("method"), method},
+                        {QStringLiteral("params"), params}};
+    if (method != QStringLiteral("hello")) {
+        request.insert(QStringLiteral("sessionId"), session->sessionId);
+    }
+    const QByteArray bytes = QJsonDocument(request).toJson(QJsonDocument::Compact);
+    return service->handle(bytes, session).message;
+}
+
+bool negotiate(ControlService* service, ControlSession* session)
+{
+    const QJsonObject reply = invoke(
+        service, session, QStringLiteral("hello"), QStringLiteral("hello"),
+        {{QStringLiteral("versions"), QJsonArray{1}}});
+    return reply.value(QStringLiteral("result")).toObject()
+        .value(QStringLiteral("sessionId")).toString() == session->sessionId
+        && session->negotiated;
+}
+
+QString errorCode(const QJsonObject& response)
+{
+    return response.value(QStringLiteral("error")).toObject()
+        .value(QStringLiteral("code")).toString();
+}
+
+QJsonObject exactResource(const QString& type, const QString& radioSession = {},
+                          const QString& id = {})
+{
+    QJsonObject resource{{QStringLiteral("type"), type}};
+    if (!radioSession.isEmpty()) {
+        resource.insert(QStringLiteral("radioSession"), radioSession);
+    }
+    if (!id.isEmpty()) {
+        resource.insert(QStringLiteral("id"), id);
+    }
+    return resource;
+}
+
+bool testStoreRevisions()
+{
+    ControlResourceStore store;
+    const ResourceAddress address{QStringLiteral("slice"),
+                                  QStringLiteral("radio-1"), QStringLiteral("0")};
+    quint64 removedRevision = 0;
+    QObject::connect(&store, &ControlResourceStore::resourceRemoved,
+                     [&removedRevision](const ResourceAddress&, quint64 revision) {
+                         removedRevision = revision;
+                     });
+
+    if (!check(store.upsert(address, {{QStringLiteral("frequencyHz"), 100}}),
+               "first resource value must create revision 1")
+        || !check(!store.upsert(address, {{QStringLiteral("frequencyHz"), 100}}),
+                  "an unchanged canonical value must not advance its revision")
+        || !check(store.upsert(address, {{QStringLiteral("frequencyHz"), 200}}),
+                  "a changed canonical value must advance its revision")) {
+        return false;
+    }
+    const std::optional<ResourceSnapshot> second = store.get(address);
+    if (!check(second && second->revision == 2,
+               "the second distinct value must carry revision 2")
+        || !check(store.remove(address) && removedRevision == 3,
+                  "removal must consume the next identity revision")
+        || !check(store.upsert(address, {{QStringLiteral("frequencyHz"), 300}}),
+                  "a removed identity may be recreated")) {
+        return false;
+    }
+    const std::optional<ResourceSnapshot> recreated = store.get(address);
+    return check(recreated && recreated->revision == 4,
+                 "recreating an identity must not reset its revision");
+}
+
+bool testServiceSubscriptions()
+{
+    ControlResourceStore store;
+    store.upsert({QStringLiteral("server"), {}, {}},
+                 {{QStringLiteral("health"), QStringLiteral("ok")}});
+    const ResourceAddress slice{QStringLiteral("slice"),
+                                QStringLiteral("radio-1"), QStringLiteral("0")};
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 100}});
+
+    ControlService service(&store);
+    ControlSession first(&store, 4096);
+    ControlSession second(&store, 4096);
+    if (!check(negotiate(&service, &first) && negotiate(&service, &second),
+               "both clients must negotiate independent sessions")) {
+        return false;
+    }
+
+    const QJsonObject getReply = invoke(
+        &service, &first, QStringLiteral("get-1"), QStringLiteral("resource.get"),
+        {{QStringLiteral("resource"),
+          exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"),
+                        QStringLiteral("0"))}});
+    if (!check(getReply.value(QStringLiteral("result")).toObject()
+                   .value(QStringLiteral("revision")).toInteger() == 1,
+               "resource.get must return the complete current snapshot")) {
+        return false;
+    }
+
+    const QJsonArray sliceSelector{
+        exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"))};
+    const QJsonObject firstSubscribe = invoke(
+        &service, &first, QStringLiteral("sub-1"), QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), sliceSelector}});
+    const QJsonObject firstBaseline = firstSubscribe.value(QStringLiteral("result")).toObject();
+    const QString firstSubscription =
+        firstBaseline.value(QStringLiteral("subscription")).toString();
+    if (!check(firstBaseline.value(QStringLiteral("sequence")).toInteger() == 0
+                   && firstBaseline.value(QStringLiteral("resources")).toArray().size() == 1,
+               "subscribe must atomically return a sequence and matching baseline")) {
+        return false;
+    }
+
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 200}});
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 300}});
+    const QList<QJsonObject> coalesced = first.takePendingMessages();
+    if (!check(coalesced.size() == 1,
+               "undrained changes to one resource must coalesce")
+        || !check(coalesced.first().value(QStringLiteral("sequence")).toInteger() == 2
+                      && coalesced.first().value(QStringLiteral("revision")).toInteger() == 3
+                      && coalesced.first().value(QStringLiteral("value")).toObject()
+                             .value(QStringLiteral("frequencyHz")).toInteger() == 300,
+                  "the coalesced event must retain the newest sequence, revision, and value")) {
+        return false;
+    }
+
+    const ResourceAddress secondSlice{QStringLiteral("slice"),
+                                      QStringLiteral("radio-1"), QStringLiteral("1")};
+    store.upsert(secondSlice, {{QStringLiteral("frequencyHz"), 700}});
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 350}});
+    const QList<QJsonObject> interleaved = first.takePendingMessages();
+    if (!check(interleaved.size() == 2
+                   && interleaved.at(0).value(QStringLiteral("sequence")).toInteger() == 3
+                   && interleaved.at(1).value(QStringLiteral("sequence")).toInteger() == 4,
+               "coalescing must preserve event-sequence delivery order across resources")) {
+        return false;
+    }
+
+    invoke(&service, &second, QStringLiteral("sub-2"),
+           QStringLiteral("resource.subscribe"),
+           {{QStringLiteral("resources"), sliceSelector}});
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 400}});
+    const QList<QJsonObject> firstNext = first.takePendingMessages();
+    const QList<QJsonObject> secondNext = second.takePendingMessages();
+    if (!check(firstNext.size() == 1 && secondNext.size() == 1
+                   && firstNext.first().value(QStringLiteral("sequence")).toInteger() == 5
+                   && secondNext.first().value(QStringLiteral("sequence")).toInteger() == 1,
+               "event sequences must be monotonic and local to each client session")) {
+        return false;
+    }
+
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 450}});
+    const QJsonObject unsubscribe = invoke(
+        &service, &first, QStringLiteral("unsub-1"),
+        QStringLiteral("resource.unsubscribe"),
+        {{QStringLiteral("subscription"), firstSubscription}});
+    const QList<QJsonObject> afterUnsubscribe = first.takePendingMessages();
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 500}});
+    if (!check(unsubscribe.value(QStringLiteral("result")).toObject()
+                   .value(QStringLiteral("removed")).toBool()
+                   && afterUnsubscribe.isEmpty()
+                   && first.takePendingMessages().isEmpty()
+                   && second.takePendingMessages().size() == 1,
+               "unsubscribe must discard undrained events no longer observed and isolate clients")) {
+        return false;
+    }
+
+    const QJsonObject malformed = invoke(
+        &service, &first, QStringLiteral("bad-selector"),
+        QStringLiteral("resource.get"),
+        {{QStringLiteral("resource"),
+          QJsonObject{{QStringLiteral("type"), QStringLiteral("slice")},
+                      {QStringLiteral("radioSession"), QStringLiteral("radio-1")},
+                      {QStringLiteral("typo"), QStringLiteral("0")}}}});
+    return check(errorCode(malformed) == QStringLiteral("request.invalid_params"),
+                 "unknown selector fields must fail closed");
+}
+
+bool testOverflowRequiresResync()
+{
+    ControlResourceStore store;
+    ControlService service(&store);
+    ControlSession session(&store, 360);
+    if (!check(negotiate(&service, &session), "overflow client must negotiate")) {
+        return false;
+    }
+    const QJsonArray selectors{
+        exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"))};
+    invoke(&service, &session, QStringLiteral("sub"),
+           QStringLiteral("resource.subscribe"),
+           {{QStringLiteral("resources"), selectors}});
+
+    store.upsert({QStringLiteral("slice"), QStringLiteral("radio-1"), QStringLiteral("0")},
+                 {{QStringLiteral("value"), QString(100, QLatin1Char('a'))}});
+    store.upsert({QStringLiteral("slice"), QStringLiteral("radio-1"), QStringLiteral("1")},
+                 {{QStringLiteral("value"), QString(100, QLatin1Char('b'))}});
+    const QList<QJsonObject> overflow = session.takePendingMessages();
+    if (!check(overflow.size() == 1
+                   && overflow.first().value(QStringLiteral("event")).toString()
+                          == QStringLiteral("resource.resyncRequired")
+                   && overflow.first().value(QStringLiteral("subscriptionsInvalidated")).toBool(),
+               "queue overflow must invalidate subscriptions and require an explicit resync")) {
+        return false;
+    }
+
+    store.upsert({QStringLiteral("slice"), QStringLiteral("radio-1"), QStringLiteral("0")},
+                 {{QStringLiteral("value"), QStringLiteral("after-overflow")}});
+    if (!check(session.takePendingMessages().isEmpty(),
+               "invalidated subscriptions must remain quiet until resubscribed")) {
+        return false;
+    }
+    const QJsonObject resubscribe = invoke(
+        &service, &session, QStringLiteral("resub"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), selectors}});
+    if (!check(resubscribe.value(QStringLiteral("result")).toObject()
+                   .value(QStringLiteral("resources")).toArray().size() == 2,
+               "resubscribe must establish a fresh complete baseline")) {
+        return false;
+    }
+
+    store.upsert({QStringLiteral("slice"), QStringLiteral("radio-1"), QStringLiteral("0")},
+                 {{QStringLiteral("value"), QString(100, QLatin1Char('c'))}});
+    store.upsert({QStringLiteral("slice"), QStringLiteral("radio-1"), QStringLiteral("1")},
+                 {{QStringLiteral("value"), QString(100, QLatin1Char('d'))}});
+    const QJsonObject baselineAfterUndrainedResync = invoke(
+        &service, &session, QStringLiteral("resub-undrained"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), selectors}});
+    return check(baselineAfterUndrainedResync.value(QStringLiteral("result")).isObject()
+                     && session.takePendingMessages().isEmpty(),
+                 "a fresh baseline must supersede an undrained resync notice");
+}
+
+RadioInfo demoInfo()
+{
+    RadioInfo info;
+    info.name = QStringLiteral("FLEX-6700");
+    info.model = SimBackend::demoModelName();
+    info.serial = SimBackend::demoSerial();
+    info.family = SimBackend::familyName();
+    info.address = QHostAddress(QHostAddress::LocalHost);
+    info.port = 4992;
+    return info;
+}
+
+bool testSimBackendEndToEnd()
+{
+    ControlResourceStore store;
+    ControlService service(&store);
+    ControlSession client(&store, 1024 * 1024);
+    RadioModel radio;
+    RadioResourceAdapter adapter(&radio, &store, QStringLiteral("radio-1"));
+    if (!check(negotiate(&service, &client), "sim observer must negotiate")) {
+        return false;
+    }
+
+    const QJsonArray selectors{
+        exactResource(QStringLiteral("radioSession")),
+        exactResource(QStringLiteral("slice"), QStringLiteral("radio-1")),
+        exactResource(QStringLiteral("panadapter"), QStringLiteral("radio-1"))};
+    const QJsonObject baselineReply = invoke(
+        &service, &client, QStringLiteral("sim-sub"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), selectors}});
+    if (!check(baselineReply.value(QStringLiteral("result")).toObject()
+                   .value(QStringLiteral("resources")).toArray().size() == 1,
+               "the disconnected model must begin as one radioSession resource")) {
+        return false;
+    }
+
+    radio.connectToRadio(demoInfo());
+    const ResourceAddress radioAddress{QStringLiteral("radioSession"), {},
+                                       QStringLiteral("radio-1")};
+    const ResourceAddress sliceAddress{QStringLiteral("slice"),
+                                       QStringLiteral("radio-1"), QStringLiteral("0")};
+    const ResourceAddress panAddress{QStringLiteral("panadapter"),
+                                     QStringLiteral("radio-1"),
+                                     QStringLiteral("0x40000000")};
+    const bool converged = waitUntil([&] {
+        const std::optional<ResourceSnapshot> radioSnapshot = store.get(radioAddress);
+        return radioSnapshot
+            && radioSnapshot->value.value(QStringLiteral("connected")).toBool()
+            && store.get(sliceAddress).has_value()
+            && store.get(panAddress).has_value();
+    });
+    if (!check(converged,
+               "SimBackend must drive connected radio, slice, and panadapter resources")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
+    const QJsonObject sliceReply = invoke(
+        &service, &client, QStringLiteral("sim-get"),
+        QStringLiteral("resource.get"),
+        {{QStringLiteral("resource"),
+          exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"),
+                        QStringLiteral("0"))}});
+    const QJsonObject sliceValue = sliceReply.value(QStringLiteral("result")).toObject()
+                                       .value(QStringLiteral("value")).toObject();
+    const QJsonObject radioValue = store.get(radioAddress)->value;
+    const QJsonObject panValue = store.get(panAddress)->value;
+    const QJsonObject identity = radioValue.value(QStringLiteral("identity")).toObject();
+    const QJsonObject capabilities =
+        radioValue.value(QStringLiteral("capabilities")).toObject();
+    const QJsonObject receive = sliceValue.value(QStringLiteral("receive")).toObject();
+    const QJsonObject displayCadence =
+        panValue.value(QStringLiteral("displayCadence")).toObject();
+    if (!check(hasExactlyKeys(radioValue,
+                              {"id", "connected", "family", "identity", "capabilities"})
+                   && hasExactlyKeys(identity,
+                                     {"name", "model", "serial", "version", "manufacturer"})
+                   && hasExactlyKeys(capabilities,
+                                     {"maxSlices", "maxPanadapters", "sampleRatesHz",
+                                      "tuningRangeHz", "declaredBands", "canTransmit",
+                                      "maximumTransmitWatts", "hasTuner", "hasAmplifier",
+                                      "extensions"})
+                   && hasExactlyKeys(sliceValue,
+                                     {"id", "letter", "panadapterId", "owned",
+                                      "frequencyHz", "mode", "filter", "active",
+                                      "txSlice", "locked", "audio", "receive"})
+                   && hasExactlyKeys(sliceValue.value(QStringLiteral("filter")).toObject(),
+                                     {"lowHz", "highHz"})
+                   && hasExactlyKeys(sliceValue.value(QStringLiteral("audio")).toObject(),
+                                     {"gain", "pan", "muted"})
+                   && hasExactlyKeys(receive,
+                                     {"antenna", "rfGain", "agc", "squelch"})
+                   && hasExactlyKeys(receive.value(QStringLiteral("agc")).toObject(),
+                                     {"mode", "threshold", "offLevel"})
+                   && hasExactlyKeys(receive.value(QStringLiteral("squelch")).toObject(),
+                                     {"enabled", "level"})
+                   && hasExactlyKeys(panValue,
+                                     {"id", "centerHz", "centerKnown",
+                                      "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
+                                      "receive", "displayCadence"})
+                   && hasExactlyKeys(panValue.value(QStringLiteral("dbmRange")).toObject(),
+                                     {"minimum", "maximum"})
+                   && hasExactlyKeys(
+                       panValue.value(QStringLiteral("bandwidthLimitsHz")).toObject(),
+                       {"minimum", "maximum"})
+                   && hasExactlyKeys(panValue.value(QStringLiteral("receive")).toObject(),
+                                     {"antenna", "rfGain"})
+                   && hasExactlyKeys(displayCadence,
+                                     {"fps", "averageFrames", "weightedAverage",
+                                      "weightedAverageKnown", "waterfallRate"}),
+               "SimBackend resources must match the complete documented v1 schemas")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    const QList<QJsonObject> events = client.takePendingMessages();
+    bool sawRadio = false;
+    bool sawSlice = false;
+    bool sawPan = false;
+    qint64 previousSequence = 0;
+    for (const QJsonObject& event : events) {
+        const qint64 sequence = event.value(QStringLiteral("sequence")).toInteger();
+        if (sequence <= previousSequence) {
+            radio.disconnectFromRadio();
+            return check(false, "SimBackend events must remain ordered after coalescing");
+        }
+        previousSequence = sequence;
+        const QString type = event.value(QStringLiteral("resource")).toObject()
+                                 .value(QStringLiteral("type")).toString();
+        sawRadio = sawRadio || type == QStringLiteral("radioSession");
+        sawSlice = sawSlice || type == QStringLiteral("slice");
+        sawPan = sawPan || type == QStringLiteral("panadapter");
+    }
+
+    const SliceModel* modelSlice = radio.slice(0);
+    const bool result =
+        check(modelSlice
+                  && sliceValue.value(QStringLiteral("frequencyHz")).toInteger()
+                         == qRound64(modelSlice->frequency() * 1'000'000.0)
+                  && sliceValue.value(QStringLiteral("mode")).toString()
+                         == modelSlice->mode(),
+              "resource.get must expose SimBackend's authoritative slice state")
+        && check(sawRadio && sawSlice && sawPan,
+                 "the subscription must deliver each SimBackend resource family")
+        && check(!radio.backendCapabilities().canTransmit,
+                 "the end-to-end simulator proof must remain RX-only");
+    radio.disconnectFromRadio();
+    const bool removed = waitUntil([&] {
+        return !radio.isConnected()
+            && !store.get(sliceAddress).has_value()
+            && !store.get(panAddress).has_value();
+    });
+    if (!result
+        || !check(removed,
+                  "disconnect must remove dynamic resources and update the radio session")) {
+        return false;
+    }
+
+    radio.connectToRadio(demoInfo());
+    const bool reclaimed = waitUntil([&] {
+        return radio.isConnected()
+            && store.get(sliceAddress).has_value()
+            && store.get(panAddress).has_value();
+    });
+    radio.disconnectFromRadio();
+    waitUntil([&radio] { return !radio.isConnected(); });
+    return check(reclaimed,
+                 "reconnect must republish reclaimed slice and panadapter resources");
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    return testStoreRevisions()
+        && testServiceSubscriptions()
+        && testOverflowRequiresResync()
+        && testSimBackendEndToEnd() ? 0 : 1;
+}

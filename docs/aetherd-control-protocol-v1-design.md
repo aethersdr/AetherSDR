@@ -186,6 +186,9 @@ schema test before it is exported.  Credentials, backend pointers, raw vendor
 messages, filesystem paths, unbounded log text, and other clients' private
 state are never resources.
 
+The schemas implemented by the first observe-only slice are fixed in
+[`aetherd-control-resource-v1-catalogue.md`](aetherd-control-resource-v1-catalogue.md).
+
 `resource.subscribe` accepts explicit resource selectors and returns an atomic
 baseline:
 

@@ -88,6 +88,17 @@ target_link_libraries(local_control_server_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME local_control_server_test COMMAND local_control_server_test)
 
+# Socket-free Stage-3 resource/service proof: revision stability, atomic
+# snapshot-to-event sequencing, multi-client delivery, unsubscribe,
+# coalescing/resync under pressure, and SimBackend -> RadioModel -> protocol.
+add_executable(control_resource_service_test
+    tests/control_resource_service_test.cpp
+)
+target_include_directories(control_resource_service_test PRIVATE src)
+target_link_libraries(control_resource_service_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME control_resource_service_test COMMAND control_resource_service_test)
+
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
 # DIGITAL_VOICE_WAVEFORM_DIR, CRDV_DIR and crdv::crdv are all defined by the time

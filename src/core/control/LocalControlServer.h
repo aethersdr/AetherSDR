@@ -37,18 +37,21 @@ public:
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
+    [[nodiscard]] ControlResourceStore& resourceStore() { return m_resources; }
 
 private:
     struct Client;
 
     void acceptConnections();
     void readClient(QLocalSocket* socket);
+    void drainSessionOutput(QLocalSocket* socket);
     void dropClient(QLocalSocket* socket);
     [[nodiscard]] bool send(QLocalSocket* socket, const QJsonObject& message);
     [[nodiscard]] static bool resolveEndpoint(
         const QString& logicalName, QString* endpointName, QString* lockPath);
 
     QLocalServer m_server;
+    ControlResourceStore m_resources;
     ControlService m_service;
     Limits m_limits;
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;

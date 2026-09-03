@@ -1,31 +1,30 @@
 #pragma once
 
 #include "ControlProtocolCodec.h"
+#include "ControlResourceStore.h"
+#include "ControlSession.h"
 
 #include <QJsonObject>
 #include <QString>
 
 namespace AetherSDR::control {
 
-struct ControlSessionState {
-    QString sessionId;
-    bool negotiated{false};
-};
-
 struct ServiceReply {
     QJsonObject message;
     bool closeAfterWrite{false};
 };
 
-// Transport-neutral Stage-3 service kernel. The first landed surface is
-// intentionally observe-only: negotiation and capability discovery. Model
-// resources and non-TX control methods attach here in subsequent slices.
+// Transport-neutral Stage-3 service kernel. The current surface is strictly
+// observe-only: negotiation, capability discovery, typed resource reads, and
+// subscriptions. Non-TX control methods attach in a subsequent slice.
 class ControlService final {
 public:
-    [[nodiscard]] ServiceReply handle(
-        const QByteArray& bytes, ControlSessionState* session) const;
+    explicit ControlService(ControlResourceStore* resources);
 
-    [[nodiscard]] static QJsonObject capabilities(const ControlSessionState& session);
+    [[nodiscard]] ServiceReply handle(
+        const QByteArray& bytes, ControlSession* session) const;
+
+    [[nodiscard]] QJsonObject capabilities(const ControlSession& session) const;
 
 private:
     [[nodiscard]] static ServiceReply failure(
@@ -33,6 +32,8 @@ private:
     [[nodiscard]] static std::optional<ProtocolError> validateHelloParams(
         const QJsonObject& params);
     [[nodiscard]] static bool acceptsVersionOne(const QJsonObject& params);
+
+    ControlResourceStore* m_resources{nullptr};
 };
 
 } // namespace AetherSDR::control

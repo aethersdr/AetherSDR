@@ -470,10 +470,16 @@ selected at connect time by a `family` string through `makeBackend()`:
 
 Step 3 is in progress: the normative v1 envelope contract, bounded codec,
 observe-only local handshake/capability service, and a QtWidgets-free
-`aetherd` skeleton have landed. Typed model resources, subscriptions,
-authenticated non-TX control, and the desktop adapter have not; UI code still
-consumes models directly, and that remains correct. No protocol TX method is
-advertised before the step-4 arbiter exists.
+`aetherd` skeleton have landed. The typed observe-only `server`,
+`radioSession`, `slice`, and `panadapter` resources now publish through
+`RadioResourceAdapter`; `resource.get` plus atomic snapshot/event
+`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, and
+bounded coalescing/resync are live over the current-user local transport.
+Meters, read-only transmit state, authenticated non-TX control, and the desktop
+adapter have not landed; UI code still consumes models directly, and that
+remains correct. New resource fields belong in the adapter and the versioned
+catalogue, never in a transport or via QObject reflection. No protocol TX
+method is advertised before the step-4 arbiter exists.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
