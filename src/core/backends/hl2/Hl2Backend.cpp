@@ -678,6 +678,15 @@ void Hl2Backend::setTelemetryPollTarget(const QHostAddress& addr, bool heldByOth
 void Hl2Backend::onStreamFreeReading(const DiscoveryReply& reply, qint64 /*ageMs*/)
 {
     m_streamFree = reply;
+    // The reply says whether somebody is streaming from this radio, so the
+    // held-by-another-client state is READ rather than passed in. That matters
+    // beyond tidiness: a caller-supplied flag would be a second opinion about
+    // the radio's state that could drift from the radio's own, and this feature
+    // exists precisely for the case where the app's picture is out of date.
+    // Only meaningful while we are not connected -- when we are, `streaming`
+    // is us.
+    if (!m_connected)
+        m_pollTargetHeldByOther = reply.streaming;
     m_haveStreamFree = true;
     m_streamFreeUnanswered = 0;
     // Age is measured from arrival here, not from the round trip the poller

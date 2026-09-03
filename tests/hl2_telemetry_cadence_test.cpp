@@ -20,7 +20,10 @@
 //   3. Nothing exceeds 10 Hz. The radio's refresh rate is not established and
 //      is only bounded as "~10 Hz or faster", so a shorter interval spends IQ
 //      slots on readings that may not have regenerated.
-//   4. surfaceVisible gates ONLY the idle case.
+//   4. surfaceVisible gates the two DISPLAY states and NEITHER fault state. A
+//      fault is diagnosed whether or not anyone has a panel open; a display
+//      that nobody is reading should not be generating traffic — least of all
+//      in HeldByOther, where the packets land in another operator's session.
 //
 // Pure header, no Qt, no socket, no radio.
 
@@ -53,7 +56,10 @@ int main()
 
     // ---- 2. The failure case is the fast one ----
     const int stalled = hl2PollIntervalMs(Hl2LinkState::StreamStalled, kHidden);
-    const int held    = hl2PollIntervalMs(Hl2LinkState::HeldByOther, kHidden);
+    // Visible, because held-by-other is demand-gated: comparing against its
+    // silent value would compare a cadence with "not polling at all", which is
+    // not the ordering this invariant is about.
+    const int held    = hl2PollIntervalMs(Hl2LinkState::HeldByOther, kVisible);
     const int idle    = hl2PollIntervalMs(Hl2LinkState::NotConnected, kVisible);
 
     check(stalled > 0, "a stalled stream IS polled — nothing else can report its silence");
@@ -67,9 +73,18 @@ int main()
     check(hl2PollIntervalMs(Hl2LinkState::StreamStalled, kHidden)
               == hl2PollIntervalMs(Hl2LinkState::StreamStalled, kVisible),
           "a stalled stream is polled regardless of whether a surface is visible");
-    check(hl2PollIntervalMs(Hl2LinkState::HeldByOther, kHidden)
-              == hl2PollIntervalMs(Hl2LinkState::HeldByOther, kVisible),
-          "held-by-other does not depend on a visible surface either");
+    // CHANGED after the wiring went in, and the reason is worth keeping.
+    // HeldByOther was unconditional here at first, on the reasoning that a
+    // status display should keep updating. Connecting it showed the flaw: the
+    // state latches on the moment any in-use radio answers, so an app sitting
+    // idle would have polled a stranger's session forever with nothing on
+    // screen. These packets land in another operator's session, which makes an
+    // unwatched poll here worse than merely wasteful.
+    check(hl2PollIntervalMs(Hl2LinkState::HeldByOther, kHidden) == 0,
+          "held-by-other with nothing reading: silent — those packets land in "
+          "someone else's session");
+    check(hl2PollIntervalMs(Hl2LinkState::HeldByOther, kVisible) > 0,
+          "held-by-other with something reading: polled");
 
     // ---- 3. Nothing polls faster than the radio is known to refresh ----
     // 100 ms is 10 Hz, the LOWEST rate the bench could not exclude. Anything
@@ -84,7 +99,7 @@ int main()
         }
     }
 
-    // ---- 4. surfaceVisible gates the idle case, and only that one ----
+    // ---- 4. surfaceVisible gates the display states, not the fault states ----
     check(idle > 0, "idle with a visible surface: polled");
     check(hl2PollIntervalMs(Hl2LinkState::NotConnected, kHidden) == 0,
           "idle with nothing watching: not polled at all");
@@ -92,7 +107,8 @@ int main()
     // ---- the table itself, so a silent change to any value is caught ----
     check(hl2PollIntervalMs(Hl2LinkState::Streaming, true) == 0,     "Streaming      -> 0 ms");
     check(hl2PollIntervalMs(Hl2LinkState::StreamStalled, false) == 500, "StreamStalled  -> 500 ms");
-    check(hl2PollIntervalMs(Hl2LinkState::HeldByOther, false) == 1000, "HeldByOther    -> 1000 ms");
+    check(hl2PollIntervalMs(Hl2LinkState::HeldByOther, true) == 1000,  "HeldByOther+   -> 1000 ms");
+    check(hl2PollIntervalMs(Hl2LinkState::HeldByOther, false) == 0,     "HeldByOther-   -> 0 ms");
     check(hl2PollIntervalMs(Hl2LinkState::NotConnected, true) == 1000, "NotConnected+  -> 1000 ms");
     check(hl2PollIntervalMs(Hl2LinkState::NotConnected, false) == 0,   "NotConnected-  -> 0 ms");
 
@@ -101,8 +117,15 @@ int main()
     static_assert(hl2PollIntervalMs(Hl2LinkState::Streaming, true) == 0,
                   "streaming must be compile-time zero");
     static_assert(hl2PollIntervalMs(Hl2LinkState::StreamStalled, false)
-                      < hl2PollIntervalMs(Hl2LinkState::HeldByOther, false),
+                      < hl2PollIntervalMs(Hl2LinkState::HeldByOther, true),
                   "the failure case must be the faster one, at compile time");
+    // A fault is diagnosed whether or not anyone is looking; a display is not.
+    // This pins WHICH states are demand-gated, so a later edit cannot quietly
+    // make the stalled case wait for a panel to be open.
+    static_assert(hl2PollIntervalMs(Hl2LinkState::StreamStalled, false) > 0,
+                  "a stalled stream is polled with nothing on screen");
+    static_assert(hl2PollIntervalMs(Hl2LinkState::HeldByOther, false) == 0,
+                  "a display state is not polled with nothing on screen");
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_cadence_test: all checks passed\n");
