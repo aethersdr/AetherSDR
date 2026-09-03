@@ -572,6 +572,86 @@ int main()
         t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+
+        // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
+        //
+        // This is the check MetisProtocol.cpp's own comment above txFifoCount
+        // asked someone to do ("The gateware RTL is the authority and this has
+        // NOT been checked against it"). Done, against the gateware at
+        // 883a338, and the current decode is wrong on all three fields.
+        //
+        // control.v:472 builds slot RADDR 0 as
+        //
+        //   data = {6'b000111, ~ext_txinhibit, (&clip_cnt), 8'h00,
+        //    bits    31:26     25              24           23:16
+        //           dsiq_status, VERSION_MAJOR}
+        //           15:8         7:0
+        //
+        // so the whole FIFO field is DATA[15:8] — eight bits, not fifteen. The
+        // reason the old decode was not obviously wrong is that DATA[23:16] is
+        // a constant zero, so (data >> 8) & 0x7FFF happens to come out equal to
+        // dsiq_status. It reads the right number under a name that claims it is
+        // something else, which is why no reading of it ever looked absurd.
+        //
+        // dsiq_fifo composes dsiq_status at fifos.v:100-110:
+        //
+        //   rd_count <= rd_tlength[(rdbits-1):(rdbits-7)];   // TOP 7 bits
+        //   ...
+        //   end else if (rd_tvalidn | ~allow_push) recovery_flag <= 1'b1;
+        //   assign rd_status = {recovery_flag_d1, rd_count};
+        //
+        // Two facts follow, and the old decode contradicts both:
+        //
+        //   [6:0] is the TOP 7 bits of the read-side fill level — a coarse
+        //   occupancy, not a count of samples. Nothing in this word is a
+        //   15-bit depth.
+        //
+        //   [7] is ONE flag covering BOTH "the FIFO ran empty" (rd_tvalidn)
+        //   and "writes were blocked because it filled" (~allow_push,
+        //   fifos.v:55-61). The gateware does not distinguish underflow from
+        //   overflow anywhere. Two booleans cannot be decoded from a
+        //   distinction the wire does not carry.
+        //
+        // NOT established, and deliberately not asserted here: what one unit of
+        // [6:0] is worth in samples or milliseconds. rdbits is 12 for this
+        // board's DSIQ_FIFO_DEPTH of 16384 (hermeslite_core.v:136, not
+        // overridden by variants/hl2b5up_main/hermeslite.v), which makes the
+        // unit 32 read-side words — but the words-to-samples mapping is an
+        // inference, not a read. #17's pacing servo needs that number; this
+        // decode does not, and must not pretend to it.
+        auto raddr0 = [&](std::uint8_t dsiqStatus) {
+            return frame(0x00, (1u << 25) | (std::uint32_t(dsiqStatus) << 8) | 0x15u);
+        };
+
+        // Recovery flag set, FIFO empty. The old decode reports a depth of 128
+        // for an empty FIFO, because it reads the flag as bit 7 of a count.
+        t.apply(*parseEp6Response(raddr0(0x80).data()));
+        check(t.txFifoCount.value_or(-1) == 0x00,
+              "dsiq_status 0x80: fill level is 0 — the set bit is the flag, not a count");
+        check(t.txFifoUnderflow.value_or(true) == false,
+              "dsiq_status 0x80: gateware claims no underflow — it has no such bit");
+
+        // Same flag, a fill level with bit 6 set. The old decode flips its
+        // verdict from 'underflow' to 'overflow' purely on a fill-level bit —
+        // two opposite diagnoses of one recovery event, chosen by how full the
+        // FIFO happened to be.
+        t.apply(*parseEp6Response(raddr0(0xC0).data()));
+        check(t.txFifoCount.value_or(-1) == 0x40,
+              "dsiq_status 0xC0: fill level is 0x40, not 0xC0");
+        check(t.txFifoOverflow.value_or(true) == false,
+              "dsiq_status 0xC0: gateware claims no overflow — it has no such bit");
+
+        // Flag clear across the full range of the fill field.
+        t.apply(*parseEp6Response(raddr0(0x7F).data()));
+        check(t.txFifoCount.value_or(-1) == 0x7F, "dsiq_status 0x7F: fill level saturates at 127");
+        t.apply(*parseEp6Response(raddr0(0x00).data()));
+        check(t.txFifoCount.value_or(-1) == 0x00, "dsiq_status 0x00: empty, no recovery");
+
+        // The recovery flag itself has nowhere to go today. That is the third
+        // half of this defect: the one bit the gateware DOES carry — the only
+        // honest signal that TX pacing went wrong — is the one field the
+        // decode does not expose. The fix adds it; there is nothing to assert
+        // against until it does.
     }
 
     // ---- SWR ----
