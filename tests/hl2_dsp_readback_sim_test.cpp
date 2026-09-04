@@ -57,7 +57,9 @@ static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
     std::printf("  [%s] %s\n", ok ? "PASS" : "FAIL", what);
-    if (!ok) ++g_failures;
+    if (!ok) {
+        ++g_failures;
+    }
 }
 
 static void spin(int ms)
@@ -73,8 +75,9 @@ static QVariantMap rxChain(const Hl2Backend& b)
     for (const QVariant& v : b.dspChains()) {
         const QVariantMap m = v.toMap();
         if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")
-            && m.value(QStringLiteral("receiver")).toInt() == 0)
+            && m.value(QStringLiteral("receiver")).toInt() == 0) {
             return m;
+        }
     }
     return {};
 }
@@ -83,9 +86,14 @@ enum class Probe { NoReply, Unreadable, NotSimulator, Simulator };
 
 // hpsdrsim builds its discovery reply with a synthetic MAC written byte by byte
 // in its source: AA BB CC DD <radio-type> FF. No HPSDR board ships an
-// AA:BB:CC:DD OUI, so this is a dependable "simulator, not a radio" fingerprint
-// — and it is the gate that keeps a test which KEYS A TRANSMITTER off real
-// hardware.
+// AA:BB:CC:DD OUI, so this is a dependable "simulator, not a radio"
+// fingerprint.
+//
+// THIS test never keys — every control it drives is receive-side — so the gate
+// is not here to keep a transmitter off the air. It is here so the test does
+// not silently CONNECT to somebody's radio and drive its receiver settings
+// while reporting a pass about a simulator. Same fingerprint, different reason,
+// and worth stating rather than inheriting the loopback test's wording.
 //
 // It replaces a bare "did anything answer at 192.168.1.12". That address is not
 // the simulator's by construction; it is only where one happened to run once. On
@@ -102,8 +110,9 @@ static Probe findSimulator(const QString& host, AetherSDR::hl2::DiscoveryReply* 
 {
     const QHostAddress target(host);
     QUdpSocket s;
-    if (!s.bind(QHostAddress(QHostAddress::AnyIPv4), 0))
+    if (!s.bind(QHostAddress(QHostAddress::AnyIPv4), 0)) {
         return Probe::NoReply;
+    }
     const auto req = AetherSDR::hl2::discoveryRequest();
     s.writeDatagram(reinterpret_cast<const char*>(req.data()),
                     static_cast<qint64>(req.size()), target,
@@ -119,16 +128,19 @@ static Probe findSimulator(const QString& host, AetherSDR::hl2::DiscoveryReply* 
     bool answeredUnparseable = false;
     while (true) {
         const qint64 remaining = 1500 - clock.elapsed();
-        if (remaining <= 0 || !s.waitForReadyRead(static_cast<int>(remaining)))
+        if (remaining <= 0 || !s.waitForReadyRead(static_cast<int>(remaining))) {
             break;
+        }
         while (s.hasPendingDatagrams()) {
             QByteArray dg(2048, 0);
             QHostAddress from;
             const qint64 got = s.readDatagram(dg.data(), dg.size(), &from);
-            if (got <= 0)
+            if (got <= 0) {
                 continue;
-            if (!from.isEqual(target, QHostAddress::TolerantConversion))
+            }
+            if (!from.isEqual(target, QHostAddress::TolerantConversion)) {
                 continue;
+            }
             const auto reply = AetherSDR::hl2::parseDiscoveryReply(
                 std::span<const std::uint8_t>(
                     reinterpret_cast<const std::uint8_t*>(dg.constData()),
@@ -141,8 +153,9 @@ static Probe findSimulator(const QString& host, AetherSDR::hl2::DiscoveryReply* 
                 answeredUnparseable = true;
                 continue;
             }
-            if (out)
+            if (out) {
                 *out = *reply;
+            }
 
             const auto& mac = reply->mac;
             const bool synthetic = mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC
@@ -189,8 +202,9 @@ static float peakNear(const std::vector<float>& spec, int centreBin, int halfWid
     const int lo = std::max(0, centreBin - halfWidth);
     const int hi = std::min(n - 1, centreBin + halfWidth);
     float best = -300.0f;
-    for (int i = lo; i <= hi; ++i)
+    for (int i = lo; i <= hi; ++i) {
         best = std::max(best, spec[static_cast<std::size_t>(i)]);
+    }
     return best;
 }
 
@@ -227,8 +241,9 @@ int main(int argc, char** argv)
                                    [&] { return backend.isConnected(); });
     spin(2000);
     check(backend.isConnected(), "connected to the simulator");
-    if (!backend.isConnected())
+    if (!backend.isConnected()) {
         return 1;
+    }
 
     // The chain must exist and say which level it is reporting, or nothing
     // below means anything.
@@ -237,8 +252,9 @@ int main(int argc, char** argv)
     check(base.value(QStringLiteral("level")).toString()
               == QLatin1String("channel-config"),
           "and names the level it is reporting");
-    if (base.isEmpty())
+    if (base.isEmpty()) {
         return 1;
+    }
 
     // ---- passband: drive it, require the read-back to follow ---------------
     // Driven through the same IRadioBackend seam the bridge's `slice filter`
@@ -252,9 +268,10 @@ int main(int argc, char** argv)
         const int hi = m.value(QStringLiteral("filterHighHz")).toInt();
         check(lo == b.lo && hi == b.hi,
               "a driven passband reaches the DSP and is read back");
-        if (lo != b.lo || hi != b.hi)
+        if (lo != b.lo || hi != b.hi) {
             std::fprintf(stderr, "      asked %d..%d, read back %d..%d\n",
                          b.lo, b.hi, lo, hi);
+        }
     }
 
     // ---- AGC ---------------------------------------------------------------
@@ -265,9 +282,10 @@ int main(int argc, char** argv)
                                 .value(QStringLiteral("agcMode")).toString();
         check(got == QLatin1String(mode),
               "a driven AGC mode reaches the DSP and is read back");
-        if (got != QLatin1String(mode))
+        if (got != QLatin1String(mode)) {
             std::fprintf(stderr, "      asked %s, read back %s\n",
                          mode, qPrintable(got));
+        }
     }
 
     // ---- mode --------------------------------------------------------------

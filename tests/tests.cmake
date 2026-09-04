@@ -3192,6 +3192,14 @@ if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)
     # The DSP read-back against a real gateware implementation. Behind the same
     # flag because it shares the fixture, though unlike the loopback test it
     # never keys — every control it drives is receive-side.
+    #
+    # SOCKETS THIS TEST BINDS, per the socket-test canon: it binds an EPHEMERAL
+    # IPv4 UDP socket (port 0, kernel-assigned) and sends Metis discovery to
+    # UDP 1024 on the simulator host — 127.0.0.1 unless AETHER_HL2_SIM_HOST
+    # overrides it. It listens only for replies from the host it probed, and
+    # requires hpsdrsim's synthetic AA:BB:CC:DD:88:FF before connecting, so it
+    # cannot drive a real radio that happens to answer. No listening server, no
+    # fixed local port, no outbound connection beyond that host.
     add_executable(hl2_dsp_readback_sim_test tests/hl2_dsp_readback_sim_test.cpp)
     target_include_directories(hl2_dsp_readback_sim_test PRIVATE src)
     target_link_libraries(hl2_dsp_readback_sim_test
@@ -3979,6 +3987,11 @@ add_executable(hl2_dsp_readback_test
 )
 target_include_directories(hl2_dsp_readback_test PRIVATE src)
 target_link_libraries(hl2_dsp_readback_test PRIVATE aethercore Qt6::Core)
+# The ownership regression reads the backend source, so it needs its path. A
+# compile definition rather than a relative path: ctest runs from the build
+# directory and a "../src/..." would be a silent skip the day that changes.
+target_compile_definitions(hl2_dsp_readback_test PRIVATE
+    HL2_BACKEND_CPP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/core/backends/hl2/Hl2Backend.cpp")
 add_test(NAME hl2_dsp_readback_test COMMAND hl2_dsp_readback_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp

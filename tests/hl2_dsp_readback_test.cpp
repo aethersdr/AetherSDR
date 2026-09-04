@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 using AetherSDR::hl2::Hl2TxDsp;
@@ -25,7 +26,9 @@ static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
     std::printf("  [%s] %s\n", ok ? "PASS" : "FAIL", what);
-    if (!ok) ++g_failures;
+    if (!ok) {
+        ++g_failures;
+    }
 }
 static bool near(double a, double b) { return std::abs(a - b) < 1e-9; }
 
@@ -85,6 +88,69 @@ int main(int argc, char** argv)
     check(dsp.configure(requested, &err), "applying the request succeeds");
     check(dsp.config().filterLowHz == 100.0 && dsp.config().filterHighHz == 3900.0,
           "applying it closes the disagreement");
+
+    // ---- ownership regression: the read-back must not touch m_rx -----------
+    //
+    // Hl2Backend::dspChains() gathers on the I/O thread, and m_rx is declared
+    // GUI THREAD ONLY: createPanadapter()'s push_back reallocates and
+    // removePanadapter()'s erase shifts, either of which can pull the storage
+    // out from under a reader midway. m_ioDsps exists precisely so I/O work
+    // never touches it. The first version of this function iterated m_rx and
+    // review caught it (#5401).
+    //
+    // A SOURCE SCAN, and deliberately so. The violation is a data race that
+    // only manifests when a GUI-side create/remove interleaves with a gather,
+    // so a runtime test would be a race detector that passes almost always —
+    // which is worse than no test, because it would be believed. The invariant
+    // is static, so the check is static: this function's body must not name
+    // m_rx. It fails the moment someone reintroduces it, deterministically.
+    {
+        FILE* f = std::fopen(HL2_BACKEND_CPP_PATH, "rb");
+        check(f != nullptr, "the backend source is readable for the scan");
+        if (f) {
+            std::string src;
+            char buf[65536];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+                src.append(buf, n);
+            }
+            std::fclose(f);
+            const std::string sig = "QVariantList Hl2Backend::dspChains() const";
+            const size_t at = src.find(sig);
+            check(at != std::string::npos, "dspChains() is present in the source");
+            if (at != std::string::npos) {
+                // Walk to the end of the function by brace depth.
+                size_t i = src.find('{', at);
+                int depth = 1;
+                const size_t start = ++i;
+                while (i < src.size() && depth) {
+                    if (src[i] == '{') { ++depth; }
+                    else if (src[i] == '}') { --depth; }
+                    ++i;
+                }
+                std::string body = src.substr(start, i - start);
+                // Strip // comments before scanning. The function's own comment
+                // explains why it reads m_ioDsps and NOT m_rx, so a raw search
+                // matches the explanation and fails on correct code — which is
+                // exactly what happened the first time this ran.
+                {
+                    std::string code;
+                    code.reserve(body.size());
+                    for (size_t k = 0; k < body.size(); ++k) {
+                        if (body[k] == '/' && k + 1 < body.size() && body[k + 1] == '/') {
+                            while (k < body.size() && body[k] != '\n') { ++k; }
+                        }
+                        if (k < body.size()) { code.push_back(body[k]); }
+                    }
+                    body.swap(code);
+                }
+                check(body.find("m_rx") == std::string::npos,
+                      "dspChains() never names m_rx — the I/O side reads m_ioDsps");
+                check(body.find("m_ioDsps") != std::string::npos,
+                      "and it does read the I/O-owned snapshot");
+            }
+        }
+    }
 
     if (g_failures == 0) {
         std::printf("\nALL PASS\n");

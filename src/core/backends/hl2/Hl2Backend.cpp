@@ -3834,12 +3834,24 @@ QVariantList Hl2Backend::dspChains() const
     const auto gather = [this]() -> QVariantList {
         QVariantList chains;
 
-        for (int i = 0; i < static_cast<int>(m_rx.size()); ++i) {
-            const Receiver& r = m_rx[static_cast<std::size_t>(i)];
+        // m_ioDsps, NOT m_rx. This runs on the I/O thread, and m_rx is declared
+        // GUI THREAD ONLY: createPanadapter()'s push_back reallocates and
+        // removePanadapter()'s erase shifts, either of which can pull the
+        // storage out from under a reader halfway through. m_ioDsps exists
+        // precisely so I/O work never touches it, is rebuilt by publishIoDsps()
+        // when the receiver set changes, and is indexed by DDC — which is the
+        // receiver index this payload reports. The EP6 fan-out reads it for the
+        // same reason; this is the same rule, not a new one.
+        //
+        // Nothing here needs Receiver anyway: every field reported below comes
+        // from the DSP object, which was the point of reading the DSP rather
+        // than the backend's mirror.
+        for (int i = 0; i < static_cast<int>(m_ioDsps.size()); ++i) {
+            Hl2RxDsp* dsp = m_ioDsps[static_cast<std::size_t>(i)];
             QVariantMap e;
             e[QStringLiteral("chain")] = QStringLiteral("rx-wdsp");
             e[QStringLiteral("receiver")] = i;
-            if (!r.dsp || !r.dsp->isConfigured()) {
+            if (!dsp || !dsp->isConfigured()) {
                 // Reported as present-but-unconfigured rather than omitted: a
                 // receiver that exists with no channel behind it is exactly the
                 // state worth seeing.
@@ -3847,7 +3859,7 @@ QVariantList Hl2Backend::dspChains() const
                 chains.append(e);
                 continue;
             }
-            const WdspChannel::Config* c = r.dsp->channelConfig();
+            const WdspChannel::Config* c = dsp->channelConfig();
             if (!c) {
                 e[QStringLiteral("level")] = QStringLiteral("not-configured");
                 chains.append(e);
@@ -3864,7 +3876,7 @@ QVariantList Hl2Backend::dspChains() const
             e[QStringLiteral("inputBlockSize")] = static_cast<int>(c->inputBlockSize);
             e[QStringLiteral("dspBlockSize")] = static_cast<int>(c->dspBlockSize);
             e[QStringLiteral("outputBlockSize")] =
-                static_cast<int>(r.dsp->channelOutputBlockSize());
+                static_cast<int>(dsp->channelOutputBlockSize());
             e[QStringLiteral("filterLowHz")] = c->filterLowHz;
             e[QStringLiteral("filterHighHz")] = c->filterHighHz;
             e[QStringLiteral("agcMode")] = agcModeName(c->agcMode);
@@ -3873,9 +3885,9 @@ QVariantList Hl2Backend::dspChains() const
             e[QStringLiteral("agcFixedGainDb")] = c->agcFixedGainDb;
             // Level 4 where it exists: these two ask WDSP itself rather than
             // reading the config, and are marked so a reader can tell.
-            e[QStringLiteral("wdspNotchCount")] = r.dsp->wdspNotchCount();
+            e[QStringLiteral("wdspNotchCount")] = dsp->wdspNotchCount();
             e[QStringLiteral("appliedNoiseBlanker")] =
-                r.dsp->appliedNoiseBlankerEnabled();
+                dsp->appliedNoiseBlankerEnabled();
             chains.append(e);
         }
 
