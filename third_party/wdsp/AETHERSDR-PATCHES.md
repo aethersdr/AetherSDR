@@ -11,22 +11,48 @@ snapshot:
    member allocations.
 3. `upstream/cfir.c`: `cfir_impulse()` now frees its temporary transition table
    before returning the generated impulse.
-4. `upstream/channel.h`, `upstream/main.c`, `upstream/channel.c`: an exit
-   handshake between `wdspmain()` and `pre_main_destroy()`. Upstream's only
-   barrier between the detached worker's exit and `destroy_main()` /
-   `post_main_destroy()` freeing the semaphore, mutex and buffers it still
-   touches was `Sleep(25)` — a scheduling bet, not synchronization, and under
-   load or a sanitizer the worker is still in `pthread_cond_wait()` on freed
-   memory. `struct _ch` gains `mainExited`; `wdspmain()` stores 1 to it as its
-   last statement; `start_thread()` resets it before every `_beginthread`
-   (so the `SetInputBuffsize` / `SetDSPBuffsize` / `SetInputSamplerate` /
-   `SetDSPSamplerate` rebuilds are covered too); `pre_main_destroy()` polls it
-   with a 1 s cap and then falls through, because upstream ignores thread-
-   creation failure and an unbounded wait would hang `CloseChannel()`. The
-   port's Interlocked shims are seq_cst `__atomic_*` builtins, so the edge is
-   real to TSan, not merely quiet. `flushChannel()` has the same detached
-   shape and no handshake; it has not surfaced, and gets the same treatment
-   if it does.
+4. `upstream/channel.h`, `upstream/main.c`, `upstream/channel.c`,
+   `upstream/iobuffs.c`: an exit handshake between the DSP worker and
+   `pre_main_destroy()`. Upstream's only barrier between the detached worker's
+   exit and `destroy_main()` / `post_main_destroy()` freeing the semaphore,
+   mutex and buffers it still touches was `Sleep(25)` — a scheduling bet, not
+   synchronization, and under load or a sanitizer the worker is still in
+   `pthread_cond_wait()` on freed memory.
+
+   `struct _ch` gains `mainGen`, `mainRunGen` and `mainExited`.
+   `start_thread()` increments `mainGen` before every `_beginthread` (so the
+   `SetInputBuffsize` / `SetDSPBuffsize` / `SetInputSamplerate` /
+   `SetDSPSamplerate` rebuilds are covered too); `wdspmain()` publishes that
+   value in `mainRunGen` at entry and stores it into `mainExited` as its last
+   statement; `pre_main_destroy()` polls until `mainExited == mainGen`, with a
+   1 s cap and then falls through, because upstream ignores thread-creation
+   failure and an unbounded wait would hang `CloseChannel()`. The port's
+   Interlocked shims are seq_cst `__atomic_*` builtins, so the edge is real to
+   TSan, not merely quiet.
+
+   Three details are not obvious and were all found in review of #5411:
+
+   - **The worker has two exits, not one.** `dexchange()` (`iobuffs.c`) begins
+     `if (!_InterlockedAnd (&ch[channel].run, 1)) _endthread();`, so a worker
+     that is inside the DSP switch when `run` clears terminates there and never
+     reaches `wdspmain()`'s tail. That site now releases `csDSP` — which
+     `_endthread()` does not unwind, leaving `post_main_destroy()` to call
+     `DeleteCriticalSection` on a held section — and completes the same
+     handshake.
+   - **`pre_main_destroy()` sets `exec_bypass` BEFORE clearing `run`**, the
+     reverse of upstream's order, so a worker that has not yet read the bypass
+     takes the bypass branch rather than `dexchange()`'s `_endthread()`. That
+     narrows the window; it does not close it, which is why the `_endthread()`
+     site stores the handshake too.
+   - **The flag is generation-valued, not 0/1.** If a wait ever falls through
+     its cap the old worker is still alive and will store eventually. With a
+     0/1 flag that late store would land on the *next* worker's slot and
+     satisfy the following wait for free, silently disabling the handshake for
+     the rest of the channel's life. A stale generation never equals the
+     current `mainGen`, so it is inert.
+
+   `flushChannel()` has the same detached shape and no handshake; it has not
+   surfaced, and gets the same treatment if it does.
 
 Without these lines, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects, while one TX channel leaks one transition table.

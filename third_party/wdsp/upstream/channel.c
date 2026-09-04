@@ -32,7 +32,13 @@ void start_thread (int channel)
 {
 	// AetherSDR patch 4: arm the exit handshake before the thread exists, on every
 	// (re)build path — OpenChannel and the SetInput*/SetDSP* rebuilds all come here.
-	InterlockedExchange (&ch[channel].mainExited, 0);
+	// A GENERATION, not a 0/1 flag. If a previous pre_main_destroy() fell through
+	// its cap, that worker is still alive and will store eventually; with a flag
+	// its late store would land on the NEW worker's slot and satisfy the next
+	// wait for free, silently disabling the handshake for the rest of the
+	// channel's life (#5411 review). Storing the generation makes a stale store
+	// inert: it writes an old number that never equals the current mainGen.
+	InterlockedIncrement (&ch[channel].mainGen);
 	HANDLE handle = (HANDLE) _beginthread(wdspmain, 0, (void *)(uintptr_t)channel);
 	//SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST);
 }
@@ -107,8 +113,17 @@ void pre_main_destroy (int channel)
 {
 	IOB a = ch[channel].iob.pc;
 	InterlockedBitTestAndReset (&ch[channel].exchange, 0);
-	InterlockedBitTestAndReset (&ch[channel].run, 0);
+	// AetherSDR patch 4: exec_bypass BEFORE run, which is the reverse of
+	// upstream's order. The worker reads exec_bypass and then, inside
+	// dexchange(), reads run (iobuffs.c). Clearing run first opens a window
+	// where it sees "not bypassed" and then "not running" and takes
+	// dexchange()'s _endthread() — an exit that is not wdspmain()'s. Setting
+	// the bypass first makes the bypass branch win for any worker that has not
+	// yet read it. The window is narrowed, not closed (a worker can read
+	// exec_bypass just before this line), which is why iobuffs.c's
+	// _endthread() site also stores the handshake.
 	InterlockedBitTestAndSet (&ch[channel].iob.pc->exec_bypass, 0);
+	InterlockedBitTestAndReset (&ch[channel].run, 0);
 	ReleaseSemaphore (a->Sem_BuffReady, 1, 0);
 	// AetherSDR patch 4. Upstream slept 25 ms here as its only barrier between
 	// the worker's exit and destroy_main()/post_main_destroy() freeing the
@@ -120,8 +135,9 @@ void pre_main_destroy (int channel)
 	// unbounded wait would then hang CloseChannel() forever; falling through
 	// after the cap restores upstream's behaviour exactly, no worse.
 	{
+		const long gen = _InterlockedAnd (&ch[channel].mainGen, ~0L);
 		int waited = 0;
-		while (!_InterlockedAnd (&ch[channel].mainExited, 1) && waited < 1000)
+		while (_InterlockedAnd (&ch[channel].mainExited, ~0L) != gen && waited < 1000)
 		{
 			Sleep (1);
 			++waited;

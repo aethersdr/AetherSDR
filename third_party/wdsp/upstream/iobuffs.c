@@ -584,7 +584,20 @@ void dexchange (int channel, double* in, double* out)
 {
 	int n;
 	IOB a = ch[channel].iob.pd;
-	if (!_InterlockedAnd (&ch[channel].run, 1)) _endthread();
+	if (!_InterlockedAnd (&ch[channel].run, 1))
+	{
+		// AetherSDR patch 4: wdspmain() calls us with csDSP HELD, and
+		// _endthread() does not unwind — upstream left the section locked for
+		// post_main_destroy()'s DeleteCriticalSection() to find. Release it,
+		// then complete the SAME exit handshake wdspmain()'s tail performs, or
+		// pre_main_destroy() waits out its full cap on a worker that is already
+		// gone and then falls through with no barrier at all (#5411 review).
+		// mainRunGen is this worker's own generation, published at entry.
+		LeaveCriticalSection (&ch[channel].csDSP);
+		InterlockedExchange (&ch[channel].mainExited,
+		                     _InterlockedAnd (&ch[channel].mainRunGen, ~0L));
+		_endthread();
+	}
 
 	EnterCriticalSection (&a->r2_ControlSection);
 	a->r2_havesamps += a->r2_insize;

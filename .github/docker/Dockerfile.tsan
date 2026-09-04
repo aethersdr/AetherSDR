@@ -47,6 +47,12 @@ RUN apt-get update && apt-get install -y \
     libxcb-xfixes0-dev \
     libxcb-xinerama0-dev \
     libxcb-xkb-dev \
+    # Qt 6's xcb QPA links libxcb-xinput directly (ldd libqxcb.so). The base
+    # image does not carry it: that one installs Qt from aqt BINARIES and never
+    # compiles qtbase, so the gap only appears here. With -DFEATURE_xcb=ON
+    # forced below, a missing xcb dependency is a fatal configure error, not a
+    # silent feature drop (#5411 review).
+    libxcb-xinput-dev \
     libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 

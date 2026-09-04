@@ -34,6 +34,10 @@ void wdspmain (void *pargs)
 	else SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
 	int channel = (int)(uintptr_t)pargs;
+	// AetherSDR patch 4: this worker's generation, published so the OTHER exit
+	// path (dexchange()'s _endthread(), iobuffs.c) can store the same value.
+	const long myGen = _InterlockedAnd (&ch[channel].mainGen, ~0L);
+	InterlockedExchange (&ch[channel].mainRunGen, myGen);
 	while (_InterlockedAnd (&ch[channel].run, 1))
 	{
 		WaitForSingleObject(ch[channel].iob.pd->Sem_BuffReady,INFINITE);
@@ -60,7 +64,9 @@ void wdspmain (void *pargs)
 	if (hTask != 0) AvRevertMmThreadCharacteristics (hTask);
 	// AetherSDR patch 4: the LAST statement. After this store the thread touches
 	// nothing in ch[channel] or its iob, so pre_main_destroy() may free them.
-	InterlockedExchange (&ch[channel].mainExited, 1);
+	// Stores THIS worker's generation, so a store from an abandoned worker can
+	// never satisfy a later generation's wait.
+	InterlockedExchange (&ch[channel].mainExited, myGen);
 }
 
 void create_main (int channel)

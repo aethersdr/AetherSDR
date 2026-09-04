@@ -70,6 +70,35 @@ jobs:
               TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1:suppressions=${{ github.workspace }}/tests/sanitizers/tsan.supp
 
     steps:
+      # The job's `container:` is pulled by the runner BEFORE any step runs, so
+      # a missing or broken image fails the job with every step skipped —
+      # including the tracking-issue step, which is gated on
+      # steps.ctest.outputs.exit and therefore never fires. The lane would go
+      # dead silently, which is the failure class this whole effort exists to
+      # end (#5411 review). This step cannot prevent that, but it makes the
+      # image an explicit, named precondition in the log rather than an
+      # inference from "the job died instantly", and it fails loudly if the
+      # image is present but not the one we think it is.
+      - name: Confirm the sanitizer image
+        run: |
+          set -e
+          echo "image: ${{ matrix.sanitizer.image }}"
+          if [ "${{ matrix.sanitizer.id }}" = "tsan" ]; then
+            # S6's whole point: TSan must be linking a Qt that is itself
+            # instrumented. If libtsan is not a DT_NEEDED of QtCore we are on
+            # the wrong image and every Qt handoff would report as a race.
+            qtcore=$(find /opt -name 'libQt6Core.so.6' 2>/dev/null | head -1)
+            if [ -z "$qtcore" ]; then
+              echo "::error::no libQt6Core.so.6 in this image — expected the tsan image"
+              exit 1
+            fi
+            if ! ldd "$qtcore" | grep -q libtsan; then
+              echo "::error::$qtcore is not TSan-instrumented. This is not the :tsan image (or build-tsan published a stale one); tests/sanitizers/tsan.supp assumes an instrumented Qt and would be wrong here."
+              exit 1
+            fi
+            echo "ok: $qtcore is linked against libtsan"
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Configure
@@ -159,29 +188,46 @@ jobs:
           # Then the sanitizer error blocks. Each ends with a `SUMMARY:` line;
           # ~80 lines of leading context per match is enough for the full
           # stack on ASan/UBSan/TSan output.
-          grep -B 80 '^SUMMARY:' sanitizer.log >> report.txt || true
-          if [ "$(wc -c < report.txt)" -lt 200 ]; then
+          # Gated on the SUMMARY block EXISTING, not on the report's size. A
+          # size gate measures the wrong thing now that the report always opens
+          # with the ctest verdict: five plain assertion failures are already
+          # ~330 bytes, so any size threshold small enough to be meaningful is
+          # already exceeded and the tail never runs — leaving the issue with
+          # test names and no assertion text, which is the #5031 case this
+          # rewrite exists for (#5411 review).
+          if grep -q '^SUMMARY:' sanitizer.log; then
+            grep -B 80 '^SUMMARY:' sanitizer.log >> report.txt
+          else
+            echo '--- last 50 KB of ctest output ---' >> report.txt
             tail -c 50000 sanitizer.log >> report.txt
           fi
           # Cap at ~45KB to stay well under GitHub's ~65KB issue-body limit
           # once we wrap it in markdown.
           head -c 45000 report.txt > report.trim && mv report.trim report.txt
-          # Stable fingerprint, used to decide whether a run is the same bug:
-          # the first sanitizer SUMMARY line when there is one. When there is
-          # none — the job also fails on plain test assertions, which print
-          # no SUMMARY — hash ctest's own failed-test list instead of the
-          # empty string (which is what #4330 collected twice: the sha256 of
-          # "" is e3b0c44298fc, a fingerprint of nothing).
+          # Stable fingerprint, used to decide whether a run is the same bug.
+          # WHICH TESTS FAILED, sorted, by NAME — not the first SUMMARY line
+          # and not ctest's ordinals (#5411 review):
+          #   - `grep -m1 SUMMARY` picks whichever race printed FIRST, and with
+          #     dozens of concurrent reports that order is scheduling-dependent,
+          #     so the fingerprint (now in the title) would churn a fresh sticky
+          #     issue most weeks — the opposite of what S5 wants.
+          #   - ctest prints `263 - name`, and that ordinal shifts whenever a
+          #     test is added earlier in tests.cmake, so an UNCHANGED set of
+          #     failures would fingerprint differently and duplicate the issue.
+          #     #5405 makes adding tests friction-free, so that is a matter of
+          #     time rather than a corner case.
+          # The SUMMARY hash stays as the fallback for a run that dies without
+          # producing a failed-test list at all (never the empty string, which
+          # is what #4330 collected twice: sha256("") is e3b0c44298fc).
+          failed=$(sed -n '/^The following tests FAILED:/,$p' sanitizer.log \
+                   | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+' | sed 's/^[0-9]* - //' | sort -u || true)
           summary=$(grep -m1 '^SUMMARY:' sanitizer.log || true)
-          if [ -n "$summary" ]; then
+          if [ -n "$failed" ]; then
+            fp=$(printf '%s' "$failed" | sha256sum | cut -c1-12)
+          elif [ -n "$summary" ]; then
             fp=$(printf '%s' "$summary" | sha256sum | cut -c1-12)
           else
-            failed=$(sed -n '/^The following tests FAILED:/,$p' sanitizer.log | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+' | sort || true)
-            if [ -n "$failed" ]; then
-              fp=$(printf '%s' "$failed" | sha256sum | cut -c1-12)
-            else
-              fp=unknown
-            fi
+            fp=unknown
           fi
           echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
