@@ -8,6 +8,7 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
+#include "models/ConnectStatePolicy.h"
 #include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
 #include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
@@ -1611,6 +1612,25 @@ void RadioModel::setupBackend(const QString& family)
         // which starts the reconnect timer. Re-emitted for the UI to surface.
         connect(m_backend.get(), &IRadioBackend::configurationWarning,
                 this, &RadioModel::configurationWarning);
+
+        // The DSP-setup phase, so the bridge can say "connecting" rather than
+        // reporting the same `connected: false` it reports when nothing is
+        // happening (#5413 item 3). HL2-specific by the same dynamic_cast
+        // MainWindow uses: these signals live on Hl2Backend, not on the seam,
+        // and the phase they describe is the HL2's — a Flex connect has its own
+        // timeout and never enters it.
+        //
+        // Disconnected first, and for the reason the MainWindow site states:
+        // the helper is idempotent for a live backend and Qt::UniqueConnection
+        // cannot cover a lambda.
+        if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(m_backend.get())) {
+            disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this, nullptr);
+            disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this, nullptr);
+            connect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this,
+                    [this](const QString&, int, int) { m_dspSetupInFlight = true; });
+            connect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this,
+                    [this] { m_dspSetupInFlight = false; });
+        }
     }
 
     // Transport counters from a backend that owns its own socket. Wired
@@ -2585,6 +2605,14 @@ QString RadioModel::digitalVoiceWaveformHealthName() const
 QString RadioModel::digitalVoiceWaveformHealthDetail() const
 {
     return DigitalVoiceWaveformProcess::instance().healthDetail();
+}
+
+QString RadioModel::connectState() const
+{
+    // The bool stays exactly as it was — existing scripts read `connected` and
+    // must not change meaning. This is the third value beside it.
+    return QString::fromLatin1(AetherSDR::connectStateName(
+        AetherSDR::connectStateFor(isConnected(), m_dspSetupInFlight)));
 }
 
 bool RadioModel::isConnected() const
@@ -6974,6 +7002,10 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    // A build that was in flight is over whatever else happens now; without
+    // this a disconnect during the DSP phase would leave the bridge reporting
+    // "connecting" for a session nobody is in.
+    m_dspSetupInFlight = false;
     qCDebug(lcProtocol) << "RadioModel: disconnected";
     m_guiClientRegistrationState.reset();
 

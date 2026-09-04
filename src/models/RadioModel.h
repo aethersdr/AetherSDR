@@ -166,6 +166,10 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // "idle" / "connecting" / "connected" — the bridge's third value, so a
+    // caller can tell a connect that is working from one that is not happening
+    // at all. `isConnected()` is unchanged (#5413 item 3).
+    QString connectState() const;
     // True from the moment a connect is requested until it lands, fails, or is
     // abandoned. isConnected() alone cannot express "still working": it is
     // false both before an attempt starts and while one is in flight, which is
@@ -1940,6 +1944,9 @@ private:
     // cannot be derived from m_lastInfo at disconnect: a same-family selection
     // replaces m_lastInfo before the old backend emits disconnected().
     QString m_connectedSessionSerial;
+    // Set by Hl2Backend::dspSetupProgress, cleared by dspSetupFinished and by
+    // onDisconnected(). Only ever read through connectState().
+    bool m_dspSetupInFlight = false;
     // #3977: OUR handle from the PREVIOUS session (captured at registration
     // into m_ownSessionHandle, consumed at stage time). Reclaim eviction must
     // only fire when the staged pan still records THIS handle — pan status
