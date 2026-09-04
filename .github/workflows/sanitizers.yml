@@ -170,7 +170,16 @@ jobs:
             const fs = require('fs');
             const report = fs.readFileSync('report.txt', 'utf8');
             const title  = `[sanitizer] ${process.env.SAN_LABEL} weekly run failure`;
+            // Lookup key only — see the listForRepo call below. Do not add
+            // labels here: anything extra in this list also has to be on the
+            // existing sticky issue, or the lookup misses it and a duplicate
+            // is opened.
             const labels = ['sanitizer', process.env.SAN_ID];
+            // What a NEW sticky issue opens with. A red weekly lane is the only
+            // full-suite signal the project has (no PR job runs the Linux
+            // tests), so it opens at high priority; a maintainer can triage it
+            // down by hand and the weekly append will not fight that.
+            const createLabels = [...labels, 'bug', 'priority: high'];
             const sha    = context.sha.substring(0, 7);
             const date   = new Date().toISOString().split('T')[0];
 
@@ -215,7 +224,7 @@ jobs:
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
                 title,
-                labels,
+                labels: createLabels,
                 body,
               });
               core.notice(`Opened #${created.data.number}`);
