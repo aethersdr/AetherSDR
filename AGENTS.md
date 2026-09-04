@@ -240,13 +240,14 @@ per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of
 tests kept on the macOS and Windows jobs because the claim each pins is about
 that platform's toolchain (Apple Metal, MSVC portability); the Linux job runs
 no tests at all, and the list does not grow. Every test declared in
-`tests.cmake` that the default configure builds runs unfiltered on the weekly
-sanitizer lane (`sanitizers.yml`) from the moment it is declared — that is
-where a new test runs. (A test behind a default-OFF option runs nowhere
-unless `sanitizers.yml` passes that option; say so in the PR.)
-`tools/check_ci_test_gate.py --strict` runs in `Static checks`, a required
-status check, and fails the PR if a `-R` pattern in `ci.yml` resolves to a
-name the frozen list does not carry. Removing a test from the gate is fine:
+`tests.cmake` that the default configure builds runs unfiltered in two places
+from the moment it is declared: on every push to `main` (`full-suite.yml`,
+minutes after the merge) and again weekly under the sanitizers
+(`sanitizers.yml`). That is where a new test runs. (A test behind a
+default-OFF option runs in neither unless that lane passes the option; say so
+in the PR.) `tools/check_ci_test_gate.py` runs in `Static checks` and fails
+the PR if a `-R` pattern in a pull-request workflow resolves to a name the
+frozen list does not carry. Removing a test from the gate is fine:
 run the script with `--update` and commit the shorter list. The script only
 ever shrinks the list; growing it is a hand edit to the maintainer-owned
 file, with the reason in the PR body. See "Gate integrity" below.
@@ -280,11 +281,12 @@ Decide the layer before writing the test (#5232):
 firmware enters the default graph.** A fake radio proves the client agrees
 with our model of the radio, not with the radio; the model freezes while
 firmware moves, so the test fails on correct changes or stays green on real
-divergence (#5232). Three legacy exceptions remain in
+divergence (#5232). Four legacy exceptions remain in
 the default graph, all tracked for socket-free extraction in #5254:
 `vkamp_connection_test` (fake VKAMP amplifier), `hl2_receiver_count_restart_test`
-(fake Metis radio), and `gui_client_registration_recovery_test` (fake FLEX-6700
-handshake peer). Mining a retired fake peer's frame tables as
+(fake Metis radio), `gui_client_registration_recovery_test` (fake FLEX-6700
+handshake peer), and `thumbdv_queue_test` (a pty-backed fake DV3000 dongle —
+not a socket, which is why it went unenumerated; #5405 review). Mining a retired fake peer's frame tables as
 *input data* for injected-transport tests is encouraged; running the fake as
 a live socket peer is not. Loopback mocks of documented HTTP APIs
 (`asr_remote_backend_test`) are a different trade — that contract is

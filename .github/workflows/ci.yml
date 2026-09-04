@@ -7,12 +7,13 @@ name: CI
 # claim each pins is about THAT platform's toolchain (Apple Metal, MSVC
 # portability, #4559's Windows-only separator failure) — not because Linux
 # cannot run them; most of them also run on the weekly Linux lane. That list
-# does not grow. The full suite runs unfiltered on the weekly sanitizer lane
-# (sanitizers.yml): every add_test() in tests/tests.cmake that the default
-# configure builds is on it the moment it is declared, so a new test needs no
-# step here — do not add one, however invisible the defect it pins.
-# tools/check_ci_test_gate.py (Static checks, a required check) fails any -R
-# pattern that resolves to a name the frozen list does not carry. Removing a
+# does not grow. The full suite runs unfiltered in two places, and a test that
+# the default configure builds joins BOTH the moment it is declared: on every
+# push to main (full-suite.yml, minutes after a merge — that is the one that
+# will tell you) and again weekly under the sanitizers (sanitizers.yml). So a
+# new test needs no step here — do not add one, however invisible the defect
+# it pins. tools/check_ci_test_gate.py (Static checks) fails any -R pattern
+# that resolves to a name the frozen list does not carry. Removing a
 # step is welcome: run `python tools/check_ci_test_gate.py --update` and
 # commit; the script only ever shrinks the list.
 
@@ -462,8 +463,9 @@ jobs:
         # the 6-hour job limit.
         #
         # No job in this file runs the Linux test suite; the full suite runs
-        # unfiltered on sanitizers.yml, weekly, on Linux. The tests built and
-        # run here are the ones ONLY a Windows runner can execute.
+        # unfiltered on full-suite.yml (every push to main) and again weekly on
+        # sanitizers.yml. The tests built and run here are the ones whose claim
+        # is about the MSVC toolchain, which a Linux lane cannot make.
         #
         # cross_needle_meter_test is the deliberate exception to the
         # no-test-tree rule here. #4559's separator assertion failed on Windows

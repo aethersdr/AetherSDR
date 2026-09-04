@@ -45,8 +45,8 @@ does not check sanitizers.yml — that lane is unfiltered by construction, and a
 test binary invoked directly (`./build/foo_test`); that is for review to catch.
 
 Usage:
-    python tools/check_ci_test_gate.py            # report, exit 0
-    python tools/check_ci_test_gate.py --strict   # exit 1 on any drift
+    python tools/check_ci_test_gate.py            # exit 1 on any drift
+    python tools/check_ci_test_gate.py --strict   # identical; accepted for symmetry
     python tools/check_ci_test_gate.py --update   # drop stale names from the list
 """
 
@@ -213,12 +213,18 @@ def pr_workflows() -> list[Path]:
     return [p.relative_to(REPO) for p in found]
 
 
-def read_frozen(path: Path) -> tuple[list[str], set[str]]:
-    """(header comment lines, names)."""
+def read_frozen(path: Path) -> tuple[list[str], dict[str, str]]:
+    """(header comment lines, {name: the whole line it came from}).
+
+    A name may carry a trailing `# why` comment saying which platform claim
+    keeps it on the gate — the file is maintainer-owned precisely so that a
+    one-line diff is reviewable, and a bare name tells a reviewer nothing. Only
+    the first whitespace-separated field is the name; the rest is prose, and
+    --update preserves it verbatim for every name it keeps."""
     if not path.is_file():
-        return FROZEN_HEADER.splitlines(), set()
+        return FROZEN_HEADER.splitlines(), {}
     header: list[str] = []
-    names: set[str] = set()
+    names: dict[str, str] = {}
     for ln in path.read_text().splitlines():
         s = ln.strip()
         if not s:
@@ -226,12 +232,12 @@ def read_frozen(path: Path) -> tuple[list[str], set[str]]:
         if s.startswith("#"):
             header.append(ln.rstrip())
         else:
-            names.add(s)
+            names[s.split("#", 1)[0].split()[0]] = ln.rstrip()
     return header, names
 
 
-def write_frozen(path: Path, header: list[str], names: set[str]) -> None:
-    body = "".join(f"{n}\n" for n in sorted(names))
+def write_frozen(path: Path, header: list[str], lines: dict[str, str]) -> None:
+    body = "".join(f"{lines[n]}\n" for n in sorted(lines))
     path.write_text("\n".join(header) + "\n" + body)
 
 
@@ -239,7 +245,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fail when ci.yml gates a test the frozen list does not carry")
     parser.add_argument("--strict", action="store_true",
-                        help="exit 1 when the gate and the frozen list differ")
+                        help="accepted for symmetry with the sibling checkers; "
+                             "drift exits non-zero either way")
     parser.add_argument("--update", action="store_true",
                         help=f"drop names from {FROZEN} that no workflow "
                              "selects any more (never adds)")
@@ -255,7 +262,8 @@ def main() -> int:
     for wf in workflows:
         patterns += gate_patterns(wf, (REPO / wf).read_text())
     gated = resolve(patterns, names)
-    header, frozen = read_frozen(REPO / FROZEN)
+    header, frozen_lines = read_frozen(REPO / FROZEN)
+    frozen = set(frozen_lines)
     added = sorted(set(gated) - frozen)
     removed = sorted(frozen - set(gated))
 
@@ -289,16 +297,21 @@ def main() -> int:
         if added:
             return 1
         if removed:
-            write_frozen(REPO / FROZEN, header, frozen - set(removed))
+            kept = {n: l for n, l in frozen_lines.items() if n not in set(removed)}
+            write_frozen(REPO / FROZEN, header, kept)
             print(f"wrote {FROZEN}: {len(frozen) - len(removed)} test(s) on the per-PR gate")
         else:
             print("ok: nothing to remove")
         return 0
 
-    if (added or removed) and args.strict:
+    if added or removed:
+        # Non-zero WITHOUT --strict too. The bare mode used to print all of the
+        # above and then exit 0, so `python tools/check_ci_test_gate.py` by hand
+        # reported a violation and passed — the one thing a ratchet must never
+        # do (#5405 review). --strict is kept as an accepted no-op so
+        # static-checks.yml and the sibling checkers' muscle memory keep working.
         return 1
-    if not added and not removed:
-        print("ok: per-PR gate matches the frozen list")
+    print("ok: per-PR gate matches the frozen list")
     return 0
 
 
