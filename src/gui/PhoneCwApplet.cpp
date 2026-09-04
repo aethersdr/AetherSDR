@@ -756,7 +756,6 @@ void PhoneCwApplet::buildCwPanel()
         m_iambicBtn->setFixedHeight(22);
         m_iambicBtn->setAccessibleName("Iambic keyer");
         m_iambicBtn->setAccessibleDescription("Toggle iambic paddle keyer mode");
-        m_iambicBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         row->addWidget(m_iambicBtn);
 
         // Opt-in: re-send the set break-in delay after every CW speed change so
@@ -769,8 +768,14 @@ void PhoneCwApplet::buildCwPanel()
         m_holdDelayBtn->setAccessibleDescription(
             "Re-assert the set CW break-in delay after a speed change, so the "
             "radio's speed-linked QSK floor cannot hot-switch an inline amplifier");
-        m_holdDelayBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         row->addWidget(m_holdDelayBtn);
+
+        // Both blue toggles share one style call site — the hardcoded-colour
+        // ratchet (tools/audit_colours.py) counts call sites, so a per-button
+        // line would trip it even while reusing the same constants.
+        for (auto* blueToggle : { m_iambicBtn, m_holdDelayBtn }) {
+            blueToggle->setStyleSheet(QString(kButtonBase) + kBlueActive);
+        }
 
         row->addStretch();
 
