@@ -17,13 +17,18 @@ reads as "CI runs the tests" when it does not. The gate grew from zero to ~40
 tests by accretion, one "rides along for the same reason" at a time; this
 script is the ratchet that stops the accretion.
 
-What it checks: every `ctest ... -R <pattern>` (or `--tests-regex`) in ci.yml
-is applied as a regex search over the names registered by add_test() in
-tests/tests.cmake, exactly as ctest applies it. Backslash-continued lines are
-joined and YAML comment lines are ignored first, so a wrapped command counts
-and a comment mentioning one does not. The resulting set of names must equal
-the frozen list in .github/ci-test-gate.txt. Any name in ci.yml that the frozen
-list does not carry fails the check with a message pointing at sanitizers.yml.
+What it checks: every `ctest` invocation in every workflow that runs on
+pull_request (any .github/workflows/*.yml with a `pull_request:` trigger;
+sanitizers.yml and the push/schedule lanes are not PR gates) must carry `-R <pattern>` (or `--tests-regex`); the pattern is
+applied as a regex search over the names registered by add_test() in
+tests/tests.cmake, exactly as ctest applies it. A `ctest` line with no
+recognised selector — an unfiltered run, `-E`, `-L`, `--tests-from-file` —
+fails closed: the script cannot tell what it runs, so it refuses it.
+Backslash-continued lines are joined and YAML comment lines are ignored first,
+so a wrapped command counts and a comment mentioning one does not. The
+resulting set of names must equal the frozen list in .github/ci-test-gate.txt.
+Any name a workflow selects that the frozen list does not carry fails the
+check with a message pointing at sanitizers.yml.
 
 The ratchet is one-directional. `--update` only ever SHRINKS the frozen list:
 it drops names ci.yml no longer selects, and refuses to run when ci.yml selects
@@ -37,8 +42,7 @@ variable is exactly the thing a reviewer of the frozen list cannot read.
 Deliberately narrow: it does not judge the tests already on the gate, and it
 does not check sanitizers.yml — that lane is unfiltered by construction, and a
 `-R` appearing there would be its own review conversation. It cannot see a
-test run by any means other than `ctest -R` (a `-L`/`-E` selection, or a test
-binary invoked directly); those are for review to catch.
+test binary invoked directly (`./build/foo_test`); that is for review to catch.
 
 Usage:
     python tools/check_ci_test_gate.py            # report, exit 0
@@ -54,7 +58,10 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CI_WORKFLOW = Path(".github/workflows/ci.yml")
+WORKFLOWS_DIR = Path(".github/workflows")
+WEEKLY_LANE = "sanitizers.yml"
+# A workflow is a PR gate if it triggers on pull_request (or _target).
+PR_TRIGGER = re.compile(r"^\s*pull_request(?:_target)?\s*:", re.M)
 FROZEN = Path(".github/ci-test-gate.txt")
 TESTS_CMAKE = Path("tests/tests.cmake")
 
@@ -63,6 +70,9 @@ TESTS_CMAKE = Path("tests/tests.cmake")
 # `--tests-regex` is ctest's long form of the same flag.
 CTEST_R = re.compile(
     r"""ctest\b.*?\s(?:-R|--tests-regex)\s+(?:"([^"]+)"|'([^']+)'|(\S+))""")
+# Any ctest invocation at all: `ctest ` as a command word, not `ctest_` or a
+# path component such as `--ctest-foo`.
+CTEST_ANY = re.compile(r"(?<![\w/.-])ctest(?=\s|$)")
 YAML_COMMENT_LINE = re.compile(r"^\s*#")
 # `$VAR`, `${VAR}`, `$env:VAR` (pwsh), `${{ env.VAR }}` — a `$` regex anchor is
 # none of these.
@@ -70,6 +80,12 @@ VARIABLE_REF = re.compile(r"\$(?:\{|env:|[A-Za-z_])")
 
 # add_test(NAME foo ...) — the NAME may sit on the line after the paren.
 ADD_TEST = re.compile(r"add_test\s*\(\s*NAME\s+(\S+)", re.S)
+# foreach(VAR a b c) — the one-level list form tests.cmake uses to register a
+# scenario family (app_settings_safety_${APP_SETTINGS_SCENARIO}). RANGE/IN
+# LISTS forms are not expanded; a name that still carries a ${…} after
+# expansion is reported rather than resolved.
+FOREACH = re.compile(r"foreach\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+([^)]*)\)", re.S)
+VAR_IN_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 # Keep in sync with tools/check_test_registration.py: bracket comments are
 # stripped FIRST (re.S — retired fixtures live inside `#[=[ ... ]=]` blocks in
 # tests.cmake), then line comments.
@@ -91,16 +107,24 @@ VARIABLE_NAMES: list[str] = []
 
 
 def registered_tests(text: str) -> set[str]:
-    """Literal add_test() names. A name built from a variable (a foreach
-    registering app_settings_safety_${SCENARIO}, say) cannot be resolved here
-    and is left out; it is reported if a -R pattern then matches nothing."""
+    """add_test() names, with `${VAR}` expanded from the plain-list foreach()
+    that declares VAR. A name this cannot expand is left out and reported if a
+    -R pattern then matches nothing."""
     code = COMMENT.sub("", BRACKET_COMMENT.sub("", text))
+    lists: dict[str, list[str]] = {}
+    for var, items in FOREACH.findall(code):
+        words = [w for w in items.split() if w not in ("IN", "LISTS", "ITEMS", "RANGE")]
+        if words and "$" not in "".join(words):
+            lists[var] = words
     names: set[str] = set()
     for raw in ADD_TEST.findall(code):
-        if "$" in raw:
-            VARIABLE_NAMES.append(raw)
-        else:
+        m = VAR_IN_NAME.search(raw)
+        if m is None and "$" not in raw:
             names.add(raw)
+        elif m is not None and m.group(1) in lists and VAR_IN_NAME.sub("", raw).count("$") == 0:
+            names.update(raw.replace(m.group(0), item) for item in lists[m.group(1)])
+        else:
+            VARIABLE_NAMES.append(raw)
     return names
 
 
@@ -127,42 +151,66 @@ def logical_lines(text: str) -> list[tuple[str, int]]:
     return out
 
 
-def gate_patterns(ci_text: str) -> list[tuple[str, int]]:
-    """Every -R pattern in ci.yml with the line number it starts on."""
-    out: list[tuple[str, int]] = []
-    for line, lineno in logical_lines(ci_text):
-        for m in CTEST_R.finditer(line):
+def gate_patterns(workflow: Path, text: str) -> list[tuple[str, str, int]]:
+    """Every -R pattern in one workflow as (pattern, file, line). A ctest
+    invocation without a recognised selector is an error: the script cannot
+    say what it runs, so it refuses it rather than assuming nothing."""
+    out: list[tuple[str, str, int]] = []
+    for line, lineno in logical_lines(text):
+        selectors = list(CTEST_R.finditer(line))
+        if len(CTEST_ANY.findall(line)) > len(selectors):
+            print(f"error: {workflow}:{lineno}: a ctest invocation with no "
+                  "-R/--tests-regex selector. The per-PR gate is frozen; a "
+                  "ctest run this script cannot classify (unfiltered, -E, -L, "
+                  "--tests-from-file) is refused. The full suite runs on "
+                  f"{WORKFLOWS_DIR / WEEKLY_LANE}.")
+            sys.exit(2)
+        for m in selectors:
             raw = next(g for g in m.groups() if g is not None)
             if VARIABLE_REF.search(raw):
-                print(f"error: {CI_WORKFLOW}:{lineno}: -R pattern {raw!r} "
+                print(f"error: {workflow}:{lineno}: -R pattern {raw!r} "
                       "references a variable. Write the pattern inline so the "
                       "frozen list is reviewable without resolving env: blocks.")
                 sys.exit(2)
-            out.append((raw, lineno))
+            out.append((raw, str(workflow), lineno))
     return out
 
 
-def resolve(patterns: list[tuple[str, int]], names: set[str]) -> dict[str, list[int]]:
-    """Name -> ci.yml lines that select it, by regex search like ctest -R."""
-    gated: dict[str, list[int]] = {}
-    for pattern, line in patterns:
+def resolve(patterns: list[tuple[str, str, int]], names: set[str]) -> dict[str, list[str]]:
+    """Name -> workflow:line sites that select it, by regex search like
+    ctest -R."""
+    gated: dict[str, list[str]] = {}
+    for pattern, wf, line in patterns:
         try:
             rx = re.compile(pattern)
         except re.error as exc:
-            print(f"error: {CI_WORKFLOW}:{line}: cannot parse -R pattern "
+            print(f"error: {wf}:{line}: cannot parse -R pattern "
                   f"{pattern!r}: {exc}")
             sys.exit(2)
         hits = sorted(n for n in names if rx.search(n))
         if not hits:
-            print(f"error: {CI_WORKFLOW}:{line}: -R pattern {pattern!r} "
+            print(f"error: {wf}:{line}: -R pattern {pattern!r} "
                   f"matches no literal add_test() name in {TESTS_CMAKE}")
             if VARIABLE_NAMES:
                 print("  (names built from variables are not resolved: "
                       + ", ".join(VARIABLE_NAMES) + ")")
             sys.exit(2)
         for n in hits:
-            gated.setdefault(n, []).append(line)
+            gated.setdefault(n, []).append(f"{wf}:{line}")
     return gated
+
+
+def pr_workflows() -> list[Path]:
+    """Every workflow with a pull_request trigger, sorted. A new workflow
+    file is scanned the moment it exists, so a `ctest` step cannot hide in
+    one this script was never told about."""
+    found = sorted(p for p in (REPO / WORKFLOWS_DIR).glob("*.yml")
+                   if p.name != WEEKLY_LANE and PR_TRIGGER.search(p.read_text()))
+    if not found:
+        print(f"error: no workflows found under {WORKFLOWS_DIR} — has it moved? "
+              "Update this script.")
+        sys.exit(2)
+    return [p.relative_to(REPO) for p in found]
 
 
 def read_frozen(path: Path) -> tuple[list[str], set[str]]:
@@ -193,42 +241,45 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true",
                         help="exit 1 when the gate and the frozen list differ")
     parser.add_argument("--update", action="store_true",
-                        help=f"drop names from {FROZEN} that ci.yml no longer "
-                             "selects (never adds)")
+                        help=f"drop names from {FROZEN} that no workflow "
+                             "selects any more (never adds)")
     args = parser.parse_args()
 
-    for rel in (CI_WORKFLOW, TESTS_CMAKE):
-        if not (REPO / rel).is_file():
-            print(f"error: {rel} is missing — has it moved? Update this script.")
-            return 2
+    if not (REPO / TESTS_CMAKE).is_file():
+        print(f"error: {TESTS_CMAKE} is missing — has it moved? Update this script.")
+        return 2
 
     names = registered_tests((REPO / TESTS_CMAKE).read_text())
-    gated = resolve(gate_patterns((REPO / CI_WORKFLOW).read_text()), names)
+    workflows = pr_workflows()
+    patterns: list[tuple[str, str, int]] = []
+    for wf in workflows:
+        patterns += gate_patterns(wf, (REPO / wf).read_text())
+    gated = resolve(patterns, names)
     header, frozen = read_frozen(REPO / FROZEN)
     added = sorted(set(gated) - frozen)
     removed = sorted(frozen - set(gated))
 
-    print(f"{CI_WORKFLOW}: {len(gated)} test(s) selected by -R; "
-          f"{FROZEN}: {len(frozen)} frozen; "
+    print(f"{len(workflows)} workflow(s) scanned: {len(gated)} test(s) selected "
+          f"by -R; {FROZEN}: {len(frozen)} frozen; "
           f"{len(names)} registered in {TESTS_CMAKE}")
 
     if added:
         print()
         print(f"NEW on the per-PR gate but not in {FROZEN}:")
         for n in added:
-            where = ", ".join(f"{CI_WORKFLOW}:{ln}" for ln in gated[n])
+            where = ", ".join(gated[n])
             print(f"  {n}  ({where})")
         print()
         print("The per-PR test gate is frozen. A test declared in tests/tests.cmake")
         print("and built by the default configure already runs on the weekly")
         print("unfiltered lane (.github/workflows/sanitizers.yml); it does not")
-        print("also get a `ctest -R` step in ci.yml. Drop the ci.yml step. If a")
+        print("also get a `ctest -R` step on a PR workflow. Drop the step. If a")
         print("maintainer has decided this test is an exception, add its name to")
         print(f"{FROZEN} by hand in the same PR, with the reason in the PR body.")
         print("--update will not do that for you.")
     if removed:
         print()
-        print(f"In {FROZEN} but no longer selected by ci.yml:")
+        print(f"In {FROZEN} but no longer selected by any workflow:")
         for n in removed:
             print(f"  {n}")
         if not args.update:
