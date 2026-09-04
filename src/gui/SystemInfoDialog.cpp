@@ -103,9 +103,14 @@ OverviewCard makeOverviewCard(const QString& title, const QString& caption,
     auto* layout = new QVBoxLayout(card.frame);
     layout->setContentsMargins(8, 5, 8, 8);
     layout->setSpacing(4);
+    // Every label says background: transparent — the frame's stylesheet
+    // background would otherwise be painted again behind each child, as a
+    // darker box around the text (found on the demo, 2026-09-04). The network
+    // dialog's own stylesheet carries the same rule for the same reason.
     auto* titleLabel = new QLabel(title, card.frame);
     ThemeManager::instance().applyStyleSheet(
-        titleLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-weight: 600; }"));
+        titleLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-weight: 600; "
+                                   "background: transparent; }"));
     card.value = new QLabel(QStringLiteral("—"), card.frame);
     card.value->setObjectName(objectName);
     card.value->setAccessibleName(accessible);
@@ -114,7 +119,8 @@ OverviewCard makeOverviewCard(const QString& title, const QString& caption,
     card.caption = new QLabel(caption, card.frame);
     card.caption->setWordWrap(true);
     ThemeManager::instance().applyStyleSheet(
-        card.caption, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        card.caption, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; "
+                                     "background: transparent; }"));
     layout->addWidget(titleLabel);
     layout->addWidget(card.value);
     layout->addWidget(card.caption);
@@ -896,7 +902,8 @@ void SystemInfoDialog::setCardLevel(QLabel* value, SystemInfo::CardLevel level)
         name = "warning";
     }
     ThemeManager::instance().applyStyleSheet(
-        value, QStringLiteral("QLabel { color: %1; font-weight: 700; font-size: 18px; }")
+        value, QStringLiteral("QLabel { color: %1; font-weight: 700; font-size: 18px; "
+                              "background: transparent; }")
                    .arg(QLatin1String(token)));
     value->setProperty("level", QLatin1String(name));
 }
