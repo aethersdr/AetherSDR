@@ -19,13 +19,19 @@ jobs:
   sanitize:
     name: ${{ matrix.sanitizer.label }}
     runs-on: ubuntu-latest
-    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    # Per-entry image: the TSan entry runs on the image whose Qt is itself
+    # built with -sanitize thread (.github/docker/Dockerfile.tsan). A TSan
+    # binary against an uninstrumented Qt reports every cross-thread queued
+    # signal as a race, because Qt's own locks are invisible to it; there is
+    # no honest suppression for that class (#5275 S6).
+    container: ${{ matrix.sanitizer.image }}
     strategy:
       fail-fast: false
       matrix:
         sanitizer:
           - id: asan-ubsan
             label: ASan + UBSan
+            image: ghcr.io/aethersdr/aethersdr-ci:latest
             build_type: Debug
             # ON here too, not only under TSan: the churn test's documented
             # failure class is a heap use-after-free on the receiver vector,
@@ -50,6 +56,7 @@ jobs:
               LSAN_OPTIONS=print_suppressions=0
           - id: tsan
             label: TSan
+            image: ghcr.io/aethersdr/aethersdr-ci:tsan
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
@@ -142,10 +149,24 @@ jobs:
           # Cap at ~45KB to stay well under GitHub's ~65KB issue-body limit
           # once we wrap it in markdown.
           head -c 45000 report.txt > report.trim && mv report.trim report.txt
-          # Stable fingerprint from the first SUMMARY line, used to detect
-          # whether a re-run is the same bug.
-          fp=$(grep -m1 '^SUMMARY:' sanitizer.log | sha256sum | cut -c1-12)
-          echo "fingerprint=${fp:-unknown}" >> "$GITHUB_OUTPUT"
+          # Stable fingerprint, used to decide whether a run is the same bug:
+          # the first sanitizer SUMMARY line when there is one. When there is
+          # none — the job also fails on plain test assertions, which print
+          # no SUMMARY — hash ctest's own failed-test list instead of the
+          # empty string (which is what #4330 collected twice: the sha256 of
+          # "" is e3b0c44298fc, a fingerprint of nothing).
+          summary=$(grep -m1 '^SUMMARY:' sanitizer.log || true)
+          if [ -n "$summary" ]; then
+            fp=$(printf '%s' "$summary" | sha256sum | cut -c1-12)
+          else
+            failed=$(sed -n '/^The following tests FAILED:/,$p' sanitizer.log | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+' | sort || true)
+            if [ -n "$failed" ]; then
+              fp=$(printf '%s' "$failed" | sha256sum | cut -c1-12)
+            else
+              fp=unknown
+            fi
+          fi
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: Upload sanitizer artifacts
         if: steps.ctest.outputs.exit != '0'
@@ -169,7 +190,13 @@ jobs:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('report.txt', 'utf8');
-            const title  = `[sanitizer] ${process.env.SAN_LABEL} weekly run failure`;
+            const fp     = process.env.FP;
+            // The fingerprint is in the title so that a NEW failure signature
+            // opens a NEW issue instead of arriving as comment N+1 on an
+            // already-red one, where it reads as more of the same (#5032,
+            // #5275 S5). One open issue per (sanitizer, fingerprint).
+            const fpTag  = fp && fp !== 'unknown' ? ` (fp ${fp})` : '';
+            const title  = `[sanitizer] ${process.env.SAN_LABEL} weekly run failure${fpTag}`;
             // Lookup key only — see the listForRepo call below. Do not add
             // labels here: anything extra in this list also has to be on the
             // existing sticky issue, or the lookup misses it and a duplicate
@@ -209,7 +236,13 @@ jobs:
               labels: labels.join(','),
               per_page: 100,
             });
-            const existing = open.data[0];
+            // Within the label bucket the fingerprint tag in the title picks
+            // the issue. An open issue with no tag is a pre-fingerprint sticky
+            // (#4330, #3462) and absorbs only runs whose fingerprint could not
+            // be computed — a run with a known signature gets its own issue.
+            const tagged   = open.data.find(i => fpTag && i.title.includes(fpTag));
+            const untagged = open.data.find(i => !/\(fp [0-9a-f]{12}\)/.test(i.title));
+            const existing = tagged || (fpTag ? undefined : untagged);
 
             if (existing) {
               await github.rest.issues.createComment({
