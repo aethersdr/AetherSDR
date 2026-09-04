@@ -3957,18 +3957,17 @@ add_executable(hl2_telemetry_cadence_test
 target_include_directories(hl2_telemetry_cadence_test PRIVATE src)
 add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
 
+# The tick/mirror ALIASING the cadence rule cannot catch on its own: a counter
+# mirrored at 1 Hz, sampled by a 1 Hz tick, reports a healthy stream as stalled.
+# Pure, no Qt -- it replays a publish/tick trace, and keeps the OLD predicate as
+# a negative control so the trace is proved to discriminate rather than assumed
+# to.
 add_executable(hl2_link_state_alias_test
     tests/hl2_link_state_alias_test.cpp
 )
 target_include_directories(hl2_link_state_alias_test PRIVATE src)
 add_test(NAME hl2_link_state_alias_test COMMAND hl2_link_state_alias_test)
-# HL2 stream-free telemetry SERVICE -- must answer with no backend and no
-# connection, which is the state the whole feature exists for. Needs Qt (timer,
-# socket) but no aethercore and no radio: it polls 192.0.2.1, TEST-NET-1, which
-# is unroutable by RFC 5737 and can never answer.
-# The WIRE between the cadence rule and the backend that must ask it. Links
-# aethercore because it constructs a real Hl2Backend -- the point is that the
-# BACKEND drives the service, which no service-level test can check.
+
 # telemetrySource policy + the health-snapshot merge, as pure functions both
 # call sites use. Truth table rather than a scenario: the row exists to tell two
 # states apart, so a test seeing only one answer proves nothing.
@@ -3977,11 +3976,18 @@ target_include_directories(hl2_telemetry_source_test PRIVATE src)
 target_link_libraries(hl2_telemetry_source_test PRIVATE Qt6::Core)
 add_test(NAME hl2_telemetry_source_test COMMAND hl2_telemetry_source_test)
 
+# The WIRE between the cadence rule and the backend that must ask it. Links
+# aethercore because it constructs a real Hl2Backend -- the point is that the
+# BACKEND drives the service, which no service-level test can check.
 add_executable(hl2_telemetry_wire_test tests/hl2_telemetry_wire_test.cpp)
 target_include_directories(hl2_telemetry_wire_test PRIVATE src tests)
 target_link_libraries(hl2_telemetry_wire_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_telemetry_wire_test COMMAND hl2_telemetry_wire_test)
 
+# HL2 stream-free telemetry SERVICE -- must answer with no backend and no
+# connection, which is the state the whole feature exists for. Needs Qt (timer,
+# socket) but no aethercore and no radio: it polls 192.0.2.1, TEST-NET-1, which
+# is unroutable by RFC 5737 and can never answer.
 add_executable(hl2_telemetry_service_test
     tests/hl2_telemetry_service_test.cpp
     src/core/backends/hl2/Hl2TelemetryService.cpp
