@@ -63,6 +63,65 @@ option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cp
 option(ASR_USE_PREBUILT_WHISPER_GPU
     "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
+
+# ── Sanitizers: ONE tree-wide switch ─────────────────────────────────────────
+# Applied through add_compile_options/add_link_options so it reaches EVERY
+# target defined below — the app shell, aethercore, the vendored C, and all
+# ~340 test targets — rather than a hand-picked few.
+#
+# It replaces an unconditional `$<$<CONFIG:Debug>:-fsanitize=address>` that sat
+# on four app-shell targets, which was wrong three ways (#5406, #4833, #4360):
+#
+#   - Every plain Debug build was an ASan build whether the developer asked for
+#     one or not.
+#   - It instrumented those four targets but NOT the ~124 test targets that
+#     link aethercore, so a Debug build failed to link on undefined `__asan_*`
+#     symbols (#4833).
+#   - `-fsanitize=address` cannot coexist with `-fsanitize=thread`, so any
+#     Debug + TSan configuration broke at link. That exact collision took the
+#     weekly TSan lane out for five weeks in July (#4360, `ef227cf1`), and the
+#     lane survives today only because it builds RelWithDebInfo.
+#
+# The weekly lane (.github/workflows/sanitizers.yml) does NOT use this option:
+# it injects flags through CFLAGS/CXXFLAGS/LDFLAGS, which is exactly why the
+# hardcode could be removed without touching the workflow. This switch is for
+# local builds and for anyone reproducing a lane finding.
+#
+# Known limit, shared with the lane: add_compile_options does not reach an
+# ExternalProject child (vendored Opus). Those read CFLAGS from the
+# environment, which is how sanitizers.yml instruments them.
+set(AETHERSDR_SANITIZER "none" CACHE STRING
+    "Sanitizer applied to the whole tree: none|address|undefined|address,undefined|thread")
+set_property(CACHE AETHERSDR_SANITIZER PROPERTY STRINGS
+             none address undefined "address,undefined" thread)
+
+if(NOT AETHERSDR_SANITIZER STREQUAL "none")
+    if(MSVC)
+        message(FATAL_ERROR
+            "AETHERSDR_SANITIZER=${AETHERSDR_SANITIZER} is not supported with MSVC. "
+            "Use a GCC or Clang build.")
+    endif()
+    string(REPLACE "," ";" _aether_san_list "${AETHERSDR_SANITIZER}")
+    foreach(_aether_san IN LISTS _aether_san_list)
+        if(NOT _aether_san MATCHES "^(address|undefined|thread)$")
+            message(FATAL_ERROR
+                "AETHERSDR_SANITIZER: unknown sanitizer '${_aether_san}'. "
+                "Valid: none, address, undefined, address,undefined, thread.")
+        endif()
+    endforeach()
+    # The #4360 collision, refused at configure time rather than at link.
+    if("address" IN_LIST _aether_san_list AND "thread" IN_LIST _aether_san_list)
+        message(FATAL_ERROR
+            "AETHERSDR_SANITIZER: address and thread cannot be combined — they "
+            "instrument the same memory accesses incompatibly. This is the "
+            "collision that broke the TSan lane in #4360; configure one or the "
+            "other.")
+    endif()
+    add_compile_options(-fsanitize=${AETHERSDR_SANITIZER} -fno-omit-frame-pointer -g3)
+    add_link_options(-fsanitize=${AETHERSDR_SANITIZER})
+    message(STATUS "AetherSDR: sanitizer = ${AETHERSDR_SANITIZER} (whole tree)")
+    unset(_aether_san_list)
+endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
@@ -2898,13 +2957,14 @@ foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
     if(MSVC)
         target_compile_options(${_aether_tgt} PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
     else()
+        # No -fsanitize here: sanitizers are a tree-wide switch now
+        # (AETHERSDR_SANITIZER, near the top of this file). Instrumenting these
+        # four targets and not the test targets that link them is what made a
+        # plain Debug build fail to link (#4833, #5406).
         target_compile_options(${_aether_tgt} PRIVATE
             -Wall -Wextra -Wpedantic
-            $<$<CONFIG:Debug>:-g3 -fsanitize=address>
+            $<$<CONFIG:Debug>:-g3>
             $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
-        )
-        target_link_options(${_aether_tgt} PRIVATE
-            $<$<CONFIG:Debug>:-fsanitize=address>
         )
     endif()
 endforeach()
