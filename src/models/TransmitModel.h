@@ -103,6 +103,7 @@ public:
     bool    cwlEnabled()    const { return m_cwlEnabled; }
     int     monGainCw()     const { return m_monGainCw; }
     int     monPanCw()      const { return m_monPanCw; }
+    bool    holdBreakInDelay() const { return m_holdBreakInDelay; }
 
     // ── Interlock / TX settings getters ──────────────────────────────────────
     int     accTxDelay()     const { return m_accTxDelay; }
@@ -304,6 +305,15 @@ public:
     void setMonGainCw(int gain);
     void setMonPanCw(int pan);
 
+    // Opt-in (client-side, default off): when set, setCwSpeed() re-asserts the
+    // delay the operator last SET (setCwDelay) right after the `cw wpm` command,
+    // so SmartSDR's speed-linked QSK-floor walk cannot drop an inline amplifier
+    // into hot-switching. Enabling it captures nothing on its own — until the
+    // operator sets a delay this session there is nothing to hold. Not radio
+    // state: PhoneCwApplet persists it in AppSettings and re-applies it on bind;
+    // resetState() leaves it be.
+    void setHoldBreakInDelay(bool on);
+
 signals:
     void stateChanged();
     // (rfPowerChanged is declared once below — main already has it for the
@@ -376,6 +386,8 @@ signals:
     void cwPitchCommandIssued(int hz);
     void cwSpeedCommandIssued(int wpm);
     void cwBreakInCommandIssued(bool on);
+    // The "hold break-in delay" opt-in changed. UI-only mirror; no wire effect.
+    void holdBreakInDelayChanged(bool on);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();
@@ -465,14 +477,18 @@ private:
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms
-    // Operator-authoritative break-in delay and the "a speed change just
-    // happened" guard. Together they revert SmartSDR's habit of walking
-    // break_in_delay down to a WPM-derived QSK floor on a speed change the
-    // operator never pointed at the delay — silent hot-switching on an
-    // amplifier that can't tolerate QSK. Seeded from the first delay the model
-    // learns (radio or operator); every setCwDelay() overrides it. -1 = unset.
+    // The break-in delay the operator explicitly set: the last value passed to
+    // setCwDelay(). Written there and nowhere else — never from a radio status,
+    // never on enabling the hold — so it cannot drift onto a WPM-derived QSK
+    // floor or hold a value the operator never picked. When m_holdBreakInDelay
+    // is set, setCwSpeed() re-asserts this after a speed change so SmartSDR's
+    // speed-linked floor walk can't hot-switch an inline amp. -1 = the operator
+    // has set no delay this session (nothing to hold). Cleared by resetState()
+    // (radio swap) so one radio's value is never re-asserted at the next (#5288).
     int  m_cwDelayHeld{-1};
-    bool m_cwSpeedGuardArmed{false};
+    // Client-side opt-in, default off. Persisted by PhoneCwApplet in
+    // AppSettings("CwHoldBreakInDelay"), not radio state — survives resetState().
+    bool m_holdBreakInDelay{false};
     bool m_cwSidetone{true};
     bool m_cwIambic{true};
     int  m_cwIambicMode{0};   // 0=A, 1=B
