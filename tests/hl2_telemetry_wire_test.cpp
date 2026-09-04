@@ -28,6 +28,7 @@
 #include "core/backends/hl2/Hl2TelemetryService.h"
 
 #include <QCoreApplication>
+#include <QString>
 #include <QEventLoop>
 #include <QTimer>
 
@@ -82,6 +83,23 @@ int main(int argc, char** argv)
     // cannot be read as approval of a broken table.
     check(hl2PollIntervalMs(Hl2LinkState::Streaming, true) == 0,
           "and the rule the wire feeds still returns 0 for Streaming");
+
+    // ---- the backend PUBLISHES an attribution row at all ----
+    //
+    // This is the second half of the same class of defect, and it is red on the
+    // tree as it stands. When Hl2TelemetryService took the four telemetry rows
+    // over, Hl2Backend stopped emitting `telemetrySource` — so the service's
+    // value always won the merge and `in-band` became unreachable. Observed on
+    // hardware during Config C: connected, EP6 healthy, the row reading
+    // `port-1025`.
+    //
+    // Asserted HERE rather than in the pure-policy test because the policy
+    // function cannot fail this way: the bug is not a wrong answer, it is a row
+    // that is never asked for. Only the real snapshot can show its absence.
+    const auto snap = backend.healthSnapshot();
+    check(snap.order.contains(QStringLiteral("telemetrySource")),
+          "the BACKEND publishes a telemetrySource row — without it the service "
+          "always wins the merge and 'in-band' is unreachable");
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_wire_test: all checks passed\n");

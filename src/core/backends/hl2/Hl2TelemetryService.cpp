@@ -1,6 +1,7 @@
 #include "core/backends/hl2/Hl2TelemetryService.h"
 
 #include "core/backends/hl2/Hl2TelemetryPoller.h"
+#include "core/backends/hl2/Hl2TelemetrySource.h"
 
 #include <QTimer>
 
@@ -129,14 +130,19 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
 
     const bool polling = d->poller->currentIntervalMs() > 0;
 
-    // Which path produced the readings. This class only ever produces
-    // stream-free ones, so it says `port-1025` or `none` and never `in-band`;
-    // the backend's own row overrides this at the merge point when it has
-    // in-band values. `none` is a claim — we looked and nobody spoke — and is
-    // deliberately not an empty string, which a reader could take for
-    // "unsupported".
+    // Which path produced the readings. This class only ever has stream-free
+    // ones, so it can answer `port-1025` or `none` and never `in-band` — and
+    // the backend's row, which CAN, overrides this at the merge point when it
+    // has in-band values.
+    //
+    // That override is now implemented. It was not when this comment first
+    // claimed it: the backend had stopped publishing the key, so this value
+    // always won and `in-band` was unreachable. A comment asserting a mechanism
+    // that has been removed reads as a reason not to check, which is why the
+    // rule now lives in one shared function both sides call.
     put("telemetrySource", QStringLiteral("Source"),
-        d->reply ? QStringLiteral("port-1025") : QStringLiteral("none"));
+        hl2TelemetrySource(/*connected=*/false, /*haveInBand=*/false,
+                           /*haveStreamFree=*/d->reply.has_value()));
 
     // Absent until something has actually arrived. A frozen reading and a fresh
     // one render identically without this, and frozen is the failure this
