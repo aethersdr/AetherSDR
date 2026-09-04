@@ -64,10 +64,11 @@ int main(int argc, char** argv)
     auto* tabs = dialog.findChild<QTabWidget*>();
     report("it has a tab widget", tabs != nullptr);
     if (tabs != nullptr) {
-        report("it has exactly three tabs", tabs->count() == 3);
-        report("first tab is Threads", tabs->tabText(0) == QLatin1String("Threads"));
-        report("second tab is Memory", tabs->tabText(1) == QLatin1String("Memory"));
-        report("third tab is Logs", tabs->tabText(2) == QLatin1String("Logs"));
+        report("it has exactly four tabs", tabs->count() == 4);
+        report("first tab is Overview", tabs->tabText(0) == QLatin1String("Overview"));
+        report("second tab is Threads", tabs->tabText(1) == QLatin1String("Threads"));
+        report("third tab is Memory", tabs->tabText(2) == QLatin1String("Memory"));
+        report("fourth tab is Logs", tabs->tabText(3) == QLatin1String("Logs"));
     }
 
     auto* table = dialog.findChild<QTableWidget*>();
@@ -594,6 +595,103 @@ int main(int argc, char** argv)
                    && priv->text() == QStringLiteral("\u2014") && virt->text() == QStringLiteral("\u2014"));
         report("an invalid sample's summary names no metric",
                summary != nullptr && summary->text() == QStringLiteral("Process memory: not available on this platform"));
+    }
+
+    // ── Overview tab (#2554: cards + charts; acceptance criterion 3's colour) ──
+    // applyCpuSample is a slot so the cards can be driven without a collector,
+    // a worker thread, or a machine busy enough to reach a band. Every number
+    // here is CONSTRUCTED (routing, formatting and the band arithmetic only).
+    {
+        qRegisterMetaType<AetherSDR::CpuSample>("AetherSDR::CpuSample");
+        SystemInfoDialog ov;
+        auto* range = ov.findChild<QComboBox*>(QStringLiteral("systemInfoOverviewTimeframe"));
+        report("the Overview tab has its own timeframe selector", range != nullptr && range->count() == 4);
+        auto* cpuCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardCpu"));
+        auto* maxCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMaxThread"));
+        auto* memCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMemory"));
+        auto* lagCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardTickLag"));
+        report("the four cards exist",
+               cpuCard != nullptr && maxCard != nullptr && memCard != nullptr && lagCard != nullptr);
+        report("cards start as a dash, not zero",
+               cpuCard != nullptr && cpuCard->text() == QStringLiteral("\u2014")
+                   && cpuCard->property("level").toString() == QLatin1String("normal"));
+
+        const auto driveCpu = [&ov](const CpuSample& sample) {
+            return QMetaObject::invokeMethod(&ov, "applyCpuSample", Qt::DirectConnection,
+                                             Q_ARG(AetherSDR::CpuSample, sample));
+        };
+        CpuSample s;
+        s.wallMs = 1'700'000'000'000;
+        s.coreCount = 8;
+        s.processPercentOfCapacity = 12.34;
+        s.busiestTid = 7;
+        s.busiestName = QStringLiteral("AudioEngine");
+        s.busiestPercentOfCore = 42.0;
+        ThreadCpuSample busy;
+        busy.tid = 7;
+        busy.name = s.busiestName;
+        busy.cpuPercentOfCore = 42.0;
+        s.busyThreads.push_back(busy);
+        report("a CPU sample can be driven into the dialog", driveCpu(s));
+        if (cpuCard != nullptr && maxCard != nullptr && lagCard != nullptr) {
+            report("CPU Total reads the process percent with one decimal",
+                   cpuCard->text() == QStringLiteral("12.3 %")
+                       && cpuCard->property("level").toString() == QLatin1String("normal"));
+            report("Max Thread reads the busiest thread's percent of one core",
+                   maxCard->text() == QStringLiteral("42.0 %"));
+            report("the tick-lag card reads a dash when the meter was never ticked",
+                   lagCard->text() == QStringLiteral("\u2014"));
+            report("a card announces its value (docs/a11y.md live-value rule)",
+                   cpuCard->accessibleName() == QStringLiteral("CPU total 12.3 %"));
+        }
+        // Bands: the issue's own numbers, inclusive at the line. 50 / 80 for
+        // CPU Total; 70 / 90 for Max Thread.
+        const auto level = [&](QLabel* card) { return card == nullptr ? QString() : card->property("level").toString(); };
+        s.wallMs += 1500; s.processPercentOfCapacity = 50.0; s.busiestPercentOfCore = 70.0; driveCpu(s);
+        report("CPU Total at 50 % is the warning band", level(cpuCard) == QLatin1String("warning"));
+        report("Max Thread at 70 % is the warning band", level(maxCard) == QLatin1String("warning"));
+        s.wallMs += 1500; s.processPercentOfCapacity = 80.0; s.busiestPercentOfCore = 90.0; driveCpu(s);
+        report("CPU Total at 80 % is the danger band", level(cpuCard) == QLatin1String("danger"));
+        report("Max Thread at 90 % is the danger band", level(maxCard) == QLatin1String("danger"));
+        s.wallMs += 1500; s.processPercentOfCapacity = 49.9; s.busiestPercentOfCore = 69.9; driveCpu(s);
+        report("just under the lines is normal again",
+               level(cpuCard) == QLatin1String("normal") && level(maxCard) == QLatin1String("normal"));
+
+        // The Memory card reads the memory ring: 1 GB is the warning line.
+        MemorySample m;
+        m.wallMs = s.wallMs;
+        m.valid = true;
+        m.residentMetric = QStringLiteral("vmRss");
+        m.residentBytes = 1024ull * 1024 * 1024;
+        m.peakResidentBytes = m.residentBytes;
+        QMetaObject::invokeMethod(&ov, "applyMemorySample", Qt::DirectConnection,
+                                  Q_ARG(AetherSDR::MemorySample, m));
+        report("the Memory card reads the resident set and bands at 1 GB",
+               memCard != nullptr && memCard->text() == QStringLiteral("1024.0 MB")
+                   && level(memCard) == QLatin1String("warning"));
+        m.wallMs += 1500; m.residentBytes = 2048ull * 1024 * 1024;
+        QMetaObject::invokeMethod(&ov, "applyMemorySample", Qt::DirectConnection,
+                                  Q_ARG(AetherSDR::MemorySample, m));
+        report("2 GB is the danger band", level(memCard) == QLatin1String("danger"));
+    }
+
+    // The tick-lag card reads the meter MainWindow injects, at the instant the
+    // CPU sample lands. Timestamps CONSTRUCTED through the meter's clock seam.
+    {
+        UiTickLagMeter meter;
+        meter.tickAt(0);
+        meter.tickAt(70 * 1'000'000);   // 20 ms late
+        meter.tickAt(120 * 1'000'000);  // on time
+        SystemInfoDialog ov(nullptr, nullptr, &meter);
+        auto* lagCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardTickLag"));
+        CpuSample s;
+        s.wallMs = 1'700'000'000'000;
+        s.coreCount = 8;
+        QMetaObject::invokeMethod(&ov, "applyCpuSample", Qt::DirectConnection,
+                                  Q_ARG(AetherSDR::CpuSample, s));
+        report("the tick-lag card reads the worst lag since the meter was last read",
+               lagCard != nullptr && lagCard->text() == QStringLiteral("20.0 ms"));
+        report("reading the meter resets it", meter.take().tickCount == 0);
     }
 
     // The history outlives the dialog when MainWindow hands one in: the

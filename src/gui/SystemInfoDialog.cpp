@@ -20,6 +20,7 @@
 #include <QStyledItemDelegate>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGridLayout>
 #include <QScrollBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -59,6 +60,76 @@ const char* const kPerfCategories[] = {"aether.perf", "aether.render", "aether.a
 const char* const kNoticeCategory = "systeminfo";
 constexpr qint64 kInitialTailBytes = 64 * 1024;
 constexpr qsizetype kMaxStoredLines = 5000;
+
+// Overview card bands, verbatim from the issue body's card table (#2554:
+// "CPU Total … yellow ≥50%, red ≥80%", "Max Thread … yellow ≥70%, red ≥90%",
+// "Memory … yellow ≥1 GB, red ≥2 GB"). Starting values, not findings: nobody
+// has measured a normal session against them, which each card's tooltip says.
+// The CPU pair is also what the status bar's own label uses (MainWindow.cpp).
+// The issue's fourth card, "GUI Frame Rate" with yellow <25 Hz / red <15 Hz,
+// is not built: the perf heartbeat it would be sourced from is a 20 Hz timer,
+// so a healthy app would sit in the yellow band by construction. That card
+// reads the heartbeat's tick lag instead, uncoloured, until a maintainer sets
+// bands for it (plan §12.2, D1).
+constexpr double kCpuWarnPercent = 50.0;
+constexpr double kCpuDangerPercent = 80.0;
+constexpr double kMaxThreadWarnPercent = 70.0;
+constexpr double kMaxThreadDangerPercent = 90.0;
+constexpr double kMemoryWarnMb = 1024.0;
+constexpr double kMemoryDangerMb = 2048.0;
+
+// A status card in the network dialog's shape — title, large value, caption —
+// built from theme tokens rather than that dialog's literal gradient, because
+// the hardcoded-colour ratchet counts literals and this dialog has none.
+struct OverviewCard {
+    QFrame* frame{nullptr};
+    QLabel* value{nullptr};
+    QLabel* caption{nullptr};
+};
+
+OverviewCard makeOverviewCard(const QString& title, const QString& caption,
+                              const QString& objectName, const QString& accessible,
+                              const QString& tip, QWidget* parent)
+{
+    OverviewCard card;
+    card.frame = new QFrame(parent);
+    card.frame->setObjectName(QStringLiteral("systemInfoCard"));
+    card.frame->setAttribute(Qt::WA_StyledBackground, true);
+    card.frame->setMinimumHeight(96);
+    ThemeManager::instance().applyStyleSheet(
+        card.frame,
+        QStringLiteral("QFrame#systemInfoCard { background: {{color.background.1}}; "
+                       "border: 1px solid {{color.background.2}}; border-radius: 7px; }"));
+    auto* layout = new QVBoxLayout(card.frame);
+    layout->setContentsMargins(8, 5, 8, 8);
+    layout->setSpacing(4);
+    auto* titleLabel = new QLabel(title, card.frame);
+    ThemeManager::instance().applyStyleSheet(
+        titleLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-weight: 600; }"));
+    card.value = new QLabel(QStringLiteral("—"), card.frame);
+    card.value->setObjectName(objectName);
+    card.value->setAccessibleName(accessible);
+    card.value->setToolTip(tip);
+    card.value->setMinimumHeight(card.value->fontMetrics().height() + 4);
+    card.caption = new QLabel(caption, card.frame);
+    card.caption->setWordWrap(true);
+    ThemeManager::instance().applyStyleSheet(
+        card.caption, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    layout->addWidget(titleLabel);
+    layout->addWidget(card.value);
+    layout->addWidget(card.caption);
+    layout->addStretch(1);
+    return card;
+}
+
+// One top-threads line per legend entry: a thread with no kernel name
+// reads "(unnamed)", and two members sharing a name get their tid appended so
+// the legend can tell them apart and clicking one selects one.
+QString threadLabel(const CpuHistoryRing::ThreadSeries& series, bool nameShared)
+{
+    const QString base = series.name.isEmpty() ? QStringLiteral("(unnamed)") : series.name;
+    return nameShared ? QStringLiteral("%1 (%2)").arg(base).arg(series.tid) : base;
+}
 
 // A trailing spacer column soaks up slack on a wide window. Without it the
 // stretch has to land on a real column, and the thread name — the only one
@@ -139,6 +210,8 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
     }
     auto* layout = new QVBoxLayout(bodyWidget());
     auto* tabs = new QTabWidget(bodyWidget());
+    // The issue's order: Overview / Threads / Memory / (Painters) / Logs.
+    tabs->addTab(buildOverviewTab(), QStringLiteral("Overview"));
     tabs->addTab(buildThreadsTab(), QStringLiteral("Threads"));
     tabs->addTab(buildMemoryTab(), QStringLiteral("Memory"));
     tabs->addTab(buildLogsTab(), QStringLiteral("Logs"));
@@ -155,6 +228,7 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
     // A reopened dialog shows the history it was handed before the first new
     // sample arrives; with an empty ring this is a no-op.
     refreshMemoryChart();
+    refreshOverview();
 
     resize(900, 600);
 }
@@ -408,6 +482,16 @@ void SystemInfoDialog::startSampling()
                     applyMemorySample(sample);
                 }
             });
+    connect(m_collector, &SystemInfoCollector::cpuSampleReady, this,
+            [this, generation](const CpuSample& sample) {
+                if (generation == m_samplingGeneration) {
+                    applyCpuSample(sample);
+                }
+            });
+    // The heartbeat meter has been ticking the whole time this dialog was
+    // closed; nobody was reading it. Drop that stretch so the first reading
+    // describes the first sampling interval, not the last hour.
+    m_tickLagMeter->reset();
     m_collectorThread->start();
 }
 
@@ -593,6 +677,7 @@ void SystemInfoDialog::applyMemorySample(const MemorySample& sample)
     record.virtualBytes = sample.virtualBytes;
     m_memoryRing->push(record);
     refreshMemoryChart();
+    refreshOverview();   // the Memory card and chart 2 read the same ring
 }
 
 void SystemInfoDialog::refreshMemoryChart()
@@ -660,6 +745,307 @@ void SystemInfoDialog::refreshMemoryChart()
          series(QStringLiteral("Private"),  theme.color("color.accent.success"), Field::Private),
          series(QStringLiteral("Peak"),     theme.color("color.accent.warning"), Field::Peak)},
         rangeSeconds);
+}
+
+// ── Overview ────────────────────────────────────────────────────────────────
+
+QWidget* SystemInfoDialog::buildOverviewTab()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+
+    // Timeframe top-right, as on the Memory tab and in the network dialog;
+    // per tab rather than per window for the reason the Memory tab gives.
+    auto* header = new QHBoxLayout;
+    header->addStretch(1);
+    auto* rangeLabel = new QLabel(QStringLiteral("Timeframe"), page);
+    rangeLabel->setAccessibleName(QStringLiteral("Chart timeframe"));
+    m_overviewRange = new QComboBox(page);
+    m_overviewRange->setObjectName(QStringLiteral("systemInfoOverviewTimeframe"));
+    m_overviewRange->setAccessibleName(QStringLiteral("Chart timeframe"));
+    m_overviewRange->setAccessibleDescription(
+        QStringLiteral("Choose how much recent history the Overview charts display."));
+    m_overviewRange->setFixedWidth(132);
+    m_overviewRange->addItem(QStringLiteral("1 minute"), 60);
+    m_overviewRange->addItem(QStringLiteral("5 minutes"), 5 * 60);
+    m_overviewRange->addItem(QStringLiteral("15 minutes"), 15 * 60);
+    m_overviewRange->addItem(QStringLiteral("1 hour"), 60 * 60);
+    m_overviewRange->setCurrentIndex(1);
+    connect(m_overviewRange, &QComboBox::currentIndexChanged, this,
+            &SystemInfoDialog::refreshOverview);
+    header->addWidget(rangeLabel);
+    header->addWidget(m_overviewRange);
+    layout->addLayout(header);
+
+    // Four cards across, the network dialog's row.
+    auto* cards = new QHBoxLayout;
+    const QString startingValues = QStringLiteral(
+        " These bands are the issue's starting values, not measured ones.");
+    OverviewCard cpu = makeOverviewCard(
+        QStringLiteral("CPU Total"), QStringLiteral("% of system capacity"),
+        QStringLiteral("systemInfoCardCpu"), QStringLiteral("CPU total"),
+        QStringLiteral("This process's share of the whole machine — every "
+                       "thread's core-time summed and divided by the core "
+                       "count, the same figure as the status bar's CPU label. "
+                       "Yellow at %1 %, red at %2 %.")
+                .arg(kCpuWarnPercent, 0, 'f', 0).arg(kCpuDangerPercent, 0, 'f', 0)
+            + startingValues,
+        page);
+    m_cardCpuValue = cpu.value;
+    OverviewCard maxThread = makeOverviewCard(
+        QStringLiteral("Max Thread"), QStringLiteral("% of one core"),
+        QStringLiteral("systemInfoCardMaxThread"), QStringLiteral("Busiest thread"),
+        QStringLiteral("The busiest single thread's share of ONE core in the "
+                       "last sample — the figure the status bar's system-wide "
+                       "percentage hides (#2545). Yellow at %1 %, red at %2 %.")
+                .arg(kMaxThreadWarnPercent, 0, 'f', 0).arg(kMaxThreadDangerPercent, 0, 'f', 0)
+            + startingValues,
+        page);
+    m_cardMaxThreadValue = maxThread.value;
+    m_cardMaxThreadCaption = maxThread.caption;
+    OverviewCard memory = makeOverviewCard(
+        QStringLiteral("Memory"), QStringLiteral("Resident set"),
+        QStringLiteral("systemInfoCardMemory"), QStringLiteral("Resident memory"),
+        QStringLiteral("Memory the OS currently holds for this process; the "
+                       "Memory tab names what \"resident\" measures on this "
+                       "platform. Yellow at %1 GB, red at %2 GB.")
+                .arg(kMemoryWarnMb / 1024.0, 0, 'f', 0).arg(kMemoryDangerMb / 1024.0, 0, 'f', 0)
+            + startingValues,
+        page);
+    m_cardMemoryValue = memory.value;
+    OverviewCard tickLag = makeOverviewCard(
+        QStringLiteral("GUI Tick Lag"), QStringLiteral("Worst event-loop delay, last sample"),
+        QStringLiteral("systemInfoCardTickLag"), QStringLiteral("GUI tick lag"),
+        QStringLiteral("How late the GUI thread's 50 ms heartbeat timer fired, "
+                       "at worst, during the last sampling interval: the "
+                       "event loop was busy for that long. Zero is on time. "
+                       "Not a frame rate, and not banded — no measured "
+                       "baseline exists yet for what \"late\" should mean here."),
+        page);
+    m_cardTickLagValue = tickLag.value;
+    for (QFrame* frame : {cpu.frame, maxThread.frame, memory.frame, tickLag.frame}) {
+        cards->addWidget(frame, 1);
+    }
+    layout->addLayout(cards);
+
+    // Charts, 2 × 2, the issue's four.
+    auto* grid = new QGridLayout;
+    m_overviewCpuGraph = new TimeSeriesGraphWidget(QStringLiteral("CPU"), QStringLiteral("%"), page);
+    m_overviewCpuGraph->setObjectName(QStringLiteral("systemInfoOverviewCpuGraph"));
+    m_overviewCpuGraph->setAccessibleName(QStringLiteral("CPU over time"));
+    m_overviewCpuGraph->setToolTip(
+        QStringLiteral("Process: share of the whole machine. Busiest thread: that "
+                       "thread's share of one core. Both are percentages, on one "
+                       "0–100 axis. Click a legend entry to show that series alone."));
+    m_overviewCpuGraph->setFixedYRange(0.0, 100.0);
+    m_overviewMemoryGraph = new TimeSeriesGraphWidget(QStringLiteral("Memory"), QStringLiteral(" MB"), page);
+    m_overviewMemoryGraph->setObjectName(QStringLiteral("systemInfoOverviewMemoryGraph"));
+    m_overviewMemoryGraph->setAccessibleName(QStringLiteral("Memory over time"));
+    m_overviewMemoryGraph->setToolTip(
+        QStringLiteral("Resident memory with the OS's recorded peak beside it; "
+                       "the Memory tab has the full set of readouts."));
+    m_overviewThreadsGraph = new TimeSeriesGraphWidget(QStringLiteral("Top threads"), QStringLiteral("%"), page);
+    m_overviewThreadsGraph->setObjectName(QStringLiteral("systemInfoOverviewThreadsGraph"));
+    m_overviewThreadsGraph->setAccessibleName(QStringLiteral("Top threads"));
+    m_overviewThreadsGraph->setToolTip(
+        QStringLiteral("The %1 threads with the highest mean share of a core over "
+                       "the selected timeframe, each as its own line in percent of one "
+                       "core, so one hot thread stands clear of the rest. Click a "
+                       "legend entry to show that thread alone.")
+            .arg(CpuHistoryRing::kTopThreads));
+    m_overviewTickGraph = new TimeSeriesGraphWidget(QStringLiteral("GUI tick lag"), QStringLiteral(" ms"), page);
+    m_overviewTickGraph->setObjectName(QStringLiteral("systemInfoOverviewTickGraph"));
+    m_overviewTickGraph->setAccessibleName(QStringLiteral("GUI tick lag over time"));
+    m_overviewTickGraph->setToolTip(
+        QStringLiteral("How late the GUI thread's 50 ms heartbeat fired — the "
+                       "worst and the mean lag per sampling interval. A busy "
+                       "event loop shows here before it shows as a stalled "
+                       "window."));
+    grid->addWidget(m_overviewCpuGraph, 0, 0);
+    grid->addWidget(m_overviewMemoryGraph, 0, 1);
+    grid->addWidget(m_overviewThreadsGraph, 1, 0);
+    grid->addWidget(m_overviewTickGraph, 1, 1);
+    grid->setRowStretch(0, 1);
+    grid->setRowStretch(1, 1);
+    grid->setColumnStretch(0, 1);
+    grid->setColumnStretch(1, 1);
+    layout->addLayout(grid, 1);
+    return page;
+}
+
+int SystemInfoDialog::selectedOverviewRangeSeconds() const
+{
+    if (m_overviewRange == nullptr) {
+        return 5 * 60;
+    }
+    return m_overviewRange->currentData().toInt();
+}
+
+void SystemInfoDialog::setCardLevel(QLabel* value, SystemInfo::CardLevel level)
+{
+    if (value == nullptr) {
+        return;
+    }
+    const char* token = "{{color.text.primary}}";
+    const char* name = "normal";
+    if (level == SystemInfo::CardLevel::Danger) {
+        token = "{{color.accent.danger}}";
+        name = "danger";
+    } else if (level == SystemInfo::CardLevel::Warning) {
+        token = "{{color.accent.warning}}";
+        name = "warning";
+    }
+    ThemeManager::instance().applyStyleSheet(
+        value, QStringLiteral("QLabel { color: %1; font-weight: 700; font-size: 18px; }")
+                   .arg(QLatin1String(token)));
+    value->setProperty("level", QLatin1String(name));
+}
+
+void SystemInfoDialog::applyCpuSample(const CpuSample& sample)
+{
+    CpuHistoryRing::Record record;
+    record.wallMs = sample.wallMs;
+    record.valid = true;
+    record.coreCount = sample.coreCount;
+    record.processPercentOfCapacity = sample.processPercentOfCapacity;
+    record.busiestTid = sample.busiestTid;
+    record.busiestName = sample.busiestName;
+    record.busiestPercentOfCore = sample.busiestPercentOfCore;
+    record.threads.reserve(sample.busyThreads.size());
+    for (const ThreadCpuSample& t : sample.busyThreads) {
+        CpuHistoryRing::ThreadShare share;
+        share.tid = t.tid;
+        share.name = t.name;
+        share.percentOfCore = t.cpuPercentOfCore;
+        record.threads.push_back(share);
+    }
+    // The heartbeat meter is read here, on the GUI thread, at the moment the
+    // CPU reading lands, so the tick-lag figure describes the same interval.
+    const UiTickLagMeter::Reading lag = m_tickLagMeter->take();
+    record.tickCount = lag.tickCount;
+    record.tickLagMaxMs = lag.lagMaxMs;
+    record.tickLagMeanMs = lag.lagMeanMs;
+    m_cpuRing->push(record);
+    refreshOverview();
+}
+
+void SystemInfoDialog::refreshOverview()
+{
+    const CpuHistoryRing::Record* cpu = m_cpuRing->latest();
+    const MemoryHistoryRing::Record* mem = m_memoryRing->latest();
+    const int rangeSeconds = selectedOverviewRangeSeconds();
+    const double gapSeconds = CpuHistoryRing::connectGapSecondsFor(rangeSeconds);
+    ThemeManager& theme = ThemeManager::instance();
+
+    // Cards. Each announces its value as the Memory readouts do (docs/a11y.md).
+    const auto announce = [](QLabel* label, const QString& caption) {
+        if (label == nullptr) {
+            return;
+        }
+        label->setAccessibleName(QStringLiteral("%1 %2").arg(caption, label->text()));
+        QAccessibleEvent event(label, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    };
+    const QString dash = QStringLiteral("\u2014");
+    if (m_cardCpuValue != nullptr) {
+        const bool have = cpu != nullptr && cpu->valid;
+        m_cardCpuValue->setText(have ? QStringLiteral("%1 %").arg(cpu->processPercentOfCapacity, 0, 'f', 1) : dash);
+        setCardLevel(m_cardCpuValue, have ? SystemInfo::cardLevel(cpu->processPercentOfCapacity,
+                                                                    kCpuWarnPercent, kCpuDangerPercent)
+                                          : SystemInfo::CardLevel::Normal);
+        announce(m_cardCpuValue, QStringLiteral("CPU total"));
+    }
+    if (m_cardMaxThreadValue != nullptr) {
+        const bool have = cpu != nullptr && cpu->valid;
+        m_cardMaxThreadValue->setText(have ? QStringLiteral("%1 %").arg(cpu->busiestPercentOfCore, 0, 'f', 1) : dash);
+        setCardLevel(m_cardMaxThreadValue, have ? SystemInfo::cardLevel(cpu->busiestPercentOfCore,
+                                                                          kMaxThreadWarnPercent, kMaxThreadDangerPercent)
+                                                : SystemInfo::CardLevel::Normal);
+        if (m_cardMaxThreadCaption != nullptr) {
+            m_cardMaxThreadCaption->setText(
+                have ? QStringLiteral("%1 · % of one core")
+                           .arg(cpu->busiestName.isEmpty() ? QStringLiteral("(unnamed)") : cpu->busiestName)
+                     : QStringLiteral("% of one core"));
+        }
+        announce(m_cardMaxThreadValue, QStringLiteral("Busiest thread"));
+    }
+    if (m_cardMemoryValue != nullptr) {
+        const bool have = mem != nullptr && mem->valid && mem->residentBytes > 0;
+        m_cardMemoryValue->setText(have ? megabytesText(mem->residentBytes) : dash);
+        setCardLevel(m_cardMemoryValue, have ? SystemInfo::cardLevel(MemoryHistoryRing::megabytes(mem->residentBytes),
+                                                                       kMemoryWarnMb, kMemoryDangerMb)
+                                             : SystemInfo::CardLevel::Normal);
+        announce(m_cardMemoryValue, QStringLiteral("Resident memory"));
+    }
+    if (m_cardTickLagValue != nullptr) {
+        const bool have = cpu != nullptr && cpu->valid && cpu->tickCount > 0;
+        m_cardTickLagValue->setText(have ? QStringLiteral("%1 ms").arg(cpu->tickLagMaxMs, 0, 'f', 1) : dash);
+        setCardLevel(m_cardTickLagValue, SystemInfo::CardLevel::Normal);   // unbanded, see kCpuWarnPercent
+        announce(m_cardTickLagValue, QStringLiteral("GUI tick lag"));
+    }
+
+    // Charts. Each window ends at its own ring's newest sample (see
+    // refreshMemoryChart for why not the wall clock).
+    using CpuField = CpuHistoryRing::Field;
+    using MemField = MemoryHistoryRing::Field;
+    const auto cpuSeries = [&](const QString& label, const QColor& color, CpuField field, const QString& suffix) {
+        TimeSeriesGraphWidget::Series s{label, color, {}, suffix};
+        if (cpu != nullptr) {
+            s.points = m_cpuRing->series(field, rangeSeconds, cpu->wallMs);
+        }
+        s.maxConnectGapSeconds = gapSeconds;
+        return s;
+    };
+    if (m_overviewCpuGraph != nullptr) {
+        m_overviewCpuGraph->setSeries(
+            {cpuSeries(QStringLiteral("Process"), theme.color("color.accent"), CpuField::ProcessPercent, QStringLiteral("%")),
+             cpuSeries(QStringLiteral("Busiest thread"), theme.color("color.accent.warning"), CpuField::BusiestPercent, QStringLiteral("%"))},
+            rangeSeconds);
+    }
+    if (m_overviewTickGraph != nullptr) {
+        m_overviewTickGraph->setSeries(
+            {cpuSeries(QStringLiteral("Worst"), theme.color("color.accent.danger"), CpuField::TickLagMax, QStringLiteral(" ms")),
+             cpuSeries(QStringLiteral("Mean"), theme.color("color.accent"), CpuField::TickLagMean, QStringLiteral(" ms"))},
+            rangeSeconds);
+    }
+    if (m_overviewMemoryGraph != nullptr) {
+        const auto memSeries = [&](const QString& label, const QColor& color, MemField field) {
+            TimeSeriesGraphWidget::Series s{label, color, {}, QStringLiteral(" MB")};
+            if (mem != nullptr) {
+                s.points = m_memoryRing->series(field, rangeSeconds, mem->wallMs);
+            }
+            s.maxConnectGapSeconds = MemoryHistoryRing::connectGapSecondsFor(rangeSeconds);
+            return s;
+        };
+        m_overviewMemoryGraph->setSeries(
+            {memSeries(QStringLiteral("Resident"), theme.color("color.accent"), MemField::Resident),
+             memSeries(QStringLiteral("Peak"), theme.color("color.accent.warning"), MemField::Peak)},
+            rangeSeconds);
+    }
+    if (m_overviewThreadsGraph != nullptr) {
+        QVector<TimeSeriesGraphWidget::Series> lines;
+        if (cpu != nullptr) {
+            const QVector<CpuHistoryRing::ThreadSeries> top =
+                m_cpuRing->topThreadSeries(CpuHistoryRing::kTopThreads, rangeSeconds, cpu->wallMs);
+            // Five distinct accent tokens; the palette is the theme's, not ours.
+            static const char* const kThreadTokens[] = {
+                "color.accent", "color.accent.success", "color.accent.warning",
+                "color.accent.bright", "color.accent.danger"};
+            QHash<QString, int> nameCount;
+            for (const CpuHistoryRing::ThreadSeries& ts : top) {
+                ++nameCount[ts.name];
+            }
+            for (int i = 0; i < top.size(); ++i) {
+                const CpuHistoryRing::ThreadSeries& ts = top.at(i);
+                TimeSeriesGraphWidget::Series s{threadLabel(ts, nameCount.value(ts.name) > 1),
+                                                theme.color(kThreadTokens[i % 5]), ts.points,
+                                                QStringLiteral("%")};
+                s.maxConnectGapSeconds = gapSeconds;
+                lines.push_back(s);
+            }
+        }
+        m_overviewThreadsGraph->setSeries(lines, rangeSeconds);
+    }
 }
 
 // ── Logs ────────────────────────────────────────────────────────────────────

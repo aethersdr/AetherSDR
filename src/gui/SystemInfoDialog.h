@@ -70,6 +70,12 @@ private slots:
     // applySample — a test hands it constructed samples and reads the labels.
     void applyMemorySample(const AetherSDR::MemorySample& sample);
 
+    // The Overview tab's counterpart (#2554): the process-level reading into
+    // the CPU ring, the heartbeat meter read at the same instant, then the
+    // cards and charts refreshed from the rings. A slot for the same reason
+    // as the other two.
+    void applyCpuSample(const AetherSDR::CpuSample& sample);
+
     // Acceptance criterion 3, in its minimal form: the summary line goes red
     // when a thread crosses 90 % of one core. A slot for the same reason
     // applySample is one — a test can raise the alert without a machine that
@@ -86,6 +92,7 @@ private slots:
     void pollLog();
 
 private:
+    QWidget* buildOverviewTab();
     QWidget* buildThreadsTab();
     QWidget* buildMemoryTab();
     QWidget* buildLogsTab();
@@ -93,6 +100,12 @@ private:
     void applyAlertStyle();
     void refreshMemoryChart();
     int  selectedMemoryRangeSeconds() const;
+    void refreshOverview();
+    int  selectedOverviewRangeSeconds() const;
+    // Colour a card's value for its band and expose the band as the label's
+    // "level" property ("normal" / "warning" / "danger") for tests and the
+    // automation bridge, which read properties and not stylesheets.
+    static void setCardLevel(QLabel* value, SystemInfo::CardLevel level);
 
     void startSampling();
     void stopSampling();
@@ -147,6 +160,16 @@ private:
     CpuHistoryRing*       m_cpuRing{&m_ownCpuRing};
     UiTickLagMeter        m_ownTickLagMeter;
     UiTickLagMeter*       m_tickLagMeter{&m_ownTickLagMeter};
+    QComboBox*            m_overviewRange{nullptr};
+    QLabel*               m_cardCpuValue{nullptr};
+    QLabel*               m_cardMaxThreadValue{nullptr};
+    QLabel*               m_cardMaxThreadCaption{nullptr};
+    QLabel*               m_cardMemoryValue{nullptr};
+    QLabel*               m_cardTickLagValue{nullptr};
+    TimeSeriesGraphWidget* m_overviewCpuGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewMemoryGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewThreadsGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewTickGraph{nullptr};
     TimeSeriesGraphWidget* m_memoryGraph{nullptr};
     QComboBox*            m_memoryRange{nullptr};
     QLabel*               m_memorySummary{nullptr};
