@@ -1473,6 +1473,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // this radio has — but stated rather than defaulted, per the struct's
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
+    c.hasAudioPeakingFilter = false;
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;

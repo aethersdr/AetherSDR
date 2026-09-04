@@ -7425,14 +7425,13 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
     // ── APF on the P/CW pane's CW face (#4879) ──────────────────────────────
     //
-    // Same flag, same reason as the VFO's DSP grid above: the row's only effect
-    // is `slice set <n> apf=`, a verb the radio's firmware executes. The DSP-tab
-    // APF button is NOT gated today (m_apfBtn is absent from
-    // VfoWidget::applyRadioSideDspVisibility) — that is a pre-existing gap, and
-    // gating it there is a separate change. This row is gated from the start
-    // because it sits on an always-visible face rather than behind a tab.
+    // NOT hasRadioSideDsp: Icom declares that true for NR/NB/notch and has no
+    // APF register. The row's only effect is Flex `slice set <n> apf=`, so it
+    // rides hasAudioPeakingFilter (permissive while disconnected, like LMS).
+    // The DSP-tab APF button is still ungated — pre-existing, left alone.
     if (m_appletPanel && m_appletPanel->phoneCwApplet()) {
-        m_appletPanel->phoneCwApplet()->setHasRadioSideDsp(radioSideDsp);
+        m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
+            m_radioModel.hasAudioPeakingFilter());
     }
 
     // ── The 8-band graphic EQ ───────────────────────────────────────────────

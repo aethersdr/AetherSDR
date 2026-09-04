@@ -390,6 +390,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // flag existed hasRadioSideDsp lit up three buttons that reached nothing —
     // the operator toggles them, the setting persists, the audio is unchanged.
     c.hasLmsNoiseFilters = false;
+    // Same split: APF is Flex `slice set <n> apf=`. No CI-V register for it.
+    c.hasAudioPeakingFilter = false;
 
     // The radio's own single in-passband notch: 16 48 enables it, 14 0D places
     // it, 16 57 picks one of three widths. Not a TNF and not the auto notch —

@@ -49,13 +49,14 @@ public:
     // returned to a slice they had used before.
     void setSlice(SliceModel* slice);
 
-    // Does the attached radio run its own receive DSP? Gates the APF row, whose
-    // only effect is `slice set <n> apf=` — a verb the radio's firmware
-    // executes, which is the test radio-capabilities-map.md gives for a control
-    // that belongs behind this flag. Pushed from MainWindow::applyCapabilitiesToUi
-    // off RadioModel::hasRadioSideDsp(), which is permissive while disconnected,
-    // so the row still shows with no radio attached.
-    void setHasRadioSideDsp(bool has);
+    // Does the attached radio run a CW audio peaking filter in firmware?
+    // Gates the APF row, whose only effect is `slice set <n> apf=` — a Flex
+    // verb, not "any radio-side DSP". hasRadioSideDsp is too coarse: Icom
+    // declares that true for NR/NB/notch and has no APF register. Pushed from
+    // MainWindow::applyCapabilitiesToUi off RadioModel::hasAudioPeakingFilter(),
+    // which is permissive while disconnected so the row does not blink off
+    // on a Flex unplug.
+    void setHasAudioPeakingFilter(bool has);
 
 signals:
     void micLevelChanged(int level);  // slider value 0-100
@@ -168,10 +169,10 @@ private:
     QPushButton* m_apfBtn{nullptr};
     QSlider*     m_apfSlider{nullptr};
     QLineEdit*   m_apfEdit{nullptr};
-    // Permissive default, matching RadioModel::hasRadioSideDsp()'s own
+    // Permissive default, matching RadioModel::hasAudioPeakingFilter()'s
     // disconnected rule: the row shows until a backend says otherwise, so it
-    // does not blink out of existence on every disconnect edge.
-    bool m_hasRadioSideDsp{true};
+    // does not blink out of existence on every Flex disconnect edge.
+    bool m_hasAudioPeakingFilter{true};
 
     // ── Shared state ─────────────────────────────────────────────────────
 

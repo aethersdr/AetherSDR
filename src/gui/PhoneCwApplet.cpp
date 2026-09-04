@@ -824,7 +824,7 @@ void PhoneCwApplet::buildCwPanel()
     // so the two surfaces mirror each other with no bridging.
     {
         // The row lives in its own container so the capability gate can hide it
-        // whole — see setHasRadioSideDsp().
+        // whole — see setHasAudioPeakingFilter().
         m_apfRow = new QWidget;
         m_apfRow->setObjectName(QStringLiteral("cwApfRow"));
         auto* row = new QHBoxLayout(m_apfRow);
@@ -867,19 +867,19 @@ void PhoneCwApplet::buildCwPanel()
         m_apfEdit->setAccessibleDescription("CW audio peaking filter bandwidth, 0 to 100");
         row->addWidget(m_apfEdit);
 
-        // m_hasRadioSideDsp is checked on the OUTBOUND edge too, not just in
-        // the sync. Hiding and disabling the row stops a person driving it, but
-        // the automation bridge and any programmatic setChecked() still reach
-        // the signal — and a verb this radio's firmware cannot execute must not
-        // leave the client on any path.
+        // m_hasAudioPeakingFilter is checked on the OUTBOUND edge too, not
+        // just in the sync. Hiding and disabling the row stops a person
+        // driving it, but the automation bridge and any programmatic
+        // setChecked() still reach the signal — and a verb this radio's
+        // firmware cannot execute must not leave the client on any path.
         connect(m_apfBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_hasRadioSideDsp && m_slice)
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
                 m_slice->setApf(on);
         });
         connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_apfEdit->hasFocus())
                 m_apfEdit->setText(QString::number(v));
-            if (!m_updatingFromModel && m_hasRadioSideDsp && m_slice)
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
                 m_slice->setApfLevel(v);
         });
         connect(m_apfEdit, &QLineEdit::editingFinished, this, [this]() {
@@ -1016,25 +1016,17 @@ void PhoneCwApplet::setSlice(SliceModel* slice)
     syncApfFromSlice();
 }
 
-void PhoneCwApplet::setHasRadioSideDsp(bool has)
+void PhoneCwApplet::setHasAudioPeakingFilter(bool has)
 {
-    // APF's ONLY effect is `slice set <n> apf=`, a verb the radio's firmware
-    // executes — which is exactly the test docs/architecture/radio-capabilities-map.md
-    // gives for a control that belongs behind this flag:
-    //
-    //   "The test for whether a control belongs behind this flag is whether its
-    //    only effect is to emit a verb the radio's firmware executes."
-    //
-    // Ungated on the always-visible CW face this would be the HERMES §17 shape
-    // on an Icom or an HL2 — the button moves, the state persists, the audio
-    // never changes. That matters more here than on the DSP-tab twin, which the
-    // operator has to go looking for; this row is in front of them the whole
-    // time they are in CW.
+    // APF's ONLY effect is `slice set <n> apf=`. That is a Flex firmware verb,
+    // not "any radio-side DSP" — Icom declares hasRadioSideDsp for NR/NB/notch
+    // and has no APF register, which is why this row is behind
+    // hasAudioPeakingFilter rather than hasRadioSideDsp (HERMES §17).
     //
     // Rides capabilitiesChanged, which repeats on every edge, so bail on no-op.
-    if (m_hasRadioSideDsp == has)
+    if (m_hasAudioPeakingFilter == has)
         return;
-    m_hasRadioSideDsp = has;
+    m_hasAudioPeakingFilter = has;
     syncApfFromSlice();
 }
 
@@ -1042,15 +1034,15 @@ void PhoneCwApplet::syncApfFromSlice()
 {
     if (!m_apfBtn) return;
 
-    // Hidden, not merely disabled, on a radio with no radio-side DSP — matching
-    // VfoWidget::applyRadioSideDspVisibility(), which hides rather than greys
-    // the DSP grid's buttons. A disabled control still claims the feature
-    // exists here and is simply unavailable right now, which is the wrong
-    // thing to tell someone on an Icom.
+    // Hidden, not merely disabled, on a radio with no audio peaking filter —
+    // matching VfoWidget::applyRadioSideDspVisibility(), which hides rather
+    // than greys the DSP grid's buttons. A disabled control still claims the
+    // feature exists here and is simply unavailable right now, which is the
+    // wrong thing to tell someone on an Icom.
     if (m_apfRow)
-        m_apfRow->setVisible(m_hasRadioSideDsp);
+        m_apfRow->setVisible(m_hasAudioPeakingFilter);
 
-    const bool bound = m_hasRadioSideDsp && !m_slice.isNull();
+    const bool bound = m_hasAudioPeakingFilter && !m_slice.isNull();
     const bool on    = bound && m_slice->apfOn();
     const int  level = bound ? m_slice->apfLevel() : 50;
 

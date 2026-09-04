@@ -11,11 +11,10 @@
 //      leave exactly one.
 //
 //   2. THE ROW IS CAPABILITY-GATED. APF's only effect is `slice set <n> apf=`,
-//      a verb the radio's firmware executes — the test
-//      docs/architecture/radio-capabilities-map.md gives for a control that
-//      belongs behind hasRadioSideDsp. Ungated on the always-visible CW face it
-//      is the HERMES §17 shape on an Icom or an HL2: the button moves, the
-//      state persists, the audio never changes. §4.
+//      a Flex firmware verb — hasRadioSideDsp is too coarse (Icom declares
+//      that for NR/NB/notch). Ungated on the always-visible CW face it is the
+//      HERMES §17 shape on an Icom: the button moves, the state persists, the
+//      audio never changes. §4.
 //
 //   3. THE TWO DIRECTIONS ROUND-TRIP, AND THE LEVEL FOLLOWS ENGAGEMENT. The
 //      radio-side echo drives the UI (Principle II) and the slider is inert
@@ -148,7 +147,7 @@ int main(int argc, char** argv)
           QString::number(sliceA.modeReceivers()));
 
     // ── §4  Capability gate ─────────────────────────────────────────────────
-    std::printf("\nSection 4 — hasRadioSideDsp gate\n");
+    std::printf("\nSection 4 — hasAudioPeakingFilter gate\n");
     applet.setSlice(&sliceA);
     // Nothing is realised in an offscreen test that never show()s the applet,
     // and the CW face is the non-current page of a QStackedWidget besides — so
@@ -158,8 +157,8 @@ int main(int argc, char** argv)
     check("4.1  row shows by default (permissive while disconnected)",
           !apfRow->isHidden());
 
-    applet.setHasRadioSideDsp(false);
-    check("4.2  a radio with no radio-side DSP hides the row entirely",
+    applet.setHasAudioPeakingFilter(false);
+    check("4.2  a radio with no audio peaking filter hides the row entirely",
           apfRow->isHidden());
     check("4.3  ...and the hidden control cannot be driven", !apfBtn->isEnabled());
 
@@ -176,7 +175,7 @@ int main(int argc, char** argv)
           cmds.count() == before, QString::number(cmds.count() - before));
     apfBtn->setChecked(false);
 
-    applet.setHasRadioSideDsp(true);
+    applet.setHasAudioPeakingFilter(true);
     check("4.5  the row comes back when a capable radio attaches",
           !apfRow->isHidden() && apfBtn->isEnabled());
 

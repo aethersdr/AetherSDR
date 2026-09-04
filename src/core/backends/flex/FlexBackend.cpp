@@ -151,6 +151,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
     caps.hasLmsNoiseFilters = true;
+    // CW audio peaking filter is base Flex firmware (`slice set <n> apf=`).
+    caps.hasAudioPeakingFilter = true;
     // A Flex notches with TNFs, which are pinned to absolute frequencies and
     // are a different instrument. No single in-passband manual notch.
     caps.hasManualNotch = false;

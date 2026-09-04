@@ -368,11 +368,16 @@ public:
     // Flex the moment it disconnects would be a regression rather than an
     // honesty gain.
     //
+    // hasAudioPeakingFilter() is the same permissive shape: APF already
+    // ships on the DSP tab, and hiding the P/CW CW-face row on a Flex
+    // unplug would blink a control the operator still has.
+    //
     // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
     // new button; a permissive default would show it on every radio in
     // the window before a backend reports, including the Flexes that
     // notch with TNFs instead and will never claim it.
     bool hasLmsNoiseFilters() const;
+    bool hasAudioPeakingFilter() const;
     bool hasManualNotch() const;
     // Whether THIS HOST blanks impulse noise in the radio's IQ
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same

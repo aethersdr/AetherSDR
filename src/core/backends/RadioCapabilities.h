@@ -332,6 +332,19 @@ struct RadioCapabilities {
     // radio with LMS filters says true and gets the same three buttons.
     bool hasLmsNoiseFilters = false;
 
+    // The radio runs a CW audio peaking filter in its own firmware, reached
+    // by a command-plane verb (Flex: `slice set <n> apf=` / `apf_level=`).
+    //
+    // A FOURTH tier under hasRadioSideDsp, and the same split that produced
+    // hasLmsNoiseFilters: an Icom runs NR/NB/notch in firmware and therefore
+    // declares hasRadioSideDsp, but it has no APF register. Gating the
+    // always-visible P/CW CW-face row on hasRadioSideDsp would light a
+    // control whose only effect is a Flex verb — HERMES §17 again.
+    //
+    // Named for the CONCEPT, not the vendor. A future radio with an audio
+    // peaking filter says true and gets the same row.
+    bool hasAudioPeakingFilter = false;
+
     // THIS HOST runs an impulse noise blanker on the radio's IQ, so the NB
     // control is real even on a radio whose own firmware has no DSP.
     //

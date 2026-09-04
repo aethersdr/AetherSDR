@@ -1352,6 +1352,15 @@ int main(int argc, char** argv)
         check(!icomCaps.hasLmsNoiseFilters,
               "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
 
+        check(flexCaps.hasAudioPeakingFilter,
+              "Flex declares hasAudioPeakingFilter (`slice set <n> apf=`)");
+        check(!icomCaps.hasAudioPeakingFilter,
+              "Icom declares NO hasAudioPeakingFilter (hasRadioSideDsp is NR/NB/notch, not APF)");
+        check(!hl2Caps.hasAudioPeakingFilter && !simCaps.hasAudioPeakingFilter,
+              "HL2 and Sim declare NO hasAudioPeakingFilter");
+        check(!fresh.hasAudioPeakingFilter,
+              "RadioCapabilities defaults hasAudioPeakingFilter to false (absent unless declared)");
+
         check(!flexCaps.hasManualNotch,
               "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
         check(icomCaps.hasManualNotch,
@@ -1369,6 +1378,8 @@ int main(int argc, char** argv)
         RadioModel disconnected;
         check(disconnected.hasLmsNoiseFilters(),
               "disconnected: hasLmsNoiseFilters() is permissive — the shipping row stays");
+        check(disconnected.hasAudioPeakingFilter(),
+              "disconnected: hasAudioPeakingFilter() is permissive — the Flex CW-face row stays");
         check(!disconnected.hasManualNotch(),
               "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
               "empty window");
