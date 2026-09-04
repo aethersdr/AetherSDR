@@ -105,6 +105,8 @@
 #include "NetworkDiagnosticsDialog.h"
 #include "SystemInfoDialog.h"
 #include "MemoryHistoryRing.h"
+#include "CpuHistoryRing.h"
+#include "UiTickLagMeter.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -1224,9 +1226,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyDarkTheme();
 
+    // The Runtime Monitor's tick-lag meter measures THIS timer's cadence, so
+    // the nominal interval it subtracts is pinned to the interval set here.
+    static_assert(UiTickLagMeter::kNominalIntervalMs == 50.0,
+                  "UiTickLagMeter::kNominalIntervalMs must match the perf heartbeat interval");
+    m_uiTickLagMeter = std::make_unique<UiTickLagMeter>();
     m_perfHeartbeatTimer.setInterval(50);
-    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [] {
+    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [this] {
         PerfTelemetry::instance().recordUiHeartbeat();
+        m_uiTickLagMeter->tick();
     });
     m_perfHeartbeatTimer.start();
 
@@ -1429,6 +1437,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
     m_memoryHistory = std::make_unique<MemoryHistoryRing>();
+    m_cpuHistory = std::make_unique<CpuHistoryRing>();
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
             this, [this](const QString& message) {
         if (!message.isEmpty()) {
@@ -4274,7 +4283,8 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get());
+    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
+                          m_uiTickLagMeter.get());
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)

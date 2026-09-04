@@ -4468,6 +4468,27 @@ target_include_directories(memory_history_ring_test PRIVATE src)
 target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
 add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
 
+# #2554 (Overview tab): the CPU counterpart of the memory ring — retention, the
+# shared bucket rule, and the window-level top-N selection behind the stacked
+# "top threads" chart. Header-only; pure logic, constructed samples; no widget,
+# no socket.
+add_executable(cpu_history_ring_test
+    tests/cpu_history_ring_test.cpp
+)
+target_include_directories(cpu_history_ring_test PRIVATE src)
+target_link_libraries(cpu_history_ring_test PRIVATE Qt6::Core)
+add_test(NAME cpu_history_ring_test COMMAND cpu_history_ring_test)
+
+# #2554 (Overview tab): the GUI tick-lag meter's "actual - nominal" arithmetic,
+# driven with constructed timestamps through its clock seam. Header-only; no
+# timer, no widget, no socket.
+add_executable(ui_tick_lag_meter_test
+    tests/ui_tick_lag_meter_test.cpp
+)
+target_include_directories(ui_tick_lag_meter_test PRIVATE src)
+target_link_libraries(ui_tick_lag_meter_test PRIVATE Qt6::Core)
+add_test(NAME ui_tick_lag_meter_test COMMAND ui_tick_lag_meter_test)
+
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host
 # self-consistency of the detection. Compiled with the same baseline define as

@@ -5,6 +5,8 @@
 #include "core/SystemInfoCollector.h"
 #include "core/ThreadCpuRing.h"
 #include "MemoryHistoryRing.h"
+#include "CpuHistoryRing.h"
+#include "UiTickLagMeter.h"
 
 #include <QFile>
 #include <QHash>
@@ -37,10 +39,15 @@ class SystemInfoDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
-    // `history` is the app-lifetime memory ring MainWindow owns (#2554); the
-    // dialog is WA_DeleteOnClose, so anything it owned would die with Close.
-    // Null means "use my own" — what the tests do.
-    explicit SystemInfoDialog(MemoryHistoryRing* history = nullptr, QWidget* parent = nullptr);
+    // `history` and `cpuHistory` are the app-lifetime rings MainWindow owns
+    // (#2554); the dialog is WA_DeleteOnClose, so anything it owned would die
+    // with Close. `tickLagMeter` is MainWindow's heartbeat meter, read on the
+    // GUI thread when a CPU sample arrives. Null means "use my own" — what the
+    // tests do (an own meter is never ticked, so its readings stay empty).
+    explicit SystemInfoDialog(MemoryHistoryRing* history = nullptr,
+                              CpuHistoryRing* cpuHistory = nullptr,
+                              UiTickLagMeter* tickLagMeter = nullptr,
+                              QWidget* parent = nullptr);
     ~SystemInfoDialog() override;
 
 protected:
@@ -133,6 +140,13 @@ private:
     // reopen shows what was sampled before. History accrues only while open.
     MemoryHistoryRing     m_ownMemoryRing;              // used when nothing is injected
     MemoryHistoryRing*    m_memoryRing{&m_ownMemoryRing};
+
+    // Overview tab (#2554): the CPU ring follows the memory ring's lifetime
+    // rules exactly; the meter is MainWindow's unless nothing was injected.
+    CpuHistoryRing        m_ownCpuRing;
+    CpuHistoryRing*       m_cpuRing{&m_ownCpuRing};
+    UiTickLagMeter        m_ownTickLagMeter;
+    UiTickLagMeter*       m_tickLagMeter{&m_ownTickLagMeter};
     TimeSeriesGraphWidget* m_memoryGraph{nullptr};
     QComboBox*            m_memoryRange{nullptr};
     QLabel*               m_memorySummary{nullptr};

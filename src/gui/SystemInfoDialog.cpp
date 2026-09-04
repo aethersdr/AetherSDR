@@ -118,7 +118,8 @@ QString stateText(ThreadRunState state)
 
 }  // namespace
 
-SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, QWidget* parent)
+SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* cpuHistory,
+                                   UiTickLagMeter* tickLagMeter, QWidget* parent)
     // Title tracks the menu entry — see MainWindow_Menus.cpp for why it is not
     // "System Info". The geometry KEY deliberately does not follow: it is a
     // settings id, and changing it would silently discard the saved window
@@ -129,6 +130,12 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, QWidget* parent)
 {
     if (history != nullptr) {
         m_memoryRing = history;
+    }
+    if (cpuHistory != nullptr) {
+        m_cpuRing = cpuHistory;
+    }
+    if (tickLagMeter != nullptr) {
+        m_tickLagMeter = tickLagMeter;
     }
     auto* layout = new QVBoxLayout(bodyWidget());
     auto* tabs = new QTabWidget(bodyWidget());
