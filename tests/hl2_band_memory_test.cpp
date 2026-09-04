@@ -8,9 +8,14 @@
 // and the band that used to be calibrated comes up on the pinned value in every
 // later session as though the operator had chosen it.
 //
-// This station lost 20 m that way during a witnessed run on 2026-09-03: the
-// stored -12 dB entry was replaced by the launch's pinned value, and the loss
-// was only visible because a backup had been taken minutes earlier.
+// NO FIELD OBSERVATION IS CLAIMED FOR THIS MECHANISM. An earlier version of
+// this comment cited a bench run in which 40 m went from -6 dB to -12 dB. That
+// loss is real but it is NOT this defect: neither launch supplied a
+// lnaGainDb connect param, so no session pin existed and this path never fired.
+// The cause was a separate global RF-gain replay. Inference presented as
+// observation, corrected in the PR body and left corrected here. (#5402 review.)
+//
+// The defect below is established by reading the path and by these assertions.
 //
 // Hl2Backend evaluates these same functions rather than its own copy, so what
 // passes here is what the radio runs
@@ -30,7 +35,9 @@ int g_failures = 0;
 void check(bool ok, const char* what)
 {
     std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", what);
-    if (!ok) ++g_failures;
+    if (!ok) {
+        ++g_failures;
+    }
 }
 
 // This station's clamp, from Hl2Backend's kLnaGainMinDb/kLnaGainMaxDb.
@@ -129,6 +136,46 @@ int main()
                                      false, 0, kDefault, kMin, kMax);
         check(seed.liveDb == kMax,
               "a stored entry above the range clamps to the ceiling");
+    }
+
+
+    // ---- THE SNAPSHOT PATH, which the write-back protection alone missed ----
+    //
+    // Hl2Backend::currentOperatingState() builds the persisted band map, and it
+    // runs on a DEBOUNCED store that any unrelated action schedules -- a
+    // same-band tune, a mode change, a filter change. So it reaches the map long
+    // before the first band change, and protecting only rememberCurrentBandState()
+    // left the pin free to be persisted through it. (#5402 review, Ozy311.)
+    //
+    // Both call sites ask THIS function, so these cases cover the production
+    // snapshot decision rather than a re-typed copy of it.
+    {
+        // The reviewer's exact scenario: 20 m stored at -12, connect pins 20,
+        // then a same-band tune triggers a capture. The capture must record -12.
+        const auto seed = connectLna(/*haveRestoredState=*/true,
+                                     /*hasStoredEntry=*/true, /*storedDb=*/-12,
+                                     /*paramPresent=*/true, /*paramDb=*/20,
+                                     kDefault, kMin, kMax);
+        check(seed.liveDb == 20 && seed.sessionPin,
+              "snapshot: the pin is live at 20 and marked");
+        check(bandMemoryWriteback(seed.liveDb, seed.sessionPin,
+                                  /*hasStoredEntry=*/true, /*storedDb=*/-12) == -12,
+              "snapshot: a capture during a pinned session records the stored -12");
+    }
+    {
+        // Without a pin the snapshot must still record the live value, or a
+        // capture would freeze the band memory against genuine operator changes.
+        check(bandMemoryWriteback(/*liveDb=*/30, /*sessionPin=*/false,
+                                  /*hasStoredEntry=*/true, /*storedDb=*/-12) == 30,
+              "snapshot: without a pin the capture records the live value");
+    }
+    {
+        // A pinned session on a band with NO stored entry has nothing to
+        // protect, so the capture records the live value and the memory still
+        // learns the band.
+        check(bandMemoryWriteback(/*liveDb=*/6, /*sessionPin=*/false,
+                                  /*hasStoredEntry=*/false, /*storedDb=*/0) == 6,
+              "snapshot: an uncalibrated band still records through a capture");
     }
 
     if (g_failures == 0) {

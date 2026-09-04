@@ -85,8 +85,9 @@ inline ConnectLna connectLna(bool haveRestoredState,
 inline int bandMemoryWriteback(int liveDb, bool sessionPin,
                                bool hasStoredEntry, int storedDb)
 {
-    if (sessionPin && hasStoredEntry)
+    if (sessionPin && hasStoredEntry) {
         return storedDb;
+    }
     return liveDb;
 }
 

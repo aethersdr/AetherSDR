@@ -4457,7 +4457,22 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     for (auto it = m_driveByBand.constBegin(); it != m_driveByBand.constEnd(); ++it)
         driveByBand.insert(it.key(), it.value());
     if (!m_currentBandKey.isEmpty()) {
-        lnaByBand.insert(m_currentBandKey, m_lnaGainDb);
+        // THE SAME PRESERVATION RULE AS THE WRITE-BACK, and it has to be here
+        // too. This snapshot is taken on a debounced store that any unrelated
+        // action schedules -- a same-band tune, a mode change, a filter change
+        // -- so it reaches the band map long BEFORE the first band change.
+        // Protecting only rememberCurrentBandState() left the session pin free
+        // to be persisted through this path: restore 20 m at -12, connect with
+        // lnaGainDb=20, tune within 20 m, and the capture stored 20 for 20 m.
+        // (#5402 review, Ozy311.)
+        //
+        // One policy, two call sites asking it -- not two copies of the rule.
+        lnaByBand.insert(
+            m_currentBandKey,
+            AetherSDR::hl2::bandMemoryWriteback(
+                m_lnaGainDb, m_lnaSessionPin,
+                m_lnaDbByBand.contains(m_currentBandKey),
+                m_lnaDbByBand.value(m_currentBandKey)));
         driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
     }
 
