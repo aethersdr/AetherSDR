@@ -8,6 +8,7 @@
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -4869,7 +4870,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)
-            ++m_adcOverloadEdges;
+            ++m_adcOverloadAssertions;
     }
     // Rate-limited, not merely edge-gated. The edge gate above is necessary and
     // was never sufficient: the comparator genuinely chatters on a strong band,
@@ -4888,36 +4889,40 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // Reported rather than dropped because the rate IS the severity here — a
     // flag that sets once is a hint, one that sets on every sample for a minute
     // is a front end being slammed.
-    if (m_adcOverloadEdges > 0
-        && (!m_adcOverloadClock.isValid()
-            || m_adcOverloadClock.hasExpired(kAdcOverloadWarnIntervalMs))) {
-        // Why reading elapsed() here is safe: more than one transition implies
-        // the clock is valid. This flush is unconditional on every telemetry
-        // update and the counter rises by at most one per update, so the first
-        // transition after an invalid clock always flushes in the same call and
-        // resets the count. The count can only exceed one against a running
-        // window.
-        //
-        // What the single-transition branch does NOT mean. It is not "this is
-        // the first overload ever" — it is "exactly one transition was seen in
-        // this window". That lone transition may have arrived at any point since
-        // the window opened, so a bare message can lag the event by up to
+    const AetherSDR::hl2::AdcOverloadWarn w = AetherSDR::hl2::adcOverloadWarn(
+        m_adcOverloadAssertions,
+        m_adcOverloadClock.isValid(),
+        m_adcOverloadClock.isValid() ? m_adcOverloadClock.elapsed() : 0,
+        kAdcOverloadWarnIntervalMs);
+    if (w.warn) {
+        // What the aggregate branch does NOT mean. It is not "this is the first
+        // overload ever" — it is "exactly one assertion was seen in this
+        // window". That lone assertion may have arrived at any point since the
+        // window opened, so a bare message can lag the event by up to
         // kAdcOverloadWarnIntervalMs. Accepted deliberately: it is the cost of
-        // the rate limit, one transition is a hint rather than an emergency, and
+        // the rate limit, one assertion is a hint rather than an emergency, and
         // an isolated overload after a quiet period still reports immediately
         // because the clock is long expired by then.
-        if (m_adcOverloadEdges > 1)
+        if (w.aggregate) {
             // noquote + one composed string: streaming "(" as its own item makes
             // QDebug insert a space after it and print "( 51 times in 10000 ms)".
             qWarning().noquote()
                 << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate"
                 << QStringLiteral("(%1 times in %2 ms)")
-                       .arg(m_adcOverloadEdges)
+                       .arg(w.count)
                        .arg(m_adcOverloadClock.elapsed());
-        else
+        } else {
             qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate";
-        m_adcOverloadClock.restart();
-        m_adcOverloadEdges = 0;
+        }
+        if (w.restartClock) {
+            // start(), NOT restart(). restart() reads the elapsed time first,
+            // and reading it on a timer that was never started is undefined —
+            // which is exactly the first-assertion path, where the clock is
+            // invalid by construction. start() is defined on both, and the
+            // value restart() returns was discarded anyway. (#5381 review.)
+            m_adcOverloadClock.start();
+        }
+        m_adcOverloadAssertions = 0;
     }
 }
 

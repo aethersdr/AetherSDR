@@ -659,12 +659,12 @@ private:
     //
     // So the edge gate stays and a rate limit sits behind it: warn on the first
     // transition, then at most once per window, carrying the count of
-    // transitions the window swallowed. Note what that count is and is not — it
-    // counts the transitions SEEN, at the 10 Hz telemetry cadence, not
+    // assertions the window swallowed. Note what that count is and is not — it
+    // counts the assertions SEEN, at the 10 Hz telemetry cadence, not
     // comparator edges, which are sampled far below their true rate and always
     // were.
     QElapsedTimer m_adcOverloadClock;
-    int m_adcOverloadEdges = 0;
+    int m_adcOverloadAssertions = 0;
     static constexpr qint64 kAdcOverloadWarnIntervalMs = 10000;
     bool m_keyed = false;
     bool m_tuning = false;
