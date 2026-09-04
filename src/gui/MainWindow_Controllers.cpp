@@ -76,24 +76,25 @@ bool usesExternalReceiveControls(const SliceModel* slice)
     return slice && slice->externalReceiveReplacementActive();
 }
 
+// #5384: the AGC-T knob is agc_off_level while AGC is off (0..100 on every
+// backend) and agc_threshold otherwise; SliceModel's agcTKnob* members own
+// that decision, the helpers below only keep the controller's 0..100 scale
+// in step with it.
 int agcThresholdMinimumForSlice(const SliceModel* slice)
 {
-    return usesExternalReceiveControls(slice)
-        ? KiwiSdrProtocol::kAgcThresholdMinDb
-        : 0;
+    return slice ? slice->agcTKnobMinimum() : 0;
 }
 
 int agcThresholdMaximumForSlice(const SliceModel* slice)
 {
-    return usesExternalReceiveControls(slice)
-        ? KiwiSdrProtocol::kAgcThresholdMaxDb
-        : 100;
+    return slice ? slice->agcTKnobMaximum() : 100;
 }
 
 int controllerValueToAgcThreshold(const SliceModel* slice, float value)
 {
     const float clamped = std::clamp(value, 0.0f, 100.0f);
-    if (!usesExternalReceiveControls(slice)) {
+    if (!usesExternalReceiveControls(slice) || slice->agcTKnobUsesOffLevel()) {
+        // agc_off_level and a Flex agc_threshold are both 0..100: 1:1.
         return static_cast<int>(std::lround(clamped));
     }
     constexpr float kUiSpan = 100.0f;
@@ -109,8 +110,8 @@ float agcThresholdToControllerValue(const SliceModel* slice)
     if (!slice) {
         return 0.0f;
     }
-    if (!usesExternalReceiveControls(slice)) {
-        return static_cast<float>(slice->agcThreshold());
+    if (!usesExternalReceiveControls(slice) || slice->agcTKnobUsesOffLevel()) {
+        return static_cast<float>(slice->agcTKnobLevel());
     }
     constexpr float kUiSpan = 100.0f;
     const float agcSpan =
@@ -125,7 +126,7 @@ float agcThresholdToControllerValue(const SliceModel* slice)
 
 int agcThresholdOverlayValue(const SliceModel* slice, int threshold)
 {
-    if (!usesExternalReceiveControls(slice)) {
+    if (!usesExternalReceiveControls(slice) || slice->agcTKnobUsesOffLevel()) {
         return threshold;
     }
     return std::clamp(
@@ -1459,14 +1460,12 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #endif
     } else if (actionId == "WheelAgcT") {
         if (auto* s = activeSlice()) {
-            const int current = usesExternalReceiveControls(s)
-                ? s->receiveAgcThreshold()
-                : s->agcThreshold();
+            // #5384: with AGC off the knob is agc_off_level, as on the slider.
             const int next = std::clamp(
-                current + steps,
+                s->agcTKnobLevel() + steps,
                 agcThresholdMinimumForSlice(s),
                 agcThresholdMaximumForSlice(s));
-            s->setAgcThreshold(next);
+            s->setAgcTKnobLevel(next);
 #ifdef HAVE_HIDAPI
             triggerTMate2Overlay(
                 TMate2Overlay::Agc, agcThresholdOverlayValue(s, next));
@@ -1871,7 +1870,8 @@ void MainWindow::registerMidiParams()
     reg("rx.agcThreshold", "AGC Threshold", "RX", P::Slider, 0, 100,
         [this](float v) {
             if (auto* s = activeSlice()) {
-                s->setAgcThreshold(controllerValueToAgcThreshold(s, v));
+                // #5384: agc_off_level while AGC is off, agc_threshold otherwise.
+                s->setAgcTKnobLevel(controllerValueToAgcThreshold(s, v));
             }
         },
         [this]() -> float {

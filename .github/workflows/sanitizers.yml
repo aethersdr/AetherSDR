@@ -8,7 +8,10 @@ name: Sanitizers
 
 on:
   schedule:
-    - cron: '0 7 * * 1'  # Mondays 07:00 UTC
+    # Saturdays 02:00 Pacific. GitHub cron is UTC and ignores DST, so this is
+    # 02:00 PDT / 01:00 PST; a fixed early-Saturday slot is the point, not the
+    # exact minute.
+    - cron: '0 9 * * 6'
   workflow_dispatch:
 
 permissions:
@@ -19,13 +22,19 @@ jobs:
   sanitize:
     name: ${{ matrix.sanitizer.label }}
     runs-on: ubuntu-latest
-    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    # Per-entry image: the TSan entry runs on the image whose Qt is itself
+    # built with -sanitize thread (.github/docker/Dockerfile.tsan). A TSan
+    # binary against an uninstrumented Qt reports every cross-thread queued
+    # signal as a race, because Qt's own locks are invisible to it; there is
+    # no honest suppression for that class (#5275 S6).
+    container: ${{ matrix.sanitizer.image }}
     strategy:
       fail-fast: false
       matrix:
         sanitizer:
           - id: asan-ubsan
             label: ASan + UBSan
+            image: ghcr.io/aethersdr/aethersdr-ci:latest
             build_type: Debug
             # ON here too, not only under TSan: the churn test's documented
             # failure class is a heap use-after-free on the receiver vector,
@@ -50,6 +59,7 @@ jobs:
               LSAN_OPTIONS=print_suppressions=0
           - id: tsan
             label: TSan
+            image: ghcr.io/aethersdr/aethersdr-ci:tsan
             # TSan cannot coexist with ASan, so build RelWithDebInfo and
             # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
@@ -57,13 +67,52 @@ jobs:
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
             runtime_env: |
-              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1
+              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1:suppressions=${{ github.workspace }}/tests/sanitizers/tsan.supp
 
     steps:
+      # The job's `container:` is pulled by the runner BEFORE any step runs, so
+      # a missing or broken image fails the job with every step skipped —
+      # including the tracking-issue step, which is gated on
+      # steps.ctest.outputs.exit and therefore never fires. The lane would go
+      # dead silently, which is the failure class this whole effort exists to
+      # end (#5411 review). This step cannot prevent that, but it makes the
+      # image an explicit, named precondition in the log rather than an
+      # inference from "the job died instantly", and it fails loudly if the
+      # image is present but not the one we think it is.
+      - name: Confirm the sanitizer image
+        run: |
+          set -e
+          echo "image: ${{ matrix.sanitizer.image }}"
+          if [ "${{ matrix.sanitizer.id }}" = "tsan" ]; then
+            # S6's whole point: TSan must be linking a Qt that is itself
+            # instrumented. If libtsan is not a DT_NEEDED of QtCore we are on
+            # the wrong image and every Qt handoff would report as a race.
+            qtcore=$(find /opt -name 'libQt6Core.so.6' 2>/dev/null | head -1)
+            if [ -z "$qtcore" ]; then
+              echo "::error::no libQt6Core.so.6 in this image — expected the tsan image"
+              exit 1
+            fi
+            if ! ldd "$qtcore" | grep -q libtsan; then
+              echo "::error::$qtcore is not TSan-instrumented. This is not the :tsan image (or build-tsan published a stale one); tests/sanitizers/tsan.supp assumes an instrumented Qt and would be wrong here."
+              exit 1
+            fi
+            echo "ok: $qtcore is linked against libtsan"
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Configure
         env:
+          # CFLAGS as well as CXXFLAGS. The tree is not all C++: WDSP and its
+          # Win32 port, liquid-dsp, rnnoise and the other vendored C libraries
+          # compile as C, and until CFLAGS was set here every one of them was
+          # built UNINSTRUMENTED in both lanes — ASan blind to their heap
+          # accesses, TSan blind to their atomics. For TSan that is the
+          # difference between a report and a fix: WDSP's teardown handshakes
+          # (Interlocked* on volatile longs, the port's __atomic builtins) are
+          # invisible to it without this, so it reports every channel close
+          # as a race whether or not one exists (#5275 S3 verification).
+          CFLAGS:   ${{ matrix.sanitizer.extra_cxx }}
           CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: |
@@ -77,6 +126,20 @@ jobs:
             -DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON
 
       - name: Build
+        # The SAME sanitizer flags as Configure, because this step also runs
+        # configure: vendored Opus is an ExternalProject_Add, so its child
+        # CMake project configures during the parent's BUILD, when a Configure-
+        # only env is long gone. third_party/radae/cmake/BuildOpus.cmake does
+        # not forward CMAKE_C_FLAGS through OPUS_CMAKE_ARGS either, so before
+        # this the bundled codec was built uninstrumented while the rest of the
+        # C tree was instrumented — a hole in S4's "every vendored C library"
+        # claim, and an invisible slice of the audio surface (#5411
+        # second-opinion review, verified with a marker flag that reached the
+        # outer CMakeCache.txt but not build_opus-cfgcmd.txt).
+        env:
+          CFLAGS:   ${{ matrix.sanitizer.extra_cxx }}
+          CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
+          LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: cmake --build build --parallel
 
       - name: Run tests under sanitizer
@@ -84,6 +147,11 @@ jobs:
         continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
+          # No glib event dispatcher. The distro glib is uninstrumented and its
+          # eventfd doorbell shows up as ~290 TSan reports per run on the fd's
+          # shadow cell — not memory, not ours. Qt's own dispatcher is a
+          # supported configuration and costs no suppression (#5275 S4).
+          QT_NO_GLIB: "1"
         # The container image's /bin/sh is Dash, which doesn't understand
         # `set -o pipefail` or ${PIPESTATUS[0]} — without `shell: bash`
         # the step exits at code 2 before reaching ctest, the
@@ -110,27 +178,72 @@ jobs:
           ${{ matrix.sanitizer.runtime_env }}
           EOF
           ec=0
-          ctest --test-dir build --output-on-failure 2>&1 | tee sanitizer.log || ec=$?
+          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee sanitizer.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
         id: extract
         if: steps.ctest.outputs.exit != '0'
         run: |
-          # Sanitizer error blocks all end with a `SUMMARY:` line. Capture
-          # ~80 lines of leading context per match, which is enough for the
-          # full stack on ASan/UBSan/TSan output.
-          grep -B 80 '^SUMMARY:' sanitizer.log > report.txt || true
-          if [ ! -s report.txt ]; then
-            tail -c 50000 sanitizer.log > report.txt
+          # ctest's own verdict goes FIRST, so the 45 KB cap below can never
+          # trim it: the "N tests passed, M failed out of T" line and the
+          # "The following tests FAILED:" list. Before this the body was only
+          # the sanitizer blocks — and once a standing UBSan report sat at
+          # test ~178 of 334, every append from 2026-08-03 on was 80 lines of
+          # context around it and nothing else. radio_capability_gating_test
+          # failed a plain assertion on 2026-08-31 and #4330 never named it.
+          # The lane has to be legible in the issue, not only in a 30-day
+          # artifact.
+          {
+            grep -E '^[0-9]+% tests passed' sanitizer.log || true
+            sed -n '/^The following tests FAILED:/,$p' sanitizer.log
+            echo
+          } > report.txt
+          # Then the sanitizer error blocks. Each ends with a `SUMMARY:` line;
+          # ~80 lines of leading context per match is enough for the full
+          # stack on ASan/UBSan/TSan output.
+          # Gated on the SUMMARY block EXISTING, not on the report's size. A
+          # size gate measures the wrong thing now that the report always opens
+          # with the ctest verdict: five plain assertion failures are already
+          # ~330 bytes, so any size threshold small enough to be meaningful is
+          # already exceeded and the tail never runs — leaving the issue with
+          # test names and no assertion text, which is the #5031 case this
+          # rewrite exists for (#5411 review).
+          if grep -q '^SUMMARY:' sanitizer.log; then
+            grep -B 80 '^SUMMARY:' sanitizer.log >> report.txt
+          else
+            echo '--- last 50 KB of ctest output ---' >> report.txt
+            tail -c 50000 sanitizer.log >> report.txt
           fi
           # Cap at ~45KB to stay well under GitHub's ~65KB issue-body limit
           # once we wrap it in markdown.
           head -c 45000 report.txt > report.trim && mv report.trim report.txt
-          # Stable fingerprint from the first SUMMARY line, used to detect
-          # whether a re-run is the same bug.
-          fp=$(grep -m1 '^SUMMARY:' sanitizer.log | sha256sum | cut -c1-12)
-          echo "fingerprint=${fp:-unknown}" >> "$GITHUB_OUTPUT"
+          # Stable fingerprint, used to decide whether a run is the same bug.
+          # WHICH TESTS FAILED, sorted, by NAME — not the first SUMMARY line
+          # and not ctest's ordinals (#5411 review):
+          #   - `grep -m1 SUMMARY` picks whichever race printed FIRST, and with
+          #     dozens of concurrent reports that order is scheduling-dependent,
+          #     so the fingerprint (now in the title) would churn a fresh sticky
+          #     issue most weeks — the opposite of what S5 wants.
+          #   - ctest prints `263 - name`, and that ordinal shifts whenever a
+          #     test is added earlier in tests.cmake, so an UNCHANGED set of
+          #     failures would fingerprint differently and duplicate the issue.
+          #     #5405 makes adding tests friction-free, so that is a matter of
+          #     time rather than a corner case.
+          # The SUMMARY hash stays as the fallback for a run that dies without
+          # producing a failed-test list at all (never the empty string, which
+          # is what #4330 collected twice: sha256("") is e3b0c44298fc).
+          failed=$(sed -n '/^The following tests FAILED:/,$p' sanitizer.log \
+                   | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+' | sed 's/^[0-9]* - //' | sort -u || true)
+          summary=$(grep -m1 '^SUMMARY:' sanitizer.log || true)
+          if [ -n "$failed" ]; then
+            fp=$(printf '%s' "$failed" | sha256sum | cut -c1-12)
+          elif [ -n "$summary" ]; then
+            fp=$(printf '%s' "$summary" | sha256sum | cut -c1-12)
+          else
+            fp=unknown
+          fi
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: Upload sanitizer artifacts
         if: steps.ctest.outputs.exit != '0'
@@ -154,8 +267,23 @@ jobs:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('report.txt', 'utf8');
-            const title  = `[sanitizer] ${process.env.SAN_LABEL} weekly run failure`;
+            const fp     = process.env.FP;
+            // The fingerprint is in the title so that a NEW failure signature
+            // opens a NEW issue instead of arriving as comment N+1 on an
+            // already-red one, where it reads as more of the same (#5032,
+            // #5275 S5). One open issue per (sanitizer, fingerprint).
+            const fpTag  = fp && fp !== 'unknown' ? ` (fp ${fp})` : '';
+            const title  = `[sanitizer] ${process.env.SAN_LABEL} weekly run failure${fpTag}`;
+            // Lookup key only — see the listForRepo call below. Do not add
+            // labels here: anything extra in this list also has to be on the
+            // existing sticky issue, or the lookup misses it and a duplicate
+            // is opened.
             const labels = ['sanitizer', process.env.SAN_ID];
+            // What a NEW sticky issue opens with. A red weekly lane is the only
+            // full-suite signal the project has (no PR job runs the Linux
+            // tests), so it opens at high priority; a maintainer can triage it
+            // down by hand and the weekly append will not fight that.
+            const createLabels = [...labels, 'bug', 'priority: high'];
             const sha    = context.sha.substring(0, 7);
             const date   = new Date().toISOString().split('T')[0];
 
@@ -185,7 +313,13 @@ jobs:
               labels: labels.join(','),
               per_page: 100,
             });
-            const existing = open.data[0];
+            // Within the label bucket the fingerprint tag in the title picks
+            // the issue. An open issue with no tag is a pre-fingerprint sticky
+            // (#4330, #3462) and absorbs only runs whose fingerprint could not
+            // be computed — a run with a known signature gets its own issue.
+            const tagged   = open.data.find(i => fpTag && i.title.includes(fpTag));
+            const untagged = open.data.find(i => !/\(fp [0-9a-f]{12}\)/.test(i.title));
+            const existing = tagged || (fpTag ? undefined : untagged);
 
             if (existing) {
               await github.rest.issues.createComment({
@@ -200,7 +334,7 @@ jobs:
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
                 title,
-                labels,
+                labels: createLabels,
                 body,
               });
               core.notice(`Opened #${created.data.number}`);

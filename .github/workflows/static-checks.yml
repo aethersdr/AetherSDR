@@ -11,37 +11,22 @@ name: Static Checks
 # #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
 # deleted, rather than left as a fourth near-identical workflow.
 #
-# None of these were required status checks, so consolidating them does not
-# touch branch protection (required contexts are build / check-windows /
-# check-macos).
+# `Static checks` is NOT yet a required status check. The required contexts
+# are build / check-windows / check-macos; adding this one is the LAST action
+# of the #5405 rollout, after that PR merges, and until it happens the frozen
+# per-PR test gate below (tools/check_ci_test_gate.py) is advisory — a red run
+# here does not block a merge. Do not describe it as enforced before the flip
+# is made and verified.
+#
+# The `paths:` filter is gone, and that ordering is deliberate: a required
+# check a PR never triggers blocks that PR forever, so the filter has to go
+# BEFORE the flip, not with it. (Making it required first is what briefly
+# blocked eleven open PRs.) Every step is stdlib Python in seconds, so running
+# on every pull request costs less than one blocked docs-only PR.
 
 on:
   pull_request:
     branches: ["**"]
-    # Union of what the three workflows gated on, widened to src/** rather than
-    # the old src/{gui,core,models} enumeration. The scripts are seconds each
-    # and now share one runner, so a broader trigger is cheaper than a precise
-    # one — and ci.yml's own history (see the check-windows comment) is a long
-    # record of hand-maintained path allow-lists leaking. a11y-check.yml
-    # previously had NO paths filter at all and ran on docs-only PRs.
-    paths:
-      - "src/**"
-      - "resources/themes/**"
-      - "resources/shaders/**"
-      - "CMakeLists.txt"
-      - "tools/audit_colours.py"
-      - "tools/check_a11y.py"
-      - "tools/check_engine_boundary.py"
-      - "tools/gen_touchpoint_manifest.py"
-      - "tools/check_network_timeouts.py"
-      - "tools/check_shader_dialects.py"
-      - "tools/check_test_registration.py"
-      - "tools/check_theme_seed.py"
-      - "tools/gen_theme_seed.py"
-      - "docs/architecture/aetherd-touchpoint-tags.json"
-      - "docs/architecture/aetherd-touchpoint-status.json"
-      - "docs/architecture/aetherd-touchpoints.md"
-      - ".github/workflows/static-checks.yml"
 
 # Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
 # workflow: the run_id suffix and the main guard never trigger here (ref is
@@ -107,6 +92,21 @@ jobs:
       - name: Test registration location
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
+
+      # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
+      # and a short allow-list of platform-toolchain tests behind `ctest -R`
+      # steps; the full suite runs unfiltered on every push to main
+      # (full-suite.yml) and again weekly under the sanitizers
+      # (sanitizers.yml), and every add_test() in tests/tests.cmake that the
+      # default configure builds joins both the moment it is declared. This
+      # resolves every -R pattern in every pull-request workflow against the
+      # registered names the way ctest does and fails if the result is not
+      # exactly .github/ci-test-gate.txt. Removing a test from the gate: run
+      # `python tools/check_ci_test_gate.py --update` and commit. Adding one is
+      # a diff to that maintainer-owned file, on purpose.
+      - name: Per-PR test gate is frozen
+        if: ${{ !cancelled() }}
+        run: python tools/check_ci_test_gate.py --strict
 
       # ── Network transfer-timeout ratchet (#4688 §6). A QNetworkAccessManager
       # with no transfer timeout turns a half-open connection into a reply that

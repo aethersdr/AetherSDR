@@ -1,5 +1,22 @@
 name: CI
 
+# ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
+# This workflow does not run the test suite. The Linux `build` job runs NO
+# tests; the only `ctest -R` steps are the ones listed in
+# .github/ci-test-gate.txt, kept on the macOS and Windows jobs because the
+# claim each pins is about THAT platform's toolchain (Apple Metal, MSVC
+# portability, #4559's Windows-only separator failure) — not because Linux
+# cannot run them; most of them also run on the weekly Linux lane. That list
+# does not grow. The full suite runs unfiltered in two places, and a test that
+# the default configure builds joins BOTH the moment it is declared: on every
+# push to main (full-suite.yml, minutes after a merge — that is the one that
+# will tell you) and again weekly under the sanitizers (sanitizers.yml). So a
+# new test needs no step here — do not add one, however invisible the defect
+# it pins. tools/check_ci_test_gate.py (Static checks) fails any -R pattern
+# that resolves to a name the frozen list does not carry. Removing a
+# step is welcome: run `python tools/check_ci_test_gate.py --update` and
+# commit; the script only ever shrinks the list.
+
 on:
   pull_request:
     branches: [main]
@@ -94,9 +111,9 @@ jobs:
       - name: Ensure ccache is present
         run: command -v ccache || (apt-get update && apt-get install -y ccache)
 
-      # Keep the PR gate honest while the rolling CI image catches up with a
+      # Keep the PR build honest while the rolling CI image catches up with a
       # Dockerfile dependency change. This is a no-op once the image contains
-      # librtlsdr-dev, and ensures rtl_backend_test exists on this exact head.
+      # librtlsdr-dev, and ensures the RTL-SDR backend compiles on this head.
       - name: Ensure RTL-SDR build dependency is present
         run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
 
@@ -176,249 +193,6 @@ jobs:
 
       - name: Build
         run: cmake --build build -j$(nproc)
-
-      # The Build step above compiles `all`, so every test target in the tree
-      # is already linked by the time we get here — and until #4559 this
-      # workflow ran none of them. Two cross_needle_meter_test assertions duly
-      # sat failing on main unnoticed. Running it here costs the ~10 s of
-      # runtime and no build time at all.
-      #
-      # QT_QPA_PLATFORM=offscreen is what makes the render measurements
-      # deterministic (bit-identical across Windows / Linux x86_64 / macOS
-      # arm64 / Linux arm64 — see #4559). CMakeLists.txt sets it as a test
-      # property too; it is repeated here so the requirement is legible at the
-      # call site rather than only in the build system.
-      #
-      # hgauge_range_test joins it for the same reason (#4636): HGauge is a
-      # SHARED widget — MeterApplet, AcomApplet and PhoneCwApplet all draw on
-      # it — and the defect it pins (a range change leaving the painted fill on
-      # the old axis) was invisible to every value/min/max assertion in the
-      # tree, which is how it shipped in AcomApplet and stayed there. It is
-      # plain float arithmetic, verified identical on Windows/MSVC, macOS
-      # arm64 and Linux/GCC, so gating it on Linux alone is enough.
-      # hgauge_hover_popup_test is a different flakiness class from the two
-      # above: it is wall-clock timed against the badge's linger rather than
-      # pure arithmetic, so it is written so a loaded runner makes it SLOWER
-      # rather than red. Every "gone by now" assertion polls to a generous
-      # deadline instead of sleeping a fixed span, so overshooting costs time
-      # and nothing else. The one assertion that cannot do that is the one
-      # pinning the linger at 450 ms rather than #3936's superseded 1000 ms:
-      # it has to land in the GAP between the two, so waiting several
-      # multiples would sail past 1000 ms and the old value would pass it just
-      # as happily. That one measures elapsed time and reports a skip rather
-      # than asserting, if the runner stalled out of the window.
-      - name: Test meter geometry and gauge scaling
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test|hgauge_hover_popup_test" --no-tests=error --output-on-failure
-
-      # band_edges_test joins the gate for the reason stated above the meter
-      # tests: it pins a defect that every existing assertion in the tree was
-      # blind to. #4723 shipped a 60m upper edge 1.3 kHz below the top of a
-      # legal channel, so band grouping, the per-band auto-save cap, digital
-      # mode matching and the TX-filter PTT preflight all quietly disagreed
-      # with the FCC allocation, and nothing went red. It is pure arithmetic
-      # over constexpr data — no widgets, no event loop, no wall clock — so it
-      # is deterministic everywhere and gating it on Linux alone is enough.
-      # Runtime is milliseconds and the Build step already compiled it.
-      # bandplan_voice_labels_test rides along for the same reason and reads the
-      # shipped resource rather than a fixture, so a relabel that drops the
-      # emission token out of a 60m segment fails here rather than showing up as
-      # voice markers that quietly never appear.
-      - name: Test band edges and band-plan voice labels
-        run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --no-tests=error --output-on-failure
-
-      # The workspace-canvas suites (RFC #4887) join the gate on the same
-      # rationale, and for a specific reason: their whole value proposition is
-      # "pure logic, pinned headless on every platform", and until this step
-      # existed none of the six ran in any job. Linux compiles `all`, so they
-      # linked and nobody noticed they were never executed — which by
-      # Principle VIII demotes every assertion they carry from evidence to
-      # hypothesis (PR #4900 review, H2).
-      #
-      # What they pin is the class of defect that does not announce itself:
-      # pixel-edge rounding that only grows seams at particular canvas widths,
-      # a z invariant whose breakage makes raise/lower quietly stop working
-      # after enough operations, and a newer-schema guard whose failure mode is
-      # silently destroying a document a later build wrote. All of it is
-      # arithmetic plus one offscreen widget test — no radio, no network, no
-      # wall clock — so it is deterministic everywhere and gating on Linux
-      # alone is enough.
-      #
-      # Measured, not assumed: 244/250/243 ms for all six, against targets the
-      # Build step already linked.
-      - name: Test workspace canvas
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^workspace_" --no-tests=error --output-on-failure
-
-      # Slippy-map world wrap. Same reasoning as the step above: the target is
-      # already linked by Build, the test runs in milliseconds, and it touches
-      # no network — but without a step here it would compile and go green
-      # having never executed. It pins the tile-hierarchy floor for negative
-      # tile x (the world copy west of the base one), the canonical-URL
-      # mapping, the camera crossing the dateline without the scene rect
-      # clamping it, and the wheel-zoom round trip.
-      - name: Test map wrap
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^map_wrap_test$" --no-tests=error --output-on-failure
-
-      # PSK Reporter query scope, parser bounds, rate-limit backoff, path
-      # unwrapping, and solar-position math. Pure Core test with no network.
-      - name: Test PSK Reporter map behavior
-        run: ctest --test-dir build -R "^psk_reporter_map_behavior_test$" --no-tests=error --output-on-failure
-
-      # Async marker/path/terminator cache replacement must retain visible
-      # content and cancel superseded work. Offscreen GUI test, no network.
-      - name: Test PSK Reporter map live updates
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^map_live_update_test$" --no-tests=error --output-on-failure
-
-      # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
-      # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
-      # the demo making the GUI thread carry a 333 Hz precise timer plus the
-      # whole synthesis load — the regression class only an executed test
-      # keeps dead. Pure event-loop test; ~1.5 s measured.
-      - name: Test demo backend threading
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "^sim_signal_source_test$" --no-tests=error --output-on-failure
-
-      # The MIDI settings store and the #4888 profile import/export boundary:
-      # the .map/XML importers (a parser fed contributor-supplied files —
-      # Principle VII's own example), the export round trip, the store's
-      # save/load, and the binding-collision rules. Until this step the suite
-      # ran in no job (#4898 approval: "green here means the tree compiled"),
-      # and its history shows what that costs: the suite sat green at 47
-      # checks while an unbounded read an operator could reach from the
-      # Import… picker waited for review to find it, and green again at 67
-      # while the Pitch Bend export→import round trip was broken (#5024) —
-      # Principle VIII's executed-vs-linked distinction, same as the
-      # workspace-canvas block above. Qt6::Core only — no widgets, no QPA
-      # platform, no radio, no wall clock; file I/O confined to its own temp
-      # dir. Measured, not assumed: 0.06 s warm / 0.32 s first run
-      # (RelWithDebInfo, Intel Mac), against a target the Build step already
-      # linked.
-      - name: Test MIDI settings and profile import/export
-        run: ctest --test-dir build -R "^midi_settings_test$" --no-tests=error --output-on-failure
-
-      # NR2's AGC recovery and settings migration claims are deterministic,
-      # headless, and already built by the Linux `all` target. Run them on PRs
-      # so a compiled-but-unexecuted regression cannot merge unnoticed.
-      - name: Test NR2 DSP and settings migration
-        run: ctest --test-dir build -R "^(spectral_nr|nr2_settings_model)_test$" --no-tests=error --output-on-failure
-
-      # Restored after #4877 bounded FFTW planning for every test. This step was
-      # previously 188-190 s on a cold runner; it now measures ~3 s while still
-      # exercising six four-second AM/SAM audio bursts through the real HL2 DSP.
-      - name: Test HL2 AM/SAM DC blocker
-        run: ctest --test-dir build -R "^hl2_am_dcblock_test$" --no-tests=error --output-on-failure
-
-      # rtl_backend_test exercises the RTL-SDR backend's gain reset, state
-      # validation, sample-rate clamping, DDC output, and discovery stub — things that
-      # can regress silently because the backend is an optional dependency.
-      # The CI image carries librtlsdr-dev, so the backend and its test are
-      # always built here. ~0.1 s, no hardware or event loop.
-      - name: Test RTL-SDR backend
-        run: ctest --test-dir build -R "^rtl_backend_test$" --no-tests=error --output-on-failure
-
-      # ulanzi_mapping_migration_test was on this gate (added by #4834) and is
-      # not any more. Unlike hl2_am_dcblock_test above it was not costing
-      # anything — it measured 0 s in every run sampled — so this is a scope
-      # call, not a budget one: it runs weekly under the sanitizers job with
-      # the rest of the suite. What it caught before the merge it now catches
-      # on Monday. The defect class is real and worth knowing about if the
-      # slot is reconsidered: guarding wheel dispatch on
-      # UlanziDialMappings::knownWheelActions() turned an unrecognised action
-      # id from a harmless fall-through into an early return, so an action
-      # added to the else-if chain and forgotten in the registry is a control
-      # that silently does nothing — no log, no crash, nothing any other
-      # assertion in the tree can see.
-
-      # tci_protocol_test joins the gate for the same reason as the steps
-      # above: it pins defects nothing else in the tree can see. TCI's
-      # malformed-input class (#4345, #4523) is *specifically* the kind that
-      # stays invisible — the malformed command lands on a plausible value and
-      # broadcasts a well-formed notification, so every other assertion in the
-      # suite, and every client watching the wire, sees a normal change. There
-      # is no crash and no log line to notice. Three instances have now shipped
-      # that way, and the only thing that would have caught any of them is this
-      # test running before the merge rather than on the weekly sanitizers job.
-      #
-      # It is parser arithmetic plus one in-process demo-backend connection —
-      # no widgets, no sockets, no wall clock — and it runs in ~0.2 s against a
-      # target the Build step already linked. The one event-loop wait polls to
-      # a deadline, so a loaded runner makes it slower rather than red.
-      - name: Test TCI protocol parsing and malformed-input rejection
-        run: ctest --test-dir build -R "^tci_protocol_test$" --no-tests=error --output-on-failure
-
-      # The TX capture path joins the gate for the reason stated above the TCI
-      # step: its defects are the invisible kind. Capture negotiation has no UI
-      # and no error -- a mic opened on the wrong rung, or a channel/format
-      # canonicalization that slips the interleave, produces audio that sounds
-      # like a DSP fault or like nothing at all, on someone else's operating
-      # system. That is the whole reason AudioFormatNegotiator takes the target
-      # OS as DATA rather than an #ifdef (#3306): a Linux runner proves the
-      # Windows and macOS ladders too.
-      #
-      # These three targets were added by #5017 and, until this step, nothing
-      # on a pull request selected any of them -- the full unfiltered suite runs
-      # only on the weekly sanitizers job, so a regression here had a week to
-      # reach main. They are pure arithmetic over injected inputs -- no widgets,
-      # no audio device, no event loop, no wall clock -- and run in well under a
-      # second against targets the Build step already linked.
-      - name: Test TX capture format negotiation and voice-strip framing
-        run: ctest --test-dir build -R "^(audio_format_negotiation_test|tx_mic_channel_normalizer_test|tx_voice_processor_test)$" --no-tests=error --output-on-failure
-
-      # THE CI-V MODE MAP IS INVISIBLE FROM THE UI. A missing arm in
-      # modeFromNeutral() does not throw, does not log, and does not fail to
-      # build — setSliceMode() takes the "no equivalent" path and re-asserts the
-      # radio's current mode, so the control appears to do nothing. That is what
-      # hid the DFM hole: selecting FM-D simply reverted, and the on-air cost was
-      # a radio transmitting from the MICROPHONE instead of the modulator.
-      #
-      # These are table assertions — no radio, no sockets, no event loop, ~0.1 s
-      # against a target the Build step already linked.
-      #
-      # icom_meters_test rides along because it owns the model table's
-      # invariants, and this PR proved they were unguarded: setting the
-      # IC-9700's hasVfoModeCommand tripped "no model silently inherits a DATA
-      # command shape" and all four checks stayed green, because nothing in this
-      # file ran that target either. A capability flag that gates which frame
-      # reaches the radio is exactly the kind of claim worth failing a merge on.
-      # tx_applet_power_reconciliation_test rides along because it consumes the
-      # normalized tuner capability and pins unavailable/inactive/active widget
-      # state without hiding the shared Transmit-app layout.
-      # radio_capability_gating_test owns the socket-free IC-9700 safety proof:
-      # unsupported startup/periodic reads and ordinary/extension writes all
-      # fail closed before transport I/O.
-      - name: Test Icom CI-V codec, model table and command scheduler
-        # Guard both erosion modes. --no-tests=error fails an EMPTY selection,
-        # but ctest still exits 0 when a proper subset matches — which is
-        # exactly how the retired icom_backend_test disappeared from this gate
-        # while four other names kept it green. The count pin below fails the
-        # step the moment any single enumerated target stops registering.
-        env:
-          ICOM_GATE: "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|rf_gain_presentation_test|icom_power_derivation_test|phone_cw_mic_gain_authority_test|tx_applet_power_reconciliation_test|radio_capability_gating_test)$"
-        run: |
-          test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "9"
-          ctest --test-dir build -R "$ICOM_GATE" --no-tests=error --output-on-failure
-
-      # The CTCSS list is a shared RX/VFO presentation surface used by every
-      # backend that publishes FM tone controls. This test renders the custom
-      # item delegate and verifies the popup row cap. The existing focused
-      # wiring contract pins both full-desktop consumers to the shared
-      # population, label and style paths; merely building either test would
-      # not exercise those claims on a pull request.
-      - name: Test shared CTCSS tone presentation
-        env:
-          QT_QPA_PLATFORM: offscreen
-          CTCSS_PRESENTATION_GATE: "^(ctcss_tone_label_test|fm_tone_presentation_contract)$"
-        run: |
-          test "$(ctest --test-dir build -N -R "$CTCSS_PRESENTATION_GATE" | sed -n 's/^Total Tests: //p')" = "2"
-          ctest --test-dir build -R "$CTCSS_PRESENTATION_GATE" --no-tests=error --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
@@ -688,31 +462,48 @@ jobs:
         # fails fast (with logs) if it ever hangs again, instead of running to
         # the 6-hour job limit.
         #
-        # This comment used to justify that by claiming cross-platform test
-        # linkage "is already exercised by the Linux/macOS CI that build AND
-        # run the full suite". It never was: before #4559 the only ctest calls
-        # in this file were the ThumbDV allow-list below and asr_gpu_probe_test
-        # in check-macos, and the Linux `build` job ran none. That wrong claim
-        # is how cross_needle_meter_test failed on main for weeks unnoticed.
-        # The Linux job now runs that one test; everything else still runs only
-        # in sanitizers.yml — weekly, and non-gating.
+        # No job in this file runs the Linux test suite; the full suite runs
+        # unfiltered on full-suite.yml (every push to main) and again weekly on
+        # sanitizers.yml. The tests built and run here are the ones whose claim
+        # is about the MSVC toolchain, which a Linux lane cannot make.
         #
         # cross_needle_meter_test is the deliberate exception to the
         # no-test-tree rule here. #4559's separator assertion failed on Windows
         # while passing on Linux, so gating its reformulated assertions on
-        # Windows too is what actually backs their claim to be bit-identical
+        # Windows is what actually backs their claim to be bit-identical
         # across platforms. One small test exe and ~10 s of ctest.
         timeout-minutes: 45
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
+      # The count pin is NOT redundant with the frozen list, and this is the
+      # one step that needs it. check_ci_test_gate.py compares names it reads
+      # out of tests.cmake's SOURCE TEXT; it does not evaluate the CMake
+      # conditions around them. Wrap one of these four add_test() calls in a
+      # condition that is false on this platform and the text is unchanged, so
+      # the frozen list still matches — while the configured build registers
+      # three, this alternation selects three, and --no-tests=error is happy
+      # because three is not zero. That is the partial-erosion case the old
+      # `Total Tests: N` pins existed for (#5232), and it is exactly how
+      # icom_backend_test once fell off a gate unnoticed (#5405
+      # second-opinion review). bash rather than the Windows default shell so
+      # the idiom matches the one this project already used.
       - name: Test ThumbDV portability paths
-        run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --no-tests=error --output-on-failure
+        #
+        # The pattern is repeated rather than held in an env var because
+        # check_ci_test_gate.py refuses `-R "$VAR"`: an opaque variable is the
+        # one thing a reviewer of the frozen list cannot read. Repeating it is
+        # the cost of that rule, and the checker resolves both occurrences to
+        # the same four names.
+        shell: bash
+        run: |
+          test "$(ctest --test-dir build -N -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" | sed -n 's/^Total Tests: //p')" = "4"
+          ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --no-tests=error --output-on-failure
 
       # cross_needle_meter_test renders widgets; the offscreen platform makes
       # its measurements deterministic (verified bit-identical across
-      # Windows/Linux x86_64/macOS arm64/Linux arm64 — see #4559). The Linux
-      # `build` job runs this too; Windows is the platform on which #4559's
-      # separator assertion actually failed, which is the point of gating both.
+      # Windows/Linux x86_64/macOS arm64/Linux arm64 — see #4559). Windows is
+      # the platform on which #4559's separator assertion actually failed,
+      # which is why it is gated here and not on the Linux job.
       # CMakeLists.txt sets QT_QPA_PLATFORM as a test property as well — it is
       # repeated here so the requirement is legible at the call site.
       - name: Test cross-needle meter geometry

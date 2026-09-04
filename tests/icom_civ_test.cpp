@@ -275,6 +275,87 @@ static void testFmRepeaterCommands()
           "receive CTCSS tone write frame");
 }
 
+static void testGps()
+{
+    // Official IC-705 CI-V pp. 21/25 layout:
+    // N 34 13.464, W 118 03.534, 1742.5 m, 275 deg, 42.7 km/h,
+    // 2026-08-21 12:34:56 UTC.
+    const std::array<std::uint8_t, 27> wire{
+        0x34, 0x13, 0x46, 0x40, 0x01,
+        0x01, 0x18, 0x03, 0x53, 0x40, 0x00,
+        0x01, 0x74, 0x25, 0x00,
+        0x02, 0x75,
+        0x00, 0x04, 0x27,
+        0x20, 0x26, 0x08, 0x21, 0x12, 0x34, 0x56,
+    };
+    const auto position = decodeGpsPosition(wire);
+    check(position.has_value(), "IC-705 GPS position decodes");
+    check(position && std::abs(position->latitude - 34.2244) < 0.000001,
+          "latitude dd mm.mmm and north flag decode");
+    check(position && std::abs(position->longitude - -118.0589) < 0.000001,
+          "longitude ddd mm.mmm and west flag decode");
+    check(position && position->altitudeMetres
+              && std::abs(*position->altitudeMetres - 1742.5) < 0.01,
+          "signed tenth-metre altitude decodes");
+    check(position && position->courseDegrees.value_or(-1) == 275,
+          "course decodes in one-degree steps");
+    check(position && position->speedKmh
+              && std::abs(*position->speedKmh - 42.7) < 0.01,
+          "speed decodes in tenth-km/h steps");
+    check(position && position->utcIso8601.value_or("") == "2026-08-21T12:34:56Z",
+          "full GPS UTC date and time decode");
+
+    auto southEast = wire;
+    southEast[4] = 0x00;   // south
+    southEast[10] = 0x01;  // east
+    const auto opposite = decodeGpsPosition(southEast);
+    check(opposite && opposite->latitude < 0.0 && opposite->longitude > 0.0,
+          "hemisphere flags preserve the official asymmetric encoding");
+
+    std::array<std::uint8_t, 27> noSignal{};
+    noSignal.fill(0xff);
+    check(!decodeGpsPosition(noSignal), "all-FF no-signal GPS report is rejected");
+    auto malformed = wire;
+    malformed[3] |= 0x01;  // low nibble is documented fixed zero
+    check(!decodeGpsPosition(malformed), "fixed GPS nibbles are validated");
+    auto impossibleDate = wire;
+    impossibleDate[22] = 0x02;
+    impossibleDate[23] = 0x30;
+    const auto noInvalidUtc = decodeGpsPosition(impossibleDate);
+    check(noInvalidUtc && !noInvalidUtc->utcIso8601,
+          "an impossible calendar date is not published as UTC");
+    auto beyondPole = wire;
+    beyondPole[0] = 0x90;
+    beyondPole[1] = 0x00;
+    beyondPole[2] = 0x00;
+    beyondPole[3] = 0x10;
+    check(!decodeGpsPosition(beyondPole),
+          "90 degrees plus non-zero minutes is rejected");
+    std::vector<std::uint8_t> wrongLength(wire.begin(), wire.end());
+    wrongLength.push_back(0x00);
+    check(!decodeGpsPosition(wrongLength),
+          "the fixed IC-705 position payload rejects trailing bytes");
+
+    check(bytesAre(cmdReadGpsPosition(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x23, 0x00, 0xFD}),
+          "GPS position read frame");
+    check(bytesAre(cmdReadGpsSource(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x23, 0x01, 0xFD}),
+          "GPS source read frame");
+    check(bytesAre(cmdNtpAccess(kIc705, true),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x07, 0x01, 0xFD}),
+          "NTP sync-now frame");
+    check(bytesAre(cmdReadNtpAccessResult(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x08, 0xFD}),
+          "NTP access-result read frame");
+
+    const std::array<std::uint8_t, 8> server{'t', 'i', 'm', 'e', '.', 'n', 'i', 's'};
+    check(bytesAre(cmdWriteSettingData(kIc705, setting::kNtpServer, server),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x05, 0x01, 0x68,
+                    't', 'i', 'm', 'e', '.', 'n', 'i', 's', 0xFD}),
+          "NTP server address write uses the documented variable ASCII payload");
+}
+
 static void testReassembler()
 {
     CivReassembler r;
@@ -642,10 +723,10 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The twelve that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 26 27. A
+    // The thirteen that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 23 26 27. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 12, "exactly twelve CI-V commands are sub-addressed");
+    check(subAddressed == 13, "exactly thirteen CI-V commands are sub-addressed");
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +897,7 @@ int main()
     testFraming();
     testBcd();
     testFmRepeaterCommands();
+    testGps();
     testReassembler();
     testModes();
     testCommands();

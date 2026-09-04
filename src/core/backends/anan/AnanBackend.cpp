@@ -290,6 +290,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
     c.hasAmplifier = false;
     c.hasRadioSideDsp = false;     // DSP is engine-side (AnanRxDsp), not firmware
+    c.hasAudioPeakingFilter = false; // no firmware APF verb on this path
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.persistsMemories = false;    // default; stated explicitly

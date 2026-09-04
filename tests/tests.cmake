@@ -515,6 +515,20 @@ add_executable(icom_meters_test
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
 
+# Socket-free lifecycle policy for the IC-705 one-shot NTP access command.
+add_executable(icom_ntp_access_test tests/icom_ntp_access_test.cpp)
+target_include_directories(icom_ntp_access_test PRIVATE src)
+target_link_libraries(icom_ntp_access_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_ntp_access_test COMMAND icom_ntp_access_test)
+
+# Socket-free injected-transport coverage for the IC-705 23 00/01 position
+# decode and the 0167-0169 / 1A 08 clock read-backs: frames go straight into
+# IcomCivBackend::onCivFrame, no fake peer.
+add_executable(icom_gps_readback_test tests/icom_gps_readback_test.cpp)
+target_include_directories(icom_gps_readback_test PRIVATE src)
+target_link_libraries(icom_gps_readback_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_gps_readback_test COMMAND icom_gps_readback_test)
+
 # Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
 # per-deck watt derivation, sibling-model isolation, and unkey clearing.
 add_executable(icom_power_derivation_test
@@ -2691,6 +2705,17 @@ target_include_directories(cw_sidetone_device_match_test PRIVATE src)
 target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
 
+# #4281 — who owns the Client-Side QSO recorder's TX slot. Pure, header-only,
+# so the truth table is a compile-time assertion; the run-time rows carry the
+# labels. The static_assert on the function's own type is the regression pin:
+# the defect was an extra input (mic-capture state), so re-adding one fails the
+# build rather than silently restoring room noise over the recorded CW.
+add_executable(cw_record_gate_test
+    tests/cw_record_gate_test.cpp
+)
+target_include_directories(cw_record_gate_test PRIVATE src)
+add_test(NAME cw_record_gate_test COMMAND cw_record_gate_test)
+
 # #5028 — the RTTY sensitivity slider's confidence mapping. Pure, header-only;
 # the floor/default/ceiling rows are compile-time static_asserts, so every CI
 # build enforces them even outside the ctest gates.
@@ -3746,15 +3771,11 @@ set_tests_properties(connection_panel_size_test PROPERTIES
 # the arithmetic and parent-chain matching in isolation, not a replacement
 # for the PR's own real-X11-input proof.
 #
-# Compiled and linked by the Linux build job, but not currently in any of
-# ci.yml's named ctest -R filters for the per-PR gate — CI building it
-# without running it (per-PR) is the only thing exercising it today; the
-# weekly sanitizers job is the sole scheduled `ctest` run that includes it
-# by not filtering, and per ci.yml that job has failed every run since
-# 2026-06-08. Pure arithmetic and four bare QWindows, no widgets/sockets/
-# wall clock, milliseconds to run — a reasonable candidate for one of the
-# per-PR filters, but that's a maintainer call on the gate's scope, not
-# this PR's to make unilaterally.
+# Compiled and linked by the Linux build job and executed unfiltered on every
+# push to main (.github/workflows/full-suite.yml) and again weekly under the
+# sanitizers, like every other Linux test; the per-PR gate in ci.yml is frozen
+# and does not take new entries (AGENTS.md, "Gate integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
+# wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp
     src/gui/FramelessResizer.cpp
@@ -4143,6 +4164,23 @@ set_target_properties(phone_applet_dexp_visibility_test PROPERTIES AUTOMOC ON)
 add_test(NAME phone_applet_dexp_visibility_test
          COMMAND phone_applet_dexp_visibility_test)
 set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
+# slice rebind must not stack handlers, the capability gate, and the model
+# round trip in both directions. No radio, no sockets.
+add_executable(phone_cw_applet_apf_test
+    tests/phone_cw_applet_apf_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_applet_apf_test PRIVATE src)
+target_link_libraries(phone_cw_applet_apf_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_applet_apf_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_applet_apf_test COMMAND phone_cw_applet_apf_test)
+set_tests_properties(phone_cw_applet_apf_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(phone_cw_mic_gain_authority_test

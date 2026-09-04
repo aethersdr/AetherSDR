@@ -161,6 +161,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/CwRecordGate.h": {
+  "tag": "universal",
+  "note": "Pure predicates for Client-Side QSO-recorder TX-slot ownership during a CW over; radio-agnostic policy, no vendor wire.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/CwSidetoneGenerator.h": {
   "tag": "universal",
   "note": "Engine-side low-latency CW sidetone DSP driven by keying intent; radio-agnostic (DAX only in comment).",

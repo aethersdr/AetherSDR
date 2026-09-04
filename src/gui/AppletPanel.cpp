@@ -1815,11 +1815,12 @@ void AppletPanel::setSlice(SliceModel* slice)
     if (m_aetherClockApplet)
         m_aetherClockApplet->setSlice(slice);
 
-    if (slice) {
-        connect(slice, &SliceModel::modeChanged,
-                m_phoneCwApplet, &PhoneCwApplet::setMode);
-        m_phoneCwApplet->setMode(slice->mode());
-    }
+    // The mode connection used to be made here with no prior disconnect, and
+    // MainWindow calls setSlice on every active-slice change — so returning to
+    // a slice already visited stacked another handler and setMode fired N
+    // times per mode change.  PhoneCwApplet::setSlice now owns both edges of
+    // the binding and disconnects the outgoing slice first (#4879).
+    m_phoneCwApplet->setSlice(slice);
 }
 
 void AppletPanel::setAntennaList(const QStringList& ants)

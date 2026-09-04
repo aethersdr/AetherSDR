@@ -2609,6 +2609,17 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
+        // The four keyer controls below commit through their TransmitModel
+        // setters, never raw wire text.  Each setter updates local state and
+        // emits phoneStateChanged BEFORE sending the same command, and that
+        // local update is the only thing that makes the value stick on a
+        // backend which never echoes the setting back: `iambic` and
+        // `iambic_mode` are parsed in exactly one place in the tree
+        // (FlexBackend::decodeTransmitState), so on a Hermes-Lite 2 nothing
+        // else ever moves the model.  Sending only the wire text leaves the
+        // dialog reseeding from a stale model and leaves
+        // MainWindow_Session's syncLocalKeyerToRadio unaware, so the keyer
+        // keeps the old mode too (#5256).
         // Iambic: Enabled | A | B
         auto* iamLbl = new QLabel("Iambic:");
         iamLbl->setStyleSheet(kLabelStyle);
@@ -2616,18 +2627,18 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* iamBtn = mkTogBtn(tx.cwIambic() ? "Enabled" : "Disabled", tx.cwIambic());
         connect(iamBtn, &QPushButton::toggled, this, [this, iamBtn](bool on) {
             iamBtn->setText(on ? "Enabled" : "Disabled");
-            m_model->sendCommand(QString("cw iambic %1").arg(on ? 1 : 0));
+            m_model->transmitModel().setCwIambic(on);
         });
         grid->addWidget(iamBtn, 0, 1);
         auto* modeA = mkTogBtn("A", tx.cwIambicMode() == 0);
         auto* modeB = mkTogBtn("B", tx.cwIambicMode() == 1);
         connect(modeA, &QPushButton::clicked, this, [this, modeA, modeB] {
             modeA->setChecked(true); modeB->setChecked(false);
-            m_model->sendCommand("cw mode 0");
+            m_model->transmitModel().setCwIambicMode(0);
         });
         connect(modeB, &QPushButton::clicked, this, [this, modeA, modeB] {
             modeA->setChecked(false); modeB->setChecked(true);
-            m_model->sendCommand("cw mode 1");
+            m_model->transmitModel().setCwIambicMode(1);
         });
         grid->addWidget(modeA, 0, 2);
         grid->addWidget(modeB, 0, 3);
@@ -2638,7 +2649,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         grid->addWidget(swapLbl, 0, 4);
         auto* swapBtn = mkTogBtn("Dot/Dash", tx.cwSwapPaddles());
         connect(swapBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_model->sendCommand(QString("cw swap %1").arg(on ? 1 : 0));
+            m_model->transmitModel().setCwSwapPaddles(on);
         });
         grid->addWidget(swapBtn, 0, 5);
 
@@ -2650,11 +2661,11 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* cwlBtn = mkTogBtn("CWL", tx.cwlEnabled());
         connect(cwuBtn, &QPushButton::clicked, this, [this, cwuBtn, cwlBtn] {
             cwuBtn->setChecked(true); cwlBtn->setChecked(false);
-            m_model->sendCommand("cw cwl_enabled 0");
+            m_model->transmitModel().setCwlEnabled(false);
         });
         connect(cwlBtn, &QPushButton::clicked, this, [this, cwuBtn, cwlBtn] {
             cwuBtn->setChecked(false); cwlBtn->setChecked(true);
-            m_model->sendCommand("cw cwl_enabled 1");
+            m_model->transmitModel().setCwlEnabled(true);
         });
         grid->addWidget(cwuBtn, 1, 1);
         grid->addWidget(cwlBtn, 1, 2);

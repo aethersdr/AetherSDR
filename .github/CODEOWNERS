@@ -212,6 +212,11 @@ LICENSE                      @aethersdr/maintainers
 # as the .claude/commands/ line above — do not narrow it back to a literal.
 SECURITY*                    @aethersdr/maintainers
 .github/CODEOWNERS           @aethersdr/maintainers
+# The per-PR test gate's frozen allow-list. Tier 1, not Tier 2, on purpose:
+# the file exists so that GROWING the gate is a visible, maintainer-reviewed
+# diff rather than one more "rides along" step in ci.yml (which is Tier 2).
+# See tools/check_ci_test_gate.py.
+.github/ci-test-gate.txt     @aethersdr/maintainers
 .github/codeql/              @aethersdr/maintainers
 docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 

@@ -308,6 +308,12 @@ int main(int argc, char** argv)
               "Flex declares hasMultiClientSessions (multiFLEX)");
         check(caps.hasGpsLocation,
               "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
+        check(caps.hasGpsSatelliteTelemetry,
+              "Flex declares hasGpsSatelliteTelemetry (tracked satellites and visibility)");
+        check(caps.hasGpsFrequencyReference,
+              "Flex declares hasGpsFrequencyReference (GPSDO 10 MHz discipline)");
+        check(!caps.hasGpsTimeConfiguration,
+              "Flex declares hasGpsTimeConfiguration=false (no CI-V-style NTP client controls)");
         check(caps.hasGpsHardware,
               "Flex declares GPS hardware for Radio Setup presentation");
         check(caps.canReboot && caps.hasRemoteOnControl && caps.canUpgradeFirmware,
@@ -467,6 +473,12 @@ int main(int argc, char** argv)
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
         check(!caps.hasGpsLocation,
               "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
+        check(!caps.hasGpsSatelliteTelemetry,
+              "HL2 declares hasGpsSatelliteTelemetry=false");
+        check(!caps.hasGpsFrequencyReference,
+              "HL2 declares hasGpsFrequencyReference=false");
+        check(!caps.hasGpsTimeConfiguration,
+              "HL2 declares hasGpsTimeConfiguration=false");
         check(!caps.hasGpsHardware,
               "HL2 declares hasGpsHardware=false");
         check(!caps.canReboot && !caps.hasRemoteOnControl
@@ -898,6 +910,12 @@ int main(int argc, char** argv)
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
+        check(!caps.hasGpsSatelliteTelemetry,
+              "Sim declares hasGpsSatelliteTelemetry=false");
+        check(!caps.hasGpsFrequencyReference,
+              "Sim declares hasGpsFrequencyReference=false");
+        check(!caps.hasGpsTimeConfiguration,
+              "Sim declares hasGpsTimeConfiguration=false");
         check(!caps.hasGpsHardware, "Sim declares hasGpsHardware=false");
         check(!caps.canReboot && !caps.hasRemoteOnControl
                   && !caps.canUpgradeFirmware,
@@ -1334,6 +1352,15 @@ int main(int argc, char** argv)
         check(!icomCaps.hasLmsNoiseFilters,
               "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
 
+        check(flexCaps.hasAudioPeakingFilter,
+              "Flex declares hasAudioPeakingFilter (`slice set <n> apf=`)");
+        check(!icomCaps.hasAudioPeakingFilter,
+              "Icom declares NO hasAudioPeakingFilter (hasRadioSideDsp is NR/NB/notch, not APF)");
+        check(!hl2Caps.hasAudioPeakingFilter && !simCaps.hasAudioPeakingFilter,
+              "HL2 and Sim declare NO hasAudioPeakingFilter");
+        check(!fresh.hasAudioPeakingFilter,
+              "RadioCapabilities defaults hasAudioPeakingFilter to false (absent unless declared)");
+
         check(!flexCaps.hasManualNotch,
               "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
         check(icomCaps.hasManualNotch,
@@ -1351,6 +1378,8 @@ int main(int argc, char** argv)
         RadioModel disconnected;
         check(disconnected.hasLmsNoiseFilters(),
               "disconnected: hasLmsNoiseFilters() is permissive — the shipping row stays");
+        check(disconnected.hasAudioPeakingFilter(),
+              "disconnected: hasAudioPeakingFilter() is permissive — the Flex CW-face row stays");
         check(!disconnected.hasManualNotch(),
               "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
               "empty window");

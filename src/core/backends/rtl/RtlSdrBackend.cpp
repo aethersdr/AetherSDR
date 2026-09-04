@@ -119,6 +119,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.persistsMemories = false;
     c.hasSupplyVoltageTelemetry = false;
     c.hasMultiClientSessions = false;
+    c.hasAudioPeakingFilter = false;
 
     // Client owns all state (RTL-SDR persists nothing)
     c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::Tuning

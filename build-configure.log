@@ -1,0 +1,132 @@
+-- The C compiler identification is GNU 16.2.1
+-- The CXX compiler identification is GNU 16.2.1
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found OpenGL: /usr/lib/libOpenGL.so
+-- Found WrapOpenGL: TRUE
+-- Found WrapVulkanHeaders: /usr/include
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Check size of off64_t
+-- Check size of off64_t - done
+-- Looking for fseeko
+-- Looking for fseeko - found
+-- Looking for unistd.h
+-- Looking for unistd.h - found
+-- Qt6::SerialPort found — serial PTT/CW support enabled
+-- Qt6::WebSockets found — FreeDV Reporter spot source enabled
+-- Qt6::DBus found — sleep inhibition via D-Bus enabled
+-- Qt6Keychain found — credential persistence enabled
+-- Checking for module 'portaudio-2.0'
+--   Found portaudio-2.0, version 19
+-- Checking for module 'fftw3'
+--   Found fftw3, version 3.3.11
+-- Will build vendored opus with FARGAN
+-- RADE enabled (bundled vendored Opus snapshot)
+-- Opus: using RADE's bundled build
+CMake Warning at /usr/lib/cmake/Qt6/QtPublicDependencyHelpers.cmake:339 (message):
+  This project is using headers of the GuiPrivate module and will therefore
+  be tied to this specific Qt module build version.  Running this project
+  against other versions of the Qt modules may crash at any arbitrary point.
+  This is not a bug, but a result of using Qt internals.  You have been
+  warned!
+
+  You can disable this warning by setting QT_NO_PRIVATE_MODULE_WARNING to ON.
+Call Stack (most recent call first):
+  /usr/lib/cmake/Qt6GuiPrivate/Qt6GuiPrivateConfig.cmake:58 (_qt_internal_show_private_module_warning)
+  CMakeLists.txt:387 (find_package)
+
+
+-- GPU spectrum rendering enabled (QRhi, Qt 6.11.2)
+-- NR4 (libspecbleach) enabled — /home/jeremy/agent-worktrees/460f1777/wt-pr5146/third_party/libspecbleach
+-- DFNR (DeepFilterNet3) enabled — /home/jeremy/agent-worktrees/460f1777/wt-pr5146/third_party/deepfilter/lib/linux-x86_64/libdeepfilter.a
+-- Found OpenSSL: /usr/lib/libcrypto.so (found version "3.6.4")
+-- MQTT client support enabled (bundled libmosquitto, TLS via OpenSSL 3.6.4)
+-- Checking for module 'libpipewire-0.3'
+--   Found libpipewire-0.3, version 1.6.8
+-- AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-later
+-- Vendored SQLite /home/jeremy/agent-worktrees/460f1777/wt-pr5146/third_party/sqlite (settings store, RFC #4603)
+-- Found Threads: TRUE
+-- ASR: Vulkan GPU backend enabled (glslc: /usr/bin/glslc)
+CMake Warning (deprecated) at third_party/whisper.cpp/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Found Git: /usr/bin/git (found version "2.55.0")
+-- The ASM compiler identification is GNU
+-- Found assembler: /usr/bin/cc
+-- ccache found, compilation results will be cached. Disable with GGML_CCACHE=OFF.
+-- CMAKE_SYSTEM_PROCESSOR: x86_64
+-- GGML_SYSTEM_ARCH: x86
+-- Found OpenMP_C: -fopenmp (found version "5.2")
+-- Found OpenMP_CXX: -fopenmp (found version "5.2")
+-- Found OpenMP: TRUE (found version "5.2")
+-- Including CPU backend
+-- x86 detected
+-- Adding CPU backend variant ggml-cpu: -msse4.2;-mf16c;-mfma;-mbmi2;-mavx;-mavx2 GGML_SSE42;GGML_F16C;GGML_FMA;GGML_BMI2;GGML_AVX;GGML_AVX2
+-- Found Vulkan: /usr/lib/libvulkan.so (found version "1.4.357") found components: glslc glslangValidator
+-- Vulkan found
+-- GL_KHR_cooperative_matrix supported by glslc
+-- GL_NV_cooperative_matrix2 supported by glslc
+-- GL_NV_cooperative_matrix_decode_vector supported by glslc
+-- GL_EXT_integer_dot_product supported by glslc
+-- GL_EXT_bfloat16 supported by glslc
+-- Including Vulkan backend
+-- ggml version: 0.16.0
+-- ggml commit:  384ab018
+-- ASR: whisper.cpp enabled (CPU backend), separate aetherasr lib; weights download-on-demand
+-- Build SHA: 384ab018
+resources/shaders/texturedquad.vert -> resources/shaders/texturedquad.vert.qsb exposed as :/shaders/resources/shaders/texturedquad.vert.qsb
+resources/shaders/texturedquad.frag -> resources/shaders/texturedquad.frag.qsb exposed as :/shaders/resources/shaders/texturedquad.frag.qsb
+resources/shaders/texturedquad_rowframes.frag -> resources/shaders/texturedquad_rowframes.frag.qsb exposed as :/shaders/resources/shaders/texturedquad_rowframes.frag.qsb
+resources/shaders/overlay.vert -> resources/shaders/overlay.vert.qsb exposed as :/shaders/resources/shaders/overlay.vert.qsb
+resources/shaders/overlay.frag -> resources/shaders/overlay.frag.qsb exposed as :/shaders/resources/shaders/overlay.frag.qsb
+resources/shaders/overlay_frequency_preview.frag -> resources/shaders/overlay_frequency_preview.frag.qsb exposed as :/shaders/resources/shaders/overlay_frequency_preview.frag.qsb
+resources/shaders/spectrum.vert -> resources/shaders/spectrum.vert.qsb exposed as :/shaders/resources/shaders/spectrum.vert.qsb
+resources/shaders/spectrum.frag -> resources/shaders/spectrum.frag.qsb exposed as :/shaders/resources/shaders/spectrum.frag.qsb
+resources/shaders/panscope.frag -> resources/shaders/panscope.frag.qsb exposed as :/shaders/resources/shaders/panscope.frag.qsb
+resources/shaders/wavescope.frag -> resources/shaders/wavescope.frag.qsb exposed as :/shaders/resources/shaders/wavescope.frag.qsb
+resources/shaders/dss_mesh.vert -> resources/shaders/dss_mesh.vert.qsb exposed as :/shaders/resources/shaders/dss_mesh.vert.qsb
+resources/shaders/dss_mesh.frag -> resources/shaders/dss_mesh.frag.qsb exposed as :/shaders/resources/shaders/dss_mesh.frag.qsb
+-- MIDI controller support enabled (RtMidi)
+-- Found PkgConfig: /usr/bin/pkg-config (found version "3.0.6")
+-- Checking for module 'alsa'
+--   Found alsa, version 1.2.16.1
+-- Checking for module 'hidapi-hidraw'
+--   Found hidapi-hidraw, version 0.15.0
+-- Checking for module 'librtlsdr'
+--   Found librtlsdr, version 2.0.3
+-- Checking for module 'fftw3f'
+--   Found fftw3f, version 3.3.11
+-- RTL-SDR ... found with fftw3f — RtlSdrBackend enabled
+-- hidapi found — USB HID encoder support enabled
+-- Checking for module 'libonnxruntime'
+--   Found libonnxruntime, version 1.29.0
+-- ONNX Runtime found — ASR ONNX (Silero VAD, speaker labeling) + signal classifier enabled
+-- sherpa-onnx not found — non-whisper ASR backend disabled (run scripts/setup/setup-sherpa-onnx.sh to enable)
+-- NVIDIA AFX GPU denoiser enabled (runtime-loaded)
+-- Linux DAX bridge enabled (PulseAudio pipe modules)
+-- Linux DAX RX uses native pw_stream (libpipewire-0.3 1.6.8)
+-- Configuring done (5.5s)
+-- Generating done (3.0s)
+-- Build files have been written to: /home/jeremy/agent-worktrees/460f1777/wt-pr5146/build
