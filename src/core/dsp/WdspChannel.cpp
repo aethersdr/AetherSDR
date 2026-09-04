@@ -689,6 +689,11 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
     return wdspPortOutstandingAllocations();
 }
 
+std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
+{
+    return std::unique_lock<std::mutex>(g_setupMutex);
+}
+
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
 {
     if (config.inputBlockSize == 0 || config.dspBlockSize == 0 ||

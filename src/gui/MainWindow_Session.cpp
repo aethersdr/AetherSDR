@@ -255,6 +255,39 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
+
+    // aetherd ANAN P2 Phase 1b: ANAN-G2 radios answer openHPSDR Protocol 2
+    // discovery on the same UDP/1024 port number as HL2's Protocol 1 (a
+    // different wire format entirely), tagged family="anan" so RadioModel
+    // routes the connect through AnanBackend. Mirrors the HL2 wiring above
+    // line for line.
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_ananDiscovery.start();
+
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    if (RtlSdrDiscovery::isAvailable()) {
+        m_rtlDiscovery.start();
+    }
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
@@ -279,10 +312,16 @@ void MainWindow::wireDiscovery()
                     m_autoConnectSerial.clear();
             });
     connect(m_connPanel, &ConnectionPanel::retryDiscoveryRequested, this, [this] {
-        m_connPanel->setStatusText("Searching your local network…");
+        m_connPanel->setStatusText(RtlSdrDiscovery::isAvailable()
+                                       ? "Searching local network & USB devices…"
+                                       : "Searching your local network…");
         if (m_titleBar) m_titleBar->setDiscovering(true);
         m_discovery.stopListening();
         m_discovery.startListening();
+        if (RtlSdrDiscovery::isAvailable()) {
+            m_rtlDiscovery.stop();
+            m_rtlDiscovery.start();
+        }
     });
     connect(m_connPanel, &ConnectionPanel::networkDiagnosticsRequested,
             this, &MainWindow::showNetworkDiagnosticsDialog);
@@ -593,7 +632,8 @@ void MainWindow::updateExperimentalRadioSupport(bool connected)
         box->setAttribute(Qt::WA_DeleteOnClose);
         box->setIcon(QMessageBox::Information);
         box->setWindowTitle(QStringLiteral("Experimental radio support"));
-        box->setText(experimentalRadioNoticeText(noticeDescriptor.displayName));
+        box->setText(experimentalRadioNoticeText(
+            noticeDescriptor.displayName, m_radioModel.backendCapabilities().canTransmit));
         box->setStandardButtons(QMessageBox::Ok);
         box->setDefaultButton(QMessageBox::Ok);
         if (QAbstractButton* continueButton = box->button(QMessageBox::Ok)) {
@@ -1161,16 +1201,15 @@ void MainWindow::wireRadioModel()
         // VITA-49 burst pressure on the GUI event loop can't gap CW elements
         // (#3623) — same reason the iambic keyer below avoids QTimer.
         m_cwxLocalKeyer = std::make_unique<CwxLocalKeyer>();
-        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
+        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down,
+                                                   std::chrono::steady_clock::time_point when) {
             // Lock-free atomic gate; safe to call directly from the keyer
-            // thread, matching the iambic keyer's gate path below.
-            // CWX: same fix pending (#4890).  This keyer runs the same
-            // absolute-grid schedule (#3644) and knows each edge's instant
-            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
-            // so its sidetone renders wake rhythm while the iambic path
-            // below renders scheduled rhythm.
+            // thread, matching the iambic keyer's gate path below.  `when`
+            // is the element's absolute grid instant (#4890/#4977), so a
+            // machine-formed CWX macro renders the rhythm it was scheduled
+            // with rather than the worker's wake rhythm.
             if (m_audio)
-                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
+                m_audio->setCwKeyDown(down, when);   // keys audible + recorder sidetone
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
                 this, [this](const QString& text, int wpm) {

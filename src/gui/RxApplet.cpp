@@ -1,5 +1,5 @@
 #include "RxApplet.h"
-#include "core/CtcssTones.h"
+#include "gui/CtcssToneLabel.h"
 
 #include "gui/FilterStepMath.h"
 #include "gui/FmTonePresentation.h"
@@ -280,16 +280,6 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
     if (mode.startsWith("FDV"))          return digSettings;  // FreeDV digital voice
     return ssbSettings;  // fallback for unknown modes
 }
-
-// ── Standard CTCSS tone table (EIA/TIA-603) ──────────────────────────────────
-
-// The tone table moved to core/CtcssTones.h so the automation bridge's
-// `slice tone` verb validates against the same set this dropdown offers
-// (#5102). Aliased rather than renamed at every use site.
-using CTCSSTone = AetherSDR::CtcssTone;
-static constexpr auto& CTCSS_TONES = AetherSDR::kCtcssTones;
-static constexpr int CTCSS_COUNT =
-    static_cast<int>(AetherSDR::kCtcssToneCount);
 
 // Small checkable button used throughout the applet.
 static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
@@ -732,15 +722,9 @@ void RxApplet::buildUI()
         // CTCSS tone value dropdown
         {
             m_toneValueCmb = new GuardedComboBox;
-            for (int i = 0; i < CTCSS_COUNT; ++i) {
-                const auto& t = CTCSS_TONES[i];
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                const QString label = t.code > 0
-                    ? QString("%1 %2 %3").arg(t.code).arg(t.designation).arg(frequency)
-                    : frequency;
-                m_toneValueCmb->addItem(label, frequency);
-            }
-            AetherSDR::applyComboStyle(m_toneValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_toneValueCmb);
+            AetherSDR::applyComboStyle(
+                m_toneValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_toneValueCmb->setEnabled(false);  // enabled only when CTCSS TX
             m_fmLayout->addWidget(m_toneValueCmb);
 
@@ -752,16 +736,10 @@ void RxApplet::buildUI()
             });
 
             m_toneRxValueCmb = new GuardedComboBox;
-            for (int i = 0; i < CTCSS_COUNT; ++i) {
-                const auto& t = CTCSS_TONES[i];
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                const QString label = t.code > 0
-                    ? QString("%1 %2 %3").arg(t.code).arg(t.designation).arg(frequency)
-                    : frequency;
-                m_toneRxValueCmb->addItem(label, frequency);
-            }
+            AetherSDR::populateCtcssToneCombo(m_toneRxValueCmb);
             m_toneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
-            AetherSDR::applyComboStyle(m_toneRxValueCmb);
+            AetherSDR::applyComboStyle(
+                m_toneRxValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_toneRxValueCmb->setVisible(false);
             m_fmLayout->addWidget(m_toneRxValueCmb);
             connect(m_toneRxValueCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1954,17 +1932,10 @@ void RxApplet::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < CTCSS_COUNT; ++i) {
-        const CTCSSTone& tone = CTCSS_TONES[i];
-        const QString frequency = QString::number(tone.frequency, 'f', 1);
-        const QString toneLabel = tone.code > 0
-            ? QString("%1 %2 %3").arg(tone.code).arg(tone.designation).arg(frequency)
-            : frequency;
-        m_toneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, toneLabel));
-        m_toneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, toneLabel));
-    }
+    configureCtcssToneComboLabels(
+        m_toneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_toneRxValueCmb, presentation, FmToneRole::Rx);
     const QString sliceMode = m_slice ? m_slice->mode() : QString();
     const bool modeEligible = sliceMode == QLatin1String("FM")
         || sliceMode == QLatin1String("NFM") || sliceMode == QLatin1String("DFM");

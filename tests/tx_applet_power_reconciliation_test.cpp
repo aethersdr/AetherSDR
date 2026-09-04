@@ -6,6 +6,7 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QLabel>
 #include <QSignalSpy>
 #include <QPushButton>
 #include <QSlider>
@@ -47,6 +48,17 @@ QWidget* namedWidget(TxApplet& applet, const QString& accessibleName)
     for (QWidget* widget : widgets) {
         if (widget->accessibleName() == accessibleName)
             return widget;
+    }
+    return nullptr;
+}
+
+QLabel* labelWithText(TxApplet& applet, const QString& text)
+{
+    const QList<QLabel*> labels = applet.findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (label->text() == text) {
+            return label;
+        }
     }
     return nullptr;
 }
@@ -229,6 +241,116 @@ void testAtuSuccessTogglesToBypass()
                && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu start"));
 }
 
+void testAtuCapabilityUsesThreeVisibleStates()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+
+    auto* atu = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU tune")));
+    auto* mem = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU memories")));
+    QLabel* success = labelWithText(applet, QStringLiteral("Success"));
+    QLabel* bypass = labelWithText(applet, QStringLiteral("Byp"));
+    QLabel* memory = labelWithText(applet, QStringLiteral("Mem"));
+    report("ATU capability widgets exist",
+           atu && mem && success && bypass && memory);
+    if (!atu || !mem || !success || !bypass || !memory) {
+        return;
+    }
+    const QString inactiveSuccessStyle = success->styleSheet();
+    const QString inactiveBypassStyle = bypass->styleSheet();
+    const QString inactiveMemoryStyle = memory->styleSheet();
+
+    report("available inactive ATU controls remain enabled",
+           atu->isEnabled() && mem->isEnabled()
+               && !atu->isCheckable() && mem->isCheckable()
+               && !mem->isChecked());
+    report("available inactive indicators are greyed",
+           success->isEnabled() && bypass->isEnabled() && memory->isEnabled()
+               && !inactiveSuccessStyle.isEmpty()
+               && inactiveSuccessStyle == inactiveBypassStyle
+               && inactiveSuccessStyle == inactiveMemoryStyle);
+
+    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    model.setHasTuner(false);
+    model.setHasTunerMemories(false);
+    QApplication::processEvents();
+    report("unavailable tuner controls remain visible",
+           !atu->isHidden() && !mem->isHidden()
+               && !success->isHidden() && !bypass->isHidden() && !memory->isHidden());
+    report("unavailable tuner controls are dimmed and inert",
+           !atu->isEnabled() && !mem->isEnabled());
+    report("unavailable tuner indicators are dimmed",
+           !success->isEnabled() && !bypass->isEnabled() && !memory->isEnabled()
+               && success->styleSheet() != inactiveSuccessStyle
+               && bypass->styleSheet() != inactiveBypassStyle
+               && memory->styleSheet() != inactiveMemoryStyle);
+    atu->click();
+    mem->click();
+    report("unavailable tuner controls emit no commands", commandSpy.isEmpty());
+    report("unavailable tuner controls explain the state",
+           atu->toolTip()
+                   == QStringLiteral("Antenna tuner controls are unavailable for this radio")
+               && mem->toolTip()
+                   == QStringLiteral("ATU memory controls are unavailable for this radio"));
+
+    model.setHasTuner(true);
+    model.setHasTunerMemories(true);
+    QApplication::processEvents();
+    report("available tuner controls return to inactive state",
+           atu->isEnabled() && mem->isEnabled()
+               && !mem->isChecked()
+               && success->styleSheet() == inactiveSuccessStyle
+               && bypass->styleSheet() == inactiveBypassStyle
+               && memory->styleSheet() == inactiveMemoryStyle);
+
+    model.setHasTunerMemories(false);
+    QApplication::processEvents();
+    report("Icom-style tuner availability keeps memory surfaces unavailable",
+           atu->isEnabled() && !mem->isEnabled()
+               && atu->contextMenuPolicy() == Qt::NoContextMenu
+               && success->isEnabled() && success->styleSheet() == inactiveSuccessStyle
+               && !memory->isEnabled() && memory->styleSheet() != inactiveMemoryStyle);
+    mem->click();
+    report("unavailable tuner-memory control emits no command", commandSpy.isEmpty());
+
+    model.setHasTunerMemories(true);
+    QApplication::processEvents();
+    report("tuner-memory capability restores memory-only menu actions",
+           atu->contextMenuPolicy() == Qt::CustomContextMenu);
+
+    TransmitDelta active;
+    active.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+    active.atuEnabled = true;
+    active.memoriesEnabled = true;
+    active.usingMemory = true;
+    model.applyChanges(active);
+    QApplication::processEvents();
+    report("available active tuner indicators are enabled",
+           success->isEnabled() && memory->isEnabled() && bypass->isEnabled()
+               && success->styleSheet() != inactiveSuccessStyle
+               && memory->styleSheet() != inactiveMemoryStyle
+               && bypass->styleSheet() == inactiveBypassStyle);
+    report("available active tuner memory control follows radio readback",
+           !atu->isCheckable() && mem->isChecked());
+    const QString activeSuccessStyle = success->styleSheet();
+    const QString activeMemoryStyle = memory->styleSheet();
+
+    model.setHasTuner(false);
+    model.setHasTunerMemories(false);
+    QApplication::processEvents();
+    report("active tuner controls dim when capability disappears",
+           mem->isChecked()
+               && !atu->isEnabled() && !mem->isEnabled()
+               && !success->isEnabled() && !memory->isEnabled()
+               && success->styleSheet() != inactiveSuccessStyle
+               && memory->styleSheet() != inactiveMemoryStyle
+               && success->styleSheet() != activeSuccessStyle
+               && memory->styleSheet() != activeMemoryStyle);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -254,6 +376,7 @@ int main(int argc, char** argv)
     testCapabilityPowerScaleHonoursBandCeiling();
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
+    testAtuCapabilityUsesThreeVisibleStates();
 
     std::printf("\n%s\n",
                 g_failed == 0

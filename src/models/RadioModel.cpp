@@ -8,9 +8,14 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
+#include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
+#include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
 #include "core/backends/icom/IcomCredentials.h"  // password: keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
+#ifdef AETHER_BACKEND_RTL
+#include "core/backends/rtl/RtlSdrBackend.h"    // RTL-SDR backend (family "rtl")
+#endif
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
@@ -565,6 +570,42 @@ void RadioModel::notePcAudioEnabled(bool on)
                                QStringLiteral("audio.pc.state"), 0, on);
 }
 
+void RadioModel::setGpsNtpEnabled(bool on)
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.ntp.enabled"), 0, on);
+}
+
+void RadioModel::setGpsNtpServer(const QString& address)
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.ntp.server"), 0, address);
+}
+
+void RadioModel::setGpsTimeCorrectionEnabled(bool on)
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.time-correction"), 0, on);
+}
+
+void RadioModel::requestGpsNtpSync()
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.ntp.sync"), 0, {});
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {
@@ -607,6 +648,26 @@ void RadioModel::handRestoredStateToBackend(const QString& serial)
 // call cannot block on the keyring — see its header.
 static void populateFamilyParams(RadioConnectRequest& req, const QString& family)
 {
+    // The DDC0 rate and ADC options are connect-time preferences selected in
+    // ConnectionPanel's ANAN-only manual-connect rows. Operating state such as
+    // frequency is deliberately absent until this backend participates in the
+    // radio-scoped RadioStateMemory contract.
+    if (family.compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0) {
+        req.params.insert(QStringLiteral("anan.ddc0RateKsps"),
+                          anan::AnanSettings::ddc0RateKsps());
+        req.params.insert(QStringLiteral("anan.ditherEnabled"),
+                          anan::AnanSettings::ditherEnabled());
+        req.params.insert(QStringLiteral("anan.randomEnabled"),
+                          anan::AnanSettings::randomEnabled());
+        req.params.insert(QStringLiteral("anan.ddc0AdcIndex"),
+                          anan::AnanSettings::ddc0AdcIndex());
+        req.params.insert(QStringLiteral("anan.bypassAdc0Filters"),
+                          anan::AnanSettings::bypassAdc0Filters());
+        req.params.insert(QStringLiteral("anan.bypassAdc1Filters"),
+                          anan::AnanSettings::bypassAdc1Filters());
+        return;
+    }
+
     if (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) != 0)
         return;
     req.params.insert(QStringLiteral("icom.username"), IcomSettings::username());
@@ -668,6 +729,12 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
 {
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
         return std::make_unique<hl2::Hl2Backend>();
+    // ANAN-G2 (openHPSDR Protocol 2). Like HL2 this is a pure seam backend —
+    // it owns no RadioConnection and no PanadapterStream, so the
+    // dynamic_cast chain in setupBackend() correctly skips it too. RX-only
+    // in this phase (aetherd ANAN P2 Phase 1b); canTransmit is false.
+    if (family.compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0)
+        return std::make_unique<anan::AnanBackend>();
     // Icom networked radios (IC-705, IC-7300MK2, …). Like HL2 this is a pure
     // seam backend — it owns no RadioConnection and no PanadapterStream, so the
     // dynamic_cast chain in setupBackend() correctly skips it and every model
@@ -685,6 +752,14 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     // same way it does for Flex (see the dynamic_cast below).
     if (family.compare(QLatin1String("sim"), Qt::CaseInsensitive) == 0)
         return std::make_unique<SimBackend>();
+    if (family.compare(QLatin1String("rtl"), Qt::CaseInsensitive) == 0) {
+#ifdef AETHER_BACKEND_RTL
+        return std::make_unique<rtl::RtlSdrBackend>();
+#else
+        qWarning() << "RadioModel: RTL-SDR backend requested but RTL support is disabled";
+        return nullptr;
+#endif
+    }
     return std::make_unique<FlexBackend>();
 }
 
@@ -723,6 +798,12 @@ void RadioModel::setupBackend(const QString& family)
         // guarded by a dynamic_cast so the Flex path stays byte-identical and a
         // non-Flex backend simply skips it (it owns its own wire objects).
         m_backend = makeBackend(m_family);
+        if (!m_backend) {
+            emit connectionError(
+                tr("This build has no RTL-SDR support — librtlsdr or fftw3f "
+                   "was unavailable when AetherSDR was compiled."));
+            return;
+        }
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
@@ -3373,7 +3454,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // family for the whole process. Same-family reconnects rebuild nothing.
     const QString wantFamily = info.family.isEmpty() ? QStringLiteral("flex")
                                                      : info.family.toLower();
-    if (wantFamily != m_family) {
+    if (wantFamily != m_family || !m_backend) {
         qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
                            << "->" << wantFamily << "for" << info.address.toString();
         // F1 (#4448): a family switch is a hard radio change — drop every live and
@@ -3383,6 +3464,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         teardownBackend();
         setupBackend(wantFamily);
         emit backendRebuilt();
+        if (!m_backend) {
+            return;
+        }
     }
 
     // An attempt is in flight from here until it lands, fails, or is abandoned
@@ -3390,6 +3474,18 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // tears the old backend down and can emit a disconnect — cannot clear the
     // flag we are about to set.
     m_connectAttemptActive = true;
+
+    // Network identity is session-owned. Seed only the endpoint we actually
+    // selected; radio-authoritative CI-V/SmartSDR replies replace it and fill
+    // the remaining fields after connection. Clearing here prevents a radio
+    // without readback (notably the IC-705) inheriting another radio's mask,
+    // gateway or MAC while a new connection is in flight.
+    m_ip = info.address.isNull() ? QString() : info.address.toString();
+    m_netmask.clear();
+    m_gateway.clear();
+    m_networkName.clear();
+    m_mac.clear();
+    emit infoChanged();
 
     clearAutomationSliceFixtures();
     m_automationGpsNtpServerAddress.clear();
@@ -3972,6 +4068,7 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    m_transmitModel.setHasTunerMemories(!connected || caps.hasTunerMemories);
     m_transmitModel.setSpeechProcessorLevelMaximum(
         connected ? caps.speechProcessorLevelMaximum : 2);
     refreshTxPowerLimit();
@@ -5905,6 +6002,14 @@ void RadioModel::onConnected()
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
+    // Automatic reconnect enters through the backend and bypasses
+    // connectToRadio(), so restore the selected endpoint after disconnect
+    // cleared the previous session's radio-authoritative network identity.
+    if (m_ip.isEmpty() && !m_lastInfo.address.isNull()) {
+        m_ip = m_lastInfo.address.toString();
+        emit infoChanged();
+    }
+
     // Inhibit system sleep while connected if the user has opted in (#1420)
     if (AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True")
         m_sleepInhibitor.acquire("AetherSDR connected to radio");
@@ -6967,6 +7072,8 @@ void RadioModel::onDisconnected()
     m_gpsdoPresent = false;
     m_tcxoPresent = false;
     m_gpsStatus.clear();
+    m_gpsPositionValid = false;
+    m_gpsSource.clear();
     m_gpsTracked = 0;
     m_gpsVisible = 0;
     m_gpsGrid.clear();
@@ -6974,14 +7081,20 @@ void RadioModel::onDisconnected()
     m_gpsLat.clear();
     m_gpsLon.clear();
     m_gpsTime.clear();
+    m_gpsDate.clear();
     m_gpsSpeed.clear();
     m_gpsTrack.clear();
     m_gpsFreqError.clear();
+    m_gpsNtpEnabled = false;
+    m_gpsNtpServer.clear();
+    m_gpsTimeCorrectionEnabled = false;
+    m_gpsNtpSyncStatus.clear();
     m_automationGpsNtpServerAddress.clear();
     emit oscillatorChanged();
     emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
                           m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
                           m_gpsTime);
+    emit gpsTimeSettingsChanged();
     // Cleared beside m_version rather than relying on the next connect to
     // reassign it: this block's contract is that everything here is re-derived
     // from the new radio's status, and a path that reaches a Flex without
@@ -7011,6 +7124,11 @@ void RadioModel::onDisconnected()
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
     m_region.clear();
+    m_ip.clear();
+    m_netmask.clear();
+    m_gateway.clear();
+    m_networkName.clear();
+    m_mac.clear();
     m_declaredBands.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
@@ -7082,6 +7200,7 @@ void RadioModel::onDisconnected()
     if (m_panStream)
         m_panStream->resetDaxChannelsForDisconnect();
     emit otherClientsChanged(0, {});
+    emit infoChanged();
     emit connectionStateChanged(false);
     m_forcedDisconnectInProgress = false;
 
@@ -10341,6 +10460,9 @@ QString RadioModel::licenseFeatureReason(const QString& name) const
 
 void RadioModel::setRemoteOnEnabled(bool on)
 {
+    if (!backendCapabilities().hasRemoteOnControl) {
+        return;
+    }
     m_remoteOnEnabled = on;
     sendCmd(QString("radio set remote_on_enabled=%1").arg(on ? 1 : 0));
     emit infoChanged();
@@ -10412,6 +10534,10 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.nickname) { m_nickname = *d.nickname; changed = true; }
     if (d.region)   { m_region = *d.region; changed = true; }
     if (d.radioOptions) { m_radioOptions = *d.radioOptions; changed = true; }
+    if (d.ip) { m_ip = *d.ip; changed = true; }
+    if (d.netmask) { m_netmask = *d.netmask; changed = true; }
+    if (d.gateway) { m_gateway = *d.gateway; changed = true; }
+    if (d.networkName) { m_networkName = *d.networkName; changed = true; }
     if (d.remoteOnEnabled) { m_remoteOnEnabled = *d.remoteOnEnabled; changed = true; }
     if (d.multiFlexEnabled) { m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
     if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }
@@ -10752,6 +10878,8 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     // Apply the present fields (absent keys keep their prior value) and always
     // re-emit — the old handler emitted unconditionally on every GPS status.
     if (d.status)    m_gpsStatus    = *d.status;
+    if (d.positionValid) m_gpsPositionValid = *d.positionValid;
+    if (d.source)    m_gpsSource    = *d.source;
     if (d.tracked)   m_gpsTracked   = *d.tracked;
     if (d.visible)   m_gpsVisible   = *d.visible;
     if (d.grid)      m_gpsGrid      = *d.grid;
@@ -10759,13 +10887,33 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     if (d.lat)       m_gpsLat       = *d.lat;
     if (d.lon)       m_gpsLon       = *d.lon;
     if (d.time)      m_gpsTime      = *d.time;
+    if (d.date)      m_gpsDate      = *d.date;
     if (d.speed)     m_gpsSpeed     = *d.speed;
     if (d.track)     m_gpsTrack     = *d.track;
     if (d.freqError) m_gpsFreqError = *d.freqError;
+    const bool timeSettingsChanged = d.ntpEnabled.has_value() || d.ntpServer.has_value()
+        || d.gpsTimeCorrectionEnabled.has_value() || d.ntpSyncStatus.has_value();
+    if (d.ntpEnabled) m_gpsNtpEnabled = *d.ntpEnabled;
+    if (d.ntpServer) m_gpsNtpServer = *d.ntpServer;
+    if (d.gpsTimeCorrectionEnabled) {
+        m_gpsTimeCorrectionEnabled = *d.gpsTimeCorrectionEnabled;
+    }
+    if (d.ntpSyncStatus) m_gpsNtpSyncStatus = *d.ntpSyncStatus;
 
-    emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
-                           m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
-                           m_gpsTime);
+    // A clock-settings read-back carries no telemetry; emitting the report
+    // signal for it would restart the dashboard's report-age clock and
+    // re-run every GPS consumer for a hostname that did not move.
+    const bool telemetryChanged = d.status || d.positionValid || d.source
+        || d.tracked || d.visible || d.grid || d.altitude || d.lat || d.lon
+        || d.time || d.date || d.speed || d.track || d.freqError;
+    if (telemetryChanged || !timeSettingsChanged) {
+        emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
+                              m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
+                              m_gpsTime);
+    }
+    if (timeSettingsChanged) {
+        emit gpsTimeSettingsChanged();
+    }
 }
 
 void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs)

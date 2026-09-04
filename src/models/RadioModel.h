@@ -248,11 +248,14 @@ public:
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
     QString gateway()     const { return m_gateway; }
+    QString networkName() const { return m_networkName; }
     QString mac()         const { return m_mac; }
     bool    enforcePrivateIp() const { return m_enforcePrivateIp; }
 
     // GPS data
     QString gpsStatus()    const { return m_gpsStatus; }
+    bool    gpsPositionValid() const { return m_gpsPositionValid; }
+    QString gpsSource()    const { return m_gpsSource; }
     int     gpsTracked()   const { return m_gpsTracked; }
     int     gpsVisible()   const { return m_gpsVisible; }
     QString gpsGrid()      const { return m_gpsGrid; }
@@ -260,10 +263,19 @@ public:
     QString gpsLat()       const { return m_gpsLat; }
     QString gpsLon()       const { return m_gpsLon; }
     QString gpsTime()      const { return m_gpsTime; }
+    QString gpsDate()      const { return m_gpsDate; }
     QString gpsSpeed()     const { return m_gpsSpeed; }
     QString gpsTrack()     const { return m_gpsTrack; }
     QString gpsFreqError() const { return m_gpsFreqError; }
     QString gpsNtpServerAddress() const;
+    bool gpsNtpEnabled() const { return m_gpsNtpEnabled; }
+    QString gpsNtpServer() const { return m_gpsNtpServer; }
+    bool gpsTimeCorrectionEnabled() const { return m_gpsTimeCorrectionEnabled; }
+    QString gpsNtpSyncStatus() const { return m_gpsNtpSyncStatus; }
+    void setGpsNtpEnabled(bool on);
+    void setGpsNtpServer(const QString& address);
+    void setGpsTimeCorrectionEnabled(bool on);
+    void requestGpsNtpSync();
 
     // Max slices reported by radio
     int maxSlices() const {
@@ -499,11 +511,22 @@ public:
     // 6000-series radios without turning the family-level capability into a
     // per-unit presence claim.
     bool hasGpsHardware() const {
-        return m_model.contains("8400") || m_model.contains("8600")
+        const RadioCapabilities caps = backendCapabilities();
+        return (isConnected() && caps.hasGpsLocation && !caps.hasGpsFrequencyReference)
+               || m_model.contains("8400") || m_model.contains("8600")
                || m_model.startsWith("AU-")
                || m_gpsdoPresent
                || (!m_gpsStatus.isEmpty()
                    && m_gpsStatus != QLatin1String("Not Present"));
+    }
+    // Settings needs a hardware-presence answer across families. Flex's backend
+    // declaration is intentionally coarse (the family can carry an optional
+    // GPSDO), so retain the live per-unit check above there. Other backends use
+    // their model profile for fixed hardware such as the IC-705's internal GPS.
+    bool hasGpsSetupHardware() const {
+        const RadioCapabilities caps = backendCapabilities();
+        return caps.hasGpsHardware
+               && (!caps.gpsHardwareRequiresPresence || hasGpsHardware());
     }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
@@ -1141,6 +1164,10 @@ signals:
                           const QString& grid, const QString& altitude,
                           const QString& lat, const QString& lon,
                           const QString& utcTime);
+    // Radio-authoritative NTP and GPS clock settings changed after CI-V
+    // read-back. No arguments keeps consumers coupled to normalized model
+    // getters rather than an Icom-specific payload.
+    void gpsTimeSettingsChanged();
     // Emitted when the station callsign becomes known or changes (from the
     // radio "info"/status feed). Lets features like the PSK Reporter map pick
     // up a late-arriving or edited callsign without a reconnect.
@@ -1242,7 +1269,6 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
-
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
     // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit
     // tears down without pumping the event loop, so the queued
@@ -1671,6 +1697,7 @@ private:
     QString     m_ip;
     QString     m_netmask;
     QString     m_gateway;
+    QString     m_networkName;
     QString     m_mac;
     bool        m_hasStaticIp{false};
     QString     m_staticIp;
@@ -1767,6 +1794,8 @@ private:
 
     // GPS state
     QString m_gpsStatus;           // "Locked", "Present", "Not Present"
+    bool    m_gpsPositionValid{false};
+    QString m_gpsSource;
     int     m_gpsTracked{0};
     int     m_gpsVisible{0};
     QString m_gpsGrid;
@@ -1774,9 +1803,14 @@ private:
     QString m_gpsLat;
     QString m_gpsLon;
     QString m_gpsTime;
+    QString m_gpsDate;
     QString m_gpsSpeed;
     QString m_gpsTrack;
     QString m_gpsFreqError;
+    bool    m_gpsNtpEnabled{false};
+    QString m_gpsNtpServer;
+    bool    m_gpsTimeCorrectionEnabled{false};
+    QString m_gpsNtpSyncStatus;
     QString m_automationGpsNtpServerAddress;
 
     // Per-band TX settings (from "transmit band" and "interlock band" status)
