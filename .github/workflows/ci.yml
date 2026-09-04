@@ -1,5 +1,15 @@
 name: CI
 
+# ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
+# This workflow does not run the test suite. It runs the hand-picked tests
+# listed in .github/ci-test-gate.txt, each behind its own `ctest -R` step,
+# and that list does not grow. The full suite runs unfiltered on the weekly
+# sanitizer lane (sanitizers.yml): every add_test() in tests/tests.cmake is on
+# it the moment it is declared, so a new test needs no step here — do not add
+# one. tools/check_ci_test_gate.py (Static Checks) fails any -R pattern that
+# resolves to a name the frozen list does not carry. Removing a step is
+# welcome: run `python tools/check_ci_test_gate.py --update` and commit.
+
 on:
   pull_request:
     branches: [main]

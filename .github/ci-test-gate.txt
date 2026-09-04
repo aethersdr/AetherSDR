@@ -1,0 +1,56 @@
+# Tests the per-PR gate (.github/workflows/ci.yml) is allowed to run. FROZEN.
+#
+# This list does not grow. New tests run on the weekly unfiltered lane
+# (.github/workflows/sanitizers.yml) the moment they are declared in
+# tests/tests.cmake; they do not get a `ctest -R` step in ci.yml.
+# tools/check_ci_test_gate.py fails Static Checks when ci.yml's -R patterns
+# resolve to a name that is not here. Removing a test from ci.yml: run
+#     python tools/check_ci_test_gate.py --update
+# and commit the shorter list. A diff that ADDS a line to this file is the
+# review signal the freeze exists to produce — it needs a maintainer's reason.
+#
+# One name per line; generated and sorted by --update.
+aether_dv_waveform_no_args
+asr_gpu_probe_test
+audio_format_negotiation_test
+band_edges_test
+bandplan_voice_labels_test
+cross_needle_meter_test
+ctcss_tone_label_test
+digital_voice_waveform_process_test
+dstar_model_test
+fm_tone_presentation_contract
+hgauge_hover_popup_test
+hgauge_range_test
+hl2_am_dcblock_test
+icom_civ_scheduler_test
+icom_civ_test
+icom_family_test
+icom_meters_test
+icom_power_derivation_test
+mac_nr_filter_test
+map_live_update_test
+map_wrap_test
+midi_settings_test
+nr2_settings_model_test
+phone_cw_mic_gain_authority_test
+psk_reporter_map_behavior_test
+radio_capability_gating_test
+rf_gain_presentation_test
+rtl_backend_test
+sim_signal_source_test
+spectral_nr_test
+tci_protocol_test
+thumbdv_queue_test
+tx_applet_power_reconciliation_test
+tx_mic_channel_normalizer_test
+tx_voice_processor_test
+workspace_canvas_widget_test
+workspace_container_mode_test
+workspace_controller_test
+workspace_document_test
+workspace_geometry_test
+workspace_interaction_test
+workspace_layout_test
+workspace_migration_test
+workspace_store_test

@@ -36,6 +36,10 @@ on:
       - "tools/check_network_timeouts.py"
       - "tools/check_shader_dialects.py"
       - "tools/check_test_registration.py"
+      - "tools/check_ci_test_gate.py"
+      - ".github/workflows/ci.yml"
+      - ".github/ci-test-gate.txt"
+      - "tests/tests.cmake"
       - "tools/check_theme_seed.py"
       - "tools/gen_theme_seed.py"
       - "docs/architecture/aetherd-touchpoint-tags.json"
@@ -107,6 +111,19 @@ jobs:
       - name: Test registration location
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
+
+      # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs a hand-picked
+      # allow-list of tests behind `ctest -R` steps, grown by accretion to ~44;
+      # the full suite runs unfiltered on the weekly sanitizer lane
+      # (sanitizers.yml), which every add_test() in tests/tests.cmake joins the
+      # moment it is declared. This resolves every -R pattern in ci.yml against
+      # the registered names the way ctest does and fails if the result is not
+      # exactly .github/ci-test-gate.txt. Removing a test from the gate: run
+      # `python tools/check_ci_test_gate.py --update` and commit. Adding one is
+      # a diff to that maintainer-owned file, on purpose.
+      - name: Per-PR test gate is frozen
+        if: ${{ !cancelled() }}
+        run: python tools/check_ci_test_gate.py --strict
 
       # ── Network transfer-timeout ratchet (#4688 §6). A QNetworkAccessManager
       # with no transfer timeout turns a half-open connection into a reply that

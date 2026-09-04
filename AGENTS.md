@@ -235,6 +235,16 @@ this at the point of use.
 A test that touches `AppSettings` also needs its target name in the
 `AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
 
+**Do not add a `ctest -R` step for it to `.github/workflows/ci.yml`.** The
+per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`, ~44
+tests grown by accretion); it does not run the suite and it does not grow.
+Every test declared in `tests.cmake` runs unfiltered on the weekly sanitizer
+lane (`sanitizers.yml`) from the moment it is declared — that is where a new
+test runs. `tools/check_ci_test_gate.py --strict` fails the PR if a `-R`
+pattern in `ci.yml` resolves to a name the frozen list does not carry.
+Removing a test from the gate is fine: run the script with `--update` and
+commit the shorter list.
+
 Every unconditional `add_executable(<name>_test …)` must have a matching
 `add_test`, or carry a `# not registered: <reason>` marker the registration
 checker recognizes (option-gated and manual targets qualify). A test that
