@@ -4,6 +4,7 @@
 #include "utils.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,11 @@ void sched_waveform_setHandle(FT_HANDLE * handle)
 #if defined(__linux__)
 typedef struct fake_dv3000 {
     int master_fd;
-    volatile int stop;
+    // atomic, not volatile: volatile is not a synchronization primitive and
+    // TSan (rightly) reports the main thread's store racing this thread's
+    // load. responses is written by this thread only and read by main only
+    // AFTER pthread_join, which is the happens-before that makes it safe.
+    atomic_int stop;
     unsigned int responses;
 } fake_dv3000;
 
@@ -48,7 +53,7 @@ static int read_exact(int fd, unsigned char * buffer, size_t length)
 static void * fake_dv3000_thread(void * opaque)
 {
     fake_dv3000 * fake = (fake_dv3000 *)opaque;
-    while (!fake->stop) {
+    while (!atomic_load(&fake->stop)) {
         struct pollfd pfd = { .fd = fake->master_fd, .events = POLLIN, .revents = 0 };
         const int ready = poll(&pfd, 1, 100);
         if (ready <= 0 || (pfd.revents & POLLIN) == 0) {
@@ -107,11 +112,12 @@ static int test_serial_probe(void)
 
     setenv("AETHER_DV_THUMBDV_SERIAL", slave_name, 1);
     failed += thumbDV_probeConfiguredSerial() != 0;
-    failed += fake.responses < 2U;
     unsetenv("AETHER_DV_THUMBDV_SERIAL");
 
-    fake.stop = 1;
+    atomic_store(&fake.stop, 1);
     pthread_join(fake_thread, NULL);
+    // Read the count only after the join: the fake thread is the sole writer.
+    failed += fake.responses < 2U;
     close(master_fd);
     close(slave_fd);
     return failed;
