@@ -23,9 +23,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}
-  cancel-in-progress: false
+# No `concurrency:` block, deliberately. Every push to main gets its own run
+# and nothing cancels anything: this lane is the record of whether THAT commit
+# is green, so a later push must not cancel an earlier commit's verdict, and
+# serialising would only delay the signal. The block that used to sit here put
+# `github.run_id` in the group, which gave every run a group of its own and
+# made the whole thing inert — the same behaviour, reached confusingly.
 
 permissions:
   contents: read
@@ -101,7 +104,7 @@ jobs:
         run: |
           set -o pipefail
           ec=0
-          ctest --test-dir build --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
@@ -119,6 +122,20 @@ jobs:
           } | head -c 45000 > report.txt
           failed=$(sed -n '/^The following tests FAILED:/,$p' full-suite.log | grep -oE '[A-Za-z0-9_.-]+ \((Failed|Timeout|Subprocess aborted|Not Run|SEGFAULT|Child aborted)[^)]*\)' | sort | tr '\n' ' ')
           echo "failed=${failed:-unknown}" >> "$GITHUB_OUTPUT"
+          # Fingerprint = WHICH tests failed, by name, sorted. Same rule as
+          # sanitizers.yml (#5411 S5) and for the same reason: without it every
+          # new regression on main arrives as comment N+1 on an already-red
+          # sticky issue, where it reads as more of the same. Names only — no
+          # ctest ordinals, which shift whenever a test is added earlier in
+          # tests.cmake and would churn a fresh issue for an unchanged failure.
+          names=$(sed -n '/^The following tests FAILED:/,$p' full-suite.log \
+                  | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+' | sed 's/^[0-9]* - //' | sort -u || true)
+          if [ -n "$names" ]; then
+            fp=$(printf '%s' "$names" | sha256sum | cut -c1-12)
+          else
+            fp=unknown
+          fi
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: Upload test log
         if: steps.ctest.outputs.exit != '0'
@@ -139,12 +156,20 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           FAILED:  ${{ steps.extract.outputs.failed }}
+          FP:      ${{ steps.extract.outputs.fingerprint }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('report.txt', 'utf8');
-            const title  = '[full-suite] test suite failing on main';
+            const fp     = process.env.FP;
+            // The fingerprint goes in the TITLE so a new failure signature
+            // opens a NEW issue instead of landing as comment N+1 on an
+            // already-red one (#5411 S5, same rule as sanitizers.yml). This is
+            // the project's primary gating signal once #5405 lands, so "a new
+            // regression is a new notification" matters more here than there.
+            const fpTag  = fp && fp !== 'unknown' ? ` (fp ${fp})` : '';
+            const title  = `[full-suite] test suite failing on main${fpTag}`;
             // Lookup key only — extra labels go on createLabels, or the
             // existing sticky issue is missed and a duplicate opened.
             const labels = ['full-suite'];
@@ -175,7 +200,12 @@ jobs:
               labels: labels.join(','),
               per_page: 100,
             });
-            const existing = open.data[0];
+            // Within the label bucket the fingerprint tag picks the issue. An
+            // open issue with no tag absorbs only runs whose fingerprint could
+            // not be computed; a run with a known signature gets its own.
+            const tagged   = open.data.find(i => fpTag && i.title.includes(fpTag));
+            const untagged = open.data.find(i => !/\(fp [0-9a-f]{12}\)/.test(i.title));
+            const existing = tagged || (fpTag ? undefined : untagged);
 
             if (existing) {
               await github.rest.issues.createComment({
