@@ -58,6 +58,9 @@ void wdspmain (void *pargs)
 		LeaveCriticalSection (&ch[channel].csDSP);
 	}
 	if (hTask != 0) AvRevertMmThreadCharacteristics (hTask);
+	// AetherSDR patch 4: the LAST statement. After this store the thread touches
+	// nothing in ch[channel] or its iob, so pre_main_destroy() may free them.
+	InterlockedExchange (&ch[channel].mainExited, 1);
 }
 
 void create_main (int channel)

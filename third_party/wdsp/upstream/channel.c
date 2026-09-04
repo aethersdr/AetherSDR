@@ -30,6 +30,9 @@ struct _ch ch[MAX_CHANNELS];
 
 void start_thread (int channel)
 {
+	// AetherSDR patch 4: arm the exit handshake before the thread exists, on every
+	// (re)build path — OpenChannel and the SetInput*/SetDSP* rebuilds all come here.
+	InterlockedExchange (&ch[channel].mainExited, 0);
 	HANDLE handle = (HANDLE) _beginthread(wdspmain, 0, (void *)(uintptr_t)channel);
 	//SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST);
 }
@@ -107,7 +110,23 @@ void pre_main_destroy (int channel)
 	InterlockedBitTestAndReset (&ch[channel].run, 0);
 	InterlockedBitTestAndSet (&ch[channel].iob.pc->exec_bypass, 0);
 	ReleaseSemaphore (a->Sem_BuffReady, 1, 0);
-	Sleep (25);
+	// AetherSDR patch 4. Upstream slept 25 ms here as its only barrier between
+	// the worker's exit and destroy_main()/post_main_destroy() freeing the
+	// semaphore, mutex and buffers the worker is still touching. A sleep is a
+	// scheduling bet, not synchronization: a starved worker leaves
+	// pthread_cond_wait() on freed memory (TSan: 116 reports, 21 failing tests
+	// across the HL2/WDSP family, #5275). Wait for the worker's own exit store
+	// instead. BOUNDED, because upstream ignores thread-creation failure and an
+	// unbounded wait would then hang CloseChannel() forever; falling through
+	// after the cap restores upstream's behaviour exactly, no worse.
+	{
+		int waited = 0;
+		while (!_InterlockedAnd (&ch[channel].mainExited, 1) && waited < 1000)
+		{
+			Sleep (1);
+			++waited;
+		}
+	}
 }
 
 void post_main_destroy (int channel)

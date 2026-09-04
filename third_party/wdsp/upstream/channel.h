@@ -33,6 +33,7 @@ struct _ch
 	int type;
 	volatile long run;			// when 1, thread loops; when 0, thread terminates
 	volatile long exchange;		// when 1, fexchange() operates; when 0, it just returns
+	volatile long mainExited;	// AetherSDR patch 4: set by wdspmain() as its last act; pre_main_destroy() waits on it instead of Sleep(25)
 	int in_rate;				// input samplerate
 	int out_rate;				// output samplerate
 	int in_size;				// input buffsize (complex samples) in a fexchange() operation
