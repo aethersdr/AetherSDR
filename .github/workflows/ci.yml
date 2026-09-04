@@ -2,15 +2,19 @@ name: CI
 
 # ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
 # This workflow does not run the test suite. The Linux `build` job runs NO
-# tests; the only `ctest -R` steps are the platform-specific ones listed in
-# .github/ci-test-gate.txt — macOS-only and Windows-only tests that the weekly
-# lane, which is Linux, can never execute — and that list does not grow. The
-# full suite runs unfiltered on the weekly sanitizer lane (sanitizers.yml):
-# every add_test() in tests/tests.cmake is on it the moment it is declared, so
-# a new test needs no step here — do not add one, however invisible the defect
-# it pins. tools/check_ci_test_gate.py (Static Checks) fails any -R pattern
-# that resolves to a name the frozen list does not carry. Removing a step is
-# welcome: run `python tools/check_ci_test_gate.py --update` and commit.
+# tests; the only `ctest -R` steps are the ones listed in
+# .github/ci-test-gate.txt, kept on the macOS and Windows jobs because the
+# claim each pins is about THAT platform's toolchain (Apple Metal, MSVC
+# portability, #4559's Windows-only separator failure) — not because Linux
+# cannot run them; most of them also run on the weekly Linux lane. That list
+# does not grow. The full suite runs unfiltered on the weekly sanitizer lane
+# (sanitizers.yml): every add_test() in tests/tests.cmake that the default
+# configure builds is on it the moment it is declared, so a new test needs no
+# step here — do not add one, however invisible the defect it pins.
+# tools/check_ci_test_gate.py (Static checks, a required check) fails any -R
+# pattern that resolves to a name the frozen list does not carry. Removing a
+# step is welcome: run `python tools/check_ci_test_gate.py --update` and
+# commit; the script only ever shrinks the list.
 
 on:
   pull_request:

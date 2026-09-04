@@ -11,41 +11,17 @@ name: Static Checks
 # #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
 # deleted, rather than left as a fourth near-identical workflow.
 #
-# None of these were required status checks, so consolidating them does not
-# touch branch protection (required contexts are build / check-windows /
-# check-macos).
+# `Static checks` IS a required status check (branch protection: build /
+# check-windows / check-macos / Static checks) — it is what enforces the
+# frozen per-PR test gate (tools/check_ci_test_gate.py). A required check
+# that a PR never triggers blocks that PR forever, so this workflow has NO
+# `paths:` filter: it runs on every pull request. Every step is stdlib
+# Python in seconds, so an unfiltered trigger costs less than one blocked
+# docs-only PR would.
 
 on:
   pull_request:
     branches: ["**"]
-    # Union of what the three workflows gated on, widened to src/** rather than
-    # the old src/{gui,core,models} enumeration. The scripts are seconds each
-    # and now share one runner, so a broader trigger is cheaper than a precise
-    # one — and ci.yml's own history (see the check-windows comment) is a long
-    # record of hand-maintained path allow-lists leaking. a11y-check.yml
-    # previously had NO paths filter at all and ran on docs-only PRs.
-    paths:
-      - "src/**"
-      - "resources/themes/**"
-      - "resources/shaders/**"
-      - "CMakeLists.txt"
-      - "tools/audit_colours.py"
-      - "tools/check_a11y.py"
-      - "tools/check_engine_boundary.py"
-      - "tools/gen_touchpoint_manifest.py"
-      - "tools/check_network_timeouts.py"
-      - "tools/check_shader_dialects.py"
-      - "tools/check_test_registration.py"
-      - "tools/check_ci_test_gate.py"
-      - ".github/workflows/ci.yml"
-      - ".github/ci-test-gate.txt"
-      - "tests/tests.cmake"
-      - "tools/check_theme_seed.py"
-      - "tools/gen_theme_seed.py"
-      - "docs/architecture/aetherd-touchpoint-tags.json"
-      - "docs/architecture/aetherd-touchpoint-status.json"
-      - "docs/architecture/aetherd-touchpoints.md"
-      - ".github/workflows/static-checks.yml"
 
 # Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
 # workflow: the run_id suffix and the main guard never trigger here (ref is
