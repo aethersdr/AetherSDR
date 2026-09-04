@@ -5,6 +5,7 @@
 
 #include <QDateTime>
 #include <QMetaType>
+#include <QThread>
 #include <QTimer>
 
 namespace AetherSDR {
@@ -17,6 +18,7 @@ SystemInfoCollector::SystemInfoCollector(QObject* parent)
     // with a runtime warning rather than failing to compile.
     qRegisterMetaType<QVector<AetherSDR::ThreadCpuSample>>("QVector<AetherSDR::ThreadCpuSample>");
     qRegisterMetaType<AetherSDR::MemorySample>("AetherSDR::MemorySample");
+    qRegisterMetaType<AetherSDR::CpuSample>("AetherSDR::CpuSample");
 }
 
 void SystemInfoCollector::init()
@@ -116,6 +118,23 @@ void SystemInfoCollector::sampleOnce()
             }
             m_previousBusiestPercent = percent;
         }
+
+        // The Overview's reading, from the same samples the table just got.
+        CpuSample cpu;
+        cpu.wallMs = QDateTime::currentMSecsSinceEpoch();
+        cpu.coreCount = QThread::idealThreadCount();
+        cpu.processPercentOfCapacity = SystemInfo::processPercentOfCapacity(samples, cpu.coreCount);
+        if (busiest >= 0) {
+            cpu.busiestTid = samples.at(busiest).tid;
+            cpu.busiestName = samples.at(busiest).name;
+            cpu.busiestPercentOfCore = samples.at(busiest).cpuPercentOfCore;
+        }
+        for (const ThreadCpuSample& sample : samples) {
+            if (sample.cpuPercentOfCore > 0.0) {
+                cpu.busyThreads.push_back(sample);
+            }
+        }
+        emit cpuSampleReady(cpu);
     }
     m_previous = current;
 }

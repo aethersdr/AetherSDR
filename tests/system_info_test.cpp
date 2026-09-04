@@ -369,6 +369,37 @@ void testBusiestAndThreshold()
            SystemInfo::crossedThreshold(50.0, 90.001, t));
 }
 
+void testOverviewMaths()
+{
+    // The process total is "of the machine": two threads at half a core each
+    // on a four-core box is a quarter of the machine, not 100 % of anything.
+    {
+        const QVector<ThreadCpuSample> samples{makeSample(1, 50.0), makeSample(2, 50.0)};
+        report("two half-cores on four cores read 25 % of capacity",
+               qAbs(SystemInfo::processPercentOfCapacity(samples, 4) - 25.0) < 0.001);
+    }
+    // Every core saturated reads 100, and a hair over (threads sampled a few
+    // microseconds apart) clamps rather than reporting 100.3 % of a machine.
+    {
+        const QVector<ThreadCpuSample> samples{
+            makeSample(1, 100.0), makeSample(2, 100.0), makeSample(3, 100.0), makeSample(4, 101.2)};
+        report("a saturated machine clamps to 100 %",
+               qAbs(SystemInfo::processPercentOfCapacity(samples, 4) - 100.0) < 0.001);
+    }
+    report("no samples is 0 % of capacity",
+           SystemInfo::processPercentOfCapacity({}, 4) == 0.0);
+    report("a non-positive core count is 0 %, not a division by zero",
+           SystemInfo::processPercentOfCapacity({makeSample(1, 50.0)}, 0) == 0.0);
+
+    // Card bands, inclusive at both lines ("yellow ≥50%, red ≥80%").
+    using Level = SystemInfo::CardLevel;
+    report("below the warning line is Normal",  SystemInfo::cardLevel(49.9, 50.0, 80.0) == Level::Normal);
+    report("exactly at the warning line is Warning", SystemInfo::cardLevel(50.0, 50.0, 80.0) == Level::Warning);
+    report("between the lines is Warning",      SystemInfo::cardLevel(79.9, 50.0, 80.0) == Level::Warning);
+    report("exactly at the danger line is Danger",  SystemInfo::cardLevel(80.0, 50.0, 80.0) == Level::Danger);
+    report("far above both is Danger",          SystemInfo::cardLevel(100.0, 50.0, 80.0) == Level::Danger);
+}
+
 void testEnumeration()
 {
     const QVector<ThreadTimes> threads = SystemInfo::enumerateThreads();
@@ -500,6 +531,7 @@ int main(int argc, char** argv)
     testRunState();
     testThreadCpuRing();
     testBusiestAndThreshold();
+    testOverviewMaths();
     testEnumeration();
     testNaming();
     testQtNamesItsOwnThreads();

@@ -2,6 +2,8 @@
 
 #include "ThreadName.h"
 
+#include <algorithm>
+
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
@@ -296,6 +298,30 @@ bool SystemInfo::crossedThreshold(double previousPercent, double currentPercent,
                                   double threshold)
 {
     return currentPercent > threshold && !(previousPercent > threshold);
+}
+
+double SystemInfo::processPercentOfCapacity(const QVector<ThreadCpuSample>& samples,
+                                            int coreCount)
+{
+    if (samples.isEmpty() || coreCount <= 0) {
+        return 0.0;
+    }
+    double sum = 0.0;
+    for (const ThreadCpuSample& sample : samples) {
+        sum += sample.cpuPercentOfCore;
+    }
+    return std::min(100.0, sum / static_cast<double>(coreCount));
+}
+
+SystemInfo::CardLevel SystemInfo::cardLevel(double value, double warningAt, double dangerAt)
+{
+    if (value >= dangerAt) {
+        return CardLevel::Danger;
+    }
+    if (value >= warningAt) {
+        return CardLevel::Warning;
+    }
+    return CardLevel::Normal;
 }
 
 ThreadRunState SystemInfo::runStateFromProcChar(char state)

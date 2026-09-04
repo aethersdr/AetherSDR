@@ -126,6 +126,23 @@ public:
     static QVector<ThreadCpuSample> cpuPercentBetween(const QVector<ThreadTimes>& previous,
                                                       const QVector<ThreadTimes>& current,
                                                       quint64 elapsedUsecs);
+
+    // The process's share of the WHOLE machine over the interval, 0..100: the
+    // per-thread per-core percentages summed and divided by the core count —
+    // the same divisor the status bar's CPU label uses (idealThreadCount()),
+    // so the Overview's "CPU Total" card and the footer read the same thing.
+    // Clamped to 100: the threads are sampled a few microseconds apart, so a
+    // saturated machine can sum to a hair over. Zero for no samples or a
+    // non-positive core count.
+    static double processPercentOfCapacity(const QVector<ThreadCpuSample>& samples,
+                                           int coreCount);
+
+    // Which colour band an Overview card sits in for a reading (#2554: "yellow
+    // ≥50%, red ≥80%" and the like). Inclusive at both lines, which is what the
+    // issue's "≥" says; Danger wins when both are met. Pure so the table of
+    // thresholds can be pinned without a widget.
+    enum class CardLevel { Normal, Warning, Danger };
+    static CardLevel cardLevel(double value, double warningAt, double dangerAt);
 };
 
 } // namespace AetherSDR

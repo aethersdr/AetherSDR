@@ -42,6 +42,8 @@ int main(int argc, char** argv)
 
     QSignalSpy memorySpy(collector, &SystemInfoCollector::memorySampleReady);
     EXPECT_TRUE(memorySpy.isValid(), "memorySampleReady is a registered, connectable signal");
+    QSignalSpy cpuSpy(collector, &SystemInfoCollector::cpuSampleReady);
+    EXPECT_TRUE(cpuSpy.isValid(), "cpuSampleReady is a registered, connectable signal");
 
     const qint64 before = QDateTime::currentMSecsSinceEpoch();
     worker.start();
@@ -81,7 +83,29 @@ int main(int argc, char** argv)
         }
     }
 
-    // 4. Orderly shutdown on the worker thread (the timer's owner), then quit.
+    // 4. The Overview's process-level reading arrives on the first tick too:
+    //    init() seeds the previous snapshot, so the first tick already has an
+    //    interval. Derived from the same samples the table gets, and carrying
+    //    the footer's divisor.
+    const bool cpuArrived = !cpuSpy.isEmpty() || cpuSpy.wait(8000);
+    EXPECT_TRUE(cpuArrived, "a CPU sample arrives on the GUI thread within 8 s");
+    if (cpuArrived) {
+        const auto cpu = cpuSpy.takeFirst().at(0).value<CpuSample>();
+        EXPECT_TRUE(cpu.coreCount == QThread::idealThreadCount(),
+                    "coreCount is idealThreadCount(), the status bar's own divisor");
+        EXPECT_TRUE(cpu.processPercentOfCapacity >= 0.0 && cpu.processPercentOfCapacity <= 100.0,
+                    "process percent of capacity is within 0..100");
+        EXPECT_TRUE(cpu.busiestPercentOfCore >= 0.0 && cpu.busiestPercentOfCore <= 100.0,
+                    "busiest thread percent of one core is within 0..100");
+        EXPECT_TRUE(cpu.wallMs >= before, "wallMs is a capture-time wall clock reading");
+        bool allBusy = true;
+        for (const ThreadCpuSample& t : cpu.busyThreads) {
+            allBusy = allBusy && t.cpuPercentOfCore > 0.0;
+        }
+        EXPECT_TRUE(allBusy, "busyThreads carries only threads with a non-zero share");
+    }
+
+    // 5. Orderly shutdown on the worker thread (the timer's owner), then quit.
     QMetaObject::invokeMethod(collector, "shutdown", Qt::BlockingQueuedConnection);
     worker.quit();
     EXPECT_TRUE(worker.wait(5000), "worker thread exits after quit()");

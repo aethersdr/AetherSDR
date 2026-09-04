@@ -28,6 +28,24 @@ struct MemorySample {
     quint64 virtualBytes{0};
 };
 
+// One process-level CPU reading per tick for the Overview tab (#2554), derived
+// from the same per-thread samples sampleReady carries — the collector is the
+// one place that knows the interval and the core count, so the sum is taken
+// here rather than by whichever tab happens to be listening. busyThreads holds
+// every thread with a non-zero share of a core this tick: exact, and compact
+// (most of the process's threads are idle on most ticks), which is what lets
+// the Overview's history ring keep an hour of them and choose its stacked
+// chart's members over the whole window rather than the newest tick.
+struct CpuSample {
+    qint64  wallMs{0};                       // QDateTime::currentMSecsSinceEpoch() at capture
+    int     coreCount{0};                    // QThread::idealThreadCount() — the footer's divisor
+    double  processPercentOfCapacity{0.0};   // 0..100 of the whole machine
+    quint64 busiestTid{0};
+    QString busiestName;                     // empty when the busiest thread has no name
+    double  busiestPercentOfCore{0.0};       // 0..100 of one core
+    QVector<ThreadCpuSample> busyThreads;    // cpuPercentOfCore > 0 only
+};
+
 // Samples per-thread CPU (and, since the Memory tab, process memory) on a
 // worker thread and publishes the result to the GUI (#2554).
 //
@@ -92,6 +110,11 @@ signals:
     // to the GUI thread like sampleReady.
     void memorySampleReady(const AetherSDR::MemorySample& sample);
 
+    // The Overview tab's reading, emitted right after sampleReady on every tick
+    // that has an interval to report — so a consumer listening to both sees
+    // the table and the cards agree about "now". Queued like the others.
+    void cpuSampleReady(const AetherSDR::CpuSample& sample);
+
 private:
     void sampleOnce();
 
@@ -104,3 +127,4 @@ private:
 }  // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::MemorySample)
+Q_DECLARE_METATYPE(AetherSDR::CpuSample)
