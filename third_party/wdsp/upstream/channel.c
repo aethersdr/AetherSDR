@@ -116,12 +116,13 @@ void pre_main_destroy (int channel)
 	// AetherSDR patch 4: exec_bypass BEFORE run, which is the reverse of
 	// upstream's order. The worker reads exec_bypass and then, inside
 	// dexchange(), reads run (iobuffs.c). Clearing run first opens a window
-	// where it sees "not bypassed" and then "not running" and takes
-	// dexchange()'s _endthread() — an exit that is not wdspmain()'s. Setting
-	// the bypass first makes the bypass branch win for any worker that has not
-	// yet read it. The window is narrowed, not closed (a worker can read
-	// exec_bypass just before this line), which is why iobuffs.c's
-	// _endthread() site also stores the handshake.
+	// where it sees "not bypassed" and then "not running" and unwinds through
+	// dexchange()'s early return. Setting the bypass first makes the bypass
+	// branch win for any worker that has not yet read it. The window is
+	// narrowed, not closed — a worker can read exec_bypass just before this
+	// line — but either way the worker leaves through wdspmain()'s tail and
+	// performs the handshake there, so correctness does not rest on the
+	// ordering; it only saves a wakeup.
 	InterlockedBitTestAndSet (&ch[channel].iob.pc->exec_bypass, 0);
 	InterlockedBitTestAndReset (&ch[channel].run, 0);
 	ReleaseSemaphore (a->Sem_BuffReady, 1, 0);

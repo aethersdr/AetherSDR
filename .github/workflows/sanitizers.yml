@@ -126,6 +126,20 @@ jobs:
             -DAETHER_ENABLE_HL2_TX_LOOPBACK_TEST=ON
 
       - name: Build
+        # The SAME sanitizer flags as Configure, because this step also runs
+        # configure: vendored Opus is an ExternalProject_Add, so its child
+        # CMake project configures during the parent's BUILD, when a Configure-
+        # only env is long gone. third_party/radae/cmake/BuildOpus.cmake does
+        # not forward CMAKE_C_FLAGS through OPUS_CMAKE_ARGS either, so before
+        # this the bundled codec was built uninstrumented while the rest of the
+        # C tree was instrumented — a hole in S4's "every vendored C library"
+        # claim, and an invisible slice of the audio surface (#5411
+        # second-opinion review, verified with a marker flag that reached the
+        # outer CMakeCache.txt but not build_opus-cfgcmd.txt).
+        env:
+          CFLAGS:   ${{ matrix.sanitizer.extra_cxx }}
+          CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
+          LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: cmake --build build --parallel
 
       - name: Run tests under sanitizer

@@ -288,8 +288,9 @@ public:
         // in the CI container; newer Qt builds happen not to query early,
         // which is how this passed locally and shipped (#5064, #4896).
         if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(this)) {
-            if (cached->role() != QAccessible::Button)
+            if (cached->role() != QAccessible::Button) {
                 QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
+            }
         }
     }
     bool isEditable() const { return m_editable; }

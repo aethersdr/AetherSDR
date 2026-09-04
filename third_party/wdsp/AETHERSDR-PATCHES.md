@@ -32,18 +32,24 @@ snapshot:
 
    Three details are not obvious and were all found in review of #5411:
 
-   - **The worker has two exits, not one.** `dexchange()` (`iobuffs.c`) begins
-     `if (!_InterlockedAnd (&ch[channel].run, 1)) _endthread();`, so a worker
-     that is inside the DSP switch when `run` clears terminates there and never
-     reaches `wdspmain()`'s tail. That site now releases `csDSP` — which
-     `_endthread()` does not unwind, leaving `post_main_destroy()` to call
-     `DeleteCriticalSection` on a held section — and completes the same
-     handshake.
+   - **The worker had two exits; it now has one.** `dexchange()` (`iobuffs.c`)
+     began `if (!_InterlockedAnd (&ch[channel].run, 1)) _endthread();`, so a
+     worker inside the DSP switch when `run` cleared terminated there: with
+     `csDSP` held, since `_endthread()` does not unwind and `wdspmain()` calls
+     `dexchange()` inside the section, leaving `post_main_destroy()` to call
+     `DeleteCriticalSection` on a locked section — and without ever reaching
+     the exit handshake. `dexchange()` now **returns** non-zero instead
+     (`int` rather than `void`, two call sites, both in `main.c`) and
+     `wdspmain()` unlocks and leaves the loop, so the tail is the single exit.
+     Making it single is what lets the handshake store a generation held in a
+     **local**: an abandoned worker must not read its generation back out of
+     `ch[]`, because by then that slot can belong to its successor and the
+     acknowledgement would be made on the successor's behalf.
    - **`pre_main_destroy()` sets `exec_bypass` BEFORE clearing `run`**, the
      reverse of upstream's order, so a worker that has not yet read the bypass
-     takes the bypass branch rather than `dexchange()`'s `_endthread()`. That
-     narrows the window; it does not close it, which is why the `_endthread()`
-     site stores the handshake too.
+     takes the bypass branch rather than unwinding through `dexchange()`. That
+     narrows the window and saves a wakeup; correctness does not rest on it,
+     because either route now leaves through `wdspmain()`'s tail.
    - **The flag is generation-valued, not 0/1.** If a wait ever falls through
      its cap the old worker is still alive and will store eventually. With a
      0/1 flag that late store would land on the *next* worker's slot and
