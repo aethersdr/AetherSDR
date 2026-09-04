@@ -7,10 +7,16 @@
 // one thing Config C asserts must never happen. The stream was not stalled --
 // the in-band temperature changed on every sample throughout.
 //
-// The cause is two clocks sampling each other:
+// The cause is two clocks sampling each other, both nominally 1000 ms:
 //
-//   Hl2Backend.h:267    kTelemetryPollStateIntervalMs = 1000   (the tick)
-//   MetisClient.cpp:785 kLinkPublishIntervalMs        = 1000   (the mirror)
+//   Hl2Backend::kTelemetryPollStateIntervalMs   the tick that decides the state
+//   MetisClient::kLinkPublishIntervalMs         the mirror the tick reads
+//
+// Cited by symbol rather than by file:line on purpose. This comment first
+// carried line numbers and both were stale within the hour -- the fix below
+// added ten lines above one of them, and the other pointed at the USE site
+// while the constant is declared in the header. A citation that rots silently
+// is worse than one a reader has to grep for.
 //
 // updateTelemetryPollState() asked whether m_link.rxPackets had changed SINCE
 // THE LAST TICK, but that field is only refreshed by linkCountersUpdated at
