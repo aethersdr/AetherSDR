@@ -778,6 +778,37 @@ static void testTwinPbt()
     check(cw.lowHz == -250 && cw.highHz == 250, "500 Hz CW is +/-250 about the tone");
 }
 
+static void testNetworkSettingDecoding()
+{
+    const std::array<std::uint8_t, 8> address{
+        0x01, 0x92, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    const auto decoded = decodeNetworkAddress(address);
+    check(decoded && *decoded == std::array<std::uint8_t, 4>{192, 168, 1, 42},
+          "SET-menu BCD network address decodes four decimal octets");
+    const auto mask = subnetMaskFromBcdPrefix(0x24);
+    check(mask && *mask == std::array<std::uint8_t, 4>{255, 255, 255, 0},
+          "SET-menu /24 prefix decodes to 255.255.255.0");
+
+    const std::array<std::uint8_t, 8> outOfRange{
+        0x02, 0x99, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    const std::array<std::uint8_t, 8> malformedBcd{
+        0x01, 0x9a, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    check(!decodeNetworkAddress(outOfRange),
+          "SET-menu network octets above 255 are rejected");
+    check(!decodeNetworkAddress(malformedBcd),
+          "SET-menu network values with non-BCD nibbles are rejected");
+    check(!subnetMaskFromBcdPrefix(0x00) && !subnetMaskFromBcdPrefix(0x31),
+          "SET-menu subnet prefixes outside the documented /1-/30 range are rejected");
+    const std::array<std::uint8_t, 9> networkName{
+        'S', 'h', 'a', 'c', 'k', 'R', 'a', 'd', 'i'};
+    const auto decodedName = decodeNetworkName(networkName);
+    check(decodedName && *decodedName == "ShackRadi",
+          "SET-menu Network Name decodes bounded printable ASCII");
+    const std::array<std::uint8_t, 2> invalidName{'A', 0x1f};
+    check(!decodeNetworkName(invalidName),
+          "SET-menu Network Name rejects control characters");
+}
+
 int main()
 {
     testFilterWidth();
@@ -790,6 +821,7 @@ int main()
     testCommands();
     testDataMode();
     testSubcommandPredicate();
+    testNetworkSettingDecoding();
 
     if (g_failures == 0)
         std::printf("icom_civ_test: all checks passed\n");

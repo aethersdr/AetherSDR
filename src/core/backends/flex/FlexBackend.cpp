@@ -155,6 +155,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // are a different instrument. No single in-passband manual notch.
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
+    caps.hasDdcPanEdgeRolloff = false;  // superhet/direct-sampling, no DDC decimation edge
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -172,7 +173,19 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.receiveOnlyModes = {};
     caps.hasRadioDialLock = false;
     caps.hasTuner = true;
+    caps.hasTunerMemories = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
+    caps.hasRemoteOnControl = true;
+    caps.canUpgradeFirmware = true;
+    caps.hasSmartLink = true;
+    caps.hasLicenseInfo = true;
+    caps.hasClientNetworkConfig = true;
+    caps.hasFlexControlIntegration = true;
+    caps.hasAudioCompression = true;
+    caps.hasSharpFilters = true;
+    caps.usesVita49Transport = true;
+    caps.hasNetworkConfigurationReadback = true;
+    caps.hasPrivateIpConnectionPolicy = true;
     // The radio owns its reference and its own calibration ("radio set cal_freq",
     // "radio pll_start", freq_error_ppb) — that surface is the Frequency Offset
     // group on the Receive page, and it is NOT this flag. False here means "the
@@ -260,6 +273,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // MainWindow therefore combines this family declaration with
     // RadioModel::hasGpsHardware() while connected.
     caps.hasGpsLocation = true;
+    caps.hasGpsHardware = true;
+    caps.gpsHardwareRequiresPresence = true;
     // The radio owns the memory slots and re-dumps them on every connect, so
     // the client must NOT keep a local bank for a Flex — two stores that both
     // believe they are authoritative would fight over slot indices.

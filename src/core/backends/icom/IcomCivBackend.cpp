@@ -107,6 +107,15 @@ QString completionName(IcomCivScheduler::Completion completion)
     return QStringLiteral("unknown");
 }
 
+QString formatNetworkAddress(const std::array<std::uint8_t, 4>& octets)
+{
+    return QStringLiteral("%1.%2.%3.%4")
+        .arg(static_cast<int>(octets[0]))
+        .arg(static_cast<int>(octets[1]))
+        .arg(static_cast<int>(octets[2]))
+        .arg(static_cast<int>(octets[3]));
+}
+
 QByteArray floatBytes(const std::vector<float>& v)
 {
     return {reinterpret_cast<const char*>(v.data()),
@@ -269,15 +278,20 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     // Published from the model's own band table rather than a second hand-kept
     // list, so the ceilings and the tune guard can never describe different
-    // hardware. An empty table (every model but the IC-9700) leaves the vector
-    // empty, which is what RadioModel reads as "txPowerMaxWatts applies
-    // everywhere" — the prior behaviour, unchanged.
+    // hardware. IC-705 additionally opts into one continuous rated-output
+    // range so its verified 10 W ceiling drives the low-power face. Other
+    // continuous-range models keep an empty vector and their prior UI path.
     c.txPowerBands = {};
     c.txPowerBands.reserve(static_cast<int>(bands.size()));
     for (const IcomBand& band : bands) {
         c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),
                                           static_cast<double>(band.highHz),
                                           band.maxWatts});
+    }
+    if (bands.empty() && profile.meters.scaleForwardPowerToRatedOutput
+        && m.hasTransmit && m.txPowerMaxWatts > 0.0) {
+        c.txPowerBands.append(TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
+                                          m.txPowerMaxWatts});
     }
     c.forwardPowerRequiresSmoothing = profile.meters.powerConversion
         != MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;
@@ -364,12 +378,20 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // hasDaxStreams below), so there is nothing here for a host stage to blank
     // even if we wanted one.
     c.hasHostNoiseBlanker = false;
+    // No DDC in any networked Icom's receive chain — CI-V ships finished audio
+    // (see hasDaxStreams below), not a decimated IQ stream with an edge to taper.
+    c.hasDdcPanEdgeRolloff = false;
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;
 
-    // The radio HAS a GPS and the protocol will not carry its data.
+    // CI-V does not carry live GPS position/time, even on the IC-705. Keep the
+    // data capability false while separately declaring the model's hardware.
     c.hasGpsLocation = false;
+    c.hasGpsHardware = profile.hasGpsHardware;
+    c.gpsHardwareRequiresPresence = false;
+    c.hasNetworkConfigurationReadback = profile.networkConfiguration.has_value();
+    c.hasPrivateIpConnectionPolicy = false;
 
     c.hasSupplyVoltageTelemetry =
         hasVoltageCalibration(profile.meters.calibration);
@@ -385,7 +407,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // the command; family membership alone is not protocol evidence.
     c.hasRadioDialLock = profile.supports(IcomFeature::DialLock);
 
-    // THE ATU BUTTON IS REACHABLE AGAIN.
+    // THE ATU MATCHING CAPABILITY IS PROFILE-SPECIFIC.
     //
     // `1C 01` drives an EXTERNAL AH-705 and there is no command to ask whether
     // one is attached, so this capability is genuinely unanswerable from the
@@ -395,10 +417,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // its tuner state (1C 01 read) well enough for the button to tell the truth
     // once a cycle has run.
     //
-    // So: offered, and honest about the outcome rather than about the hardware.
-    // A start on a radio with no tuner reports NONE and the button returns to
-    // rest, which is a better answer than a control that is not there.
-    c.hasTuner = m.hasTransmit;
+    // Preserve that established surface only for exact profiles whose guides
+    // document the tuner path: IC-705, IC-7300/MK2, IC-7610, and IC-785x. The
+    // IC-9700 and unprofiled radios fail closed, while the shared UI keeps the
+    // controls visible and presents them as unavailable.
+    c.hasTuner = m.hasTransmit && profile.supports(IcomFeature::AntennaTuner);
+    // The shared MEM control is a separate capability. CI-V 1C 01 exposes
+    // matching state, not Flex's client-selectable memory recall/database.
+    c.hasTunerMemories = false;
 
     // The radio chooses its own modulation input from its own menu (MOD Input
     // > DATA MOD, which must be WLAN for us to be heard at all). A client
@@ -476,6 +502,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // A one-way trip over WiFi: 0x18 0x00 powers the radio off, which drops the
     // WLAN interface, so the 0x18 0x01 that would bring it back has no path.
     c.canReboot = false;
+    c.hasRemoteOnControl = false;
+    c.canUpgradeFirmware = false;
+    c.hasSmartLink = false;
+    c.hasLicenseInfo = false;
+    c.hasClientNetworkConfig = false;
+    c.hasFlexControlIntegration = false;
+    c.hasAudioCompression = false;
+    c.hasSharpFilters = false;
+    c.usesVita49Transport = false;
 
     // EMPTY, and load-bearing. An Icom remembers its own frequency, mode and
     // filter across power cycles and reports them on request, so Constitution
@@ -955,6 +990,17 @@ void IcomCivBackend::sendConnectReadBurst()
         }
     }
 
+    // IC-9700 CI-V Reference Guide (2019), printed p. 8. These are the
+    // radio-authoritative effective address, subnet prefix and default gateway.
+    // Other Icom profiles do not inherit the register map merely because they
+    // share the 1A 05 envelope.
+    if (const auto network = profileFor(*m_model).networkConfiguration) {
+        for (int item : {network->effectiveIpItem, network->subnetMaskItem,
+                         network->gatewayItem, network->networkNameItem}) {
+            queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
+        }
+    }
+
     // ADOPT THE RADIO'S OWN LEVELS. Constitution II/III says an Icom is
     // authoritative over its operating state and the client must never push a
     // restored one — but that cuts both ways, and the reading half was missing.
@@ -1050,7 +1096,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                              tuneOffset::kXitOnOff})
         queueStartupRead(cmdReadTuneOffset(m_session->civAddress(), sub));
-    queueStartupRead(cmdReadTuner(m_session->civAddress()));
+    queueTunerReadIfSupported(m_session->civAddress(),
+                              IcomCivScheduler::Priority::Maintenance);
 
 }
 
@@ -2600,6 +2647,50 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (frame.sub != settingSub::kMenu || frame.data.size() < 3)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
+
+        if (const auto networkProfile = profileFor(*m_model).networkConfiguration) {
+            RadioDelta network;
+            if (item == networkProfile->effectiveIpItem) {
+                const auto address = decodeNetworkAddress(
+                    std::span<const std::uint8_t>(frame.data).subspan(2));
+                if (!address) {
+                    return;
+                }
+                network.ip = formatNetworkAddress(*address);
+            } else if (item == networkProfile->subnetMaskItem) {
+                if (frame.data.size() != 3) {
+                    return;
+                }
+                const auto mask = subnetMaskFromBcdPrefix(frame.data[2]);
+                if (!mask) {
+                    return;
+                }
+                network.netmask = formatNetworkAddress(*mask);
+            } else if (item == networkProfile->gatewayItem) {
+                if (frame.data.size() == 3 && frame.data[2] == 0xff) {
+                    network.gateway = QString();
+                } else {
+                    const auto address = decodeNetworkAddress(
+                        std::span<const std::uint8_t>(frame.data).subspan(2));
+                    if (!address) {
+                        return;
+                    }
+                    network.gateway = formatNetworkAddress(*address);
+                }
+            } else if (item == networkProfile->networkNameItem) {
+                const auto name = decodeNetworkName(
+                    std::span<const std::uint8_t>(frame.data).subspan(2));
+                if (!name) {
+                    return;
+                }
+                network.networkName = QString::fromLatin1(
+                    name->data(), static_cast<qsizetype>(name->size()));
+            }
+            if (network.ip || network.netmask || network.gateway || network.networkName) {
+                emit radioChanged(network);
+                return;
+            }
+        }
 
         // TRANSMIT PASSBAND EDGES, which are a different shape from every other
         // SET item: one packed BCD byte whose high digit indexes this model's
@@ -4275,16 +4366,43 @@ void IcomCivBackend::setVox(bool on, int level, int delayMs)
 // THE ANTENNA TUNER, and it keys.
 //
 // `1C 01 02` starts a matching cycle on an EXTERNAL AH-705; `1C 01 00` bypasses.
-// There is no command to ask whether a tuner is attached, so a start on a radio
-// with none is a request that simply does nothing — which is why
-// capabilities().hasTuner stays operator-driven rather than claiming knowledge
-// the protocol cannot give us.
+// There is no command to ask whether an external tuner is attached, so only an
+// exact model profile with a documented tuner path may send this command. The
+// IC-9700 has no such path.
 void IcomCivBackend::setAtu(bool start)
 {
+    if (!sendTunerCommandIfSupported(start)) {
+        qCWarning(lcIcomTx)
+            << "refusing antenna-tuner command: unsupported by active Icom profile";
+    }
+}
+
+bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
+{
+    if (!tunerSupported()) {
+        return false;
+    }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
                                 start ? 0x02 : 0x00));
     // sendUserCommand queues a readback after the radio has applied the write;
     // that confirmation is also what lets the transient tuning state settle.
+    return true;
+}
+
+bool IcomCivBackend::tunerSupported() const
+{
+    return m_model && profileFor(*m_model).supports(IcomFeature::AntennaTuner);
+}
+
+bool IcomCivBackend::queueTunerReadIfSupported(
+    std::uint8_t address, IcomCivScheduler::Priority priority)
+{
+    if (!tunerSupported()) {
+        return false;
+    }
+    const std::vector<std::uint8_t> frame = cmdReadTuner(address);
+    queueRead(frame, semanticKey(frame), priority);
+    return true;
 }
 
 void IcomCivBackend::setSliceSquelch(int, bool on, int level)
@@ -5686,9 +5804,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
         // an operator with an AH-705 can reach it without the TUNE button
         // running an ATU that may not be attached.
-        sendUserCommand(buildFrameSub(m_session ? m_session->civAddress() : 0xA4,
-                                      cmd::kControl, control::kTuner,
-                                      std::array<std::uint8_t, 1>{0x02}));
+        if (!sendTunerCommandIfSupported(true)) {
+            emit extensionError(requestId, QStringLiteral("antenna tuner unsupported"));
+            return;
+        }
         emit extensionResult(requestId, true);
         return;
     }
@@ -6165,7 +6284,7 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadFunction(addr, fn));
         }
         queueControl(cmdReadAttenuator(addr));
-        queueControl(cmdReadTuner(addr));
+        queueTunerReadIfSupported(addr, IcomCivScheduler::Priority::Control);
         for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                                  tuneOffset::kXitOnOff}) {
             queueControl(cmdReadTuneOffset(addr, sub));

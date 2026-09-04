@@ -4524,6 +4524,21 @@ void AutomationServer::setClockModel(AetherClockModel* model)
     m_clockModel = model;
 }
 
+void AutomationServer::setRadioModel(RadioModel* model)
+{
+    m_radioModel = model;
+}
+
+void AutomationServer::setAudioEngine(AudioEngine* audio)
+{
+    m_audioEngine = audio;
+}
+
+void AutomationServer::setQsoRecorder(QsoRecorder* recorder)
+{
+    m_qsoRecorder = recorder;
+}
+
 namespace {
 // AetherClock model snapshot for "get clock" (PRD-A: bridge exposure).
 QJsonObject clockSnapshot(const AetherClockModel* m)

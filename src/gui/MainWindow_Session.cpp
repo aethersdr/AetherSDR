@@ -255,6 +255,39 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
+
+    // aetherd ANAN P2 Phase 1b: ANAN-G2 radios answer openHPSDR Protocol 2
+    // discovery on the same UDP/1024 port number as HL2's Protocol 1 (a
+    // different wire format entirely), tagged family="anan" so RadioModel
+    // routes the connect through AnanBackend. Mirrors the HL2 wiring above
+    // line for line.
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_ananDiscovery.start();
+
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    if (RtlSdrDiscovery::isAvailable()) {
+        m_rtlDiscovery.start();
+    }
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
@@ -279,10 +312,16 @@ void MainWindow::wireDiscovery()
                     m_autoConnectSerial.clear();
             });
     connect(m_connPanel, &ConnectionPanel::retryDiscoveryRequested, this, [this] {
-        m_connPanel->setStatusText("Searching your local network…");
+        m_connPanel->setStatusText(RtlSdrDiscovery::isAvailable()
+                                       ? "Searching local network & USB devices…"
+                                       : "Searching your local network…");
         if (m_titleBar) m_titleBar->setDiscovering(true);
         m_discovery.stopListening();
         m_discovery.startListening();
+        if (RtlSdrDiscovery::isAvailable()) {
+            m_rtlDiscovery.stop();
+            m_rtlDiscovery.start();
+        }
     });
     connect(m_connPanel, &ConnectionPanel::networkDiagnosticsRequested,
             this, &MainWindow::showNetworkDiagnosticsDialog);
@@ -593,7 +632,8 @@ void MainWindow::updateExperimentalRadioSupport(bool connected)
         box->setAttribute(Qt::WA_DeleteOnClose);
         box->setIcon(QMessageBox::Information);
         box->setWindowTitle(QStringLiteral("Experimental radio support"));
-        box->setText(experimentalRadioNoticeText(noticeDescriptor.displayName));
+        box->setText(experimentalRadioNoticeText(
+            noticeDescriptor.displayName, m_radioModel.backendCapabilities().canTransmit));
         box->setStandardButtons(QMessageBox::Ok);
         box->setDefaultButton(QMessageBox::Ok);
         if (QAbstractButton* continueButton = box->button(QMessageBox::Ok)) {

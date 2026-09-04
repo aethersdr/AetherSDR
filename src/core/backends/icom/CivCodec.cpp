@@ -1128,6 +1128,66 @@ std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int va
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
 }
 
+std::optional<std::array<std::uint8_t, 4>>
+decodeNetworkAddress(std::span<const std::uint8_t> data)
+{
+    if (data.size() != 8) {
+        return std::nullopt;
+    }
+    std::array<std::uint8_t, 4> octets{};
+    for (std::size_t i = 0; i < data.size(); i += 2) {
+        const std::uint8_t high = data[i];
+        const std::uint8_t low = data[i + 1];
+        if ((high & 0x0f) > 9 || ((high >> 4) & 0x0f) > 9
+            || (low & 0x0f) > 9 || ((low >> 4) & 0x0f) > 9) {
+            return std::nullopt;
+        }
+        const int value = decodeBcdByte(high) * 100 + decodeBcdByte(low);
+        if (value > 255) {
+            return std::nullopt;
+        }
+        octets[i / 2] = static_cast<std::uint8_t>(value);
+    }
+    return octets;
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+subnetMaskFromBcdPrefix(std::uint8_t raw)
+{
+    if ((raw & 0x0f) > 9 || ((raw >> 4) & 0x0f) > 9) {
+        return std::nullopt;
+    }
+    const int prefix = decodeBcdByte(raw);
+    if (prefix < 1 || prefix > 30) {
+        return std::nullopt;
+    }
+    const std::uint32_t mask = 0xffffffffU << (32 - prefix);
+    return std::array<std::uint8_t, 4>{
+        static_cast<std::uint8_t>((mask >> 24) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 16) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 8) & 0xffU),
+        static_cast<std::uint8_t>(mask & 0xffU)};
+}
+
+std::optional<std::string> decodeNetworkName(std::span<const std::uint8_t> data)
+{
+    if (data.size() > 15) {
+        return std::nullopt;
+    }
+    std::string name;
+    name.reserve(data.size());
+    for (std::uint8_t byte : data) {
+        if (byte < 0x20 || byte > 0x7e) {
+            return std::nullopt;
+        }
+        name.push_back(static_cast<char>(byte));
+    }
+    while (!name.empty() && name.back() == ' ') {
+        name.pop_back();
+    }
+    return name;
+}
+
 std::vector<std::uint8_t> cmdTuneOffsetHz(std::uint8_t to, int hz)
 {
     // +/- 9.99 kHz, and the radio takes a MAGNITUDE plus a separate sign byte.

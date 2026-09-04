@@ -347,6 +347,7 @@ enum class IcomFeature : std::uint8_t {
     DialLock,
     CivDataRestart,
     MemoryChannels,
+    AntennaTuner,
 };
 
 enum class MemoryDialect : std::uint8_t {
@@ -412,6 +413,10 @@ struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
     PowerConversion powerConversion = PowerConversion::NativeWatts;
+    // Opt into a forward-power face derived from this model's published
+    // txPowerMaxWatts even when it has one continuous tuning range. Keep this
+    // model-specific: a low-power face must not leak to sibling Icom profiles.
+    bool scaleForwardPowerToRatedOutput = false;
     // UI exposure is narrower than wire decoding. Several Icom profiles have
     // an Id calibration, but each model must be approved independently before
     // Radio Vitals offers that instrument.
@@ -434,6 +439,15 @@ struct CivRecoveryProfile {
     int maxAttempts = 3;
 };
 
+// Model-owned 1A 05 register addresses for radio-authoritative network state.
+// These differ across Icom command tables and are absent from the IC-705 guide.
+struct NetworkConfigurationProfile {
+    int effectiveIpItem = -1;
+    int subnetMaskItem = -1;
+    int gatewayItem = -1;
+    int networkNameItem = -1;
+};
+
 // The immutable, backend-private capability profile from RFC #4984. IcomModel
 // remains transport/identity geometry; every command-table difference lives
 // here. Adding a radio is intentionally metadata-first and conservative: code
@@ -441,6 +455,7 @@ struct CivRecoveryProfile {
 // borrow another model's command shape or calibration.
 struct IcomModelProfile {
     bool supportedBringup = false;
+    bool hasGpsHardware = false;
     int speechProcessorLevelMaximum = 2;
     std::string_view speechProcessorLabel = "PROC";
     std::string_view guideRevision;
@@ -457,6 +472,7 @@ struct IcomModelProfile {
     MeterCalibrationProfile meters;
     std::optional<CivRecoveryProfile> civRecovery;
     std::optional<MemoryProfile> memory;
+    std::optional<NetworkConfigurationProfile> networkConfiguration;
     std::span<const std::string_view> preampLabels;
     std::span<const AttenStep> attenuatorSteps;
     std::span<const std::string_view> modes;

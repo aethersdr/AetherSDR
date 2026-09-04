@@ -349,6 +349,15 @@ inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
                                                              int value);
 
+// Four zero-padded decimal IPv4 octets, each encoded in two BCD bytes, as used
+// by the Icom SET-menu network registers. Invalid BCD and octets >255 fail.
+[[nodiscard]] std::optional<std::array<std::uint8_t, 4>>
+decodeNetworkAddress(std::span<const std::uint8_t> data);
+[[nodiscard]] std::optional<std::array<std::uint8_t, 4>>
+subnetMaskFromBcdPrefix(std::uint8_t raw);
+[[nodiscard]] std::optional<std::string>
+decodeNetworkName(std::span<const std::uint8_t> data);
+
 // Command 0x21 — RIT and dTX (which is what Icom calls XIT).
 namespace tuneOffset {
 inline constexpr std::uint8_t kFrequency = 0x00;   // signed, +/- 9.99 kHz

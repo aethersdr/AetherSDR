@@ -186,6 +186,10 @@ private:
     [[nodiscard]] int stopTuneProducer();
     QVariantMap finishAx25PostResampleCapture();
     void reassertPanPreampWireStep(int step);
+    [[nodiscard]] bool tunerSupported() const;
+    bool sendTunerCommandIfSupported(bool start);
+    bool queueTunerReadIfSupported(std::uint8_t address,
+                                   IcomCivScheduler::Priority priority);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a
