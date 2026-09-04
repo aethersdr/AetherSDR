@@ -719,6 +719,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/tnc/Ax25AudioCapture.h": {
+  "tag": "universal",
+  "note": "AX.25 Capture 3m diagnostics: capture-id/path naming and the shared float32 WAV writer for the RX, generated-TX and post-resample stages; radio-agnostic diagnostic I/O (#5311).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/tnc/Ax25FrameFormatter.h": {
   "tag": "universal",
   "note": "AX.25 frame human-formatting; radio-agnostic.",
