@@ -1698,6 +1698,12 @@ target_include_directories(opus_tx_pacer_test PRIVATE src)
 target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
 add_test(NAME opus_tx_pacer_test COMMAND opus_tx_pacer_test)
 
+add_executable(tci_tx_chrono_pacer_test
+    tests/tci_tx_chrono_pacer_test.cpp
+)
+target_include_directories(tci_tx_chrono_pacer_test PRIVATE src)
+add_test(NAME tci_tx_chrono_pacer_test COMMAND tci_tx_chrono_pacer_test)
+
 add_executable(adaptive_filter_test
     tests/adaptive_filter_test.cpp
     src/core/OccupiedRegion.cpp

@@ -5,6 +5,7 @@
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "IcomTciUnkeySettle.h"
+#include "TciTxChronoPacer.h"
 
 #include <QObject>
 #include <QPointer>
@@ -396,7 +397,8 @@ private:
     std::unique_ptr<Resampler> m_txResampler; // 48kHz→24kHz TX downsampler
     QElapsedTimer     m_txChronoClock;
     QElapsedTimer     m_txChronoSessionClock;
-    qint64            m_txChronoAccumNs{0};
+    QElapsedTimer     m_txAudioClock; // last TX_AUDIO block this over
+    TciTxChronoPacer  m_txChronoPacer;
     qint64            m_txChronoRequestedFrames{0};
     bool              m_txUseRadioRoute{true};
     float             m_txGain{1.0f};

@@ -1,6 +1,7 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciServer.h"
 #include "TciProtocol.h"
+#include "TciTxChronoPacer.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -73,10 +74,9 @@ static_assert(sizeof(TciAudioHeader) == 64, "TCI audio header must be 64 bytes")
 
 namespace {
 
-constexpr int kTxChronoSamples = 2048; // float payload length sent to WSJT-X
-constexpr int kTxChronoStereoFrames = kTxChronoSamples / 2;
-constexpr qint64 kTxChronoPeriodNs =
-    (static_cast<qint64>(kTxChronoStereoFrames) * 1000000000LL) / 48000LL;
+constexpr int kTxChronoSamples = TciTxChronoPacer::kStereoFrames * 2; // float payload
+constexpr int kTxChronoStereoFrames = TciTxChronoPacer::kStereoFrames;
+constexpr qint64 kTxChronoPeriodNs = TciTxChronoPacer::kPeriodNs;
 constexpr int kTxChronoPollMs = 5;
 constexpr qint64 kTxSummaryEveryBlocks = 48;
 
@@ -475,12 +475,36 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             return;
         }
 
-        m_txChronoAccumNs += m_txChronoClock.nsecsElapsed();
+        const qint64 elapsedNs = m_txChronoClock.nsecsElapsed();
         m_txChronoClock.restart();
-
-        while (m_txChronoAccumNs >= kTxChronoPeriodNs) {
+        const qint64 audioGapNs = m_txAudioClock.isValid()
+            ? m_txAudioClock.nsecsElapsed()
+            : static_cast<qint64>(-1);
+        const TciTxChronoPacer::TickResult tick =
+            m_txChronoPacer.tick(elapsedNs, audioGapNs);
+        for (int i = 0; i < tick.framesToSend; ++i) {
             sendTxChronoFrame(client);
-            m_txChronoAccumNs -= kTxChronoPeriodNs;
+        }
+        // Intra-second burst line (#5133 item 3). 1-second TCI TX summaries
+        // cannot show a 50 ms clump; this fires when the unbounded while
+        // would have emitted more than one frame, or when the pacer drops
+        // backlog / refuses because the client is behind.
+        if (tick.wouldHaveSent > 1 || tick.droppedNs > 0
+            || tick.outstandingCapped || tick.forgotStuck) {
+            qCInfo(lcCat).nospace()
+                << "TCI TX chrono burst"
+                << " chrono_this_tick=" << tick.framesToSend
+                << " would_have_sent=" << tick.wouldHaveSent
+                << " dropped_ns=" << tick.droppedNs
+                << " accum_ns=" << tick.accumNs
+                << " outstanding=" << tick.outstanding
+                << " audio_gap_ms="
+                << (audioGapNs >= 0
+                        ? static_cast<double>(audioGapNs) / 1.0e6
+                        : -1.0)
+                << " forgot_stuck=" << (tick.forgotStuck ? "true" : "false")
+                << " outstanding_capped="
+                << (tick.outstandingCapped ? "true" : "false");
         }
     });
 }
@@ -2575,6 +2599,8 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     }
 
     ++m_txAudioBlocks;
+    m_txChronoPacer.onAudioBlock();
+    m_txAudioClock.start();
     m_txInputFrames += inputFramesSrcRate;
     m_txOutputFrames += outputStereoFrames;
     m_txClipSamples += clipSamples;
@@ -3276,8 +3302,9 @@ void TciServer::prepareTxAudio()
         if (!ok || rawMode < 0 || rawMode > 2) rawMode = 0;
         m_overflowMode = static_cast<OverflowMode>(rawMode);
     }
-    m_txChronoAccumNs = 0;
+    m_txChronoPacer.reset();
     m_txChronoRequestedFrames = 0;
+    m_txAudioClock.invalidate();
     m_txAudioBlocks = 0;
     m_txInputFrames = 0;
     m_txOutputFrames = 0;
@@ -3387,6 +3414,8 @@ void TciServer::startTxChrono(QWebSocket* client, int trx)
     m_txChronoClient = client;
     m_txChronoTrx = trx;
 
+    m_txChronoPacer.reset();
+    m_txAudioClock.invalidate();
     m_txChronoClock.start();
     m_txChronoSessionClock.start();
     m_txChronoTimer->start();
@@ -3409,7 +3438,8 @@ void TciServer::stopTxChrono()
     m_txChronoClient = nullptr;
     m_txChronoClock.invalidate();
     m_txChronoSessionClock.invalidate();
-    m_txChronoAccumNs = 0;
+    m_txAudioClock.invalidate();
+    m_txChronoPacer.reset();
 
     // Do NOT send `transmit set dax=0` here. The radio's status echo
     // flips m_daxTxMode to false via updateDaxTxMode, which blocks the
@@ -3441,6 +3471,7 @@ void TciServer::sendTxChronoFrame(QWebSocket* client)
     std::memcpy(frame.data(), &hdr, sizeof(hdr));
     client->sendBinaryMessage(frame);
     m_txChronoRequestedFrames += kTxChronoStereoFrames;
+    m_txChronoPacer.onChronoSent();
 }
 
 void TciServer::logTxAudioSummary(const char* reason)
@@ -3471,7 +3502,8 @@ void TciServer::logTxAudioSummary(const char* reason)
         << " peak=" << m_txAudioPeak
         << " rms=" << rms
         << " clips=" << m_txClipSamples
-        << " layout=" << (m_txSawDuplicatedStereo ? "duplicated-stereo" : "mono-or-stereo");
+        << " layout=" << (m_txSawDuplicatedStereo ? "duplicated-stereo" : "mono-or-stereo")
+        << " outstanding=" << m_txChronoPacer.outstanding();
 }
 
 void TciServer::broadcastActualTxState(bool transmitting)
