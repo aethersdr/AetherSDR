@@ -201,6 +201,21 @@ jobs:
             # loaded is the same class of lie this lane exists to stop.
             if [ ! -r "$supp" ]; then
               echo "::error::TSan suppressions file not readable at $supp"
+              # Do NOT bare-exit. This step is continue-on-error, so an exit
+              # here does not end the job — it skips `tee sanitizer.log` and the
+              # outputs.exit write. The report chain then runs anyway ('' is
+              # != '0'), against a log that does not exist; the extract step's
+              # `sed` exits 2 under the default `bash -e`, and that takes the
+              # artifact upload AND the tracking issue with it. Red job, no
+              # artifact, nothing to read — strictly worse than the failure this
+              # guard replaces, which at least filed #5420. Leave the chain
+              # something to report (#5421 review).
+              {
+                echo "TSan suppressions file not readable at $supp"
+                echo "The lane did NOT run: the sanitizer runtime refuses to"
+                echo "start without it, so no result in this run is meaningful."
+              } > sanitizer.log
+              echo "exit=1" >> "$GITHUB_OUTPUT"
               exit 1
             fi
             export TSAN_OPTIONS="${TSAN_OPTIONS}:suppressions=$supp"
