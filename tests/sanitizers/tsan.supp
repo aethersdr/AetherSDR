@@ -1,0 +1,50 @@
+# ThreadSanitizer suppressions for the weekly sanitizer lane
+# (.github/workflows/sanitizers.yml, TSAN_OPTIONS=suppressions=<this file>).
+#
+# The lane links the stock prebuilt Qt 6.8.3 and the distro's glib and pulse.
+# None of them is TSan-instrumented, and their synchronization is raw futex
+# — invisible to TSan — so every cross-thread handoff INSIDE those libraries
+# is reported as a race whether or not one exists. This file lists exactly
+# the entries that survived adversarial review in #5275: each names a frame
+# inside the uninstrumented library, never one of ours, so a real race in
+# AetherSDR code that happens to run under a queued slot still reports.
+#
+# Every entry carries its caveat. Read it before widening anything.
+
+# libpulse: the original #3462 finding (June 2026), triaged as pa_mutex_lock
+# on an uninstrumented mutex. Blinds nothing of ours: no AetherSDR code runs
+# inside libpulsecommon.
+called_from_lib:libpulsecommon
+
+# QtGui's threaded raster paint engine hands QImage backing stores between
+# the GUI thread and its raster workers under an uninstrumented lock.
+# ~370 reports per run, all the same handoff. CAVEAT: this also blinds a
+# real cross-thread QImage sharing bug in our code IF the racing access
+# happens inside libQt6Gui's own frames (ours still report). Documented
+# trade; revisit when Qt is built with -sanitize thread (#5275 S6).
+called_from_lib:libQt6Gui.so.6
+
+# Queued-metacall payload handoff: QMetaCallEvent carries the argument copies
+# across the thread boundary, and QMetaType::create/destroy build and tear
+# them down. The synchronization is Qt's own postEvent lock, uninstrumented.
+# These match the CARRIER, not the slot body: a race inside the slot that
+# runs afterwards is in our frames and still reports.
+race:QMetaCallEvent
+race:QCoreApplicationPrivate::sendPostedEvents
+race:QMetaType::create
+race:QMetaType::destroy
+
+# ── DO NOT ADD — rejected in #5275 review, each would blind the lane ──────
+# Every entry below matches a frame that OUR code executes inside, so a real
+# race whose access sits in a queued slot body — the sendCmd and audio-atomics
+# paths this lane exists to guard — would be swallowed with the false
+# positive. The glib cluster is handled by QT_NO_GLIB=1 in the workflow env
+# instead of a suppression, with zero debt.
+#   race:qobjectdefs_impl.h
+#   race:QtPrivate::FunctorCall
+#   race:QtPrivate::QCallableObject
+#   race:QObject::event
+#   called_from_lib:libQt6Core.so.6
+#   called_from_lib:libglib
+#   race:CloseHandle
+#   race:wdspmain

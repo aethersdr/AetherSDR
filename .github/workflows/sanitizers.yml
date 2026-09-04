@@ -57,13 +57,23 @@ jobs:
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
             runtime_env: |
-              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1
+              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1:suppressions=${{ github.workspace }}/tests/sanitizers/tsan.supp
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Configure
         env:
+          # CFLAGS as well as CXXFLAGS. The tree is not all C++: WDSP and its
+          # Win32 port, liquid-dsp, rnnoise and the other vendored C libraries
+          # compile as C, and until CFLAGS was set here every one of them was
+          # built UNINSTRUMENTED in both lanes — ASan blind to their heap
+          # accesses, TSan blind to their atomics. For TSan that is the
+          # difference between a report and a fix: WDSP's teardown handshakes
+          # (Interlocked* on volatile longs, the port's __atomic builtins) are
+          # invisible to it without this, so it reports every channel close
+          # as a race whether or not one exists (#5275 S3 verification).
+          CFLAGS:   ${{ matrix.sanitizer.extra_cxx }}
           CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
           LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
         run: |
@@ -84,6 +94,11 @@ jobs:
         continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
+          # No glib event dispatcher. The distro glib is uninstrumented and its
+          # eventfd doorbell shows up as ~290 TSan reports per run on the fd's
+          # shadow cell — not memory, not ours. Qt's own dispatcher is a
+          # supported configuration and costs no suppression (#5275 S4).
+          QT_NO_GLIB: "1"
         # The container image's /bin/sh is Dash, which doesn't understand
         # `set -o pipefail` or ${PIPESTATUS[0]} — without `shell: bash`
         # the step exits at code 2 before reaching ctest, the
