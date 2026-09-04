@@ -662,6 +662,65 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   open — any receiver, any sample rate — is **40–175 ms**. The planning cost is
   not a bug and cannot be optimised away, but it is now paid **off the GUI
   thread** and reported in the connect animation; see §22.
+
+- **"Every later open" assumes the wisdom cache survives, and the isolation
+  recipe above destroys it.** This is the most expensive thing on this page to
+  get wrong, because it presents as a hang rather than as slowness.
+
+  The three variables move three different things, and only one of them is
+  about settings:
+
+  | variable | what it moves |
+  |---|---|
+  | `CFFIXED_USER_HOME` | Qt's config and log locations — `QStandardPaths::writableLocation(GenericConfigLocation)`, so the settings store and `LogManager`'s rotated log |
+  | `XDG_CONFIG_HOME` | the same locations on platforms that consult it |
+  | **`HOME`** | everything resolved from `QDir::homePath()` — **and the WDSP wisdom cache** |
+
+  `WdspChannel::wisdomPath()` resolves to `$XDG_CACHE_HOME`, else
+  **`$HOME/.cache`**, then `/aethersdr/wdsp-fftw-wisdom`. It is imported before
+  the channels are built and exported after. A redirected `HOME` therefore
+  points it at an empty directory, and each run writes its own cache into a
+  temporary tree that is then deleted — so **every run is a first open**, for
+  ever.
+
+  It is far worse than the ~19 s above. WDSP builds every FFT with
+  `FFTW_PATIENT`, 35 plans per channel. Measured on one machine and one binary,
+  changing only whether that cache was reachable:
+
+  | wisdom cache | connect |
+  |---|---|
+  | present | **4.1 s** |
+  | absent | **still running at 150 s** |
+
+  **The fix is one variable**, and the code already provides it for its own
+  tests — see the `AETHER_WDSP_WISDOM_DIR` branch at the top of
+  `WdspChannel::wisdomPath()`:
+
+  ```bash
+  # ABSOLUTE, and resolved BEFORE HOME is redirected.
+  export AETHER_WDSP_WISDOM_DIR=/var/tmp/aethersdr-harness-wisdom
+  ```
+
+  **Do not write `$HOME/...` here.** `HOME` is the variable this very recipe
+  redirects, so a `$HOME`-relative path lands *inside* the temporary tree and is
+  deleted with it — the fix silently undoes itself, and the symptom is
+  indistinguishable from not having applied it. On a single command line with
+  `HOME=$T` in front, `$HOME` happens to expand from the caller's environment
+  and it appears to work; in a script that sets `HOME` first, it does not. Use
+  an absolute path.
+
+  Point it at a directory that OUTLIVES the run. The harness then pays the
+  planning cost once instead of on every launch, and keeps the isolation the
+  rest of the recipe is for.
+
+  Two traps worth naming, both of which cost a day here. There are **two**
+  FFTW wisdom files — `AudioEngine::wisdomFilePath()` under
+  `~/.config/AetherSDR/` for NR2, and `WdspChannel::wisdomPath()` under
+  `~/.cache/aethersdr/` for the channels — and the startup log line
+  `Audio NR2 wisdom summary: status=missing` refers to the **first**, which is
+  routinely absent and says nothing about the second. And a stalled DSP open
+  produced **no diagnostic at all** until #5413: the phase had no timeout and no
+  log line, so a caller saw `ok`/`deferred` from `connect ip` and then silence.
 - The `tools/hl2/` Python spike defaults to broadcasting
   `255.255.255.255`, which fails on macOS with `OSError 65` when multiple
   interfaces are up. Use `--bcast <subnet>.255`. The in-app Qt sweep is fine.
