@@ -173,6 +173,62 @@ bounded one: 1 Hz sees roughly one conversion in sixteen, which is all a 1 Hz
 display can show, and 15.6 Hz is a hard ceiling on any future "make it more
 responsive" change to the idle states.
 
+### 3.1 How the state is *measured* — the half this note originally left out
+
+Everything above derives what to do **given** the state. It said nothing about
+how the state is determined, and that gap is where the first hardware defect
+lived: the rule was right, the thing feeding it was wrong, and the unit test
+could not tell.
+
+The obvious implementation is the wrong one. "Did the EP6 packet counter change
+since the last tick?" reads as a direct question about the stream, and it is
+not — `m_link.rxPackets` is a **mirror**, refreshed from the I/O thread by
+`linkCountersUpdated` at 1 Hz, and the tick that read it also ran at 1 Hz. Two
+clocks sampling each other. Whenever two ticks fell between two publishes, the
+second saw an unchanged counter and reported `StreamStalled` on a perfectly
+healthy stream, and since `StreamStalled` is one of the two states that poll
+**without** a visible surface, the app emitted port-1025 datagrams through its
+own live session — the precise thing §3's first row forbids. **M**
+(2026-09-04: `telemetryPollMs` oscillating 0 → 500 → 0 while the in-band
+temperature changed on every sample and `telemetryAgeMs` reset, i.e. replies
+were landing.)
+
+**This is a certainty, not a race that might not happen.** The publish is gated
+by `elapsed() < kLinkPublishIntervalMs` and checked on packet arrival, so its
+period is bounded *below* by 1000 ms and in practice runs a little over. The
+tick is a steady 1000 ms. A sequence never faster than the tick and sometimes
+slower must fall behind without bound, so a tick with no intervening publish is
+inevitable; only its arrival time is in doubt. **R**
+
+That also settles what the Config C capture proved. It ran 60 s and saw
+nothing, which was read as proof of silence. Drift between two nominally-equal
+clocks beats slowly and phase-dependently, so a 60 s window can sit in a quiet
+phase while a 24 s window hours later hits it repeatedly. Config C establishes
+*"no port-1025 traffic seen in one 60 s window"* — a bound, not the claim.
+
+**The rule.** Measure elapsed time since the counter last advanced, not a
+tick-to-tick delta:
+
+| input | what it actually measures |
+|---|---|
+| counter changed since the last tick | the **tick** as much as the stream |
+| ms since the counter last advanced | the stream only, at any tick rate |
+
+`kStreamStallDeclareMs = 2500` — two publish intervals plus margin. A healthy
+stream never reaches it because the publish period is bounded below by 1000 ms;
+two consecutive missed publishes do. The clock is restarted **in the mirror**,
+on an actual advance, because `linkCountersUpdated` fires whether or not EP6
+moved: "a publish arrived" is not "packets arrived".
+
+**The cost, stated rather than buried:** a real stall is declared 2.5–3.5 s
+after it starts instead of ~1 s. The old ~1 s was not real. It was a coin flip
+that paid for its apparent speed with false stalls on healthy streams.
+
+The two states this collapsed, in the vocabulary of `collapsed-states.md`: *"the
+stream stopped"* and *"our sampling missed it"* rendered identically, and the
+second is far more common. The fix does not make the reading perfect — it makes
+the two distinguishable, because only one of them can survive 2.5 s.
+
 ## 4. Which source wins, and the state that must not collapse
 
 Two paths now produce the same fields in the same raw units — deliberately, so
