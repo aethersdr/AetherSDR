@@ -34,6 +34,21 @@ race:QCoreApplicationPrivate::sendPostedEvents
 race:QMetaType::create
 race:QMetaType::destroy
 
+# WDSP's io ring buffer (third_party/wdsp/upstream/iobuffs.c). Visible only
+# now that the C sources are instrumented: fexchange2()/upslew2() write the
+# next block into the r1 ring on the caller's thread while wdspmain()'s
+# dexchange() memcpy reads the previous one; the write→read edge is the
+# Sem_BuffReady semaphore, but slot REUSE (reader done → writer overwrites)
+# has no synchronization at all — upstream relies on the ring being deep
+# enough that the writer never laps the reader. That is a by-construction
+# ordering TSan cannot prove, in upstream's real-time path, and a handoff
+# there is a DSP change, not a teardown fix. Exactly these two upstream
+# functions, anchored: a race anywhere else in WDSP still reports.
+# CAVEAT: a ring too shallow for the configured rates would be a real
+# overrun and would hide behind this line; the audible symptom is the tell.
+race:^upslew2$
+race:^dexchange$
+
 # ── DO NOT ADD — rejected in #5275 review, each would blind the lane ──────
 # Every entry below matches a frame that OUR code executes inside, so a real
 # race whose access sits in a queued slot body — the sendCmd and audio-atomics
