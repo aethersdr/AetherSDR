@@ -63,10 +63,13 @@ Parameters contain 1–64 selectors:
 {"resources":[{"type":"slice","radioSession":"radio-1"}]}
 ```
 
-The result contains a session-local subscription ID, the current session event
-sequence, and the complete baseline matching those selectors. Registration and
-snapshot capture execute as one main-thread operation; the next event therefore
-has a greater sequence and cannot leave a snapshot/event gap.
+The result contains a session-local subscription ID, the last session event
+sequence already drained to the transport, and the complete baseline matching
+those selectors. Registration and snapshot capture execute as one main-thread
+operation. Events still pending for existing subscriptions retain sequences
+greater than the returned boundary, and newly generated events advance beyond
+them, so an event delivered after the baseline cannot leave a snapshot/event
+gap or reuse the baseline sequence.
 
 ### `resource.unsubscribe`
 
@@ -76,9 +79,11 @@ Parameters are `{"subscription":"sub-1"}`. Success returns the same ID and
 ## Events, revisions, and resync
 
 `resource.changed` carries the complete new value. `resource.removed` carries
-the identity and its next revision but no value. Revisions are monotonic per
-identity, survive removal/recreation, and advance only when the canonical value
-changes.
+the identity and its next revision but no value. Revisions come from one
+store-wide monotonic counter. They are therefore monotonic per identity and
+survive removal/recreation. A revision is consumed only when a canonical value
+changes or a live identity is removed, but an identity's revisions need not be
+consecutive or begin at one.
 
 Event `sequence` is monotonic within one protocol session. Pending events for
 the same resource coalesce to the newest sequence, revision, and complete value.
@@ -98,8 +103,10 @@ service clears that session's subscriptions and emits:
 ```
 
 The client must call `resource.subscribe` again and replace its cache from the
-fresh baseline. If even the resync event cannot fit, the transport closes the
-client under the protocol's hard output limit.
+fresh baseline. The current-user local transport also has an independent hard
+socket-output cap. A client whose operating-system socket buffer is already at
+that cap can be disconnected before a queued resync notice is written; after
+reconnecting it must establish a new session and baseline.
 
 ## Resource values
 
@@ -109,7 +116,9 @@ client under the protocol's hard output limit.
 - `buildVersion`: AetherSDR build version.
 - `protocolVersions`: supported protocol versions.
 - `health`: bounded service health token.
-- `localTransport`: `idle`, `listening`, or `stopped`.
+- `localTransport`: `idle`, `listening`, or `stopped`. `idle` and `stopped`
+  describe in-process lifecycle state before or after socket availability; a
+  protocol client can query this resource only while the value is `listening`.
 
 No endpoint path, process environment, hostname, or filesystem value is
 exported.
@@ -150,8 +159,8 @@ Values come from `SliceModel`; radio/backend status remains authoritative.
 - `receive.antenna`, `receive.rfGain`.
 - `displayCadence.fps`, `displayCadence.averageFrames`.
 - `displayCadence.weightedAverage`, `weightedAverageKnown`.
-- `displayCadence.waterfallRate`; this is the normalized 1–100 rate, not
-  milliseconds.
+- `displayCadence.waterfallRate`; `-1` means the backend has not reported a
+  value, otherwise this is the normalized 1–100 rate, not milliseconds.
 
 FFT bins, waterfall rows, audio, and other high-rate data never enter these
 JSON resources; they belong to the later bounded binary data plane.

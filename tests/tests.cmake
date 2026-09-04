@@ -90,7 +90,8 @@ add_test(NAME local_control_server_test COMMAND local_control_server_test)
 
 # Socket-free Stage-3 resource/service proof: revision stability, atomic
 # snapshot-to-event sequencing, multi-client delivery, unsubscribe,
-# coalescing/resync under pressure, and SimBackend -> RadioModel -> protocol.
+# coalescing/resync under pressure, normalized backend reconnect reclaim, and
+# SimBackend -> RadioModel -> protocol.
 add_executable(control_resource_service_test
     tests/control_resource_service_test.cpp
 )

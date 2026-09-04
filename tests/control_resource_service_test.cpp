@@ -106,6 +106,8 @@ bool testStoreRevisions()
     ControlResourceStore store;
     const ResourceAddress address{QStringLiteral("slice"),
                                   QStringLiteral("radio-1"), QStringLiteral("0")};
+    const ResourceAddress otherAddress{QStringLiteral("slice"),
+                                       QStringLiteral("radio-1"), QStringLiteral("1")};
     quint64 removedRevision = 0;
     QObject::connect(&store, &ControlResourceStore::resourceRemoved,
                      [&removedRevision](const ResourceAddress&, quint64 revision) {
@@ -116,21 +118,23 @@ bool testStoreRevisions()
                "first resource value must create revision 1")
         || !check(!store.upsert(address, {{QStringLiteral("frequencyHz"), 100}}),
                   "an unchanged canonical value must not advance its revision")
+        || !check(store.upsert(otherAddress, {{QStringLiteral("frequencyHz"), 700}}),
+                  "a second identity must consume the next store revision")
         || !check(store.upsert(address, {{QStringLiteral("frequencyHz"), 200}}),
                   "a changed canonical value must advance its revision")) {
         return false;
     }
     const std::optional<ResourceSnapshot> second = store.get(address);
-    if (!check(second && second->revision == 2,
-               "the second distinct value must carry revision 2")
-        || !check(store.remove(address) && removedRevision == 3,
+    if (!check(second && second->revision == 3,
+               "store-wide revisions must stay monotonic across identities")
+        || !check(store.remove(address) && removedRevision == 4,
                   "removal must consume the next identity revision")
         || !check(store.upsert(address, {{QStringLiteral("frequencyHz"), 300}}),
                   "a removed identity may be recreated")) {
         return false;
     }
     const std::optional<ResourceSnapshot> recreated = store.get(address);
-    return check(recreated && recreated->revision == 4,
+    return check(recreated && recreated->revision == 5,
                  "recreating an identity must not reset its revision");
 }
 
@@ -156,8 +160,9 @@ bool testServiceSubscriptions()
         {{QStringLiteral("resource"),
           exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"),
                         QStringLiteral("0"))}});
-    if (!check(getReply.value(QStringLiteral("result")).toObject()
-                   .value(QStringLiteral("revision")).toInteger() == 1,
+    const qint64 initialSliceRevision = getReply.value(QStringLiteral("result")).toObject()
+                                            .value(QStringLiteral("revision")).toInteger();
+    if (!check(initialSliceRevision > 0,
                "resource.get must return the complete current snapshot")) {
         return false;
     }
@@ -182,7 +187,8 @@ bool testServiceSubscriptions()
     if (!check(coalesced.size() == 1,
                "undrained changes to one resource must coalesce")
         || !check(coalesced.first().value(QStringLiteral("sequence")).toInteger() == 2
-                      && coalesced.first().value(QStringLiteral("revision")).toInteger() == 3
+                      && coalesced.first().value(QStringLiteral("revision")).toInteger()
+                             == initialSliceRevision + 2
                       && coalesced.first().value(QStringLiteral("value")).toObject()
                              .value(QStringLiteral("frequencyHz")).toInteger() == 300,
                   "the coalesced event must retain the newest sequence, revision, and value")) {
@@ -288,6 +294,52 @@ bool testServiceSubscriptions()
                  "a client must reject subscription 65");
 }
 
+bool testSubscribeSequenceBoundary()
+{
+    ControlResourceStore store;
+    ControlService service(&store);
+    ControlSession session(&store, 4096);
+    if (!check(negotiate(&service, &session),
+               "sequence-boundary client must negotiate")) {
+        return false;
+    }
+
+    const ResourceAddress slice{QStringLiteral("slice"),
+                                QStringLiteral("radio-1"), QStringLiteral("0")};
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 100}});
+    const QJsonArray selectors{
+        exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"))};
+    invoke(&service, &session, QStringLiteral("sub-initial"),
+           QStringLiteral("resource.subscribe"),
+           {{QStringLiteral("resources"), selectors}});
+
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 200}});
+    const QJsonObject pendingBaseline = invoke(
+        &service, &session, QStringLiteral("sub-pending"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), selectors}})
+                                            .value(QStringLiteral("result")).toObject();
+    const QList<QJsonObject> pending = session.takePendingMessages();
+    if (!check(pendingBaseline.value(QStringLiteral("sequence")).toInteger() == 0
+                   && pending.size() == 1
+                   && pending.first().value(QStringLiteral("sequence")).toInteger() == 1,
+               "a baseline must stop at the last drained sequence when an older event is pending")) {
+        return false;
+    }
+
+    const QJsonObject drainedBaseline = invoke(
+        &service, &session, QStringLiteral("sub-drained"),
+        QStringLiteral("resource.subscribe"),
+        {{QStringLiteral("resources"), selectors}})
+                                            .value(QStringLiteral("result")).toObject();
+    store.upsert(slice, {{QStringLiteral("frequencyHz"), 300}});
+    const QList<QJsonObject> afterBaseline = session.takePendingMessages();
+    return check(drainedBaseline.value(QStringLiteral("sequence")).toInteger() == 1
+                     && afterBaseline.size() == 1
+                     && afterBaseline.first().value(QStringLiteral("sequence")).toInteger() == 2,
+                 "the next delivered event must have a sequence greater than the baseline");
+}
+
 bool testOverflowRequiresResync()
 {
     ControlResourceStore store;
@@ -347,13 +399,70 @@ bool testOverflowRequiresResync()
 RadioInfo demoInfo()
 {
     RadioInfo info;
-    info.name = QStringLiteral("FLEX-6700");
+    info.name = SimBackend::demoModelName();
     info.model = SimBackend::demoModelName();
     info.serial = SimBackend::demoSerial();
     info.family = SimBackend::familyName();
     info.address = QHostAddress(QHostAddress::LocalHost);
     info.port = 4992;
     return info;
+}
+
+bool testPureSeamReconnectRepublishesSlice()
+{
+    ControlResourceStore store;
+    RadioModel radio;
+    RadioResourceAdapter adapter(&radio, &store, QStringLiteral("radio-1"));
+    radio.connectToRadio(demoInfo());
+
+    const ResourceAddress sliceAddress{QStringLiteral("slice"),
+                                       QStringLiteral("radio-1"), QStringLiteral("0")};
+    if (!check(waitUntil([&] { return store.get(sliceAddress).has_value(); }),
+               "the seam-reconnect fixture must start with a published slice")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    SliceModel* originalSlice = radio.slice(0);
+    if (!check(originalSlice != nullptr,
+               "the seam-reconnect fixture must retain its SliceModel")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
+    radio.disconnectFromRadio();
+    if (!check(waitUntil([&] {
+                   return !radio.isConnected()
+                       && !store.get(sliceAddress).has_value();
+               }),
+               "disconnect must remove the published slice before reclaim")) {
+        return false;
+    }
+
+    radio.stageSessionModelsForReconnectForTest();
+    radio.connectionStateChanged(true);
+    int occupancySignals = 0;
+    QObject::connect(&radio, &RadioModel::slotOccupancyChanged,
+                     [&occupancySignals](int sliceId) {
+                         if (sliceId == 0) {
+                             ++occupancySignals;
+                         }
+                     });
+    SliceDelta delta;
+    delta.frequency = originalSlice->frequency();
+    delta.mode = originalSlice->mode();
+    delta.panId = originalSlice->panId();
+    radio.emitBackendSliceChangedForTest(0, delta);
+
+    const std::optional<ResourceSnapshot> reclaimed = store.get(sliceAddress);
+    const bool result = check(radio.slice(0) == originalSlice,
+                              "the normalized backend seam must reclaim the existing SliceModel")
+        && check(occupancySignals == 1,
+                 "non-Flex slice reclaim must publish an occupancy edge")
+        && check(reclaimed.has_value()
+                     && reclaimed->value.value(QStringLiteral("owned")).toBool(),
+                 "the occupancy edge must reattach and republish the slice resource");
+    radio.connectionStateChanged(false);
+    return result;
 }
 
 bool testSimBackendEndToEnd()
@@ -466,7 +575,7 @@ bool testSimBackendEndToEnd()
     store.upsert(sliceAddress, staleSliceValue);
     radio.slotOccupancyChanged(0);
     const std::optional<ResourceSnapshot> refreshedSlice = store.get(sliceAddress);
-    if (!check(refreshedSlice && refreshedSlice->revision == sliceRevision + 2
+    if (!check(refreshedSlice && refreshedSlice->revision > sliceRevision
                    && refreshedSlice->value.value(QStringLiteral("owned")).toBool(),
                "slot occupancy changes must republish RadioModel-derived ownership")) {
         radio.disconnectFromRadio();
@@ -480,7 +589,7 @@ bool testSimBackendEndToEnd()
     store.upsert(panAddress, stalePanValue);
     radio.panadapterReclaimed(radio.panadapter(QStringLiteral("0x40000000")));
     const std::optional<ResourceSnapshot> refreshedPan = store.get(panAddress);
-    if (!check(refreshedPan && refreshedPan->revision == panRevision + 2
+    if (!check(refreshedPan && refreshedPan->revision > panRevision
                    && refreshedPan->value.value(QStringLiteral("centerKnown"))
                           == panValue.value(QStringLiteral("centerKnown")),
                "panadapter reclaim must republish canonical model state")) {
@@ -549,6 +658,8 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
     return testStoreRevisions()
         && testServiceSubscriptions()
+        && testSubscribeSequenceBoundary()
         && testOverflowRequiresResync()
+        && testPureSeamReconnectRepublishesSlice()
         && testSimBackendEndToEnd() ? 0 : 1;
 }

@@ -63,6 +63,7 @@ private:
     ControlResourceStore* m_resources{nullptr};
     qint64 m_maxQueuedOutputBytes{0};
     quint64 m_sequence{0};
+    quint64 m_drainedSequence{0};
     quint64 m_nextSubscription{1};
     QMap<QString, QList<ResourceSelector>> m_subscriptions;
     QList<PendingMessage> m_pending;

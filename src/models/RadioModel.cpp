@@ -1289,6 +1289,11 @@ void RadioModel::setupBackend(const QString& family)
                 s->applyChanges(mapped);
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
                 refreshTxPowerLimit();
+                // Reclaim deliberately does not emit sliceAdded: the UI already
+                // owns this object. Notify non-UI observers through the existing
+                // occupancy edge so adapters that detached on disconnect can
+                // reattach and republish it.
+                emit slotOccupancyChanged(sliceId);
                 // Reuse the same SliceModel so every UI subscriber — including
                 // RX Controls — stays attached. A sliceAdded here would build a
                 // duplicate VFO for an object the UI already owns.

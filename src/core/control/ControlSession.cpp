@@ -49,7 +49,7 @@ std::optional<ProtocolError> ControlSession::subscribe(
         resources.append(snapshot.toJson());
     }
     *result = {{QStringLiteral("subscription"), subscriptionId},
-               {QStringLiteral("sequence"), static_cast<qint64>(m_sequence)},
+               {QStringLiteral("sequence"), static_cast<qint64>(m_drainedSequence)},
                {QStringLiteral("resources"), resources}};
     return std::nullopt;
 }
@@ -84,6 +84,12 @@ QList<QJsonObject> ControlSession::takePendingMessages()
     messages.reserve(m_pending.size());
     for (const PendingMessage& pending : std::as_const(m_pending)) {
         messages.append(pending.message);
+        const qint64 sequence = pending.message.value(
+            QStringLiteral("sequence")).toInteger();
+        if (sequence > 0
+            && static_cast<quint64>(sequence) > m_drainedSequence) {
+            m_drainedSequence = static_cast<quint64>(sequence);
+        }
     }
     m_pending.clear();
     m_pendingBytes = 0;

@@ -37,8 +37,9 @@ struct ResourceSnapshot {
 };
 
 // Main-thread authoritative cache for the bounded resources exposed by the
-// AetherD control protocol. Revisions advance only when the complete canonical
-// value changes, so consumers never have to merge partial model state.
+// AetherD control protocol. Revisions advance when the complete canonical value
+// changes or a live identity is removed, so consumers never have to merge
+// partial model state.
 class ControlResourceStore final : public QObject {
     Q_OBJECT
 
@@ -60,7 +61,10 @@ signals:
 
 private:
     QMap<QString, ResourceSnapshot> m_resources;
-    QMap<QString, quint64> m_lastRevisions;
+    // Store-wide revisions are stronger than the protocol's per-identity
+    // monotonicity guarantee and avoid retaining one tombstone for every
+    // resource identity ever observed by a long-running daemon.
+    quint64 m_lastRevision{0};
 };
 
 } // namespace AetherSDR::control

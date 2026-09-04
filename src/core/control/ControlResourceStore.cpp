@@ -47,8 +47,7 @@ bool ControlResourceStore::upsert(
         return false;
     }
 
-    const quint64 revision = m_lastRevisions.value(resourceKey, 0) + 1;
-    m_lastRevisions.insert(resourceKey, revision);
+    const quint64 revision = ++m_lastRevision;
     const ResourceSnapshot next{address, revision, value};
     m_resources.insert(resourceKey, next);
     emit resourceChanged(next);
@@ -61,8 +60,7 @@ bool ControlResourceStore::remove(const ResourceAddress& address)
     if (m_resources.remove(resourceKey) == 0) {
         return false;
     }
-    const quint64 revision = m_lastRevisions.value(resourceKey, 0) + 1;
-    m_lastRevisions.insert(resourceKey, revision);
+    const quint64 revision = ++m_lastRevision;
     emit resourceRemoved(address, revision);
     return true;
 }

@@ -473,8 +473,9 @@ observe-only local handshake/capability service, and a QtWidgets-free
 `aetherd` skeleton have landed. The typed observe-only `server`,
 `radioSession`, `slice`, and `panadapter` resources now publish through
 `RadioResourceAdapter`; `resource.get` plus atomic snapshot/event
-`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, and
-bounded coalescing/resync are live over the current-user local transport.
+`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
+coalescing/session resync, and an independent local-socket hard disconnect cap
+are live over the current-user local transport.
 Meters, read-only transmit state, authenticated non-TX control, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned

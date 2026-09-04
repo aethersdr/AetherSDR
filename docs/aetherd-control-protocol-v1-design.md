@@ -203,11 +203,13 @@ baseline:
 }
 ```
 
-The service registers the subscription, captures the snapshot, and queues all
-changes after the returned `sequence` as one main-thread operation.  Therefore
-there is no snapshot/event gap.  Reconnect creates a new protocol session;
-clients resubscribe and replace their cache from a fresh snapshot.  V1 does not
-promise event replay across connections.
+The service returns the last event sequence already drained to the transport,
+registers the subscription, and captures the snapshot as one main-thread
+operation. Events still pending for existing subscriptions retain greater
+sequences, and newly generated changes advance beyond them. Therefore there is
+no snapshot/event gap or duplicate baseline sequence. Reconnect creates a new
+protocol session; clients resubscribe and replace their cache from a fresh
+snapshot. V1 does not promise event replay across connections.
 
 High-rate spectrum, waterfall and audio payloads are not embedded in these
 control JSON events.  Their later stream contract must use bounded binary

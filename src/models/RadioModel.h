@@ -1615,6 +1615,19 @@ public:
     {
         onStatusReceived(object, kvs);
     }
+    // Drive the reconnect/reclaim portion of the normalized backend seam
+    // without a synthetic radio peer. The socket-free resource test uses these
+    // to prove that a reclaimed non-Flex slice is republished.
+    void stageSessionModelsForReconnectForTest()
+    {
+        stageSessionModelsForReconnect();
+    }
+    void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
+    {
+        if (m_backend) {
+            emit m_backend->sliceChanged(sliceId, delta);
+        }
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
