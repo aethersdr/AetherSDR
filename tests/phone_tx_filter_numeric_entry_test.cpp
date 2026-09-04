@@ -445,10 +445,22 @@ int main(int argc, char** argv)
 
     // Qt::Key_Cancel is the same gesture on platforms that send it; VfoWidget
     // treats the two together and so do we.
+    //
+    // Delivered by hand, not QTest::keyClick(): testlib maps a key to its ASCII
+    // text through a table that has no entry for Key_Cancel and aborts on the
+    // miss (QTEST_ASSERT), in every build configuration. Production never goes
+    // through that table — the platform sends a real QKeyEvent — and the
+    // handler keys on the press (GuardedSlider.h eventFilter), so a press and a
+    // release through QApplication::sendEvent is the same delivery the app sees.
     model.setTxFilter(150, 3300);
     if (QLineEdit* ed = openEditor(low)) {
         ed->setText(QStringLiteral("2000"));
-        QTest::keyClick(ed, Qt::Key_Cancel);
+        QKeyEvent cancelOverride(QEvent::ShortcutOverride, Qt::Key_Cancel, Qt::NoModifier);
+        QApplication::sendEvent(ed, &cancelOverride);
+        QKeyEvent cancelPress(QEvent::KeyPress, Qt::Key_Cancel, Qt::NoModifier);
+        QApplication::sendEvent(ed, &cancelPress);
+        QKeyEvent cancelRelease(QEvent::KeyRelease, Qt::Key_Cancel, Qt::NoModifier);
+        QApplication::sendEvent(ed, &cancelRelease);
     }
     check(!low->isEditing() && model.txFilterLow() == 150,
           "Key_Cancel abandons the edit the same way Esc does");
