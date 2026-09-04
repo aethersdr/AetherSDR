@@ -112,8 +112,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
 
-      # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs a hand-picked
-      # allow-list of tests behind `ctest -R` steps, grown by accretion to ~44;
+      # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
+      # and a short allow-list of platform-only tests behind `ctest -R` steps;
       # the full suite runs unfiltered on the weekly sanitizer lane
       # (sanitizers.yml), which every add_test() in tests/tests.cmake joins the
       # moment it is declared. This resolves every -R pattern in ci.yml against

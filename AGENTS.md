@@ -236,8 +236,9 @@ A test that touches `AppSettings` also needs its target name in the
 `AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
 
 **Do not add a `ctest -R` step for it to `.github/workflows/ci.yml`.** The
-per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`, ~44
-tests grown by accretion); it does not run the suite and it does not grow.
+per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of
+platform-only tests that a Linux lane cannot execute — macOS Metal, Windows
+ThumbDV; the Linux job runs no tests at all, and the list does not grow.
 Every test declared in `tests.cmake` runs unfiltered on the weekly sanitizer
 lane (`sanitizers.yml`) from the moment it is declared — that is where a new
 test runs. `tools/check_ci_test_gate.py --strict` fails the PR if a `-R`
