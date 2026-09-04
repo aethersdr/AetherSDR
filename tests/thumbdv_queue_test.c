@@ -4,7 +4,6 @@
 #include "utils.h"
 
 #include <pthread.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +12,13 @@
 #include <errno.h>
 #include <poll.h>
 #include <pty.h>
+// Linux-only, with the atomics it declares: every use is inside the
+// __linux__ fake-DV3000 block below. MSVC's vcruntime_c11_stdatomic.h is a
+// hard #error below C11 and this TU compiles at the MSVC default, so an
+// unconditional include breaks check-windows even though Windows compiles
+// none of the code that needs it. <pthread.h> above survives only because
+// smartsdr-dsp/compat/windows shims it; there is no shim for this one.
+#include <stdatomic.h>
 #include <unistd.h>
 #endif
 
