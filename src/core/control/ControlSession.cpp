@@ -41,6 +41,7 @@ std::optional<ProtocolError> ControlSession::subscribe(
     }
     const QString subscriptionId = QStringLiteral("sub-%1").arg(m_nextSubscription++);
     m_subscriptions.insert(subscriptionId, selectors);
+    rebuildSelectorIndex();
     m_resyncRequired = false;
 
     QJsonArray resources;
@@ -66,10 +67,11 @@ std::optional<ProtocolError> ControlSession::unsubscribe(
         return ProtocolError{QStringLiteral("resource.not_found"),
                              QStringLiteral("subscription does not exist"), {}, false};
     }
+    rebuildSelectorIndex();
     for (qsizetype index = m_pending.size(); index > 0; --index) {
         const PendingMessage& pending = m_pending.at(index - 1);
         if (pending.resource && !observes(*pending.resource)) {
-            m_pendingBytes -= pending.bytes;
+            m_pendingBytes -= pending.frame.size();
             m_pending.removeAt(index - 1);
         }
     }
@@ -78,31 +80,40 @@ std::optional<ProtocolError> ControlSession::unsubscribe(
     return std::nullopt;
 }
 
-QList<QJsonObject> ControlSession::takePendingMessages()
+QList<QByteArray> ControlSession::takePendingFrames()
 {
-    QList<QJsonObject> messages;
-    messages.reserve(m_pending.size());
+    QList<QByteArray> frames;
+    frames.reserve(m_pending.size());
     for (const PendingMessage& pending : std::as_const(m_pending)) {
-        messages.append(pending.message);
-        const qint64 sequence = pending.message.value(
-            QStringLiteral("sequence")).toInteger();
-        if (sequence > 0
-            && static_cast<quint64>(sequence) > m_drainedSequence) {
-            m_drainedSequence = static_cast<quint64>(sequence);
+        frames.append(pending.frame);
+        if (pending.sequence > m_drainedSequence) {
+            m_drainedSequence = pending.sequence;
         }
     }
     m_pending.clear();
     m_pendingBytes = 0;
-    return messages;
+    return frames;
+}
+
+void ControlSession::rebuildSelectorIndex()
+{
+    m_selectorsByType.clear();
+    for (auto it = m_subscriptions.constBegin(); it != m_subscriptions.constEnd(); ++it) {
+        for (const ResourceSelector& selector : it.value()) {
+            m_selectorsByType[selector.type].append(selector);
+        }
+    }
 }
 
 bool ControlSession::observes(const ResourceAddress& address) const
 {
-    for (auto it = m_subscriptions.constBegin(); it != m_subscriptions.constEnd(); ++it) {
-        for (const ResourceSelector& selector : it.value()) {
-            if (selector.matches(address)) {
-                return true;
-            }
+    const auto bucket = m_selectorsByType.constFind(address.type);
+    if (bucket == m_selectorsByType.constEnd()) {
+        return false;
+    }
+    for (const ResourceSelector& selector : *bucket) {
+        if (selector.matches(address)) {
+            return true;
         }
     }
     return false;
@@ -144,18 +155,20 @@ void ControlSession::enqueueCoalesced(
     const ResourceAddress& address, const QJsonObject& message)
 {
     const QString key = address.key();
-    const qint64 bytes = wireBytes(message);
+    const QByteArray frame = encodeFrame(message);
+    const qint64 bytes = frame.size();
+    const quint64 sequence = m_sequence;
     for (qsizetype index = 0; index < m_pending.size(); ++index) {
         const PendingMessage& pending = m_pending.at(index);
         if (pending.coalesceKey == key) {
-            const qint64 nextBytes = m_pendingBytes - pending.bytes + bytes;
+            const qint64 nextBytes = m_pendingBytes - pending.frame.size() + bytes;
             if (nextBytes > m_maxQueuedOutputBytes) {
                 requireResync();
                 return;
             }
             m_pendingBytes = nextBytes;
             m_pending.removeAt(index);
-            m_pending.append(PendingMessage{key, address, message, bytes});
+            m_pending.append(PendingMessage{key, address, frame, sequence});
             emit outputReady();
             return;
         }
@@ -165,7 +178,7 @@ void ControlSession::enqueueCoalesced(
         requireResync();
         return;
     }
-    m_pending.append(PendingMessage{key, address, message, bytes});
+    m_pending.append(PendingMessage{key, address, frame, sequence});
     m_pendingBytes += bytes;
     emit outputReady();
 }
@@ -177,6 +190,7 @@ void ControlSession::requireResync()
     }
     m_resyncRequired = true;
     m_subscriptions.clear();
+    rebuildSelectorIndex();
     m_pending.clear();
     m_pendingBytes = 0;
 
@@ -185,19 +199,21 @@ void ControlSession::requireResync()
                               {QStringLiteral("event"), QStringLiteral("resource.resyncRequired")},
                               {QStringLiteral("sequence"), static_cast<qint64>(++m_sequence)},
                               {QStringLiteral("subscriptionsInvalidated"), true}};
-    const qint64 bytes = wireBytes(message);
-    if (bytes > m_maxQueuedOutputBytes) {
+    const QByteArray frame = encodeFrame(message);
+    if (frame.size() > m_maxQueuedOutputBytes) {
         emit outputOverflow();
         return;
     }
-    m_pending.append(PendingMessage{QString(), std::nullopt, message, bytes});
-    m_pendingBytes = bytes;
+    m_pending.append(PendingMessage{QString(), std::nullopt, frame, m_sequence});
+    m_pendingBytes = frame.size();
     emit outputReady();
 }
 
-qint64 ControlSession::wireBytes(const QJsonObject& message)
+QByteArray ControlSession::encodeFrame(const QJsonObject& message)
 {
-    return QJsonDocument(message).toJson(QJsonDocument::Compact).size() + 1;
+    QByteArray frame = QJsonDocument(message).toJson(QJsonDocument::Compact);
+    frame.append('\n');
+    return frame;
 }
 
 } // namespace AetherSDR::control

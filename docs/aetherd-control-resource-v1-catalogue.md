@@ -103,10 +103,13 @@ service clears that session's subscriptions and emits:
 ```
 
 The client must call `resource.subscribe` again and replace its cache from the
-fresh baseline. The current-user local transport also has an independent hard
-socket-output cap. A client whose operating-system socket buffer is already at
-that cap can be disconnected before a queued resync notice is written; after
-reconnecting it must establish a new session and baseline.
+fresh baseline. The current-user local transport also enforces a hard
+socket-output cap. That cap is a separate *check* — the session's pending queue
+against the operating-system socket buffer — but not a separate *budget*: both
+are the same `maxQueuedOutputBytes` figure advertised in the handshake, so a
+client should budget that figure once, not twice. A client whose socket buffer
+is already at the cap can be disconnected before a queued resync notice is
+written; after reconnecting it must establish a new session and baseline.
 
 ## Resource values
 

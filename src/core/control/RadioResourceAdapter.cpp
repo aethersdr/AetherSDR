@@ -83,16 +83,22 @@ RadioResourceAdapter::RadioResourceAdapter(
     connect(m_radio, &RadioModel::sliceAdded,
             this, &RadioResourceAdapter::attachSlice);
     connect(m_radio, &RadioModel::sliceRemoved, this, [this](int sliceId) {
+        // Match the object, not just the id. pruneStaleSessionModels() removes a
+        // *stale* SliceModel whose id a live one may already have reclaimed; an
+        // id-only match would unbind the live slice and publish a spurious
+        // resource.removed for a resource that still exists.
+        SliceModel* live = m_radio->slice(sliceId);
         SliceModel* removed = nullptr;
         for (SliceModel* slice : std::as_const(m_slices)) {
-            if (slice && slice->sliceId() == sliceId) {
+            if (slice && slice != live && slice->sliceId() == sliceId) {
                 removed = slice;
                 break;
             }
         }
-        if (removed) {
-            QObject::disconnect(removed, nullptr, this, nullptr);
+        if (!removed) {
+            return;
         }
+        QObject::disconnect(removed, nullptr, this, nullptr);
         m_slices.remove(removed);
         m_resources->remove({QStringLiteral("slice"), m_radioSessionId,
                              QString::number(sliceId)});
@@ -160,6 +166,18 @@ void RadioResourceAdapter::attachSlice(SliceModel* slice)
     connect(slice, &SliceModel::agcThresholdChanged, this, refresh);
     connect(slice, &SliceModel::agcOffLevelChanged, this, refresh);
     connect(slice, &SliceModel::squelchChanged, this, refresh);
+    // While external receive-audio replacement is active (a Kiwi RX source
+    // replacing the radio's audio) SliceModel's AGC and squelch setters take an
+    // early-return branch that emits only these signals, but receiveAgcMode(),
+    // receiveAgcThreshold(), receiveAgcOffLevel(), receiveSquelchOn() and
+    // receiveSquelchLevel() switch to the external values. Without them
+    // receive.agc.* and receive.squelch.* would publish the pre-replacement
+    // state forever. (audio.* needs no equivalent: setAudioGain/Pan/Mute reuse
+    // the same signal in both branches.)
+    connect(slice, &SliceModel::externalReceiveAgcModeChanged, this, refresh);
+    connect(slice, &SliceModel::externalReceiveAgcThresholdChanged, this, refresh);
+    connect(slice, &SliceModel::externalReceiveAgcOffLevelChanged, this, refresh);
+    connect(slice, &SliceModel::externalReceiveSquelchChanged, this, refresh);
     connect(slice, &QObject::destroyed, this, [this, slice] {
         m_slices.remove(slice);
     });

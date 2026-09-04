@@ -232,9 +232,9 @@ void LocalControlServer::drainSessionOutput(QLocalSocket* socket)
     if (clientIt == m_clients.end()) {
         return;
     }
-    const QList<QJsonObject> messages = clientIt->second->session->takePendingMessages();
-    for (const QJsonObject& message : messages) {
-        if (!send(socket, message)) {
+    const QList<QByteArray> frames = clientIt->second->session->takePendingFrames();
+    for (const QByteArray& frame : frames) {
+        if (!sendFrame(socket, frame)) {
             return;
         }
     }
@@ -247,16 +247,21 @@ void LocalControlServer::dropClient(QLocalSocket* socket)
 
 bool LocalControlServer::send(QLocalSocket* socket, const QJsonObject& message)
 {
+    QByteArray bytes = QJsonDocument(message).toJson(QJsonDocument::Compact);
+    bytes.append('\n');
+    return sendFrame(socket, bytes);
+}
+
+bool LocalControlServer::sendFrame(QLocalSocket* socket, const QByteArray& frame)
+{
     if (!socket || socket->state() == QLocalSocket::UnconnectedState) {
         return false;
     }
-    QByteArray bytes = QJsonDocument(message).toJson(QJsonDocument::Compact);
-    bytes.append('\n');
-    if (socket->bytesToWrite() + bytes.size() > m_limits.maxQueuedOutputBytes) {
+    if (socket->bytesToWrite() + frame.size() > m_limits.maxQueuedOutputBytes) {
         socket->abort();
         return false;
     }
-    if (socket->write(bytes) != bytes.size()) {
+    if (socket->write(frame) != frame.size()) {
         socket->abort();
         return false;
     }

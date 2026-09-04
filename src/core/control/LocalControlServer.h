@@ -47,6 +47,9 @@ private:
     void drainSessionOutput(QLocalSocket* socket);
     void dropClient(QLocalSocket* socket);
     [[nodiscard]] bool send(QLocalSocket* socket, const QJsonObject& message);
+    // Writes a frame the session already encoded, so an event is serialized
+    // exactly once between ControlSession and the socket.
+    [[nodiscard]] bool sendFrame(QLocalSocket* socket, const QByteArray& frame);
     [[nodiscard]] static bool resolveEndpoint(
         const QString& logicalName, QString* endpointName, QString* lockPath);
 
