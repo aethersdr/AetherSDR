@@ -152,8 +152,26 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     # `-fsanitize=` substring, `-fsanitize=kernel-address` stops at the hyphen,
     # and `-fsanitize=address` does not contain `hwaddress`. Reordered lists
     # (`-fsanitize=undefined,thread`) still match.
+    #
+    # THREE sources are scanned, because a sanitizer can arrive three ways and
+    # this guard is only as good as its narrowest blind spot:
+    #   - CMAKE_CXX_FLAGS and CMAKE_C_FLAGS, which is how sanitizers.yml
+    #     delivers them (CXXFLAGS/CFLAGS in the job environment);
+    #   - AETHERSDR_SANITIZER, the tree-wide option (CMakeLists.txt). It
+    #     reaches targets through add_compile_options and therefore NEVER
+    #     appears in the FLAGS variables, so scanning only those two is blind
+    #     to it. That blindness re-creates #4360 exactly, and not in theory:
+    #     configuring -DAETHERSDR_SANITIZER=thread with the two-source form
+    #     produced translation units carrying both -fsanitize=thread and
+    #     -fsanitize=address,undefined, and this message did not print. It was
+    #     77 of them when measured (Debug, Linux/GCC, ENABLE_DSTAR on, at
+    #     #5419); the figure tracks the target list below and will drift, so
+    #     treat it as scale rather than as a number to assert on.
+    # When the option is "none" the synthesized string is "-fsanitize=none",
+    # which matches nothing in the alternation.
     set(_aether_dv_external_sanitizer OFF)
-    foreach(_aether_dv_flags "${CMAKE_CXX_FLAGS}" "${CMAKE_C_FLAGS}")
+    foreach(_aether_dv_flags
+            "${CMAKE_CXX_FLAGS}" "${CMAKE_C_FLAGS}" "-fsanitize=${AETHERSDR_SANITIZER}")
         if(_aether_dv_flags MATCHES "-fsanitize=[a-z,]*(thread|memory|hwaddress)")
             set(_aether_dv_external_sanitizer ON)
         endif()
