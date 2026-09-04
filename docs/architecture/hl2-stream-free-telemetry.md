@@ -220,6 +220,30 @@ two consecutive missed publishes do. The clock is restarted **in the mirror**,
 on an actual advance, because `linkCountersUpdated` fires whether or not EP6
 moved: "a publish arrived" is not "packets arrived".
 
+**"But the I/O side already knows this."** It does, and the answer is worth
+writing down because it is the first question a reader should ask.
+`MetisClient::m_sinceLastEp6` is restarted on every EP6 packet and is exactly the
+quantity wanted — with none of the 1 Hz quantisation, since it is updated at the
+packet rate. It is unusable from here: `m_metis` is `moveToThread(m_ioThread)`,
+so reading that member from the backend's thread is a data race, and the whole
+reason `m_link` exists is to be the seam where I/O-thread state is republished on
+the reader's thread. **R**
+
+So the mirror is not an accident to be routed around; it is the thread boundary,
+and its 1 Hz cadence is a property of that boundary rather than an oversight.
+What was wrong was reading a 1 Hz seam with a 1 Hz sampler and treating the
+result as an observation of the stream. A finer-grained answer would mean
+publishing a timestamp across the seam, not reaching across it.
+
+One consequence worth stating for whoever changes this next: **the mirror
+publishes whether or not EP6 advanced.** `publishLinkCountersIfDue()` is called
+at the end of `onReadyRead()`, while `++m_link.rxPackets` happens only after the
+EP6 filter — a wakeup carrying nothing but a stray discovery reply therefore
+publishes counters with the packet count unchanged. **R** That is why the stall
+clock is restarted on an actual counter ADVANCE and not merely on the arrival of
+a publish: "a publish arrived" and "packets arrived" are two different facts, and
+the seam carries both.
+
 **The cost, stated rather than buried:** a real stall is declared 2.5–3.5 s
 after it starts instead of ~1 s. The old ~1 s was not real. It was a coin flip
 that paid for its apparent speed with false stalls on healthy streams.
