@@ -11,6 +11,23 @@
 #include <cstdio>
 #include <utility>
 
+// Naming this thread is done HERE rather than through AetherSDR::ThreadName
+// (src/core/ThreadName.h), which is the canonical helper and the one every
+// other caller uses. The reason is build cost, not preference: this file is
+// compiled into 51 test targets and ThreadName.cpp into 6, so routing through
+// it would mean adding a source to 45 unrelated targets. Keep the two in step
+// if the platform calls ever change.
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#elif defined(__linux__)
+#include <sys/prctl.h>
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -320,8 +337,29 @@ void AsyncLogWriter::markDone(const std::shared_ptr<SyncPoint>& sync)
     sync->cv.notify_all();
 }
 
+namespace {
+
+// See the include block above for why this is not AetherSDR::setCurrentThreadName.
+void nameThisThread()
+{
+#if defined(__linux__)
+    prctl(PR_SET_NAME, "AsyncLogWriter", 0, 0, 0);   // 14 chars, inside the kernel's 15
+#elif defined(__APPLE__)
+    pthread_setname_np("AsyncLogWriter");
+#elif defined(_WIN32)
+    SetThreadDescription(GetCurrentThread(), L"AsyncLogWriter");
+#endif
+}
+
+}  // namespace
+
 void AsyncLogWriter::run(std::promise<bool> opened)
 {
+    // The one thread AetherSDR starts that Qt cannot name for us: a raw
+    // std::thread never passes through QThreadPrivate::start(), so it read as
+    // an unnamed row in the System Info thread table (#2554).
+    nameThisThread();
+
     QString path;
     bool mirrorToStderr = false;
     qint64 maxFileBytes = 0;

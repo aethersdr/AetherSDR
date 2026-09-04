@@ -8,6 +8,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.9.1] — 2026-08-29
+
+### Globe maps, antenna control and operator polish · sharper Flex behavior · deeper evidence-gated Icom support
+
+53 merged changes from 12 contributors put the broad operator experience first:
+PSK Reporter gains a globe projection, Green Heron antenna and rotator control
+arrives as a native applet, System Info exposes live thread and log views, and
+the panadapter, RTTY, CW, sidetone and automation workflows all receive focused
+improvements.
+
+Flex-specific fixes restore band-stack recall, PA temperature and TNF removal
+behavior. Networked Icom support closes the cycle with model-gated controls and
+telemetry, stronger IC-9700 presentation and scaling, safer reconnect/TX
+lifecycle behavior, read-only radio memories, DTCS and multi-radio NAT support.
+
+### New features and operator workflow
+
+- **Green Heron Everyware antenna control (#5209).** A native GHE applet controls
+  compatible antenna switches and rotators.
+- **Optional globe projection for PSK Reporter (#5273).** Operators can switch
+  from the flat map to a global view of received reports.
+- **System Info Threads and Logs tabs (#5246)** make runtime diagnosis available
+  inside the app.
+- **RTTY decoder sensitivity (#5132)** is adjustable directly from the decoder
+  bar.
+- Panadapter button-rail collapse state now persists (#5221), and the active band
+  is highlighted in the spectrum overlay (#5236).
+- Connect-time enumeration no longer overwrites the radio's active slice (#4985).
+- Explicit PortAudio sidetone selections no longer get captured by a shorter
+  device-name match (#5135).
+- CW Zero Beat mirrors correctly for CWL and clears stale pitch estimates
+  (#5224); iambic keyer edges no longer echo back into the sidetone gate (#5128).
+- Radio sharing is single-sourced (#5264), unsupported Flex-only controls dim
+  off-Flex (#5266), and missing command planes fail visibly (#5265).
+- Demo mode now reaches its backend through the capability extension namespace
+  (#5268).
+
+### Automation and project quality
+
+- Automation adds FM repeater controls (#5104), text-view inspection (#5136),
+  momentary key events (#5137), and combo-box popup actions (#5144).
+- Flex-only automation verbs now refuse unsupported backends instead of falsely
+  reporting success (#5267).
+- Synthetic transport tests are separated by verification layer (#5232), every
+  registered test receives a default 300-second timeout (#5272), and the test
+  boundary conventions are documented (#5255).
+- The capability field map and stale comments are brought back into sync (#5269),
+  and the project gains a repeatable issue-fit, governance and code-quality PR
+  review workflow (#5245).
+
+### FlexRadio and TCI fixes
+
+- Band shortcuts once again restore Flex band-stack state (#4967).
+- Flex PA temperature returns to the status bar on capable radios (#5295).
+- TNF removal status now removes the notch instead of recreating it (#5314).
+- TCI `cw_macros` messages no longer append the receiver index to macro text
+  (#5153).
+
+### Networked Icom
+
+- **Radio-authoritative memories and signaling.** Read-only IC-9700 radio memory
+  integration (#5283), synchronized dial lock (#5261), capability-gated IC-705
+  and IC-9700 DTCS (#5294), IC-9700 CTCSS TX/RX (#5203), and model-gated
+  extended repeater readback (#5161) follow each model's attested surface.
+- **More accurate IC-9700 controls and telemetry.** Supply voltage (#5170), PA
+  drain current (#5238), continuous compression (#5240), LAN MOD Phone level
+  (#5211), RF power scaling (#5208), RF Gain/preamp presentation (#5189), and
+  declared VHF/UHF bands (#5186) now reach the UI correctly.
+- Unsupported PA temperature (#5172), Main Fan (#5174), DEXP (#5181), and TX
+  cutoff controls (#5184) remain hidden; voltage waits for real telemetry
+  (#5176), and Phone/CW level clears before its first sample (#5179).
+- **Safer network and TX lifecycle.** TUNE owns its carrier (#5218), SWR and ALC
+  survive isolated minimum replies (#5216), RX Controls stay subscribed across
+  reconnect (#5220), and WSJT-X TCI unkey handling gains incident telemetry
+  (#5274).
+- Custom UDP port triplets support multi-radio NAT (#5230), SpotHub spots flow
+  through the client model (#5228), and RS-BA1 handshake failures identify both
+  the target and likely cause (#5303).
+
+### Contributors
+
+Big thanks to **@w5jwp** (17 changes), **@ten9876** (maintainer, 9),
+**@jensenpat** (9), **@skerker** (8), **@chibondking** (2), **@nonoo** (2),
+**@M7HNF-Ian**, **@motoham88**, **@nigelfenton**, **@Ozy311**, and **@rfoust**.
+
+We are excited to welcome our first-time contributor this cycle:
+**@williamscody**.
+
+73, Pat KI6BCJ & Codex (AI dev partner)
+
 ## [v26.8.4] — 2026-08-22
 
 ### Evidence-backed Icom · client-timed HL2 CW · faster PSK Reporter maps · steadier audio, MIDI and TCI

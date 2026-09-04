@@ -33,7 +33,16 @@ jobs:
           target: 'desktop'
           # Qt 6.8 LTS dropped MSVC 2019 builds — arch must be msvc2022.
           arch: 'win64_msvc2022_64'
-          modules: 'qtmultimedia qtserialport qtwebsockets qtshadertools'
+          # Base Qt PDBs live in debug_info; each add-on keeps its PDBs in a
+          # separate .debug_information module. Restrict the base archives to
+          # the QtBase/QtSvg binaries AetherSDR actually deploys so release CI
+          # does not download unrelated Qt debug data.
+          modules: 'qtmultimedia qtserialport qtwebsockets qtshadertools debug_info qtmultimedia.debug_information qtserialport.debug_information qtwebsockets.debug_information'
+          # Keep the software OpenGL fallback that the existing Windows package
+          # ships; archive pruning must not change the runtime payload while
+          # adding symbols. d3dcompiler_47 remains intentionally omitted by the
+          # existing windeployqt --no-system-d3d-compiler flag below.
+          archives: 'opengl32sw qtbase qtsvg'
 
       - name: Install Ninja, Inno Setup, and LLVM
         run: choco install ninja innosetup llvm -y
@@ -236,7 +245,10 @@ jobs:
           if (Test-Path "third_party\qtkeychain\bin\qt6keychain.dll") {
             copy third_party\qtkeychain\bin\qt6keychain.dll "$env:QT_ROOT_DIR\bin\"
           }
-          windeployqt deploy\AetherSDR.exe --release --no-translations --no-system-d3d-compiler
+          # --pdb copies symbols only for the exact Qt DLLs/plugins selected by
+          # this deployment pass. The next step removes them from deploy/ and
+          # flattens them beside AetherSDR.pdb for the x64 .appxsym.
+          windeployqt deploy\AetherSDR.exe --release --pdb --no-translations --no-system-d3d-compiler
           if (Test-Path "third_party\fftw3\bin\libfftw3-3.dll") {
             copy third_party\fftw3\bin\libfftw3-3.dll deploy\
           }
@@ -283,6 +295,9 @@ jobs:
           if (-not $vkDll) { throw "vulkan-1.dll not found in: $($vkCandidates -join '; ')" }
           Write-Host "Bundling Vulkan loader: $vkDll"
           copy $vkDll deploy\
+
+      - name: Stage application and Qt debug symbols
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\stage-debug-symbols.ps1 -DeployDir deploy -ApplicationPdb build\AetherSDR.pdb -OutputDir symbols -QtRootDir $env:QT_ROOT_DIR
 
       - name: Verify DPI awareness manifest
         run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-dpi-awareness.ps1 -ExePath deploy\AetherSDR.exe
@@ -342,26 +357,35 @@ jobs:
           AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR }}
         run: |
           . .\packaging\windows\store-identity.ps1
-          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign -ExcludeDfnrModel -RequirePdb
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -PdbPath symbols\AetherSDR.pdb -SymbolDir symbols -CreateUpload -SkipSign -ExcludeDfnrModel -RequirePdb
 
-      # Hard gate for the PDB-regression class (#3946). The Create MSIX
-      # package step above is continue-on-error (to tolerate MSIX SDK/tool
-      # flakes), which ALSO swallows create-msix.ps1's -RequirePdb throw — so
-      # a missing PDB can't red the build from inside that step. A missing PDB
-      # is not an MSIX hiccup though: it's a build regression (e.g.
-      # CMAKE_BUILD_TYPE flipped back to Release, which omits /Zi + /DEBUG so
-      # no build/AetherSDR.pdb is emitted) that would silently ship
-      # symbol-less .msixupload packages and skip the Windows-Symbols upload.
-      # Re-check the PDB the RelWithDebInfo Build step must emit in a step that
-      # is deliberately NOT continue-on-error, so that regression fails the job
-      # loudly instead of landing on a green build. -RequirePdb is kept above
-      # for local/dev ergonomics; this step is the CI gate that actually reds.
-      - name: Verify debug symbols (PDB) present
+      # The staging step above is a hard gate: it verifies every deployed Qt
+      # DLL/plugin has its same-named PDB before removing symbols from deploy/.
+      # Re-check the high-value symbols independently so a packaging refactor
+      # cannot silently shrink the Store symbol surface. Keep this list in sync
+      # with check-symbol-package.ps1's default RequiredPdbs list.
+      - name: Verify required debug symbols present
         run: |
-          if (-not (Test-Path build\AetherSDR.pdb)) {
-            throw "build/AetherSDR.pdb is missing. The RelWithDebInfo Windows build must emit a PDB for Partner Center crash symbolication (.appxsym) and the standalone Windows-Symbols artifact. If CMAKE_BUILD_TYPE was changed to Release, restore RelWithDebInfo. See #3946 / #3934."
+          $required = @("AetherSDR.pdb", "Qt6Core.pdb", "Qt6Gui.pdb", "Qt6Multimedia.pdb", "Qt6Network.pdb", "Qt6Widgets.pdb", "qwindows.pdb", "windowsmediaplugin.pdb")
+          foreach ($pdb in $required) {
+            if (-not (Test-Path (Join-Path "symbols" $pdb))) {
+              throw "Required Store symbol is missing: symbols\$pdb"
+            }
           }
-          Write-Host "PDB present: build\AetherSDR.pdb"
+          $symbolCount = @(Get-ChildItem symbols -File -Filter "*.pdb").Count
+          Write-Host "Required symbols present; $symbolCount PDBs staged."
+
+      - name: Verify Store symbol package topology
+        if: hashFiles('AetherSDR-*.appxsym') != ''
+        run: |
+          $appxSym = @(Get-ChildItem -File -Filter "AetherSDR-*.appxsym")
+          $msixUpload = @(Get-ChildItem -File -Filter "AetherSDR-*.msixupload")
+          if ($appxSym.Count -ne 1 -or $msixUpload.Count -ne 1) {
+            throw "Expected exactly one .appxsym and one .msixupload. Found $($appxSym.Count) and $($msixUpload.Count)."
+          }
+          $appxSymPath = $appxSym[0].FullName
+          $msixUploadPath = $msixUpload[0].FullName
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-symbol-package.ps1 -AppxSymPath $appxSymPath -MsixUploadPath $msixUploadPath
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -374,16 +398,14 @@ jobs:
             AetherSDR-*.msixupload
             AetherSDR-*.appxsym
 
-      # Standalone PDB, kept separately from the .msixupload bundle above so
-      # maintainers can pull matching debug symbols for WinDbg/Visual Studio
-      # without unzipping a Store submission package — same PDB that's zipped
-      # into the .appxsym for Partner Center's crash symbolication.
+      # Complete application + Qt PDB set, kept separately from .msixupload so
+      # maintainers can symbolize local dumps without unpacking Store assets.
       - name: Upload debug symbols
-        if: hashFiles('build/AetherSDR.pdb') != ''
+        if: hashFiles('symbols/AetherSDR.pdb') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: Windows-Symbols
-          path: build/AetherSDR.pdb
+          path: symbols/
           retention-days: 90
 
       - name: Attach to release
@@ -424,6 +446,8 @@ jobs:
       - name: Setup Microsoft Store Developer CLI
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
+        with:
+          version: v0.4.1
 
       - name: Stage Microsoft Store submission (draft)
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
@@ -434,9 +458,10 @@ jobs:
           SELLER_ID: ${{ secrets.SELLER_ID }}
           AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
         run: |
+          msstore --version
           msstore reconfigure `
             --tenantId $env:AZURE_AD_TENANT_ID `
             --sellerId $env:SELLER_ID `
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
-          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -UploadTimeoutSeconds 300

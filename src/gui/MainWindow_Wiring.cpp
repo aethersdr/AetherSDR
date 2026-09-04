@@ -40,6 +40,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "LpMeterApplet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
@@ -77,6 +78,8 @@
 #include <QJsonParseError>
 #include <QPointer>
 #include <QSet>
+
+#include <optional>
 #include <QStringList>
 #include <QTimer>
 
@@ -6045,6 +6048,7 @@ void MainWindow::wireMeters()
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
+        m_lpMeterConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
@@ -6509,6 +6513,104 @@ void MainWindow::wireMeters()
         const int savedVariant = PeripheralSettings::deviceInt(
             "Vkamp", "Variant", static_cast<int>(AetherSDR::Vkamp::Variant::W2000));
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
+    }
+
+    // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
+    // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
+    // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
+    // wiring first, the auto-connect trigger LAST. connectSerial() can call
+    // onTransportUp() synchronously, so anything wired after the trigger
+    // misses the first connected().
+    connect(&m_lpMeterConn, &LpMeterConnection::connected, this, [this]() {
+        auto* lp = m_appletPanel->lpMeterApplet();
+        // Derived from the LIVE transport, never the persisted setting — the
+        // two diverge when the operator switches the Radio Setup mode combo
+        // without disconnecting. Same rationale as the ACOM block.
+        lp->setSource(m_lpMeterConn.sourceLabel());
+        lp->setConnected(true);
+        m_appletPanel->setLpMeterVisible(true);
+    });
+    connect(&m_lpMeterConn, &LpMeterConnection::disconnected, this, [this]() {
+        m_appletPanel->lpMeterApplet()->setConnected(false);
+        m_appletPanel->setLpMeterVisible(false);
+    });
+    connect(&m_lpMeterConn, &LpMeterConnection::readingUpdated, this,
+            [this](const AetherSDR::LpMeter::Reading& r) {
+        auto* lp = m_appletPanel->lpMeterApplet();
+        lp->setReading(r);
+        // Riding-along state is cheap to push per reading and drives only a
+        // tooltip; the applet does no work with it beyond storing it.
+        lp->setRidingAlong(m_lpMeterConn.isRidingAlong(),
+                           m_lpMeterConn.foreignIntervalMs());
+    });
+    // The meter reports WHICH range is active but never that range's ceiling
+    // in watts, so the scale comes from the connection's RangeTracker rather
+    // than from the reading.
+    connect(&m_lpMeterConn, &LpMeterConnection::gaugeCeilingChanged, this,
+            [this](double ceilingW, bool autoExpanded) {
+        m_appletPanel->lpMeterApplet()->setPowerCeiling(ceilingW, autoExpanded);
+    });
+    // Link up, meter silent. Deliberately does NOT hide the tile: the LP-100A
+    // can wedge with the serial link perfectly healthy, and hiding the applet
+    // would remove the only surface that could explain it.
+    connect(&m_lpMeterConn, &LpMeterConnection::dataFlowingChanged, this,
+            [this](bool flowing) {
+        m_appletPanel->lpMeterApplet()->setDataFlowing(flowing);
+    });
+    // Power-range full scale is a display preference owned by the applet, so
+    // the applet is where it is edited; the connection only consumes it.
+    connect(m_appletPanel->lpMeterApplet(), &LpMeterApplet::ceilingsChanged, this,
+            [this](const AetherSDR::LpMeter::RangeCeilings& c, int editedRange) {
+        // From the context menu, so it is authoritative and overrides an
+        // auto-expanded ceiling -- see RangeTracker::CeilingSource.
+        m_lpMeterConn.setRangeCeilings(
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::OperatorEdit,
+            editedRange >= 0 ? std::optional<int>(editedRange) : std::nullopt);
+        // Persisted as int: the edit dialog offers 0 decimals, so a fractional
+        // full scale is unreachable and the cast cannot lose anything today.
+        PeripheralSettings::setDeviceInt("Lp100a", "RangeHighW",
+                                         static_cast<int>(c.highW));
+        PeripheralSettings::setDeviceInt("Lp100a", "RangeMidW",
+                                         static_cast<int>(c.midW));
+        PeripheralSettings::setDeviceInt("Lp100a", "RangeLowW",
+                                         static_cast<int>(c.lowW));
+    });
+
+    // Stored ceilings, then the auto-connect trigger LAST (see above).
+    {
+        AetherSDR::LpMeter::RangeCeilings c;
+        c.highW = PeripheralSettings::deviceInt("Lp100a", "RangeHighW",
+                                                static_cast<int>(c.highW));
+        c.midW = PeripheralSettings::deviceInt("Lp100a", "RangeMidW",
+                                               static_cast<int>(c.midW));
+        c.lowW = PeripheralSettings::deviceInt("Lp100a", "RangeLowW",
+                                               static_cast<int>(c.lowW));
+        m_lpMeterConn.setRangeCeilings(
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::ConfigLoad);
+        m_appletPanel->lpMeterApplet()->setCeilings(c);
+
+        const QString mode = PeripheralSettings::deviceString("Lp100a", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        if (mode == "Network") {
+            const QString ip = PeripheralSettings::deviceString("Lp100a", "ManualIp");
+            // 2000 rather than the ACOM row's 7000: it is ser2net's own
+            // common default and the port the reference station uses.
+            const int port = PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000);
+            if (!ip.isEmpty())
+                m_lpMeterConn.connectNetwork(ip, static_cast<quint16>(port));
+        }
+#ifdef HAVE_SERIALPORT
+        else {
+            const QString port = PeripheralSettings::deviceString("Lp100a", "SerialPort");
+            if (!port.isEmpty())
+                m_lpMeterConn.connectSerial(port);
+        }
+#endif
     }
 
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.

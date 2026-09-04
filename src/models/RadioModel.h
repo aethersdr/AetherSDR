@@ -248,6 +248,7 @@ public:
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
     QString gateway()     const { return m_gateway; }
+    QString networkName() const { return m_networkName; }
     QString mac()         const { return m_mac; }
     bool    enforcePrivateIp() const { return m_enforcePrivateIp; }
 
@@ -517,6 +518,15 @@ public:
                || m_gpsdoPresent
                || (!m_gpsStatus.isEmpty()
                    && m_gpsStatus != QLatin1String("Not Present"));
+    }
+    // Settings needs a hardware-presence answer across families. Flex's backend
+    // declaration is intentionally coarse (the family can carry an optional
+    // GPSDO), so retain the live per-unit check above there. Other backends use
+    // their model profile for fixed hardware such as the IC-705's internal GPS.
+    bool hasGpsSetupHardware() const {
+        const RadioCapabilities caps = backendCapabilities();
+        return caps.hasGpsHardware
+               && (!caps.gpsHardwareRequiresPresence || hasGpsHardware());
     }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
@@ -798,6 +808,13 @@ public:
     // reconstruction input carries the intended rhythm rather than
     // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
     // schedule; send-time stamping is unchanged.
+    // Note the deliberate asymmetry with sendCwKey: this entry point does
+    // NOT emit cwKeyDownChanged.  It is the local iambic keyer's path, and
+    // that producer already drove the sidetone gate at the element's
+    // scheduled instant, so publishing here would queue a second,
+    // wall-clock-stamped edge for the same element (#4976).  m_cwKeyActive
+    // is tracked on both paths either way — it feeds the TX-ownership
+    // interlock.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
@@ -983,8 +1000,15 @@ signals:
     // Emitted whenever the backend instance is (re)built — including the
     // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
     // m_backend is already destroyed and m_backend now points at the new one.
-    // Emitted whenever the local CW key transitions on/off — funnel for
-    // serial CTS/DSR, MIDI Gate, TCI key, CWX, and HID encoder sources.
+    // Emitted whenever a straight-key-shaped local CW source transitions
+    // on/off — the funnel for the serial CW-key line, the TCI `keyer:trx`
+    // command, and the MIDI Gate / keyboard / HID straight-key actions.
+    // All of them reach it through RadioModel::sendCwKey.
+    // NOT the local iambic keyer: sendCwKeyEdge deliberately does not
+    // publish here (#4976), because that producer already drove the
+    // sidetone gate at the element's own scheduled instant.  NOT CWX
+    // either — CwxLocalKeyer calls AudioEngine::setCwKeyDown directly and
+    // never touches RadioModel.
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
     // sidetone independent of the radio's own DAX-fed sidetone.
     void cwKeyDownChanged(bool down);
@@ -1245,7 +1269,6 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
-
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
     // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit
     // tears down without pumping the event loop, so the queued
@@ -1580,6 +1603,13 @@ public:
     {
         handleSliceStatus(id, kvs, removed);
     }
+    // Feed a decoded status line straight into the router. Used to pin the TNF
+    // removal-status handling — the wire says the notch is gone, and the router
+    // must not upsert it back into TnfModel.
+    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
+    {
+        onStatusReceived(object, kvs);
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
@@ -1667,6 +1697,7 @@ private:
     QString     m_ip;
     QString     m_netmask;
     QString     m_gateway;
+    QString     m_networkName;
     QString     m_mac;
     bool        m_hasStaticIp{false};
     QString     m_staticIp;

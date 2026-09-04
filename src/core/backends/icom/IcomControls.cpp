@@ -353,9 +353,10 @@ constexpr std::array kSpecs = {
                 "setAtu", "txAtuBtn", true,
                 "NOT a tune carrier — it runs the model's internal or external "
                 "antenna-tuner matching cycle and it KEYS. There is no universal "
-                "attachment query, so capabilities().hasTuner follows canTransmit and the "
-                "button is honest about the OUTCOME (00 none / 01 matched / 02 "
-                "tuning) rather than about the hardware."},
+                "attachment query, so only exact model profiles with documented tuner "
+                "paths publish capabilities().hasTuner and send this command. The "
+                "shared button remains visible but unavailable otherwise.",
+                IcomFeature::AntennaTuner},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
                 Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,

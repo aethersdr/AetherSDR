@@ -22,6 +22,7 @@ class QScrollArea;
 namespace AetherSDR {
 
 class MemoryBrowsePanel;
+class BandPlanManager;
 class KiwiSdrManager;
 class SliceModel;
 class SpectrumOverlayWheelGuard;
@@ -94,6 +95,9 @@ public:
 
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
+    // Use the active regional plan when mapping the slice frequency to a
+    // native band button. The manager is owned by MainWindow.
+    void setBandPlanManager(BandPlanManager* manager);
     void setWnbState(bool on, int level);
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
@@ -320,12 +324,20 @@ private:
     // deleteLater() on every rebuild, so entries can outlive their buttons by a
     // full event-loop turn if a range update lands in that window.
     QVector<QPair<QPointer<QPushButton>, double>> m_bandBtnFreqs;
+    struct BandButtonEntry {
+        QPointer<QPushButton> button;
+        QString bandName;
+    };
+    QVector<BandButtonEntry> m_bandButtons;
+    QString m_lastHighlightedBand;
+    BandPlanManager* m_bandPlanManager{nullptr};
     double m_tuningMinMhz{0.0};
     double m_tuningMaxMhz{0.0};
     // True until a connected backend says otherwise, so a disconnected session
     // keeps the button rather than having it appear on connect.
     bool m_notchesSupported{true};
     void applyTuningRangeToBandButtons();
+    void updateActiveBandHighlight();
 
     // Cached state for band-panel rebuilds — setXvtrBands() and
     // setRadioCapabilities() each store their argument and trigger

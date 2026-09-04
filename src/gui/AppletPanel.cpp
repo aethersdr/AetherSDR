@@ -15,6 +15,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "LpMeterApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -821,6 +822,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // LP-100A wattmeter — an instrument rather than an amplifier, so it is
+    // independent of every amplifier applet above and lives in the Metering
+    // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
+    // so the stored Peripherals configuration is the only thing that can ever
+    // reveal it. See docs/architecture/lp-100a-wattmeter-design.md.
+    m_lpMeterApplet = new LpMeterApplet;
+    {
+        auto entry = makeEntry("LP100", "LP-100A Meter", m_lpMeterApplet, false,
+                               m_drawer, m_drawerLayout);
+        markHardwareConditional("LP100");
+        m_appletOrder.append(entry);
+    }
+
     m_txApplet = new TxApplet;
     m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
 
@@ -1333,6 +1347,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
         {QStringLiteral("PWR"),   QStringLiteral("Metering")},
         {QStringLiteral("MTR"),   QStringLiteral("Metering")},
+        {QStringLiteral("LP100"), QStringLiteral("Metering")},
         {QStringLiteral("HLTH"),  QStringLiteral("Antennas & Switching")},
         {QStringLiteral("AG"),    QStringLiteral("Antennas & Switching")},
         {QStringLiteral("SS"),    QStringLiteral("Antennas & Switching")},
@@ -1745,6 +1760,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setLpMeterVisible(bool visible)
+{
+    updateHardwareAvailability("LP100", "Applet_LP100", visible);
     applyBarLayout();
 }
 

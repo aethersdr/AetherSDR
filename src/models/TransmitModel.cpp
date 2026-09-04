@@ -278,6 +278,15 @@ void TransmitModel::setHasTuner(bool present)
     emit hasTunerChanged(present);
 }
 
+void TransmitModel::setHasTunerMemories(bool present)
+{
+    if (m_hasTunerMemories == present) {
+        return;
+    }
+    m_hasTunerMemories = present;
+    emit hasTunerMemoriesChanged(present);
+}
+
 void TransmitModel::setRfPower(int power)
 {
     power = qBound(0, power, 100);

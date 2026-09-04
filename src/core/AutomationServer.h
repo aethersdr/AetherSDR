@@ -248,13 +248,13 @@ public:
     // Live model handle for the get() verb. Set once at startup from the
     // MainWindow's active-session RadioModel; may be null (get() then reports
     // "no radio model" rather than crashing).
-    void setRadioModel(RadioModel* model) { m_radioModel = model; }
-    void setAudioEngine(AudioEngine* audio) { m_audioEngine = audio; }
+    void setRadioModel(RadioModel* model);
+    void setAudioEngine(AudioEngine* audio);
     // AetherClock model handle for "get clock"; may be null (reports
     // "no clock model available" until the applet wires it).
     void setClockModel(AetherClockModel* model);  // out-of-line: QPointer needs the complete type
     // QSO recorder handle for the record() verb (start/stop/status/path).
-    void setQsoRecorder(QsoRecorder* rec) { m_qsoRecorder = rec; }
+    void setQsoRecorder(QsoRecorder* rec);
     // Real connection hook for the connect/disconnect/dialog verbs. The bridge
     // asks the implementor (the GUI's ConnectionPanel) to drive the same path
     // the visible buttons do, so automation exercises the normal
