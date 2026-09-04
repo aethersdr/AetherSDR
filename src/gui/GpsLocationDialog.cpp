@@ -573,6 +573,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                 m_radioModel, &RadioModel::setGpsTimeCorrectionEnabled);
         connect(m_applyNtpServerButton, &QPushButton::clicked, this, [this] {
             m_radioModel->setGpsNtpServer(m_ntpServerEdit->text().trimmed());
+            m_ntpServerEdit->setModified(false);   // the read-back now owns it
         });
         connect(m_ntpServerEdit, &QLineEdit::textChanged, this,
                 [this](const QString& value) {
@@ -752,7 +753,9 @@ void GpsLocationDialog::updateGpsTimeControls()
     m_ntpEnabledCheck->setChecked(m_radioModel->gpsNtpEnabled());
     m_gpsTimeCorrectionCheck->setChecked(
         m_radioModel->gpsTimeCorrectionEnabled());
-    if (!m_ntpServerEdit->hasFocus()) {
+    // isModified() is the operator's unsent edit; a periodic read-back must
+    // not replace it just because focus moved to the Apply button.
+    if (!m_ntpServerEdit->isModified()) {
         const QSignalBlocker serverBlock(m_ntpServerEdit);
         m_ntpServerEdit->setText(m_radioModel->gpsNtpServer());
     }

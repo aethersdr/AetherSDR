@@ -190,6 +190,22 @@ QString gpsCoordinateText(double value, bool longitude)
         .arg(minutes, 0, 'f', 3);
 }
 
+// Every position readout goes blank together: a stale coordinate surviving
+// "GPS off" would keep the dashboard, APRS beacon and status bar on the last
+// fix. One writer so a new GpsDelta field cannot be cleared on one path only.
+void clearGpsPosition(GpsDelta& d)
+{
+    d.positionValid = false;
+    d.grid = QString();
+    d.altitude = QString();
+    d.lat = QString();
+    d.lon = QString();
+    d.time = QString();
+    d.date = QString();
+    d.speed = QString();
+    d.track = QString();
+}
+
 bool validNtpServer(const QString& address)
 {
     if (address.isEmpty() || address.size() > 64) {
@@ -1752,6 +1768,7 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
     m_dataOffModRestore.reset();
     m_lastModInputWarning.clear();
     m_gpsSource = -1;
+    m_gpsPositionValid = false;
     m_ntpAccess.finish();
 
     if (extendedFmReadbackProfileFor(m_model)) {
@@ -2589,24 +2606,22 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                     && frame.data[0] != 0x03)) {
                 return;
             }
+            const bool sourceChanged = m_gpsSource != frame.data[0];
             m_gpsSource = frame.data[0];
             GpsDelta d;
             d.source = m_gpsSource == 0x00 ? QStringLiteral("Off")
                 : m_gpsSource == 0x03 ? QStringLiteral("Manual")
                                       : QStringLiteral("Internal GPS");
-            d.status = m_gpsSource == 0x00 ? QStringLiteral("GPS off")
-                : m_gpsSource == 0x03 ? QStringLiteral("Manual position")
-                                      : QStringLiteral("Waiting for position");
             if (m_gpsSource == 0x00) {
-                d.positionValid = false;
-                d.grid = QString();
-                d.altitude = QString();
-                d.lat = QString();
-                d.lon = QString();
-                d.time = QString();
-                d.date = QString();
-                d.speed = QString();
-                d.track = QString();
+                d.status = QStringLiteral("GPS off");
+                clearGpsPosition(d);
+                m_gpsPositionValid = false;
+            } else if (sourceChanged || !m_gpsPositionValid) {
+                // The source is re-read every 12 s; while a fix is being
+                // reported the 23 00 poll owns the status text, and a
+                // periodic "Waiting for position" would contradict it.
+                d.status = m_gpsSource == 0x03 ? QStringLiteral("Manual position")
+                                               : QStringLiteral("Waiting for position");
             }
             emit gpsChanged(d);
             return;
@@ -2616,21 +2631,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         const std::optional<GpsPosition> position = decodeGpsPosition(frame.data);
         if (!position) {
+            m_gpsPositionValid = false;
             GpsDelta d;
-            d.positionValid = false;
+            clearGpsPosition(d);
             d.status = m_gpsSource == 0x00 ? QStringLiteral("GPS off")
                                            : QStringLiteral("No position data");
-            d.grid = QString();
-            d.altitude = QString();
-            d.lat = QString();
-            d.lon = QString();
-            d.time = QString();
-            d.date = QString();
-            d.speed = QString();
-            d.track = QString();
             emit gpsChanged(d);
             return;
         }
+        m_gpsPositionValid = true;
         GpsDelta d;
         d.positionValid = true;
         d.status = m_gpsSource == 0x03 ? QStringLiteral("Manual position")
@@ -2801,14 +2810,29 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 if (nul >= 0) {
                     raw.truncate(nul);
                 }
-                const QString server = QString::fromLatin1(raw);
-                if (server.isEmpty() || validNtpServer(server)) {
-                    d.ntpServer = server;
+                while (!raw.isEmpty()
+                       && (static_cast<std::uint8_t>(raw.back()) == 0xff
+                           || raw.back() == ' ')) {
+                    raw.chop(1);   // FF or space padding is transport shape too
+                }
+                // Radio-authoritative (Principle II): whatever the radio
+                // stores is displayed, even when it is outside the alphabet
+                // our own write path accepts; only unprintable bytes are
+                // refused, because they cannot be a hostname at all.
+                bool printable = true;
+                for (const char ch : raw) {
+                    if (ch < 0x20 || ch == 0x7f) {
+                        printable = false;
+                        break;
+                    }
+                }
+                if (printable) {
+                    d.ntpServer = QString::fromLatin1(raw);
                     emit gpsChanged(d);
                 } else {
                     qCWarning(lcIcomCiv)
-                        << "ignoring invalid NTP server readback with"
-                        << server.size() << "characters";
+                        << "ignoring unprintable NTP server readback of"
+                        << raw.size() << "bytes";
                 }
                 return;
             }
@@ -5849,10 +5873,16 @@ void IcomCivBackend::publishNtpAccessResult(std::uint8_t result)
         return;
     }
 
+    // "Still accessing" arrives once per link tick until the radio finishes;
+    // the model already shows Accessing, and re-emitting it every second
+    // would churn every gpsTimeSettingsChanged consumer (the dialog's
+    // hostname edit among them) for nothing.
+    if (result == 0x00 && m_ntpAccess.active()) {
+        return;
+    }
     GpsDelta d;
     if (result == 0x00) {
-        d.ntpSyncStatus = m_ntpAccess.active()
-            ? QStringLiteral("Accessing") : QStringLiteral("Not accessed");
+        d.ntpSyncStatus = QStringLiteral("Not accessed");
     } else if (result == 0x01) {
         d.ntpSyncStatus = QStringLiteral("Succeeded");
         m_ntpAccess.finish();
@@ -5921,6 +5951,15 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
                 static_cast<std::size_t>(ascii.size()));
             sendUserCommand(cmdWriteSettingData(addr, profile.gps->ntpServerItem, bytes));
         } else if (verb == QLatin1String("gps.ntp.sync")) {
+            if (!profile.gps->hasNtpAccess) {
+                if (requestId != 0) {
+                    emit extensionError(requestId,
+                                        QStringLiteral("NTP access is not supported by %1")
+                                            .arg(QString::fromUtf8(m_model->name.data(),
+                                                                   static_cast<int>(m_model->name.size()))));
+                }
+                return;
+            }
             startNtpAccess(nowMs());
             sendUserCommand(cmdNtpAccess(addr, true));
         } else {

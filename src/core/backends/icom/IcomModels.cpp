@@ -1,5 +1,7 @@
 #include "core/backends/icom/IcomModels.h"
 
+#include "core/backends/icom/CivCodec.h"   // setting::kNtp* — one source for the SET items
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -608,7 +610,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
-        .gps = GpsProfile{167, 168, 169, true},
+        .gps = GpsProfile{setting::kNtpEnabled, setting::kNtpServer,
+                          setting::kGpsTimeCorrect, true},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{

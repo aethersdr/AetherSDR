@@ -1132,9 +1132,10 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
             || status.contains(QLatin1String("not lock"))
             || status.contains(QLatin1String("lost"))
             || status.contains(QLatin1String("loss"));
-        d.positionValid = saysLock && !saysNoLock
-            && !kvs.value(QStringLiteral("lat")).trimmed().isEmpty()
-            && !kvs.value(QStringLiteral("lon")).trimmed().isEmpty();
+        // Lock alone decides validity; the coordinates are carried by their
+        // own keys and consumers parse the persisted lat/lon, so a status
+        // line without them must not invalidate a fix the radio still has.
+        d.positionValid = saysLock && !saysNoLock;
         d.source = QStringLiteral("GPSDO");
     }
     carry(kvs, "tracked", d.tracked);

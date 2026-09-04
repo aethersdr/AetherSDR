@@ -542,6 +542,7 @@ private:
     // -1 means the radio has not answered yet. NTP access is a short-lived
     // operation polled until the radio reports success or failure.
     int     m_gpsSource = -1;
+    bool    m_gpsPositionValid = false;
     IcomNtpAccess m_ntpAccess;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).

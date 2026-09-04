@@ -521,6 +521,14 @@ target_include_directories(icom_ntp_access_test PRIVATE src)
 target_link_libraries(icom_ntp_access_test PRIVATE aethercore Qt6::Core)
 add_test(NAME icom_ntp_access_test COMMAND icom_ntp_access_test)
 
+# Socket-free injected-transport coverage for the IC-705 23 00/01 position
+# decode and the 0167-0169 / 1A 08 clock read-backs: frames go straight into
+# IcomCivBackend::onCivFrame, no fake peer.
+add_executable(icom_gps_readback_test tests/icom_gps_readback_test.cpp)
+target_include_directories(icom_gps_readback_test PRIVATE src)
+target_link_libraries(icom_gps_readback_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_gps_readback_test COMMAND icom_gps_readback_test)
+
 # Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
 # per-deck watt derivation, sibling-model isolation, and unkey clearing.
 add_executable(icom_power_derivation_test

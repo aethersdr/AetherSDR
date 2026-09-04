@@ -2345,8 +2345,11 @@ MainWindow::MainWindow(QWidget* parent)
             // compact status-bar identity and fix state privacy-safe while
             // the live position details remain available in the GPS dashboard.
             sourceLabel = QStringLiteral("Int. GPS");
+            // A hand-entered position (IC-705 GPS Select = Manual) is usable
+            // but it is not a fix; say so rather than printing "Locked".
             const QString positionStatus = m_radioModel.gpsPositionValid()
-                ? QStringLiteral("Locked")
+                ? (m_radioModel.gpsSource() == QLatin1String("Manual")
+                       ? QStringLiteral("Manual") : QStringLiteral("Locked"))
                 : (m_radioModel.gpsStatus().isEmpty()
                        ? QStringLiteral("Waiting") : m_radioModel.gpsStatus());
             statusLabel = QStringLiteral("[%1]").arg(positionStatus);
