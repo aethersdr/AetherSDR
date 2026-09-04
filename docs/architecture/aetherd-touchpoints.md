@@ -214,7 +214,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/RadioStatusOwnership.h` | 1 | vendor(flex) — SmartSDR status parsing helpers: Flex hex handles, client_handle ownership, remote_audio_rx, interlock gate | unconverted |
 | `models/Rn2SettingsModel.h` | 1 | universal — Process-wide owner of client-side RN2 configuration as one versioned object (Principle V). Engine DSP configuration; radio-agnostic. | unconverted |
 | `models/SliceLinkPolicy.h` | 2 | universal — Pure decision logic for Slice Link (cross-panadapter VFO link) — echo classification on integer Hz, no QObject, no I/O, no model access. Canonical slice state only. | unconverted |
-| `models/SliceModel.h` | 31 | mixed(flex) — Slice state (freq/mode/filter/DSP) is core-profile; DAX, index_letter, SmartSDR status KVs are flex ext | unconverted |
+| `models/SliceModel.h` | 32 | mixed(flex) — Slice state (freq/mode/filter/DSP) is core-profile; DAX, index_letter, SmartSDR status KVs are flex ext | unconverted |
 | `models/SpotModel.h` | 1 | universal — Panadapter spot store (callsign/freq/mode/lifetime/priority) on canonical state; kv ingest is trivially generic | unconverted |
 | `models/TnfModel.h` | 1 | universal — Tracking notch filter state (freq/width/depth/permanent, global enable) — generic DSP notch surface; kv parse is transport detail | unconverted |
 | `models/TransmitModel.h` | 15 | mixed(flex) — TX state model: power/MOX/VOX/CW/filter are core-profile; ATU, DAX, APD, profiles, interlock are Flex. | unconverted |
