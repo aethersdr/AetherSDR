@@ -3956,6 +3956,12 @@ add_executable(hl2_telemetry_cadence_test
 )
 target_include_directories(hl2_telemetry_cadence_test PRIVATE src)
 add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
+
+add_executable(hl2_link_state_alias_test
+    tests/hl2_link_state_alias_test.cpp
+)
+target_include_directories(hl2_link_state_alias_test PRIVATE src)
+add_test(NAME hl2_link_state_alias_test COMMAND hl2_link_state_alias_test)
 # HL2 stream-free telemetry SERVICE -- must answer with no backend and no
 # connection, which is the state the whole feature exists for. Needs Qt (timer,
 # socket) but no aethercore and no radio: it polls 192.0.2.1, TEST-NET-1, which

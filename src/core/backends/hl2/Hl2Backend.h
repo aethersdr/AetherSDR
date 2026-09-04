@@ -256,11 +256,21 @@ private:
     // not connected: it is the difference between "idle radio nobody is using"
     // and "someone else's session", which is the case A-telemetry is about.
     bool m_pollTargetHeldByOther = false;
-    // Separate from m_linkRxPacketsAtLastTick, which publishLinkStats()
-    // CONSUMES for the heartbeat. Sharing one counter would mean whichever
-    // reader ran second always saw "no new packets" and reported a healthy
-    // link as stalled.
-    quint64 m_linkRxPacketsAtPollCheck = 0;
+    // WHEN the mirrored EP6 counter last went up, not what it was at some
+    // previous tick.
+    //
+    // This was a tick-to-tick comparison and that was a category error. The
+    // counter is mirrored by linkCountersUpdated at 1 Hz and the tick that read
+    // it also ran at 1 Hz, so whenever two ticks fell between two publishes the
+    // second saw no change and declared a healthy stream stalled -- and the app
+    // polled port 1025 through its own live session. Observed on hardware
+    // 2026-09-04; reproduced in hl2_link_state_alias_test; the rule and its
+    // threshold are in Hl2TelemetryCadence.h.
+    //
+    // Restarted from the MIRROR, which runs at the publish rate, so the value
+    // this records does not depend on the tick rate at all.
+    QElapsedTimer m_rxAdvanceClock;
+    quint64 m_rxPacketsAtLastAdvance = 0;
     // How often the poll state is re-evaluated. Independent of the link-stats
     // cadence on purpose: see the timer's construction for why sharing that
     // one would silence the poller in exactly the states it is for.

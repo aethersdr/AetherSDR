@@ -438,6 +438,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // rather than as one that has not come up yet.
         m_link = LinkStats{};
         m_linkRxPacketsAtLastTick = 0;
+        // Fresh session: the stall clock must start now. Left over from a
+        // previous connection it would read minutes, and the first poll-state
+        // tick of a healthy new stream would declare it stalled.
+        m_rxPacketsAtLastAdvance = 0;
+        m_rxAdvanceClock.restart();
         m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
@@ -585,6 +590,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // and both publishers below own them.
         m_link.rxBytes = static_cast<qint64>(c.rxBytes);
         m_link.txBytes = static_cast<qint64>(c.txBytes);
+        // The stall clock is restarted HERE, in the mirror, and only on an
+        // actual advance -- linkCountersUpdated fires on its own cadence whether
+        // or not EP6 moved, so "a publish arrived" is not "packets arrived".
+        if (c.rxPackets != m_rxPacketsAtLastAdvance) {
+            m_rxPacketsAtLastAdvance = c.rxPackets;
+            m_rxAdvanceClock.restart();
+        }
         m_link.rxPackets = c.rxPackets;
         m_link.rxPacketsLost = c.drops;
         // Protocol 1 is a one-way stream with no request/response exchange: EP2
@@ -635,20 +647,15 @@ void Hl2Backend::updateTelemetryPollState()
 
     // Only the link state. Demand belongs to the service: it is recorded by the
     // health read itself, which every consumer performs and none can forget.
-    Hl2LinkState state;
-    if (!m_connected) {
-        state = m_pollTargetHeldByOther ? Hl2LinkState::HeldByOther
-                                        : Hl2LinkState::NotConnected;
-    } else if (m_link.rxPackets != m_linkRxPacketsAtPollCheck) {
-        state = Hl2LinkState::Streaming;
-    } else {
-        // Connected, and no EP6 since the last tick. The case the whole feature
-        // exists for: the packets that carry the radio's state are the packets
-        // that stopped.
-        state = Hl2LinkState::StreamStalled;
-    }
-    m_linkRxPacketsAtPollCheck = m_link.rxPackets;
-    m_telemetryService->setLinkState(state);
+    // How long the EP6 counter has sat still. An invalid clock means nothing has
+    // ever advanced it; while connected that is a stream which never came up,
+    // which is a stall by any reading, so it is reported as one rather than
+    // being excused as "no data yet".
+    const long long sinceAdvance =
+        m_rxAdvanceClock.isValid() ? m_rxAdvanceClock.elapsed() : kStreamStallDeclareMs;
+
+    m_telemetryService->setLinkState(
+        hl2LinkStateFor(m_connected, m_pollTargetHeldByOther, sinceAdvance));
 }
 
 void Hl2Backend::setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther)

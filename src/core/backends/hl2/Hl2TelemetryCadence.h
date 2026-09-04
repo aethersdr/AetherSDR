@@ -88,4 +88,47 @@ enum class Hl2LinkState {
     return 0;
 }
 
+
+// How long the packet counter must sit still before the stream is called
+// stalled.
+//
+// WHY A DURATION AND NOT A TICK-TO-TICK COMPARISON. The obvious rule -- "did
+// rxPackets change since the last tick?" -- was the rule, and it was wrong. The
+// counter it reads is mirrored from the I/O thread by linkCountersUpdated at
+// 1 Hz, and the tick that read it also ran at 1 Hz. Two clocks sampling each
+// other: whenever two ticks fell between two publishes, the second saw an
+// unchanged counter and declared StreamStalled on a perfectly healthy stream,
+// so the app polled port 1025 through its own live session. That was observed
+// on hardware on 2026-09-04 and is reproduced in hl2_link_state_alias_test.
+//
+// It was not a tuning error, it was a category error: a tick-to-tick delta
+// measures the TICK as much as the stream. Elapsed time since the counter last
+// advanced measures only the stream, and gives the same answer at any tick rate
+// -- including a tick rate somebody changes later without reading this comment.
+//
+// 2500 ms is two publish intervals plus margin. The publish period is bounded
+// below by kLinkPublishIntervalMs = 1000 and runs a little over, so a healthy
+// stream never reaches 2500; two consecutive missed publishes do.
+//
+// THE COST, stated rather than buried: a real stall is now declared 2.5-3.5 s
+// after it starts instead of ~1 s. The old ~1 s was not real. It was a coin
+// flip that happened to land right in the runs that were looked at, and it paid
+// for its speed with false stalls on healthy streams.
+inline constexpr long long kStreamStallDeclareMs = 2500;
+
+// The link state, from what the backend can actually observe.
+//
+// `msSinceRxAdvanced` is the time since the mirrored EP6 packet counter last
+// went up. It is meaningful only while connected; the disconnected answers do
+// not consult it.
+[[nodiscard]] constexpr Hl2LinkState hl2LinkStateFor(bool connected,
+                                                     bool heldByOther,
+                                                     long long msSinceRxAdvanced) noexcept
+{
+    if (!connected)
+        return heldByOther ? Hl2LinkState::HeldByOther : Hl2LinkState::NotConnected;
+    return msSinceRxAdvanced >= kStreamStallDeclareMs ? Hl2LinkState::StreamStalled
+                                                      : Hl2LinkState::Streaming;
+}
+
 }  // namespace AetherSDR::hl2
