@@ -831,14 +831,6 @@ void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
     refreshVariantStatus();
 }
 
-void UlanziDialMapperDialog::setTciClientConnected(bool connected)
-{
-    if (m_tciClientConnected == connected) return;
-    m_tciClientConnected = connected;
-    if (!m_unsupportedVariant.isEmpty() && !m_connected)
-        refreshVariantStatus();
-}
-
 void UlanziDialMapperDialog::refreshVariantStatus()
 {
     if (m_unsupportedVariant.isEmpty()) return;
@@ -860,18 +852,10 @@ void UlanziDialMapperDialog::refreshVariantStatus()
     showAttentionStatus(tr("Use Ulanzi Studio"));
 
     if (m_variantHelpBtn) {
-        // TciServer reports only peer address/port (TciClientInfo), never an
-        // application name, so a live client cannot be attributed to the
-        // Ulanzi plugin specifically — say "a TCI client", not "your dial".
         m_variantHelpBtn->setToolTip(
-            m_tciClientConnected
-                ? tr("%1 — not driven over HID. A TCI client is connected, so "
-                     "if this dial is mapped in Ulanzi Studio it is already "
-                     "working. Click for setup instructions.")
-                      .arg(m_unsupportedVariant)
-                : tr("%1 — cannot be driven over HID. Click for setup "
-                     "instructions.")
-                      .arg(m_unsupportedVariant));
+            tr("%1 — cannot be driven over HID. Click for setup "
+               "instructions.")
+                .arg(m_unsupportedVariant));
         m_variantHelpBtn->setVisible(true);
     }
 }
@@ -879,10 +863,11 @@ void UlanziDialMapperDialog::refreshVariantStatus()
 
 void UlanziDialMapperDialog::onVariantHelpClicked()
 {
-    // Rich text so the plugin release is a real clickable link — retyping a
-    // URL out of a status label is not a usable acquisition path.  The link
-    // points at the plugin's own release, which actually carries the
-    // packaged .zip; the AetherSDR release assets do not include it. (#3485)
+    // Rich text for the numbered steps.  Deliberately NO download link: the
+    // packaged plugin is not yet published as an AetherSDR release asset, and
+    // a shipping dialog must not point at a contributor's personal repository
+    // (raised by @jensenpat in review).  The in-tree plugin and its install
+    // steps live at plugins/ulanzi-aethersdr/. (#3485)
     QMessageBox box(this);
     box.setWindowTitle(tr("Ulanzi Dial — Setup Required"));
     box.setIcon(QMessageBox::Information);
@@ -897,10 +882,9 @@ void UlanziDialMapperDialog::onVariantHelpClicked()
            "<p>Drive it through Ulanzi Studio instead:</p>"
            "<ol>"
            "<li>Enable TCI: <b>Settings → Autostart TCI with AetherSDR</b>.</li>"
-           "<li>Download <code>com.g0jkn.aethersdr.ulanziPlugin.zip</code> from "
-           "<a href=\"https://github.com/nigelfenton/aethersdr-ulanzi-plugin/releases/latest\">"
-           "the AetherSDR Ulanzi plugin release</a>.</li>"
-           "<li>Unpack it into "
+           "<li>Build the plugin from <code>plugins/ulanzi-aethersdr/</code> in "
+           "the AetherSDR source tree, following the README there.</li>"
+           "<li>Copy the built plugin folder into "
            "<code>%APPDATA%\\Ulanzi\\UlanziDeck\\Plugins\\</code>.</li>"
            "<li>Quit Ulanzi Studio from the system tray and relaunch it.</li>"
            "</ol>"));
