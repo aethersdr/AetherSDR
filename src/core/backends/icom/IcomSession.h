@@ -93,6 +93,9 @@ public:
 
     // Send one CI-V frame. Frames are built by CivCodec's cmd* helpers.
     void sendCiv(std::span<const std::uint8_t> frame);
+    // Re-open only the RS-BA1 CI-V data pipe while retaining the authenticated
+    // control and audio streams. The backend owns the bounded retry policy.
+    [[nodiscard]] bool reopenCivPipe();
     // Queue transmit audio (mono float). Nothing leaves until a full 20 ms
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.
@@ -108,6 +111,9 @@ public:
     [[nodiscard]] Stats stats() const;
     // Credential-free RS-BA1 lease state for health and automation diagnostics.
     [[nodiscard]] QVariantMap leaseDiagnostics() const;
+    // Per-stream packet activity and socket health. Contains no endpoint,
+    // session id, credential, or payload data, so it is safe in support logs.
+    [[nodiscard]] QVariantMap transportDiagnostics() const;
 
 signals:
     void connected(const QString& deviceName);

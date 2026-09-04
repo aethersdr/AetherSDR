@@ -8,6 +8,221 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.9.1] — 2026-08-29
+
+### Globe maps, antenna control and operator polish · sharper Flex behavior · deeper evidence-gated Icom support
+
+53 merged changes from 12 contributors put the broad operator experience first:
+PSK Reporter gains a globe projection, Green Heron antenna and rotator control
+arrives as a native applet, System Info exposes live thread and log views, and
+the panadapter, RTTY, CW, sidetone and automation workflows all receive focused
+improvements.
+
+Flex-specific fixes restore band-stack recall, PA temperature and TNF removal
+behavior. Networked Icom support closes the cycle with model-gated controls and
+telemetry, stronger IC-9700 presentation and scaling, safer reconnect/TX
+lifecycle behavior, read-only radio memories, DTCS and multi-radio NAT support.
+
+### New features and operator workflow
+
+- **Green Heron Everyware antenna control (#5209).** A native GHE applet controls
+  compatible antenna switches and rotators.
+- **Optional globe projection for PSK Reporter (#5273).** Operators can switch
+  from the flat map to a global view of received reports.
+- **System Info Threads and Logs tabs (#5246)** make runtime diagnosis available
+  inside the app.
+- **RTTY decoder sensitivity (#5132)** is adjustable directly from the decoder
+  bar.
+- Panadapter button-rail collapse state now persists (#5221), and the active band
+  is highlighted in the spectrum overlay (#5236).
+- Connect-time enumeration no longer overwrites the radio's active slice (#4985).
+- Explicit PortAudio sidetone selections no longer get captured by a shorter
+  device-name match (#5135).
+- CW Zero Beat mirrors correctly for CWL and clears stale pitch estimates
+  (#5224); iambic keyer edges no longer echo back into the sidetone gate (#5128).
+- Radio sharing is single-sourced (#5264), unsupported Flex-only controls dim
+  off-Flex (#5266), and missing command planes fail visibly (#5265).
+- Demo mode now reaches its backend through the capability extension namespace
+  (#5268).
+
+### Automation and project quality
+
+- Automation adds FM repeater controls (#5104), text-view inspection (#5136),
+  momentary key events (#5137), and combo-box popup actions (#5144).
+- Flex-only automation verbs now refuse unsupported backends instead of falsely
+  reporting success (#5267).
+- Synthetic transport tests are separated by verification layer (#5232), every
+  registered test receives a default 300-second timeout (#5272), and the test
+  boundary conventions are documented (#5255).
+- The capability field map and stale comments are brought back into sync (#5269),
+  and the project gains a repeatable issue-fit, governance and code-quality PR
+  review workflow (#5245).
+
+### FlexRadio and TCI fixes
+
+- Band shortcuts once again restore Flex band-stack state (#4967).
+- Flex PA temperature returns to the status bar on capable radios (#5295).
+- TNF removal status now removes the notch instead of recreating it (#5314).
+- TCI `cw_macros` messages no longer append the receiver index to macro text
+  (#5153).
+
+### Networked Icom
+
+- **Radio-authoritative memories and signaling.** Read-only IC-9700 radio memory
+  integration (#5283), synchronized dial lock (#5261), capability-gated IC-705
+  and IC-9700 DTCS (#5294), IC-9700 CTCSS TX/RX (#5203), and model-gated
+  extended repeater readback (#5161) follow each model's attested surface.
+- **More accurate IC-9700 controls and telemetry.** Supply voltage (#5170), PA
+  drain current (#5238), continuous compression (#5240), LAN MOD Phone level
+  (#5211), RF power scaling (#5208), RF Gain/preamp presentation (#5189), and
+  declared VHF/UHF bands (#5186) now reach the UI correctly.
+- Unsupported PA temperature (#5172), Main Fan (#5174), DEXP (#5181), and TX
+  cutoff controls (#5184) remain hidden; voltage waits for real telemetry
+  (#5176), and Phone/CW level clears before its first sample (#5179).
+- **Safer network and TX lifecycle.** TUNE owns its carrier (#5218), SWR and ALC
+  survive isolated minimum replies (#5216), RX Controls stay subscribed across
+  reconnect (#5220), and WSJT-X TCI unkey handling gains incident telemetry
+  (#5274).
+- Custom UDP port triplets support multi-radio NAT (#5230), SpotHub spots flow
+  through the client model (#5228), and RS-BA1 handshake failures identify both
+  the target and likely cause (#5303).
+
+### Contributors
+
+Big thanks to **@w5jwp** (17 changes), **@ten9876** (maintainer, 9),
+**@jensenpat** (9), **@skerker** (8), **@chibondking** (2), **@nonoo** (2),
+**@M7HNF-Ian**, **@motoham88**, **@nigelfenton**, **@Ozy311**, and **@rfoust**.
+
+We are excited to welcome our first-time contributor this cycle:
+**@williamscody**.
+
+73, Pat KI6BCJ & Codex (AI dev partner)
+
+## [v26.8.4] — 2026-08-22
+
+### Evidence-backed Icom · client-timed HL2 CW · faster PSK Reporter maps · steadier audio, MIDI and TCI
+
+48 commits since v26.8.3. **Icom support now grows by model and evidence, not
+assumption:** typed profiles for the IC-705, IC-7300MK2 and IC-9700 gate the
+radio's actual controls, calibration and RF decks; unknown models fail closed.
+That foundation brings radio-authoritative repeater tone/duplex/XFC, real
+IF-width/PBT and TX-cut readback, the network radio name, CW text keying, WFM,
+correct VHF/UHF limits and bounded IC-9700 CI-V recovery.
+
+The **Hermes-Lite 2 gains client-timed CW transmit and persistence**, scheduled
+key edges now drive sidetone/trace/netcw consistently, and the default PortAudio
+sidetone path works. PSK Reporter renders more coverage with less overhead and
+smooth pinch-to-zoom; NR2, the float32 microphone path, MIDI profile handling,
+TCI, Workspace Canvas and several controller/UI seams receive focused fixes.
+
+### Networked Icom
+
+- **Evidence-backed model capability profiles (#5151).** IC-705, IC-7300MK2
+  and IC-9700 behavior is described by independently attested facets instead of
+  scattered address checks. Unknown and unprofiled radios hide unsupported
+  controls and telemetry instead of borrowing another model's commands or
+  calibration.
+- **Real RX filters, twin PBT and TX cuts (#5076).** The app reads the radio's
+  actual IF width, keeps filter slot/width/shift separate, writes only
+  model-supported TX edges and publishes the radio's readback.
+- **FM repeater tone, duplex, offset and momentary XFC (#5140).** State is
+  read-first and profile-gated, recalled in radio-safe order, and XFC always
+  releases on hide, deactivation, capability change or disconnect.
+- **Network Radio Name in the status bar (#5148).** A custom RS-BA1 radio name
+  is kept distinct from canonical model, hostname and callsign.
+- **CI-V CW text keying as CWK (#5113)** and a focus fix that prevents incoming
+  CWK updates from stealing the VFO editor (#5134).
+- **The radio's own mode vocabulary reaches the UI (#5106),** making WFM
+  selectable where the model advertises it.
+- **Correct RF decks and tune guards:** 2 m/70 cm are admitted on the IC-705
+  (#5108), and IC-9700 band power limits are modelled explicitly (#5117).
+- **Hardened lifecycle and IC-9700 recovery (#5145).** Cancelled scheduler work
+  receives terminal outcomes, stale-session frames cannot publish state, and a
+  confirmed IC-9700 CI-V stall gets bounded serial-stream recovery before a
+  full reconnect.
+- Icom logging now registers its categories and records every CI-V frame
+  (#4965); the scheduler-safe trace regression was fixed (#5046).
+
+### CW and Hermes-Lite 2
+
+- **Client-timed HL2 CW transmit and persistence (#5061).** Host-scheduled key
+  edges drive Protocol 1 CW safely, and client-owned CW operating state returns
+  after restart.
+- First-connect setup is presented reliably and test FFTW planning is bounded
+  (#5062).
+- Scheduled key instants now flow to sidetone, trace and netcw (#4942), and late
+  edges shift the sidetone anchor forward rather than being clamped (#4934).
+- PortAudio's real default-device path is reachable for the default sidetone
+  selection (#5085), and CWX macro rows remain readable at minimum window
+  height (#5125).
+
+### Audio and noise reduction
+
+- Microphone capture stays float32 through the 48 kHz voice strip (#5017).
+- TX-accumulator clears are serialized on the AudioEngine thread (#5095).
+- NR2 recovers from residual noise when AGC-T changes (#5045), and RN2 frame
+  accumulation is unified (#5039).
+- Automation proof modes now exercise RN2 more completely (#5043).
+
+### PSK Reporter and the panadapter
+
+- PSK Reporter map coverage and responsiveness improve through batched marker
+  and path rendering, wrapped-map geometry and live-update work (#5110).
+- Smooth trackpad pinch-to-zoom reaches the map (#5103).
+- DIGL is no longer misclassified as RTTY, restoring the normal carrier marker
+  and removing meaningless mark/space cues (#5167).
+- Duplicate pan wiring callbacks are removed (#5038).
+
+### Controllers, MIDI and TCI
+
+- macOS Ulanzi input no longer seizes unrelated trackpads (#5147).
+- AetherControl gains a direct Settings link for FlexControl configuration
+  (#5157).
+- MIDI profile Save reports its real outcome (#5127); dotted profile names and
+  paths round-trip safely (#5083); the app's own Pitch Bend export re-imports
+  (#5054); and SmartSDR `.map` files translate direct band/mode selection
+  (#5053).
+- TCI starts only after readiness, echoes start/stop correctly (#5082), and no
+  longer double-broadcasts `vfo:` on channel 0 (#5088).
+
+### App workflow and automation
+
+- Workspace Canvas pan layouts reflow correctly after surface changes (#5152).
+- Slider hover events no longer leave stale pixels at fractional UI scale
+  (#4923).
+- MainWindow disconnects the global focus-change signal before member teardown
+  (#4927).
+- PHONE low/high TX cuts accept exact typed values while preserving radio
+  readback (#5064).
+- The automation bridge gains `doubleClick` and `doubleClickAt` (#5069).
+- Accessibility announcement tests skip only where the platform has no
+  accessibility backend (#4949).
+
+### Diagnostics, documentation and CI
+
+- Startup logs and support bundles record CPU SIMD, RAM and GPU capability
+  inventory (#4988).
+- MCP token guidance keeps `AETHER_MCP_TOKEN` out of persistent configuration
+  (#5158).
+- HL2 documentation and tools move into their maintained repository homes
+  (#5035).
+- The Linux gate runs `midi_settings_test` (#5025); digital-voice ASan opt-in no
+  longer breaks TSan (#4947); and release signing archives the tag build rather
+  than `main` (#5029).
+
+### Contributors
+
+Big thanks to **@jensenpat** (10 commits), **@skerker** (9), **@rfoust** (8),
+**@fklassen** (3), **@nigelfenton** (3), **@Ozy311** (3), **@M7HNF-Ian**
+(2), **@ten9876** (maintainer, 2), **@w5jwp** (2), **@aethersdr-agent**
+(the AetherClaude orchestrator, 2), **@chibondking** (1), **@K5PTB** (1),
+**@NF0T** (1), and **@tropo1234** (1).
+
+We are excited to welcome our first-time contributors this cycle:
+**@fklassen** and **@tropo1234**.
+
+73, Pat KI6BCJ & Codex (AI dev partner)
+
 ## [v26.8.3] — 2026-08-16
 
 ### The workspace canvas · a command scheduler for Icom · HL2 gains a noise blanker and a real BFO · VK3AMP amplifiers · the TX voice chain moves to 48 kHz float

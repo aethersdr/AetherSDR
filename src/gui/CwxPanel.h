@@ -16,6 +16,7 @@ class QVBoxLayout;
 class QShortcut;
 class QResizeEvent;
 class QPaintEvent;
+class QFont;
 
 namespace AetherSDR {
 
@@ -61,6 +62,15 @@ class CwxPanel : public QWidget {
     Q_OBJECT
 public:
     explicit CwxPanel(CwxModel* model, QWidget* parent = nullptr);
+
+    // The Setup page's F1-F12 macro row floor (#4945/#5121 review) — ~2
+    // text lines derived from font metrics rather than a bare pixel count,
+    // so it moves with the theme's font. Public and static so a test can
+    // call the SAME function buildSetupView() uses instead of keeping its
+    // own copy of the derivation, which is exactly how the two drifted
+    // apart the first time (#5125 review, credit NF0T): production moved
+    // to a font-metrics formula and the test kept its old hardcoded number.
+    static int macroRowMinimumHeight(const QFont& baseFont);
 
     void setModel(CwxModel* model);
     void setDisplayName(const QString& name);

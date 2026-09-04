@@ -27,6 +27,7 @@ class QCheckBox;
 class QGraphicsOpacityEffect;
 class QDoubleSpinBox;
 class QGridLayout;
+class QVBoxLayout;
 class QPainter;
 class QHideEvent;
 class QResizeEvent;
@@ -693,6 +694,10 @@ private:
     // (NRS/RNN/NRF) — one place so setSlice/syncFromSlice/setHasExtendedDsp
     // can't drift on the mode gate. Caller must hold a valid m_slice. (#2177)
     void updateExtendedDspVisibility();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void configureFmToneControls();
+    void releaseTransmitFrequencyCheck();
     // The ONE owner of the radio-side DSP buttons' visibility: ANDs each
     // button's cached mode eligibility with m_hasRadioSideDsp. Both mode
     // recompute sites and setHasRadioSideDsp() route through here, so no
@@ -707,14 +712,21 @@ private:
     QStackedWidget*  m_digOffsetStack{nullptr};    // switches between label and edit
     // FM-family OPT controls. DSTR uses the duplex controls but not CTCSS.
     QWidget*       m_fmContainer{nullptr};
+    QVBoxLayout*   m_fmLayout{nullptr};
     QWidget*       m_fmToneContainer{nullptr};
+    QWidget*       m_fmToneRxContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};
+    QComboBox*     m_fmToneRxValueCmb{nullptr};
+    QComboBox*     m_fmDtcsCodeCmb{nullptr};
+    QComboBox*     m_fmDtcsPolarityCmb{nullptr};
+    QWidget*       m_fmDtcsContainer{nullptr};
     QDoubleSpinBox* m_fmOffsetSpin{nullptr};
     QPushButton*   m_fmOffsetDown{nullptr};
     QPushButton*   m_fmSimplexBtn{nullptr};
     QPushButton*   m_fmOffsetUp{nullptr};
     QPushButton*   m_fmRevBtn{nullptr};
+    bool           m_xfcHeldByThisControl{false};
     ScrollableLabel* m_markLabel{nullptr};
     ScrollableLabel* m_shiftLabel{nullptr};
     // Mode tab

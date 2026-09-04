@@ -15,6 +15,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "LpMeterApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -37,6 +38,7 @@
 #include "DaxIqApplet.h"
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
+#include "GreenHeronApplet.h"
 #include "MeterApplet.h"
 #include "ProfileSwitcherApplet.h"
 #include "HealthApplet.h"
@@ -151,10 +153,25 @@ MeterSettings::Snapshot loadVuMeterSettings()
     return settings;
 }
 
+// Breathing room under the last docked tile, so the stack never comes to rest
+// with a control flush against the viewport's bottom edge.
+//
+// Whether the stack overflows at all is arithmetic over whichever tiles the
+// operator has open — not a property of any one tile — so this belongs to the
+// scroll area rather than to the tile that happens to be last. It buys nothing
+// when the content is shorter than the viewport: the trailing addStretch(1)
+// below already owns that slack, and this margin simply sits under it.
+//
+// It pads the BOTTOM OF THE SCROLL RANGE, which is the only place a fix can
+// live. A tile clipped at scroll position 0 is not clipped, it is scrolled;
+// nothing added here can change what a viewport shows before it has been
+// scrolled, and a margin large enough to try would just be a blank band.
+constexpr int kStackBottomMargin = 8;
+
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "CLOCK"
+    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -469,7 +486,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     };
     auto* container = new FlexContainer;
     m_stack = new QVBoxLayout(container);
-    m_stack->setContentsMargins(0, 0, 0, 0);
+    m_stack->setContentsMargins(0, 0, 0, kStackBottomMargin);
     m_stack->setSpacing(0);
     // Stretch factor 1 (not the default 0) so all surplus vertical space is
     // routed to this trailing spacer.  With a factor-0 spacer, Qt distributes
@@ -805,6 +822,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // LP-100A wattmeter — an instrument rather than an amplifier, so it is
+    // independent of every amplifier applet above and lives in the Metering
+    // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
+    // so the stored Peripherals configuration is the only thing that can ever
+    // reveal it. See docs/architecture/lp-100a-wattmeter-design.md.
+    m_lpMeterApplet = new LpMeterApplet;
+    {
+        auto entry = makeEntry("LP100", "LP-100A Meter", m_lpMeterApplet, false,
+                               m_drawer, m_drawerLayout);
+        markHardwareConditional("LP100");
+        m_appletOrder.append(entry);
+    }
+
     m_txApplet = new TxApplet;
     m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
 
@@ -989,6 +1019,36 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_ssBtn = entry.btn;
         markHardwareConditional("SS");
         m_appletOrder.append(entry);
+    }
+
+    // Green Heron Everyware antenna switch.  NOT markHardwareConditional()
+    // like AG/SS: the Everyware server has no discovery path, so there is
+    // nothing to detect and nothing to condition the button on — the operator
+    // types the server's address into the tile itself, which they cannot do
+    // if the tile is hidden until the device is found.  Same shape as KSDR:
+    // always in the bar, closed until opened.
+    m_greenHeronApplet = new GreenHeronApplet;
+    {
+        AppletEntry gheEntry = makeEntry("GHE", "Green Heron", m_greenHeronApplet,
+                                         false, m_drawer, m_drawerLayout);
+        if (auto* c = qobject_cast<ContainerWidget*>(gheEntry.widget)) {
+            // Deliberately NO setDefaultFloatingSize(). The compass is inside
+            // the rotor section, so it enters and leaves the layout with the
+            // rotator itself, and the floating window follows: measured on a
+            // real RT-21, the window went 346 -> 538 px the moment the section
+            // appeared, saved geometry notwithstanding. A fixed default would
+            // only bind in the other case — a first float with no rotator
+            // reporting — where it would open a tall window mostly empty of
+            // the dial it was reserving room for.
+            connect(c, &ContainerWidget::dockModeChanged, m_greenHeronApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        // Canvas counts as floating: like the CAT tile above,
+                        // the operator sized that rect themselves.
+                        m_greenHeronApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
+                    });
+        }
+        m_appletOrder.append(gheEntry);
     }
 
 #ifdef HAVE_MQTT
@@ -1287,9 +1347,11 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
         {QStringLiteral("PWR"),   QStringLiteral("Metering")},
         {QStringLiteral("MTR"),   QStringLiteral("Metering")},
+        {QStringLiteral("LP100"), QStringLiteral("Metering")},
         {QStringLiteral("HLTH"),  QStringLiteral("Antennas & Switching")},
         {QStringLiteral("AG"),    QStringLiteral("Antennas & Switching")},
         {QStringLiteral("SS"),    QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("GHE"),   QStringLiteral("Antennas & Switching")},
         {QStringLiteral("CAT"),   QStringLiteral("Integration")},
         {QStringLiteral("DAX"),   QStringLiteral("Integration")},
         {QStringLiteral("IQ"),    QStringLiteral("Integration")},
@@ -1622,10 +1684,11 @@ void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
         m_rxApplet->setRadioFilterWidths(widthsHz);
 }
 
-void AppletPanel::setMicLevelMeterAvailable(bool available)
+void AppletPanel::setMicLevelMeterState(MicMeterSessionState session,
+                                        bool available)
 {
     if (m_phoneCwApplet)
-        m_phoneCwApplet->setMicLevelMeterAvailable(available);
+        m_phoneCwApplet->setMicLevelMeterState(session, available);
 }
 
 void AppletPanel::setSelectableMicInputs(bool selectable)
@@ -1697,6 +1760,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setLpMeterVisible(bool visible)
+{
+    updateHardwareAvailability("LP100", "Applet_LP100", visible);
     applyBarLayout();
 }
 

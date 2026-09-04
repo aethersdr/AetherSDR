@@ -101,6 +101,14 @@ constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 // guard.
 constexpr int kMinForwardCountsForSwr = 16;
 
+// The radio's rated output, in watts, as the gauges' full-scale reference.
+//
+// The HL2 wiki's own FAQ: "The Hermes-Lite 2.0 is a QRP transceiver and
+// achieves 5W out on all HF amateur radio bands." A published figure rather
+// than a measurement, which is the right kind of number for a scale — it must
+// be the same on every operator's radio, not a property of one unit's PA.
+constexpr int kHl2RatedOutputWatts = 5;
+
 // Snap a requested span (Hz) to the rate that best matches it.
 //
 // Nearest in the LOG domain, not the linear one: the rates are octave-spaced, so
@@ -1372,10 +1380,25 @@ Hl2Backend::~Hl2Backend()
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
+    c.canReboot = false;
+    c.hasRemoteOnControl = false;
+    c.canUpgradeFirmware = false;
+    c.hasSmartLink = false;
+    c.hasLicenseInfo = false;
+    c.hasClientNetworkConfig = false;
+    c.hasFlexControlIntegration = false;
+    c.hasAudioCompression = false;
+    c.hasSharpFilters = false;
+    c.usesVita49Transport = false;
+    c.hasNetworkConfigurationReadback = false;
+    c.hasPrivateIpConnectionPolicy = false;
     c.txPowerBands = {};
+    c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
+    c.fmTonePresentation = FmTonePresentation::Legacy;
+    c.fmDtcsCodes = {};
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
     // running count would tell the UI the limit was already reached and
@@ -1402,6 +1425,30 @@ RadioCapabilities Hl2Backend::capabilities() const
     // rolls off and there is nothing to hear.
     c.tuningMinHz = 100'000.0;
     c.tuningMaxHz = 38'400'000.0;
+    // THE RADIO'S POWER CLASS, which is what every forward-power gauge scales
+    // its arc from. Declared as a band table because that is the seam the
+    // clients already read: RadioModel::refreshTxPowerLimit turns it into
+    // TransmitModel::maxPowerLevel, and TxApplet additionally treats a
+    // non-empty table as permission to draw a face other than the 100 W one
+    // (m_forwardPowerScaleFollowsBandRating).
+    //
+    // WITHOUT IT, TransmitModel kept its compiled-in 100 W default and every
+    // gauge scaled for a 100 W radio: a full-power HL2 transmission sat in the
+    // bottom few percent of the arc, which is indistinguishable from a meter
+    // that does not work — and is what it has been reported as.
+    //
+    // ONE BAND, spanning the whole tuning range, because that is the truth
+    // about this radio rather than a simplification: "The Hermes-Lite 2.0 is a
+    // QRP transceiver and achieves 5W out on ALL HF amateur radio bands" (HL2
+    // wiki, FAQ). Unlike the IC-9700, whose three decks each have their own
+    // ceiling, there is no per-band variation to describe.
+    //
+    // The secondary instrumentation output at RF1 is +17 dBm and is
+    // deliberately NOT what this describes: it is selected in hardware with no
+    // register to read back, so scaling for it would be wrong for every
+    // operator using the normal output.
+    c.txPowerBands = {TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
+                                  static_cast<double>(kHl2RatedOutputWatts)}};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -1414,7 +1461,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
+    // HL2 publishes an instantaneous directional estimate; preserve the
+    // established client-side PEP response above the backend seam.
+    c.forwardPowerRequiresSmoothing = true;
+    c.hasRadioDialLock = false;
     c.hasTuner = false;
+    c.hasTunerMemories = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
     // Both moot while hasRadioSideDsp is false — the host runs every filter
@@ -1422,6 +1474,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
     c.hasManualNotch = false;
+    c.hasTransmitFrequencyCheck = false;
+    c.hasDdcPanEdgeRolloff = false;
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum
@@ -1442,9 +1496,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
+    c.hasDownwardExpander = false;
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
+    // The host modulator implements a continuous transmit passband.
+    c.hasTxFilterControls = true;
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;
@@ -1468,6 +1525,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    c.alwaysUseClientSideSpots = false;
     // Manual notches, and the one piece of DSP on this radio that is NOT absent
     // just because hasRadioSideDsp is false. The notch runs in WDSP on this
     // host, which is the whole point: the HL2 sends raw IQ, so a notch either
@@ -1488,10 +1546,20 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.notchMinWidthHz = Hl2RxDsp::kMinNotchWidthHz;
     c.notchMaxWidthHz = 6000.0;
     c.hasGpsLocation = false;           // no GNSS receiver on the board
+    c.hasGpsSatelliteTelemetry = false;
+    c.hasGpsFrequencyReference = false;
+    c.hasGpsTimeConfiguration = false;
+    c.hasGpsHardware = false;
+    c.gpsHardwareRequiresPresence = false;
     // The HL2 declares PATEMP but no "+13.8A": PA temperature is a real reading
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    c.hasPaTemperatureTelemetry = true;
+    c.hasPaCurrentTelemetry = false;
+    c.speechProcessorLevelMaximum = 2;
+    c.speechProcessorLabel = QStringLiteral("PROC");
+    c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory
@@ -1522,7 +1590,8 @@ RadioCapabilities Hl2Backend::capabilities() const
                             // RadioStateMemory's ext gate (one domain, one
                             // document — RFC #4603 PR 6).
                             | RadioCapabilities::ClientSettingsDomain::Memories;
-    // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
+    // (extensionNamespaces is declared above, with the freqcal/nb verbs it
+    // names — an earlier revision of this comment claimed none existed.)
     return c;
 }
 
@@ -4516,6 +4585,7 @@ void Hl2Backend::pushInitialState()
     // belongs here.
     if (const Receiver* txRx = rx(m_txDdc))
         setTxFrequency(txRx->sliceFreqHz);
+
     // NOT the drive level. connectRadio() already asserts a safe 0 before the
     // link comes up, and by the time this runs RadioModel has pushed the
     // operator's actual RF power — emit connected() above is synchronous, so

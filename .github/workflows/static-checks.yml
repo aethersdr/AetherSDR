@@ -32,11 +32,15 @@ on:
       - "tools/audit_colours.py"
       - "tools/check_a11y.py"
       - "tools/check_engine_boundary.py"
+      - "tools/gen_touchpoint_manifest.py"
       - "tools/check_network_timeouts.py"
       - "tools/check_shader_dialects.py"
       - "tools/check_test_registration.py"
       - "tools/check_theme_seed.py"
       - "tools/gen_theme_seed.py"
+      - "docs/architecture/aetherd-touchpoint-tags.json"
+      - "docs/architecture/aetherd-touchpoint-status.json"
+      - "docs/architecture/aetherd-touchpoints.md"
       - ".github/workflows/static-checks.yml"
 
 # Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
@@ -76,14 +80,22 @@ jobs:
       #   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on
       #             the UI: no gui/ header includes, no QtWidgets.
       #   EB3     — no file ABOVE the radio seam (src/gui/ + src/core/ +
-      #             src/models/, excluding the backend tree) may include a
-      #             VENDOR header; the wire is reached only through
-      #             IRadioBackend (RFC step 2.4).
+      #             src/models/ + root app-shell files, excluding the backend
+      #             tree) may include a family-specific VENDOR header; the wire
+      #             is reached only through IRadioBackend (RFC step 2.4).
       # Known legacy offenders are tracked in tools/check_engine_boundary.py and
       # warn without blocking; NEW violations fail (--strict). Baselines only
       # shrink. Full-tree scan, stdlib-only.
       - name: Engine/UI dependency direction
         run: python tools/check_engine_boundary.py --strict
+
+      # The aetherd burndown table is generated from live gui→engine includes
+      # plus its tag/status sidecars. Keep the committed catalogue synchronized
+      # and require every live touchpoint to carry a valid semantic tag so the
+      # EB3 vendor vocabulary cannot acquire an unclassified blind spot.
+      - name: aetherd touchpoint manifest
+        if: ${{ !cancelled() }}
+        run: python tools/gen_touchpoint_manifest.py --check
 
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split

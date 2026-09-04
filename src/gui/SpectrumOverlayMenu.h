@@ -22,6 +22,7 @@ class QScrollArea;
 namespace AetherSDR {
 
 class MemoryBrowsePanel;
+class BandPlanManager;
 class KiwiSdrManager;
 class SliceModel;
 class SpectrumOverlayWheelGuard;
@@ -37,7 +38,7 @@ public:
 
     // Raise this widget and all floating panels above sibling widgets.
     void raiseAll();
-    void setMemories(const QMap<int, MemoryEntry>& memories);
+    void setMemories(const QMap<int, MemoryEntry>& memories, bool writable = true);
 
     // Set the antenna list (from RadioModel::antListChanged).
     void setAntennaList(const QStringList& ants);
@@ -84,8 +85,19 @@ public:
     void setPanId(const QString& id);
     QString panId() const { return m_panId; }
 
+    // Set the panadapter's stable client-side slot index (SpectrumWidget::panIndex()
+    // — 0, 1, 2, 3 by layout position, distinct from the radio-assigned m_panId
+    // string above). Used to key the persisted collapsed/expanded state of this
+    // menu so each panadapter slot remembers its own preference across restarts
+    // (client-side UI preference, not radio-authoritative — see AGENTS.md
+    // "Settings Authority Policy"). Restores the saved state on first call.
+    void setPanSlotIndex(int idx);
+
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
+    // Use the active regional plan when mapping the slice frequency to a
+    // native band button. The manager is owned by MainWindow.
+    void setBandPlanManager(BandPlanManager* manager);
     void setWnbState(bool on, int level);
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
@@ -145,7 +157,8 @@ public:
     // gateway presenting non-Flex hardware offers its true band set (e.g.
     // an IC-9700's 2m/440/23cm).  Empty (all real Flex radios): the grid
     // is unchanged.  Triggers a band-panel rebuild on change.
-    void setDeclaredBands(const QStringList& bands);
+    void setDeclaredBands(const QStringList& bands,
+                          const QVector<DeclaredBandRange>& ranges = {});
     void syncDaxIqChannel(int channel);
     // Reflect the real WFM demodulator state onto the DAX-panel WFM toggle
     // WITHOUT re-emitting wfmToggleRequested. Self-gated on this menu's slice,
@@ -254,6 +267,7 @@ signals:
 
 private:
     QString m_panId;
+    int m_panSlotIndex{-1};
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
@@ -310,12 +324,20 @@ private:
     // deleteLater() on every rebuild, so entries can outlive their buttons by a
     // full event-loop turn if a range update lands in that window.
     QVector<QPair<QPointer<QPushButton>, double>> m_bandBtnFreqs;
+    struct BandButtonEntry {
+        QPointer<QPushButton> button;
+        QString bandName;
+    };
+    QVector<BandButtonEntry> m_bandButtons;
+    QString m_lastHighlightedBand;
+    BandPlanManager* m_bandPlanManager{nullptr};
     double m_tuningMinMhz{0.0};
     double m_tuningMaxMhz{0.0};
     // True until a connected backend says otherwise, so a disconnected session
     // keeps the button rather than having it appear on connect.
     bool m_notchesSupported{true};
     void applyTuningRangeToBandButtons();
+    void updateActiveBandHighlight();
 
     // Cached state for band-panel rebuilds — setXvtrBands() and
     // setRadioCapabilities() each store their argument and trigger
@@ -324,6 +346,7 @@ private:
     QVector<XvtrBand>  m_lastXvtrBands;
     ModelCapabilities  m_radioCapabilities;
     QStringList        m_declaredBands;   // radio-declared band set (see setDeclaredBands)
+    QVector<DeclaredBandRange> m_declaredBandRanges;
 
     // ANT sub-panel
     QWidget*     m_antPanel{nullptr};

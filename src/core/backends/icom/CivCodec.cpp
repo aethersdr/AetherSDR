@@ -1,8 +1,10 @@
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace AetherSDR::icom {
@@ -63,7 +65,9 @@ bool commandHasSubcommand(std::uint8_t command)
     case cmd::kPower:
     case cmd::kReadId:
     case cmd::kSetting:
+    case cmd::kTone:
     case cmd::kControl:
+    case cmd::kGps:
     case cmd::kScope:
     // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
     // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
@@ -225,6 +229,15 @@ std::optional<std::uint64_t> decodeFreq(std::span<const std::uint8_t> bcd)
         scale *= 10;
     }
     return hz;
+}
+
+std::optional<std::uint64_t> decodeFreqExact(
+    std::span<const std::uint8_t> bcd, std::size_t expectedBytes)
+{
+    if (bcd.size() != expectedBytes) {
+        return std::nullopt;
+    }
+    return decodeFreq(bcd);
 }
 
 std::optional<std::int64_t> decodeFreqSigned(std::span<const std::uint8_t> bcd)
@@ -734,6 +747,238 @@ std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
     return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
+std::vector<std::uint8_t> cmdReadRepeaterOffsetDirection(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kDuplex);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffsetDirection(
+    std::uint8_t to, RepeaterOffsetDirection direction)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(direction)};
+    return buildFrame(to, cmd::kDuplex, body);
+}
+
+std::optional<RepeaterOffsetDirection> decodeRepeaterOffsetDirection(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload.front()) {
+    case 0x10: return RepeaterOffsetDirection::Simplex;
+    case 0x11: return RepeaterOffsetDirection::Down;
+    case 0x12: return RepeaterOffsetDirection::Up;
+    default: return std::nullopt;
+    }
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kReadRepeaterOffset);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to, int offsetHz)
+{
+    // Three little-endian BCD bytes in 100 Hz units.  600 kHz is 6000 units,
+    // and therefore 00 60 00 on the wire — the same pair ordering as a
+    // frequency, with two fewer bytes and coarser resolution.
+    const int units = std::clamp(static_cast<int>(std::lround(offsetHz / 100.0)),
+                                 0, 999999);
+    const std::array<std::uint8_t, 3> body{
+        encodeBcdByte(units % 100),
+        encodeBcdByte((units / 100) % 100),
+        encodeBcdByte((units / 10000) % 100),
+    };
+    return buildFrame(to, cmd::kSetRepeaterOffset, body);
+}
+
+std::optional<int> decodeRepeaterOffsetHz(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload) {
+        if ((byte & 0x0F) > 9 || ((byte >> 4) & 0x0F) > 9) {
+            return std::nullopt;
+        }
+    }
+    const int units = decodeBcdByte(payload[0])
+        + decodeBcdByte(payload[1]) * 100
+        + decodeBcdByte(payload[2]) * 10000;
+    return units * 100;
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to)
+{
+    return cmdReadRepeaterToneRegister(to, repeaterTone::kTxCtcss);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
+{
+    return cmdSetCtcssTone(to, repeaterTone::kTxCtcss, toneHz);
+}
+
+std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
+                                          double toneHz)
+{
+    // The guide fixes the first two digits at zero and allows 000.0..299.9 Hz.
+    // Carry tenths of a hertz as six big-endian BCD digits: 88.5 -> 00 08 85.
+    const int tenths = std::clamp(static_cast<int>(std::lround(toneHz * 10.0)),
+                                  0, 2999);
+    const std::array<std::uint8_t, 3> body{
+        0x00,
+        encodeBcdByte((tenths / 100) % 100),
+        encodeBcdByte(tenths % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::vector<std::uint8_t> cmdSetDtcsTone(
+    std::uint8_t to, int code, bool txReverse, bool rxReverse)
+{
+    if (!isCanonicalDtcsCode(code)) {
+        return {};
+    }
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte(code / 100),
+        encodeBcdByte(code % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, repeaterTone::kDtcs, body);
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return cmdReadFunction(to, func::kRepeaterAccess);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to, std::uint8_t mode)
+{
+    return cmdSetFunction(to, func::kRepeaterAccess, mode);
+}
+
+std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3 || payload[0] != 0x00) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload.subspan(1)) {
+        if ((byte & 0x0F) > 9 || ((byte >> 4) & 0x0F) > 9) {
+            return std::nullopt;
+        }
+    }
+    const int tenths = decodeBcdByte(payload[1]) * 100
+        + decodeBcdByte(payload[2]);
+    if (tenths > 2999) {
+        return std::nullopt;
+    }
+    return static_cast<double>(tenths) / 10.0;
+}
+
+std::optional<std::uint8_t> decodeRepeaterAccess(
+    std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 1) {
+        return std::nullopt;
+    }
+    switch (payload[0]) {
+    case 0x00:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x09:
+        return payload[0];
+    default:
+        return std::nullopt;
+    }
+}
+
+std::string_view repeaterAccessModeName(std::uint8_t value) noexcept
+{
+    switch (value) {
+    case 0x00: return "off";
+    case 0x01: return "ctcss_tx";
+    case 0x02: return "ctcss_rx";
+    case 0x03: return "dtcs_txrx";
+    case 0x06: return "dtcs_tx";
+    case 0x07: return "ctcss_tx_dtcs_rx";
+    case 0x08: return "dtcs_tx_ctcss_rx";
+    case 0x09: return "ctcss_txrx";
+    default:   return {};
+    }
+}
+
+std::optional<std::uint8_t> repeaterAccessModeValue(std::string_view name) noexcept
+{
+    constexpr std::array<std::uint8_t, 8> kValues{
+        0x00, 0x01, 0x02, 0x03, 0x06, 0x07, 0x08, 0x09};
+    for (const std::uint8_t value : kValues) {
+        if (repeaterAccessModeName(value) == name) {
+            return value;
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterToneRegister(
+    std::uint8_t to, std::uint8_t which, int value,
+    bool txReverse, bool rxReverse)
+{
+    const int bounded = std::clamp(value, 0, 9999);
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00)
+                                  | (rxReverse ? 0x01 : 0x00)),
+        encodeBcdByte((bounded / 100) % 100),
+        encodeBcdByte(bounded % 100),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::optional<std::vector<std::uint8_t>> repeaterToneConfirmationForWrite(
+    std::uint8_t to, const CivFrame& write)
+{
+    if (write.cmd != cmd::kTone || !write.hasSub || write.data.empty()
+        || (write.sub != repeaterTone::kTxCtcss
+            && write.sub != repeaterTone::kRxCtcss
+            && write.sub != repeaterTone::kDtcs)) {
+        return std::nullopt;
+    }
+    return cmdReadRepeaterToneRegister(to, write.sub);
+}
+
+std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
+    std::span<const std::uint8_t> payload)
+{
+    const auto validBcd = [](std::uint8_t byte) {
+        return (byte & 0x0F) <= 9 && ((byte >> 4) & 0x0F) <= 9;
+    };
+    if (payload.size() != 3 || (payload[0] & 0xEE) != 0
+        || !validBcd(payload[1]) || !validBcd(payload[2])) {
+        return std::nullopt;
+    }
+    return RepeaterToneRegister{
+        decodeBcdByte(payload[1]) * 100 + decodeBcdByte(payload[2]),
+        (payload[0] & 0x10) != 0,
+        (payload[0] & 0x01) != 0,
+    };
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kReadTxFreq);
+}
+
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
 {
     return buildFrameSub(to, cmd::kTuneOffset, sub);
@@ -756,6 +1001,17 @@ std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit)
 {
     const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(transmit ? 0x01 : 0x00)};
     return buildFrameSub(to, cmd::kControl, control::kPtt, body);
+}
+
+std::vector<std::uint8_t> cmdSetTransmitFrequencyCheck(std::uint8_t to, bool on)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(on ? 0x01 : 0x00)};
+    return buildFrameSub(to, cmd::kControl, control::kXfc, body);
+}
+
+std::vector<std::uint8_t> cmdReadTransmitFrequencyCheck(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kXfc);
 }
 
 std::vector<std::uint8_t> cmdReadId(std::uint8_t to)
@@ -860,9 +1116,260 @@ std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item)
 
 std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item, std::uint8_t value)
 {
+    return cmdWriteSettingData(to, item, std::span(&value, 1));
+}
+
+std::vector<std::uint8_t> cmdWriteSettingData(std::uint8_t to, int item,
+                                               std::span<const std::uint8_t> value)
+{
     const auto bcd = settingItemBcd(item);
-    const std::array<std::uint8_t, 3> body{bcd[0], bcd[1], value};
+    std::vector<std::uint8_t> body;
+    body.reserve(2 + value.size());
+    body.push_back(bcd[0]);
+    body.push_back(bcd[1]);
+    body.insert(body.end(), value.begin(), value.end());
+    return buildFrameSub(to, cmd::kSetting, settingSub::kMenu, body);
+}
+
+namespace {
+
+bool validBcd(std::uint8_t value)
+{
+    return ((value >> 4) & 0x0f) <= 9 && (value & 0x0f) <= 9;
+}
+
+bool allFf(std::span<const std::uint8_t> data)
+{
+    return !data.empty()
+        && std::all_of(data.begin(), data.end(), [](std::uint8_t value) {
+               return value == 0xff;
+           });
+}
+
+bool allValidBcd(std::span<const std::uint8_t> data)
+{
+    return !data.empty()
+        && std::all_of(data.begin(), data.end(), validBcd);
+}
+
+bool validDate(int year, int month, int day)
+{
+    static constexpr std::array<int, 12> kDaysPerMonth{
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1) {
+        return false;
+    }
+    int days = kDaysPerMonth[static_cast<std::size_t>(month - 1)];
+    const bool leapYear = year % 4 == 0;
+    if (month == 2 && leapYear) {
+        ++days;
+    }
+    return day <= days;
+}
+
+std::optional<int> decodeBcdSpan(std::span<const std::uint8_t> data)
+{
+    if (data.empty() || allFf(data)) {
+        return std::nullopt;
+    }
+    int value = 0;
+    for (std::uint8_t byte : data) {
+        if (!validBcd(byte)) {
+            return std::nullopt;
+        }
+        value = value * 100 + decodeBcdByte(byte);
+    }
+    return value;
+}
+
+}  // namespace
+
+std::optional<GpsPosition> decodeGpsPosition(std::span<const std::uint8_t> data)
+{
+    constexpr std::size_t kPositionBytes = 27;
+    if (data.size() != kPositionBytes || allFf(data)) {
+        return std::nullopt;
+    }
+
+    // Latitude: DD MM mm m0 0H, H=0 south / 1 north.
+    if (!validBcd(data[0]) || !validBcd(data[1]) || !validBcd(data[2])
+        || (data[3] & 0x0f) != 0 || ((data[3] >> 4) & 0x0f) > 9
+        || (data[4] & 0xf0) != 0 || (data[4] & 0x0f) > 1) {
+        return std::nullopt;
+    }
+    const int latDegrees = decodeBcdByte(data[0]);
+    const double latMinutes = decodeBcdByte(data[1])
+        + decodeBcdByte(data[2]) / 100.0
+        + ((data[3] >> 4) & 0x0f) / 1000.0;
+    if (latDegrees > 90 || latMinutes >= 60.0
+        || (latDegrees == 90 && latMinutes > 0.0)) {
+        return std::nullopt;
+    }
+
+    // Longitude: 0D DD MM mm m0 0H, H=0 west / 1 east.
+    //
+    // Unlike latitude, the three degree digits straddle two bytes. A real
+    // IC-705 reporting 118 deg 03.534 min sends `01 18 03 53 40 00`.
+    // Treating the second byte's low nibble as the first minutes digit turns
+    // that into the impossible 11 deg 95.390 min and rejects an otherwise
+    // valid fix.
+    for (std::size_t i = 5; i <= 9; ++i) {
+        if (!validBcd(data[i])) {
+            return std::nullopt;
+        }
+    }
+    if ((data[5] & 0xf0) != 0 || (data[9] & 0x0f) != 0
+        || (data[10] & 0xf0) != 0 || (data[10] & 0x0f) > 1) {
+        return std::nullopt;
+    }
+    const int lonDegrees = (data[5] & 0x0f) * 100 + decodeBcdByte(data[6]);
+    const double lonMinutes = decodeBcdByte(data[7])
+        + decodeBcdByte(data[8]) / 100.0
+        + ((data[9] >> 4) & 0x0f) / 1000.0;
+    if (lonDegrees > 180 || lonMinutes >= 60.0
+        || (lonDegrees == 180 && lonMinutes > 0.0)) {
+        return std::nullopt;
+    }
+
+    GpsPosition out;
+    out.latitude = latDegrees + latMinutes / 60.0;
+    if ((data[4] & 0x0f) == 0) {
+        out.latitude = -out.latitude;
+    }
+    out.longitude = lonDegrees + lonMinutes / 60.0;
+    if ((data[10] & 0x0f) == 0) {
+        out.longitude = -out.longitude;
+    }
+
+    const std::span altitude = data.subspan(11, 4);
+    if (!allFf(altitude)) {
+        if (!validBcd(data[11]) || !validBcd(data[12]) || !validBcd(data[13])
+            || (data[14] & 0xf0) != 0 || (data[14] & 0x0f) > 1) {
+            return std::nullopt;
+        }
+        double metres = (decodeBcdByte(data[11]) * 10000
+                         + decodeBcdByte(data[12]) * 100
+                         + decodeBcdByte(data[13])) / 10.0;
+        if ((data[14] & 0x0f) != 0) {
+            metres = -metres;
+        }
+        out.altitudeMetres = metres;
+    }
+
+    if (const auto course = decodeBcdSpan(data.subspan(15, 2)); course && *course <= 360) {
+        out.courseDegrees = *course;
+    }
+    if (const auto speed = decodeBcdSpan(data.subspan(17, 3)); speed) {
+        out.speedKmh = *speed / 10.0;
+    }
+    const std::span dateTime = data.subspan(20, 7);
+    if (!allFf(dateTime) && allValidBcd(dateTime)) {
+        const int year = decodeBcdByte(data[20]) * 100 + decodeBcdByte(data[21]);
+        const int month = decodeBcdByte(data[22]);
+        const int day = decodeBcdByte(data[23]);
+        const int hour = decodeBcdByte(data[24]);
+        const int minute = decodeBcdByte(data[25]);
+        const int second = decodeBcdByte(data[26]);
+        if (validDate(year, month, day)
+            && hour <= 23 && minute <= 59 && second <= 60) {
+            char iso[21]{};
+            std::snprintf(iso, sizeof(iso), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                          year, month, day, hour, minute, second);
+            out.utcIso8601 = iso;
+        }
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> cmdReadGpsPosition(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kGps, gps::kPosition);
+}
+
+std::vector<std::uint8_t> cmdReadGpsSource(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kGps, gps::kSource);
+}
+
+std::vector<std::uint8_t> cmdNtpAccess(std::uint8_t to, bool initiate)
+{
+    const std::array<std::uint8_t, 1> body{
+        static_cast<std::uint8_t>(initiate ? 0x01 : 0x00)};
+    return buildFrameSub(to, cmd::kSetting, settingSub::kNtpAccess, body);
+}
+
+std::vector<std::uint8_t> cmdReadNtpAccessResult(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kSetting, settingSub::kNtpResult);
+}
+
+std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int value)
+{
+    const auto itemBcd = settingItemBcd(item);
+    const auto levelBcd = encodeLevel(std::clamp(value, 0, 255));
+    const std::array<std::uint8_t, 4> body{
+        itemBcd[0], itemBcd[1], levelBcd[0], levelBcd[1]};
     return buildFrameSub(to, cmd::kSetting, 0x05, body);
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+decodeNetworkAddress(std::span<const std::uint8_t> data)
+{
+    if (data.size() != 8) {
+        return std::nullopt;
+    }
+    std::array<std::uint8_t, 4> octets{};
+    for (std::size_t i = 0; i < data.size(); i += 2) {
+        const std::uint8_t high = data[i];
+        const std::uint8_t low = data[i + 1];
+        if ((high & 0x0f) > 9 || ((high >> 4) & 0x0f) > 9
+            || (low & 0x0f) > 9 || ((low >> 4) & 0x0f) > 9) {
+            return std::nullopt;
+        }
+        const int value = decodeBcdByte(high) * 100 + decodeBcdByte(low);
+        if (value > 255) {
+            return std::nullopt;
+        }
+        octets[i / 2] = static_cast<std::uint8_t>(value);
+    }
+    return octets;
+}
+
+std::optional<std::array<std::uint8_t, 4>>
+subnetMaskFromBcdPrefix(std::uint8_t raw)
+{
+    if ((raw & 0x0f) > 9 || ((raw >> 4) & 0x0f) > 9) {
+        return std::nullopt;
+    }
+    const int prefix = decodeBcdByte(raw);
+    if (prefix < 1 || prefix > 30) {
+        return std::nullopt;
+    }
+    const std::uint32_t mask = 0xffffffffU << (32 - prefix);
+    return std::array<std::uint8_t, 4>{
+        static_cast<std::uint8_t>((mask >> 24) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 16) & 0xffU),
+        static_cast<std::uint8_t>((mask >> 8) & 0xffU),
+        static_cast<std::uint8_t>(mask & 0xffU)};
+}
+
+std::optional<std::string> decodeNetworkName(std::span<const std::uint8_t> data)
+{
+    if (data.size() > 15) {
+        return std::nullopt;
+    }
+    std::string name;
+    name.reserve(data.size());
+    for (std::uint8_t byte : data) {
+        if (byte < 0x20 || byte > 0x7e) {
+            return std::nullopt;
+        }
+        name.push_back(static_cast<char>(byte));
+    }
+    while (!name.empty() && name.back() == ' ') {
+        name.pop_back();
+    }
+    return name;
 }
 
 std::vector<std::uint8_t> cmdTuneOffsetHz(std::uint8_t to, int hz)

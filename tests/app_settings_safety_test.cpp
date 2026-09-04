@@ -30,6 +30,10 @@
 
 #include <cstdio>
 
+#ifndef Q_OS_WIN
+#include <sys/stat.h>
+#endif
+
 using namespace AetherSDR;
 
 namespace {
@@ -210,6 +214,47 @@ void testFirstRunInitialization()
                && lastRadio == QStringLiteral("True")
                && dbHas(QStringLiteral("GUIClientID")),
            "first-run initialization writes the intentional default profile");
+}
+
+// Pins the runtime hardening SettingsDatabase::open() re-establishes for
+// -DUSE_SYSTEM_SQLITE=ON, where the distro library doesn't carry the
+// vendored target's SQLITE_DEFAULT_FILE_PERMISSIONS=0600. Platform-gated
+// because Windows ACLs have no POSIX owner-only bit for QFileDevice
+// permissions to model.
+void testDatabaseFilePermissions()
+{
+#ifdef Q_OS_WIN
+    std::printf("[SKIP] database file is owner-only on disk (no POSIX mode bits on Windows)\n");
+#else
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    const auto isOwnerOnly = [](const QString& path) {
+        struct stat fileStatus {};
+        const QByteArray nativePath = QFile::encodeName(path);
+        return ::stat(nativePath.constData(), &fileStatus) == 0
+               && (fileStatus.st_mode & 0777) == 0600;
+    };
+
+    expect(QFile::exists(dbPath()), "first-run load creates the database");
+    expect(isOwnerOnly(dbPath()),
+           "the database file is owner-read/write only, group/other have no access");
+
+    // journal_mode=WAL is on by default (testFirstRunInitialization's own
+    // profile confirms this store reaches createSchema()), so -wal exists
+    // by the time load() returns; -shm's presence is backend-dependent and
+    // only checked if SettingsDatabase actually created one.
+    const QString walPath = dbPath() + QStringLiteral("-wal");
+    if (QFile::exists(walPath)) {
+        expect(isOwnerOnly(walPath),
+               "the -wal sidecar is owner-read/write only");
+    }
+    const QString shmPath = dbPath() + QStringLiteral("-shm");
+    if (QFile::exists(shmPath)) {
+        expect(isOwnerOnly(shmPath),
+               "the -shm sidecar is owner-read/write only");
+    }
+#endif
 }
 
 void testImportPromotesValidTemp()
@@ -576,6 +621,41 @@ void testThreeDSliceDepthDefaultAndOptIn()
            "3D Slice Shadow can be disabled again after opting in");
 }
 
+void testPanMenuStateDefaultAndPerSlotPersistence()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    expect(DisplaySettings::panMenuExpanded(0),
+           "the panadapter menu defaults expanded when no state exists");
+    expect(DisplaySettings::panMenuExpanded(1),
+           "each additional pan slot defaults expanded independently");
+
+    DisplaySettings::setPanMenuExpanded(0, false);
+    DisplaySettings::setPanMenuExpanded(1, true);
+    expect(!DisplaySettings::panMenuExpanded(0),
+           "slot zero remembers a collapsed menu");
+    expect(DisplaySettings::panMenuExpanded(1),
+           "slot one remains expanded when slot zero is collapsed");
+
+    QString persisted;
+    expect(settings.readAppRowFromDisk(QStringLiteral("Display"), persisted),
+           "pan menu state is committed to the settings database");
+    const QJsonObject slotStates = QJsonDocument::fromJson(persisted.toUtf8())
+                                      .object()
+                                      .value(QStringLiteral("panMenuExpanded"))
+                                      .toObject();
+    expect(slotStates.value(QStringLiteral("0")).toString() == QStringLiteral("False")
+               && slotStates.value(QStringLiteral("1")).toString() == QStringLiteral("True"),
+           "all pan slots share one nested Display configuration object");
+
+    settings.reset();
+    settings.load();
+    expect(!DisplaySettings::panMenuExpanded(0)
+               && DisplaySettings::panMenuExpanded(1),
+           "independent pan menu states survive a settings reload");
+}
+
 // A nickname is stored under a key derived from the radio's MAC, folded to the
 // XML-era sanitized convention by Hl2Discovery::nicknameSettingsKey(). The
 // SQLite store no longer rejects exotic characters, but the sanitized key IS
@@ -792,6 +872,8 @@ int main(int argc, char** argv)
         testXmlImportParity();
     } else if (scenario == QStringLiteral("first-run")) {
         testFirstRunInitialization();
+    } else if (scenario == QStringLiteral("database-file-permissions")) {
+        testDatabaseFilePermissions();
     } else if (scenario == QStringLiteral("xml-import-tmp-promotion")) {
         testImportPromotesValidTemp();
     } else if (scenario == QStringLiteral("xml-import-bak-fallback")) {
@@ -816,6 +898,8 @@ int main(int argc, char** argv)
         testDirtyRowSaves();
     } else if (scenario == QStringLiteral("display-slice-depth-default")) {
         testThreeDSliceDepthDefaultAndOptIn();
+    } else if (scenario == QStringLiteral("display-pan-menu-state")) {
+        testPanMenuStateDefaultAndPerSlotPersistence();
     } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
         testNicknameKeySurvivesDisk();
     } else if (scenario == QStringLiteral("browser-api")) {

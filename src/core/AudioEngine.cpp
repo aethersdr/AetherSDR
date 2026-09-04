@@ -7701,13 +7701,14 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 {
     if (m_audioSource) return true;  // already running
 
-    // WASAPI silent-open recovery (#2929). If the previous open was driven
-    // by the silence watchdog, m_txForceMonoOnNextOpen is true; consume it
-    // here. A fresh (non-watchdog) start re-enables the one-shot retry budget.
-    const bool isWatchdogRetry = m_txForceMonoOnNextOpen;
-    m_txForceMonoOnNextOpen = false;
+    // WASAPI silent-open recovery (#2929). If the previous open was driven by
+    // the silence watchdog, m_txSilentOpenRetryArmed is true; consume it here
+    // and stay on the ladder. A fresh (non-watchdog) start rewinds to stage 0,
+    // which re-enables the whole recovery budget.
+    const bool isWatchdogRetry = m_txSilentOpenRetryArmed;
+    m_txSilentOpenRetryArmed = false;
     if (!isWatchdogRetry) {
-        m_txSilenceRetryDone = false;
+        m_txOpenStage = 0;
     }
     m_txReceivedAnyBytes = false;
 
@@ -7718,8 +7719,12 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_txMicChannelState.reset();
     m_lastTxMicChannelLog.invalidate();
 
-    // TX mic capture uses Int16 — we convert to float32 after capture.
-    // (makeFormat() returns Float for the RX sink, but mic hardware is Int16.)
+    // Seed values only — every platform branch below overrides format, rate and
+    // channel count from its own ladder, so nothing here survives negotiation.
+    // Int16 is no longer the assumed mic format: Windows and Linux lead with
+    // Float32 so the 48 kHz float voice strip is fed without a round trip, and
+    // macOS keeps Int16 (AudioFormatNegotiator::formatOrder). The negotiated
+    // value is recorded in m_txInputFormat.
     QAudioFormat fmt;
     fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
     fmt.setChannelCount(2);
@@ -7780,9 +7785,47 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // migrating its mono-clamp onto the wrapper is a separate, soakable step.
     constexpr int preferredTxRate = 48000;
     fmt.setSampleRate(48000);
+    // Ask WASAPI for its own currency. The shared-mode mix is float32 by
+    // construction, so Int16 here makes the engine quantize on the way to us
+    // and TxVoiceProcessor widen it straight back. Probe-at-open applies as
+    // ever: if Float is refused, the fallback ladder below walks Int16.
+    //
+    // Rate, format and channel count all come from ONE ordered cursor
+    // (AudioFormatNegotiator::TxOpenCursor). It used to be two sequences: this
+    // (format, channels) recovery ladder at 48 kHz, plus a separate
+    // rate x channels x format loop further down entered only when
+    // QAudioSource::start() returned null. They could interleave into a
+    // permanently silent mic — at the recovery ladder's last stage a null open
+    // dropped into the other loop, which restarted at 48 kHz Float stereo, a
+    // tuple already observed silent, and accepted it with no watchdog budget
+    // left (round-3 review of PR #5017).
+    //
+    // Stage 0 is the normal open and records the maximumChannelCount() clamp
+    // the rest of the ladder derives from. BOTH failure shapes now advance the
+    // same cursor: a null open advances it inline (below), a non-null/no-data
+    // open advances it from the watchdog. The cursor only moves forward, so a
+    // tuple already observed silent can never be reached again.
     const int maxCh = dev.maximumChannelCount();
-    const int initialCh = (isWatchdogRetry || (maxCh > 0 && maxCh < 2)) ? 1 : 2;
-    fmt.setChannelCount(initialCh);
+    if (!isWatchdogRetry) {
+        m_txSilentOpenInitialChannels = (maxCh > 0 && maxCh < 2) ? 1 : 2;
+    }
+    AudioFormatNegotiator::TxOpenCursor txOpenCursor(
+        m_txSilentOpenInitialChannels, m_txOpenStage);
+    const auto seedAttempt = txOpenCursor.attempt();
+    fmt.setSampleRate(seedAttempt.rate);
+    fmt.setSampleFormat(
+        seedAttempt.fmt == AudioFormatNegotiator::SampleFmt::Int16
+            ? QAudioFormat::Int16
+            : QAudioFormat::Float);
+    fmt.setChannelCount(seedAttempt.channels);
+    if (txOpenCursor.stage() > 0) {
+        noteTxFallback(
+            QStringLiteral("TX open recovery stage %1 -> %2Hz %3ch %4 (#2929)")
+                .arg(txOpenCursor.stage())
+                .arg(seedAttempt.rate)
+                .arg(seedAttempt.channels)
+                .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat())));
+    }
     noteTxAttempt(fmt);
     formatFound = true;
 #else
@@ -7804,10 +7847,13 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     const int preferredTxRate = txLadder.isEmpty() ? 48000 : txLadder.first().sampleRate();
     for (int channels : {2, 1}) {
         for (const QAudioFormat& cand : txLadder) {
-            if (cand.sampleFormat() != QAudioFormat::Int16)
-                continue;   // mic is captured as Int16
+            // Honour the rung's sample format instead of forcing Int16. The
+            // ladder already ranks Float32 first for the TX voice strip on the
+            // platforms this is measured on; dropping every non-Int16 rung here
+            // is what previously made FormatPreference::Float32First unreachable.
             fmt.setChannelCount(channels);
             fmt.setSampleRate(cand.sampleRate());
+            fmt.setSampleFormat(cand.sampleFormat());
             noteTxAttempt(fmt);
             if (dev.isFormatSupported(fmt)) {
                 formatFound = true;
@@ -7837,24 +7883,33 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     }
 
     qCInfo(lcAudio) << "AudioEngine: selected TX input format:"
-        << fmt.sampleRate() << "Hz" << fmt.channelCount() << "ch";
+        << fmt.sampleRate() << "Hz" << fmt.channelCount() << "ch"
+        << AudioSummaryLogger::sampleFormatName(fmt.sampleFormat());
 
     // Record the negotiated device format. Voice normalizes directly to the
     // 48 kHz DSP island; the legacy 24 kHz resampler below is retained only
     // for the separate RADE branch.
-    m_txInputRate = fmt.sampleRate();
-    m_txInputChannels = fmt.channelCount();
-    m_txInputFormat = fmt.sampleFormat();
-    m_txInputMono = (m_txInputChannels == 1);
-    m_radeTxNeedsResample = (m_txInputRate != DEFAULT_SAMPLE_RATE);
+    // ONE place that turns a negotiated format into engine state. It used to
+    // be two — here, and again inside the Windows null-open fallback loop —
+    // and a rung reached by the fallback path has to end up in byte-identical
+    // state to the same rung reached by the initial open, or a watchdog
+    // restart lands somewhere subtly different from where it left off.
+    const auto applyNegotiatedFormat = [this](const QAudioFormat& f) -> bool {
+        m_txInputRate = f.sampleRate();
+        m_txInputChannels = f.channelCount();
+        m_txInputFormat = f.sampleFormat();
+        m_txInputMono = (m_txInputChannels == 1);
+        m_radeTxNeedsResample = (m_txInputRate != DEFAULT_SAMPLE_RATE);
+        // The RADE path's polyphase resampler for high-quality conversion.
+        if (m_radeTxNeedsResample) {
+            m_txResampler = std::make_unique<Resampler>(m_txInputRate, DEFAULT_SAMPLE_RATE, 16384);
+        } else {
+            m_txResampler.reset();
+        }
+        return m_txVoiceProcessor->prepare(m_txInputRate, 16384);
+    };
 
-    // Create the RADE path's polyphase resampler for high-quality conversion.
-    if (m_radeTxNeedsResample) {
-        m_txResampler = std::make_unique<Resampler>(m_txInputRate, DEFAULT_SAMPLE_RATE, 16384);
-    } else {
-        m_txResampler.reset();
-    }
-    if (!m_txVoiceProcessor->prepare(m_txInputRate, 16384)) {
+    if (!applyNegotiatedFormat(fmt)) {
         qCWarning(lcAudio) << "AudioEngine: failed to prepare 48 kHz TX voice processor"
                            << "for input rate" << m_txInputRate;
         return false;
@@ -7955,55 +8010,52 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
                            << "device:" << dev.description();
 #ifdef Q_OS_WIN
         // Windows: WASAPI may reject our negotiated format at open time.
-        // Try additional rates before giving up.
+        // Advance the SAME cursor the watchdog advances, rather than starting a
+        // second, independent rate ladder — that duplication is what let a null
+        // open at the recovery ladder's last stage restart at 48 kHz Float
+        // stereo, a tuple already observed silent, with no watchdog budget left
+        // (round-3 review of PR #5017). A null open and a no-data open are the
+        // same statement about a rung, so they take the same transition.
         delete m_audioSource; m_audioSource = nullptr;
-        bool txOpened = false;
-        constexpr int fallbackRates[] = {48000, 44100, 24000, 16000};
-        const int initialRate = fmt.sampleRate();
-        const int initialChannels = fmt.channelCount();
-        for (int rate : fallbackRates) {
-            for (int ch : {2, 1}) {
-                // Skip only the exact (rate, ch) combo that just failed —
-                // a mono-only 48 kHz USB mic needs a 48 kHz mono retry (#2929).
-                if (rate == initialRate && ch == initialChannels) continue;
-                fmt.setSampleRate(rate);
-                fmt.setChannelCount(ch);
-                noteTxAttempt(fmt);
-                m_audioSource = new QAudioSource(dev, fmt, this);
-                m_micDevice = m_audioSource->start();
-                if (m_micDevice) {
-                    qCInfo(lcAudio) << "AudioEngine: TX source opened at fallback"
-                                    << rate << "Hz" << ch << "ch";
-                    noteTxFallback(QStringLiteral("initial TX source open failed -> %1Hz %2ch")
-                                       .arg(rate)
-                                       .arg(ch));
-                    m_txInputRate = rate;
-                    m_txInputChannels = ch;
-                    m_txInputFormat = fmt.sampleFormat();
-                    m_txInputMono = (m_txInputChannels == 1);
-                    m_radeTxNeedsResample = (rate != DEFAULT_SAMPLE_RATE);
-                    if (m_radeTxNeedsResample) {
-                        m_txResampler = std::make_unique<Resampler>(rate, 24000, 16384);
-                    } else {
-                        m_txResampler.reset();
-                    }
-                    if (!m_txVoiceProcessor->prepare(rate, 16384)) {
-                        qCWarning(lcAudio)
-                            << "AudioEngine: failed to prepare 48 kHz TX voice processor"
-                            << "for fallback input rate" << rate;
-                        delete m_audioSource;
-                        m_audioSource = nullptr;
-                        m_micDevice = nullptr;
-                        continue;
-                    }
-                    txOpened = true;
-                    break;
-                }
+        while (txOpenCursor.advance()) {
+            const auto next = txOpenCursor.attempt();
+            fmt.setSampleRate(next.rate);
+            fmt.setChannelCount(next.channels);
+            fmt.setSampleFormat(
+                next.fmt == AudioFormatNegotiator::SampleFmt::Int16
+                    ? QAudioFormat::Int16
+                    : QAudioFormat::Float);
+            noteTxAttempt(fmt);
+            m_audioSource = new QAudioSource(dev, fmt, this);
+            m_micDevice = m_audioSource->start();
+            if (!m_micDevice) {
                 delete m_audioSource; m_audioSource = nullptr;
+                continue;
             }
-            if (txOpened) break;
+            if (!applyNegotiatedFormat(fmt)) {
+                // A rung that cannot prepare is a rung that does not work.
+                // Advance past it exactly as a null open does, so it can never
+                // be the one the watchdog is later told it is sitting on.
+                qCWarning(lcAudio)
+                    << "AudioEngine: failed to prepare 48 kHz TX voice processor"
+                    << "for fallback input rate" << next.rate;
+                delete m_audioSource;
+                m_audioSource = nullptr;
+                m_micDevice = nullptr;
+                continue;
+            }
+            qCInfo(lcAudio) << "AudioEngine: TX source opened at fallback stage"
+                            << txOpenCursor.stage()
+                            << next.rate << "Hz" << next.channels << "ch"
+                            << AudioSummaryLogger::sampleFormatName(fmt.sampleFormat());
+            noteTxFallback(QStringLiteral("initial TX source open failed -> stage %1: %2Hz %3ch %4")
+                               .arg(txOpenCursor.stage())
+                               .arg(next.rate)
+                               .arg(next.channels)
+                               .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat())));
+            break;
         }
-        if (!txOpened) {
+        if (!m_micDevice) {
             qCWarning(lcAudio) << "AudioEngine: all TX source formats failed";
             logAudioOpenFailure(QStringLiteral("TX source"),
                                 QStringLiteral("QAudioSource"),
@@ -8032,25 +8084,66 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // native mono format but Qt's QAudioSource::start() returns a non-null
     // QIODevice for an unsupported stereo open, then delivers zero bytes.
     // The null-open fallback ladder above never sees this case (start did
-    // not return null). One-shot retry as mono if no bytes arrive in 1.5 s.
-    if (!m_txSilenceRetryDone) {
+    // not return null). Retry along the recovery ladder if no bytes arrive
+    // in 1.5 s, and arm only while the ladder has somewhere left to go.
+    //
+    // Recovery walks channel count AND sample format. Forcing Float-first
+    // capture made the format a way to open successfully and receive nothing,
+    // exactly as an unsupported stereo open already was: an Int16-capable
+    // endpoint that accepts a Float open must still reach Int16 rather than
+    // being left permanently silent (review of PR #5017).
+    //
+    // The cursor answers "is there anywhere left to go", and it is the SAME
+    // question the null-open walk above answers with advance(). Whichever path
+    // opened the device, the cursor is on the rung that is actually open, so
+    // the watchdog can no longer be told it is sitting on a rung the fallback
+    // walk moved off.
+    if (txOpenCursor.hasNext()) {
         const quint64 watchdogGen = m_txLifecycleGeneration;
         const QHostAddress watchdogAddr = m_txAddress;
         const quint16 watchdogPort = m_txPort;
-        QTimer::singleShot(1500, this, [this, watchdogGen, watchdogAddr, watchdogPort]() {
+        const int nextStage = txOpenCursor.stage() + 1;
+        const AudioFormatNegotiator::TxOpenAttempt nextAttempt =
+            txOpenCursor.ladder().at(nextStage);
+        QTimer::singleShot(1500, this,
+                           [this, watchdogGen, watchdogAddr, watchdogPort,
+                            nextStage, nextAttempt]() {
             if (!m_audioSource) return;
             if (watchdogGen != m_txLifecycleGeneration) return;
             if (m_audioSource->state() != QAudio::ActiveState) return;
             if (m_txReceivedAnyBytes) return;
             qCWarning(lcAudio) << "AudioEngine: TX source opened but produced no bytes in 1.5 s — "
-                                  "retrying as mono (likely WASAPI mono-only USB mic, #2929)"
-                               << "rate:" << m_txInputRate << "ch:" << m_txInputChannels;
-            m_txSilenceRetryDone = true;
-            m_txForceMonoOnNextOpen = true;
+                                  "retrying (WASAPI silent open, #2929)"
+                               << "rate:" << m_txInputRate
+                               << "ch:" << m_txInputChannels
+                               << "-> stage" << nextStage
+                               << nextAttempt.rate << "Hz"
+                               << AudioFormatNegotiator::toString(nextAttempt.fmt)
+                               << nextAttempt.channels << "ch";
+            m_txOpenStage = nextStage;
+            m_txSilentOpenRetryArmed = true;
             QMetaObject::invokeMethod(this, [this, watchdogAddr, watchdogPort]() {
                 stopTxStream();
                 startTxStream(watchdogAddr, watchdogPort);
             }, Qt::QueuedConnection);
+        });
+    } else {
+        // Terminal rung. The mic is open and may simply never speak, and until
+        // now that end state was completely silent in the logs too: no
+        // watchdog, no warning, a QAudioSource sitting in ActiveState
+        // delivering nothing. Say so once, so the failure is diagnosable
+        // instead of merely inaudible.
+        const quint64 exhaustedGen = m_txLifecycleGeneration;
+        QTimer::singleShot(1500, this, [this, exhaustedGen]() {
+            if (!m_audioSource) return;
+            if (exhaustedGen != m_txLifecycleGeneration) return;
+            if (m_txReceivedAnyBytes) return;
+            qCWarning(lcAudio)
+                << "AudioEngine: TX source produced no bytes in 1.5 s and the open "
+                   "ladder is exhausted — capture is silent, no retry left (#2929)"
+                << "rate:" << m_txInputRate
+                << "ch:" << m_txInputChannels
+                << "format:" << AudioSummaryLogger::sampleFormatName(m_txInputFormat);
         });
     }
 #endif
@@ -8251,10 +8344,24 @@ void AudioEngine::onTxAudioReady()
         // Discard one bounded block per callback so neither can accumulate.
         if (m_micDevice) {
             const TxCaptureBuffer::BoundedRead drained =
-                TxCaptureBuffer::readLatestBoundedInt16(m_micDevice.data(),
-                                                        m_txInputChannels);
-            if (!drained.block.isEmpty() || drained.discardedBytes > 0) {
+                TxCaptureBuffer::readLatestBounded(m_micDevice.data(),
+                                                   m_txInputChannels,
+                                                   txInputBytesPerSample());
+            if (drained.deliveredBytes()) {
                 m_txCaptureHealth.recordMicRead(txCaptureNowMs());
+                // These bytes are thrown away, and they are still proof the
+                // endpoint works -- which is the only question the WASAPI
+                // silent-open watchdog asks (#2929). Without this, a mic that
+                // is delivering normally reads as silent for as long as TCI
+                // owns TX audio: the watchdog walks the recovery ladder off a
+                // rung that was never broken, reopening a valid device up to
+                // 15 times and leaving local capture at the terminal
+                // 16 kHz/Int16/mono rung once TCI stops. On that terminal rung
+                // it also logs "capture is silent, no retry left", which would
+                // be just as wrong. Before this PR the same oversight could
+                // only trigger the single mono retry; the full ladder makes it
+                // materially worse (round-4 review of PR #5017).
+                m_txReceivedAnyBytes = true;
             }
             if (drained.discardedBytes > 0) {
                 noteTxCaptureBacklogDiscard(drained.discardedBytes);
@@ -8286,8 +8393,8 @@ void AudioEngine::onTxAudioReady()
     // as oversized and the whole thing would be dropped instead of the stale
     // part of it.
     {
-        const qint64 stale = TxCaptureBuffer::trimToLatestBoundedInt16(
-            data, m_txInputChannels);
+        const qint64 stale = TxCaptureBuffer::trimToLatestBounded(
+            data, m_txInputChannels, txInputBytesPerSample());
         if (stale > 0) {
             noteTxCaptureBacklogDiscard(stale);
         }
@@ -8299,13 +8406,21 @@ void AudioEngine::onTxAudioReady()
     // freshest block rather than walking a backlog of hours-old audio onto the
     // air 1.36 s at a time.
     const TxCaptureBuffer::BoundedRead micRead =
-        TxCaptureBuffer::readLatestBoundedInt16(m_micDevice.data(), m_txInputChannels);
+        TxCaptureBuffer::readLatestBounded(m_micDevice.data(), m_txInputChannels,
+                                          txInputBytesPerSample());
     if (micRead.discardedBytes > 0) {
         noteTxCaptureBacklogDiscard(micRead.discardedBytes);
     }
+    // One evidence rule, asked at every place this device is read: the
+    // suppressed drain above uses the same call. A read that only DISCARDED
+    // still proves the endpoint delivers, and returning early on an empty
+    // block before recording that would leave the same blind spot the
+    // suppressed branch had.
+    if (micRead.deliveredBytes()) {
+        m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
+    }
     QByteArray data = micRead.block;
     if (data.isEmpty()) return;
-    m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
 #endif
 
     m_txCaptureHealth.recordMicRead(txCaptureNowMs());
@@ -8314,13 +8429,22 @@ void AudioEngine::onTxAudioReady()
     // carried as stereo int16, so choose/average the real mic channel before
     // any resampling, RADE/DAX branch, test tone, DSP, gain, limiter, or meter.
     TxMicChannelNormalizer::Diagnostics channelDiagnostics;
-    data = TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo(
-        data,
-        m_txInputChannels,
-        m_txInputRate,
-        m_txMicChannelMode,
-        &m_txMicChannelState,
-        &channelDiagnostics);
+    const bool capturedFloat32 = txInputIsFloat32();
+    data = capturedFloat32
+        ? TxMicChannelNormalizer::canonicalizeFloat32ToMonoStereo(
+              data,
+              m_txInputChannels,
+              m_txInputRate,
+              m_txMicChannelMode,
+              &m_txMicChannelState,
+              &channelDiagnostics)
+        : TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo(
+              data,
+              m_txInputChannels,
+              m_txInputRate,
+              m_txMicChannelMode,
+              &m_txMicChannelState,
+              &channelDiagnostics);
     if (data.isEmpty()) {
         if (channelDiagnostics.inputRejected) {
             qCWarning(lcAudio) << "AudioEngine: rejected oversized TX mic block"
@@ -8337,6 +8461,24 @@ void AudioEngine::onTxAudioReady()
     // processStereoToStereo() here: that helper would average raw mic L/R and
     // reintroduce the one-sided-channel 6.02 dB loss.
     const bool radeMode = m_radeMode.load(std::memory_order_acquire);
+
+    // RADE is a separate fixed 24 kHz island with its own resampler, gain and
+    // metering, all Int16-typed. Rather than thread float through a path this
+    // change does not claim to improve, collapse to the canonical Int16 form
+    // once, here, and leave every RADE line below byte-identical. The SSB voice
+    // strip — the path the 48 kHz float domain exists for — keeps its float.
+    if (capturedFloat32 && radeMode) {
+        const auto* f = reinterpret_cast<const float*>(data.constData());
+        const int samples = data.size() / static_cast<int>(sizeof(float));
+        QByteArray i16(samples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+        auto* d = reinterpret_cast<int16_t*>(i16.data());
+        for (int i = 0; i < samples; ++i) {
+            d[i] = static_cast<int16_t>(
+                std::clamp(f[i] * 32768.0f, -32768.0f, 32767.0f));
+        }
+        data = i16;
+    }
+
     if (radeMode && m_radeTxNeedsResample && m_txResampler) {
         // Convert canonical duplicated int16 stereo → float32 mono for the
         // mono-to-stereo resampler.
@@ -8405,7 +8547,11 @@ void AudioEngine::onTxAudioReady()
         m_txChainPacked.load(std::memory_order_acquire));
     m_txVoiceProcessor->setMicGain(m_pcMicGain.load());
     m_txVoiceProcessor->setRnnoiseEnabled(m_rn2TxEnabled.load());
-    const bool voiceProcessed = m_txVoiceProcessor->processCapturedInt16(data);
+    // Both routes return the same transport Int16 in `data`, so every tap,
+    // monitor, meter and the Opus encoder below are untouched by this branch.
+    const bool voiceProcessed = capturedFloat32
+        ? m_txVoiceProcessor->processCapturedFloat32(data)
+        : m_txVoiceProcessor->processCapturedInt16(data);
     if (m_txVoiceProcessor->egressRecoveryPending()
         && !m_txVoiceEgressRecoveryQueued) {
         m_txVoiceEgressRecoveryQueued = true;

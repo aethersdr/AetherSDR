@@ -1,4 +1,6 @@
 #include "SpectrumWidget.h"
+
+#include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
@@ -10,6 +12,7 @@
 #include "PanadapterMessageOverlay.h"
 #include "SoftwareOpenGlRequest.h"
 #include "SpectrumOverlayMenu.h"
+#include "RfGainPresentation.h"
 #include "VfoWidget.h"
 #include "DisplaySettings.h"
 #include "MacCursorCompat.h"
@@ -187,7 +190,7 @@ VfoWidget::FlagDir singleVfoFlagDirectionForOverlay(
     int markerX,
     int spectrumWidth)
 {
-    if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+    if (drawsRttyToneCues(overlay.mode)) {
         return VfoWidget::ForceRight;
     }
 
@@ -325,7 +328,7 @@ void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& ove
                                 QMap<int, VfoWidget::FlagDir>& dirMap)
 {
     for (const SpectrumWidget::SliceOverlay& overlay : overlays) {
-        if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+        if (drawsRttyToneCues(overlay.mode)) {
             dirMap[overlay.sliceId] = VfoWidget::ForceRight;
         }
     }
@@ -867,18 +870,6 @@ const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
     const auto& v = c.stops[static_cast<int>(scheme)];
     count = static_cast<int>(v.size());
     return v.data();
-}
-
-const char* wfSchemeName(WfColorScheme scheme)
-{
-    switch (scheme) {
-    case WfColorScheme::Grayscale: return "Grayscale";
-    case WfColorScheme::BlueGreen: return "Blue-Green";
-    case WfColorScheme::Fire:      return "Fire";
-    case WfColorScheme::Plasma:    return "Plasma";
-    case WfColorScheme::Purple:    return "Purple";
-    default:                       return "Default";
-    }
 }
 
 // Interpolate a normalized value t (0–1) through the given gradient stops.
@@ -2386,7 +2377,7 @@ bool SpectrumWidget::vfoFlagOnLeftForSlice(
         if (VfoWidget* widget = m_vfoWidgets.value(overlay.sliceId, nullptr)) {
             const double markerMhz = overlay.sliceId == sliceId ? freqMhz : overlay.freqMhz;
             int x = mhzToX(markerMhz);
-            if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+            if (drawsRttyToneCues(overlay.mode)) {
                 const double hiMhz = markerMhz + overlay.filterHighHz / 1.0e6;
                 x = mhzToX(hiMhz) + 4;
             }
@@ -2445,6 +2436,16 @@ QString SpectrumWidget::settingsKey(const QString& base) const
     if (m_panIndex == 0)
         return base;  // backward compat — no suffix for pan 0
     return QString("%1_%2").arg(base).arg(m_panIndex);
+}
+
+void SpectrumWidget::setPanIndex(int idx)
+{
+    m_panIndex = idx;
+    // Let the overlay menu (the +RX/+TNF/Band/ANT/Display/Memory/DAX button
+    // rail) key its persisted collapsed/expanded state to this slot.
+    if (m_overlayMenu) {
+        m_overlayMenu->setPanSlotIndex(idx);
+    }
 }
 
 void SpectrumWidget::loadSettings()
@@ -2738,6 +2739,9 @@ void SpectrumWidget::applyActiveVfoZOrder()
 
 void SpectrumWidget::setBandPlanManager(BandPlanManager* mgr) {
     m_bandPlanMgr = mgr;
+    if (m_overlayMenu) {
+        m_overlayMenu->setBandPlanManager(mgr);
+    }
     if (mgr) {
         connect(mgr, &BandPlanManager::planChanged, this, QOverload<>::of(&QWidget::update));
         connect(mgr, &BandPlanManager::kiwiDxSpotsChanged, this, [this]() {
@@ -13927,6 +13931,44 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
 
+            // Cosmetic fade over the outer margin of the spectrum trace and
+            // waterfall, toward the canvas background -- see
+            // setPanEdgeTaperEnabled()'s own comment for why this is drawn
+            // here (a pixel-only overlay, on top of everything below it)
+            // rather than as a bin crop. Drawn first in this layer so the
+            // freq scale, WNB/RF-gain indicators, etc. below still paint on
+            // top of it unaffected. Only the CONTENT width (excluding the
+            // dBm strip, which isn't spectrum data) is faded.
+            if (m_edgeTaperEnabled) {
+                // 0.05 (5% margin per side) -- the same proportion the
+                // now-reverted bin-crop attempt used, which the operator
+                // already confirmed looked good on the bench. A later,
+                // untested guess that HALVING it (2.5%) would look gentler
+                // was wrong -- the same opacity swing over half the pixel
+                // distance is a STEEPER ramp, which read as a harder visible
+                // edge, not a softer one. Back to the confirmed value.
+                static constexpr double kEdgeTaperFraction = 0.05;
+                const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
+                QColor bgOpaque = bg; bgOpaque.setAlpha(255);
+                QColor bgClear = bg; bgClear.setAlpha(0);
+                auto paintTaperedEdges = [&](const QRect& area, int contentW) {
+                    const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
+                    if (marginPx <= 0) return;
+                    QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
+                    left.setColorAt(0.0, bgOpaque);
+                    left.setColorAt(1.0, bgClear);
+                    p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
+                    const int rightContentEdge = area.left() + contentW;
+                    QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
+                    right.setColorAt(0.0, bgClear);
+                    right.setColorAt(1.0, bgOpaque);
+                    p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
+                              right);
+                };
+                paintTaperedEdges(specRect, specContentW);
+                paintTaperedEdges(wfRect, wfContentW);
+            }
+
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
@@ -13946,7 +13988,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     && m_propKIndex >= 0
                     && m_propAIndex >= 0
                     && m_propSfi > 0;
-                if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
+                const bool showRfGain = shouldShowRfGainIndicator(
+                    m_rfGainValue, m_rfGainNeutralValue);
+                if (m_wnbActive || showRfGain || !m_preampIndicator.isEmpty()
+                    || showProp || m_wideActive) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
                     const QColor indicatorColor(0xc8, 0xd8, 0xe8, 180);
@@ -13968,12 +14013,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     if (m_wideActive) {
                         drawSegment(QStringLiteral("WIDE"), indicatorColor);
                     }
-                    if (m_rfGainValue != 0) {
-                        drawSegment(
-                            QStringLiteral("%1%2 dB")
-                                .arg(m_rfGainValue > 0 ? "+" : "")
-                                .arg(m_rfGainValue),
-                            indicatorColor);
+                    if (!m_preampIndicator.isEmpty()) {
+                        drawSegment(m_preampIndicator, indicatorColor);
+                    }
+                    if (showRfGain) {
+                        drawSegment(formatRfGainIndicator(
+                                        m_rfGainValue, m_rfGainUnitSuffix),
+                                    indicatorColor);
                     }
                     if (m_wnbActive) {
                         drawSegment(QStringLiteral("WNB"),
@@ -14375,7 +14421,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             };
             // Match drawSliceMarkers / the CPU 3D fallback: the passband band
             // and marker cue(s) are placed independently (an off-screen passband
-            // must not drop an on-screen cue, and vice versa); RTTY/DIGL draws a
+            // must not drop an on-screen cue, and vice versa); RTTY draws a
             // mark+space pair rather than a carrier cue; markerWidth == 0 draws
             // the passband with no cue at all.
             const auto appendShadow = [&](const SliceOverlay& so) {
@@ -14401,13 +14447,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 struct ShadowCue { float center; QColor color; };
                 std::array<ShadowCue, 2> cues;
                 int cueCount = 0;
-                const bool rtty = so.mode == QStringLiteral("RTTY")
-                    || so.mode == QStringLiteral("DIGL");
-                if (rtty) {
-                    double markMhz = so.freqMhz;
-                    if (so.mode == QStringLiteral("DIGL")) {
-                        markMhz -= so.rttyMark / 1.0e6;
-                    }
+                // RTTY keeps its exclusive mark/space pair — the RF frequency
+                // IS the mark, so a carrier cue would be coincident with it and
+                // would spend a third descriptor against kDssMeshShadowSlices
+                // for no visible gain. DIGL now falls through to the carrier
+                // cue instead of being treated as RTTY (#5097).
+                if (drawsRttyToneCues(so.mode)) {
+                    // RTTY: RF_frequency IS the mark (radio applies IF shift).
+                    const double markMhz = so.freqMhz;
                     const double spaceMhz = markMhz - so.rttyShift / 1.0e6;
                     cues[cueCount++] = {unitForShadowMhz(markMhz),
                         AetherSDR::ThemeManager::instance().color(
@@ -15063,6 +15110,40 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     drawFreqScale(p, scaleRect);
     p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
     drawWaterfall(p, wfContentRect);
+
+    // Cosmetic fade over the outer margin of the spectrum trace and
+    // waterfall, toward the canvas background -- software-path mirror of
+    // renderGpuFrame()'s own overlay taper (see setPanEdgeTaperEnabled()'s
+    // own comment for why this exists and isn't a bin crop). Drawn here,
+    // after both content regions are fully painted but before the VFO
+    // flags/TNF/spot markers/SWR overlay below, so those stay fully
+    // visible on top of it, same ordering as the GPU path.
+    if (m_edgeTaperEnabled) {
+        // 0.05 (5% margin per side) -- see renderGpuFrame()'s own comment
+        // for why this exact fraction, and why guessing a gentler-looking
+        // smaller value was wrong.
+        static constexpr double kEdgeTaperFraction = 0.05;
+        const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
+        QColor bgOpaque = bg; bgOpaque.setAlpha(255);
+        QColor bgClear = bg; bgClear.setAlpha(0);
+        auto paintTaperedEdges = [&](const QRect& area, int contentW) {
+            const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
+            if (marginPx <= 0) return;
+            QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
+            left.setColorAt(0.0, bgOpaque);
+            left.setColorAt(1.0, bgClear);
+            p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
+            const int rightContentEdge = area.left() + contentW;
+            QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
+            right.setColorAt(0.0, bgClear);
+            right.setColorAt(1.0, bgOpaque);
+            p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
+                      right);
+        };
+        paintTaperedEdges(specRect, specContentRect.width());
+        paintTaperedEdges(wfRect, wfContentRect.width());
+    }
+
     repositionVfoFlags(specRect);
     if (is3D && m_threeDSliceDepth) {
         drawDssDepthGeometry(
@@ -15092,7 +15173,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             && m_propKIndex >= 0
             && m_propAIndex >= 0
             && m_propSfi > 0;
-        if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
+        const bool showRfGain = shouldShowRfGainIndicator(
+            m_rfGainValue, m_rfGainNeutralValue);
+        if (m_wnbActive || showRfGain || !m_preampIndicator.isEmpty()
+            || showProp || m_wideActive) {
             QFont indFont = p.font();
             indFont.setPointSize(18);
             indFont.setBold(true);
@@ -15121,12 +15205,15 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
                 drawSegment(QStringLiteral("WIDE"), indicatorColor);
             }
 
+            if (!m_preampIndicator.isEmpty()) {
+                drawSegment(m_preampIndicator, indicatorColor);
+            }
+
             // RF Gain (to the left of WIDE)
-            if (m_rfGainValue != 0) {
-                const QString gainStr = (m_rfGainValue > 0)
-                    ? QString("+%1dB").arg(m_rfGainValue)
-                    : QString("%1dB").arg(m_rfGainValue);
-                drawSegment(gainStr, indicatorColor);
+            if (showRfGain) {
+                drawSegment(formatRfGainIndicator(
+                                m_rfGainValue, m_rfGainUnitSuffix),
+                            indicatorColor);
             }
 
             // WNB (to the left of RF Gain)
@@ -15248,8 +15335,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
     for (const SliceOverlay& so : m_sliceOverlays) {
         if (VfoWidget* flag = m_vfoWidgets.value(so.sliceId, nullptr)) {
             int x = mhzToX(so.freqMhz);
-            if (so.mode == QStringLiteral("RTTY")
-                || so.mode == QStringLiteral("DIGL")) {
+            if (drawsRttyToneCues(so.mode)) {
                 const double hiMhz =
                     so.freqMhz + so.filterHighHz / 1.0e6;
                 x = mhzToX(hiMhz) + 4;
@@ -16922,13 +17008,12 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
             }
         };
 
-        const bool rtty = so.mode == QStringLiteral("RTTY")
-            || so.mode == QStringLiteral("DIGL");
-        if (rtty) {
-            double markMhz = so.freqMhz;
-            if (so.mode == QStringLiteral("DIGL")) {
-                markMhz -= so.rttyMark / 1.0e6;
-            }
+        // RTTY keeps its exclusive mark/space pair: the RF frequency IS the
+        // mark, so a carrier cue would land at the identical x. DIGL now falls
+        // through to the carrier cue instead of being treated as RTTY (#5097).
+        if (drawsRttyToneCues(so.mode)) {
+            // RTTY: RF_frequency IS the mark (radio applies the IF shift).
+            const double markMhz = so.freqMhz;
             const double spaceMhz = markMhz - so.rttyShift / 1.0e6;
             appendLine(
                 markMhz,
@@ -17099,20 +17184,19 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.drawLine(fX2, specRect.top(), fX2, specRect.bottom());
         }
 
-        // ── RTTY/DIGL: mark/space lines replace the VFO center line ────
-        const bool isRttyMode = (so.mode == "RTTY" || so.mode == "DIGL");
-
-        if (isRttyMode) {
-            double markMhz, spaceMhz;
-            if (so.mode == "RTTY") {
-                // In RTTY mode, RF_frequency IS the mark (radio applies IF shift).
-                markMhz  = so.freqMhz;
-                spaceMhz = so.freqMhz - so.rttyShift / 1.0e6;
-            } else {
-                // In DIGL mode, RF_frequency is the carrier (no IF shift).
-                markMhz  = so.freqMhz - so.rttyMark / 1.0e6;
-                spaceMhz = markMhz - so.rttyShift / 1.0e6;
-            }
+        // ── RTTY: mark/space lines replace the VFO center line ───────────
+        // For RTTY the RF frequency IS the mark (the radio applies the IF
+        // shift), so the mark cue already marks the tuned frequency — a
+        // separate carrier line would sit at the identical x. RTTY rendering
+        // is therefore left exactly as it was.
+        //
+        // DIGL used to be routed here too, which cost it the carrier marker
+        // and gave it two meaningless FSK cues; it now falls through to the
+        // standard centre line below. See drawsRttyToneCues() (#5097).
+        if (drawsRttyToneCues(so.mode)) {
+            // In RTTY mode, RF_frequency IS the mark (radio applies IF shift).
+            const double markMhz  = so.freqMhz;
+            const double spaceMhz = so.freqMhz - so.rttyShift / 1.0e6;
             const int markX  = mhzToX(markMhz);
             const int spaceX = mhzToX(spaceMhz);
 

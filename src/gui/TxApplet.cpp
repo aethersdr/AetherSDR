@@ -51,13 +51,39 @@ static QLabel* makeIndicator(const QString& text)
     return lbl;
 }
 
-static void setIndicatorActive(QLabel* lbl, bool active, const QColor& color = QColor(0x00, 0xc0, 0x40))
+enum class IndicatorState {
+    Unavailable,
+    Inactive,
+    Active,
+};
+
+static IndicatorState indicatorState(bool available, bool active)
 {
-    if (active) {
+    if (!available) {
+        return IndicatorState::Unavailable;
+    }
+    return active ? IndicatorState::Active : IndicatorState::Inactive;
+}
+
+static void setIndicatorState(QLabel* lbl, IndicatorState state,
+                              const QColor& color = QColor(0x00, 0xc0, 0x40))
+{
+    lbl->setEnabled(state != IndicatorState::Unavailable);
+    switch (state) {
+    case IndicatorState::Unavailable:
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            lbl,
+            "QLabel { color: {{color.text.disabled}}; font-size: 9px; font-weight: bold; }");
+        break;
+    case IndicatorState::Inactive:
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            lbl,
+            "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
+        break;
+    case IndicatorState::Active:
         lbl->setStyleSheet(
             QString("QLabel { color: %1; font-size: 9px; font-weight: bold; }").arg(color.name()));
-    } else {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
+        break;
     }
 }
 
@@ -241,7 +267,6 @@ void TxApplet::buildUI()
             "QPushButton:hover { background: #204060; }"
             "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
             "border: 1px solid #2a3040; }";
-
         m_tuneBtn = new QPushButton("TUNE");
         markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
         m_tuneBtn->setStyleSheet(btnStyle);
@@ -506,8 +531,15 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     connect(m_model, &TransmitModel::hasTunerChanged, this, [this](bool present) {
         m_radioHasTuner = present;
         updateAtuAvailability();
+        syncAtuIndicators();
     });
     m_radioHasTuner = m_model->hasTuner();
+    connect(m_model, &TransmitModel::hasTunerMemoriesChanged, this, [this](bool present) {
+        m_radioHasTunerMemories = present;
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
+    m_radioHasTunerMemories = m_model->hasTunerMemories();
 
     syncFromModel();
     syncAtuIndicators();
@@ -518,9 +550,15 @@ void TxApplet::updateAtuAvailability()
 {
     if (!m_atuBtn || !m_memBtn)
         return;
-    const bool enabled = m_radioHasTuner && !m_tgxlOperate;
-    m_atuBtn->setEnabled(enabled);
-    m_memBtn->setEnabled(enabled);
+    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate;
+    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate;
+    m_atuBtn->setEnabled(atuEnabled);
+    m_memBtn->setEnabled(memoriesEnabled);
+    // The ATU context menu contains only memory operations. Keep the shared
+    // ATU button visible, but do not expose Flex-only actions on other radios.
+    m_atuBtn->setContextMenuPolicy(m_radioHasTunerMemories
+                                       ? Qt::CustomContextMenu
+                                       : Qt::NoContextMenu);
 
     // The radio-has-no-tuner reason is checked FIRST because it is the more
     // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
@@ -528,11 +566,15 @@ void TxApplet::updateAtuAvailability()
     // looking at the wrong box.
     QString tip;
     if (!m_radioHasTuner)
-        tip = tr("This radio has no antenna tuner");
+        tip = tr("Antenna tuner controls are unavailable for this radio");
     else if (m_tgxlOperate)
         tip = tr("Disabled — TGXL is in OPERATE mode");
     m_atuBtn->setToolTip(tip);
-    m_memBtn->setToolTip(tip);
+    if (!m_radioHasTunerMemories) {
+        m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else {
+        m_memBtn->setToolTip(tip);
+    }
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -598,27 +640,33 @@ void TxApplet::syncAtuIndicators()
     }
 
     // Success — green when tune was successful
-    setIndicatorActive(m_successInd,
-        status == ATUStatus::Successful || status == ATUStatus::OK);
+    setIndicatorState(m_successInd,
+        indicatorState(m_radioHasTuner,
+                       status == ATUStatus::Successful || status == ATUStatus::OK));
 
     // Byp — orange when in bypass
-    setIndicatorActive(m_bypInd,
-        status == ATUStatus::Bypass || status == ATUStatus::ManualBypass,
+    setIndicatorState(m_bypInd,
+        indicatorState(m_radioHasTuner,
+                       status == ATUStatus::Bypass
+                           || status == ATUStatus::ManualBypass),
         QColor(0xd0, 0x90, 0x00));
 
     // Mem — green when using memory
-    setIndicatorActive(m_memInd, m_model->usingMemory());
+    setIndicatorState(m_memInd,
+        indicatorState(m_radioHasTunerMemories, m_model->usingMemory()));
 
     // APD indicators — mutually exclusive states, all off when APD disabled
     // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
     const bool apdOn  = m_model->apdEnabled();
     const bool eqActv = m_model->apdEqualizerActive();
     const bool config = m_model->apdConfigurable();
-    setIndicatorActive(m_activeInd, apdOn && eqActv);
-    setIndicatorActive(m_availInd,  apdOn && !eqActv && config);
-    setIndicatorActive(m_calInd,    apdOn && !eqActv && !config);
+    setIndicatorState(m_activeInd, indicatorState(true, apdOn && eqActv));
+    setIndicatorState(m_availInd,
+        indicatorState(true, apdOn && !eqActv && config));
+    setIndicatorState(m_calInd,
+        indicatorState(true, apdOn && !eqActv && !config));
 
-    // MEM button — sync checked state
+    // ATU / MEM buttons — active styling follows radio readback only.
     {
         m_updatingFromModel = true;
         const QSignalBlocker blocker(m_memBtn);
@@ -636,7 +684,12 @@ void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
         return;
     }
     m_smoothedPower = fwdPower;
-    static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
+    HGauge* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (m_forwardPowerRequiresSmoothing) {
+        powerGauge->setValue(fwdPower);
+    } else {
+        powerGauge->setValueImmediate(fwdPower);
+    }
     // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
     // read as an off-scale value, and holding the last ratio is exactly the
     // stale display #4533 removed.
@@ -678,7 +731,37 @@ void TxApplet::setTransmitting(bool tx)
 
 void TxApplet::setRadioModel(RadioModel* radio)
 {
+    if (m_radioModel == radio) {
+        return;
+    }
+    if (m_capabilitiesConnection) {
+        disconnect(m_capabilitiesConnection);
+        m_capabilitiesConnection = {};
+    }
     m_radioModel = radio;
+    m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
+        || radio->backendCapabilities().forwardPowerRequiresSmoothing;
+    m_forwardPowerScaleFollowsBandRating = radio && radio->isConnected()
+        && !radio->backendCapabilities().txPowerBands.isEmpty();
+    if (radio) {
+        m_capabilitiesConnection = connect(
+            radio, &RadioModel::capabilitiesChanged, this,
+            [this](bool connected, const RadioCapabilities& caps) {
+                m_forwardPowerRequiresSmoothing = !connected
+                    || caps.forwardPowerRequiresSmoothing;
+                const bool followsBandRating = connected
+                    && !caps.txPowerBands.isEmpty();
+                if (followsBandRating != m_forwardPowerScaleFollowsBandRating) {
+                    m_forwardPowerScaleFollowsBandRating = followsBandRating;
+                    if (m_havePowerScale) {
+                        const int maxWatts = m_lastMaxWatts;
+                        const bool hasAmplifier = m_lastHasAmplifier;
+                        m_havePowerScale = false;
+                        setPowerScale(maxWatts, hasAmplifier);
+                    }
+                }
+            });
+    }
 }
 
 void TxApplet::setBandPlanManager(BandPlanManager* bandPlan)
@@ -692,12 +775,16 @@ void TxApplet::showAtuContextMenu(const QPoint& pos)
 
     auto* preTune = menu.addAction(QString::fromUtf8("Pre-tune bands\xE2\x80\xA6"));
     const bool memOn = m_model && m_model->memoriesEnabled();
-    preTune->setEnabled(memOn);
-    if (!memOn)
-        preTune->setToolTip("Enable MEM before running the pre-tune sweep.");
+    preTune->setEnabled(m_radioHasTunerMemories && memOn);
+    if (!m_radioHasTunerMemories) {
+        preTune->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!memOn) {
+        preTune->setToolTip(tr("Enable MEM before running the pre-tune sweep"));
+    }
     connect(preTune, &QAction::triggered, this, &TxApplet::openPreTuneDialog);
 
     auto* clearMem = menu.addAction(QString::fromUtf8("Clear ATU memories\xE2\x80\xA6"));
+    clearMem->setEnabled(m_radioHasTunerMemories);
     connect(clearMem, &QAction::triggered,
             this, &TxApplet::confirmAndClearAtuMemories);
 
@@ -795,11 +882,28 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
             {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
              {400, "400"}, {500, "500"}, {600, "600"}});
         gaugeFullScaleW = 600.0f;
-    } else {
-        // Barefoot: 0–120 W, red > 100 W
+    } else if (!m_forwardPowerScaleFollowsBandRating
+               || maxWatts <= 0 || maxWatts == 100) {
+        // Preserve the established 100 W barefoot face exactly. In particular,
+        // this is the ordinary FlexRadio path. A lower-power face is an
+        // explicit per-band capability, not something inferred from one number.
         gauge->setRange(0.0f, 120.0f, 100.0f,
             {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
         gaugeFullScaleW = 120.0f;
+    } else {
+        // A capability may declare a lower active-band PA ceiling (the
+        // IC-9700 publishes 75 W on 430 MHz and 10 W on 1240 MHz). Honour the
+        // supplied ceiling instead of silently replacing every <=100 W radio
+        // with the 100 W face. Keep the established 20% headroom and the same
+        // 0/40/80/100/120-percent tick rhythm as the barefoot scale.
+        const float ratedW = static_cast<float>(maxWatts);
+        gaugeFullScaleW = ratedW * 1.2f;
+        const auto tick = [](float watts) {
+            return HGauge::Tick{watts, QString::number(watts, 'g', 3)};
+        };
+        gauge->setRange(0.0f, gaugeFullScaleW, ratedW,
+            {tick(0.0f), tick(ratedW * 0.4f), tick(ratedW * 0.8f),
+             tick(ratedW), tick(gaugeFullScaleW)});
     }
     // Scale peak-hold decay to the gauge full-scale (~2.5 s from full to
     // zero) so the visual feel is the same whether the rig is barefoot

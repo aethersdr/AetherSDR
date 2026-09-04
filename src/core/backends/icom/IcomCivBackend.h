@@ -19,8 +19,10 @@
 #include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomCivScheduler.h"
 #include "core/backends/icom/IcomMeters.h"
+#include "core/backends/icom/IcomMemoryCodec.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
+#include "core/backends/icom/IcomNtpAccess.h"
 #include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
 
@@ -85,6 +87,7 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    void setRadioDialLock(bool locked) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
@@ -103,6 +106,16 @@ public:
     void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
+    void setSliceFmToneMode(int sliceId, const QString& mode) override;
+    void setSliceFmToneValue(int sliceId, double hz) override;
+    void setSliceFmToneRxValue(int sliceId, double hz) override;
+    void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                        bool rxReverse) override;
+    void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
+    void setSliceFmRepeaterOffset(int sliceId, double hz) override;
+    bool applyMemoryRecallDetails(const MemoryRecallDetails& details) override;
+    void refreshMemories(const QString& group) override;
+    void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start) override;
     void setRitEnabled(bool on) override;
@@ -133,6 +146,8 @@ public:
     // NEITHER KEYS THE TRANSMITTER. The scrub deliberately excludes ptt, tuner
     // and power: two of them transmit and the third cannot be undone over WiFi.
     [[nodiscard]] QVariantList controlMap() const;
+    [[nodiscard]] QVariantMap profileMap() const;
+    [[nodiscard]] QVariantMap repeaterStateMap() const;
     [[nodiscard]] QVariantList meterMap() const;
     [[nodiscard]] QVariantMap controlScrub(const QString& filter);
     // Returns false when the row cannot be re-asserted safely — the scrub's
@@ -153,12 +168,27 @@ public:
 private slots:
     void onSessionConnected(const QString& deviceName);
     void onSessionDisconnected(const QString& reason);
-    void onCivFrame(const AetherSDR::icom::CivFrame& frame);
+    void onCivFrame(const AetherSDR::icom::CivFrame& frame,
+                    std::uint64_t sessionGeneration);
     void onAudio(const std::vector<float>& mono);
     void onMeterTick();
     void onLinkTick();
+    void onTuneAudioTick();
 
 private:
+    // Focused access for the generation-gate regression test.  The test must
+    // inject a frame carrying an obsolete session generation after the backend
+    // has advanced to a replacement session; exercising only the public UDP
+    // path cannot make that queued-delivery race deterministic.
+    friend struct IcomCivBackendTestAccess;
+
+    void queueTuneAudioFrame();
+    [[nodiscard]] int stopTuneProducer();
+    void reassertPanPreampWireStep(int step);
+    [[nodiscard]] bool tunerSupported() const;
+    bool sendTunerCommandIfSupported(bool start);
+    bool queueTunerReadIfSupported(std::uint8_t address,
+                                   IcomCivScheduler::Priority priority);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a
@@ -170,6 +200,9 @@ private:
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
     void publishScopeDbmRange();
+    void startNtpAccess(qint64 now);
+    void publishNtpAccessResult(std::uint8_t result);
+    [[nodiscard]] bool expireNtpAccess(qint64 now);
     // The neutral mode string for whatever CivMode the radio is in, or an
     // empty string for a mode with no neutral equivalent (D-STAR).
     // Everything that reports a mode to the models needs this.
@@ -227,13 +260,15 @@ private:
     // we have just stopped standing behind.)
     void publishModeList();
     void publishMeterDefs();
+    void clearDerivedForwardPower();
     // The receive-only mode gate. True when the radio will not transmit in the
     // mode it is currently in, in which case the caller must NOT key. Warns and
     // puts the transmit indicator back where the radio is. See the definition.
     bool refuseKeyingInReceiveOnlyMode();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
-                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
+                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
+                   std::vector<std::uint8_t> replyDataPrefix = {});
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
                     bool coalesce = true);
@@ -249,7 +284,22 @@ private:
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] QVariantMap schedulerDiagnostics() const;
-    void serviceSchedulerWaiters(qint64 nowMs);
+    [[nodiscard]] QVariantList schedulerTransactionTrace(
+        std::size_t limit = 32) const;
+    [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,
+                                               const QString& reason) const;
+    void recordIncident(const QString& kind, const QString& reason);
+    enum class SchedulerWaiterOutcome : std::uint8_t {
+        Completed,
+        TimedOut,
+        Failed,
+        Cancelled,
+    };
+    void serviceSchedulerWaiters(qint64 nowMs,
+                                 std::optional<SchedulerWaiterOutcome> terminal = std::nullopt,
+                                 std::optional<QVariantMap> diagnosticSnapshot = std::nullopt);
+    void terminateScheduler(IcomCivScheduler::TerminalOutcome requestOutcome,
+                            SchedulerWaiterOutcome waiterOutcome);
     void applyScopeStartup();
     // The connect-edge read burst, lifted out of onSessionConnected UNCHANGED.
     //
@@ -262,12 +312,17 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
+    int queueMemorySnapshot(const MemoryProfile& profile, int selectedGroup);
+    void finishMemoryRefresh(bool success);
+    void finishMemoryRefreshWhenDrained(quint64 generation);
+    void publishExtendedRepeaterState();
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     void adoptReportedCivAddress(std::uint8_t reported);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     std::unique_ptr<IcomSession> m_session;
+    std::uint64_t m_sessionGeneration = 0;
     const IcomModel* m_model = nullptr;
 
     // ---- CI-V address resolution (see IcomSettings::CivSelection) ------------
@@ -290,6 +345,10 @@ private:
     bool m_civAmbiguous = false;
     // Whether sendConnectReadBurst() has already run this session.
     bool m_connectBurstSent = false;
+    bool m_memoryRefreshActive = false;
+    quint64 m_memoryRefreshGeneration = 0;
+    QSet<int> m_memoryRefreshReplies;
+    int m_memoryRefreshTotal = 0;
     // The model the RS-BA1 handshake NAMED. Kept separately from m_model because
     // it is the third signal that separates "right radio, changed address" from
     // "wrong radio entirely" — see adoptReportedCivAddress().
@@ -340,6 +399,7 @@ private:
 
     QTimer* m_meterTimer = nullptr;
     QTimer* m_linkTimer = nullptr;
+    QTimer* m_tuneTimer = nullptr;
 
     QString m_deviceName;
     std::uint64_t m_frequencyHz = 0;
@@ -347,8 +407,14 @@ private:
     bool m_dataMode = false;
     bool m_connected = false;
     bool m_keyed = false;
+    bool m_transmitFrequencyCheck = false;
+    // Set before an XFC ON enters the scheduler and cleared only by radio
+    // readback of OFF (or completed teardown). Capability may change while a
+    // command is in flight, but the obligation to release the radio may not.
+    bool m_xfcReleaseRequired = false;
     std::optional<bool> m_pendingPttIntent;
     qint64 m_pendingPttUntilMs = 0;
+    bool m_pttIncidentReported = false;
     bool m_overflow = false;
     double m_vdVolts = 0.0;
     double m_idAmps = 0.0;
@@ -459,8 +525,25 @@ private:
     bool    m_ritOn = false;
     bool    m_xitOn = false;
     int     m_ritOffsetHz = 0;
+    std::optional<bool> m_repeaterToneOn;
+    std::optional<double> m_repeaterToneHz;
+    std::optional<icom::RepeaterOffsetDirection> m_repeaterOffsetDirection;
+    std::optional<int> m_repeaterOffsetHz;
+    std::optional<std::uint8_t> m_repeaterAccess;
+    std::optional<double> m_repeaterRxToneHz;
+    std::optional<int> m_repeaterDtcsCode;
+    std::optional<bool> m_repeaterDtcsTxReverse;
+    std::optional<bool> m_repeaterDtcsRxReverse;
+    std::optional<std::uint64_t> m_repeaterTxFrequencyHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
+    std::optional<bool> m_radioDialLocked;
+    // IC-705 GPS state. Source is 00 off, 01 internal receiver, 03 manual;
+    // -1 means the radio has not answered yet. NTP access is a short-lived
+    // operation polled until the radio reports success or failure.
+    int     m_gpsSource = -1;
+    bool    m_gpsPositionValid = false;
+    IcomNtpAccess m_ntpAccess;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //
@@ -477,9 +560,10 @@ private:
     // modulating ambient room noise from its own microphone, and that happened
     // to be enough for an antenna tuner to see something.
     //
-    // The tone REPLACES the outgoing audio inside submitTxAudio rather than
-    // being generated on a timer, so its cadence is the transmit callback's
-    // cadence and it cannot drift against the stream it is riding.
+    // The carrier owns a 20 ms radio-rate producer while TUNE is active. It
+    // cannot depend on microphone capture callbacks: PC Audio may be disabled,
+    // and then a keyed IC-705 receives no samples at all. Exact 20 ms frames
+    // match the RS-BA1 packetizer's framing without borrowing the mic stream.
     bool m_tuning = false;
     // Last non-off value reported by 16 47. The shared UI is still boolean,
     // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
@@ -488,6 +572,7 @@ private:
     int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
+    static constexpr int kTuneToneFrameMs = 20;
     // -6 dBFS. Loud enough for a tuner to read instantly, short of the clipping
     // that would splatter a carrier the operator is deliberately leaving up.
     static constexpr float kTuneToneAmplitude = 0.5f;
@@ -510,6 +595,7 @@ private:
     std::optional<int> m_dataOffModRestore;
     QString m_lastModInputWarning;
     void checkModInput();
+    void publishPhoneModulationLevel();
 
     std::int64_t m_scopeCentreHz = 0;
     std::int64_t m_scopeSpanHz = 0;
@@ -565,13 +651,27 @@ private:
     };
     std::vector<SchedulerWaiter> m_schedulerWaiters;
     quint64 m_schedulerTimeoutsReported = 0;
+    quint64 m_schedulerCancelledRequests = 0;
+    quint64 m_schedulerFailedRequests = 0;
+    bool m_civBacklogIncidentReported = false;
+
+    // Last structured incident survives a dropped session so support can read
+    // it after the sockets are gone. It is replaced only by a newer incident
+    // or a successfully connected new session.
+    QVariantMap m_lastIncident;
+    quint64 m_incidentSequence = 0;
+    qint64 m_connectedAtMs = 0;
 
     // CI-V stall detection. The transport can be healthy while the command
     // plane is dead — see onLinkTick — so these track the command plane alone.
     qint64  m_lastInboundCivAtMs = 0;
     QString m_lastOutboundCiv;      // the last frame we sent, as hex
+    QString m_lastOutboundCivKey;   // payload-free semantic transaction id
     qint64  m_lastOutboundCivAtMs = 0;
     bool    m_civStallReported = false;
+    qint64  m_civRecoveryStartedAtMs = 0;
+    qint64  m_lastCivRecoveryAttemptAtMs = 0;
+    int     m_civRecoveryAttempts = 0;
     // Long enough that a quiet moment is not an alarm — the slowest poll here is
     // 1 s and a user-command guard can defer it — short enough that an operator
     // has not yet had time to wonder why the S-meter stopped.

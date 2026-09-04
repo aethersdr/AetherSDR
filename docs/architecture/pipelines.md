@@ -23,6 +23,9 @@ Multi-thread architecture — up to 12 threads depending on features enabled:
 - **RADE thread**: RADEEngine neural encoder/decoder (on-demand, HAVE_RADE)
 - **BNR**: NvidiaAfxFilter — in-process NVIDIA Maxine AFX GPU denoiser (runtime-loaded, HAVE_NVIDIA_AFX; runs inline on the audio thread, no dedicated thread)
 - **DXCC parse thread**: DxccColorProvider ADIF log parser (one-shot at startup)
+- **SystemInfoCollector thread**: per-thread CPU sampler behind Help → Runtime Monitor (#2554). On-demand: started when the dialog is shown, torn down when it is hidden. Every 1.5 s it runs `SystemInfo::enumerateThreads()` off the GUI thread and emits `sampleReady` / `thresholdExceeded` queued back to the dialog, so the sampler is not measured by the metric it gathers.
+
+Thread names: Qt propagates `QThread::objectName()` to the OS thread name when it starts a thread, which covers the workers above. The main thread names itself `AetherSDR-GUI` in `main.cpp` (Qt-side only on Linux, where the main thread is the thread-group leader and its kernel name is the process name — renaming it would rename the process for `ps` and `pgrep`); the raw `std::thread` workers (`IambicKeyer`, `CwxLocalKeyer`, `AsyncLogWriter`) and the RtMidi callback thread (`MidiIn`) name themselves through `src/core/ThreadName.h`, which is Qt-free so the keyers' pthread-only test targets stay that way.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
