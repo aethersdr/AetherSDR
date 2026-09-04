@@ -8,7 +8,10 @@ name: Sanitizers
 
 on:
   schedule:
-    - cron: '0 7 * * 1'  # Mondays 07:00 UTC
+    # Saturdays 02:00 Pacific. GitHub cron is UTC and ignores DST, so this is
+    # 02:00 PDT / 01:00 PST; a fixed early-Saturday slot is the point, not the
+    # exact minute.
+    - cron: '0 9 * * 6'
   workflow_dispatch:
 
 permissions:
@@ -132,19 +135,33 @@ jobs:
           ${{ matrix.sanitizer.runtime_env }}
           EOF
           ec=0
-          ctest --test-dir build --output-on-failure 2>&1 | tee sanitizer.log || ec=$?
+          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee sanitizer.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
         id: extract
         if: steps.ctest.outputs.exit != '0'
         run: |
-          # Sanitizer error blocks all end with a `SUMMARY:` line. Capture
-          # ~80 lines of leading context per match, which is enough for the
-          # full stack on ASan/UBSan/TSan output.
-          grep -B 80 '^SUMMARY:' sanitizer.log > report.txt || true
-          if [ ! -s report.txt ]; then
-            tail -c 50000 sanitizer.log > report.txt
+          # ctest's own verdict goes FIRST, so the 45 KB cap below can never
+          # trim it: the "N tests passed, M failed out of T" line and the
+          # "The following tests FAILED:" list. Before this the body was only
+          # the sanitizer blocks — and once a standing UBSan report sat at
+          # test ~178 of 334, every append from 2026-08-03 on was 80 lines of
+          # context around it and nothing else. radio_capability_gating_test
+          # failed a plain assertion on 2026-08-31 and #4330 never named it.
+          # The lane has to be legible in the issue, not only in a 30-day
+          # artifact.
+          {
+            grep -E '^[0-9]+% tests passed' sanitizer.log || true
+            sed -n '/^The following tests FAILED:/,$p' sanitizer.log
+            echo
+          } > report.txt
+          # Then the sanitizer error blocks. Each ends with a `SUMMARY:` line;
+          # ~80 lines of leading context per match is enough for the full
+          # stack on ASan/UBSan/TSan output.
+          grep -B 80 '^SUMMARY:' sanitizer.log >> report.txt || true
+          if [ "$(wc -c < report.txt)" -lt 200 ]; then
+            tail -c 50000 sanitizer.log >> report.txt
           fi
           # Cap at ~45KB to stay well under GitHub's ~65KB issue-body limit
           # once we wrap it in markdown.
