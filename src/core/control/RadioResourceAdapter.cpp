@@ -192,7 +192,10 @@ void RadioResourceAdapter::attachPanadapter(PanadapterModel* panadapter)
     connect(panadapter, &PanadapterModel::rfGainChanged, this, refresh);
     connect(panadapter, &PanadapterModel::fpsChanged, this, refresh);
     connect(panadapter, &PanadapterModel::averageChanged, this, refresh);
-    connect(panadapter, &PanadapterModel::weightedAverageChanged, this, refresh);
+    // The first valid report can be false, matching the model's default value.
+    // Listen to Reported so weightedAverageKnown is published on that edge;
+    // ControlResourceStore deduplicates later identical snapshots.
+    connect(panadapter, &PanadapterModel::weightedAverageReported, this, refresh);
     connect(panadapter, &PanadapterModel::waterfallLineDurationChanged, this, refresh);
     connect(panadapter, &QObject::destroyed, this, [this, panadapter] {
         m_panadapters.remove(panadapter);

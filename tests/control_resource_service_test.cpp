@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/sim/SimBackend.h"
 #include "core/control/ControlResourceStore.h"
@@ -569,6 +570,41 @@ bool testSimBackendEndToEnd()
         return false;
     }
 
+    QList<QJsonObject> events = client.takePendingMessages();
+    PanadapterModel* modelPan = radio.panadapter(QStringLiteral("0x40000000"));
+    if (!check(modelPan && !modelPan->weightedAverageKnown(),
+               "weighted averaging must begin unknown before its first report")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    const quint64 weightedRevision = store.get(panAddress)->revision;
+    modelPan->applyStateExtension(
+        {{QStringLiteral("weighted_average"), QStringLiteral("0")}});
+    const std::optional<ResourceSnapshot> reportedWeighted = store.get(panAddress);
+    const QList<QJsonObject> weightedEvents = client.takePendingMessages();
+    events.append(weightedEvents);
+    if (!check(reportedWeighted && reportedWeighted->revision > weightedRevision
+                   && reportedWeighted->value.value(QStringLiteral("displayCadence"))
+                          .toObject().value(QStringLiteral("weightedAverageKnown")).toBool()
+                   && !reportedWeighted->value.value(QStringLiteral("displayCadence"))
+                           .toObject().value(QStringLiteral("weightedAverage")).toBool()
+                   && weightedEvents.size() == 1
+                   && weightedEvents.first().value(QStringLiteral("event")).toString()
+                          == QStringLiteral("resource.changed"),
+               "the first known-false weighted-average report must publish an event")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    const quint64 knownWeightedRevision = reportedWeighted->revision;
+    modelPan->applyStateExtension(
+        {{QStringLiteral("weighted_average"), QStringLiteral("0")}});
+    if (!check(store.get(panAddress)->revision == knownWeightedRevision
+                   && client.takePendingMessages().isEmpty(),
+               "an identical known weighted-average report must be deduplicated")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
     const quint64 sliceRevision = store.get(sliceAddress)->revision;
     QJsonObject staleSliceValue = sliceValue;
     staleSliceValue.insert(QStringLiteral("owned"), false);
@@ -596,7 +632,7 @@ bool testSimBackendEndToEnd()
         radio.disconnectFromRadio();
         return false;
     }
-    const QList<QJsonObject> events = client.takePendingMessages();
+    events.append(client.takePendingMessages());
     bool sawRadio = false;
     bool sawSlice = false;
     bool sawPan = false;
@@ -655,6 +691,12 @@ bool testSimBackendEndToEnd()
 
 int main(int argc, char* argv[])
 {
+    TestSettingsProfile settingsProfile(
+        QStringLiteral("aether-control-resource-service-test"));
+    if (!check(settingsProfile.isValid(),
+               "isolated settings profile must be available")) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
     return testStoreRevisions()
         && testServiceSubscriptions()
