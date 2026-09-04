@@ -578,7 +578,7 @@ int main()
         // This is the check MetisProtocol.cpp's own comment above txFifoCount
         // asked someone to do ("The gateware RTL is the authority and this has
         // NOT been checked against it"). Done, against the gateware at
-        // 883a338, and the current decode is wrong on all three fields.
+        // 883a338, and the pre-fix decode was wrong on all three fields.
         //
         // control.v:472 builds slot RADDR 0 as
         //

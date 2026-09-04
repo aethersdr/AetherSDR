@@ -272,8 +272,12 @@ signals:
     // driving it from a timer here.
     void linkCountersUpdated(const AetherSDR::hl2::MetisClient::LinkCounters& c);
     // Radio telemetry decoded from the EP6 C&C bytes: forward/reverse power,
-    // temperature, TX FIFO depth, ADC overload, PTT. Free-running, so it
+    // temperature, TX FIFO status, ADC overload, PTT. Free-running, so it
     // arrives without us issuing a request.
+    //
+    // "status", not "depth": the wire carries a recovery flag plus the top 7
+    // bits of the fill level, and no sample count at all. See
+    // Hl2Telemetry::apply().
     void telemetryUpdated(const AetherSDR::hl2::Hl2Telemetry& t);
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
