@@ -141,6 +141,23 @@ static void testTxTailPadding()
               && pcm8Chunks.front().bytes.front() == 0x80
               && pcm8Chunks.back().bytes.back() == 0x80,
           "8-bit tail padding is midpoint silence");
+
+    // Near the cap, padding must NOT evict: the oldest frame is unsent audio
+    // of the same packet, and a 20 ms hole there is an FCS failure by another
+    // route. The cap bounds a continuous producer's latency; a finite stream's
+    // final partial frame may exceed it by less than one frame.
+    TxPacketizer nearCap;
+    const std::size_t capSamples = TxPacketizer::kMaxPendingBytes / sizeof(std::int16_t);
+    nearCap.submit(std::vector<float>(capSamples - 50, 0.25f));
+    const std::size_t pendingBefore = nearCap.pendingBytes();
+    const std::size_t padAtCap = nearCap.padToFrame();
+    check(padAtCap > 0, "a near-cap partial frame is still padded");
+    check(nearCap.pendingBytes() == pendingBefore + padAtCap,
+          "padding at the cap appends without evicting any pending frame");
+    check(nearCap.pendingBytes() % kAudioFrameBytes == 0,
+          "and leaves the queue frame-aligned");
+    check(nearCap.pendingBytes() < TxPacketizer::kMaxPendingBytes + kAudioFrameBytes,
+          "overshooting the cap is bounded by one frame");
 }
 
 static void testLossConcealment()

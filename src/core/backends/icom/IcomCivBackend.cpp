@@ -249,18 +249,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
-    // AetherModem finishes PRODUCING before both host and radio have finished
-    // PLAYING. Publish a conservative vendor-specific drain budget so the UI
-    // can hold its scheduled packet PTT without delaying an operator's manual
-    // unkey. TxPacketizer's cap is 250 ms at our negotiated 48 kHz mono s16;
-    // the conninfo request asks the radio for another 300 ms of TX buffering.
-    QVariantMap icomExtensions;
-    constexpr int kPacketizerMaxMs = static_cast<int>(
-        TxPacketizer::kMaxPendingBytes * 1000
-        / (kRadioAudioRateHz * static_cast<int>(sizeof(qint16))));
-    icomExtensions.insert(QStringLiteral("txAudioDrainBudgetMs"),
-                          kPacketizerMaxMs + IcomSession::kDefaultTxBufferMs);
-    c.extensions.insert(QStringLiteral("icom"), icomExtensions);
+    // setKeying() is intent; the decoded CI-V `1C 00` readback is the keyed
+    // state. AetherModem waits for that edge before releasing sample zero, and
+    // RadioModel does not synthesise a command-edge fallback here.
+    c.hasRadioPttReadback = true;
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
@@ -2867,6 +2859,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // "Explicit PTT OFF and fail-safe unkey are never suppressed by a
             // key-on transition guard", and Constitution VI wants every path
             // that can transmit to fail closed.
+            bool republishContradiction = false;
             if (m_pendingPttIntent) {
                 const bool confirmsIntent = keyed == *m_pendingPttIntent;
                 const bool guarding = *m_pendingPttIntent
@@ -2880,9 +2873,17 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 if (!confirmsIntent && !*m_pendingPttIntent) {
                     // The radio says it is keyed while we asked it to stop.
                     // Publish it and say so — this is the fail-closed path.
+                    //
+                    // FORCE the publication. setKeying(false) no longer moves
+                    // m_keyed optimistically, so a radio that stays keyed
+                    // answers with the value m_keyed already holds and the
+                    // on-change gate below would swallow it — leaving
+                    // RadioModel's optimistic RX presentation uncorrected while
+                    // the transmitter is on the air.
                     qCWarning(lcIcomScheduler)
                         << "radio reports KEYED after an unkey request; "
                            "publishing radio truth";
+                    republishContradiction = true;
                 } else if (!confirmsIntent && *m_pendingPttIntent) {
                     qCWarning(lcIcomScheduler)
                         << "radio did not confirm key-on before the PTT intent window expired";
@@ -2915,7 +2916,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // Republishing unchanged state is never merely wasteful on a path
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
-            if (keyed == m_keyed) {
+            if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
                     emit keyingStateConfirmed(keyed);
                 }
@@ -3117,7 +3118,7 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     // TUNE has a backend-owned, radio-rate producer. Letting microphone
     // callbacks feed this path at the same time creates a second packet cadence
     // and can overrun the bounded transmit queue.
-    if (m_tuning || !m_keyed) {
+    if (m_tuning || !txAudioGateOpen()) {
         return;
     }
     // The engine hands us interleaved int16 stereo; the radio wants mono at its
@@ -3168,15 +3169,36 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     m_session->sendAudio(mono);
 }
 
-void IcomCivBackend::finishTxAudio()
+// The transmit-audio admission gate, shared by the seam feed, the TUNE tone
+// producer and the finite-stream barrier.
+//
+// Commanded intent leads inside its bounded confirmation window; radio truth
+// decides everywhere else. setKeying() no longer moves m_keyed on its own
+// (the readback does), so gating on m_keyed alone would head-clip every voice,
+// DAX and TCI over by one CI-V round trip — up to the 250 ms fallback poll —
+// and leave the TUNE carrier silent until the radio answered, the exact edge
+// setTune()'s priming frame exists to cover. Admitting audio on the key-on
+// intent restores the established timing; refusing it on the unkey intent
+// keeps audio out of a queue that setKeying(false) has just flushed. Past the
+// window an unconfirmed key-on stops admitting audio to a radio that still
+// says RX (fail closed), and a refused unkey re-admits it once the radio has
+// said it is still keyed — audio into a keyed transmitter is the truthful
+// state, not a stray emission.
+bool IcomCivBackend::txAudioGateOpen() const
 {
-    if (!m_txResampler) {
-        return;
+    if (m_pendingPttIntent && nowMs() < m_pendingPttUntilMs) {
+        return *m_pendingPttIntent;
     }
+    return m_keyed;
+}
 
-    if (!m_session || !m_connected || !m_keyed || m_tuning) {
-        m_txResampler->reset();
-        return;
+int IcomCivBackend::finishTxAudio()
+{
+    if (!m_session || !m_connected || !txAudioGateOpen() || m_tuning) {
+        if (m_txResampler) {
+            m_txResampler->reset();
+        }
+        return 0;
     }
 
     // A finite packet ends while r8brain still holds one linear-phase group
@@ -3185,24 +3207,36 @@ void IcomCivBackend::finishTxAudio()
     // samples while PTT is still confirmed, then finish the packetizer's last
     // 20 ms frame with silence so none of that recovered tail remains pending
     // when unkey flushes the queue.
-    const QByteArray tail = m_txResampler->drain();
-    if (!tail.isEmpty()) {
-        const auto* samples = reinterpret_cast<const float*>(tail.constData());
-        const std::span<const float> mono(
-            samples, static_cast<std::size_t>(tail.size() / sizeof(float)));
-        appendAx25PostResampleCapture(mono);
-        m_session->sendAudio(mono);
+    //
+    // The padding is unconditional: a producer already at the negotiated rate
+    // has no resampler and no tail, but its final partial frame would be lost
+    // to the unkey flush exactly the same way.
+    int drainedSamples = 0;
+    if (m_txResampler) {
+        const QByteArray tail = m_txResampler->drain();
+        if (!tail.isEmpty()) {
+            const auto* samples = reinterpret_cast<const float*>(tail.constData());
+            const std::span<const float> mono(
+                samples, static_cast<std::size_t>(tail.size() / sizeof(float)));
+            appendAx25PostResampleCapture(mono);
+            m_session->sendAudio(mono);
+            drainedSamples = tail.size() / static_cast<int>(sizeof(float));
+        }
     }
     const std::size_t paddedBytes = m_session->padTxAudioToFrame();
+    // What is actually still queued, host plus radio — not the packetizer's
+    // worst case. After padding, a normal packet holds a single 20 ms frame.
+    const int drainMs = m_session->txAudioDrainMs();
     qCInfo(lcIcomTx) << "Icom finite TX audio drained"
-                     << tail.size() / static_cast<int>(sizeof(float))
+                     << drainedSamples
                      << "samples; packetizer silence padding"
-                     << paddedBytes << "bytes";
+                     << paddedBytes << "bytes; drain budget" << drainMs << "ms";
+    return drainMs;
 }
 
 void IcomCivBackend::onTuneAudioTick()
 {
-    if (!m_tuning || !m_keyed || !m_session || !m_connected) {
+    if (!m_tuning || !txAudioGateOpen() || !m_session || !m_connected) {
         return;
     }
 
@@ -4740,6 +4774,18 @@ void IcomCivBackend::setKeying(bool key)
     // decoded reply moves m_keyed, the meters, and transmitChanged. Publishing
     // here made AetherModem release sample zero while the IC-705 still reported
     // RX, truncating the AX.25 preamble and header on air.
+    //
+    // Three things still happen on the command, because none of them is a
+    // claim about the air: the transmit-audio gate follows this intent inside
+    // its window (txAudioGateOpen), the queued audio of a finished transmission
+    // is discarded, and the DERIVED IC-9700 forward-power estimate is zeroed —
+    // CI-V stops Po polling at unkey, so waiting for the readback would leave a
+    // stale wattage on the meter for as long as that reply takes, or forever
+    // if it is lost. A readback that then contradicts the unkey is republished
+    // by onCivFrame; nothing here pre-empts it.
+    if (!key) {
+        clearDerivedForwardPower();
+    }
     if (!key && m_session) {
         m_session->flushTxAudio();   // queued audio belongs to the transmission that ended
     }

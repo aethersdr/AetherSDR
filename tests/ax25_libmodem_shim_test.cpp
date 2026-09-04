@@ -685,9 +685,24 @@ void testIcomResamplerTailDrainPreservesVhfPacket()
     }
 
     // Pin the failure mode that motivated the API: the undrained finite output
-    // is shorter by the converter's delayed tail.
+    // is shorter by the converter's delayed tail — and that missing tail is
+    // the FCS and postamble, so the undrained stream must NOT decode. Without
+    // this second half the test would pass against a drain() that returned
+    // any non-empty buffer.
     report("undrained Icom output is shorter than finalized output",
            withoutDrainSamples < radioSamplesCount);
+    std::vector<float> undrainedReplay;
+    undrainedReplay.reserve(static_cast<std::size_t>(withoutDrainSamples / 2));
+    for (int index = 0; index + 1 < withoutDrainSamples; index += 2) {
+        undrainedReplay.push_back(radioSamples[index]);
+    }
+    AetherAx25LibmodemShim undrainedShim;
+    undrainedShim.configure(config);
+    const QVector<Ax25DecodedFrame> undrainedFrames = undrainedShim.processMonoFloat(
+        undrainedReplay.data(), static_cast<int>(undrainedReplay.size()),
+        config.sampleRate);
+    report("the undrained Icom output loses the AX.25 frame (missing FCS/postamble)",
+           undrainedFrames.isEmpty());
 }
 
 void testKissFramingRoundTrip()

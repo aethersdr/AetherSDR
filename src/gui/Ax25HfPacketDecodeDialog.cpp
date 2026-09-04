@@ -2328,33 +2328,36 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             return;
         }
         auto& txModel = m_radio->transmitModel();
+        // A backend whose keyed state is the radio's own readback (Icom) gets
+        // sample zero only after that readback — the command edge is intent.
         const bool waitsForRadioPtt =
-            m_radio->backendCapabilities().family == QLatin1String("icom");
+            m_radio->backendCapabilities().hasRadioPttReadback;
         const quint64 generation = m_txGeneration;
 
-        if (m_txPttConfirmConnection) {
-            disconnect(m_txPttConfirmConnection);
-            m_txPttConfirmConnection = {};
-        }
+        disconnectPttConfirmation();
         if (waitsForRadioPtt) {
+            // Two sources, because radioTransmittingChanged is change-gated: a
+            // radio still reporting keyed from the previous packet (its unkey
+            // readback not yet landed) never produces a new true edge, while
+            // radioTransmitConfirmed carries every accepted readback including
+            // unchanged ones — the same signal TciServer confirms Icom PTT on.
+            const auto confirmed = [this, generation](bool transmitting) {
+                if (!transmitting || !m_txActive || generation != m_txGeneration) {
+                    return;
+                }
+                disconnectPttConfirmation();
+                const qint64 confirmMs = m_txPttClock.isValid()
+                    ? m_txPttClock.elapsed() : -1;
+                qCInfo(lcAx25) << "AX.25 PTT confirmed by radio after"
+                               << confirmMs << "ms";
+                appendSystemLine(QStringLiteral(
+                    "PTT confirmed by radio after %1 ms.").arg(confirmMs));
+                startTransmitAudioAfterPtt();
+            };
             m_txPttConfirmConnection = connect(
-                m_radio, &RadioModel::radioTransmittingChanged, this,
-                [this, generation](bool transmitting) {
-                    if (!transmitting || !m_txActive || generation != m_txGeneration) {
-                        return;
-                    }
-                    if (m_txPttConfirmConnection) {
-                        disconnect(m_txPttConfirmConnection);
-                        m_txPttConfirmConnection = {};
-                    }
-                    const qint64 confirmMs = m_txPttClock.isValid()
-                        ? m_txPttClock.elapsed() : -1;
-                    qCInfo(lcAx25) << "AX.25 Icom PTT confirmed by radio after"
-                                   << confirmMs << "ms";
-                    appendSystemLine(QStringLiteral(
-                        "Icom PTT confirmed by radio after %1 ms.").arg(confirmMs));
-                    startTransmitAudioAfterPtt();
-                });
+                m_radio, &RadioModel::radioTransmittingChanged, this, confirmed);
+            m_txPttConfirmedConnection = connect(
+                m_radio, &RadioModel::radioTransmitConfirmed, this, confirmed);
         }
 
         m_txPttClock.restart();
@@ -2362,14 +2365,27 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         if (!m_txActive)
             return;
         if (waitsForRadioPtt) {
-            appendSystemLine(QStringLiteral("Waiting for radio-confirmed Icom PTT."));
+            if (m_radio->isRadioTransmitting()) {
+                // Already keyed — an operator holding MOX/footswitch, or the
+                // previous packet's unkey not yet reported. No edge is coming;
+                // the current radio state is the confirmation.
+                disconnectPttConfirmation();
+                appendSystemLine(QStringLiteral(
+                    "Radio already reports keyed; releasing audio."));
+                startTransmitAudioAfterPtt();
+                return;
+            }
+            appendSystemLine(QStringLiteral("Waiting for radio-confirmed PTT."));
+            // Sibling of TciServer's 1250 ms key-confirm timeout. Longer here
+            // because a packet is cheap to abort and a slow CI-V link on WLAN
+            // is the common IC-705 case; the abort unkeys either way.
             QTimer::singleShot(kIcomPttConfirmTimeoutMs, this, [this, generation] {
                 if (!m_txActive || m_txAudioStartArmed
                     || generation != m_txGeneration) {
                     return;
                 }
                 finishTransmit(true, QStringLiteral(
-                    "Icom PTT was not confirmed within %1 ms")
+                    "radio did not confirm PTT within %1 ms")
                     .arg(kIcomPttConfirmTimeoutMs));
             });
             return;
@@ -2522,23 +2538,30 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
     }
 }
 
-void Ax25HfPacketDecodeDialog::handleTxAudioFinished(quint64 token)
+void Ax25HfPacketDecodeDialog::disconnectPttConfirmation()
+{
+    if (m_txPttConfirmConnection) {
+        disconnect(m_txPttConfirmConnection);
+        m_txPttConfirmConnection = {};
+    }
+    if (m_txPttConfirmedConnection) {
+        disconnect(m_txPttConfirmedConnection);
+        m_txPttConfirmedConnection = {};
+    }
+}
+
+void Ax25HfPacketDecodeDialog::handleTxAudioFinished(quint64 token, int drainMs)
 {
     if (!m_txActive || !m_txAwaitingAudioFinish || token != m_txGeneration) {
         return;
     }
     m_txAwaitingAudioFinish = false;
 
-    int drainBudgetMs = 0;
-    if (m_radio) {
-        const RadioCapabilities caps = m_radio->backendCapabilities();
-        if (caps.family == QLatin1String("icom")) {
-            const QVariantMap icom = caps.extensions
-                .value(QStringLiteral("icom")).toMap();
-            drainBudgetMs = std::max(
-                0, icom.value(QStringLiteral("txAudioDrainBudgetMs")).toInt());
-        }
-    }
+    // The backend measured what is actually still queued on its side (host
+    // queue after padding plus the radio's own TX buffer); on a shared
+    // 1200-baud channel every unnecessary millisecond of carrier is dead air a
+    // peer cannot talk over, so this is not a worst-case constant.
+    const int drainBudgetMs = std::max(0, drainMs);
     const int unkeyDelayMs = m_txTailMs + drainBudgetMs;
     appendSystemLine(QStringLiteral(
         "AX.25 TX path flushed; waiting %1 ms before unkey (%2 ms drain, %3 ms tail).")
@@ -2561,10 +2584,7 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
 {
     if (m_txPaceTimer)
         m_txPaceTimer->stop();
-    if (m_txPttConfirmConnection) {
-        disconnect(m_txPttConfirmConnection);
-        m_txPttConfirmConnection = {};
-    }
+    disconnectPttConfirmation();
 
     const bool hadTx = m_txActive || m_txPendingStream || !m_txPcm.isEmpty();
     finishIcomPostResampleCapture();

@@ -395,6 +395,21 @@ the backend's keyed state nor publishes `transmitChanged`; only a decoded
 radio-confirmed edge before releasing sample zero, with a bounded timeout. This
 is load-bearing for short AX.25 frames: the earlier optimistic edge let their
 entire preamble run while an IC-705 was still completing its CI-V PTT transition.
+The backend advertises this contract as `RadioCapabilities::hasRadioPttReadback`;
+`RadioModel` then does not synthesise the command-edge fallback it still uses
+for a backend with no status plane.
+
+Three things are deliberately **not** deferred to the readback, because none of
+them is a claim about the air. The transmit-audio admission gate
+(`txAudioGateOpen`) follows the commanded intent inside its 1 s confirmation
+window and radio truth outside it — gating on the readback alone would head-clip
+every voice, DAX and TCI over by a CI-V round trip and leave the TUNE carrier
+silent until the radio answered. A client unkey still zeroes the derived IC-9700
+forward-power estimate immediately. And a readback that **contradicts** a
+pending unkey (the radio still keyed) is republished even though the backend's
+own keyed flag did not change, so the model's optimistic RX presentation is
+corrected rather than left lying (Constitution VI). `icom_ptt_authority_test`
+pins all of this without a socket.
 
 | group | interval | condition |
 |---|---:|---|
@@ -899,12 +914,19 @@ just what a 1920-byte frame becomes. kappanhang hardcodes the same two offsets.
 Either way the invariant is the frame's **duration**, and the byte count follows
 from the rate and the sample width.
 
-The transmit queue is clocked at **one 20 ms frame pair per 20 ms**. A producer
-may front-load audio to absorb GUI scheduling jitter, but queue depth never
-turns into a wire burst. At scheduled packet completion AetherModem adds the
-packetizer's 250 ms maximum plus the negotiated 300 ms radio buffer before its
-ordinary tail; an operator/manual unkey remains immediate and never takes that
-delay.
+The transmit queue is clocked at **one 20 ms frame pair per 20 ms**, drained by
+elapsed time: a late or coalesced timer tick sends the frames it owes (at most
+three per tick), so backlog cannot ratchet, while an on-time tick sends exactly
+one. A producer may front-load audio to absorb GUI scheduling jitter, and that
+queue depth never turns into a wire burst — but neither can it grow without
+bound, which is what "exactly one per tick" did: a Qt timer only ever fires
+late, so producer and consumer ran at equal rate with no recovery until the
+packetizer's 250 ms cap shed the oldest audio mid-over. That pump clocks every
+Icom transmission, voice included. At scheduled packet completion the backend
+reports what is **actually** still queued — the padded host queue at wire cadence
+plus the negotiated 300 ms radio buffer — and AetherModem holds PTT for that plus
+its ordinary tail; an operator/manual unkey remains immediate and never takes
+that delay.
 
 Finite modem audio has an additional completion barrier. The engine posts it
 behind the final PCM block, and `IcomCivBackend` then drains the 24-to-48 kHz

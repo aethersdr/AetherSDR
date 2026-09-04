@@ -688,9 +688,8 @@ int main(int argc, char** argv)
     check(!caps.hasDaxStreams, "no IQ on any networked Icom — absent, not deferred");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "the radio remembers its own state, so the client restores NOTHING");
-    check(caps.extensions.value(QStringLiteral("icom")).toMap()
-              .value(QStringLiteral("txAudioDrainBudgetMs")).toInt() == 550,
-          "Icom publishes the 250 ms host queue plus 300 ms radio TX drain budget");
+    check(caps.hasRadioPttReadback,
+          "Icom declares hasRadioPttReadback: setKeying() is intent, 1C 00 is state");
     check(caps.hasRadioSideDsp, "NR/NB/notch run in the radio's firmware");
     check(caps.hasRadioSideCwKeyer && caps.cwTextKeyerName == QLatin1String("CWK"),
           "CWK capability follows the resolved CI-V model, not its display string");
@@ -1092,10 +1091,18 @@ int main(int argc, char** argv)
               "the confirmed true edge is visible to the TX coordinator");
 
         // Unkey remains fail-closed: until the radio itself reports RX, the
-        // backend continues to publish/show that the transmitter is keyed.
+        // backend continues to publish/show that the transmitter is keyed —
+        // and a readback that CONTRADICTS the unkey is republished even though
+        // the backend's own keyed flag did not change, so RadioModel's
+        // optimistic RX presentation is corrected (Constitution VI).
         moxPublications.clear();
         backend.setKeying(false);
-        QTest::qWait(400);
+        check(waitFor([&] {
+                  return std::find(moxPublications.begin(), moxPublications.end(),
+                                   true) != moxPublications.end();
+              }, 1000),
+              "a radio reporting KEYED after an unkey request is republished "
+              "immediately, NOT swallowed by the on-change gate");
         check(lastTransmitState.mox.value_or(false),
               "a refused/delayed unkey cannot make the UI claim the radio is RX");
 

@@ -3576,6 +3576,20 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
 
 void TciServer::onRadioTransmitConfirmed(bool transmitting)
 {
+    // A pending TCI key-on is confirmed by ANY accepted keyed readback, not
+    // only a change edge. radioTransmittingChanged is change-gated, so when
+    // the radio still reports keyed from the previous period (its unkey
+    // readback not yet landed — back-to-back FT8) no edge ever arrives and the
+    // 1250 ms timeout would abort a transmission the radio is making. This is
+    // the readback the backend accepted for the CURRENT command generation —
+    // radio truth, not the optimistic command edge.
+    if (transmitting && m_tciPttClient && m_tciPttRequestedOn
+        && !m_tciPttConfirmedOn && !m_tciPttCancelPending
+        && !m_icomUnkeySettle.isSettling()) {
+        onRadioTransmittingChanged(true);
+        return;
+    }
+
     const IcomTciUnkeySettle::Confirmation confirmation =
         m_icomUnkeySettle.confirm(transmitting);
     if (confirmation == IcomTciUnkeySettle::Confirmation::Ignored) {

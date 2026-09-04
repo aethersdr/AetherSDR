@@ -702,7 +702,13 @@ public:
     // Finish a finite processed-audio stream before its caller starts the PTT
     // drain timer. Stateful converters may emit delayed tail samples here;
     // streaming/no-op backends have nothing to do.
-    virtual void finishTxAudio() {}
+    //
+    // Returns how many milliseconds of already-submitted audio are still to be
+    // PLAYED after this call returns — everything queued on the host plus
+    // whatever the radio buffers before its modulator — so the caller can hold
+    // PTT for exactly that long rather than a compile-time worst case. Zero
+    // means "nothing is buffered on your behalf; unkey when you like".
+    virtual int finishTxAudio() { return 0; }
 
     // ---- diagnostics ----
     //

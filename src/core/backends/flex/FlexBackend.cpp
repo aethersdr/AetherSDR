@@ -205,6 +205,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // omitted field is indistinguishable here from a considered false, which is
     // what this file's ADDING-A-FIELD note exists to prevent.
     caps.takesTxAudioOverSeam = false;
+    // The keyed edge is decoded from `interlock` status inside RadioModel, not
+    // published through this seam — see RadioCapabilities::hasRadioPttReadback.
+    caps.hasRadioPttReadback = false;
 
     // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
     // configurable width list. A Flex's filters are continuous.

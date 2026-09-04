@@ -192,13 +192,12 @@ std::size_t TxPacketizer::padToFrame()
         return 0;
     }
 
+    // Never evict to make room. The cap in submit() bounds LATENCY for a
+    // continuous producer; padding is the end of a finite stream, adds less
+    // than one frame, and nothing follows it. Dropping the oldest frame here
+    // would punch a 20 ms hole into unsent audio of the very packet the
+    // padding exists to complete — an FCS failure by another route.
     const std::size_t missing = kAudioFrameBytes - remainder;
-    while (m_pending.size() + missing > kMaxPendingBytes
-           && m_pending.size() >= kAudioFrameBytes) {
-        for (std::size_t index = 0; index < kAudioFrameBytes; ++index) {
-            m_pending.pop_front();
-        }
-    }
     std::uint8_t silenceByte = 0x00;
     if (m_codec == AudioCodec::Lpcm1ch8) {
         silenceByte = 0x80;

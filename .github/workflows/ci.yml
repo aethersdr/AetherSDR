@@ -401,9 +401,9 @@ jobs:
         # while four other names kept it green. The count pin below fails the
         # step the moment any single enumerated target stops registering.
         env:
-          ICOM_GATE: "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|rf_gain_presentation_test|icom_power_derivation_test|phone_cw_mic_gain_authority_test|tx_applet_power_reconciliation_test|radio_capability_gating_test)$"
+          ICOM_GATE: "^(icom_civ_test|icom_civ_scheduler_test|icom_meters_test|icom_family_test|icom_audio_test|icom_ptt_authority_test|rf_gain_presentation_test|icom_power_derivation_test|phone_cw_mic_gain_authority_test|tx_applet_power_reconciliation_test|radio_capability_gating_test)$"
         run: |
-          test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "9"
+          test "$(ctest --test-dir build -N -R "$ICOM_GATE" | sed -n 's/^Total Tests: //p')" = "11"
           ctest --test-dir build -R "$ICOM_GATE" --no-tests=error --output-on-failure
 
       # The CTCSS list is a shared RX/VFO presentation surface used by every

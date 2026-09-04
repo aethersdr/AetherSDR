@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QHostAddress>
 #include <QObject>
 #include <QSet>
@@ -107,6 +108,11 @@ public:
     // Complete the last 20 ms transport frame with silence. Returns bytes
     // appended; the normal TX pump still sends the completed frame on cadence.
     [[nodiscard]] std::size_t padTxAudioToFrame();
+    // Milliseconds of already-queued transmit audio still to be played: the
+    // host queue at wire cadence, plus the TX buffer the radio was asked to
+    // hold before its modulator. Measured from what is pending NOW, so a
+    // finite-stream caller holds PTT for what is actually queued.
+    [[nodiscard]] int txAudioDrainMs() const;
     // Discard queued transmit audio. Call on unkey.
     void flushTxAudio();
 
@@ -200,6 +206,11 @@ private:
 
     std::uint16_t m_serialSendSeq = 0;
     std::uint16_t m_audioSendSeq = 1;
+    // Wire clock for the transmit pump: frames owed since the current stream
+    // started flowing, so a late or coalesced tick can pay back what it missed
+    // (bounded) instead of leaving a permanent backlog. Invalid while idle.
+    QElapsedTimer m_txPumpClock;
+    qint64 m_txFramesSent = 0;
 
     CivReassembler m_civ;
     TxPacketizer m_tx;

@@ -86,7 +86,8 @@ public:
     void flush() noexcept;
 
     // Complete the final 20 ms wire frame with codec-correct silence. Returns
-    // the number of bytes appended, or zero when already frame-aligned.
+    // the number of bytes appended, or zero when already frame-aligned. May
+    // exceed kMaxPendingBytes by less than one frame; it never evicts.
     [[nodiscard]] std::size_t padToFrame();
 
     [[nodiscard]] std::size_t pendingBytes() const noexcept { return m_pending.size(); }

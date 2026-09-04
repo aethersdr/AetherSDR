@@ -4250,12 +4250,14 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 
 void RadioModel::publishCommandedBackendTransmitEdge(bool tx)
 {
-    // Icom has a real CI-V PTT readback. Its command is intent, not proof: a
-    // queued/ACKed write can still be delayed, refused, or overtaken by an
-    // older poll. Let IcomCivBackend::transmitChanged publish the decoded radio
-    // state. HL2 has no equivalent status plane, so it retains the established
-    // command-edge fallback used by TCI and the TX indicators.
-    if (m_family == QLatin1String("icom")) {
+    // A backend with a real PTT readback (Icom's CI-V 1C 00) publishes the
+    // decoded radio state through transmitChanged; its command is intent, not
+    // proof — a queued/ACKed write can still be delayed, refused, or overtaken
+    // by an older poll. A backend with no status plane (HL2) retains the
+    // established command-edge fallback used by TCI and the TX indicators.
+    // Capability-shaped rather than a family test: see
+    // RadioCapabilities::hasRadioPttReadback.
+    if (m_backend && m_backend->capabilities().hasRadioPttReadback) {
         return;
     }
     publishBackendTransmitEdge(tx);
@@ -8269,10 +8271,8 @@ void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
 
 void RadioModel::finishTxAudio(quint64 token)
 {
-    if (m_backend) {
-        m_backend->finishTxAudio();
-    }
-    emit txAudioFinished(token);
+    const int drainMs = m_backend ? std::max(0, m_backend->finishTxAudio()) : 0;
+    emit txAudioFinished(token, drainMs);
 }
 
 bool RadioModel::sendCommand(const QString& cmd)

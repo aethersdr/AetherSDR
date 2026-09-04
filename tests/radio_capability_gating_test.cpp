@@ -308,6 +308,10 @@ int main(int argc, char** argv)
               "Flex declares hasMultiClientSessions (multiFLEX)");
         check(caps.hasGpsLocation,
               "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
+        // The Flex keyed edge is decoded from `interlock` inside RadioModel,
+        // not published through the backend seam.
+        check(!caps.hasRadioPttReadback,
+              "Flex declares hasRadioPttReadback=false (interlock is decoded in RadioModel)");
         check(caps.hasGpsHardware,
               "Flex declares GPS hardware for Radio Setup presentation");
         check(caps.canReboot && caps.hasRemoteOnControl && caps.canUpgradeFirmware,
@@ -497,6 +501,10 @@ int main(int argc, char** argv)
         // entirely rather than sitting permanently dim.
         check(!caps.hasRadioSideCwKeyer,
               "HL2 declares hasRadioSideCwKeyer=false (no text buffer)");
+        // No PTT status plane, so RadioModel must keep synthesising the
+        // command edge for TCI's key confirmation and the TX indicators.
+        check(!caps.hasRadioPttReadback,
+              "HL2 declares hasRadioPttReadback=false (command edge is the only edge)");
         check(!caps.hasVoiceKeyer,
               "HL2 declares hasVoiceKeyer=false (no on-radio recorder)");
         check(!caps.hasDownwardExpander,
@@ -898,6 +906,7 @@ int main(int argc, char** argv)
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
+        check(!caps.hasRadioPttReadback, "Sim declares hasRadioPttReadback=false");
         check(!caps.hasGpsHardware, "Sim declares hasGpsHardware=false");
         check(!caps.canReboot && !caps.hasRemoteOnControl
                   && !caps.canUpgradeFirmware,

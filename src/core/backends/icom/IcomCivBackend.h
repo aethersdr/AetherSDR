@@ -122,7 +122,7 @@ public:
     void setRitOffset(int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled) override;
-    void finishTxAudio() override;
+    int finishTxAudio() override;
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg = {}) override;
 
@@ -184,7 +184,9 @@ private:
 
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
-    QVariantMap finishAx25PostResampleCapture();
+    // Commanded PTT intent inside its confirmation window, radio truth
+    // otherwise. See the definition for why neither alone is right.
+    [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
     [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start);
@@ -681,6 +683,7 @@ private:
     QByteArray m_ax25PostResampleCapturePcm;
     bool m_ax25PostResampleCaptureTruncated = false;
     void appendAx25PostResampleCapture(std::span<const float> mono);
+    QVariantMap finishAx25PostResampleCapture();
     static constexpr qsizetype kAx25PostResampleCaptureMaxBytes =
         64 * 1024 * 1024;
 };

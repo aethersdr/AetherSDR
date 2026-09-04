@@ -186,14 +186,16 @@ void testIc9700DerivedForwardPowerAcrossBands()
     IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic9700, 430'000'000ULL);
     const int beforeClientUnkey = updateSpy.count();
     backend.setKeying(false);
-    bool sawClientUnkeyReset = false;
+    bool clientUnkeyReset = false;
     for (int i = beforeClientUnkey; i < updateSpy.count(); ++i) {
         const QList<QVariant> args = updateSpy.at(i);
-        sawClientUnkeyReset |= args.at(0).toString() == QStringLiteral("TX:FWDPWR")
+        clientUnkeyReset |= args.at(0).toString() == QStringLiteral("TX:FWDPWR")
             && args.at(1).toDouble() == 0.0;
     }
-    check(!sawClientUnkeyReset,
-          "client-requested Icom unkey retains power until radio confirmation");
+    // Zeroing a DERIVED wattage is not an on-air claim, so it does not wait
+    // for the radio's PTT readback the way the published keyed state does.
+    check(clientUnkeyReset,
+          "client-requested Icom unkey immediately clears derived forward power");
 
     CivFrame ptt;
     ptt.to = kControllerAddress;

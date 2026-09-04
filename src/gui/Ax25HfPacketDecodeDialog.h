@@ -174,7 +174,8 @@ private:
     void beginTransmitWhenReady();
     void startTransmitAudioAfterPtt();
     void paceTransmitAudio();
-    void handleTxAudioFinished(quint64 token);
+    void disconnectPttConfirmation();
+    void handleTxAudioFinished(quint64 token, int drainMs);
     void finishTransmit(bool aborted, const QString& reason);
 
     // APRS client (APRS tab): station table, timed beacon, messaging.
@@ -324,6 +325,7 @@ private:
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
     QMetaObject::Connection m_txPttConfirmConnection;
+    QMetaObject::Connection m_txPttConfirmedConnection;
 
     // KISS TNC server (TCP) and its controls.
     KissTncServer* m_kissServer{nullptr};

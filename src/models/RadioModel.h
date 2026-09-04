@@ -1164,7 +1164,9 @@ signals:
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
     // Emitted only after the active backend has drained finite TX-audio state.
-    void txAudioFinished(quint64 token);
+    // drainMs is how much already-submitted audio (host queue plus radio
+    // buffer) is still to be played — hold PTT for that long, then the tail.
+    void txAudioFinished(quint64 token, int drainMs);
     // Emitted when the radio assigns a remote audio TX stream ID (voice/VOX).
     void remoteTxStreamReady(quint32 streamId);
     // Audio TX gate for sample pipeline (separate from optimistic MOX UI state).
@@ -1837,8 +1839,9 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
-    // Command-edge fallback for a backend with no radio TX readback. Icom has
-    // CI-V PTT state and therefore waits for the decoded backend edge.
+    // Command-edge fallback for a backend with no radio TX readback. One that
+    // declares RadioCapabilities::hasRadioPttReadback (Icom) waits for the
+    // decoded backend edge instead.
     void publishCommandedBackendTransmitEdge(bool tx);
     // Key-on guard for the MOX/TUNE seam paths, which do not run through
     // setTransmit() and therefore missed its canTransmit test. Returns true when

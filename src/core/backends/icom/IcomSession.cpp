@@ -20,10 +20,20 @@ Q_LOGGING_CATEGORY(lcIcom, "aether.icom.session")
 
 namespace {
 
-// The radio consumes one 20 ms frame at a time. Keep this timer as the sole
-// wire clock: draining multiple queued frames in one callback turns a useful
-// host-side lead buffer into a burst on the RS-BA1 audio stream.
+// The radio consumes one 20 ms frame at a time. Keep this timer as the wire
+// clock, but drain by ELAPSED TIME rather than "everything that is ready" or
+// "exactly one": a late or coalesced tick sends the frames it owes (bounded by
+// kTxPumpMaxFramesPerTick), so backlog cannot ratchet — while steady state
+// still never turns a host-side lead buffer into a burst on the RS-BA1 stream.
+//
+// Both extremes were tried. Draining everything at 10 ms made the modem's
+// deliberate lead buffer arrive as a burst. Draining exactly one per tick had
+// no recovery at all: a Qt timer only ever fires late, so producer and
+// consumer ran at equal rate with a monotonic backlog until TxPacketizer's
+// 250 ms cap started dropping the OLDEST bytes mid-over — and this pump clocks
+// every Icom transmission, voice included, not only AX.25.
 constexpr int kTxPumpMs = 20;
+constexpr qint64 kTxPumpMaxFramesPerTick = 3;
 
 // A partial CI-V frame older than this is abandoned. Without it, one truncated
 // frame swallows every subsequent byte and the radio appears to stop answering
@@ -731,15 +741,60 @@ void IcomSession::onTxPump()
 {
     if (!m_audio || !m_audio->isReady())
         return;
-    // One callback is one 20 ms wire frame. AudioEngine and AetherModem may
-    // submit larger blocks to build a jitter cushion, but that queue depth must
-    // never change the radio-facing cadence.
-    const auto chunks = m_tx.takeFrame();
-    for (const auto& c : chunks) {
-        m_audio->sendTracked(buildAudio(m_audio->localSessionId(),
-                                        m_audio->remoteSessionId(), 0, m_audioSendSeq++,
-                                        c.bytes));
+    if (m_tx.pendingBytes() < kAudioFrameBytes) {
+        // Idle. Forget the reference clock so the gap between transmissions
+        // is not counted as frames owed to the next one.
+        m_txPumpClock.invalidate();
+        m_txFramesSent = 0;
+        return;
     }
+
+    // Frames due since this stream started flowing: one on the first tick,
+    // then one per kTxPumpMs of wall clock. AudioEngine and AetherModem may
+    // submit larger blocks to build a jitter cushion; that queue depth changes
+    // nothing here while ticks arrive on time, and only lateness is paid back.
+    qint64 due = 1;
+    qint64 shouldHaveSent = 1;
+    if (!m_txPumpClock.isValid()) {
+        m_txPumpClock.start();
+        m_txFramesSent = 0;
+    } else {
+        shouldHaveSent = 1 + m_txPumpClock.elapsed() / kTxPumpMs;
+        due = std::clamp<qint64>(shouldHaveSent - m_txFramesSent, 1,
+                                 kTxPumpMaxFramesPerTick);
+    }
+
+    qint64 sent = 0;
+    for (; sent < due; ++sent) {
+        const auto chunks = m_tx.takeFrame();
+        if (chunks.empty())
+            break;
+        for (const auto& c : chunks) {
+            m_audio->sendTracked(buildAudio(m_audio->localSessionId(),
+                                            m_audio->remoteSessionId(), 0, m_audioSendSeq++,
+                                            c.bytes));
+        }
+    }
+    m_txFramesSent += sent;
+    if (sent < due) {
+        // The queue ran short of what the clock says is owed: the producer,
+        // not this pump, is behind. Forgive the difference rather than burst
+        // it later when the producer catches up.
+        m_txFramesSent = shouldHaveSent;
+    }
+}
+
+int IcomSession::txAudioDrainMs() const
+{
+    if (!m_params.enableTx)
+        return 0;
+    // Every codec's frame is 20 ms of audio, so pending bytes convert through
+    // the frame size regardless of sample width. The last partial or whole
+    // frame leaves on the next tick; then the radio plays out its own buffer.
+    const std::size_t pendingFrames =
+        (m_tx.pendingBytes() + kAudioFrameBytes - 1) / kAudioFrameBytes;
+    return static_cast<int>(pendingFrames) * kTxPumpMs + kTxPumpMs
+        + static_cast<int>(m_params.txBufferMs);
 }
 
 void IcomSession::sendCiv(std::span<const std::uint8_t> frame)
