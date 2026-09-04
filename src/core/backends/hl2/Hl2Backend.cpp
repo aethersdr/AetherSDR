@@ -4197,6 +4197,26 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         put("swr", QStringLiteral("SWR"), swr);
     }
 
+    // ---- attribution: which path produced the readings above ----
+    //
+    // The backend publishes this and WINS the merge, because these rows are
+    // in-band: 10 Hz against the poller's 1-2 Hz, on a cadence we control.
+    // Hl2TelemetryService publishes the same key for the stream-free case and
+    // loses to this one whenever we have in-band values.
+    //
+    // It went missing when the service took the four telemetry rows over, and
+    // the result was a row that could never say "in-band" — observed on
+    // hardware with the app connected and EP6 healthy, reading "port-1025".
+    // Decided by the shared policy rather than restated here: a re-typed copy
+    // of a rule proves only that two copies agree.
+    section("telemetrySource", QStringLiteral("Telemetry source"));
+    put("telemetrySource", QStringLiteral("Source"),
+        hl2TelemetrySource(m_connected,
+                           /*haveInBand=*/m_telemetry.temperatureRaw.has_value(),
+                           // The backend knows nothing about the stream-free
+                           // path; the service supplies that side at the merge.
+                           /*haveStreamFree=*/false));
+
     section("bandFilter", QStringLiteral("Front end"));
     put("bandFilter", QStringLiteral("J16 filter byte"),
         (m_ocFilterByte >= 0 && m_ocFilterByte <= 0x7F)

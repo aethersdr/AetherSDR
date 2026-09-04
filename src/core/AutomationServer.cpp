@@ -15,6 +15,7 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
+#include "core/backends/hl2/Hl2TelemetrySource.h"   // hl2MergeHealth, the shared merge rule
 #include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
@@ -6631,22 +6632,9 @@ QJsonObject AutomationServer::doHealth()
     // 10 Hz against the poller's 1-2 Hz, and their cadence is ours. The service
     // fills the gaps and owns the source/age/unanswered rows that say which
     // path spoke.
-    IRadioBackend::HealthSnapshot snap = m_radioModel->streamFreeTelemetryRows();
-    const IRadioBackend::HealthSnapshot backend = m_radioModel->backendHealthSnapshot();
-    for (const QString& key : backend.order) {
-        if (!snap.labels.contains(key))
-            snap.order.push_back(key);
-        if (const auto l = backend.labels.constFind(key); l != backend.labels.constEnd())
-            snap.labels.insert(key, *l);
-        if (const auto sec = backend.sections.constFind(key); sec != backend.sections.constEnd())
-            snap.sections.insert(key, *sec);
-        // A key the backend leaves out of `values` is "not reported by the
-        // radio", and must NOT overwrite a value the stream-free path does
-        // have. Overwriting with nothing is how a working reading becomes a
-        // dash.
-        if (const auto v = backend.values.constFind(key); v != backend.values.constEnd())
-            snap.values.insert(key, *v);
-    }
+    IRadioBackend::HealthSnapshot snap = hl2::hl2MergeHealth(
+        m_radioModel->streamFreeTelemetryRows(),   // base: stream-free
+        m_radioModel->backendHealthSnapshot());    // winner: in-band
     if (snap.isEmpty()) {
         // Still a real state: no backend AND nothing stream-free to say. Name it
         // rather than returning an empty object the caller has to guess about.

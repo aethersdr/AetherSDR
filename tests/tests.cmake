@@ -3963,6 +3963,14 @@ add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
 # The WIRE between the cadence rule and the backend that must ask it. Links
 # aethercore because it constructs a real Hl2Backend -- the point is that the
 # BACKEND drives the service, which no service-level test can check.
+# telemetrySource policy + the health-snapshot merge, as pure functions both
+# call sites use. Truth table rather than a scenario: the row exists to tell two
+# states apart, so a test seeing only one answer proves nothing.
+add_executable(hl2_telemetry_source_test tests/hl2_telemetry_source_test.cpp)
+target_include_directories(hl2_telemetry_source_test PRIVATE src)
+target_link_libraries(hl2_telemetry_source_test PRIVATE Qt6::Core)
+add_test(NAME hl2_telemetry_source_test COMMAND hl2_telemetry_source_test)
+
 add_executable(hl2_telemetry_wire_test tests/hl2_telemetry_wire_test.cpp)
 target_include_directories(hl2_telemetry_wire_test PRIVATE src tests)
 target_link_libraries(hl2_telemetry_wire_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
