@@ -6,10 +6,11 @@ The per-PR workflow (.github/workflows/ci.yml) does not run the test suite. It
 runs a hand-picked allow-list of tests, each behind its own `ctest -R` step on
 the platform job whose toolchain the test's claim is about. That list is
 FROZEN: no new test joins it. The full suite runs unfiltered in
-.github/workflows/sanitizers.yml (`ctest --test-dir build`, no -R), weekly,
-under ASan+UBSan and TSan — a test declared in tests/tests.cmake and built by
-the default configure is on that lane the moment it is declared, and that is
-where a new test belongs.
+.github/workflows/full-suite.yml on every push to main (minutes after a merge,
+and the fastest signal a contributor will get) and again in
+.github/workflows/sanitizers.yml weekly under ASan+UBSan and TSan. A test
+declared in tests/tests.cmake and built by the default configure is on BOTH the
+moment it is declared, and that is where a new test belongs.
 
 Why freeze it: every test added to ci.yml is one more step, one more comment
 justifying it, one more wall-clock minute on every PR, and one more thing that
@@ -60,8 +61,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = Path(".github/workflows")
 WEEKLY_LANE = "sanitizers.yml"
-# A workflow is a PR gate if it triggers on pull_request (or _target).
-PR_TRIGGER = re.compile(r"^\s*pull_request(?:_target)?\s*:", re.M)
+# The `on:` key, and the rest of its line. YAML allows the trigger list as an
+# inline scalar (`on: pull_request`), an inline flow sequence
+# (`on: [push, pull_request]`) or an indented block — and a workflow file may
+# be .yml OR .yaml. Missing any of those shapes silently drops a workflow from
+# the scan (#5405 second-opinion review).
+ON_KEY = re.compile(r"^on\s*:(.*)$", re.M)
+PR_WORD = re.compile(r"\bpull_request(?:_target)?\b")
 FROZEN = Path(".github/ci-test-gate.txt")
 TESTS_CMAKE = Path("tests/tests.cmake")
 
@@ -70,9 +76,13 @@ TESTS_CMAKE = Path("tests/tests.cmake")
 # `--tests-regex` is ctest's long form of the same flag.
 CTEST_R = re.compile(
     r"""ctest\b.*?\s(?:-R|--tests-regex)\s+(?:"([^"]+)"|'([^']+)'|(\S+))""")
-# Any ctest invocation at all: `ctest ` as a command word, not `ctest_` or a
-# path component such as `--ctest-foo`.
-CTEST_ANY = re.compile(r"(?<![\w/.-])ctest(?=\s|$)")
+# Any ctest invocation at all, INCLUDING a path-qualified one: `ctest`,
+# `/usr/bin/ctest`, `./build/ctest`. It must sit at a command position — start
+# of line, or after whitespace or a shell operator — so `ctest_helper` and
+# `--ctest-foo` do not match, but `/usr/bin/ctest` does. An earlier form
+# excluded anything preceded by `/`, which let a full path through the
+# fail-closed counter entirely (#5405 second-opinion review).
+CTEST_ANY = re.compile(r"(?:^|[\s;&|(`])(?:[\w.@+-]*/)*ctest(?=\s|$)", re.M)
 YAML_COMMENT_LINE = re.compile(r"^\s*#")
 # `$VAR`, `${VAR}`, `$env:VAR` (pwsh), `${{ env.VAR }}` — a `$` regex anchor is
 # none of these.
@@ -200,12 +210,31 @@ def resolve(patterns: list[tuple[str, str, int]], names: set[str]) -> dict[str, 
     return gated
 
 
+def has_pr_trigger(text: str) -> bool:
+    """True if the workflow's `on:` names pull_request in any valid shape."""
+    m = ON_KEY.search(text)
+    if not m:
+        return False
+    if PR_WORD.search(m.group(1).split("#", 1)[0]):
+        return True  # `on: pull_request` / `on: [push, pull_request]`
+    for line in text[m.end():].split("\n")[1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[:1].isspace():
+            break  # dedented to the next top-level key; the on: block ended
+        if PR_WORD.search(line.split("#", 1)[0]):
+            return True
+    return False
+
+
 def pr_workflows() -> list[Path]:
     """Every workflow with a pull_request trigger, sorted. A new workflow
     file is scanned the moment it exists, so a `ctest` step cannot hide in
-    one this script was never told about."""
-    found = sorted(p for p in (REPO / WORKFLOWS_DIR).glob("*.yml")
-                   if p.name != WEEKLY_LANE and PR_TRIGGER.search(p.read_text()))
+    one this script was never told about — either extension, any `on:` shape."""
+    candidates = sorted(set((REPO / WORKFLOWS_DIR).glob("*.yml"))
+                        | set((REPO / WORKFLOWS_DIR).glob("*.yaml")))
+    found = [p for p in candidates
+             if p.name != WEEKLY_LANE and has_pr_trigger(p.read_text())]
     if not found:
         print(f"error: no workflows found under {WORKFLOWS_DIR} — has it moved? "
               "Update this script.")
@@ -279,8 +308,9 @@ def main() -> int:
             print(f"  {n}  ({where})")
         print()
         print("The per-PR test gate is frozen. A test declared in tests/tests.cmake")
-        print("and built by the default configure already runs on the weekly")
-        print("unfiltered lane (.github/workflows/sanitizers.yml); it does not")
+        print("and built by the default configure already runs unfiltered on every")
+        print("push to main (.github/workflows/full-suite.yml) and again weekly")
+        print("(.github/workflows/sanitizers.yml); it does not")
         print("also get a `ctest -R` step on a PR workflow. Drop the step. If a")
         print("maintainer has decided this test is an exception, add its name to")
         print(f"{FROZEN} by hand in the same PR, with the reason in the PR body.")

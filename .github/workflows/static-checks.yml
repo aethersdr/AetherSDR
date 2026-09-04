@@ -11,13 +11,18 @@ name: Static Checks
 # #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
 # deleted, rather than left as a fourth near-identical workflow.
 #
-# `Static checks` IS a required status check (branch protection: build /
-# check-windows / check-macos / Static checks) — it is what enforces the
-# frozen per-PR test gate (tools/check_ci_test_gate.py). A required check
-# that a PR never triggers blocks that PR forever, so this workflow has NO
-# `paths:` filter: it runs on every pull request. Every step is stdlib
-# Python in seconds, so an unfiltered trigger costs less than one blocked
-# docs-only PR would.
+# `Static checks` is NOT yet a required status check. The required contexts
+# are build / check-windows / check-macos; adding this one is the LAST action
+# of the #5405 rollout, after that PR merges, and until it happens the frozen
+# per-PR test gate below (tools/check_ci_test_gate.py) is advisory — a red run
+# here does not block a merge. Do not describe it as enforced before the flip
+# is made and verified.
+#
+# The `paths:` filter is gone, and that ordering is deliberate: a required
+# check a PR never triggers blocks that PR forever, so the filter has to go
+# BEFORE the flip, not with it. (Making it required first is what briefly
+# blocked eleven open PRs.) Every step is stdlib Python in seconds, so running
+# on every pull request costs less than one blocked docs-only PR.
 
 on:
   pull_request:
@@ -89,11 +94,13 @@ jobs:
         run: python tools/check_test_registration.py --strict
 
       # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
-      # and a short allow-list of platform-only tests behind `ctest -R` steps;
-      # the full suite runs unfiltered on the weekly sanitizer lane
-      # (sanitizers.yml), which every add_test() in tests/tests.cmake joins the
-      # moment it is declared. This resolves every -R pattern in ci.yml against
-      # the registered names the way ctest does and fails if the result is not
+      # and a short allow-list of platform-toolchain tests behind `ctest -R`
+      # steps; the full suite runs unfiltered on every push to main
+      # (full-suite.yml) and again weekly under the sanitizers
+      # (sanitizers.yml), and every add_test() in tests/tests.cmake that the
+      # default configure builds joins both the moment it is declared. This
+      # resolves every -R pattern in every pull-request workflow against the
+      # registered names the way ctest does and fails if the result is not
       # exactly .github/ci-test-gate.txt. Removing a test from the gate: run
       # `python tools/check_ci_test_gate.py --update` and commit. Adding one is
       # a diff to that maintainer-owned file, on purpose.

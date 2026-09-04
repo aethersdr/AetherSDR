@@ -3770,10 +3770,10 @@ set_tests_properties(connection_panel_size_test PROPERTIES
 # the arithmetic and parent-chain matching in isolation, not a replacement
 # for the PR's own real-X11-input proof.
 #
-# Compiled and linked by the Linux build job and executed on the weekly
-# unfiltered sanitizer lane, like every other Linux test; the per-PR gate
-# in ci.yml is frozen and does not take new entries (AGENTS.md, "Gate
-# integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
+# Compiled and linked by the Linux build job and executed unfiltered on every
+# push to main (.github/workflows/full-suite.yml) and again weekly under the
+# sanitizers, like every other Linux test; the per-PR gate in ci.yml is frozen
+# and does not take new entries (AGENTS.md, "Gate integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
 # wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp

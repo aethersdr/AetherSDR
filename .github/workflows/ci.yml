@@ -475,8 +475,29 @@ jobs:
         timeout-minutes: 45
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
+      # The count pin is NOT redundant with the frozen list, and this is the
+      # one step that needs it. check_ci_test_gate.py compares names it reads
+      # out of tests.cmake's SOURCE TEXT; it does not evaluate the CMake
+      # conditions around them. Wrap one of these four add_test() calls in a
+      # condition that is false on this platform and the text is unchanged, so
+      # the frozen list still matches — while the configured build registers
+      # three, this alternation selects three, and --no-tests=error is happy
+      # because three is not zero. That is the partial-erosion case the old
+      # `Total Tests: N` pins existed for (#5232), and it is exactly how
+      # icom_backend_test once fell off a gate unnoticed (#5405
+      # second-opinion review). bash rather than the Windows default shell so
+      # the idiom matches the one this project already used.
       - name: Test ThumbDV portability paths
-        run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --no-tests=error --output-on-failure
+        #
+        # The pattern is repeated rather than held in an env var because
+        # check_ci_test_gate.py refuses `-R "$VAR"`: an opaque variable is the
+        # one thing a reviewer of the frozen list cannot read. Repeating it is
+        # the cost of that rule, and the checker resolves both occurrences to
+        # the same four names.
+        shell: bash
+        run: |
+          test "$(ctest --test-dir build -N -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" | sed -n 's/^Total Tests: //p')" = "4"
+          ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --no-tests=error --output-on-failure
 
       # cross_needle_meter_test renders widgets; the offscreen platform makes
       # its measurements deterministic (verified bit-identical across

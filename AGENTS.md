@@ -395,11 +395,17 @@ contributors with existing GPG workflows.
   silently shrinks the gate while the job stays green — #5232 demonstrated
   this live. The unfiltered sanitizer sweep carries it too, so an empty
   test tree fails rather than passing vacuously.
-- Erosion inside a pattern is caught by the frozen list: the checker
-  requires the names `ci.yml` selects to EQUAL the list, so a regex that
-  used to match five names and now matches four fails `Static checks` on
-  the missing one. (This replaces the `Total Tests: N` count pins the
-  enumerated gates used to carry.)
+- Erosion inside a pattern is caught two ways, and they cover different
+  halves. The frozen list catches it in the SOURCE: the checker requires
+  the names a PR workflow selects to EQUAL the list, so a renamed or
+  deregistered `add_test` fails `Static checks` on the missing name. It
+  cannot catch erosion at CONFIGURE time — it reads `tests.cmake` as text
+  and does not evaluate the conditions around an `add_test`, so a test
+  that stops being registered on a platform leaves the text unchanged and
+  the list still matching. That is what the `Total Tests: N` pin on a
+  multi-name step is for, and why the ThumbDV step still carries one
+  (#5232, #5405 review). A single-name anchored step needs no pin:
+  `--no-tests=error` already distinguishes one from zero.
 - Deregistering or renaming a test requires grepping `.github/workflows/`
   for its name in the same PR, and running `--update` if it was on the
   frozen list. The gate regexes are part of the test's surface.
