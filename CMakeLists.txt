@@ -96,10 +96,18 @@ set_property(CACHE AETHERSDR_SANITIZER PROPERTY STRINGS
              none address undefined "address,undefined" thread)
 
 if(NOT AETHERSDR_SANITIZER STREQUAL "none")
+    # NOTE: CMake sets MSVC true for clang-cl as well as cl.exe, because
+    # clang-cl simulates the MSVC driver. Refusing both is deliberate: this
+    # block emits only the GNU `-fsanitize=` spelling, and clang-cl wants
+    # `/fsanitize=`, so letting it through would fail later with a worse
+    # message. The wording names clang-cl so someone already using Clang does
+    # not read this as a condition they have satisfied (#5419 review).
     if(MSVC)
         message(FATAL_ERROR
-            "AETHERSDR_SANITIZER=${AETHERSDR_SANITIZER} is not supported with MSVC. "
-            "Use a GCC or Clang build.")
+            "AETHERSDR_SANITIZER=${AETHERSDR_SANITIZER} is not supported with the "
+            "MSVC driver, which includes clang-cl — those need the /fsanitize= "
+            "spelling, and this option emits the GNU -fsanitize= form. Use a "
+            "GNU-driver GCC or Clang build.")
     endif()
     string(REPLACE "," ";" _aether_san_list "${AETHERSDR_SANITIZER}")
     foreach(_aether_san IN LISTS _aether_san_list)
@@ -117,6 +125,15 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
             "collision that broke the TSan lane in #4360; configure one or the "
             "other.")
     endif()
+    # -g3 and -fno-omit-frame-pointer are applied to EVERY configuration here,
+    # not just Debug, and that is deliberate: a sanitizer report without symbols
+    # and frame pointers is a stack of addresses, which is worth roughly
+    # nothing. The consequence to know about is that
+    # `-DAETHERSDR_SANITIZER=address -DCMAKE_BUILD_TYPE=Release` gives you a
+    # Release build carrying full debug info — surprising if you reached for
+    # Release to keep the build small (#5419 review). Reaching for a sanitizer
+    # at all says you want the report legible; the plain Debug flags at the
+    # bottom of this file stay $<CONFIG:Debug>-scoped and are unaffected.
     add_compile_options(-fsanitize=${AETHERSDR_SANITIZER} -fno-omit-frame-pointer -g3)
     add_link_options(-fsanitize=${AETHERSDR_SANITIZER})
     message(STATUS "AetherSDR: sanitizer = ${AETHERSDR_SANITIZER} (whole tree)")

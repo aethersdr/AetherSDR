@@ -150,8 +150,11 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     #     appears in the FLAGS variables, so scanning only those two is blind
     #     to it. That blindness re-creates #4360 exactly, and not in theory:
     #     configuring -DAETHERSDR_SANITIZER=thread with the two-source form
-    #     produced 77 translation units carrying both -fsanitize=thread and
-    #     -fsanitize=address,undefined, and this message did not print.
+    #     produced translation units carrying both -fsanitize=thread and
+    #     -fsanitize=address,undefined, and this message did not print. It was
+    #     77 of them when measured (Debug, Linux/GCC, ENABLE_DSTAR on, at
+    #     #5419); the figure tracks the target list below and will drift, so
+    #     treat it as scale rather than as a number to assert on.
     # When the option is "none" the synthesized string is "-fsanitize=none",
     # which matches nothing in the alternation.
     set(_aether_dv_external_sanitizer OFF)
