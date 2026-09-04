@@ -485,11 +485,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         for (int i = 0; i < tick.framesToSend; ++i) {
             sendTxChronoFrame(client);
         }
-        // Intra-second burst line (#5133 item 3). 1-second TCI TX summaries
-        // cannot show a 50 ms clump; this fires when the unbounded while
-        // would have emitted more than one frame, or when the pacer drops
-        // backlog / refuses because the client is behind.
-        if (tick.wouldHaveSent > 1 || tick.droppedNs > 0
+        // Intra-second burst line (#5133). A 5K-display GUI fires this
+        // timer at 20–40 ms, so would_have_sent=2 is routine — do not log
+        // that. Log when the unbounded while would have dumped ≥3 frames,
+        // when we actually discarded time, or when the client is behind.
+        if (tick.wouldHaveSent >= 3 || tick.droppedNs > 0
             || tick.outstandingCapped || tick.forgotStuck) {
             qCInfo(lcCat).nospace()
                 << "TCI TX chrono burst"

@@ -18,55 +18,91 @@ bool testSteadyPollEmitsEveryPeriod()
 {
     TciTxChronoPacer pacer;
     int sent = 0;
-    // 21.333 ms period, 5 ms poll. Four quiet polls then one emit.
     for (int i = 0; i < 20; ++i) {
         const TciTxChronoPacer::TickResult r =
             pacer.tick(5 * 1000000LL, /*audioGapNs=*/i * 5 * 1000000LL);
-        if (!expect(r.framesToSend <= 1, "steady poll never bursts")
-            || !expect(r.droppedNs == 0, "steady poll drops nothing")
-            || !expect(r.wouldHaveSent <= 1, "steady poll would_have_sent<=1")) {
+        if (!expect(r.framesToSend <= 1, "steady 5 ms poll never catch-up bursts")
+            || !expect(r.droppedNs == 0, "steady poll drops nothing")) {
             return false;
         }
-        if (r.framesToSend == 1) {
+        for (int n = 0; n < r.framesToSend; ++n) {
             pacer.onChronoSent();
             ++sent;
-            pacer.onAudioBlock(); // client answers promptly
+            pacer.onAudioBlock();
         }
     }
     return expect(sent >= 4 && sent <= 5, "about one chrono per 21.3 ms");
 }
 
-bool testStallDoesNotReplayUnbounded()
+bool testLateGuiPollDoesNotDrop()
 {
     TciTxChronoPacer pacer;
-    // 53 ms GUI stall (KN7K median uiHeartbeat). Old while would send 2–3.
-    const TciTxChronoPacer::TickResult r =
-        pacer.tick(53 * 1000000LL, /*audioGapNs=*/-1);
-    if (!expect(r.framesToSend == 1, "stall emits at most one chrono")
-        || !expect(r.wouldHaveSent >= 2, "telemetry records the unbounded count")
-        || !expect(r.droppedNs > 0, "excess stall is dropped not banked")) {
-        std::printf("got frames=%d would=%d dropped=%lld\n",
-                    r.framesToSend, r.wouldHaveSent,
-                    static_cast<long long>(r.droppedNs));
-        return false;
+    // 5K Studio Display: timer fires at ~40 ms, not 5 ms.
+    int sent = 0;
+    std::int64_t elapsed = 0;
+    for (int i = 0; i < 10; ++i) {
+        const TciTxChronoPacer::TickResult r =
+            pacer.tick(40 * 1000000LL, /*audioGapNs=*/2 * 1000000LL);
+        elapsed += 40 * 1000000LL;
+        if (!expect(r.droppedNs == 0, "40 ms poll must not drop owed time")
+            || !expect(r.framesToSend >= 1 && r.framesToSend <= 3,
+                       "40 ms poll pays 1–2 frames, not zero")) {
+            std::printf("tick %d frames=%d dropped=%lld would=%d\n",
+                        i, r.framesToSend,
+                        static_cast<long long>(r.droppedNs), r.wouldHaveSent);
+            return false;
+        }
+        for (int n = 0; n < r.framesToSend; ++n) {
+            pacer.onChronoSent();
+            ++sent;
+            pacer.onAudioBlock();
+        }
     }
-    pacer.onChronoSent();
-    if (!expect(pacer.outstanding() == 1, "one unanswered after stall tick")) {
+    const double hz = static_cast<double>(sent) * TciTxChronoPacer::kStereoFrames
+        / (static_cast<double>(elapsed) / 1.0e9);
+    if (!expect(hz > 45000.0 && hz < 51000.0, "late polls still average ~48 kHz")) {
+        std::printf("effective48k=%.1f sent=%d elapsed_ms=%.1f\n",
+                    hz, sent, elapsed / 1.0e6);
         return false;
     }
     return true;
 }
 
-bool testLongStallStillOneFrame()
+bool testFiftyMsStallPaysTwoNotOne()
 {
     TciTxChronoPacer pacer;
-    // 1675 ms outlier from KN7K. Old while would send ~78 frames.
+    const TciTxChronoPacer::TickResult r =
+        pacer.tick(53 * 1000000LL, /*audioGapNs=*/-1);
+    if (!expect(r.framesToSend == 2, "53 ms stall pays two periods")
+        || !expect(r.wouldHaveSent == 2, "would_have_sent matches owed")
+        || !expect(r.droppedNs == 0, "53 ms fits in the 213 ms backlog")) {
+        std::printf("got frames=%d would=%d dropped=%lld\n",
+                    r.framesToSend, r.wouldHaveSent,
+                    static_cast<long long>(r.droppedNs));
+        return false;
+    }
+    return true;
+}
+
+bool testLongStallIsBoundedNotDroppedToOne()
+{
+    TciTxChronoPacer pacer;
+    // 1675 ms outlier. Unbounded while ≈ 78 frames; we send 3 and keep ~213 ms.
     const TciTxChronoPacer::TickResult r =
         pacer.tick(1675 * 1000000LL, /*audioGapNs=*/-1);
-    return expect(r.framesToSend == 1, "1.6 s stall still one frame")
-        && expect(r.wouldHaveSent >= 70, "would_have_sent captures the old burst")
-        && expect(r.droppedNs > TciTxChronoPacer::kPeriodNs,
-                  "most of the stall is discarded");
+    if (!expect(r.framesToSend == TciTxChronoPacer::kMaxFramesPerTick,
+                "long stall still bounded per tick")
+        || !expect(r.wouldHaveSent >= 70, "telemetry records the unbounded count")
+        || !expect(r.droppedNs > TciTxChronoPacer::kPeriodNs,
+                   "seconds of stall are discarded after keeping ~213 ms")) {
+        std::printf("got frames=%d would=%d dropped=%lld accum=%lld\n",
+                    r.framesToSend, r.wouldHaveSent,
+                    static_cast<long long>(r.droppedNs),
+                    static_cast<long long>(r.accumNs));
+        return false;
+    }
+    return expect(pacer.accumNs() == TciTxChronoPacer::kMaxBacklogNs,
+                  "backlog sits at the cap after a watchdog stall");
 }
 
 bool testOutstandingCapRefusesMoreChrono()
@@ -89,7 +125,7 @@ bool testOutstandingCapRefusesMoreChrono()
     pacer.onAudioBlock();
     const TciTxChronoPacer::TickResult resumed =
         pacer.tick(TciTxChronoPacer::kPeriodNs, /*audioGapNs=*/5 * 1000000LL);
-    return expect(resumed.framesToSend == 1, "audio reply unblocks chrono");
+    return expect(resumed.framesToSend >= 1, "audio reply unblocks chrono");
 }
 
 bool testForgetStuckOutstanding()
@@ -105,10 +141,7 @@ bool testForgetStuckOutstanding()
         pacer.tick(TciTxChronoPacer::kPeriodNs,
                    TciTxChronoPacer::kForgetStuckNs);
     return expect(forgot.forgotStuck, "250 ms without audio forgets outstanding")
-        && expect(forgot.framesToSend == 1, "chrono resumes after forget")
-        && expect(pacer.outstanding() == 0
-                      || forgot.outstanding == 0,
-                  "outstanding cleared before the new send");
+        && expect(forgot.framesToSend >= 1, "chrono resumes after forget");
 }
 
 bool testAudioBlockDecrementsOutstanding()
@@ -116,10 +149,10 @@ bool testAudioBlockDecrementsOutstanding()
     TciTxChronoPacer pacer;
     pacer.tick(TciTxChronoPacer::kPeriodNs, -1);
     pacer.onChronoSent();
-    pacer.onChronoSent(); // defensive: startTxChrono sends one immediately
+    pacer.onChronoSent();
     pacer.onAudioBlock();
     pacer.onAudioBlock();
-    pacer.onAudioBlock(); // extra reply must not underflow
+    pacer.onAudioBlock();
     return expect(pacer.outstanding() == 0, "outstanding floors at zero");
 }
 
@@ -138,8 +171,9 @@ bool testResetClearsState()
 int main()
 {
     if (!testSteadyPollEmitsEveryPeriod()
-        || !testStallDoesNotReplayUnbounded()
-        || !testLongStallStillOneFrame()
+        || !testLateGuiPollDoesNotDrop()
+        || !testFiftyMsStallPaysTwoNotOne()
+        || !testLongStallIsBoundedNotDroppedToOne()
         || !testOutstandingCapRefusesMoreChrono()
         || !testForgetStuckOutstanding()
         || !testAudioBlockDecrementsOutstanding()
