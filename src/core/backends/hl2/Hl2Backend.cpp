@@ -1700,14 +1700,16 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         // Only take the live value when the policy actually had something to
         // say: with no restored state and no param it returns the default,
         // which must not stamp on a value the lines above already settled.
-        if (m_haveRestoredState || paramPresent)
+        if (m_haveRestoredState || paramPresent) {
             m_lnaGainDb = seed.liveDb;
+        }
         m_lnaSessionPin = seed.sessionPin;
-        if (m_lnaSessionPin)
+        if (m_lnaSessionPin) {
             qCInfo(lcHl2) << "HL2: lnaGainDb param pins" << m_lnaGainDb
                           << "dB for this session;" << m_currentBandKey
                           << "keeps its stored"
                           << m_lnaDbByBand.value(m_currentBandKey) << "dB";
+        }
     }
     // Seed the DRIVE from the start band's memory and echo it upward NOW —
     // before linkUp — so TransmitModel carries the restored value when its

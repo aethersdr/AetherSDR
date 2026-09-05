@@ -388,6 +388,92 @@ int main(int argc, char** argv)
         backend.disconnectRadio();
     }
 
+    // ---- #5402: the CAPTURE SNAPSHOT preserves the band's stored LNA ------
+    //
+    // THE PRODUCTION WRITER, NOT THE POLICY. hl2_band_memory_test proves
+    // bandMemoryWriteback() decides correctly; it cannot prove that
+    // currentOperatingState() asks it. The review of #5402 made exactly that
+    // mutation — reverting the snapshot line to the old unconditional
+    // `lnaByBand.insert(m_currentBandKey, m_lnaGainDb)` compiled and left the
+    // policy test green — so the regression has to run through the real
+    // capture, which is what this block does.
+    //
+    // The scenario is the reviewer's own: restore 20 m at -12, connect with
+    // lnaGainDb=20 (a session pin), then tune WITHIN 20 m. The tune is not a
+    // band change, so rememberCurrentBandState() never runs; the debounced
+    // capture is the only writer that reaches the map, and before the fix it
+    // persisted the pin over the operator's stored value long before the first
+    // band change could.
+    //
+    // A pin is the only state in which live and stored legitimately differ —
+    // every other path keeps them equal — so this is the one scenario in which
+    // the snapshot line's decision is observable at all.
+    {
+        hl2::Hl2Backend backend;
+        // A pan id the way the app learns one: from the backend's own echo.
+        QString panId;
+        QObject::connect(&backend, &IRadioBackend::panRfGainChanged, &backend,
+                         [&panId](const QString& id, int) {
+                             if (panId.isEmpty()) {
+                                 panId = id;
+                             }
+                         });
+
+        RestoredRadioState remembered;
+        remembered.rfFrequencyHz = 14'074'000.0;   // 20m
+        remembered.sampleRateHz = 48'000;
+        remembered.extensionSchemaVersion = 1;
+        remembered.extension = QJsonObject{
+            {QStringLiteral("rfGain"),
+             QJsonObject{{QStringLiteral("defaultDb"), 20},
+                         {QStringLiteral("lnaDbByBand"),
+                          QJsonObject{{QStringLiteral("20m"), -12}}}}}};
+        backend.applyRestoredState(remembered);
+
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:01");
+        req.params.insert(QStringLiteral("lnaGainDb"), 20);   // the pin
+        backend.connectRadio(req);
+
+        // 999 rather than 0: a missing key must not read as a plausible gain.
+        const auto stored20m = [&backend] {
+            return backend.currentOperatingState()
+                .extension.value(QStringLiteral("rfGain"))
+                .toObject()
+                .value(QStringLiteral("lnaDbByBand"))
+                .toObject()
+                .value(QStringLiteral("20m"))
+                .toInt(999);
+        };
+
+        check(stored20m() == -12,
+              "the capture snapshot keeps 20m's stored -12 under a session pin");
+
+        backend.setSliceFrequency(0, 14'080'000.0);   // same band, not a hop
+        check(stored20m() == -12,
+              "and a same-band tune — the debounced store — still keeps it");
+
+        // PRESENCE CONTROL. Everything above is an absence: a value that did
+        // not change. On its own it would also pass if this map were simply
+        // unwritable through the capture, or if the pin had never happened and
+        // the live value were -12 all along. So end the pin the way an operator
+        // does and show the SAME assertion move.
+        backend.setSliceFrequency(0, 7'074'000.0);    // hop to 40m: pin ends
+        backend.setSliceFrequency(0, 14'074'000.0);   // back to 20m
+        check(stored20m() == -12,
+              "returning to 20m still finds the value the pin never consumed");
+        check(!panId.isEmpty(),
+              "the backend echoed a pan id — the control below can be issued");
+        backend.setPanRfGain(panId, 5);
+        check(stored20m() == 5,
+              "and the operator's OWN choice does reach the map — the "
+              "preserved value above is preservation, not a dead writer");
+
+        backend.disconnectRadio();
+    }
+
     // ---- radio swap: an empty restore is a full reset ---------------------
     // (PR #4619 review, Ozy311 finding 1): same backend instance, radio A
     // with maps, then applyRestoredState({}) for radio B — nothing of A may
