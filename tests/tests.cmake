@@ -678,12 +678,14 @@ target_include_directories(hl2_receivers_test PRIVATE src)
 target_link_libraries(hl2_receivers_test PRIVATE Qt6::Core)
 add_test(NAME hl2_receivers_test COMMAND hl2_receivers_test)
 
-# HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
-add_executable(hl2_spectrum_test
-    tests/hl2_spectrum_test.cpp
-    src/core/backends/hl2/Hl2Spectrum.cpp)
+# HL2 spectrum (FFT panadapter). This compiled Hl2Spectrum.cpp standalone
+# against FFTW3 with no Qt at all, which stopped working when the class took
+# WdspChannel::fftwSetupLock() to serialise the process-global FFTW planner:
+# WdspChannel.h includes <QMetaType>, and the lock is defined in
+# WdspChannel.cpp. Links aethercore for both, like its RX-DSP siblings below.
+add_executable(hl2_spectrum_test tests/hl2_spectrum_test.cpp)
 target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
-target_link_libraries(hl2_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
 # HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
