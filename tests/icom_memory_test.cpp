@@ -132,9 +132,9 @@ int main()
               && memoryIndex(MemoryDialect::Ic7300Mk2, -1, 99) == 98,
           "each model maps its documented address space to stable cache indices");
 
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
-    const IcomModel* ic7300 = modelForCivAddress(0xB6);
-    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* ic705 = modelForId(0xA4);
+    const IcomModel* ic7300 = modelForId(0xB6);
+    const IcomModel* ic9700 = modelForId(0xA2);
     check(ic705 && profileFor(*ic705).memory
               && profileFor(*ic705).memory->requiresGroupSelection,
           "IC-705 profile requires explicit group selection");

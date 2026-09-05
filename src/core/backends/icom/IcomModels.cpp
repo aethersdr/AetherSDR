@@ -351,7 +351,7 @@ constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
 
 }  // namespace
 
-const IcomModel* modelForCivAddress(std::uint8_t addr)
+const IcomModel* modelForId(std::uint8_t addr)
 {
     for (const auto& m : kModels)
         if (m.civAddress == addr)
@@ -491,8 +491,11 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 {
     if (frame.cmd != cmd::kReadId || !frame.hasSub || frame.sub != 0x00)
         return std::nullopt;
-    if (frame.data.empty())
+    if (frame.data.size() != 1 || frame.from == kBroadcastAddress
+        || frame.from >= kControllerAddress
+        || (frame.to != kControllerAddress && frame.to != kBroadcastAddress)) {
         return std::nullopt;
+    }
     return frame.data[0];
 }
 

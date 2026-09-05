@@ -569,6 +569,13 @@ target_link_libraries(icom_power_derivation_test PRIVATE
     aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
 
+# Socket-free CI-V identity and late TX-audio lifecycle. IcomSession is never
+# started; literal replies enter the existing injected frame-handler seam.
+add_executable(icom_identity_test tests/icom_identity_test.cpp)
+target_include_directories(icom_identity_test PRIVATE src)
+target_link_libraries(icom_identity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_identity_test COMMAND icom_identity_test)
+
 # Retired fake-radio fixtures. Positive session and backend convergence is
 # certified against real firmware through the automation bridge and radiocert;
 # deterministic protocol/model policy stays in socket-free tests. Keep these
@@ -4331,6 +4338,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    icom_identity_test
     control_resource_service_test
     slice_label_test
     ulanzi_mapping_migration_test

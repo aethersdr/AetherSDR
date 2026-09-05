@@ -318,7 +318,8 @@ private:
     void finishMemoryRefreshWhenDrained(quint64 generation);
     void publishExtendedRepeaterState();
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
-    void adoptReportedCivAddress(std::uint8_t reported);
+    bool adoptCivIdentity(std::uint8_t address, std::uint8_t modelId);
+    void publishModelControls();
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
@@ -335,11 +336,12 @@ private:
     // A typed hex address: a device selection, so the wire must not retarget it.
     // A picked model is NOT pinned — it is a shortcut for an address.
     bool m_civAddressPinned = false;
-    // The address the session opened with, before any wire adoption. What a
-    // two-responder bus falls back TO.
+    // The address the session opened with, used only by the bounded read
+    // fallback before an identity reply arrives.
     std::uint8_t m_civSeedAddress = 0;
     // The address adopted from a 0x19 0x00 reply this session, 0 if none yet.
     std::uint8_t m_civReported = 0;
+    std::uint8_t m_civModelId = 0;
     // Two DIFFERENT addresses answered. Adopt neither — on a bus fronted by
     // Icom's own RS-BA1 server the second responder may be a rotator or an amp,
     // and picking either at random mis-decodes the rest of the session.
@@ -350,10 +352,6 @@ private:
     quint64 m_memoryRefreshGeneration = 0;
     QSet<int> m_memoryRefreshReplies;
     int m_memoryRefreshTotal = 0;
-    // The model the RS-BA1 handshake NAMED. Kept separately from m_model because
-    // it is the third signal that separates "right radio, changed address" from
-    // "wrong radio entirely" — see adoptReportedCivAddress().
-    const IcomModel* m_modelByName = nullptr;
     // Bounded, single-shot, never a poll: the unknown-model path waits this long
     // for a broadcast reply before giving up and bursting at the fallback
     // address, so a radio that answers nothing still connects.

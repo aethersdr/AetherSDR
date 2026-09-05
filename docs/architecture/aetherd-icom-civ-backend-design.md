@@ -1363,3 +1363,42 @@ of a black panadapter.
 5. **Re-run this sweep against the IC-7300MK2** when one is available. The
    sweeper is model-agnostic and the JSON diffs cleanly, which is the cheapest
    possible way to establish a second model's capability set.
+
+## CI-V identity and custom Network Radio Names (#5164)
+
+Every connection begins with conservative unknown-model capabilities. The
+RS-BA1 Network Radio Name is presentation text only, including names that
+happen to match another supported model. CI-V `19 00` selects the profile from
+its one-byte model-ID payload; the reply envelope's source address selects the
+command destination. These values are independent when the operator changes
+the CI-V address. This follows wfview's `funcTransceiverId` model-ID decode and
+`determineRigCaps` adoption of `incomingCIVAddr` as the destination.
+
+Auto sends one broadcast identity query; a manually pinned address receives a
+directed query and rejects other responders. The existing bounded timeout can
+start common reads at the seed address, but never promotes a nickname to a
+hardware profile. A valid late identity restarts the snapshot with the correct
+model vocabulary and publishes capabilities, modes, antenna choices, front-end
+controls, meters, and scope geometry. Repeated identical replies are inert.
+Conflicting identities withdraw transmit capability until reconnect.
+
+The current model table recognizes these hexadecimal `19 00` payloads. These
+are model IDs, even though their values match factory CI-V addresses; changing
+the operating address does not change the ID. Recognition alone does not imply
+that every feature or network path has live-hardware validation.
+
+| Model | Model-ID payload |
+|---|---|
+| IC-705 | `A4` |
+| IC-9700 | `A2` |
+| IC-7610 | `98` |
+| IC-7850 / IC-7851 (`IC-785x` profile) | `8E` |
+| IC-7300 | `94` |
+| IC-7300MK2 | `B6` |
+| IC-905 | `AC` |
+
+Sources: the existing `IcomModels.cpp` model table and its Icom/wfview provenance;
+Icom's per-model CI-V guides define `19 00` as the transceiver-ID read. The
+IC-7300MK2 `B6` payload and destination were also confirmed by a receive-only
+connection for this change. For example, `FE FE E0 50 19 00 A4 FD` identifies an
+IC-705 whose operating address is `50`, regardless of its Network Radio Name.

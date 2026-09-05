@@ -79,9 +79,9 @@ public:
 
     // RETARGET the session at a different CI-V address, mid-session.
     //
-    // The address the session opened with is a SEED — from the operator's pick,
-    // or from the model the RS-BA1 handshake named — and the radio's own
-    // 0x19 0x00 reply is what corrects it. Without a setter the correction had
+    // The address the session opened with is a seed from settings. The source
+    // address of the radio's 19 00 reply corrects it independently of the model
+    // ID carried in the payload. Without a setter the correction had
     // nowhere to land: Params::civAddress is baked at start() and read through a
     // const getter, so an IC-9700 seeded at the IC-705's 0xA4 went on being
     // addressed at 0xA4 for the whole session and answered nothing.

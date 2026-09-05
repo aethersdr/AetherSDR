@@ -3300,6 +3300,10 @@ hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
 should only be enabled briefly when these structured diagnostics are
 insufficient.
 
+The `icom.profile.show` extension distinguishes `modelId` (the `19 00` payload)
+from `civAddress` (the current command destination). A custom address can differ
+from the model ID; Network Radio Name does not select either value.
+
 ### `controls`
 
 The CI-V control and meter registry, joined against what is actually wired.
