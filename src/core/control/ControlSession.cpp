@@ -2,12 +2,16 @@
 
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLoggingCategory>
 #include <QPointer>
+#include <QThread>
 #include <QUuid>
 
 #include <utility>
 
 namespace AetherSDR::control {
+
+Q_LOGGING_CATEGORY(lcControlSession, "aether.control.session")
 
 ControlSession::ControlSession(ControlResourceStore* resources,
                                qint64 maxQueuedOutputBytes,
@@ -83,8 +87,18 @@ void ControlSession::bindOutputTransport(
     std::function<bool(const QByteArray&)> writeFrame,
     std::function<void()> abortTransport)
 {
-    Q_ASSERT(transportContext && transportContext->thread() == thread());
-    Q_ASSERT(writeFrame && abortTransport);
+    // Reject invalid bindings in release builds too. In particular, never
+    // compensate for mismatched affinity by aborting a socket on another thread.
+    if (QThread::currentThread() != thread()
+        || !transportContext || transportContext->thread() != thread()) {
+        qCWarning(lcControlSession) << "Output transport must bind on the session's owning thread";
+        return;
+    }
+    if (!writeFrame || !abortTransport || m_outputTransportBound) {
+        qCWarning(lcControlSession) << "Output transport requires callbacks and may only bind once";
+        return;
+    }
+    m_outputTransportBound = true;
     const QPointer<ControlSession> session(this);
     const QPointer<QObject> transport(transportContext);
     connect(this, &ControlSession::outputReady, transportContext,
@@ -178,6 +192,10 @@ std::optional<ProtocolError> ControlSession::unsubscribe(
 QList<QByteArray> ControlSession::takePendingFrames()
 {
     if (!canObserve()) {
+        // Defence in depth: authorization is immutable and revocation already
+        // clears this queue. Do not retain charged bytes if that invariant changes.
+        m_pending.clear();
+        m_pendingBytes = 0;
         return {};
     }
     QList<QByteArray> frames;
@@ -205,6 +223,8 @@ void ControlSession::rebuildSelectorIndex()
 
 bool ControlSession::observes(const ResourceAddress& address) const
 {
+    // Defence in depth: denied sessions cannot subscribe, and revocation clears
+    // the selector index. No supported state currently relies on this guard alone.
     if (!canObserve()) {
         return false;
     }

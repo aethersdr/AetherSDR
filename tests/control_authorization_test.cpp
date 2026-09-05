@@ -4,6 +4,7 @@
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QThread>
 
 #include <cstdio>
 #include <memory>
@@ -165,6 +166,83 @@ bool testUntrustedHelloCannotGrantAccess()
         }
     }
     return true;
+}
+
+bool testHelloAuthorizationPrecedesParams()
+{
+    ControlResourceStore store;
+    ControlService service(&store);
+    for (const QJsonObject& params : {
+             QJsonObject{},
+             QJsonObject{{QStringLiteral("versions"), QJsonArray{}}},
+             QJsonObject{{QStringLiteral("versions"), QJsonArray{2}}},
+             QJsonObject{{QStringLiteral("versions"), QJsonArray{1}}}}) {
+        ControlSession session(&store, 4096);
+        const ServiceReply reply = invoke(service, session, QStringLiteral("hello"), params);
+        if (!check(errorCode(reply) == QStringLiteral("auth.required")
+                       && reply.closeAfterWrite && !session.isNegotiated()
+                       && reply.message.value(QStringLiteral("error")).toObject()
+                           .value(QStringLiteral("details")).toObject().isEmpty(),
+                   "unauthenticated hello must not disclose parameter/version negotiation")) {
+            return false;
+        }
+    }
+    ControlSession observer(&store, 4096, SessionAuthorization::Observer);
+    return check(errorCode(invoke(service, observer, QStringLiteral("hello"),
+                                 {{QStringLiteral("versions"), QJsonArray{2}}}))
+                     == QStringLiteral("protocol.version_unsupported"),
+                 "trusted observers must retain version negotiation errors");
+}
+
+bool testOutputBindingContract()
+{
+    ControlResourceStore store;
+    ControlService service(&store);
+    ControlSession session(&store, 4096, SessionAuthorization::Observer);
+    QObject transport;
+    int writes = 0;
+    int aborts = 0;
+    int rejectedCallbacks = 0;
+    const auto rejectedWrite = [&](const QByteArray&) { ++rejectedCallbacks; return true; };
+    const auto rejectedAbort = [&] { ++rejectedCallbacks; };
+
+    // These must be rejected without consuming the one permitted binding.
+    session.bindOutputTransport(nullptr, rejectedWrite, rejectedAbort);
+    session.bindOutputTransport(&transport, {}, rejectedAbort);
+    session.bindOutputTransport(&transport, rejectedWrite, {});
+
+    QThread worker;
+    QObject foreignTransport;
+    foreignTransport.moveToThread(&worker);
+    worker.start();
+    session.bindOutputTransport(&foreignTransport, rejectedWrite, rejectedAbort);
+    // Same-affinity endpoints are insufficient if the call itself is off-thread.
+    QMetaObject::invokeMethod(&foreignTransport, [&] {
+        session.bindOutputTransport(&transport, rejectedWrite, rejectedAbort);
+        foreignTransport.moveToThread(transport.thread());
+    }, Qt::BlockingQueuedConnection);
+    worker.quit();
+    worker.wait();
+
+    session.bindOutputTransport(&transport, [&](const QByteArray&) {
+        ++writes;
+        return true;
+    }, [&] { ++aborts; });
+    // Reject rebinds to both the same context and a different live context.
+    session.bindOutputTransport(&transport, rejectedWrite, rejectedAbort);
+    QObject duplicateTransport;
+    session.bindOutputTransport(&duplicateTransport, rejectedWrite, rejectedAbort);
+    hello(service, session);
+    QJsonObject baseline;
+    if (!check(!session.subscribe(kSelectors, &baseline), "binding observer must subscribe")) {
+        return false;
+    }
+    store.upsert(kServer, {{QStringLiteral("health"), QStringLiteral("ok")}});
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    session.revokeAuthorization();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    return check(writes == 1 && aborts == 1 && rejectedCallbacks == 0,
+                 "invalid and repeated bindings must install no callbacks in release builds");
 }
 
 bool testRevocationStopsDelivery()
@@ -423,6 +501,8 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
     return testAuthenticationAndGrants()
         && testUntrustedHelloCannotGrantAccess()
+        && testHelloAuthorizationPrecedesParams()
+        && testOutputBindingContract()
         && testBufferedTransportRevocation()
         && testRevocationStopsDelivery()
         && testOutputTransportLifetime()

@@ -48,7 +48,9 @@ public:
     // connection must construct a new session; hello cannot restore this one.
     void revokeAuthorization();
 
-    // Bind once on the owning thread. The transport context bounds callback
+    // Bind once on the owning thread; neither endpoint may move threads afterward.
+    // Invalid/repeated binds log and leave the existing wiring unchanged.
+    // The transport context bounds callback
     // lifetime; writeFrame accepts a complete frame and returns false on failure.
     // abortTransport must synchronously discard transport-owned output. Keeping
     // this wiring here lets socket-free tests exercise the production lifecycle.
@@ -101,6 +103,7 @@ private:
     const SessionAuthorization m_authorization;
     QString m_sessionId;
     bool m_revoked{false};
+    bool m_outputTransportBound{false};
     qint64 m_maxQueuedOutputBytes{0};
     quint64 m_sequence{0};
     quint64 m_drainedSequence{0};

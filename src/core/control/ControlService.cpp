@@ -120,6 +120,12 @@ ServiceReply ControlService::handle(
 
     const ProtocolRequest& request = *parsed.request;
     if (!session->isNegotiated()) {
+        if (!session->isAuthenticated()) {
+            return failure(request.id,
+                           {QStringLiteral("auth.required"),
+                            QStringLiteral("authenticated transport context required"), {}, false},
+                           true);
+        }
         if (!request.isHello()) {
             return failure(request.id,
                            {QStringLiteral("protocol.invalid_envelope"),
@@ -138,12 +144,6 @@ ServiceReply ControlService::handle(
                            true);
         }
 
-        if (!session->isAuthenticated()) {
-            return failure(request.id,
-                           {QStringLiteral("auth.required"),
-                            QStringLiteral("authenticated transport context required"), {}, false},
-                           true);
-        }
         session->completeNegotiation();
         return {ControlProtocolCodec::successResponse(
                     request.id, capabilities(*session)), false};
