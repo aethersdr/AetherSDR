@@ -2175,20 +2175,25 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
         "QPushButton:pressed { background: #00b4d8; color: #000; }"
-        // rgba(), not a {{color.text.disabled}}/{{color.border.subtle}}
-        // token: this button always paints its own dark rgba(15,15,26,*)
-        // backdrop first, regardless of app theme, so a theme-relative
-        // "dimmed text" token is the wrong tool -- color.text.disabled
-        // resolves to #a0b0c0 in the light theme (WCAG luminance 0.42),
-        // BRIGHTER than the enabled state's hardcoded #90a0b0 (0.34),
-        // inverting the intended hierarchy (ten9876, #5166 review).
-        // Reusing the enabled colours' own RGB at reduced alpha dims them
-        // against this widget's own backdrop by construction, in every
-        // theme, without introducing a new hex literal for the ratchet
-        // (audit_colours.py) to flag -- rgba(15,15,26,90) two lines up is
-        // the existing precedent for that.
-        "QPushButton:disabled { background: rgba(15,15,26,90); border-color: rgba(48,64,80,90);"
-        " color: rgba(144,160,176,140); }";
+        // Its own role rather than the shared {{color.text.disabled}} /
+        // {{color.border.subtle}}: this button always paints its own dark
+        // rgba(15,15,26,*) backdrop first, regardless of app theme, so a
+        // theme-relative "dimmed text" token is the wrong reference point --
+        // color.text.disabled resolves to #a0b0c0 in the light theme (WCAG
+        // luminance 0.42), BRIGHTER than the enabled state's #90a0b0 (0.34),
+        // inverting the intended hierarchy (ten9876, #5166 review). The
+        // values are the enabled colours' own RGB at reduced alpha, which
+        // dims them against this widget's own backdrop by construction.
+        // A new token role rather than the literals this shipped with first
+        // (theme-style-guide.md section 4; Ozy311, #5166 review) -- and the
+        // reason both bundled themes carry the same value is that the alpha
+        // IS the mechanism here, so there is nothing theme-relative left to
+        // vary. QSS rgba() rather than 8-digit hex because Qt reads #AARRGGBB
+        // while CSS/QSS reads #RRGGBBAA (see tools/audit_colours.py's note on
+        // exactly that ambiguity); rgba() has one reading in both.
+        "QPushButton:disabled { background: {{color.spectrum.zoomButton.disabled.background}};"
+        " border-color: {{color.spectrum.zoomButton.disabled.border}};"
+        " color: {{color.spectrum.zoomButton.disabled.text}}; }";
 
     // objectName + accessibleName let the automation bridge target these by a
     // stable handle instead of the visible label \u2014 notably zoom-out, whose glyph

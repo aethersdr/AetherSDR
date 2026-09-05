@@ -91,7 +91,10 @@
             "trace":    "{color.blue.500}",
             "peakHold": "{color.amber.500}",
             "average":  "{color.gray.400}",
-            "grid":     "{color.gray.850}"
+            "grid":     "{color.gray.850}",
+            "zoomButton.disabled.background": "rgba(15,15,26,90)",
+            "zoomButton.disabled.border":     "rgba(48,64,80,90)",
+            "zoomButton.disabled.text":       "rgba(144,160,176,140)"
           },
           "waterfall.colormap": {
             "default": {

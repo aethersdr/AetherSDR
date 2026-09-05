@@ -104,6 +104,29 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.spectrum.average` | `#8ea8c0` | averaged trace |
 | `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
 | `color.waterfall.colormap` | (gradient — Phase 2 gradient support) | the 8-stop RF colormap |
+| `color.spectrum.zoomButton.disabled.background` | `rgba(15,15,26,90)` | disabled state of the waterfall zoom / band-segment buttons |
+| `color.spectrum.zoomButton.disabled.border` | `rgba(48,64,80,90)` | as above, border |
+| `color.spectrum.zoomButton.disabled.text` | `rgba(144,160,176,140)` | as above, glyph |
+
+The three `zoomButton.disabled.*` tokens are the exception to this section's
+"paint code only" heading — they are consumed from a QSS template through
+`ThemeManager::applyStyleSheet()`, not from a painter.
+
+Two things about them are deliberate and will look wrong to a reader who
+expects the usual shape:
+
+- **The value is a QSS `rgba()` string, not hex.** These colours need alpha:
+  the button paints its own dark backdrop, and the disabled look is the
+  enabled colour at reduced opacity over it. 8-digit hex is ambiguous here —
+  Qt reads `#AARRGGBB`, CSS/QSS reads `#RRGGBBAA` (`tools/audit_colours.py`
+  flags exactly this ambiguity) — whereas `rgba()` has one reading in both.
+  A consequence: these values are **not** valid input to `QColor`, so they
+  suit a stylesheet and nothing else.
+- **Both bundled themes carry the same value.** The dimming is constructed
+  from alpha against the widget's own backdrop rather than from the app
+  theme, so there is nothing theme-relative left to vary. They exist as
+  tokens so a theme author can override them, which the literals they
+  replaced did not allow.
 
 ### Slice indicators
 

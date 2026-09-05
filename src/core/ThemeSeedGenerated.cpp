@@ -106,6 +106,9 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.spectrum.grid", QString("#1a2330"));
     m_tokens.insert("color.spectrum.peakHold", QString("#ffb84d"));
     m_tokens.insert("color.spectrum.trace", QString("#00b4d8"));
+    m_tokens.insert("color.spectrum.zoomButton.disabled.background", QString("rgba(15,15,26,90)"));
+    m_tokens.insert("color.spectrum.zoomButton.disabled.border", QString("rgba(48,64,80,90)"));
+    m_tokens.insert("color.spectrum.zoomButton.disabled.text", QString("rgba(144,160,176,140)"));
     m_tokens.insert("color.text.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.text.label", QString("#506070"));
     m_tokens.insert("color.text.primary", QString("#c8d8e8"));
