@@ -98,6 +98,47 @@ int main()
         check((c[0] & 0x01) == 0, "config C0 is even (MOX=0, cannot key)");
     }
 
+    // ---- config register: ADC dither / randomization (C3 bits 3/4) ----
+    {
+        check(ccConfig(SampleRate::R48k, 1)[3] == 0x00,
+              "dither/random default false -> C3 still zero (pre-existing callers unaffected)");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, true, false)[3] == 0x08,
+              "dither alone sets C3 bit3");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, false, true)[3] == 0x10,
+              "random alone sets C3 bit4");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, true, true)[3] == 0x18,
+              "dither+random set both C3 bits 3 and 4");
+        // The OC filter byte lives in C2 and must be unaffected by the new C3 args.
+        check(ccConfig(SampleRate::R48k, 1, kOcLpf160, true, true)[2]
+                  == ccConfig(SampleRate::R48k, 1, kOcLpf160)[2],
+              "dither/random do not disturb the OC filter byte in C2");
+    }
+
+    // ---- TX latency + PTT hang (register 0x17, C0=0x2E) ----
+    {
+        const Cc c = ccTxLatencyPttHang(20, 12);
+        check(c[0] == 0x2E, "tx-latency/ptt-hang C0 is register 0x17 (addr<<1)");
+        check(c[3] == 12, "C3 = PTT hang");
+        check(c[4] == 20, "C4 = TX latency");
+        check(ccTxLatencyPttHang(200, 100)[4] == kTxLatencyMax,
+              "TX latency clamps to its 7-bit field width (127)");
+        check(ccTxLatencyPttHang(20, 100)[3] == kPttHangMax,
+              "PTT hang clamps to its 5-bit field width (31)");
+        check((c[0] & 0x01) == 0, "tx-latency/ptt-hang C0 is even (MOX=0, cannot key)");
+    }
+
+    // ---- Reset on disconnect (register 0x3A, C0=0x74) ----
+    {
+        const Cc off = ccResetOnDisconnect(false);
+        const Cc on = ccResetOnDisconnect(true);
+        check(off[0] == 0x74, "reset-on-disconnect C0 is register 0x3A (addr<<1)");
+        check(on[0] == 0x74, "reset-on-disconnect C0 is the same register whichever way it's set");
+        check(off[0] != kC0Sync, "reset-on-disconnect is NOT the hazardous sync/reset register (0x39)");
+        check(off[4] == 0x00, "disabled encodes C4 = 0");
+        check(on[4] == 0x01, "enabled encodes C4 = 1");
+        check(off[1] == 0 && off[2] == 0 && off[3] == 0, "reset-on-disconnect C1..C3 are zero");
+    }
+
     // ---- J16 open-collector filter byte: DATA[23:17] == C2[7:1] ----
     //
     // The SHIFT is the whole point. DATA[16] is not part of the field, so an
@@ -572,6 +613,55 @@ int main()
         t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+    }
+
+    // ---- I/O Board: raw I2C request/reply (register 0x3C/0x3D) ----
+    {
+        const Cc readReq = ccI2cRead(I2cBus::Bus1, 0xD4, 0x0F);
+        check(readReq[0] == static_cast<std::uint8_t>((kAddrI2cBus1 << 1) | 0x80),
+              "I2C bus 1 read sets RQST (C0 bit 7) on the bus-1 register");
+        check(readReq[1] == 0x07, "I2C read is C1 = 0x07 (read + stop)");
+        check(readReq[2] == (0x80 | (0xD4 >> 1)),
+              "an 8-bit-shifted device address is normalized to 7 bits before C2");
+
+        const Cc writeReq = ccI2cWrite(I2cBus::Bus2, 0x50, 0x03, 0xAB);
+        check(writeReq[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
+              "I2C bus 2 write sets RQST on the bus-2 register, distinct from bus 1");
+        check(writeReq[1] == 0x06, "I2C write is C1 = 0x06 (write + stop)");
+        check(writeReq[2] == (0x80 | 0x50), "a 7-bit device address passes through unshifted");
+        check(writeReq[3] == 0x03, "C3 carries the target register");
+        check(writeReq[4] == 0xAB, "C4 carries the write data");
+
+        // A successful bus-1 reply: ACK, RADDR = kAddrI2cBus1, data byte in C4.
+        std::uint8_t frame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        frame[3] = static_cast<std::uint8_t>((kAddrI2cBus1 << 1) | 0x80);
+        frame[7] = 0x42;   // C4 = returned byte
+        const auto resp = parseEp6Response(frame);
+        check(resp.has_value() && resp->ack, "constructed ACK frame decodes as ack=true");
+        const auto decoded = decodeI2cResponse(*resp);
+        check(decoded.matched && !decoded.error && decoded.data == 0x42,
+              "a bus-1 ACK reply decodes to matched, no error, byte 0x42");
+
+        // The error sentinel (RADDR = 0x3F).
+        std::uint8_t errFrame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        errFrame[3] = static_cast<std::uint8_t>((kI2cErrorRaddr << 1) | 0x80);
+        const auto errResp = parseEp6Response(errFrame);
+        const auto errDecoded = decodeI2cResponse(*errResp);
+        check(errDecoded.matched && errDecoded.error,
+              "the 0x3F sentinel decodes to matched + error, never a silent success");
+
+        // A classic free-running frame (ack=false) is not an I2C reply at all.
+        std::uint8_t classic[8] = {0x7F, 0x7F, 0x7F, 0x00, 0, 0, 0, 0};
+        const auto classicResp = parseEp6Response(classic);
+        check(!decodeI2cResponse(*classicResp).matched,
+              "a classic (non-ACK) frame never decodes as an I2C reply");
+
+        // An ACK for some OTHER RQST (not I2C) must not be misread as one.
+        std::uint8_t otherFrame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        otherFrame[3] = static_cast<std::uint8_t>((0x00 << 1) | 0x80);  // some unrelated RADDR
+        const auto otherResp = parseEp6Response(otherFrame);
+        check(!decodeI2cResponse(*otherResp).matched,
+              "an ACK for an unrelated RADDR is not mistaken for an I2C reply");
     }
 
     // ---- SWR ----

@@ -218,6 +218,24 @@ inline constexpr std::uint8_t kC0AdcAssignOrTxGain = 0x1C;
 // watchdog enable at [27:24] and the master enable at [11:8].
 inline constexpr std::uint8_t kC0Sync = 0x72;
 
+// addr 0x17: TX latency + PTT hang. A dedicated register, never shared with
+// anything above — distinct from kC0Sync (addr 0x39) despite both being
+// "timing" controls; do not conflate the two. DATA[12:8] (C3[4:0]) is PTT
+// hang, DATA[6:0] (C4[6:0]) is TX latency. Sourced from the W5TSU fork of the
+// MI0BOT Hermes-Lite-2 Thetis fork (ChannelMaster/networkproto1.c, case 17,
+// "TX latency and PTT hang 0x17") — tier 3 on the source-precedence ladder;
+// not independently re-verified against the HL2 gateware RTL.
+inline constexpr std::uint8_t kC0TxLatencyPttHang = 0x2E;
+inline constexpr int kPttHangMax = 0x1F;     // 5-bit field
+inline constexpr int kTxLatencyMax = 0x7F;   // 7-bit field
+
+// addr 0x3A: reset-on-disconnect. DATA[0] (C4 bit 0), no other bits used.
+// A dedicated register — confirmed NOT the same as kC0Sync (addr 0x39, the
+// filter-pipeline reset that wedged a radio; see the warning above). Sourced
+// from the same Thetis fork (case 18, "Reset on disconnect 0x3a"), same
+// tier-3 caveat as kC0TxLatencyPttHang.
+inline constexpr std::uint8_t kC0ResetOnDisconnect = 0x74;
+
 // Config-register (C0=0x00) bit flags.
 //
 // NOTE: neither of these does anything on a Hermes-Lite 2. The HL2 gateware
@@ -230,6 +248,16 @@ inline constexpr std::uint8_t kConfigMercury = 0x40;  // C1 bit6: ADC-as-DDC-sou
                                                       // openHPSDR Hermes/Mercury. No-op on HL2.
 inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets this
                                                       // unconditionally. No-op on HL2.
+
+// C3 bits 3/4 of the config register: ADC dither and ADC randomization.
+// Same tier-3 sourcing and same not-yet-gateware-verified caveat as the two
+// registers above — reproduced from the Thetis fork's case 0 ("general
+// settings") rather than re-derived. Thetis's own UI labels these controls
+// "Band Volts" and "Disable PS Sync", neither of which describes what its
+// code actually does (SetADCDither / SetADCRandom); AetherSDR names them for
+// the real mechanism.
+inline constexpr std::uint8_t kConfigAdcDither = 0x08;  // C3 bit3
+inline constexpr std::uint8_t kConfigAdcRandom = 0x10;  // C3 bit4
 
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
@@ -286,18 +314,47 @@ std::uint8_t ocFilterByteForHz(double hz) noexcept;
 // Human-readable name of an open-collector filter selection, for logging.
 const char* ocFilterName(std::uint8_t oc) noexcept;
 
+// ---- I/O Board accessory: raw I2C request/reply (ticket #11) ----
+//
+// A SEPARATE I2C peripheral from the HL2 itself — unrelated to the J16
+// filter board above, which drives its I2C device by config-register bits
+// alone and reads nothing back. This is a genuine bidirectional transaction:
+// addr 0x3C (I2C bus 1) / 0x3D (I2C bus 2), RQST on the outgoing frame is C0
+// bit 7 — the SAME bit the incoming frame's ACK occupies (Ep6Response::ack
+// above) — and the radio's ACK-tagged reply echoes RADDR = 0x3C/0x3D in
+// C0[6:1], with 0x3F reserved to mean "transaction failed". Sourced from the
+// W5TSU fork of the MI0BOT Hermes-Lite-2 Thetis fork
+// (ChannelMaster/networkproto1.c, the I2C request-encode block around the
+// round-robin's I2C slot) — tier 3 on the source-precedence ladder; not
+// independently re-verified against the HL2 gateware RTL.
+inline constexpr std::uint8_t kAddrI2cBus1 = 0x3C;
+inline constexpr std::uint8_t kAddrI2cBus2 = 0x3D;
+inline constexpr int kI2cErrorRaddr = 0x3F;
+
+enum class I2cBus : std::uint8_t { Bus1 = 0, Bus2 = 1 };
+
 // A 5-byte Command & Control payload: C0 (register address) + C1..C4 (data).
 using Cc = std::array<std::uint8_t, 5>;
 
 // Config register: sample rate + receiver count + the J16 open-collector filter
-// byte. Also carries the Mercury and duplex bits for openHPSDR compatibility;
-// both are ignored by the HL2 gateware.
+// byte + ADC dither/randomization. Also carries the Mercury and duplex bits for
+// openHPSDR compatibility; both are ignored by the HL2 gateware.
 //
 // ocFilterByte is the value from ocFilterByteForHz(); only bits [6:0] are used
 // (they land in DATA[23:17]). Bit 7 is the RX-antenna bit and lives elsewhere in
 // the register, so it is masked off here rather than silently switching antennas
 // on a caller who passed a full I2C byte.
-Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone) noexcept;
+//
+// adcDither/adcRandom default false, so every existing caller keeps sending a
+// zero C3 exactly as before.
+Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone,
+            bool adcDither = false, bool adcRandom = false) noexcept;
+// TX latency (7-bit) + PTT hang (5-bit), packed into their own dedicated
+// register (kC0TxLatencyPttHang). Both clamped to their field width.
+Cc ccTxLatencyPttHang(int txLatency, int pttHang) noexcept;
+// Reset-on-disconnect flag, packed into its own dedicated register
+// (kC0ResetOnDisconnect) — distinct from kC0Sync, see the warning there.
+Cc ccResetOnDisconnect(bool enabled) noexcept;
 // NCO frequency in Hz (32-bit big-endian across C1..C4) for receiver `rxIndex`,
 // zero-based: RX1 is index 0 at register 0x02, up to RX7 at 0x08. Clamped to
 // that run — see the note in the .cpp about why RX8..RX12 are not reachable by
@@ -377,6 +434,25 @@ struct Ep6Response {
 // Decode the C&C bytes of one 512-byte EP6 frame. Returns nullopt if the frame
 // is not sync-framed.
 std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept;
+
+// One-shot I2C read/write REQUEST. `deviceAddress` is the 7-bit I2C device
+// address (values above 0x7F are shifted right by one, matching the
+// reference implementation's own handling of an 8-bit-shifted address);
+// `control` is the target register on that device. Sets the RQST bit so the
+// radio's ACK-tagged reply can be correlated back by decodeI2cResponse().
+Cc ccI2cRead(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control) noexcept;
+Cc ccI2cWrite(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control, std::uint8_t data) noexcept;
+
+// Result of decoding an ACK-tagged EP6 response as an I2C reply.
+struct I2cResult {
+    // This response answers an I2C bus 1/2 RQST — false for every other kind
+    // of ACK reply (an unrelated extension's RQST, or a classic free-running
+    // frame), so a caller polling telemetry cannot mistake one for the other.
+    bool matched = false;
+    bool error = false;     // the radio reported the 0x3F "no such transaction" sentinel
+    std::uint8_t data = 0;  // the returned byte (DATA[7:0]) when matched && !error
+};
+I2cResult decodeI2cResponse(const Ep6Response& r) noexcept;
 
 // Everything the classic response cycle carries. Fields are std::optional
 // because each RADDR carries only part of it, so "not seen yet" stays

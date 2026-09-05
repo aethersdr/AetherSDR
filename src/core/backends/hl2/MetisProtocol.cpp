@@ -73,7 +73,8 @@ const char* ocFilterName(std::uint8_t oc) noexcept
     }
 }
 
-Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
+Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte,
+            bool adcDither, bool adcRandom) noexcept
 {
     const auto c1 = static_cast<std::uint8_t>((static_cast<std::uint8_t>(rate) & 0x03) | kConfigMercury);
     if (numRx < 1) numRx = 1;
@@ -83,11 +84,31 @@ Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
     // part of the field, and writing the byte unshifted would put the 160 m
     // relay's bit there and every real selection one filter too low.
     const auto c2 = static_cast<std::uint8_t>((ocFilterByte & 0x7F) << 1);
+    // ADC dither/randomization: C3 bits 3/4. Zero (both flags false) matches
+    // every pre-existing call site's expectation of an all-zero C3.
+    const auto c3 = static_cast<std::uint8_t>((adcDither ? kConfigAdcDither : 0)
+                                             | (adcRandom ? kConfigAdcRandom : 0));
     // Receiver count is DATA[6:3] — a FOUR-bit field (0000=1 .. 1011=12), so the
     // mask is 0x0F. It was 0x07 while only one receiver ever ran, which silently
     // capped the encodable count at 8 and would have wrapped 9..12 into 1..4.
     const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x0F) << 3));
-    return {kC0Config, c1, c2, 0x00, c4};
+    return {kC0Config, c1, c2, c3, c4};
+}
+
+Cc ccTxLatencyPttHang(int txLatency, int pttHang) noexcept
+{
+    if (txLatency < 0) txLatency = 0;
+    if (txLatency > kTxLatencyMax) txLatency = kTxLatencyMax;
+    if (pttHang < 0) pttHang = 0;
+    if (pttHang > kPttHangMax) pttHang = kPttHangMax;
+    return {kC0TxLatencyPttHang, 0x00, 0x00,
+            static_cast<std::uint8_t>(pttHang & kPttHangMax),
+            static_cast<std::uint8_t>(txLatency & kTxLatencyMax)};
+}
+
+Cc ccResetOnDisconnect(bool enabled) noexcept
+{
+    return {kC0ResetOnDisconnect, 0x00, 0x00, 0x00, static_cast<std::uint8_t>(enabled ? 0x01 : 0x00)};
 }
 
 Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept
@@ -209,6 +230,43 @@ std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept
     r.ptt  = (c0 & 0x01) != 0;
     r.data = readBe32(frame + 4);
     return r;
+}
+
+Cc ccI2cRead(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control) noexcept
+{
+    const std::uint8_t addr = (bus == I2cBus::Bus1) ? kAddrI2cBus1 : kAddrI2cBus2;
+    const auto c0 = static_cast<std::uint8_t>(static_cast<std::uint8_t>(addr << 1) | 0x80);  // RQST
+    if (deviceAddress > 0x7F)
+        deviceAddress = static_cast<std::uint8_t>(deviceAddress >> 1);
+    // C1: read + stop. C2: stop-request flag | 7-bit device address.
+    return {c0, 0x07, static_cast<std::uint8_t>(0x80 | (deviceAddress & 0x7F)), control, 0x00};
+}
+
+Cc ccI2cWrite(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control, std::uint8_t data) noexcept
+{
+    const std::uint8_t addr = (bus == I2cBus::Bus1) ? kAddrI2cBus1 : kAddrI2cBus2;
+    const auto c0 = static_cast<std::uint8_t>(static_cast<std::uint8_t>(addr << 1) | 0x80);  // RQST
+    if (deviceAddress > 0x7F)
+        deviceAddress = static_cast<std::uint8_t>(deviceAddress >> 1);
+    // C1: write + stop. C2: stop-request flag | 7-bit device address.
+    return {c0, 0x06, static_cast<std::uint8_t>(0x80 | (deviceAddress & 0x7F)), control, data};
+}
+
+I2cResult decodeI2cResponse(const Ep6Response& r) noexcept
+{
+    I2cResult out;
+    if (!r.ack)
+        return out;                      // not a reply to any RQST
+    if (r.raddr == kI2cErrorRaddr) {
+        out.matched = true;
+        out.error = true;
+        return out;
+    }
+    if (r.raddr != kAddrI2cBus1 && r.raddr != kAddrI2cBus2)
+        return out;                      // an ACK for some other RQST
+    out.matched = true;
+    out.data = static_cast<std::uint8_t>(r.data & 0xFF);
+    return out;
 }
 
 void Hl2Telemetry::apply(const Ep6Response& r) noexcept

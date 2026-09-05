@@ -61,6 +61,12 @@ public:
         // register is rebuilt from — see setSampleRate() for why a field that
         // shares a register with another has to be carried, not re-defaulted.
         std::uint8_t ocFilterByte = kOcNone;
+        // ADC dither / randomization. Ride the SAME config register as
+        // ocFilterByte above, for the same reason: every ccConfig() rebuild
+        // has to carry them, or an unrelated config-register change (a band
+        // filter switch, a receiver-count change) would silently reset them.
+        bool adcDither = false;
+        bool adcRandom = false;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -165,6 +171,22 @@ public:
     // on the next EP2 frame, ahead of the round robin.
     Q_INVOKABLE void requestPipelineReset();
 
+    // ADC dither / randomization. Same rebuild-and-one-shot treatment as
+    // setBandFilter(), since both live in the config register: latched into
+    // Params, then pushed ahead of the round robin so the change reaches the
+    // radio within one EP2 frame rather than waiting for the rotation.
+    Q_INVOKABLE void setAdcDither(bool enabled);
+    Q_INVOKABLE void setAdcRandom(bool enabled);
+
+    // TX latency + PTT hang (register 0x17). Not time-critical the way a band
+    // filter is, so — like setLnaGainDb() — this only updates the stored bank;
+    // the round robin re-asserts it periodically rather than one-shotting it.
+    Q_INVOKABLE void setTxLatencyPttHang(int txLatency, int pttHang);
+
+    // Reset-on-disconnect (register 0x3A). Same treatment as TX latency/PTT
+    // hang: latched, re-asserted by the round robin.
+    Q_INVOKABLE void setResetOnDisconnect(bool enabled);
+
     // Receivers this client can both RUN and TUNE: the RX1..RX7 NCO registers
     // are one contiguous run (0x02..0x08) and RX8..RX12 are not. See ccRxFreq().
     static constexpr int kMaxTunableRx = 7;
@@ -251,6 +273,13 @@ public:
     Q_INVOKABLE void setTxTestTone(double offsetHz, double amplitude);
     [[nodiscard]] bool txTestToneEnabled() const noexcept { return m_toneAmp > 0.0; }
 
+    // I/O Board accessory: raw I2C read/write (ticket #11). One outstanding
+    // request at a time — a second call before i2cResponseReceived() fires
+    // for the first is queued behind it via m_oneShot, same as any other
+    // one-shot bank, so requests cannot race each other's replies.
+    Q_INVOKABLE void sendI2cRead(int bus, int deviceAddress, int control);
+    Q_INVOKABLE void sendI2cWrite(int bus, int deviceAddress, int control, int data);
+
 signals:
     void linkUp();                                                  // first EP6 seen
     void linkDown();                                               // stopped
@@ -278,6 +307,13 @@ signals:
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
     void connectFailed(const QString& reason);
+    // A sendI2cRead()/sendI2cWrite() request was answered: `error` is either
+    // the radio's 0x3F "no such transaction" sentinel (decodeI2cResponse())
+    // or the kI2cTimeoutMs timeout firing with nothing having answered —
+    // both look identical to a caller, which only needs to know the request
+    // did not succeed. `data` is the returned byte, meaningful only when
+    // error is false.
+    void i2cResponseReceived(bool error, int data);
 
 private slots:
     void onReadyRead();
@@ -353,6 +389,16 @@ private:
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
     Cc m_ccTxDrive{};
+    Cc m_ccTxLatencyPttHang = ccTxLatencyPttHang(20, 12);  // reference-client defaults
+    Cc m_ccResetOnDisconnect = ccResetOnDisconnect(false);
+
+    // I/O Board I2C request/reply (ticket #11). A request is pending from the
+    // moment sendI2cRead()/sendI2cWrite() queues it until either a matching
+    // ACK arrives (onReadyRead's telemetry decode) or the timeout fires —
+    // whichever is first; the other outcome is then ignored.
+    bool    m_i2cRequestPending = false;
+    QTimer* m_i2cTimeoutTimer = nullptr;
+    static constexpr int kI2cTimeoutMs = 500;
 
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples

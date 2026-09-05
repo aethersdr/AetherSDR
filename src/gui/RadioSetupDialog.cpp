@@ -9,6 +9,11 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
+#include "core/backends/hl2/Hl2MiscOptionsSettings.h" // Hermes Lite 2 misc-options page
+#include "core/backends/hl2/MetisProtocol.h"  // kTxLatencyMax/kPttHangMax field widths
+#include "core/backends/hl2/Hl2FilterBoard.h" // manual J16 filter-board table
+#include "core/backends/hl2/Hl2FilterBoardSettings.h" // "Hl2FilterBoard" root key
+#include "core/backends/IRadioBackend.h"      // extensionResult (I/O Board I2C round trip)
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -71,6 +76,7 @@
 #include <QMessageBox>
 #include <QColorDialog>
 #include <QRadioButton>
+#include <QButtonGroup>
 #include <QProgressBar>
 #include <QProcess>
 #include <QListWidget>
@@ -812,6 +818,40 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
     addPage(hardwareCategory, QStringLiteral("Peripherals"),
         QStringLiteral("controllers amplifier tuner antenna genius pgxl tgxl manual ip"), [this] { return buildPeripheralsTab(); });
+
+    // Hermes-Lite 2 settings (issue #9). Each page is gated on its own
+    // capability boolean, following the Calibration/APD precedent above —
+    // never a family check — and hidden immediately at construction since a
+    // reconnect to a non-HL2 radio must not leave an HL2-only page visible.
+    QTreeWidgetItem* hermesLiteItem = addPage(hardwareCategory, QStringLiteral("Hermes Lite 2"),
+        QStringLiteral("hermes lite adc dither randomization reset disconnect tx latency ptt hang swap audio"),
+        [this] { return buildHermesLiteOptionsTab(); });
+    m_hermesLiteOptionsPageIndex = m_pageIndexes.value(QStringLiteral("Hermes Lite 2"));
+    hermesLiteItem->setHidden(!m_model->backendCapabilities().hasHermesLiteOptions);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this, hermesLiteItem](bool, const RadioCapabilities&) {
+        hermesLiteItem->setHidden(!m_model->backendCapabilities().hasHermesLiteOptions);
+    });
+
+    QTreeWidgetItem* ioBoardItem = addPage(hardwareCategory, QStringLiteral("I/O Board"),
+        QStringLiteral("i2c bus address register read write pin state accessory"),
+        [this] { return buildIoBoardTab(); });
+    m_ioBoardPageIndex = m_pageIndexes.value(QStringLiteral("I/O Board"));
+    ioBoardItem->setHidden(!m_model->backendCapabilities().hasIoBoardAccessory);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this, ioBoardItem](bool, const RadioCapabilities&) {
+        ioBoardItem->setHidden(!m_model->backendCapabilities().hasIoBoardAccessory);
+    });
+
+    QTreeWidgetItem* filterBoardItem = addPage(hardwareCategory, QStringLiteral("Filter Board"),
+        QStringLiteral("j16 relay band filter manual open collector n2adr"),
+        [this] { return buildFilterBoardTab(); });
+    m_filterBoardPageIndex = m_pageIndexes.value(QStringLiteral("Filter Board"));
+    filterBoardItem->setHidden(!m_model->backendCapabilities().hasJ16FilterBoard);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this, filterBoardItem](bool, const RadioCapabilities&) {
+        filterBoardItem->setHidden(!m_model->backendCapabilities().hasJ16FilterBoard);
+    });
     addPage(onlineCategory, QStringLiteral("Appearance & Behavior"),
         QStringLiteral("themes colors display font vision contrast click wheel ui enhancements"), [this] { return buildUiEnhancementsTab(); });
     addPage(onlineCategory, QStringLiteral("SmartLink"),
@@ -869,12 +909,18 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 // reaches the radio).
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
+                const bool hermesLiteRow = item == m_pageItems.value(m_hermesLiteOptionsPageIndex);
+                const bool ioBoardRow = item == m_pageItems.value(m_ioBoardPageIndex);
+                const bool filterBoardRow = item == m_pageItems.value(m_filterBoardPageIndex);
                 const bool gated =
                     (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
-                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
+                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
+                    || (hermesLiteRow && !m_model->backendCapabilities().hasHermesLiteOptions)
+                    || (ioBoardRow && !m_model->backendCapabilities().hasIoBoardAccessory)
+                    || (filterBoardRow && !m_model->backendCapabilities().hasJ16FilterBoard);
                 if (!gated) {
                     item->setHidden(!matches);
                 }
@@ -9226,6 +9272,463 @@ QWidget* RadioSetupDialog::buildQrzTab()
 
     root->addWidget(cache);
     root->addStretch();
+    return page;
+}
+
+// Hermes-Lite 2 misc options (issue #9 / ticket #10). Six independent
+// controls, each persisted in Hl2MiscOptionsSettings and applied live through
+// the "hl2" extension namespace (RadioModel::invokeBackendExtension), the
+// same persist-then-repush pattern buildCalibrationTab() uses for freqcal.
+QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto* group = new QGroupBox("Hermes Lite 2 Options");
+    group->setStyleSheet(kGroupStyle);
+    auto* grid = new QGridLayout(group);
+    grid->setHorizontalSpacing(16);
+    grid->setVerticalSpacing(10);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto makeCheck = [&theme](const QString& text, const QString& accessibleDesc) {
+        auto* cb = new QCheckBox(text);
+        theme.applyStyleSheet(cb,
+            QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }")
+            + kCheckBoxIndicator);
+        cb->setAccessibleName(text);
+        cb->setAccessibleDescription(accessibleDesc);
+        return cb;
+    };
+    auto apply = [this](const QString& verb, const QVariant& value) {
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), verb, 0, value);
+    };
+
+    auto* ditherCheck = makeCheck(QStringLiteral("ADC Dither"),
+        QStringLiteral("Enable ADC dither noise shaping"));
+    ditherCheck->setChecked(Hl2MiscOptionsSettings::adcDither(m_model->settingsScope()));
+    connect(ditherCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setAdcDither"), QVariant(on));
+    });
+    grid->addWidget(ditherCheck, 0, 0);
+
+    auto* randomCheck = makeCheck(QStringLiteral("ADC Randomization"),
+        QStringLiteral("Enable ADC output randomization"));
+    randomCheck->setChecked(Hl2MiscOptionsSettings::adcRandom(m_model->settingsScope()));
+    connect(randomCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setAdcRandom"), QVariant(on));
+    });
+    grid->addWidget(randomCheck, 1, 0);
+
+    auto* resetCheck = makeCheck(QStringLiteral("Reset On Disconnect"),
+        QStringLiteral("Reset the radio when this application disconnects"));
+    resetCheck->setChecked(Hl2MiscOptionsSettings::resetOnDisconnect(m_model->settingsScope()));
+    connect(resetCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setResetOnDisconnect"), QVariant(on));
+    });
+    grid->addWidget(resetCheck, 2, 0);
+
+    auto* swapCheck = makeCheck(QStringLiteral("Swap Audio Channels"),
+        QStringLiteral("Swap left and right transmit audio channels"));
+    swapCheck->setChecked(Hl2MiscOptionsSettings::swapAudioChannels(m_model->settingsScope()));
+    swapCheck->setToolTip(QStringLiteral(
+        "This backend's transmit audio path carries no stereo signal today, "
+        "so this setting is persisted for parity with the reference client "
+        "but has no audible effect yet."));
+    connect(swapCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setSwapAudioChannels"), QVariant(on));
+    });
+    grid->addWidget(swapCheck, 3, 0);
+
+    auto* latencyLabel = new QLabel(QStringLiteral("TX Latency"));
+    latencyLabel->setStyleSheet(kLabelStyle);
+    grid->addWidget(latencyLabel, 0, 1);
+    auto* latencySpin = new QSpinBox;
+    latencySpin->setRange(0, hl2::kTxLatencyMax);
+    latencySpin->setValue(Hl2MiscOptionsSettings::txLatency(m_model->settingsScope()));
+    latencySpin->setKeyboardTracking(false);
+    latencySpin->setAccessibleName(QStringLiteral("TX latency"));
+    connect(latencySpin, &QSpinBox::valueChanged, this, [apply](int v) {
+        apply(QStringLiteral("options.setTxLatency"), QVariant(v));
+    });
+    grid->addWidget(latencySpin, 0, 2);
+
+    auto* hangLabel = new QLabel(QStringLiteral("PTT Hang"));
+    hangLabel->setStyleSheet(kLabelStyle);
+    grid->addWidget(hangLabel, 1, 1);
+    auto* hangSpin = new QSpinBox;
+    hangSpin->setRange(0, hl2::kPttHangMax);
+    hangSpin->setValue(Hl2MiscOptionsSettings::pttHang(m_model->settingsScope()));
+    hangSpin->setKeyboardTracking(false);
+    hangSpin->setAccessibleName(QStringLiteral("PTT hang"));
+    connect(hangSpin, &QSpinBox::valueChanged, this, [apply](int v) {
+        apply(QStringLiteral("options.setPttHang"), QVariant(v));
+    });
+    grid->addWidget(hangSpin, 1, 2);
+
+    vbox->addWidget(group);
+    vbox->addStretch();
+    return page;
+}
+
+// I/O Board (issue #9 / ticket #11): the separate I2C accessory board — NOT
+// the J16 filter board (Filter Board page, below), a distinct peripheral with
+// its own register map. Scoped to what the reference screenshots show: pin
+// states and a raw address/register I2C read/write panel; the accessory's
+// full register map (antenna tuner, fault/fan/firmware telemetry, per-band RX
+// frequency codes, ADC readback) is out of scope for this pass.
+QWidget* RadioSetupDialog::buildIoBoardTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+    auto& theme = AetherSDR::ThemeManager::instance();
+
+    static const QString kSpin =
+        "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        "color: {{color.text.primary}}; font-size: 11px; padding: 2px; }";
+
+    // ---- pin states: read-only, populated by the Read Pins buttons below ----
+    auto* pinGroup = new QGroupBox(QStringLiteral("I/O Board Pin States"));
+    pinGroup->setStyleSheet(kGroupStyle);
+    auto* pinLayout = new QGridLayout(pinGroup);
+    pinLayout->setHorizontalSpacing(6);
+
+    QVector<QCheckBox*> inputPins, outputPins;
+    auto makeReadOnlyRow = [&theme](QGridLayout* grid, int row, const QString& label,
+                                    int count, QVector<QCheckBox*>& out) {
+        auto* lbl = new QLabel(label);
+        lbl->setStyleSheet(kLabelStyle);
+        grid->addWidget(lbl, row, 0);
+        for (int i = 0; i < count; ++i) {
+            auto* cb = new QCheckBox;
+            cb->setEnabled(false);   // reflects the last read; never operator-set directly
+            theme.applyStyleSheet(cb, kCheckBoxIndicator);
+            cb->setAccessibleName(QStringLiteral("%1 pin %2").arg(label).arg(i + 1));
+            grid->addWidget(cb, row, i + 1);
+            out.append(cb);
+        }
+    };
+    makeReadOnlyRow(pinLayout, 0, QStringLiteral("Input"), 5, inputPins);
+    makeReadOnlyRow(pinLayout, 1, QStringLiteral("Output"), 8, outputPins);
+
+    // ---- generic I2C control ----
+    auto* i2cGroup = new QGroupBox(QStringLiteral("I2C Control"));
+    i2cGroup->setStyleSheet(kGroupStyle);
+    auto* i2cGrid = new QGridLayout(i2cGroup);
+    i2cGrid->setHorizontalSpacing(10);
+    i2cGrid->setVerticalSpacing(8);
+
+    auto* enableCheck = new QCheckBox(QStringLiteral("Enable I2C control"));
+    theme.applyStyleSheet(enableCheck,
+        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }")
+        + kCheckBoxIndicator);
+    enableCheck->setAccessibleName(QStringLiteral("Enable I2C control"));
+    enableCheck->setToolTip(QStringLiteral(
+        "Advanced: sends raw I2C transactions to whatever is on the bus. "
+        "Leave off unless you have the I/O Board accessory attached."));
+    i2cGrid->addWidget(enableCheck, 0, 0, 1, 4);
+
+    auto* bus1Radio = new QRadioButton(QStringLiteral("I2C 1"));
+    auto* bus2Radio = new QRadioButton(QStringLiteral("I2C 2"));
+    bus1Radio->setChecked(true);
+    auto* busGroup = new QButtonGroup(page);
+    busGroup->addButton(bus1Radio, 1);
+    busGroup->addButton(bus2Radio, 2);
+    i2cGrid->addWidget(bus1Radio, 1, 0);
+    i2cGrid->addWidget(bus2Radio, 1, 1);
+
+    auto makeLabeledSpin = [&](const QString& text, int row, int max = 0xFF) {
+        auto* lbl = new QLabel(text);
+        lbl->setStyleSheet(kLabelStyle);
+        i2cGrid->addWidget(lbl, row, 0);
+        auto* spin = new QSpinBox;
+        spin->setRange(0, max);
+        spin->setDisplayIntegerBase(16);
+        spin->setPrefix(QStringLiteral("0x"));
+        theme.applyStyleSheet(spin, kSpin);
+        spin->setKeyboardTracking(false);
+        spin->setAccessibleName(text);
+        i2cGrid->addWidget(spin, row, 1);
+        return spin;
+    };
+    auto* addressSpin = makeLabeledSpin(QStringLiteral("I2C Address"), 2, 0x7F);
+    auto* controlSpin = makeLabeledSpin(QStringLiteral("Reg/Control"), 3);
+    auto* writeDataSpin = makeLabeledSpin(QStringLiteral("Write Data"), 4);
+
+    auto* resultLabel = new QLabel(QStringLiteral("—"));
+    resultLabel->setStyleSheet(kValueStyle);
+    resultLabel->setAccessibleName(QStringLiteral("I2C result"));
+    i2cGrid->addWidget(new QLabel(QStringLiteral("Result")), 5, 0);
+    i2cGrid->addWidget(resultLabel, 5, 1);
+
+    auto* readBtn = new QPushButton(QStringLiteral("Read"));
+    auto* writeBtn = new QPushButton(QStringLiteral("Write"));
+    for (auto* btn : {readBtn, writeBtn}) {
+        theme.applyStyleSheet(btn,
+            "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; padding: 4px 12px; }"
+            "QPushButton:hover { background: {{color.background.2}}; }"
+            "QPushButton:disabled { color: {{color.background.3}}; }");
+    }
+    i2cGrid->addWidget(readBtn, 2, 2);
+    i2cGrid->addWidget(writeBtn, 2, 3);
+
+    auto* readInputPinsBtn = new QPushButton(QStringLiteral("Read Input Pins"));
+    auto* readOutputPinsBtn = new QPushButton(QStringLiteral("Read Output Pins"));
+    for (auto* btn : {readInputPinsBtn, readOutputPinsBtn}) {
+        theme.applyStyleSheet(btn, readBtn->styleSheet());
+        btn->setToolTip(QStringLiteral(
+            "Reads a pin-state register at the address above into the "
+            "pin-state row. Register number is a best guess from the "
+            "reference implementation's register-enum NAMING alone "
+            "(REG_IN_PINS/REG_OUT_PINS) — no usage of it was found to "
+            "confirm against, so treat the result with suspicion until "
+            "verified on real hardware."));
+    }
+    i2cGrid->addWidget(readInputPinsBtn, 6, 0);
+    i2cGrid->addWidget(readOutputPinsBtn, 6, 1);
+
+    // ---- wiring ----
+    auto setEnabled = [=](bool on) {
+        for (QWidget* w : {static_cast<QWidget*>(bus1Radio), static_cast<QWidget*>(bus2Radio),
+                          static_cast<QWidget*>(addressSpin), static_cast<QWidget*>(controlSpin),
+                          static_cast<QWidget*>(writeDataSpin), static_cast<QWidget*>(readBtn),
+                          static_cast<QWidget*>(writeBtn), static_cast<QWidget*>(readInputPinsBtn),
+                          static_cast<QWidget*>(readOutputPinsBtn)}) {
+            w->setEnabled(on);
+        }
+    };
+    setEnabled(false);
+    connect(enableCheck, &QCheckBox::toggled, this, [setEnabled](bool on) { setEnabled(on); });
+
+    // extensionResult is per-CALL (requestId 0 == fire-and-forget); a real
+    // reply needs a live requestId, so this dialog mints its own counter
+    // rather than reusing 0 for every I2C call it makes. Hl2Backend allows
+    // only one outstanding I2C request at a time, so remembering just the
+    // LAST call's purpose ("plain" vs "pin-in"/"pin-out") is enough to route
+    // its eventual reply without a full request table.
+    auto nextRequestId = std::make_shared<quint64>(1);
+    auto pendingKind = std::make_shared<QString>(QStringLiteral("plain"));
+    // Connects to the CURRENT backend only — a family switch away from and
+    // back to an HL2 while this page is open would need a fresh connection
+    // this pass does not re-establish. Acceptable for now: reopening the
+    // dialog (or the page) after such a switch restores it.
+    if (IRadioBackend* backend = m_model->backend()) {
+        connect(backend, &IRadioBackend::extensionResult, this,
+                [this, resultLabel, inputPins, outputPins, pendingKind](quint64, const QVariant& result) {
+        const QVariantMap m = result.toMap();
+        if (m.value(QStringLiteral("error")).toBool()) {
+            resultLabel->setText(QStringLiteral("timeout / error"));
+            return;
+        }
+        const int data = m.value(QStringLiteral("data")).toInt();
+        resultLabel->setText(QStringLiteral("0x%1").arg(data, 2, 16, QLatin1Char('0')));
+        // Only a Read Input/Output Pins click populates the pin row; a plain
+        // register read leaves it alone since the byte may not even BE a pin
+        // state.
+        if (*pendingKind == QStringLiteral("pin-in")) {
+            for (int i = 0; i < inputPins.size(); ++i)
+                inputPins[i]->setChecked((data & (1 << i)) != 0);
+        } else if (*pendingKind == QStringLiteral("pin-out")) {
+            for (int i = 0; i < outputPins.size(); ++i)
+                outputPins[i]->setChecked((data & (1 << i)) != 0);
+        }
+        });
+    }
+
+    connect(readBtn, &QPushButton::clicked, this,
+            [this, busGroup, addressSpin, controlSpin, nextRequestId, pendingKind] {
+        *pendingKind = QStringLiteral("plain");
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
+            (*nextRequestId)++, QVariant(QVariantMap{
+                {QStringLiteral("bus"), busGroup->checkedId()},
+                {QStringLiteral("address"), addressSpin->value()},
+                {QStringLiteral("control"), controlSpin->value()},
+            }));
+    });
+    connect(writeBtn, &QPushButton::clicked, this,
+            [this, busGroup, addressSpin, controlSpin, writeDataSpin, nextRequestId, pendingKind] {
+        *pendingKind = QStringLiteral("plain");
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cWrite"),
+            (*nextRequestId)++, QVariant(QVariantMap{
+                {QStringLiteral("bus"), busGroup->checkedId()},
+                {QStringLiteral("address"), addressSpin->value()},
+                {QStringLiteral("control"), controlSpin->value()},
+                {QStringLiteral("data"), writeDataSpin->value()},
+            }));
+    });
+    // REG_IN_PINS = 168 / REG_OUT_PINS = 169, per the reference
+    // implementation's register-enum NAMING alone (Thetis IoBoardHl2.cs) —
+    // see the buttons' tooltip for why that's a guess, not a verified fact.
+    connect(readInputPinsBtn, &QPushButton::clicked, this,
+            [this, busGroup, addressSpin, nextRequestId, pendingKind] {
+        *pendingKind = QStringLiteral("pin-in");
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
+            (*nextRequestId)++, QVariant(QVariantMap{
+                {QStringLiteral("bus"), busGroup->checkedId()},
+                {QStringLiteral("address"), addressSpin->value()},
+                {QStringLiteral("control"), 168},
+            }));
+    });
+    connect(readOutputPinsBtn, &QPushButton::clicked, this,
+            [this, busGroup, addressSpin, nextRequestId, pendingKind] {
+        *pendingKind = QStringLiteral("pin-out");
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
+            (*nextRequestId)++, QVariant(QVariantMap{
+                {QStringLiteral("bus"), busGroup->checkedId()},
+                {QStringLiteral("address"), addressSpin->value()},
+                {QStringLiteral("control"), 169},
+            }));
+    });
+
+    vbox->addWidget(pinGroup);
+    auto* row = new QHBoxLayout;
+    row->addWidget(i2cGroup, 1);
+    vbox->addLayout(row);
+    vbox->addStretch();
+    return page;
+}
+
+// Filter Board (issue #9 / ticket #12): the J16 open-collector relay board.
+// Automatic band switching (Hl2Backend::applyBandFilter) is unchanged unless
+// "Enable manual filter control" is on; the grid below is a single flat
+// table — no HF/VHF/SWL tabs, since this radio has exactly one RF path and
+// two of the three would drive nothing (see the ticket's Q11 finding).
+QWidget* RadioSetupDialog::buildFilterBoardTab()
+{
+    using AetherSDR::hl2::ManualFilterBand;
+    using AetherSDR::hl2::ManualFilterTable;
+    using AetherSDR::hl2::kFilterBoardBands;
+    using AetherSDR::hl2::kFilterBoardBandCount;
+
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto apply = [this](const QString& verb, const QVariant& value) {
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), verb, 0, value);
+    };
+
+    // ---- manual-mode toggle + restore-defaults ----
+    auto* topRow = new QHBoxLayout;
+    auto* manualCheck = new QCheckBox(QStringLiteral("Enable manual filter control"));
+    theme.applyStyleSheet(manualCheck,
+        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }")
+        + kCheckBoxIndicator);
+    manualCheck->setChecked(Hl2FilterBoardSettings::manualEnabled(m_model->settingsScope()));
+    manualCheck->setAccessibleName(QStringLiteral("Enable manual filter control"));
+    manualCheck->setAccessibleDescription(
+        QStringLiteral("Hand-configure the J16 filter board instead of switching it automatically by frequency"));
+    topRow->addWidget(manualCheck);
+    topRow->addStretch();
+    auto* restoreBtn = new QPushButton(QStringLiteral("Restore N2ADR Defaults"));
+    restoreBtn->setAccessibleName(QStringLiteral("Restore N2ADR defaults"));
+    theme.applyStyleSheet(restoreBtn,
+        "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.primary}}; padding: 4px 12px; }"
+        "QPushButton:hover { background: {{color.background.2}}; }");
+    topRow->addWidget(restoreBtn);
+    vbox->addLayout(topRow);
+
+    // ---- the grid: one row per band, 7 RX + 7 TX pin checkboxes ----
+    auto* table = new QTableWidget(kFilterBoardBandCount, 15);
+    QStringList headers;
+    headers << QStringLiteral("Band");
+    for (int i = 1; i <= 7; ++i) headers << QStringLiteral("RX%1").arg(i);
+    for (int i = 1; i <= 7; ++i) headers << QStringLiteral("TX%1").arg(i);
+    table->setHorizontalHeaderLabels(headers);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    theme.applyStyleSheet(table,
+        "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
+        "border: 1px solid {{color.background.1}}; gridline-color: {{color.background.1}}; }"
+        "QHeaderView::section { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        "border: none; padding: 4px; }");
+
+    // Each cell's checkbox toggled callback re-reads every pin in its row and
+    // sends the whole band's {rx, tx} pair — matching Hl2FilterBoardSettings'
+    // whole-band write shape (Principle XIV), never a lone bit.
+    QVector<QVector<QCheckBox*>> rxBoxes(kFilterBoardBandCount), txBoxes(kFilterBoardBandCount);
+
+    ManualFilterTable initial = Hl2FilterBoardSettings::table(m_model->settingsScope());
+    if (initial.isEmpty())
+        initial = AetherSDR::hl2::seedManualFilterTableFromAutomatic();
+
+    for (int row = 0; row < kFilterBoardBandCount; ++row) {
+        const QString band = QString::fromLatin1(kFilterBoardBands[row]);
+        auto* bandItem = new QTableWidgetItem(band);
+        bandItem->setFlags(bandItem->flags() & ~Qt::ItemIsEditable);
+        table->setItem(row, 0, bandItem);
+
+        const ManualFilterBand entry = initial.value(band);
+        auto sendRow = [this, apply, table, band, row]() {
+            int rx = 0, tx = 0;
+            for (int pin = 0; pin < 7; ++pin) {
+                if (auto* cb = qobject_cast<QCheckBox*>(table->cellWidget(row, 1 + pin)))
+                    if (cb->isChecked()) rx |= (1 << pin);
+                if (auto* cb = qobject_cast<QCheckBox*>(table->cellWidget(row, 8 + pin)))
+                    if (cb->isChecked()) tx |= (1 << pin);
+            }
+            apply(QStringLiteral("filterboard.setBand"), QVariant(QVariantMap{
+                {QStringLiteral("band"), band},
+                {QStringLiteral("rx"), rx},
+                {QStringLiteral("tx"), tx},
+            }));
+        };
+
+        for (int pin = 0; pin < 7; ++pin) {
+            auto* rxCb = new QCheckBox;
+            theme.applyStyleSheet(rxCb, kCheckBoxIndicator);
+            rxCb->setChecked((entry.rxMask & (1 << pin)) != 0);
+            rxCb->setAccessibleName(QStringLiteral("%1 receive pin %2").arg(band).arg(pin + 1));
+            connect(rxCb, &QCheckBox::toggled, this, [sendRow](bool) { sendRow(); });
+            table->setCellWidget(row, 1 + pin, rxCb);
+            rxBoxes[row].append(rxCb);
+
+            auto* txCb = new QCheckBox;
+            theme.applyStyleSheet(txCb, kCheckBoxIndicator);
+            txCb->setChecked((entry.txMask & (1 << pin)) != 0);
+            txCb->setAccessibleName(QStringLiteral("%1 transmit pin %2").arg(band).arg(pin + 1));
+            connect(txCb, &QCheckBox::toggled, this, [sendRow](bool) { sendRow(); });
+            table->setCellWidget(row, 8 + pin, txCb);
+            txBoxes[row].append(txCb);
+        }
+    }
+
+    auto setGridEnabled = [table](bool enabled) {
+        for (int row = 0; row < kFilterBoardBandCount; ++row)
+            for (int col = 1; col < 15; ++col)
+                if (auto* w = table->cellWidget(row, col))
+                    w->setEnabled(enabled);
+    };
+    setGridEnabled(manualCheck->isChecked());
+
+    connect(manualCheck, &QCheckBox::toggled, this, [apply, setGridEnabled](bool on) {
+        setGridEnabled(on);
+        apply(QStringLiteral("filterboard.setManualEnabled"), QVariant(on));
+    });
+    connect(restoreBtn, &QPushButton::clicked, this,
+            [this, table, rxBoxes, txBoxes]() {
+        const auto seeded = AetherSDR::hl2::seedManualFilterTableFromAutomatic();
+        for (int row = 0; row < kFilterBoardBandCount; ++row) {
+            const QString band = QString::fromLatin1(kFilterBoardBands[row]);
+            const auto entry = seeded.value(band);
+            for (int pin = 0; pin < 7; ++pin) {
+                QSignalBlocker rxBlock(rxBoxes[row][pin]);
+                QSignalBlocker txBlock(txBoxes[row][pin]);
+                rxBoxes[row][pin]->setChecked((entry.rxMask & (1 << pin)) != 0);
+                txBoxes[row][pin]->setChecked((entry.txMask & (1 << pin)) != 0);
+            }
+        }
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+            QStringLiteral("filterboard.restoreDefaults"), 0, QVariant());
+    });
+
+    vbox->addWidget(table, 1);
     return page;
 }
 

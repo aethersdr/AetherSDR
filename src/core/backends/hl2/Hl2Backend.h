@@ -20,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+namespace AetherSDR {
+class RadioSettingsScope;
+}
+
 namespace AetherSDR::hl2 {
 
 class MetisClient;
@@ -265,11 +269,28 @@ private:
     // whoever asked for it (setup dialog, automation bridge, connect).
     void applyFreqCalPpb(int ppb, bool persist);
 
+    // Radio-scoped feature-document identity for this connected HL2
+    // (AGENTS.md "Radio-Scoped Feature Documents"), used by
+    // Hl2MiscOptionsSettings/Hl2FilterBoardSettings. Safe to use for READS
+    // even before m_radioSerial is known — an empty radioId reads the
+    // family-wide default row, which is the correct fallback.
+    RadioSettingsScope hl2SettingsScope() const;
+    // The same scope, but refuses (logs and returns false) when
+    // m_radioSerial is still empty — a WRITE must never land in the
+    // family-wide row by accident (AGENTS.md: "guard against writing one by
+    // accident when the serial isn't known yet"), unlike a read's fallback.
+    bool hl2SettingsScopeForWrite(RadioSettingsScope& outScope) const;
+
     // The operator's calibration for THIS radio and the derived scale applied to
     // every commanded frequency. 0 / 1.0 is "uncalibrated" — the behaviour every
     // build before this one had.
     int m_freqCalPpb = 0;
     double m_freqCalScale = 1.0;
+
+    // I/O Board raw I2C (ticket #11): the requestId a pending
+    // ioboard.i2cRead/i2cWrite is answered under, or 0 when nothing is
+    // outstanding. GUI-thread only, like every other invokeExtension state.
+    quint64 m_pendingI2cRequestId = 0;
     // Identity of the connected radio (its MAC, from the connect request), so
     // the calibration loads and stores per radio rather than globally: it
     // describes one physical crystal. Empty until connectRadio().

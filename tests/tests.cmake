@@ -416,6 +416,22 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# Manual J16 filter-board table — pure encode/lookup, Qt::Core only (no
+# sockets, no aethercore, no other Qt module).
+add_executable(hl2_filter_board_test
+    tests/hl2_filter_board_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_filter_board_test PRIVATE src)
+target_link_libraries(hl2_filter_board_test PRIVATE Qt6::Core)
+add_test(NAME hl2_filter_board_test COMMAND hl2_filter_board_test)
+
+# Radio-scoped settings persistence for Hl2MiscOptionsSettings and
+# Hl2FilterBoardSettings (RadioSettingsScope-backed, not flat AppSettings).
+add_executable(hl2_settings_persistence_test tests/hl2_settings_persistence_test.cpp)
+target_include_directories(hl2_settings_persistence_test PRIVATE src tests)
+target_link_libraries(hl2_settings_persistence_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_settings_persistence_test COMMAND hl2_settings_persistence_test)
+
 # ANAN P2 protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 # Direct port of the live-validated anan/spike/phase1a.py spike (aetherd ANAN
 # P2 Phase 1a), run against a real ANAN-G2 on the bench.
