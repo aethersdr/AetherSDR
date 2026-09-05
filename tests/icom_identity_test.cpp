@@ -5,6 +5,8 @@
 #include "core/AudioEngine.h"
 
 #include <QCoreApplication>
+#include <QEventLoop>
+#include <QTimer>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -16,6 +18,7 @@ struct IcomCivBackendTestAccess {
                         std::uint8_t seed = 0xA4, bool pinned = false)
     {
         b.disconnectRadio();
+        b.m_civTrace.clear();
         b.m_session = std::make_unique<IcomSession>();
         b.m_session->setCivAddress(seed);
         b.m_civSeedAddress = seed;
@@ -41,12 +44,31 @@ struct IcomCivBackendTestAccess {
     static bool ambiguous(const IcomCivBackend& b) { return b.m_civAmbiguous; }
     static void markKeyed(IcomCivBackend& b) { b.m_keyed = true; }
     static bool keyed(const IcomCivBackend& b) { return b.m_keyed; }
-    static void timeout(IcomCivBackend& b) { b.sendConnectReadBurst(); }
+    static void timeout(IcomCivBackend& b) { b.requestCivIdentity(b.m_sessionGeneration); }
+    static void staleRetry(IcomCivBackend& b, std::uint64_t generation)
+    { b.requestCivIdentity(generation); }
+    static int attempts(const IcomCivBackend& b) { return b.m_civDetectAttempts; }
+    static bool retrying(const IcomCivBackend& b)
+    { return b.m_civDetectTimer && b.m_civDetectTimer->isActive(); }
+    static QStringList outbound(const IcomCivBackend& b)
+    {
+        QStringList frames;
+        for (const auto& e : b.m_civTrace) {
+            if (e.outbound) { frames << e.hex; }
+        }
+        return frames;
+    }
 };
 }
 
 namespace {
 int failures = 0;
+void waitMs(int ms)
+{
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+}
 void check(bool ok, const char* message)
 {
     if (!ok) {
@@ -182,6 +204,52 @@ int main(int argc, char** argv)
     rxOnly.canTransmit = false;
     audio.applyBackendAudioCapabilities(true, rxOnly, false, {});
     check(!audio.hostModulation(), "RX-only seam backend remains disabled");
+    // Real timer/scheduler lifecycle with a silent injected transport. The
+    // initial broadcast may time out or receive only FB/FA during pipe startup.
+    const QString broadcast = QStringLiteral("fe fe 00 e0 19 00 fd");
+    for (const char* earlyReply : {"", "fefee0b6fbfd", "fefee0b6fafd"}) {
+        IcomCivBackendTestAccess::connect(backend, "Renamed radio");
+        if (*earlyReply) {
+            IcomCivBackendTestAccess::inject(backend, earlyReply);
+        }
+        waitMs(1250);
+        check(IcomCivBackendTestAccess::outbound(backend)
+                  == QStringList{broadcast, broadcast},
+              "missed identity or generic ACK retries broadcast without polling seed A4");
+        check(!backend.capabilities().canTransmit && !audio.hostModulation(),
+              "a generic ACK cannot finish model identification");
+        IcomCivBackendTestAccess::inject(backend, "fefee0b61900b6fd");
+        check(backend.capabilities().model == QStringLiteral("IC-7300MK2")
+                  && IcomCivBackendTestAccess::address(backend) == 0xB6
+                  && audio.hostModulation(),
+              "a later B6 reply completes startup and enables the audio route");
+        check(!IcomCivBackendTestAccess::retrying(backend),
+              "valid model reply stops identification retries");
+    }
+    IcomCivBackendTestAccess::connect(backend, "Pinned radio", 0x50, true);
+    waitMs(1250);
+    check(IcomCivBackendTestAccess::outbound(backend)
+              == QStringList{QStringLiteral("fe fe 50 e0 19 00 fd"),
+                             QStringLiteral("fe fe 50 e0 19 00 fd")},
+          "a pinned selection retries only its selected destination");
+    const auto previousGeneration = IcomCivBackendTestAccess::generation(backend);
+    IcomCivBackendTestAccess::connect(backend, "New session");
+    IcomCivBackendTestAccess::staleRetry(backend, previousGeneration);
+    check(IcomCivBackendTestAccess::attempts(backend) == 1,
+          "queued retry from an old session cannot advance new discovery");
+    int warnings = 0;
+    QObject::connect(&backend, &IRadioBackend::configurationWarning,
+                     [&](const QString&) { ++warnings; });
+    waitMs(6500);
+    check(IcomCivBackendTestAccess::outbound(backend)
+              == QStringList{broadcast, broadcast, broadcast, broadcast, broadcast},
+          "silent startup sends exactly five identity queries and no seed-address reads");
+    check(warnings == 1 && !IcomCivBackendTestAccess::retrying(backend)
+              && !backend.capabilities().canTransmit,
+          "retry exhaustion reports one actionable error and stays conservative");
+    backend.disconnectRadio();
+    check(!IcomCivBackendTestAccess::retrying(backend),
+          "disconnect cancels pending discovery");
     backend.disconnectRadio();
     std::printf("icom_identity_test: %d failure(s)\n", failures);
     return failures ? 1 : 0;

@@ -407,7 +407,7 @@ fail closed. Radio truth wins again as soon as the bounded window expires.
 
 | group | interval | condition |
 |---|---:|---|
-| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| PTT fallback | 250 ms | connected with an identified CI-V destination; Transceive is only a hint |
 | S meter | 100 ms | RX and visible |
 | power, SWR, ALC, compression | 200 ms | TX and visible |
 | PA current | 500 ms | TX and visible |
@@ -1374,9 +1374,13 @@ command destination. These values are independent when the operator changes
 the CI-V address. This follows wfview's `funcTransceiverId` model-ID decode and
 `determineRigCaps` adoption of `incomingCIVAddr` as the destination.
 
-Auto sends one broadcast identity query; a manually pinned address receives a
-directed query and rejects other responders. The existing bounded timeout can
-start common reads at the seed address, but never promotes a nickname to a
+Auto broadcasts identity queries; a manually pinned address receives directed
+queries and rejects other responders. Identification makes at most five attempts
+one second apart, stopping on a valid model-ID reply, conflict, or disconnect.
+A generic FB/FA reply or controller echo cannot complete identification. Meter,
+PTT, and control polling wait until the destination is identified. Exhaustion
+reports a configuration warning and keeps capabilities conservative; it never
+starts a read burst at an unverified seed address or promotes a nickname to a
 hardware profile. A valid late identity restarts the snapshot with the correct
 model vocabulary and publishes capabilities, modes, antenna choices, front-end
 controls, meters, and scope geometry. Repeated identical replies are inert.

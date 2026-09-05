@@ -320,6 +320,7 @@ private:
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     bool adoptCivIdentity(std::uint8_t address, std::uint8_t modelId);
     void publishModelControls();
+    void requestCivIdentity(std::uint64_t sessionGeneration);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
@@ -336,8 +337,7 @@ private:
     // A typed hex address: a device selection, so the wire must not retarget it.
     // A picked model is NOT pinned — it is a shortcut for an address.
     bool m_civAddressPinned = false;
-    // The address the session opened with, used only by the bounded read
-    // fallback before an identity reply arrives.
+    // The address the session opened with, before CI-V identifies a destination.
     std::uint8_t m_civSeedAddress = 0;
     // The address adopted from a 0x19 0x00 reply this session, 0 if none yet.
     std::uint8_t m_civReported = 0;
@@ -346,17 +346,15 @@ private:
     // Icom's own RS-BA1 server the second responder may be a rotator or an amp,
     // and picking either at random mis-decodes the rest of the session.
     bool m_civAmbiguous = false;
-    // Whether sendConnectReadBurst() has already run this session.
-    bool m_connectBurstSent = false;
+    int m_civDetectAttempts = 0;
     bool m_memoryRefreshActive = false;
     quint64 m_memoryRefreshGeneration = 0;
     QSet<int> m_memoryRefreshReplies;
     int m_memoryRefreshTotal = 0;
-    // Bounded, single-shot, never a poll: the unknown-model path waits this long
-    // for a broadcast reply before giving up and bursting at the fallback
-    // address, so a radio that answers nothing still connects.
+    // Bounded identity discovery; ordinary polling waits for an actual reply.
     QTimer* m_civDetectTimer = nullptr;
-    static constexpr int kCivDetectTimeoutMs = 1000;
+    static constexpr int kCivDetectIntervalMs = 1000;
+    static constexpr int kCivDetectMaxAttempts = 5;
     // applyScopeStartup() now has two callers — the connect edge and a late
     // model resolution — and the radio only needs telling once.
     bool m_scopeStarted = false;

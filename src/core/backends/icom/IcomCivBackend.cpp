@@ -827,7 +827,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     // conservative unknown capabilities, and reads as a half-finished backend.
     //
     // Auto learns the destination from the source of the CI-V ID reply.
-    // The seed is only a read-only fallback when identification times out.
+    // The seed cannot authorize ordinary polling before identification.
     const bool haveCiv = request.params.contains(QStringLiteral("icom.civAddress"));
     const uint civParam = request.params.value(QStringLiteral("icom.civAddress"), 0).toUInt();
     const bool civValid = haveCiv && civParam > 0 && civParam <= 0xFF;
@@ -840,7 +840,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_civReported = 0;
     m_civModelId = 0;
     m_civAmbiguous = false;
-    m_connectBurstSent = false;
+    m_civDetectAttempts = 0;
     // 48 kHz, FIXED — the rate is deliberately not negotiable here.
     //
     // It is tempting on a weak link: 48 kHz LPCM is ~768 kbps each way, and a
@@ -972,7 +972,7 @@ void IcomCivBackend::disconnectRadio()
     m_civReported = 0;
     m_civModelId = 0;
     m_civAmbiguous = false;
-    m_connectBurstSent = false;
+    m_civDetectAttempts = 0;
     m_scopeStarted = false;
     m_tuning = false;
     m_cwBreakInMode = 1;
@@ -1004,8 +1004,7 @@ void IcomCivBackend::sendConnectReadBurst()
 {
     if (!m_session)
         return;
-    // Re-entrancy: a retarget arriving mid-burst would otherwise stack.
-    m_connectBurstSent = true;
+    // A valid identity ends discovery before the model-shaped snapshot starts.
     if (m_civDetectTimer)
         m_civDetectTimer->stop();
 
@@ -1321,6 +1320,32 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
     return true;
 }
 
+void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
+{
+    if (!m_connected || !m_session || sessionGeneration != m_sessionGeneration
+        || m_civReported != 0 || m_civAmbiguous) {
+        return;
+    }
+    if (m_civDetectAttempts >= kCivDetectMaxAttempts) {
+        m_civDetectTimer->stop();
+        qCWarning(lcIcomAddr) << "CI-V identification failed after"
+                             << m_civDetectAttempts << "attempts";
+        emit configurationWarning(QStringLiteral(
+            "The Icom network connection is open, but the radio did not answer "
+            "model identification. Check its network CI-V settings and selected "
+            "CI-V address, then reconnect. Transmit remains disabled."));
+        return;
+    }
+    ++m_civDetectAttempts;
+    qCInfo(lcIcomAddr) << "CI-V identification attempt" << m_civDetectAttempts
+                      << "of" << kCivDetectMaxAttempts;
+    queueRead(cmdReadId(m_civAddressPinned ? m_session->civAddress()
+                                         : kBroadcastAddress),
+              m_civAddressPinned ? "identity.directed" : "identity.broadcast",
+              IcomCivScheduler::Priority::Maintenance);
+    pumpCiv(nowMs());
+}
+
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
     m_deviceName = deviceName.trimmed();
@@ -1347,28 +1372,16 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_rxResampler = std::make_unique<Resampler>(
         static_cast<double>(m_audioRateHz), static_cast<double>(kEngineAudioRateHz), 4096);
 
-    // Identify every radio through CI-V, independent of its network name.
-    // A pinned address selects one device; Auto broadcasts once. The bounded
-    // fallback retains common read-only startup for radios that do not answer.
-    queueRead(cmdReadId(m_civAddressPinned ? m_session->civAddress()
-                                         : kBroadcastAddress),
-              m_civAddressPinned ? "identity.directed" : "identity.broadcast",
-              IcomCivScheduler::Priority::Maintenance);
+    // A freshly opened serial pipe can echo traffic before the radio answers
+    // 19 00. Retry identity itself; polling the seed cannot recover Auto when
+    // the actual radio is at a different address (#5164, IC-7300MK2 logs).
     m_civDetectTimer = new QTimer(this);
-    m_civDetectTimer->setSingleShot(true);
-    connect(m_civDetectTimer, &QTimer::timeout, this, [this] {
-        if (m_connectBurstSent)
-            return;
-        // NO REPLY. Burst at the fallback address anyway rather than leaving
-        // the operator with a connected radio and no state at all — a silent
-        // radio still deserves whatever a wrong-address session can give,
-        // and this is exactly today's behaviour, reached only now.
-        qCInfo(lcIcomAddr) << "no CI-V id reply within" << kCivDetectTimeoutMs
-                       << "ms; falling back to address"
-                       << Qt::hex << m_session->civAddress();
-        sendConnectReadBurst();
+    const std::uint64_t generation = m_sessionGeneration;
+    connect(m_civDetectTimer, &QTimer::timeout, this, [this, generation] {
+        requestCivIdentity(generation);
     });
-    m_civDetectTimer->start(kCivDetectTimeoutMs);
+    m_civDetectTimer->start(kCivDetectIntervalMs);
+    requestCivIdentity(generation);
     applyScopeStartup();
 
     // CONNECTED FIRST, then the state.
@@ -5964,6 +5977,12 @@ void IcomCivBackend::onMeterTick()
     if (!m_session || !m_connected)
         return;
     const std::int64_t now = nowMs();
+    if (m_civReported == 0 || m_civAmbiguous) {
+        // Expire/dispatch identity transactions without creating a backlog of
+        // meter and PTT reads at a destination we have not identified yet.
+        pumpCiv(now);
+        return;
+    }
 
     // ASK THE RADIO WHETHER IT IS TRANSMITTING, rather than assuming we are the
     // only thing that can key it.
@@ -6105,6 +6124,10 @@ void IcomCivBackend::onLinkTick()
         disconnectRadio();
         emit connectionError(reason);
         return;
+    }
+
+    if (m_civReported == 0 || m_civAmbiguous) {
+        return; // identity discovery owns startup; do not poll the seed address
     }
 
     // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
