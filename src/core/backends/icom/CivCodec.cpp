@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace AetherSDR::icom {
@@ -66,6 +67,7 @@ bool commandHasSubcommand(std::uint8_t command)
     case cmd::kSetting:
     case cmd::kTone:
     case cmd::kControl:
+    case cmd::kGps:
     case cmd::kScope:
     // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
     // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
@@ -1114,9 +1116,191 @@ std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item)
 
 std::vector<std::uint8_t> cmdWriteSetting(std::uint8_t to, int item, std::uint8_t value)
 {
+    return cmdWriteSettingData(to, item, std::span(&value, 1));
+}
+
+std::vector<std::uint8_t> cmdWriteSettingData(std::uint8_t to, int item,
+                                               std::span<const std::uint8_t> value)
+{
     const auto bcd = settingItemBcd(item);
-    const std::array<std::uint8_t, 3> body{bcd[0], bcd[1], value};
-    return buildFrameSub(to, cmd::kSetting, 0x05, body);
+    std::vector<std::uint8_t> body;
+    body.reserve(2 + value.size());
+    body.push_back(bcd[0]);
+    body.push_back(bcd[1]);
+    body.insert(body.end(), value.begin(), value.end());
+    return buildFrameSub(to, cmd::kSetting, settingSub::kMenu, body);
+}
+
+namespace {
+
+bool validBcd(std::uint8_t value)
+{
+    return ((value >> 4) & 0x0f) <= 9 && (value & 0x0f) <= 9;
+}
+
+bool allFf(std::span<const std::uint8_t> data)
+{
+    return !data.empty()
+        && std::all_of(data.begin(), data.end(), [](std::uint8_t value) {
+               return value == 0xff;
+           });
+}
+
+bool allValidBcd(std::span<const std::uint8_t> data)
+{
+    return !data.empty()
+        && std::all_of(data.begin(), data.end(), validBcd);
+}
+
+bool validDate(int year, int month, int day)
+{
+    static constexpr std::array<int, 12> kDaysPerMonth{
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1) {
+        return false;
+    }
+    int days = kDaysPerMonth[static_cast<std::size_t>(month - 1)];
+    const bool leapYear = year % 4 == 0;
+    if (month == 2 && leapYear) {
+        ++days;
+    }
+    return day <= days;
+}
+
+std::optional<int> decodeBcdSpan(std::span<const std::uint8_t> data)
+{
+    if (data.empty() || allFf(data)) {
+        return std::nullopt;
+    }
+    int value = 0;
+    for (std::uint8_t byte : data) {
+        if (!validBcd(byte)) {
+            return std::nullopt;
+        }
+        value = value * 100 + decodeBcdByte(byte);
+    }
+    return value;
+}
+
+}  // namespace
+
+std::optional<GpsPosition> decodeGpsPosition(std::span<const std::uint8_t> data)
+{
+    constexpr std::size_t kPositionBytes = 27;
+    if (data.size() != kPositionBytes || allFf(data)) {
+        return std::nullopt;
+    }
+
+    // Latitude: DD MM mm m0 0H, H=0 south / 1 north.
+    if (!validBcd(data[0]) || !validBcd(data[1]) || !validBcd(data[2])
+        || (data[3] & 0x0f) != 0 || ((data[3] >> 4) & 0x0f) > 9
+        || (data[4] & 0xf0) != 0 || (data[4] & 0x0f) > 1) {
+        return std::nullopt;
+    }
+    const int latDegrees = decodeBcdByte(data[0]);
+    const double latMinutes = decodeBcdByte(data[1])
+        + decodeBcdByte(data[2]) / 100.0
+        + ((data[3] >> 4) & 0x0f) / 1000.0;
+    if (latDegrees > 90 || latMinutes >= 60.0
+        || (latDegrees == 90 && latMinutes > 0.0)) {
+        return std::nullopt;
+    }
+
+    // Longitude: 0D DD MM mm m0 0H, H=0 west / 1 east.
+    //
+    // Unlike latitude, the three degree digits straddle two bytes. A real
+    // IC-705 reporting 118 deg 03.534 min sends `01 18 03 53 40 00`.
+    // Treating the second byte's low nibble as the first minutes digit turns
+    // that into the impossible 11 deg 95.390 min and rejects an otherwise
+    // valid fix.
+    for (std::size_t i = 5; i <= 9; ++i) {
+        if (!validBcd(data[i])) {
+            return std::nullopt;
+        }
+    }
+    if ((data[5] & 0xf0) != 0 || (data[9] & 0x0f) != 0
+        || (data[10] & 0xf0) != 0 || (data[10] & 0x0f) > 1) {
+        return std::nullopt;
+    }
+    const int lonDegrees = (data[5] & 0x0f) * 100 + decodeBcdByte(data[6]);
+    const double lonMinutes = decodeBcdByte(data[7])
+        + decodeBcdByte(data[8]) / 100.0
+        + ((data[9] >> 4) & 0x0f) / 1000.0;
+    if (lonDegrees > 180 || lonMinutes >= 60.0
+        || (lonDegrees == 180 && lonMinutes > 0.0)) {
+        return std::nullopt;
+    }
+
+    GpsPosition out;
+    out.latitude = latDegrees + latMinutes / 60.0;
+    if ((data[4] & 0x0f) == 0) {
+        out.latitude = -out.latitude;
+    }
+    out.longitude = lonDegrees + lonMinutes / 60.0;
+    if ((data[10] & 0x0f) == 0) {
+        out.longitude = -out.longitude;
+    }
+
+    const std::span altitude = data.subspan(11, 4);
+    if (!allFf(altitude)) {
+        if (!validBcd(data[11]) || !validBcd(data[12]) || !validBcd(data[13])
+            || (data[14] & 0xf0) != 0 || (data[14] & 0x0f) > 1) {
+            return std::nullopt;
+        }
+        double metres = (decodeBcdByte(data[11]) * 10000
+                         + decodeBcdByte(data[12]) * 100
+                         + decodeBcdByte(data[13])) / 10.0;
+        if ((data[14] & 0x0f) != 0) {
+            metres = -metres;
+        }
+        out.altitudeMetres = metres;
+    }
+
+    if (const auto course = decodeBcdSpan(data.subspan(15, 2)); course && *course <= 360) {
+        out.courseDegrees = *course;
+    }
+    if (const auto speed = decodeBcdSpan(data.subspan(17, 3)); speed) {
+        out.speedKmh = *speed / 10.0;
+    }
+    const std::span dateTime = data.subspan(20, 7);
+    if (!allFf(dateTime) && allValidBcd(dateTime)) {
+        const int year = decodeBcdByte(data[20]) * 100 + decodeBcdByte(data[21]);
+        const int month = decodeBcdByte(data[22]);
+        const int day = decodeBcdByte(data[23]);
+        const int hour = decodeBcdByte(data[24]);
+        const int minute = decodeBcdByte(data[25]);
+        const int second = decodeBcdByte(data[26]);
+        if (validDate(year, month, day)
+            && hour <= 23 && minute <= 59 && second <= 60) {
+            char iso[21]{};
+            std::snprintf(iso, sizeof(iso), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                          year, month, day, hour, minute, second);
+            out.utcIso8601 = iso;
+        }
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> cmdReadGpsPosition(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kGps, gps::kPosition);
+}
+
+std::vector<std::uint8_t> cmdReadGpsSource(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kGps, gps::kSource);
+}
+
+std::vector<std::uint8_t> cmdNtpAccess(std::uint8_t to, bool initiate)
+{
+    const std::array<std::uint8_t, 1> body{
+        static_cast<std::uint8_t>(initiate ? 0x01 : 0x00)};
+    return buildFrameSub(to, cmd::kSetting, settingSub::kNtpAccess, body);
+}
+
+std::vector<std::uint8_t> cmdReadNtpAccessResult(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kSetting, settingSub::kNtpResult);
 }
 
 std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item, int value)

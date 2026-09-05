@@ -161,8 +161,10 @@ void testIc9700DerivedForwardPowerAcrossBands()
               "IC-705 keeps its native 5 W raw-143 calibration");
         check(backend.capabilities().forwardPowerRequiresSmoothing,
               "IC-705 retains established client-side power ballistics");
-        check(backend.capabilities().txPowerBands.isEmpty(),
-              "IC-705 does not inherit the IC-9700 per-band power ratings");
+        const RadioCapabilities caps = backend.capabilities();
+        check(caps.txPowerBands.size() == 1
+                  && caps.txPowerMaxWattsAt(14'100'000.0) == 10.0,
+              "IC-705 uses only its own continuous 10 W rated-output range");
     }
 
     const IcomModel* ic7300mk2 = modelForCivAddress(0xB6);

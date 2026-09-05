@@ -1851,6 +1851,11 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("available"), r->hasGpsHardware()
              || !r->gpsStatus().isEmpty()},
         {QStringLiteral("status"), r->gpsStatus()},
+        // Backend-normalized validity and source (GpsDelta::positionValid /
+        // source), so a scenario can assert "usable fix" without parsing
+        // family-specific status prose.
+        {QStringLiteral("positionValid"), r->gpsPositionValid()},
+        {QStringLiteral("source"), r->gpsSource()},
         {QStringLiteral("tracked"), r->gpsTracked()},
         {QStringLiteral("visible"), r->gpsVisible()},
         {QStringLiteral("grid"), r->gpsGrid()},
@@ -1858,10 +1863,18 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("latitude"), r->gpsLat()},
         {QStringLiteral("longitude"), r->gpsLon()},
         {QStringLiteral("utcTime"), r->gpsTime()},
+        {QStringLiteral("utcDate"), r->gpsDate()},
         {QStringLiteral("speed"), r->gpsSpeed()},
         {QStringLiteral("course"), r->gpsTrack()},
         {QStringLiteral("frequencyError"), r->gpsFreqError()},
         {QStringLiteral("ntpServerAddress"), r->gpsNtpServerAddress()},
+        // Radio-owned NTP *client* configuration (hasGpsTimeConfiguration;
+        // IC-705 SET 0167-0169 and 1A 08), distinct from the Flex-hosted NTP
+        // server address above.
+        {QStringLiteral("ntpClientEnabled"), r->gpsNtpEnabled()},
+        {QStringLiteral("ntpClientServer"), r->gpsNtpServer()},
+        {QStringLiteral("gpsTimeCorrection"), r->gpsTimeCorrectionEnabled()},
+        {QStringLiteral("ntpSyncStatus"), r->gpsNtpSyncStatus()},
         {QStringLiteral("referenceSetting"), r->oscSetting()},
         {QStringLiteral("referenceActual"), r->oscState()},
         {QStringLiteral("referenceLocked"), r->oscLocked()},
@@ -4524,6 +4537,21 @@ void AutomationServer::setClockModel(AetherClockModel* model)
     m_clockModel = model;
 }
 
+void AutomationServer::setRadioModel(RadioModel* model)
+{
+    m_radioModel = model;
+}
+
+void AutomationServer::setAudioEngine(AudioEngine* audio)
+{
+    m_audioEngine = audio;
+}
+
+void AutomationServer::setQsoRecorder(QsoRecorder* recorder)
+{
+    m_qsoRecorder = recorder;
+}
+
 namespace {
 // AetherClock model snapshot for "get clock" (PRD-A: bridge exposure).
 QJsonObject clockSnapshot(const AetherClockModel* m)
@@ -6017,7 +6045,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
             QPointer<QObject> guard(conn->asQObject());
             QPointer<AutomationServer> self(this);
-            QTimer::singleShot(0, qApp, [guard, self, conn, selectedSerial] {
+            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial] {
                 if (!guard) {
                     return;
                 }
@@ -6047,7 +6075,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
                 QPointer<QObject> guard(conn->asQObject());
                 QPointer<AutomationServer> self(this);
-                QTimer::singleShot(0, qApp, [guard, self, conn, serial] {
+                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial] {
                     if (!guard) {
                         return;
                     }
@@ -6155,7 +6183,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
         QPointer<QObject> guard(conn->asQObject());
         QPointer<AutomationServer> self(this);
-        QTimer::singleShot(0, qApp, [guard, self, conn, target, family] {
+        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family] {
             if (!guard) {
                 return;
             }
@@ -6202,7 +6230,7 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
     const bool wasVisible = conn && conn->automationDialogVisible();
     QPointer<QObject> guardedHost = host;
     QPointer<QObject> guard(conn ? conn->asQObject() : nullptr);
-    QTimer::singleShot(0, qApp, [guardedHost, guard, conn, show] {
+    QTimer::singleShot(0, QCoreApplication::instance(), [guardedHost, guard, conn, show] {
         if (guardedHost) {
             const char* method = show ? "showConnectionDialog" : "hideConnectionDialog";
             if (QMetaObject::invokeMethod(guardedHost, method, Qt::DirectConnection)) {
@@ -6240,7 +6268,7 @@ QJsonObject AutomationServer::doDisconnect()
 
     QPointer<QObject> guard(conn->asQObject());
     QPointer<AutomationServer> self(this);
-    QTimer::singleShot(0, qApp, [guard, self, conn] {
+    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn] {
         if (!guard) {
             return;
         }
@@ -7515,6 +7543,10 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
     }
 
     delta.status = QStringLiteral("Locked");
+    // The dashboard, APRS beacon and clock agreement gate on the normalized
+    // validity flag, not on the "Locked" prose, so the fixture must carry it.
+    delta.positionValid = true;
+    delta.source = QStringLiteral("GPSDO");
     delta.time = QDateTime::currentDateTimeUtc().time()
                      .toString(QStringLiteral("HH:mm:ss'Z'"));
     delta.speed = QStringLiteral("0 kts");

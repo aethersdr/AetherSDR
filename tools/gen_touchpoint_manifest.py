@@ -47,6 +47,9 @@ STATUS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-status.json"
 # Matches any quoted .h include; resolution (incl. core/models subdirs like
 # core/aprs/AprsPacket.h) happens in resolve_engine_header.
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"(?P<inc>[^"]+\.h)"')
+TAG_RE = re.compile(
+    r"^(?:universal|ui-support|(?:vendor|mixed|peripheral)\([a-z0-9][a-z0-9._-]*\))$"
+)
 
 
 def ui_files():
@@ -109,12 +112,33 @@ def load_json(path):
         return {}
 
 
+def valid_tag(tags, key):
+    entry = tags.get(key)
+    if not isinstance(entry, dict):
+        return None
+    tag = entry.get("tag")
+    if not isinstance(tag, str) or not TAG_RE.fullmatch(tag):
+        return None
+    return tag
+
+
+def invalid_live_tags(touchpoints, tags):
+    return [
+        f"{module}/{name}"
+        for module, name in touchpoints
+        if valid_tag(tags, f"{module}/{name}") is None
+    ]
+
+
 def render(touchpoints, tags, status):
     total = len(touchpoints)
     by_mod = {"core": 0, "models": 0}
     for (mod, _name) in touchpoints:
         by_mod[mod] += 1
-    tagged = sum(1 for (m, n) in touchpoints if f"{m}/{n}" in tags)
+    tagged = sum(
+        1 for (m, n) in touchpoints
+        if valid_tag(tags, f"{m}/{n}") is not None
+    )
     converted = sum(
         1
         for (m, n) in touchpoints
@@ -144,6 +168,8 @@ def render(touchpoints, tags, status):
     for (mod, name), includers in touchpoints.items():
         key = f"{mod}/{name}"
         tag = tags.get(key, {})
+        if not isinstance(tag, dict):
+            tag = {}
         tag_txt = tag.get("tag", "—")
         if tag.get("note"):
             tag_txt += f" — {tag['note']}"
@@ -153,12 +179,15 @@ def render(touchpoints, tags, status):
         )
     lines += [
         "",
-        "**Tag legend:** `universal` = core-profile surface every radio"
-        " family has; `vendor` = FlexRadio/SmartSDR-specific, becomes a"
-        " namespaced extension; `mixed` = header carries both (split"
-        " candidates noted); `ui-support` = not radio state at all"
-        " (settings, theming, app plumbing) — needs a home decision,"
-        " not a protocol message.",
+        "**Tag legend:** `universal` = core-profile surface shared across"
+        " radio families; `vendor(<family>)` = family-specific radio/backend"
+        " wire surface, kept behind `IRadioBackend` or exposed as a reviewed"
+        " namespaced extension; `mixed(<family>)` = header carries both"
+        " universal and family-specific concerns (split candidates noted);"
+        " `peripheral(<family>)` = standalone accessory transport outside the"
+        " radio-family seam; `ui-support` = not radio state at all (settings,"
+        " theming, app plumbing) — needs a home decision, not a protocol"
+        " message.",
         "",
     ]
     return "\n".join(lines)
@@ -171,9 +200,15 @@ def main():
     args = ap.parse_args()
 
     touchpoints = scan()
-    out = render(touchpoints, load_json(TAGS_JSON), load_json(STATUS_JSON))
+    tags = load_json(TAGS_JSON)
+    out = render(touchpoints, tags, load_json(STATUS_JSON))
 
     if args.check:
+        invalid_tags = invalid_live_tags(touchpoints, tags)
+        if invalid_tags:
+            print("::error::aetherd touchpoints require a valid semantic tag: "
+                  + ", ".join(invalid_tags))
+            return 1
         current = MANIFEST_MD.read_text() if MANIFEST_MD.is_file() else ""
         if current != out:
             print("::error::aetherd-touchpoints.md is stale — run"

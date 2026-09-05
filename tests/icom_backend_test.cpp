@@ -469,6 +469,18 @@ int main(int argc, char** argv)
     // canonicalises it, while capability code that compares the display text
     // literally loses CWK.
     radio.setDeviceName("IC 705");
+    radio.setSetting(setting::kNtpEnabled, 0x01);
+    radio.setSettingText(setting::kNtpServer, "time.nist.gov");
+    radio.setSetting(setting::kGpsTimeCorrect, 0x01);
+    radio.setGpsSource(0x01);
+    radio.setGpsPosition({
+        0x34, 0x13, 0x46, 0x40, 0x01,
+        0x01, 0x18, 0x03, 0x53, 0x40, 0x00,
+        0x01, 0x74, 0x25, 0x00,
+        0x02, 0x75,
+        0x00, 0x04, 0x27,
+        0x20, 0x26, 0x08, 0x21, 0x12, 0x34, 0x56,
+    });
     IcomCivBackend backend;
 
     int sliceAudioBuffers = 0;
@@ -499,6 +511,27 @@ int main(int argc, char** argv)
     // one both end up in the same place.
     std::vector<bool> moxPublications;
     std::vector<bool> xfcPublications;
+    GpsDelta gpsState;
+    QObject::connect(&backend, &IRadioBackend::gpsChanged, &app,
+                     [&](const GpsDelta& d) {
+                         if (d.status) { gpsState.status = d.status; }
+                         if (d.positionValid) { gpsState.positionValid = d.positionValid; }
+                         if (d.source) { gpsState.source = d.source; }
+                         if (d.grid) { gpsState.grid = d.grid; }
+                         if (d.altitude) { gpsState.altitude = d.altitude; }
+                         if (d.lat) { gpsState.lat = d.lat; }
+                         if (d.lon) { gpsState.lon = d.lon; }
+                         if (d.time) { gpsState.time = d.time; }
+                         if (d.date) { gpsState.date = d.date; }
+                         if (d.speed) { gpsState.speed = d.speed; }
+                         if (d.track) { gpsState.track = d.track; }
+                         if (d.ntpEnabled) { gpsState.ntpEnabled = d.ntpEnabled; }
+                         if (d.ntpServer) { gpsState.ntpServer = d.ntpServer; }
+                         if (d.gpsTimeCorrectionEnabled) {
+                             gpsState.gpsTimeCorrectionEnabled = d.gpsTimeCorrectionEnabled;
+                         }
+                         if (d.ntpSyncStatus) { gpsState.ntpSyncStatus = d.ntpSyncStatus; }
+                     });
     const auto mergeSlice = [&lastSliceState](const SliceDelta& d) {
         if (d.nr) lastSliceState.nr = d.nr;
         if (d.nb) lastSliceState.nb = d.nb;
@@ -713,6 +746,12 @@ int main(int argc, char** argv)
                       && fm.value(QStringLiteral("dtcs")).toBool()
                       && fm.value(QStringLiteral("xfc")).toBool(),
                   "profile.show carries the IC-705 repeater dialect, DTCS and XFC");
+            const QVariantMap gps = profile.value(QStringLiteral("gps")).toMap();
+            check(gps.value(QStringLiteral("ntpEnabledSetItem")).toInt() == 167
+                      && gps.value(QStringLiteral("ntpServerSetItem")).toInt() == 168
+                      && gps.value(QStringLiteral("timeCorrectSetItem")).toInt() == 169
+                      && gps.value(QStringLiteral("ntpAccess")).toBool(),
+                  "profile.show carries the IC-705 GPS/NTP command shape");
         }
     }
     check(caps.cwTextMinWpm == 6 && caps.cwTextMaxWpm == 48
@@ -747,6 +786,46 @@ int main(int argc, char** argv)
     check(backend.model().verified, "whose capability numbers are tier-1 verified");
     check(waitSchedulerIdle(),
           "connect-time radio-authoritative state converges through the scheduler");
+    const RadioCapabilities connectedCaps = backend.capabilities();
+    check(connectedCaps.hasGpsLocation && connectedCaps.hasGpsTimeConfiguration,
+          "the resolved IC-705 advertises GPS position and clock configuration");
+    check(!connectedCaps.hasGpsSatelliteTelemetry
+              && !connectedCaps.hasGpsFrequencyReference,
+          "but does not overclaim satellite counts, lock, or a GPS frequency reference");
+    check(gpsState.positionValid.value_or(false)
+              && gpsState.status.value_or(QString{}) == QStringLiteral("Position reported"),
+          "the startup read publishes a usable position without inventing a lock");
+    check(!gpsState.grid.value_or(QString{}).isEmpty()
+              && gpsState.date.value_or(QString{}) == QStringLiteral("2026-08-21")
+              && gpsState.time.value_or(QString{}) == QStringLiteral("12:34:56Z"),
+          "coordinates are derived to grid square and the full radio UTC is preserved");
+    check(gpsState.ntpEnabled.value_or(false)
+              && gpsState.ntpServer.value_or(QString{}) == QStringLiteral("time.nist.gov")
+              && gpsState.gpsTimeCorrectionEnabled.value_or(false),
+          "the dashboard state is adopted from the radio's NTP/GPS settings");
+
+    backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("gps.ntp.enabled"),
+                            0, false);
+    check(waitSchedulerIdle() && radio.setting(setting::kNtpEnabled) == 0x00
+              && gpsState.ntpEnabled.has_value() && !*gpsState.ntpEnabled,
+          "an explicit NTP toggle is written, read back, and only then published");
+    backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("gps.ntp.server"),
+                            0, QStringLiteral("pool.ntp.org"));
+    check(waitSchedulerIdle()
+              && radio.settingText(setting::kNtpServer) == "pool.ntp.org"
+              && gpsState.ntpServer.value_or(QString{}) == QStringLiteral("pool.ntp.org"),
+          "an explicit NTP hostname write preserves all bytes and publishes read-back");
+    backend.invokeExtension(QStringLiteral("icom"),
+                            QStringLiteral("gps.time-correction"), 0, false);
+    check(waitSchedulerIdle() && radio.setting(setting::kGpsTimeCorrect) == 0x00
+              && gpsState.gpsTimeCorrectionEnabled.has_value()
+              && !*gpsState.gpsTimeCorrectionEnabled,
+          "GPS Time Correct also follows explicit-write then read-back authority");
+    backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("gps.ntp.sync"),
+                            0, {});
+    check(waitSchedulerIdle()
+              && gpsState.ntpSyncStatus.value_or(QString{}) == QStringLiteral("Succeeded"),
+          "Sync now follows 1A 07 with the radio's 1A 08 access result");
     check(lastTransmitState.cwSpeed.value_or(-1) == 28,
           "connect reads and adopts the radio's 28 WPM key speed");
     check(lastTransmitState.cwPitch.value_or(-1) == 601,

@@ -36,6 +36,7 @@
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
+#include "core/CwRecordGate.h"        // micTapOwnsRecorder — carried explicitly (AGENTS.md, #3532)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
@@ -1697,8 +1698,21 @@ MainWindow::MainWindow(QWidget* parent)
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
     // single time-interleaved RX/TX stream.
+    // Gated on the current TX-slot owner: this tap keeps running through a CW
+    // over (mic capture follows mic_selection, not mode), and the recorder
+    // cannot tell mic bytes from pumped sidetone — ungated, room noise landed
+    // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
+    // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+        // Evaluated at queued-delivery time on the recorder's thread, so blocks
+        // already in flight when ownership flips are gated by the NEW owner —
+        // bounded (tens of ms) leakage in both directions at over boundaries.
+        if (!micTapOwnsRecorder(m_audio->txRecorderSource())) {
+            return;
+        }
+        m_qsoRecorder->feedTxAudio(pcm);
+    });
     // Host-modulated backends (HL2) take their transmit audio from the SAME tap
     // the recorder uses: fully processed, after the test tone, compressor and
     // EQ. One path means the TONE button, the microphone and the recording all
@@ -1719,7 +1733,35 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
-            m_qsoRecorder, &QsoRecorder::onMoxChanged);
+            m_qsoRecorder, &QsoRecorder::setCwOverActive);
+    // Queued, unlike the two direct connections below: setCwOverActive reaches
+    // applyOverBookkeeping, which touches a QTimer and can open a file, so it
+    // must run on the recorder's own thread rather than the AudioEngine's.
+    // Mirror the keyer speed so the pump can size the CW over-hang in dit units
+    // rather than a fixed wall-clock value (#4281).
+    m_audio->setCwWpm(m_radioModel.transmitModel().cwSpeed());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwSpeedChanged,
+            m_audio, [ae = m_audio](int wpm) { ae->setCwWpm(wpm); });
+    // Tune carriers raise the interlock as an owned TX but are not a CW over:
+    // mirror tune state so cwOverTxActive can exclude them (#4281).
+    // TransmitModel sets its flag optimistically before the tune command is
+    // even sent, so this mirror cannot lose a race against the interlock rise.
+    m_audio->setTuneActive(m_radioModel.transmitModel().isTuning());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            m_audio, [ae = m_audio](bool tuning) { ae->setTuneActive(tuning); });
+    // Let the CW record pump skip rendering while no file is open (#4281).
+    // Direct connections: the slot is a single atomic store that touches no Qt
+    // state, and recordingStarted is emitted once the file is open and
+    // m_recording is set — so the flag is true before the recorder can accept
+    // anything, and a queued hop cannot lose the first elements of an over.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted,
+            m_audio, [ae = m_audio](const QString&) {
+        ae->setQsoRecordingActive(true);
+    }, Qt::DirectConnection);
+    connect(m_qsoRecorder, &QsoRecorder::recordingStopped,
+            m_audio, [ae = m_audio](const QString&, int) {
+        ae->setQsoRecordingActive(false);
+    }, Qt::DirectConnection);
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in
@@ -2333,13 +2375,27 @@ MainWindow::MainWindow(QWidget* parent)
         return value.trimmed().isEmpty() ? QStringLiteral("Unknown") : value.toUpper();
     };
     auto updateFrequencyReferenceLabel = [this, normalizeOscillatorValue, oscillatorName] {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
         const QString state = normalizeOscillatorValue(m_radioModel.oscState());
         const QString setting = normalizeOscillatorValue(m_radioModel.oscSetting());
         const bool locked = m_radioModel.oscLocked();
 
         QString sourceLabel;
         QString statusLabel;
-        if (state.isEmpty()) {
+        if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
+            // A position receiver is not a frequency reference. Keep the
+            // compact status-bar identity and fix state privacy-safe while
+            // the live position details remain available in the GPS dashboard.
+            sourceLabel = QStringLiteral("Int. GPS");
+            // A hand-entered position (IC-705 GPS Select = Manual) is usable
+            // but it is not a fix; say so rather than printing "Locked".
+            const QString positionStatus = m_radioModel.gpsPositionValid()
+                ? (m_radioModel.gpsSource() == QLatin1String("Manual")
+                       ? QStringLiteral("Manual") : QStringLiteral("Locked"))
+                : (m_radioModel.gpsStatus().isEmpty()
+                       ? QStringLiteral("Waiting") : m_radioModel.gpsStatus());
+            statusLabel = QStringLiteral("[%1]").arg(positionStatus);
+        } else if (state.isEmpty()) {
             sourceLabel = QStringLiteral("Ref: --");
             statusLabel = QStringLiteral("[Waiting]");
         } else if (state == "gpsdo") {
@@ -2366,10 +2422,19 @@ MainWindow::MainWindow(QWidget* parent)
         m_gpsLabel->setText(sourceLabel);
         m_gpsStatusLabel->setText(statusLabel);
 
-        QString tooltip = QStringLiteral("10 MHz reference\nSetting: %1\nActual: %2\nLock: %3")
-            .arg(oscillatorName(setting, false),
-                 oscillatorName(state, false),
-                 locked ? QStringLiteral("Locked") : QStringLiteral("Unlocked"));
+        QString tooltip;
+        if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
+            tooltip = QStringLiteral("GPS position receiver\nSource: %1\nStatus: %2")
+                .arg(m_radioModel.gpsSource().isEmpty() ? QStringLiteral("Unknown")
+                                                        : m_radioModel.gpsSource(),
+                     m_radioModel.gpsStatus().isEmpty() ? QStringLiteral("Waiting")
+                                                        : m_radioModel.gpsStatus());
+        } else {
+            tooltip = QStringLiteral("10 MHz reference\nSetting: %1\nActual: %2\nLock: %3")
+                .arg(oscillatorName(setting, false),
+                     oscillatorName(state, false),
+                     locked ? QStringLiteral("Locked") : QStringLiteral("Unlocked"));
+        }
         if (state == "external") {
             tooltip += QStringLiteral("\nExternal 10 MHz: %1")
                 .arg(m_radioModel.extPresent() ? QStringLiteral("detected")
@@ -2413,9 +2478,14 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Use GPS UTC time only when GPSDO is installed and locked.
         // GPS with no antenna/lock sends stale "00:00:00Z" — fall back to system clock.
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const bool usablePositionTime = caps.hasGpsLocation
+            && !caps.hasGpsFrequencyReference
+            && m_radioModel.gpsPositionValid();
         if (!utcTime.isEmpty()
-            && normalizeOscillatorValue(m_radioModel.oscState()) == "gpsdo"
-            && m_radioModel.oscLocked()) {
+            && (usablePositionTime
+                || (normalizeOscillatorValue(m_radioModel.oscState()) == "gpsdo"
+                    && m_radioModel.oscLocked()))) {
             m_gpsTimeLabel->setText(utcTime);
             m_useSystemClock = false;
         } else {
@@ -2435,9 +2505,17 @@ MainWindow::MainWindow(QWidget* parent)
         QString dateFmt = loc.dateFormat(QLocale::ShortFormat);
         if (!dateFmt.contains(QLatin1String("yyyy")))
             dateFmt.replace(QLatin1String("yy"), QLatin1String("yyyy"));
-        m_gpsDateLabel->setText(loc.toString(utc.date(), dateFmt));
-        if (m_useSystemClock)
+        QDate displayDate = utc.date();
+        if (!m_useSystemClock) {
+            const QDate radioDate = QDate::fromString(m_radioModel.gpsDate(), Qt::ISODate);
+            if (radioDate.isValid()) {
+                displayDate = radioDate;
+            }
+        }
+        m_gpsDateLabel->setText(loc.toString(displayDate, dateFmt));
+        if (m_useSystemClock) {
             m_gpsTimeLabel->setText(utc.toString("HH:mm:ssZ"));
+        }
     });
     clockTimer->start(1000);
 
@@ -3266,7 +3344,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
     showOrRaisePersistent(m_radioSetupDialog,
                           &m_radioModel, m_audio,
                           &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
+                          &m_lpMeterConn);
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -3774,6 +3853,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // this function returns, leaving the amp holding a stale half-open
     // connection instead of seeing a clean close.
     m_vkampConn.disconnect();
+    // The LP-100A is likewise independent of the radio lifecycle and may be
+    // connected through a shared ser2net proxy. Close it explicitly while
+    // the event loop is still live instead of relying on member destruction.
+    m_lpMeterConn.disconnect();
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands
@@ -7340,6 +7423,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->txApplet()->setRadioSideDspAvailable(radioSideDsp);
     }
 
+    // ── APF on the P/CW pane's CW face (#4879) ──────────────────────────────
+    //
+    // NOT hasRadioSideDsp: Icom declares that true for NR/NB/notch and has no
+    // APF register. The row's only effect is Flex `slice set <n> apf=`, so it
+    // rides hasAudioPeakingFilter (permissive while disconnected, like LMS).
+    // The DSP-tab APF button is still ungated — pre-existing, left alone.
+    if (m_appletPanel && m_appletPanel->phoneCwApplet()) {
+        m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
+            m_radioModel.hasAudioPeakingFilter());
+    }
+
     // ── The 8-band graphic EQ ───────────────────────────────────────────────
     //
     // NO LONGER GATED on hasRadioSideDsp. It used to be, on the reasoning that
@@ -9688,6 +9782,14 @@ void MainWindow::updateKeyerAvailability()
     // activatedAmbiguously (#2464, #2582, #4173).
     SliceModel* txSlice = m_radioModel.txSlice();
     const QString txMode = txSlice ? txSlice->mode() : QString();
+    // Mirror "the TX slice is in a CW mode" into the CW over machinery: the
+    // record-gate latch must not arm off a key edge in a voice mode, and
+    // leaving CW ends any over in flight (#4281). This function already
+    // re-runs on every mode change and TX-slice reassignment — exactly the
+    // coverage the mirror needs. No TX slice (receive-only) parses as not-CW.
+    if (m_audio) {
+        m_audio->setTxModeCw(isCwMode(txMode));
+    }
     // Both keyers carry a family gate ahead of the mode gate: a radio with no
     // text buffer and no voice recorder never gains one by switching mode, so
     // the capability is ANDed into the availability that drives the enabled

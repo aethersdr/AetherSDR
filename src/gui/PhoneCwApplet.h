@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QPointer>
 
 class QPushButton;
 class QLabel;
@@ -12,6 +13,7 @@ class QStackedWidget;
 namespace AetherSDR {
 
 class HGauge;
+class SliceModel;
 class TransmitModel;
 
 enum class MicMeterSessionState {
@@ -38,6 +40,23 @@ public:
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
+
+    // Bind the active slice.  TransmitModel is radio-global TX state; APF is a
+    // per-slice receive filter, so the CW panel needs the slice itself to drive
+    // its APF row (#4879).  Re-binding disconnects the previous slice first —
+    // AppletPanel::setSlice is called on every active-slice change, so a
+    // connect-only binding stacked a duplicate handler each time the operator
+    // returned to a slice they had used before.
+    void setSlice(SliceModel* slice);
+
+    // Does the attached radio run a CW audio peaking filter in firmware?
+    // Gates the APF row, whose only effect is `slice set <n> apf=` — a Flex
+    // verb, not "any radio-side DSP". hasRadioSideDsp is too coarse: Icom
+    // declares that true for NR/NB/notch and has no APF register. Pushed from
+    // MainWindow::applyCapabilitiesToUi off RadioModel::hasAudioPeakingFilter(),
+    // which is permissive while disconnected so the row does not blink off
+    // on a Flex unplug.
+    void setHasAudioPeakingFilter(bool has);
 
 signals:
     void micLevelChanged(int level);  // slider value 0-100
@@ -75,10 +94,16 @@ private:
     void buildCwPanel();
     void syncPhoneFromModel();
     void syncCwFromModel();
+    void syncApfFromSlice();
     void applyLevelMeterReceiveGate();
     void resetLevelMeter();
 
     TransmitModel* m_model{nullptr};
+    // QPointer, not a raw pointer: MainWindow calls setSlice(nullptr) from
+    // onSliceRemoved, by which point the outgoing SliceModel is already
+    // deleteLater'd — disconnecting through a dangling raw pointer would be a
+    // use-after-free on any path that drains the event loop first.
+    QPointer<SliceModel> m_slice;
     QStackedWidget* m_stack{nullptr};
     QWidget* m_phonePanel{nullptr};
     QWidget* m_cwPanel{nullptr};
@@ -136,6 +161,18 @@ private:
     QLineEdit*   m_pitchEdit{nullptr};
     QPushButton* m_pitchDown{nullptr};
     QPushButton* m_pitchUp{nullptr};
+
+    // APF — per-slice CW audio peaking filter, mirroring the VfoWidget DSP-tab
+    // pair.  Both surfaces drive the same SliceModel, so they stay in sync
+    // without any bridging between them (#4879).
+    QWidget*     m_apfRow{nullptr};   // container, so the capability gate can hide the row whole
+    QPushButton* m_apfBtn{nullptr};
+    QSlider*     m_apfSlider{nullptr};
+    QLineEdit*   m_apfEdit{nullptr};
+    // Permissive default, matching RadioModel::hasAudioPeakingFilter()'s
+    // disconnected rule: the row shows until a backend says otherwise, so it
+    // does not blink out of existence on every Flex disconnect edge.
+    bool m_hasAudioPeakingFilter{true};
 
     // ── Shared state ─────────────────────────────────────────────────────
 

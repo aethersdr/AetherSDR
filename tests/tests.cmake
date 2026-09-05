@@ -66,6 +66,41 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# ── AetherD control protocol tests ───────────────────────────────────────────
+# AetherD control protocol v1: transport-neutral envelope validation and
+# fail-closed structural limits. QtCore only; no daemon/socket/model dependency.
+add_executable(control_protocol_codec_test
+    tests/control_protocol_codec_test.cpp
+    src/core/control/ControlProtocolCodec.cpp
+)
+target_include_directories(control_protocol_codec_test PRIVATE src)
+target_link_libraries(control_protocol_codec_test PRIVATE Qt6::Core)
+add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
+
+# Current-user local transport plus the first-request handshake. This test
+# binds the production QLocalServer socket and proves that the Stage-3 surface
+# grants observation only; no control or transmit capability may appear.
+add_executable(local_control_server_test
+    tests/local_control_server_test.cpp
+)
+target_include_directories(local_control_server_test PRIVATE src)
+target_link_libraries(local_control_server_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME local_control_server_test COMMAND local_control_server_test)
+
+# Socket-free Stage-3 resource/service proof: revision stability, atomic
+# snapshot-to-event sequencing, multi-client delivery, unsubscribe,
+# coalescing/resync under pressure, normalized backend reconnect reclaim,
+# external receive-audio AGC/squelch republish, stale-vs-live slice removal, and
+# SimBackend -> RadioModel -> protocol.
+add_executable(control_resource_service_test
+    tests/control_resource_service_test.cpp
+)
+target_include_directories(control_resource_service_test PRIVATE src)
+target_link_libraries(control_resource_service_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME control_resource_service_test COMMAND control_resource_service_test)
+
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
 # DIGITAL_VOICE_WAVEFORM_DIR, CRDV_DIR and crdv::crdv are all defined by the time
@@ -118,8 +153,26 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     # `-fsanitize=` substring, `-fsanitize=kernel-address` stops at the hyphen,
     # and `-fsanitize=address` does not contain `hwaddress`. Reordered lists
     # (`-fsanitize=undefined,thread`) still match.
+    #
+    # THREE sources are scanned, because a sanitizer can arrive three ways and
+    # this guard is only as good as its narrowest blind spot:
+    #   - CMAKE_CXX_FLAGS and CMAKE_C_FLAGS, which is how sanitizers.yml
+    #     delivers them (CXXFLAGS/CFLAGS in the job environment);
+    #   - AETHERSDR_SANITIZER, the tree-wide option (CMakeLists.txt). It
+    #     reaches targets through add_compile_options and therefore NEVER
+    #     appears in the FLAGS variables, so scanning only those two is blind
+    #     to it. That blindness re-creates #4360 exactly, and not in theory:
+    #     configuring -DAETHERSDR_SANITIZER=thread with the two-source form
+    #     produced translation units carrying both -fsanitize=thread and
+    #     -fsanitize=address,undefined, and this message did not print. It was
+    #     77 of them when measured (Debug, Linux/GCC, ENABLE_DSTAR on, at
+    #     #5419); the figure tracks the target list below and will drift, so
+    #     treat it as scale rather than as a number to assert on.
+    # When the option is "none" the synthesized string is "-fsanitize=none",
+    # which matches nothing in the alternation.
     set(_aether_dv_external_sanitizer OFF)
-    foreach(_aether_dv_flags "${CMAKE_CXX_FLAGS}" "${CMAKE_C_FLAGS}")
+    foreach(_aether_dv_flags
+            "${CMAKE_CXX_FLAGS}" "${CMAKE_C_FLAGS}" "-fsanitize=${AETHERSDR_SANITIZER}")
         if(_aether_dv_flags MATCHES "-fsanitize=[a-z,]*(thread|memory|hwaddress)")
             set(_aether_dv_external_sanitizer ON)
         endif()
@@ -493,6 +546,20 @@ add_executable(icom_meters_test
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
 
+# Socket-free lifecycle policy for the IC-705 one-shot NTP access command.
+add_executable(icom_ntp_access_test tests/icom_ntp_access_test.cpp)
+target_include_directories(icom_ntp_access_test PRIVATE src)
+target_link_libraries(icom_ntp_access_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_ntp_access_test COMMAND icom_ntp_access_test)
+
+# Socket-free injected-transport coverage for the IC-705 23 00/01 position
+# decode and the 0167-0169 / 1A 08 clock read-backs: frames go straight into
+# IcomCivBackend::onCivFrame, no fake peer.
+add_executable(icom_gps_readback_test tests/icom_gps_readback_test.cpp)
+target_include_directories(icom_gps_readback_test PRIVATE src)
+target_link_libraries(icom_gps_readback_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_gps_readback_test COMMAND icom_gps_readback_test)
+
 # Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
 # per-deck watt derivation, sibling-model isolation, and unkey clearing.
 add_executable(icom_power_derivation_test
@@ -724,6 +791,14 @@ target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6
 add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 ]==]
 
+if(AETHER_BACKEND_RTL)
+    # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
+    add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
+    target_include_directories(rtl_backend_test PRIVATE src)
+    target_link_libraries(rtl_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+    add_test(NAME rtl_backend_test COMMAND rtl_backend_test)
+endif()
+
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
 # is what lets the weekly TSan job (.github/workflows/sanitizers.yml) exercise the
@@ -927,6 +1002,7 @@ foreach(APP_SETTINGS_SCENARIO
         save-before-load
         xml-import-parity
         first-run
+        database-file-permissions
         xml-import-tmp-promotion
         xml-import-bak-fallback
         xml-artifacts-unusable
@@ -2006,6 +2082,14 @@ target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
+add_executable(lp100a_protocol_test
+    tests/lp100a_protocol_test.cpp
+    src/core/LpMeterProtocol.cpp
+)
+target_include_directories(lp100a_protocol_test PRIVATE src)
+target_link_libraries(lp100a_protocol_test PRIVATE Qt6::Core)
+add_test(NAME lp100a_protocol_test COMMAND lp100a_protocol_test)
+
 add_executable(spe_protocol_test
     tests/spe_protocol_test.cpp
     src/core/SpeProtocol.cpp
@@ -2651,6 +2735,17 @@ add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test
 target_include_directories(cw_sidetone_device_match_test PRIVATE src)
 target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
+
+# #4281 — who owns the Client-Side QSO recorder's TX slot. Pure, header-only,
+# so the truth table is a compile-time assertion; the run-time rows carry the
+# labels. The static_assert on the function's own type is the regression pin:
+# the defect was an extra input (mic-capture state), so re-adding one fails the
+# build rather than silently restoring room noise over the recorded CW.
+add_executable(cw_record_gate_test
+    tests/cw_record_gate_test.cpp
+)
+target_include_directories(cw_record_gate_test PRIVATE src)
+add_test(NAME cw_record_gate_test COMMAND cw_record_gate_test)
 
 # #5028 — the RTTY sensitivity slider's confidence mapping. Pure, header-only;
 # the floor/default/ceiling rows are compile-time static_asserts, so every CI
@@ -3526,6 +3621,15 @@ target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
 
+add_executable(ctcss_tone_label_test
+    tests/ctcss_tone_label_test.cpp
+)
+target_include_directories(ctcss_tone_label_test PRIVATE src)
+target_link_libraries(ctcss_tone_label_test PRIVATE Qt6::Widgets)
+add_test(NAME ctcss_tone_label_test COMMAND ctcss_tone_label_test)
+set_tests_properties(ctcss_tone_label_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(local_memory_store_test
     tests/local_memory_store_test.cpp
     src/core/LocalMemoryStore.cpp
@@ -3698,15 +3802,11 @@ set_tests_properties(connection_panel_size_test PROPERTIES
 # the arithmetic and parent-chain matching in isolation, not a replacement
 # for the PR's own real-X11-input proof.
 #
-# Compiled and linked by the Linux build job, but not currently in any of
-# ci.yml's named ctest -R filters for the per-PR gate — CI building it
-# without running it (per-PR) is the only thing exercising it today; the
-# weekly sanitizers job is the sole scheduled `ctest` run that includes it
-# by not filtering, and per ci.yml that job has failed every run since
-# 2026-06-08. Pure arithmetic and four bare QWindows, no widgets/sockets/
-# wall clock, milliseconds to run — a reasonable candidate for one of the
-# per-PR filters, but that's a maintainer call on the gate's scope, not
-# this PR's to make unilaterally.
+# Compiled and linked by the Linux build job and executed unfiltered on every
+# push to main (.github/workflows/full-suite.yml) and again weekly under the
+# sanitizers, like every other Linux test; the per-PR gate in ci.yml is frozen
+# and does not take new entries (AGENTS.md, "Gate integrity"). Pure arithmetic and four bare QWindows, no widgets/sockets/
+# wall clock, milliseconds to run.
 add_executable(frameless_resizer_test
     tests/frameless_resizer_test.cpp
     src/gui/FramelessResizer.cpp
@@ -4097,6 +4197,23 @@ add_test(NAME phone_applet_dexp_visibility_test
 set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
+# slice rebind must not stack handlers, the capability gate, and the model
+# round trip in both directions. No radio, no sockets.
+add_executable(phone_cw_applet_apf_test
+    tests/phone_cw_applet_apf_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_applet_apf_test PRIVATE src)
+target_link_libraries(phone_cw_applet_apf_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_applet_apf_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_applet_apf_test COMMAND phone_cw_applet_apf_test)
+set_tests_properties(phone_cw_applet_apf_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
@@ -4197,6 +4314,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    control_resource_service_test
     slice_label_test
     ulanzi_mapping_migration_test
     theme_manager_test
@@ -4261,6 +4379,28 @@ set(AETHER_SETTINGS_CONSUMERS
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
         target_link_libraries(${_settings_consumer} PRIVATE aether_sqlite3)
+    endif()
+endforeach()
+
+# AutomationServer is desktop support, not engine code. Keep every test that
+# instantiates the production bridge linked through the same desktop-only
+# library as AetherSDR so moving QtWidgets out of aethercore cannot silently
+# leave these harnesses with unresolved bridge symbols.
+set(AETHER_AUTOMATION_SERVER_TESTS
+    automation_server_gesture_test
+    automation_device_diagnostics_test
+    automation_json_id_test
+    automation_connect_family_test
+    automation_connect_wait_phase_test
+    automation_double_click_test
+    automation_drag_at_test
+    automation_tx_watchdog_test
+    automation_rn2_probe_test
+    tci_automation_test
+)
+foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
+    if(TARGET ${_automation_test})
+        target_link_libraries(${_automation_test} PRIVATE aetherdesktop_support)
     endif()
 endforeach()
 
@@ -4349,6 +4489,28 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+# GUI harnesses that link aethercore used to receive ThemeManager,
+# SettingsHelpers, and ShortcutManager accidentally from that engine archive.
+# Run this retrofit only after every test target has been declared, preserving
+# their desktop dependency without exposing desktop support to engine-only tests.
+get_property(_aether_desktop_test_candidates DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_desktop_test IN LISTS _aether_desktop_test_candidates)
+    get_target_property(_desktop_test_type ${_desktop_test} TYPE)
+    if(NOT _desktop_test_type STREQUAL "EXECUTABLE")
+        continue()
+    endif()
+    get_target_property(_desktop_test_links ${_desktop_test} LINK_LIBRARIES)
+    if(";${_desktop_test_links};" MATCHES ";aethercore;"
+            AND ";${_desktop_test_links};" MATCHES ";Qt6::Widgets;"
+            AND NOT ";${_desktop_test_links};" MATCHES ";aetherdesktop_support;")
+        target_link_libraries(${_desktop_test} PRIVATE aetherdesktop_support)
+    endif()
+endforeach()
+unset(_aether_desktop_test_candidates)
+unset(_desktop_test)
+unset(_desktop_test_type)
+unset(_desktop_test_links)
 
 
 # The isolation TU, compiled once and linked into every test target below. An

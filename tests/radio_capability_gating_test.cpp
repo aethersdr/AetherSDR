@@ -166,6 +166,22 @@ struct IcomCivBackendTestAccess {
     {
         return backend.m_session ? backend.m_session->civAddress() : 0;
     }
+
+    static bool queueTunerRead(IcomCivBackend& backend, std::uint8_t address,
+                               IcomCivScheduler::Priority priority)
+    {
+        return backend.queueTunerReadIfSupported(address, priority);
+    }
+
+    static bool sendTunerCommand(IcomCivBackend& backend, bool start)
+    {
+        return backend.sendTunerCommandIfSupported(start);
+    }
+
+    static std::size_t queuedRequestCount(const IcomCivBackend& backend)
+    {
+        return backend.m_civScheduler.m_queue.size();
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -324,6 +340,12 @@ int main(int argc, char** argv)
               "Flex declares hasMultiClientSessions (multiFLEX)");
         check(caps.hasGpsLocation,
               "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
+        check(caps.hasGpsSatelliteTelemetry,
+              "Flex declares hasGpsSatelliteTelemetry (tracked satellites and visibility)");
+        check(caps.hasGpsFrequencyReference,
+              "Flex declares hasGpsFrequencyReference (GPSDO 10 MHz discipline)");
+        check(!caps.hasGpsTimeConfiguration,
+              "Flex declares hasGpsTimeConfiguration=false (no CI-V-style NTP client controls)");
         check(caps.hasGpsHardware,
               "Flex declares GPS hardware for Radio Setup presentation");
         check(caps.canReboot && caps.hasRemoteOnControl && caps.canUpgradeFirmware,
@@ -464,8 +486,9 @@ int main(int argc, char** argv)
         check(caps.receiveOnlyModes.isEmpty(),
               "HL2 declares no receive-only modes — it modulates on this host, "
               "so there is no mode it hears and cannot send");
-        check(caps.txPowerBands.isEmpty(),
-              "HL2 explicitly leaves per-band TX power limits empty");
+        check(caps.txPowerBands.size() == 1
+                  && caps.txPowerMaxWattsAt(14'200'000.0) == 5.0,
+              "HL2 declares its continuous 5 W rated-output range");
         check(!caps.hasDaxStreams,
               "HL2 declares hasDaxStreams=false (one raw IQ feed, no stream plane)");
         check(!caps.hasExtendedDsp,
@@ -482,6 +505,12 @@ int main(int argc, char** argv)
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
         check(!caps.hasGpsLocation,
               "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
+        check(!caps.hasGpsSatelliteTelemetry,
+              "HL2 declares hasGpsSatelliteTelemetry=false");
+        check(!caps.hasGpsFrequencyReference,
+              "HL2 declares hasGpsFrequencyReference=false");
+        check(!caps.hasGpsTimeConfiguration,
+              "HL2 declares hasGpsTimeConfiguration=false");
         check(!caps.hasGpsHardware,
               "HL2 declares hasGpsHardware=false");
         check(!caps.canReboot && !caps.hasRemoteOnControl
@@ -650,6 +679,29 @@ int main(int argc, char** argv)
     // ---- Icom model capabilities and CI-V dial lock without a socket -------
     {
         using namespace AetherSDR::icom;
+        const IcomModel* ic705 = modelForName("IC-705");
+        check(ic705 != nullptr, "the IC-705 resolves from the Icom model table");
+        if (ic705) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic705);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.size() == 1
+                      && caps.txPowerMaxWattsAt(14'200'000.0) == 10.0,
+                  "IC-705 alone declares its continuous 10 W rated-output range");
+        }
+
+        const IcomModel* ic7300Mk2 = modelForName("IC-7300MK2");
+        check(ic7300Mk2 != nullptr,
+              "the IC-7300MK2 resolves from the Icom model table");
+        if (ic7300Mk2) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic7300Mk2);
+            const RadioCapabilities caps = backend.capabilities();
+            check(caps.txPowerBands.isEmpty()
+                      && caps.txPowerMaxWattsAt(14'200'000.0) == 100.0,
+                  "IC-7300MK2 retains its unbanded 100 W capability path");
+        }
+
         const IcomModel* ic9700 = modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
         // Guarded as a block: without the guard a failed lookup would run the
@@ -673,6 +725,30 @@ int main(int argc, char** argv)
                   "Icom declares the profiled IC-9700 supply-voltage telemetry");
             check(!caps.hasMainFanTelemetry,
                   "Icom declares no Main Fan telemetry family-wide");
+            check(!caps.hasTuner,
+                  "IC-9700 publishes tuner controls as unavailable");
+            check(!caps.hasTunerMemories,
+                  "IC-9700 publishes tuner-memory controls as unavailable");
+            const std::size_t queuedBefore =
+                IcomCivBackendTestAccess::queuedRequestCount(backend);
+            check(!IcomCivBackendTestAccess::queueTunerRead(
+                      backend, 0xA2, IcomCivScheduler::Priority::Maintenance)
+                      && !IcomCivBackendTestAccess::queueTunerRead(
+                          backend, 0xA2, IcomCivScheduler::Priority::Control)
+                      && IcomCivBackendTestAccess::queuedRequestCount(backend)
+                          == queuedBefore,
+                  "IC-9700 suppresses startup and periodic tuner reads");
+            check(!IcomCivBackendTestAccess::sendTunerCommand(backend, true)
+                      && !IcomCivBackendTestAccess::sendTunerCommand(backend, false),
+                  "IC-9700 suppresses ordinary tuner start and bypass writes");
+            QSignalSpy tunerErrorSpy(&backend, &IRadioBackend::extensionError);
+            backend.invokeExtension(QStringLiteral("icom"),
+                                    QStringLiteral("tuner.start"), 9700, {});
+            check(tunerErrorSpy.count() == 1
+                      && tunerErrorSpy.first().at(0).toULongLong() == 9700
+                      && tunerErrorSpy.first().at(1).toString()
+                          == QStringLiteral("antenna tuner unsupported"),
+                  "IC-9700 rejects the tuner extension before radio I/O");
             check(caps.speechProcessorLevelMaximum == 100
                       && caps.speechProcessorLabel == QStringLiteral("COMP"),
                   "IC-9700 alone declares the continuous COMP presentation");
@@ -718,6 +794,15 @@ int main(int argc, char** argv)
                 check(!caps.persistsMemories && !caps.canWriteMemories
                           && caps.canRefreshMemories,
                       "IC-7300MK2 keeps the client database writable and exposes radio sync");
+                check(caps.hasTuner,
+                      "evidenced sibling Icom models retain tuner control");
+                check(!caps.hasTunerMemories,
+                      "Icom tuner support does not invent Flex ATU memories");
+                check(IcomCivBackendTestAccess::queueTunerRead(
+                          backend, sibling->civAddress,
+                          IcomCivScheduler::Priority::Maintenance)
+                          && IcomCivBackendTestAccess::sendTunerCommand(backend, true),
+                      "evidenced sibling profiles retain accepted tuner read/write paths");
             }
         }
 
@@ -842,6 +927,22 @@ int main(int argc, char** argv)
               "relay: capabilitiesChanged fired on the connect edge");
         check(model.isConnected(),
               "synthetic demo connect reached the connected state");
+
+        // Captured SmartSDR status can be replayed while SimBackend is active.
+        // The neutral identity path must not depend on a live FlexBackend.
+        const QString tunerObject = QStringLiteral("amplifier 0x2000");
+        const QMap<QString, QString> tunerStatus{
+            {QStringLiteral("model"), QStringLiteral("TunerGeniusXL")}
+        };
+        check(QMetaObject::invokeMethod(
+                  &model, "onStatusReceived", Qt::DirectConnection,
+                  QGenericArgument("QString", &tunerObject),
+                  QGenericArgument("QMap<QString,QString>", &tunerStatus)),
+              "demo TGXL status fixture reached RadioModel");
+        check(model.tunerModel().handle() == QStringLiteral("0x2000")
+                  && model.tunerModel().isPresent(),
+              "demo TGXL status preserves backend-neutral tuner identity");
+        model.tunerModel().setHandle({});
         if (spy.count() > 0) {
             const QList<QVariant> args = spy.last();
             check(args.value(0).toBool(),
@@ -853,6 +954,9 @@ int main(int argc, char** argv)
         check(caps.txPowerBands.isEmpty(),
               "Sim explicitly leaves per-band TX power limits empty");
         check(!caps.hasDaxStreams, "Sim declares hasDaxStreams=false");
+        check(!model.transmitModel().hasTuner()
+                  && !model.transmitModel().hasTunerMemories(),
+              "connected Sim propagates tuner and memory capabilities to the transmit model");
         check(!caps.hasExtendedDsp, "Sim declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
         check(!caps.hasRadioSideWaterfallAutoBlack,
@@ -863,6 +967,12 @@ int main(int argc, char** argv)
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
+        check(!caps.hasGpsSatelliteTelemetry,
+              "Sim declares hasGpsSatelliteTelemetry=false");
+        check(!caps.hasGpsFrequencyReference,
+              "Sim declares hasGpsFrequencyReference=false");
+        check(!caps.hasGpsTimeConfiguration,
+              "Sim declares hasGpsTimeConfiguration=false");
         check(!caps.hasGpsHardware, "Sim declares hasGpsHardware=false");
         check(!caps.canReboot && !caps.hasRemoteOnControl
                   && !caps.canUpgradeFirmware,
@@ -1026,6 +1136,9 @@ int main(int argc, char** argv)
         check(relayFired,
               "relay: capabilitiesChanged fired on the disconnect edge");
         check(!model.isConnected(), "disconnected from the synthetic demo radio");
+        check(model.transmitModel().hasTuner()
+                  && model.transmitModel().hasTunerMemories(),
+              "disconnect restores permissive tuner and memory presentation");
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(uiWouldShow(model.isConnected(), caps.hasProfiles),
@@ -1279,6 +1392,15 @@ int main(int argc, char** argv)
               "Sim explicitly omits TX cutoff controls because it is RX-only");
         check(!icomCaps.hasTxFilterControls,
               "an unidentified Icom cannot surface an unverified TX cutoff editor");
+        check(!icomCaps.hasTuner,
+              "an unidentified Icom cannot surface unverified tuner control");
+        check(!fresh.hasTunerMemories,
+              "RadioCapabilities defaults tuner memories to unavailable");
+        check(flexCaps.hasTunerMemories,
+              "Flex explicitly retains radio-side ATU memories");
+        check(!hl2Caps.hasTunerMemories && !simCaps.hasTunerMemories
+                  && !icomCaps.hasTunerMemories,
+              "non-Flex backends explicitly omit Flex-style ATU memories");
         check(uiWouldShow(/*connected=*/false, /*declared=*/false),
               "disconnected: the TX cutoff editor remains permissive");
 
@@ -1286,6 +1408,15 @@ int main(int argc, char** argv)
               "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");
         check(!icomCaps.hasLmsNoiseFilters,
               "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
+
+        check(flexCaps.hasAudioPeakingFilter,
+              "Flex declares hasAudioPeakingFilter (`slice set <n> apf=`)");
+        check(!icomCaps.hasAudioPeakingFilter,
+              "Icom declares NO hasAudioPeakingFilter (hasRadioSideDsp is NR/NB/notch, not APF)");
+        check(!hl2Caps.hasAudioPeakingFilter && !simCaps.hasAudioPeakingFilter,
+              "HL2 and Sim declare NO hasAudioPeakingFilter");
+        check(!fresh.hasAudioPeakingFilter,
+              "RadioCapabilities defaults hasAudioPeakingFilter to false (absent unless declared)");
 
         check(!flexCaps.hasManualNotch,
               "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
@@ -1304,6 +1435,8 @@ int main(int argc, char** argv)
         RadioModel disconnected;
         check(disconnected.hasLmsNoiseFilters(),
               "disconnected: hasLmsNoiseFilters() is permissive — the shipping row stays");
+        check(disconnected.hasAudioPeakingFilter(),
+              "disconnected: hasAudioPeakingFilter() is permissive — the Flex CW-face row stays");
         check(!disconnected.hasManualNotch(),
               "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
               "empty window");

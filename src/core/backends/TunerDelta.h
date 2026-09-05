@@ -18,6 +18,7 @@ namespace AetherSDR {
 // "tuner.*", …) (#4092). The direct port-9010 relay/antenna fast-path and the
 // direct-connection fwd-power/SWR meters are set outside this decode.
 struct TunerDelta {
+    std::optional<QString> handle;       // normalized tuner identity
     std::optional<QString> serialNum;    // "serial_num"
     std::optional<QString> model;
     std::optional<QString> ip;

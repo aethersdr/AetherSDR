@@ -3962,11 +3962,11 @@ void Ax25HfPacketDecodeDialog::handleGpsUpdate()
     double lat = 0.0, lon = 0.0;
     const bool latOk = aprs::parseGpsCoordinate(m_radio->gpsLat(), lat);
     const bool lonOk = aprs::parseGpsCoordinate(m_radio->gpsLon(), lon);
-    // "Fine Lock" / "Coarse Lock" mean the fix is real; "Present" /
-    // "Not Present" mean no usable position.
-    const bool locked =
-        m_radio->gpsStatus().contains(QStringLiteral("Lock"), Qt::CaseInsensitive);
-    const bool valid = latOk && lonOk && locked && (lat != 0.0 || lon != 0.0);
+    // Position validity is normalized by the backend. An IC-705 reports usable
+    // coordinates but no separate lock flag, so parsing vendor prose for
+    // "Lock" would discard its position while mobile.
+    const bool valid = latOk && lonOk && m_radio->gpsPositionValid()
+        && (lat != 0.0 || lon != 0.0);
     m_aprsBeacon->setGpsPosition(lat, lon, valid);
     refreshAprsPositionLabel();
 }
