@@ -49,16 +49,30 @@
 // figure and a connect are not strictly the same measurement. That cuts toward
 // a wider bound, not a narrower one.
 //
-// WHAT NONE OF THOSE FIGURES COVER: MORE THAN ONE RECEIVER. beginDspSetup()
-// opens one chain per receiver — `for (int i = 0; i < actualNumRx; ++i)` — and
-// the transmit path opens none, so the cost scales with actualNumRx. Every
-// measurement above is a ONE-receiver connect. Plan sets overlap heavily (the
-// same bench's second, third and fourth cold opens, at other rates, cost
-// 1862 / 1223 / 739 ms after that first 98 s), so receivers 2..N at the same
-// rate are probably nearly free — but that is an expectation, not a
-// measurement, and the board reports four. If a four-receiver first connect
-// ever fails this bound, that is the number to go and measure, not evidence
-// that the bound was set too low on the evidence available.
+// WHAT NONE OF THOSE FIGURES COVER: MORE THAN ONE RECEIVER — and the exposure
+// is much narrower than "the board reports four". beginDspSetup() opens one
+// chain per receiver, `for (int i = 0; i < actualNumRx; ++i)`, and the transmit
+// path opens none, so the cost does scale with actualNumRx. But three things
+// bound how it can exceed 1 inside this window:
+//
+//   * connectRadio() sets `m_requestedNumRx = 1` unconditionally and raises it
+//     only for an explicit `numRx` CONNECT PARAM. A saved count is deliberately
+//     not re-imposed (see the comment there). Nothing in RadioModel passes the
+//     param, so an ordinary app connect opens exactly one chain.
+//   * A receiver added later is outside this timer entirely: createPanadapter()
+//     refuses before m_connected, so its chain opens after the phase this
+//     watchdog measures.
+//   * receiverCeiling() is min(board, maxReceiversAtRate(rate, board)), so at
+//     384 kHz — the rate every measurement above used — a 4-receiver board is
+//     honestly 3. A four-receiver run would have to change the rate, and would
+//     then not be comparable to the figures above at all.
+//
+// So the reachable case is an automation or embedder caller that passes numRx>1
+// at connect: the same class of entry point as #5402's lnaGainDb. Plan sets
+// overlap heavily (this bench's second, third and fourth cold opens, at other
+// rates, cost 1862 / 1223 / 739 ms after that first 98 s), so chains 2..N at
+// one rate are probably nearly free — an expectation, not a measurement. If
+// such a connect ever fails this bound, that is the number to go and measure.
 //
 // Hence 600 s: an order of magnitude over the quiet floor, ~3x over the largest
 // documented cold cost, ~2.7x over the worst measured working connect, and
