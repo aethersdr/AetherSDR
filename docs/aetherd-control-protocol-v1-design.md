@@ -259,12 +259,13 @@ credentials are never accepted and ignored. The `auth` shape above is reserved
 for a transport wired to the verifier described here.
 
 The service now enforces an explicit, immutable authorization context on each
-`ControlSession`. The default context is unauthenticated: after envelope parsing,
-`hello` returns `auth.required` and requests closure before parameter or version
-negotiation. Invalid envelopes still receive protocol errors. The existing local transport supplies
-observer authorization only for connections admitted through its current-user
-endpoint. Trusted in-process callers must also provide their authorization
-explicitly. Client names, session IDs, and JSON fields cannot grant access.
+`ControlSession`. The default context is unauthenticated: after envelope
+parsing, `hello` returns `auth.required` and requests closure before parameter
+or version negotiation. Invalid envelopes still receive protocol errors. The
+existing local transport supplies observer authorization only for connections
+admitted through its current-user endpoint. Trusted in-process callers must
+also provide their authorization explicitly. Client names, session IDs, and
+JSON fields cannot grant access.
 
 An authenticated session with no grants can negotiate and call
 `capabilities.get`, but advertises empty grants/resource capabilities and gets

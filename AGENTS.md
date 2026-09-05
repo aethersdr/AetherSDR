@@ -479,8 +479,8 @@ are live over the current-user local transport.
 Sessions now require explicit trusted authorization; the local transport grants
 observe permission, and reads/subscriptions enforce it. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon
-path invokes it yet. Credential
-verification/provisioning and control/transmit grants are not implemented yet.
+path invokes it yet. Credential verification/provisioning and control/transmit
+grants are not implemented yet.
 Meters, read-only transmit state, authenticated non-TX control, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
