@@ -35,6 +35,7 @@ void SystemInfoCollector::init()
     // Seed the baseline so the first published sample is a real interval rather
     // than every thread's whole lifetime divided by a few milliseconds.
     m_previous = SystemInfo::enumerateThreads();
+    m_previousProcessCpuUsecs = SystemInfo::processCpuUsecs();
     m_sinceLastSample.start();
 
     m_timer = new QTimer(this);
@@ -52,6 +53,7 @@ void SystemInfoCollector::shutdown()
         m_timer = nullptr;
     }
     m_previous.clear();
+    m_previousProcessCpuUsecs.reset();
     // Reset with the rest of the state: a collector restarted after the dialog
     // was hidden would otherwise inherit "already above the threshold" and
     // swallow the next crossing.
@@ -91,6 +93,9 @@ void SystemInfoCollector::sampleOnce()
     if (current.isEmpty()) {
         return;  // enumeration failed; publishing an empty table would read as "no threads"
     }
+    // Read right after the thread table so the two describe the same instant
+    // as nearly as two syscalls can; the interval below is shared by both.
+    const std::optional<quint64> processCpuUsecs = SystemInfo::processCpuUsecs();
 
     // Measured elapsed time, not the nominal interval: a late timer would
     // otherwise inflate every percentage by the amount the sampler itself was
@@ -119,11 +124,19 @@ void SystemInfoCollector::sampleOnce()
             m_previousBusiestPercent = percent;
         }
 
-        // The Overview's reading, from the same samples the table just got.
+        // The Overview's reading. The process total comes from the kernel's
+        // whole-process counter, which still holds the time of threads that
+        // exited during the interval; the per-thread sum would lose it (#5427
+        // review). The busiest thread and the busy set come from the same
+        // samples the table just got.
         CpuSample cpu;
         cpu.wallMs = QDateTime::currentMSecsSinceEpoch();
         cpu.coreCount = QThread::idealThreadCount();
-        cpu.processPercentOfCapacity = SystemInfo::processPercentOfCapacity(samples, cpu.coreCount);
+        if (processCpuUsecs.has_value() && m_previousProcessCpuUsecs.has_value()) {
+            cpu.processPercentOfCapacity = SystemInfo::processPercentOfCapacity(
+                *m_previousProcessCpuUsecs, *processCpuUsecs,
+                static_cast<quint64>(elapsedUsecs), cpu.coreCount);
+        }
         if (busiest >= 0) {
             cpu.busiestTid = samples.at(busiest).tid;
             cpu.busiestName = samples.at(busiest).name;
@@ -137,6 +150,7 @@ void SystemInfoCollector::sampleOnce()
         emit cpuSampleReady(cpu);
     }
     m_previous = current;
+    m_previousProcessCpuUsecs = processCpuUsecs;
 }
 
 }  // namespace AetherSDR

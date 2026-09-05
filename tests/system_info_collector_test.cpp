@@ -16,7 +16,12 @@
 #include <QSignalSpy>
 #include <QString>
 #include <QThread>
+
+#include <algorithm>
+#include <atomic>
 #include <cstdio>
+#include <thread>
+#include <vector>
 
 using namespace AetherSDR;
 
@@ -47,6 +52,35 @@ int main(int argc, char** argv)
 
     const qint64 before = QDateTime::currentMSecsSinceEpoch();
     worker.start();
+
+    // #5427 review: workers that start AND exit between the collector's seed
+    // and its first tick must still show in the process total. init() seeds on
+    // QThread::started, microseconds after start(); the 100 ms wait puts the
+    // whole burn inside the first 1.5 s interval. Four busy threads for 400 ms
+    // is (workers * 0.4 / 1.5) cores of the interval; half of that share is the
+    // floor, so a loaded host still clears it, and the per-thread sum the card
+    // used to take reads ~0 for threads on neither snapshot.
+    const int cores = QThread::idealThreadCount();
+    const int churnWorkers = std::max(2, std::min(4, cores));
+    QThread::msleep(100);
+    {
+        std::atomic<bool> stop{false};
+        std::vector<std::thread> busy;
+        for (int i = 0; i < churnWorkers; ++i) {
+            busy.emplace_back([&stop]() {
+                volatile quint64 sink = 0;
+                while (!stop.load(std::memory_order_relaxed)) {
+                    sink = sink * 6364136223846793005ULL + 1442695040888963407ULL;
+                }
+            });
+        }
+        QThread::msleep(400);
+        stop.store(true, std::memory_order_relaxed);
+        for (std::thread& t : busy) {
+            t.join();
+        }
+    }  // all gone before the first tick at ~1.5 s
+    const double churnFloorPercent = 0.5 * 100.0 * churnWorkers * 0.4 / 1.5 / cores;
 
     // 1. The first tick already carries a memory sample: 1.5 s cadence, so
     //    one sample well inside 5 s means the tick fired and the queued copy
@@ -85,8 +119,9 @@ int main(int argc, char** argv)
 
     // 4. The Overview's process-level reading arrives on the first tick too:
     //    init() seeds the previous snapshot, so the first tick already has an
-    //    interval. Derived from the same samples the table gets, and carrying
-    //    the footer's divisor.
+    //    interval. The process total from the whole-process counter, the
+    //    busiest thread from the same samples the table gets, carrying the
+    //    footer's divisor.
     const bool cpuArrived = !cpuSpy.isEmpty() || cpuSpy.wait(8000);
     EXPECT_TRUE(cpuArrived, "a CPU sample arrives on the GUI thread within 8 s");
     if (cpuArrived) {
@@ -95,6 +130,11 @@ int main(int argc, char** argv)
                     "coreCount is idealThreadCount(), the status bar's own divisor");
         EXPECT_TRUE(cpu.processPercentOfCapacity >= 0.0 && cpu.processPercentOfCapacity <= 100.0,
                     "process percent of capacity is within 0..100");
+        std::printf("  first tick: process=%.2f%% of capacity, churn floor=%.2f%% "
+                    "(workers=%d cores=%d)\n",
+                    cpu.processPercentOfCapacity, churnFloorPercent, churnWorkers, cores);
+        EXPECT_TRUE(cpu.processPercentOfCapacity >= churnFloorPercent,
+                    "the process total counts workers that exited before the tick (#5427 review)");
         EXPECT_TRUE(cpu.busiestPercentOfCore >= 0.0 && cpu.busiestPercentOfCore <= 100.0,
                     "busiest thread percent of one core is within 0..100");
         EXPECT_TRUE(cpu.wallMs >= before, "wallMs is a capture-time wall clock reading");

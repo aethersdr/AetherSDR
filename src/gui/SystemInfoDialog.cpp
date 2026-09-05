@@ -790,9 +790,11 @@ QWidget* SystemInfoDialog::buildOverviewTab()
     OverviewCard cpu = makeOverviewCard(
         QStringLiteral("CPU Total"), QStringLiteral("% of system capacity"),
         QStringLiteral("systemInfoCardCpu"), QStringLiteral("CPU total"),
-        QStringLiteral("This process's share of the whole machine — every "
-                       "thread's core-time summed and divided by the core "
-                       "count, the same figure as the status bar's CPU label. "
+        QStringLiteral("This process's share of the whole machine — the "
+                       "kernel's whole-process CPU time over the interval, "
+                       "divided by the core count: the same figure and source "
+                       "as the status bar's CPU label, so threads that came and "
+                       "went between samples still count. "
                        "Yellow at %1 %, red at %2 %.")
                 .arg(kCpuWarnPercent, 0, 'f', 0).arg(kCpuDangerPercent, 0, 'f', 0)
             + startingValues,

@@ -29,9 +29,11 @@ extern "C" __declspec(dllimport) HRESULT WINAPI
 #include <mach/thread_act.h>
 #include <mach/thread_info.h>
 #include <pthread.h>
+#include <sys/resource.h>
 #elif defined(Q_OS_LINUX)
 #include <pthread.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -300,17 +302,40 @@ bool SystemInfo::crossedThreshold(double previousPercent, double currentPercent,
     return currentPercent > threshold && !(previousPercent > threshold);
 }
 
-double SystemInfo::processPercentOfCapacity(const QVector<ThreadCpuSample>& samples,
-                                            int coreCount)
+std::optional<quint64> SystemInfo::processCpuUsecs()
 {
-    if (samples.isEmpty() || coreCount <= 0) {
+#if defined(Q_OS_WIN)
+    FILETIME creation{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exited, &kernel, &user)) {
+        return std::nullopt;
+    }
+    const auto toUsecs = [](const FILETIME& ft) -> quint64 {
+        // FILETIME counts 100 ns units.
+        return ((static_cast<quint64>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime) / 10;
+    };
+    return toUsecs(kernel) + toUsecs(user);
+#else
+    struct rusage usage {};
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        return std::nullopt;
+    }
+    const auto toUsecs = [](const timeval& tv) -> quint64 {
+        return static_cast<quint64>(tv.tv_sec) * 1000000ULL + static_cast<quint64>(tv.tv_usec);
+    };
+    return toUsecs(usage.ru_utime) + toUsecs(usage.ru_stime);
+#endif
+}
+
+double SystemInfo::processPercentOfCapacity(quint64 previousCpuUsecs, quint64 currentCpuUsecs,
+                                            quint64 elapsedUsecs, int coreCount)
+{
+    if (elapsedUsecs == 0 || coreCount <= 0 || currentCpuUsecs < previousCpuUsecs) {
         return 0.0;
     }
-    double sum = 0.0;
-    for (const ThreadCpuSample& sample : samples) {
-        sum += sample.cpuPercentOfCore;
-    }
-    return std::min(100.0, sum / static_cast<double>(coreCount));
+    const double cpuUsecs = static_cast<double>(currentCpuUsecs - previousCpuUsecs);
+    const double percent = 100.0 * cpuUsecs / static_cast<double>(elapsedUsecs)
+                           / static_cast<double>(coreCount);
+    return std::min(100.0, percent);
 }
 
 SystemInfo::CardLevel SystemInfo::cardLevel(double value, double warningAt, double dangerAt)
