@@ -1,5 +1,6 @@
 #include "KiwiPublicReceiverPicker.h"
 
+#include <QDateTime>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -19,10 +20,25 @@ namespace {
 // Session-scoped cache of the last successful directory fetch, shared across
 // every picker instance opened this run.  Being a process-static, it is NOT
 // persisted to disk — it dies with the app, so a new session always starts
-// fresh.  This is what lets repeat "Browse public…" opens re-serve the list
-// without hitting the operators' servers again; "Refresh list" overwrites it.
+// fresh.
+//
+// The client only ever talks to AetherSDR's own CDN, which is built to be hit,
+// so repeat "Browse public…" opens may refresh — but no faster than the mirror
+// itself updates (cache-control: max-age=1800).  Inside that window we re-serve
+// the cache; past it the next open fetches again.  "Refresh list" always
+// fetches and overwrites.
 QVector<KiwiPublicReceiver> g_sessionCache;
 bool g_haveSessionCache = false;
+QDateTime g_cacheFetchedAt;    // mirror's own fetched_at for the cached list
+QDateTime g_cacheReceivedAt;   // when WE last pulled it (local UTC clock)
+
+bool cacheIsFresh()
+{
+    if (!g_haveSessionCache || !g_cacheReceivedAt.isValid())
+        return false;
+    const qint64 age = g_cacheReceivedAt.secsTo(QDateTime::currentDateTimeUtc());
+    return age >= 0 && age < KiwiPublicDirectory::kMinRefreshSeconds;
+}
 
 enum Column {
     ReceiverColumn,
@@ -97,17 +113,32 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
     connect(m_search, &QLineEdit::textChanged, this, &KiwiPublicReceiverPicker::applyFilter);
     connect(m_refresh, &QPushButton::clicked, this, &KiwiPublicReceiverPicker::startFetch);
 
-    connect(m_dir, &KiwiPublicDirectory::ready, this, &KiwiPublicReceiverPicker::onReady);
+    connect(m_dir, &KiwiPublicDirectory::ready, this,
+            [this](const QVector<KiwiPublicReceiver>& receivers, const QDateTime& fetchedAt) {
+                g_cacheReceivedAt = QDateTime::currentDateTimeUtc();
+                onReady(receivers, fetchedAt);
+            });
     connect(m_dir, &KiwiPublicDirectory::failed, this, [this](const QString& err) {
-        m_status->setText(tr("Could not load directory: %1").arg(err));
         m_refresh->setEnabled(true);
+        // No origin fallback by design (see KiwiPublicDirectory's good-citizen
+        // contract): show whatever list we already have, or say plainly that we
+        // have none.
+        if (g_haveSessionCache) {
+            m_fromCache = true;
+            onReady(g_sessionCache, g_cacheFetchedAt);
+            m_status->setText(m_status->text()
+                              + tr("  ·  could not refresh: %1").arg(err));
+        } else {
+            m_status->setText(tr("Receiver directory unavailable (%1) — "
+                                 "try again later.").arg(err));
+        }
     });
 
-    // Re-serve the session cache if we already fetched once this run; only the
-    // first browse (or an explicit "Refresh list") touches the network.
-    if (g_haveSessionCache) {
+    // Re-serve the session cache while it is still inside the mirror's own
+    // 30-minute refresh window; otherwise fetch.  "Refresh list" always fetches.
+    if (cacheIsFresh()) {
         m_fromCache = true;
-        onReady(g_sessionCache);
+        onReady(g_sessionCache, g_cacheFetchedAt);
     } else {
         startFetch();
     }
@@ -121,20 +152,29 @@ void KiwiPublicReceiverPicker::startFetch()
     m_dir->fetch();
 }
 
-void KiwiPublicReceiverPicker::onReady(const QVector<KiwiPublicReceiver>& receivers)
+void KiwiPublicReceiverPicker::onReady(const QVector<KiwiPublicReceiver>& receivers,
+                                       const QDateTime& fetchedAt)
 {
     // Populate (or overwrite) the session cache from every successful fetch.
     // Serving from the cache passes the same vector straight back through here,
     // which is a harmless no-op assignment.
     g_sessionCache = receivers;
+    g_cacheFetchedAt = fetchedAt;
     g_haveSessionCache = true;
+    m_fetchedAt = fetchedAt;
 
     m_refresh->setEnabled(true);
     m_apiReceivers.clear();
     m_hiddenWebOnly = 0;
     m_hiddenUnknown = 0;
+    m_hiddenFlagged = 0;
     for (const auto& r : receivers) {
         if (r.offline) continue;
+        // The origin itself marks these entries as bad; don't offer them.
+        if (r.flagged) {
+            ++m_hiddenFlagged;
+            continue;
+        }
         // Honor the operator: only receivers that allow the external API are
         // listed. Web-only (ext_api == 0) are excluded entirely, as are
         // receivers that don't publish a policy (we can't confirm API is OK).
@@ -195,10 +235,22 @@ void KiwiPublicReceiverPicker::applyFilter()
         hiddenParts << tr("%1 web-only").arg(m_hiddenWebOnly);
     if (m_hiddenUnknown > 0)
         hiddenParts << tr("%1 policy-unknown").arg(m_hiddenUnknown);
+    if (m_hiddenFlagged > 0)
+        hiddenParts << tr("%1 flagged").arg(m_hiddenFlagged);
     if (!hiddenParts.isEmpty())
         status += tr(" (%1 hidden)").arg(hiddenParts.join(QStringLiteral(", ")));
     if (m_fromCache)
         status += tr("  ·  cached — use “Refresh list” to update");
+    // Surface the list's age only once it is genuinely old: the mirror refreshes
+    // hourly, so anything inside its own staleness threshold is unremarkable.
+    if (m_fetchedAt.isValid()) {
+        const qint64 mins = m_fetchedAt.secsTo(QDateTime::currentDateTimeUtc()) / 60;
+        if (mins >= KiwiPublicDirectory::kStaleAfterMinutes) {
+            status += (mins >= 2 * 60 * 24)
+                ? tr("  ·  list is %1 days old").arg(mins / (60 * 24))
+                : tr("  ·  list is %1 hours old").arg(mins / 60);
+        }
+    }
     m_status->setText(status);
     m_ok->setEnabled(!m_table->selectedItems().isEmpty());
 }

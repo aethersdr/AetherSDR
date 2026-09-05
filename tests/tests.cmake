@@ -1898,7 +1898,7 @@ target_include_directories(receive_presentation_sync_test PRIVATE src)
 target_link_libraries(receive_presentation_sync_test PRIVATE Qt6::Core)
 add_test(NAME receive_presentation_sync_test COMMAND receive_presentation_sync_test)
 
-# Public-directory parser + external-API (ext_api) policy honoring.
+# Directory-mirror JSON parser + external-API (ext_api) policy honoring.
 add_executable(kiwi_public_directory_test
     tests/kiwi_public_directory_test.cpp
     src/core/KiwiPublicDirectory.cpp
@@ -1909,7 +1909,7 @@ target_compile_definitions(kiwi_public_directory_test PRIVATE AETHERSDR_VERSION=
 set_target_properties(kiwi_public_directory_test PROPERTIES AUTOMOC ON)
 add_test(NAME kiwi_public_directory_test COMMAND kiwi_public_directory_test)
 
-# Demonstration tool: honest, API-policy-aware read of kiwisdr.com/public
+# Demonstration tool: honest, API-policy-aware read of the AetherSDR mirror
 # (proof-of-concept shown to operators — see docs/kiwisdr-public-directory.md).
 add_executable(kiwi_directory_poc
     tools/kiwi_directory_poc.cpp

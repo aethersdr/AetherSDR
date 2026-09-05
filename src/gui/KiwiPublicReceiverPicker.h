@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDateTime>
 #include <QVector>
 
 #include "PersistentDialog.h"
@@ -12,11 +13,12 @@ class QTableWidget;
 
 namespace AetherSDR {
 
-// "Browse public KiwiSDRs" picker. Fetches the public directory on open (an
-// explicit user action), and lists ONLY receivers whose operator allows the
-// external API (ext_api > 0). Web-only receivers (ext_api == 0) are filtered
-// out entirely and never shown — AetherSDR honors that policy by not offering
-// them. See docs/kiwisdr-public-directory.md.
+// "Browse public KiwiSDRs" picker. Populates from AetherSDR's directory mirror
+// (cdn.aethersdr.com/kiwi.json), and lists ONLY receivers whose operator allows
+// the external API (ext_api > 0). Web-only receivers (ext_api == 0) are
+// filtered out entirely and never shown — AetherSDR honors that policy by not
+// offering them, and receivers that publish no policy at all are not assumed to
+// permit one. See docs/kiwisdr-public-directory.md.
 class KiwiPublicReceiverPicker : public PersistentDialog {
     Q_OBJECT
 public:
@@ -28,7 +30,7 @@ public:
 
 private:
     void startFetch();
-    void onReady(const QVector<KiwiPublicReceiver>& receivers);
+    void onReady(const QVector<KiwiPublicReceiver>& receivers, const QDateTime& fetchedAt);
     void applyFilter();
     void acceptCurrentRow();
 
@@ -36,7 +38,9 @@ private:
     QVector<KiwiPublicReceiver> m_apiReceivers;  // already filtered to ext_api>0
     int m_hiddenWebOnly{0};
     int m_hiddenUnknown{0};  // dropped because their API policy wasn't published
+    int m_hiddenFlagged{0};  // the origin itself marks these entries as bad
     bool m_fromCache{false};  // current list came from the session cache
+    QDateTime m_fetchedAt;   // when the mirror last pulled the origin (UTC)
 
     QLineEdit*    m_search{nullptr};
     QTableWidget* m_table{nullptr};

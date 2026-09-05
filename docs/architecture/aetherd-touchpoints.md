@@ -68,7 +68,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/IConnectionAutomation.h` | 1 | ui-support — Gui-free connect/disconnect/dialog hook the automation bridge drives; bridge plumbing, not radio state. | unconverted |
 | `core/IambicKeyer.h` | 3 | universal — Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling. | unconverted |
 | `core/IssueReport.h` | 1 | ui-support — Renders a pre-filled GitHub issue body from a SupportBundle snapshot, with PII redaction applied at the render boundary (GHSA-ccrg-j8cp-qhc4). Support and diagnostics tooling; not radio state. | unconverted |
-| `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
+| `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses AetherSDR's kiwi.json mirror of the kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
 | `core/KiwiSdrClient.h` | 2 | vendor(kiwi) — KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself | unconverted |
 | `core/KiwiSdrManager.h` | 8 | vendor(kiwi) — KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension. | unconverted |
 | `core/KiwiSdrProtocol.h` | 8 | vendor(kiwi) — KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting | unconverted |

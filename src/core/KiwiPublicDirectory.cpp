@@ -1,11 +1,18 @@
 #include "KiwiPublicDirectory.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
-#include <QRegularExpressionMatchIterator>
 #include <QUrl>
+
+#include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -13,6 +20,55 @@ namespace {
 // Per-request transfer timeout so a stalled server can't leave the picker stuck
 // on "Loading…" forever (the only escape would otherwise be Cancel).
 constexpr int kDirectoryFetchTimeoutMs = 15000;
+
+// Longest sysop-supplied string we keep.  The body is already capped, but a
+// single pathological field should not reach the UI at megabyte length either
+// (Principle VII — bound it where the bytes enter).
+constexpr int kMaxFieldChars = 512;
+
+QString boundedString(const QJsonValue& v)
+{
+    if (!v.isString())
+        return QString();
+    QString s = v.toString().trimmed();
+    if (s.size() > kMaxFieldChars)
+        s.truncate(kMaxFieldChars);
+    return s;
+}
+
+// The origin publishes offline as a real JSON bool; older snapshots used the
+// string "yes"/"no".  Anything else is "not offline".
+bool readOffline(const QJsonValue& v)
+{
+    if (v.isBool())
+        return v.toBool();
+    if (v.isString()) {
+        const QString s = v.toString().trimmed();
+        return s.compare(QLatin1String("yes"), Qt::CaseInsensitive) == 0
+            || s.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0;
+    }
+    return false;
+}
+
+// A non-negative count, or 0 for anything missing or nonsensical.
+int readCount(const QJsonValue& v)
+{
+    if (!v.isDouble())
+        return 0;
+    const double d = v.toDouble(0.0);
+    if (!std::isfinite(d) || d <= 0.0)
+        return 0;
+    return static_cast<int>(std::min(d, 1.0e6));
+}
+
+// A finite number from a JSON array slot, or fallback.
+double readNumber(const QJsonArray& a, int i, double fallback)
+{
+    if (i >= a.size() || !a.at(i).isDouble())
+        return fallback;
+    const double d = a.at(i).toDouble(fallback);
+    return std::isfinite(d) ? d : fallback;
+}
 } // namespace
 
 QByteArray KiwiPublicDirectory::userAgent()
@@ -61,57 +117,160 @@ QString KiwiPublicReceiver::connectionLimitBadge() const
         : QString();
 }
 
-QVector<KiwiPublicReceiver> KiwiPublicDirectory::parse(const QByteArray& directoryHtml)
+QString KiwiPublicReceiver::bandRangeLabel() const
 {
-    QVector<KiwiPublicReceiver> out;
-    const QString html = QString::fromUtf8(directoryHtml);
+    if (!hasBands)
+        return QString();
+    const auto mhz = [](qint64 hz) {
+        return QString::number(static_cast<double>(hz) / 1e6, 'f', 1);
+    };
+    return QStringLiteral("%1 – %2 MHz").arg(mhz(bandLowHz), mhz(bandHighHz));
+}
 
-    // Each receiver entry is an <a href='http://host:port' target='_blank'>
-    // anchor followed by a block of <!-- key=value --> metadata comments,
-    // running up to the next anchor.
-    static const QRegularExpression anchorRe(
-        QStringLiteral("<a href='(https?://[^']+)'[^>]*target='_blank'[^>]*>"));
-    static const QRegularExpression fieldRe(
-        QStringLiteral("<!--\\s*([A-Za-z_]+)=(.*?)\\s*-->"));
+KiwiDirectoryParse KiwiPublicDirectory::parse(const QByteArray& json)
+{
+    KiwiDirectoryParse result;
 
-    QRegularExpressionMatchIterator anchors = anchorRe.globalMatch(html);
-    while (anchors.hasNext()) {
-        const QRegularExpressionMatch a = anchors.next();
-        const int blockStart = a.capturedEnd();
-        // Block ends at the next anchor (peek without consuming the iterator).
-        const QRegularExpressionMatch nextA = anchorRe.match(html, blockStart);
-        const int blockEnd = nextA.hasMatch() ? nextA.capturedStart() : html.size();
-        const QString block = html.mid(blockStart, blockEnd - blockStart);
+    if (json.isEmpty()) {
+        result.error = QStringLiteral("empty response from the receiver directory");
+        return result;
+    }
+    if (json.size() > kMaxBodyBytes) {
+        result.error = QStringLiteral("receiver directory is implausibly large (%1 bytes)")
+                           .arg(json.size());
+        return result;
+    }
+
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        result.error = QStringLiteral("receiver directory is not valid JSON (%1)")
+                           .arg(perr.error != QJsonParseError::NoError
+                                    ? perr.errorString()
+                                    : QStringLiteral("expected a JSON object"));
+        return result;
+    }
+    const QJsonObject root = doc.object();
+
+    // Schema gate.  We refuse to parse on hopefully: the fields this class
+    // exists to get right (ext_api above all) could have changed meaning.
+    const QJsonValue schemaVal = root.value(QStringLiteral("schema"));
+    if (!schemaVal.isDouble()) {
+        result.error = QStringLiteral("receiver directory has no schema version");
+        return result;
+    }
+    result.schema = schemaVal.toInt(0);
+    if (result.schema != kSupportedSchema) {
+        result.error = QStringLiteral(
+                           "receiver directory uses schema %1, but this build of "
+                           "AetherSDR understands only schema %2 — please update "
+                           "AetherSDR")
+                           .arg(result.schema)
+                           .arg(kSupportedSchema);
+        return result;
+    }
+
+    const QJsonValue rxVal = root.value(QStringLiteral("receivers"));
+    if (!rxVal.isArray()) {
+        result.error = QStringLiteral("receiver directory has no receiver list");
+        return result;
+    }
+    const QJsonArray arr = rxVal.toArray();
+    if (arr.size() > kMaxReceivers) {
+        result.error = QStringLiteral("receiver directory lists %1 receivers, "
+                                      "far more than any plausible list")
+                           .arg(arr.size());
+        return result;
+    }
+
+    result.fetchedAt = QDateTime::fromString(
+        boundedString(root.value(QStringLiteral("fetched_at"))), Qt::ISODate);
+    if (result.fetchedAt.isValid())
+        result.fetchedAt.setTimeSpec(Qt::UTC);
+
+    QVector<KiwiPublicReceiver> receivers;
+    receivers.reserve(arr.size());
+    for (const QJsonValue& entry : arr) {
+        if (!entry.isObject())
+            continue;
+        const QJsonObject obj = entry.toObject();
 
         KiwiPublicReceiver rx;
-        rx.url = a.captured(1).trimmed();
-        bool haveName = false, haveMax = false;
+        rx.url = boundedString(obj.value(QStringLiteral("url")));
+        if (rx.url.isEmpty())
+            continue;  // an entry with no endpoint is not a receiver
 
-        QRegularExpressionMatchIterator fields = fieldRe.globalMatch(block);
-        while (fields.hasNext()) {
-            const QRegularExpressionMatch f = fields.next();
-            const QString key = f.captured(1);
-            const QString val = f.captured(2).trimmed();
-            if      (key == QLatin1String("name"))      { rx.name = val; haveName = true; }
-            else if (key == QLatin1String("loc"))       rx.location = val;
-            else if (key == QLatin1String("antenna"))   rx.antenna = val;
-            else if (key == QLatin1String("sdr_hw"))    rx.sdrHw = val;
-            else if (key == QLatin1String("grid"))      rx.grid = val;
-            else if (key == QLatin1String("gps"))       rx.gps = val;
-            else if (key == QLatin1String("bands"))     rx.bands = val;
-            else if (key == QLatin1String("snr"))       rx.snr = val;
-            else if (key == QLatin1String("users"))     rx.users = val.toInt();
-            else if (key == QLatin1String("users_max")) { rx.usersMax = val.toInt(); haveMax = true; }
-            else if (key == QLatin1String("ext_api"))   rx.extApi = val.toInt();
-            else if (key == QLatin1String("offline"))   rx.offline = (val == QLatin1String("yes"));
+        rx.id       = boundedString(obj.value(QStringLiteral("id")));
+        rx.name     = boundedString(obj.value(QStringLiteral("name")));
+        rx.location = boundedString(obj.value(QStringLiteral("loc")));
+        rx.antenna  = boundedString(obj.value(QStringLiteral("antenna")));
+        rx.sdrHw    = boundedString(obj.value(QStringLiteral("sdr_hw")));
+        rx.grid     = boundedString(obj.value(QStringLiteral("grid")));
+
+        rx.users    = readCount(obj.value(QStringLiteral("users")));
+        rx.usersMax = readCount(obj.value(QStringLiteral("users_max")));
+
+        // THE field this class exists for.  A receiver that does not publish a
+        // policy has NO ext_api key — obj["ext_api"].toInt() would hand back 0
+        // and silently reclassify every Unknown operator as a Disabled one.
+        // That fails safe for the connection decision but misreports the
+        // operator's policy in the badge and in the picker's hidden counts,
+        // which is exactly what we must not get wrong.
+        const QJsonValue extApiVal = obj.value(QStringLiteral("ext_api"));
+        rx.extApi = extApiVal.isDouble() ? extApiVal.toInt(-1) : -1;
+
+        rx.offline = readOffline(obj.value(QStringLiteral("offline")));
+        rx.flagged = obj.value(QStringLiteral("flagged")).toBool(false);
+
+        const QJsonValue gpsVal = obj.value(QStringLiteral("gps"));
+        if (gpsVal.isArray()) {
+            const QJsonArray gps = gpsVal.toArray();
+            const double lat = readNumber(gps, 0, 0.0);
+            const double lon = readNumber(gps, 1, 0.0);
+            // A null island fix is the origin's "no position", not a position.
+            if (gps.size() >= 2 && std::abs(lat) <= 90.0 && std::abs(lon) <= 180.0
+                && !(lat == 0.0 && lon == 0.0)) {
+                rx.gpsLat = lat;
+                rx.gpsLon = lon;
+                rx.hasGps = true;
+            }
         }
 
-        // Skip non-receiver anchors (nav links etc.) — a real entry always
-        // publishes at least a name and a channel count.
-        if (haveName && haveMax)
-            out.push_back(rx);
+        const QJsonValue bandsVal = obj.value(QStringLiteral("bands"));
+        if (bandsVal.isArray()) {
+            const QJsonArray bands = bandsVal.toArray();
+            const double low  = readNumber(bands, 0, -1.0);
+            const double high = readNumber(bands, 1, -1.0);
+            if (bands.size() >= 2 && low >= 0.0 && high > low) {
+                rx.bandLowHz  = static_cast<qint64>(low);
+                rx.bandHighHz = static_cast<qint64>(high);
+                rx.hasBands   = true;
+            }
+        }
+
+        // snr is [all-band, HF]; the origin also publishes the same pair as
+        // scalar snr_all/snr_hf, which we accept as a fallback.
+        const QJsonValue snrVal = obj.value(QStringLiteral("snr"));
+        if (snrVal.isArray()) {
+            const QJsonArray snr = snrVal.toArray();
+            rx.snrAll = static_cast<int>(readNumber(snr, 0, -1.0));
+            rx.snrHf  = static_cast<int>(readNumber(snr, 1, -1.0));
+        }
+        if (rx.snrAll < 0 && obj.value(QStringLiteral("snr_all")).isDouble())
+            rx.snrAll = obj.value(QStringLiteral("snr_all")).toInt(-1);
+        if (rx.snrHf < 0 && obj.value(QStringLiteral("snr_hf")).isDouble())
+            rx.snrHf = obj.value(QStringLiteral("snr_hf")).toInt(-1);
+
+        receivers.push_back(rx);
     }
-    return out;
+
+    if (receivers.isEmpty()) {
+        result.error = QStringLiteral("receiver directory contained no usable receivers");
+        return result;
+    }
+
+    result.receivers = std::move(receivers);
+    return result;
 }
 
 KiwiPublicDirectory::KiwiPublicDirectory(QObject* parent)
@@ -122,68 +281,25 @@ KiwiPublicDirectory::KiwiPublicDirectory(QObject* parent)
 
 void KiwiPublicDirectory::fetch()
 {
-    // Step 1 — load the gate page and read its one-time interactive token,
-    // exactly as a browser does before the user clicks "show receivers".
-    QNetworkRequest gateReq{QUrl(QString::fromLatin1(kDirectoryUrl))};
-    gateReq.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
-    gateReq.setTransferTimeout(kDirectoryFetchTimeoutMs);
-    QNetworkReply* gate = m_net->get(gateReq);
+    // One GET against AetherSDR's mirror.  There is deliberately no fallback
+    // to kiwisdr.com: see the good-citizen contract in the header.
+    QNetworkRequest req{QUrl(QString::fromLatin1(kDirectoryUrl))};
+    req.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
+    req.setTransferTimeout(kDirectoryFetchTimeoutMs);
+    QNetworkReply* reply = m_net->get(req);
 
-    connect(gate, &QNetworkReply::finished, this, [this, gate]() {
-        gate->deleteLater();
-        if (gate->error() != QNetworkReply::NoError) {
-            emit failed(QStringLiteral("gate: ") + gate->errorString());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit failed(reply->errorString());
             return;
         }
-        const QByteArray body = gate->readAll();
-
-        // If this IP is already past the (IP-based) interactive gate, the very
-        // first GET is the directory itself — parse it directly, no token dance.
-        QVector<KiwiPublicReceiver> direct = parse(body);
-        if (!direct.isEmpty()) {
-            emit ready(direct);
+        const KiwiDirectoryParse parsed = parse(reply->readAll());
+        if (!parsed.ok()) {
+            emit failed(parsed.error);
             return;
         }
-
-        const QString page = QString::fromUtf8(body);
-        static const QRegularExpression tokenRe(
-            QStringLiteral("x-kiwi-auth'\\s*,\\s*'([0-9a-fA-F]+)'"));
-        const QRegularExpressionMatch tm = tokenRe.match(page);
-        if (!tm.hasMatch()) {
-            emit failed(QStringLiteral("gate token not found"));
-            return;
-        }
-        const QByteArray token = tm.captured(1).toLatin1();
-
-        // Step 2 — replay the documented unlock request (token + honest UA),
-        // the network equivalent of the user clicking the button.
-        QNetworkRequest unlockReq{QUrl(QString::fromLatin1(kDirectoryUrl))};
-        unlockReq.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
-        unlockReq.setTransferTimeout(kDirectoryFetchTimeoutMs);
-        unlockReq.setRawHeader("x-kiwi-auth", token);
-        QNetworkReply* unlock = m_net->get(unlockReq);
-
-        connect(unlock, &QNetworkReply::finished, this, [this, unlock]() {
-            unlock->deleteLater();
-            if (unlock->error() != QNetworkReply::NoError) {
-                emit failed(QStringLiteral("unlock: ") + unlock->errorString());
-                return;
-            }
-            // Step 3 — fetch the now-unlocked directory listing.
-            QNetworkRequest listReq{QUrl(QString::fromLatin1(kDirectoryUrl))};
-            listReq.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
-            listReq.setTransferTimeout(kDirectoryFetchTimeoutMs);
-            QNetworkReply* list = m_net->get(listReq);
-
-            connect(list, &QNetworkReply::finished, this, [this, list]() {
-                list->deleteLater();
-                if (list->error() != QNetworkReply::NoError) {
-                    emit failed(QStringLiteral("list: ") + list->errorString());
-                    return;
-                }
-                emit ready(parse(list->readAll()));
-            });
-        });
+        emit ready(parsed.receivers, parsed.fetchedAt);
     });
 }
 
