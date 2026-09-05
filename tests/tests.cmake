@@ -3993,6 +3993,23 @@ target_link_libraries(hl2_dsp_readback_test PRIVATE aethercore Qt6::Core)
 target_compile_definitions(hl2_dsp_readback_test PRIVATE
     HL2_BACKEND_CPP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/core/backends/hl2/Hl2Backend.cpp")
 add_test(NAME hl2_dsp_readback_test COMMAND hl2_dsp_readback_test)
+
+# The bridge half of the same read-back: `get dsp` and `get dsp … backend` must
+# answer from one object, because assert_state and wait_for only ever issue the
+# property form (#5401 review). Socket-free — the line dispatcher is called
+# directly against a stand-in backend; no QLocalServer is created, no radio is
+# contacted, and the stub cannot key.
+add_executable(automation_dsp_backend_readback_test
+    tests/automation_dsp_backend_readback_test.cpp
+)
+target_include_directories(automation_dsp_backend_readback_test PRIVATE src tests)
+# aetherdesktop_support (where AutomationServer.cpp lives) is added by the
+# AETHER_AUTOMATION_SERVER_TESTS loop below.
+target_link_libraries(automation_dsp_backend_readback_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_dsp_backend_readback_test
+         COMMAND automation_dsp_backend_readback_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -4405,6 +4422,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_drag_at_test
     automation_tx_watchdog_test
     automation_rn2_probe_test
+    automation_dsp_backend_readback_test
     tci_automation_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)

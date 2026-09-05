@@ -1631,6 +1631,16 @@ public:
         }
     }
 
+    // Install a backend directly, bypassing buildBackend()'s family wiring.
+    //
+    // The DSP read-back path — AutomationServer's `get dsp` — needs exactly one
+    // thing from this model: backend()->dspChains(). Reaching it through
+    // buildBackend() would mean constructing a real family backend, i.e. a wire
+    // object and its I/O thread, inside a test whose whole point is that it
+    // opens no socket. Takes ownership. Nothing in production calls this; the
+    // family string is set alongside because the read-back reports it.
+    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Connect a slice's operator-issued AUDIO and TX-slice intents to the
