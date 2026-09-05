@@ -663,12 +663,13 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   not a bug and cannot be optimised away, but it is now paid **off the GUI
   thread** and reported in the connect animation; see §22.
 
-- **"Every later open" assumes the wisdom cache survives, and the isolation
-  recipe above destroys it.** This is the most expensive thing on this page to
-  get wrong, because it presents as a hang rather than as slowness.
+- **"Every later open" assumes the wisdom cache survives, and a redirected
+  `HOME` starts you without one.** This is the most expensive thing on this
+  page to get wrong, because it presents as a hang rather than as slowness.
 
-  The three variables move three different things, and only one of them is
-  about settings:
+  Read the table below for `HOME` specifically. The other two variables move
+  where Qt looks for config; `HOME` moves that *and* the WDSP wisdom cache,
+  which is the one nobody expects:
 
   | variable | what it moves |
   |---|---|
@@ -679,18 +680,36 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   `WdspChannel::wisdomPath()` resolves to `$XDG_CACHE_HOME`, else
   **`$HOME/.cache`**, then `/aethersdr/wdsp-fftw-wisdom`. It is imported before
   the channels are built and exported after. A redirected `HOME` therefore
-  points it at an empty directory, and each run writes its own cache into a
-  temporary tree that is then deleted — so **every run is a first open**, for
-  ever.
+  points it at a directory the operator's own cache is not in: **the first
+  isolated run is a cold open even on a machine that has connected a hundred
+  times.**
+
+  **How often you pay that depends on your profile's lifetime, so be deliberate
+  about it.** The recipe above exports a stable `$T=/tmp/aether-hl2-test` and
+  `mkdir -p`s it, so its cache survives between runs and only the first launch
+  is slow — until something clears `/tmp`. A harness that builds its profile
+  with `mktemp -d`, or removes it in a trap, or runs each case in a fresh
+  container, has **no warm run at all**: every launch is a first open, for ever,
+  and that is the case that reads as a hang. Which shape you have is not
+  visible from the symptom, so decide it rather than discover it.
 
   It is far worse than the ~19 s above. WDSP builds every FFT with
-  `FFTW_PATIENT`, 35 plans per channel. Measured on one machine and one binary,
-  changing only whether that cache was reachable:
+  `FFTW_PATIENT`, 35 plans per channel. Two independent measurements, both on
+  this bench, changing only whether that cache was reachable:
 
-  | wisdom cache | connect |
-  |---|---|
-  | present | **4.1 s** |
-  | absent | **still running at 150 s** |
+  | what was measured | cache present | cache absent |
+  |---|---|---|
+  | connect, via the bridge | **4.1 s** | **still running at 150 s** (abandoned, not a completion time) |
+  | first `WdspChannel` open, direct | **86 ms** (warm re-open) | **98.3 s** on an idle machine; **188.1 s** at one-minute load 38–40 |
+
+  The second row is the one to quote, because it is a completion time rather
+  than the moment an observer gave up. Raw result and runner are in the bench
+  notebook repo, not this one: `hl2-lab`, at
+  `streams/hl2-telemetry/runs/d57_bench_quiet_result.txt` and
+  `d57_bench_quiet.py`. Quiet throughout — 21 load samples at 5 s intervals, all
+  between 3.3 and 4.1. Note what it says about the first
+  row: **150 s was not a failure**, it was a working open that had not finished
+  yet. Do not set a timeout against it.
 
   **The fix is one variable**, and the code already provides it for its own
   tests — see the `AETHER_WDSP_WISDOM_DIR` branch at the top of
@@ -718,9 +737,11 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   `~/.config/AetherSDR/` for NR2, and `WdspChannel::wisdomPath()` under
   `~/.cache/aethersdr/` for the channels — and the startup log line
   `Audio NR2 wisdom summary: status=missing` refers to the **first**, which is
-  routinely absent and says nothing about the second. And a stalled DSP open
-  produced **no diagnostic at all** until #5413: the phase had no timeout and no
-  log line, so a caller saw `ok`/`deferred` from `connect ip` and then silence.
+  routinely absent and says nothing about the second. And a slow DSP open still
+  produces **no diagnostic at all**: the phase has no timeout and no log line,
+  so a caller sees `ok`/`deferred` from `connect ip` and then silence. #5413
+  reports that; #5415 is the fix and is not merged as of this writing, so on
+  current `main` the silence is what you get.
 - The `tools/hl2/` Python spike defaults to broadcasting
   `255.255.255.255`, which fails on macOS with `OSError 65` when multiple
   interfaces are up. Use `--bcast <subnet>.255`. The in-app Qt sweep is fine.
