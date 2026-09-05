@@ -11,15 +11,18 @@
 // only the request does. A read-back that returned its own input would pass a
 // test written the first way and be worthless.
 
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 
 #include <QCoreApplication>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <string>
 
+using AetherSDR::hl2::Hl2Backend;
 using AetherSDR::hl2::Hl2TxDsp;
 
 static int g_failures = 0;
@@ -89,67 +92,85 @@ int main(int argc, char** argv)
     check(dsp.config().filterLowHz == 100.0 && dsp.config().filterHighHz == 3900.0,
           "applying it closes the disagreement");
 
-    // ---- ownership regression: the read-back must not touch m_rx -----------
+    // ---- ownership: the gather answers from the snapshot it is handed -----
     //
-    // Hl2Backend::dspChains() gathers on the I/O thread, and m_rx is declared
-    // GUI THREAD ONLY: createPanadapter()'s push_back reallocates and
+    // Hl2Backend::dspChains() runs its gather on the I/O thread, and m_rx is
+    // declared GUI THREAD ONLY: createPanadapter()'s push_back reallocates and
     // removePanadapter()'s erase shifts, either of which can pull the storage
-    // out from under a reader midway. m_ioDsps exists precisely so I/O work
-    // never touches it. The first version of this function iterated m_rx and
+    // out from under a reader midway. The first version iterated m_rx and
     // review caught it (#5401).
     //
-    // A SOURCE SCAN, and deliberately so. The violation is a data race that
-    // only manifests when a GUI-side create/remove interleaves with a gather,
-    // so a runtime test would be a race detector that passes almost always —
-    // which is worse than no test, because it would be believed. The invariant
-    // is static, so the check is static: this function's body must not name
-    // m_rx. It fails the moment someone reintroduces it, deterministically.
+    // The invariant is now enforced where it cannot rot: gatherDspChains() is a
+    // STATIC member over the two lists it may read, so it has no `this` and the
+    // whole body is unable to name m_rx — through a rename, a helper, or an
+    // alias alike. That is the compiler's job, not a test's, and it replaces
+    // the source scan an earlier revision of this file used.
+    //
+    // What is left for a test is the behavioural half: that the answer is a
+    // function of the snapshot passed in and of nothing else. Substitute the
+    // snapshot, and the reply must follow it — in length, in index, and in the
+    // values it reports. A gather reading some other list would keep answering
+    // the same thing while the argument changed.
     {
-        FILE* f = std::fopen(HL2_BACKEND_CPP_PATH, "rb");
-        check(f != nullptr, "the backend source is readable for the scan");
-        if (f) {
-            std::string src;
-            char buf[65536];
-            size_t n;
-            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-                src.append(buf, n);
-            }
-            std::fclose(f);
-            const std::string sig = "QVariantList Hl2Backend::dspChains() const";
-            const size_t at = src.find(sig);
-            check(at != std::string::npos, "dspChains() is present in the source");
-            if (at != std::string::npos) {
-                // Walk to the end of the function by brace depth.
-                size_t i = src.find('{', at);
-                int depth = 1;
-                const size_t start = ++i;
-                while (i < src.size() && depth) {
-                    if (src[i] == '{') { ++depth; }
-                    else if (src[i] == '}') { --depth; }
-                    ++i;
-                }
-                std::string body = src.substr(start, i - start);
-                // Strip // comments before scanning. The function's own comment
-                // explains why it reads m_ioDsps and NOT m_rx, so a raw search
-                // matches the explanation and fails on correct code — which is
-                // exactly what happened the first time this ran.
-                {
-                    std::string code;
-                    code.reserve(body.size());
-                    for (size_t k = 0; k < body.size(); ++k) {
-                        if (body[k] == '/' && k + 1 < body.size() && body[k + 1] == '/') {
-                            while (k < body.size() && body[k] != '\n') { ++k; }
-                        }
-                        if (k < body.size()) { code.push_back(body[k]); }
-                    }
-                    body.swap(code);
-                }
-                check(body.find("m_rx") == std::string::npos,
-                      "dspChains() never names m_rx — the I/O side reads m_ioDsps");
-                check(body.find("m_ioDsps") != std::string::npos,
-                      "and it does read the I/O-owned snapshot");
-            }
+        check(Hl2Backend::gatherDspChains({}, nullptr).isEmpty(),
+              "an empty snapshot with no TX chain gathers nothing");
+
+        // Length and index come from the snapshot. Null entries are deliberate:
+        // a receiver that exists with no channel behind it is a state worth
+        // seeing, and it keeps this case free of any WDSP channel.
+        const QVariantList three = Hl2Backend::gatherDspChains(
+            {nullptr, nullptr, nullptr}, nullptr);
+        check(three.size() == 3, "three receivers in gives three chains out");
+        const QVariantList one = Hl2Backend::gatherDspChains({nullptr}, nullptr);
+        check(one.size() == 1,
+              "and ONE receiver in gives one — the count follows the argument");
+        bool indexed = true;
+        for (int i = 0; i < three.size(); ++i) {
+            const QVariantMap e = three.at(i).toMap();
+            indexed = indexed
+                      && e.value(QStringLiteral("chain")).toString()
+                             == QLatin1String("rx-wdsp")
+                      && e.value(QStringLiteral("receiver")).toInt() == i
+                      && e.value(QStringLiteral("level")).toString()
+                             == QLatin1String("not-configured");
         }
+        check(indexed,
+              "each entry is indexed by its position in the snapshot, and an "
+              "empty slot reports not-configured rather than vanishing");
+
+        // The TX chain's VALUES come from the modulator handed in, and move
+        // when it does. `dsp` above is configured with the passband from case
+        // 4 (100/3900), so this also pins that the gather reads the DSP's own
+        // config rather than a copy taken earlier.
+        const QVariantList tx = Hl2Backend::gatherDspChains({}, &dsp);
+        check(tx.size() == 1, "a modulator with no receivers gathers one chain");
+        const QVariantMap t = tx.isEmpty() ? QVariantMap{} : tx.at(0).toMap();
+        check(t.value(QStringLiteral("chain")).toString() == QLatin1String("hl2-tx")
+                  && t.value(QStringLiteral("level")).toString()
+                         == QLatin1String("dsp-config"),
+              "it is named and levelled as the TX chain");
+        check(near(t.value(QStringLiteral("filterLowHz")).toDouble(), 100.0)
+                  && near(t.value(QStringLiteral("filterHighHz")).toDouble(), 3900.0),
+              "and reports the modulator's CURRENT passband");
+
+        Hl2TxDsp::Config moved = dsp.config();
+        moved.filterLowHz = 200.0;
+        moved.filterHighHz = 2800.0;
+        check(dsp.configure(moved, &err), "the modulator takes a further change");
+        const QVariantList after = Hl2Backend::gatherDspChains({}, &dsp);
+        const QVariantMap t2 = after.isEmpty() ? QVariantMap{} : after.at(0).toMap();
+        check(near(t2.value(QStringLiteral("filterLowHz")).toDouble(), 200.0)
+                  && near(t2.value(QStringLiteral("filterHighHz")).toDouble(), 2800.0),
+              "which the gather reports — the values track the object passed in");
+
+        // Both halves at once, in order: receivers first, TX last.
+        const QVariantList both = Hl2Backend::gatherDspChains({nullptr, nullptr},
+                                                              &dsp);
+        check(both.size() == 3, "two receivers and a modulator gather three chains");
+        check(!both.isEmpty()
+                  && both.last().toMap().value(QStringLiteral("chain")).toString()
+                         == QLatin1String("hl2-tx"),
+              "with the TX chain last, after the receivers");
     }
 
     if (g_failures == 0) {

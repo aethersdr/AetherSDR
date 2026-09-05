@@ -3987,11 +3987,6 @@ add_executable(hl2_dsp_readback_test
 )
 target_include_directories(hl2_dsp_readback_test PRIVATE src)
 target_link_libraries(hl2_dsp_readback_test PRIVATE aethercore Qt6::Core)
-# The ownership regression reads the backend source, so it needs its path. A
-# compile definition rather than a relative path: ctest runs from the build
-# directory and a "../src/..." would be a silent skip the day that changes.
-target_compile_definitions(hl2_dsp_readback_test PRIVATE
-    HL2_BACKEND_CPP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/core/backends/hl2/Hl2Backend.cpp")
 add_test(NAME hl2_dsp_readback_test COMMAND hl2_dsp_readback_test)
 
 # The bridge half of the same read-back: `get dsp` and `get dsp … backend` must

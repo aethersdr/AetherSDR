@@ -123,6 +123,25 @@ public:
 
     HealthSnapshot healthSnapshot() const override;
     QVariantList dspChains() const override;
+
+    // dspChains()' gather, over the two things it may read.
+    //
+    // STATIC, AND THAT IS THE POINT. This runs on the I/O thread, where m_rx is
+    // off limits — it is GUI-thread-owned, and createPanadapter()'s push_back
+    // reallocates while removePanadapter()'s erase shifts, either of which can
+    // pull the storage out from under a reader midway. The first version of the
+    // read-back iterated m_rx and review caught it (#5401).
+    //
+    // A static member has no `this`, so the hundred lines below cannot reach
+    // m_rx however they are edited: not through a rename, not through a helper,
+    // not through an alias. The compiler enforces what a comment used to ask
+    // for, and the only line left that could pass the wrong list is the single
+    // call in dspChains() itself.
+    //
+    // Public because it is also the seam the read-back test substitutes: hand
+    // it a snapshot, and what comes back is a function of that snapshot alone.
+    static QVariantList gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
+                                        Hl2TxDsp* txDsp);
     LinkStats linkStats() const override;
 
 signals:
