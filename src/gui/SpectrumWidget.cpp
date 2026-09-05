@@ -321,8 +321,13 @@ void assignDiversityPairDirections(const QVector<VfoPos>& vfos,
         return vfos[lhs].sliceId < vfos[rhs].sliceId;
     });
 
-    dirMap[vfos[diversityIndices[0]].sliceId] = VfoWidget::LockLeft;
-    dirMap[vfos[diversityIndices[1]].sliceId] = VfoWidget::LockRight;
+    // The primary diversity slice (parent / diversityIndex 0) locks RIGHT, the
+    // secondary locks LEFT.  The radio pans the primary's audio to the right
+    // channel by default, and SmartSDR draws the DIV slice on the right — so the
+    // DIV flag belongs on the right too.  Locking it left put the flag on the
+    // opposite side from both its own audio and SmartSDR's layout.
+    dirMap[vfos[diversityIndices[0]].sliceId] = VfoWidget::LockRight;
+    dirMap[vfos[diversityIndices[1]].sliceId] = VfoWidget::LockLeft;
 }
 
 void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& overlays,
