@@ -305,20 +305,51 @@ void KiwiPublicDirectory::fetch()
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, oversized]() {
         reply->deleteLater();
+
+        // Log every outcome. Without this the only way to answer "did this
+        // build actually read the mirror?" is to catch the socket live — the
+        // request is one sub-second GET that leaves no trace otherwise, and
+        // "the picker looks populated" cannot distinguish a fresh fetch from
+        // the session cache.
+        const QString url = QString::fromLatin1(kDirectoryUrl);
+
         if (*oversized) {
-            emit failed(QStringLiteral("receiver directory is implausibly large "
-                                       "(over %1 MB)").arg(kMaxBodyBytes / (1024 * 1024)));
+            const QString err = QStringLiteral("receiver directory is implausibly large "
+                                               "(over %1 MB)").arg(kMaxBodyBytes / (1024 * 1024));
+            qWarning().noquote() << "KiwiPublicDirectory: refused" << url << "-" << err;
+            emit failed(err);
             return;
         }
         if (reply->error() != QNetworkReply::NoError) {
+            qWarning().noquote() << "KiwiPublicDirectory: fetch of" << url
+                                 << "failed -" << reply->errorString();
             emit failed(reply->errorString());
             return;
         }
-        const KiwiDirectoryParse parsed = parse(reply->readAll());
+        const QByteArray body = reply->readAll();
+        const KiwiDirectoryParse parsed = parse(body);
         if (!parsed.ok()) {
+            qWarning().noquote() << "KiwiPublicDirectory: fetched" << body.size()
+                                 << "bytes from" << url
+                                 << "but could not use them -" << parsed.error;
             emit failed(parsed.error);
             return;
         }
+
+        // The age is the point of logging fetchedAt at all: it separates "our
+        // fetch is stale" from "the mirror itself stopped updating", which look
+        // identical from the picker.
+        const qint64 ageMin = parsed.fetchedAt.isValid()
+            ? parsed.fetchedAt.secsTo(QDateTime::currentDateTimeUtc()) / 60
+            : -1;
+        qInfo().nospace().noquote()
+            << "KiwiPublicDirectory: fetched " << url << " - " << parsed.receivers.size()
+            << " receivers, " << body.size() << " bytes, schema " << parsed.schema
+            << ", mirror fetched_at "
+            << (parsed.fetchedAt.isValid() ? parsed.fetchedAt.toString(Qt::ISODate)
+                                           : QStringLiteral("(not published)"))
+            << (ageMin >= 0 ? QStringLiteral(" (%1 min old)").arg(ageMin) : QString());
+
         emit ready(parsed.receivers, parsed.fetchedAt);
     });
 }

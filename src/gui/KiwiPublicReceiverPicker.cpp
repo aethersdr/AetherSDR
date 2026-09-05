@@ -143,6 +143,14 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
     // 30-minute refresh window; otherwise fetch.  "Refresh list" always fetches.
     if (cacheIsFresh()) {
         m_fromCache = true;
+        // Logged so a populated picker is never mistaken for evidence of a
+        // fetch: inside the mirror's own 30-minute window we deliberately do
+        // not touch the network at all.
+        qInfo().nospace().noquote() << "KiwiPublicDirectory: serving " << g_sessionCache.size()
+                          << " receivers from the session cache ("
+                          << g_cacheReceivedAt.secsTo(QDateTime::currentDateTimeUtc())
+                          << "s old, refresh after "
+                          << KiwiPublicDirectory::kMinRefreshSeconds << "s)";
         onReady(g_sessionCache, g_cacheFetchedAt);
     } else {
         startFetch();
