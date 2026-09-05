@@ -2096,12 +2096,14 @@ void Hl2Backend::onDspSetupWatchdog()
         return;
     case AetherSDR::hl2::DspSetupAction::Warn:
         // NOT a failure. A machine's first WDSP open measures its FFT plans
-        // rather than loading them and is legitimately slow (#5052), so this
-        // says so and keeps waiting — the alternative is failing a connect that
-        // is working.
+        // rather than loading them and is legitimately slow (#5052) — 98 s on a
+        // quiet machine, 188 s under load — so this says so and keeps waiting;
+        // the alternative is failing a connect that is working. It repeats,
+        // because the wait it is reporting can be minutes long.
         qCWarning(lcHl2) << "HL2 DSP setup: still opening after" << elapsed
                          << "ms — a first open on this machine can be slow;"
-                         << "will fail at" << AetherSDR::hl2::kDspSetupFailMs << "ms";
+                         << "will fail at"
+                         << AetherSDR::hl2::kDspSetupFailMs / 1000 << "s";
         m_dspSetupWatchdog->start(
             static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(elapsed)));
         return;
