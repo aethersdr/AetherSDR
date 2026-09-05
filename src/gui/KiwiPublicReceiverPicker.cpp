@@ -130,8 +130,12 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
             m_refreshError = err;
             onReady(g_sessionCache, g_cacheFetchedAt);
         } else {
-            m_status->setText(tr("Receiver directory unavailable (%1) — "
-                                 "try again later.").arg(err));
+            // With no cached list the user has no way to tell a local network
+            // problem from our mirror being down; the status page is published
+            // for precisely this moment.
+            m_status->setText(tr("Receiver directory unavailable (%1) — try again "
+                                 "later, or check %2")
+                                  .arg(err, QStringLiteral("kiwi-status.aethersdr.com")));
         }
     });
 

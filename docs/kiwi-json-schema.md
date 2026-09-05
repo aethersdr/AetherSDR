@@ -111,6 +111,25 @@ schema break:
 
 Also optional and unread: `mode` (847/870), `sm_cal` / `wf_cal` (845/870).
 
+## A new schema ships at a new URL. Always.
+
+**`https://cdn.aethersdr.com/kiwi.json` serves `schema: 1` in perpetuity.** A
+future schema ships at its own path — `kiwi-v2.json` — which only builds that
+understand it ever request.
+
+This is an operational commitment, not a style preference, and it is the reason
+the sole-source design in [RFC #5447](https://github.com/aethersdr/AetherSDR/issues/5447)
+is safe to live with. The client hard-fails on an unrecognised `schema` and has
+no fallback source, so bumping the number *on this URL* would break "Browse
+public receivers" for **every already-shipped AetherSDR simultaneously** — the
+same thundering-herd shape the mirror exists to prevent, aimed at us instead of
+at the origin, and unrecoverable for anyone who cannot update.
+
+Serving each schema from its own path makes that impossible: old builds keep
+reading the URL they were built against, and a rollout becomes additive rather
+than a flag day. Retire an old path only when the builds that request it are
+genuinely gone, and treat that as its own decision.
+
 ## Compatibility rules for the producer
 
 1. **Adding an ignored field** — safe, no bump.
@@ -119,6 +138,19 @@ Also optional and unread: `mode` (847/870), `sm_cal` / `wf_cal` (845/870).
    the most damaging one available: it silently misreports operator policy.
 4. **Changing `gps`/`bands`/`snr` from pairs to anything else** — schema break.
 5. **Changing `offline`/`flagged` away from JSON bools** — schema break.
+
+A schema break is never resolved by bumping `schema` on the existing URL. See
+the section above: publish the new shape at a new path.
+
+## What the mirror sees
+
+Serving the directory ourselves means AetherSDR's own infrastructure now
+receives, on each fetch, what the third-party origin used to: the client's IP
+address and its `AetherSDR/<version>` User-Agent, on a schedule bounded by the
+30-minute `max-age`. Recorded here as **collected, not incidental** — the
+version is useful precisely for judging which builds are still live if a new
+schema URL is ever needed. See `docs/kiwisdr-public-directory.md` for why this
+is an improvement on the arrangement it replaces.
 
 ## Example
 

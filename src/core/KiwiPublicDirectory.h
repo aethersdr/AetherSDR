@@ -159,8 +159,15 @@ public:
     // The only kiwi.json schema this build understands.  A different value is
     // a hard failure telling the user to update, not something to parse on
     // hopefully — the fields we honor could have moved under our feet.
-    // The producer lives outside this repo, so docs/kiwi-json-schema.md is the
-    // in-tree contract this pins to; change one and change the other.
+    // docs/kiwi-json-schema.md is the in-tree contract this pins to; change one
+    // and change the other.
+    //
+    // The mirror commits to serving schema 1 at kiwi.json in perpetuity, and to
+    // publishing any future schema at its own path (kiwi-v2.json) that only
+    // builds understanding it request. That commitment is what makes failing
+    // closed here safe: because there is no fallback source, bumping the number
+    // on THIS url would break the picker for every shipped install at once —
+    // the thundering herd this class exists to prevent, aimed at us instead.
     static constexpr int kSupportedSchema = 1;
 
     // The mirror publishes cache-control: max-age=1800; refreshing faster than

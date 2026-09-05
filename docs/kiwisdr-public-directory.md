@@ -83,6 +83,12 @@ parser reads it as `-1` unless the key is actually present, and
   mirror and, once the user chooses a receiver, that receiver itself — which for
   a proxied KiwiSDR is itself a `*.proxy.kiwisdr.com` host. That connection is
   unchanged by this arrangement.
+- **What the mirror sees is stated, not incidental.** Each fetch gives
+  AetherSDR's infrastructure the client's IP and its `AetherSDR/<version>`
+  User-Agent — the same pair the third-party origin used to receive over
+  plaintext HTTP. The version is deliberately retained: it is what tells us
+  which builds are still live if a new schema URL is ever needed. Recorded as
+  collected, in [`kiwi-json-schema.md`](kiwi-json-schema.md#what-the-mirror-sees).
 - **Refresh respects the mirror's own 30-minute `max-age`.** Opening the picker
   re-serves the session's cached list while it is inside that window and fetches
   once it is past; "Refresh list" always fetches. We never poll faster than the
