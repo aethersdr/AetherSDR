@@ -1343,8 +1343,8 @@ void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
                 return;
             }
             emit configurationWarning(QStringLiteral(
-                "Wake on connect requires an explicitly selected, network-verified model "
-                "(currently IC-9700). The network name is not a model identity."));
+                "Wake on connect requires an explicitly selected supported model "
+                "(IC-705, IC-7300MK2 or IC-9700). The network name is not a model identity."));
             return;
         }
         emit configurationWarning(QStringLiteral(
@@ -5662,7 +5662,7 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             || !addressOk || address == 0 || address >= 0xE0
             || !selected || !profileFor(*selected).powerOn) {
             emit extensionError(requestId, QStringLiteral(
-                "Wake requires an open Icom network session, a verified model and a radio address (01-DF)."));
+                "Wake requires an open Icom network session, a supported model and a radio address (01-DF)."));
             return;
         }
         if ((m_civReported && (m_civReported != address || m_civModelId != modelId))

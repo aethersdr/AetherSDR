@@ -301,9 +301,9 @@ int main(int argc, char** argv)
         IcomCivBackend& wakeBackend = RadioModelWakeTestAccess::prepare(radio);
         IcomCivBackendTestAccess::connect(wakeBackend, "IC-9700");
         QString error;
-        check(!radio.wakeIcomRadio(0xA4, 0xA4, &error)
-                  && !radio.wakeIcomRadio(0xB6, 0xB6, &error),
-              "IC-705 and MK2 do not inherit the IC-9700 network wake profile");
+        check(!radio.wakeIcomRadio(0x94, 0x94, &error)
+                  && !radio.wakeIcomRadio(0x98, 0x98, &error),
+              "unprofiled IC-7300 and IC-7610 do not inherit network wake");
         check(!radio.wakeIcomRadio(0xA2, 0, &error)
                   && !radio.wakeIcomRadio(0xA2, 0xE0, &error)
                   && !radio.wakeIcomRadio(0x1A2, 0xA2, &error),
@@ -352,6 +352,28 @@ int main(int argc, char** argv)
         check(!radio.radioWakeActive() && radio.isConnected(),
               "matching wire identity completes wake and invalidates its deadline");
         radio.disconnectFromRadio();
+        // Independent literal fixtures for the two standard-frame profiles.
+        // These exercise model selection, encoding, and post-wake identity;
+        // the injected session never starts a socket or contacts firmware.
+        for (const int modelId : {0xA4, 0xB6}) {
+            const IcomModel* model = modelForId(static_cast<std::uint8_t>(modelId));
+            check(model && profileFor(*model).powerOn
+                      && profileFor(*model).powerOn->extraPreambleBytes == 0
+                      && profileFor(*model).powerOn->controllerAddress == 0xE0,
+                  "705 and MK2 use standard framing, independently of the 9700 profile");
+            IcomCivBackendTestAccess::connect(wakeBackend, "Custom network name", 0x50, true);
+            check(radio.wakeIcomRadio(modelId, 0x50, &error),
+                  "705 and MK2 accept an explicit wake at a custom destination");
+            check(IcomCivBackendTestAccess::outbound(wakeBackend).count(
+                      QStringLiteral("fe fe 50 e0 18 01 fd")) == 1,
+                  "standard-profile wake sends exactly one literal power-on frame");
+            IcomCivBackendTestAccess::connect(wakeBackend, "Custom network name", 0x50, true);
+            IcomCivBackendTestAccess::inject(wakeBackend, modelId == 0xA4
+                ? "fefee0501900a4fd" : "fefee0501900b6fd");
+            check(!radio.radioWakeActive() && radio.isConnected(),
+                  "705 and MK2 wake complete only when wire identity matches");
+            radio.disconnectFromRadio();
+        }
     }
     std::printf("icom_identity_test: %d failure(s)\n", failures);
     return failures ? 1 : 0;

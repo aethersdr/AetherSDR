@@ -3305,9 +3305,9 @@ from `civAddress` (the current command destination). A custom address can differ
 from the model ID; Network Radio Name does not select either value.
 
 **`civ wake <model-id-hex> <address-hex>`** explicitly requests one wake and one
-bounded reconnect on the current Icom network session. Currently only the
-hardware-verified IC-9700 profile is enabled, e.g. `civ wake a2 a2` (or its
-custom radio address). The model selection authorizes framing only; CI-V still
+bounded reconnect on the current Icom network session. Supported selections are
+IC-705 (`civ wake a4 a4`), IC-7300MK2 (`civ wake b6 b6`), and IC-9700
+(`civ wake a2 a2`); the second argument may instead be its custom radio address. The model selection authorizes framing only; CI-V still
 establishes identity and capabilities after reconnect. The response acknowledges
 the request, not radio readiness. No power-off command is exposed. Read-only
 mode refuses this action. Disconnect or another connection selection cancels it.
@@ -3317,9 +3317,12 @@ settings document (`wakeOnConnect`, default false). It requests wake only after
 identity discovery exhausts, and only with an explicitly selected supported
 model. Auto-detect and custom address alone cannot identify an asleep radio.
 The post-wake reconnect disables another wake and expires after 20 seconds;
-the IC-9700 has a 10-second pre-reconnect boot delay. Settings on the radio are
-never modified. IC-705 and IC-7300MK2 document `18 01`, but their native-network
-wake sequences remain disabled pending separate hardware verification.
+all three profiles allow 10 seconds before reconnecting. Radio configuration
+settings are not modified. IC-705 and IC-7300MK2 use their documented `18 01`
+command with standard framing; IC-9700 retains its measured extra FE prefix and
+E1 controller. Live network wake for the first two still requires hardware
+validation. Network control must remain reachable: an offline Wi-Fi interface
+cannot receive a wake command.
 
 ### `controls`
 

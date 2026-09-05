@@ -1413,11 +1413,11 @@ IC-705 whose operating address is `50`, regardless of its Network Radio Name.
 The connection panel exposes **Wake on connect**, default off and persisted in
 the existing Icom JSON settings document. An awake identity completes normally
 without sending power commands. Only exhausted identity discovery with explicit
-opt-in and a selected verified model requests wake via the namespaced extension
+opt-in and a selected supported model requests wake via the namespaced extension
 channel. Nicknames and arbitrary CI-V addresses never establish model identity.
 
 RadioModel owns one wake operation: one `18 01`, intentional session release,
-10-second IC-9700 boot delay, then one fresh network session with wake disabled.
+10-second readiness allowance, then one fresh network session with wake disabled.
 The ordinary repeating reconnect timer is not armed during this operation.
 Wire identity must match the selection within 20 seconds after reconnect starts;
 failure terminates the attempt. Generation checks invalidate delayed work on
@@ -1430,5 +1430,9 @@ address and 10-second delay are retained as contributed hardware evidence, not
 as the guide's serial baud-rate requirements. The official IC-9700 guide lists
 approximately 119 FE bytes at 115200 baud. IC-705 documents `18 01` from
 Standby/Shutdown; IC-7300MK2 documents baud-dependent fill specifically for its
-REMOTE jack. Neither statement alone validates a native-network wake sequence,
-so those two profiles remain disabled.
+REMOTE jack. Both models have explicit profiles that send the standard E0-controller
+`18 01` frame over the existing RS-BA1 serial envelope, without the IC-9700's
+extra FE prefix. Their 10-second allowance is client policy, not a guide timing.
+These profiles implement the documented command; live network wake remains to
+be checked on each model. Network control must remain reachable in standby;
+an offline WLAN interface cannot receive CI-V wake.

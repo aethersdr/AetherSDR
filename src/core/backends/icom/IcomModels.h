@@ -435,9 +435,6 @@ struct MeterCalibrationProfile {
     bool hasPaTemperatureTelemetry = false;
 };
 
-// Recovery policy is model capability, not shared Icom scheduler policy.  The
-// RS-BA1 data-start envelope and its retry timing are enabled only for models
-// whose public/live evidence supports this exact recovery path.
 // Explicit native-network wake framing. This never grants a model identity or TX.
 struct PowerOnProfile {
     std::size_t extraPreambleBytes = 0;
@@ -445,6 +442,8 @@ struct PowerOnProfile {
     int readyDelayMs = 10000;
 };
 
+// Recovery policy is model capability, not shared Icom scheduler policy.
+// RS-BA1 data-start recovery is enabled only with model-specific evidence.
 struct CivRecoveryProfile {
     int retryIntervalMs = 1000;
     int maxAttempts = 3;

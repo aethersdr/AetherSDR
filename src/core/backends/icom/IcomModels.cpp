@@ -623,6 +623,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .scaleForwardPowerToRatedOutput = true,
             .holdIsolatedTxMinimums = true,
         },
+        // IC-705 CI-V Reference Guide 2020, p.15 note *4: 18 01 powers
+        // on from Standby/Shutdown. Native RS-BA1 carries the standard frame;
+        // no model-specific serial preamble is prescribed. Network must be up.
+        .powerOn = PowerOnProfile{0, kControllerAddress, 10000},
         .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
@@ -680,6 +684,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 25.0,
             .holdIsolatedTxMinimums = true,
         },
+        // IC-7300MK2 guide, "Turning the transceiver ON": 18 01.
+        // Baud-dependent FE fill is explicitly for the REMOTE jack, not LAN.
+        // Ten seconds is our bounded client readiness allowance, not a guide value.
+        .powerOn = PowerOnProfile{0, kControllerAddress, 10000},
         .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
                                 "Group"},
         // IC-7300MK2 CI-V Reference Guide, SET > Network, printed p. 10.
