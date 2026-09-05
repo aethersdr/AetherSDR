@@ -476,6 +476,10 @@ observe-only local handshake/capability service, and a QtWidgets-free
 `resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
 coalescing/session resync, and an independent local-socket hard disconnect cap
 are live over the current-user local transport.
+Sessions now require explicit trusted authorization; the local transport grants
+observe permission, and reads/subscriptions enforce it. Session revocation
+discards pending observations and terminates local delivery. Credential
+verification/provisioning and control/transmit grants are not implemented yet.
 Meters, read-only transmit state, authenticated non-TX control, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned

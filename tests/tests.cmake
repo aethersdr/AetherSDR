@@ -77,6 +77,21 @@ target_include_directories(control_protocol_codec_test PRIVATE src)
 target_link_libraries(control_protocol_codec_test PRIVATE Qt6::Core)
 add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
 
+# Socket-free session authorization and revocation; only the real protocol
+# service/store/session are compiled. No sockets, radio models, or settings.
+add_executable(control_authorization_test
+    tests/control_authorization_test.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlSession.cpp
+)
+target_include_directories(control_authorization_test PRIVATE src)
+target_compile_definitions(control_authorization_test PRIVATE
+    AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
+add_test(NAME control_authorization_test COMMAND control_authorization_test)
+
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
 # grants observation only; no control or transmit capability may appear.
