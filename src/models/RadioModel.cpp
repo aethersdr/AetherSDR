@@ -697,6 +697,12 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
         break;
     }
 
+    req.params.insert(QStringLiteral("icom.wakeOnConnect"), IcomSettings::wakeOnConnect());
+    if (IcomSettings::civSelection() == IcomSettings::CivSelection::Model) {
+        // An explicit model choice may authorize power framing, never capabilities.
+        req.params.insert(QStringLiteral("icom.wakeModelId"), IcomSettings::civAddress());
+    }
+
     // LOW BANDWIDTH MODE REACHES THIS FAMILY NOW.
     //
     // The connect dialog has offered the checkbox all along and it did nothing
@@ -1128,6 +1134,18 @@ void RadioModel::setupBackend(const QString& family)
     // namespaces/kinds are ignored here.
     connect(m_backend.get(), &IRadioBackend::extensionStatus, this,
             [this](const QString& ns, const QString& kind, const QVariantMap& fields) {
+        if (ns == QLatin1String("icom") && kind == QLatin1String("power.wakeNeeded")) {
+            const quint64 generation = m_radioWakeGeneration;
+            QTimer::singleShot(0, this, [this, fields, generation] {
+                if (generation != m_radioWakeGeneration || m_radioWakeActive) { return; }
+                QString error;
+                if (!wakeIcomRadio(fields.value("modelId").toInt(),
+                                   fields.value("address").toInt(), &error)) {
+                    emit configurationWarning(error);
+                }
+            });
+            return;
+        }
         if (ns != QLatin1String("flex")) {
             return;
         }
@@ -1188,7 +1206,14 @@ void RadioModel::setupBackend(const QString& family)
     // through the same helper means every capability consumer has exactly one
     // signal to bind to and cannot observe a stale picture.
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
-            [this] { publishCapabilities(isConnected()); });
+            [this] {
+        publishCapabilities(isConnected());
+        if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
+            finishRadioWake(m_backend->capabilities().model == m_radioWakeModel
+                ? tr("Radio ready.") : tr("The radio identified as a different model."),
+                m_backend->capabilities().model == m_radioWakeModel);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::transmitFrequencyCheckChanged, this,
             [this](bool on) {
         if (m_transmitFrequencyCheck == on) {
@@ -3453,6 +3478,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    cancelRadioWake();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
     // choice is actually made — so swap the backend here rather than pinning the
@@ -3563,6 +3589,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
+    cancelRadioWake();
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
              << "udpPort=" << udpPort
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
@@ -3770,8 +3797,101 @@ void RadioModel::announceClientConnection(quint32 handle,
     });
 }
 
+void RadioModel::cancelRadioWake()
+{
+    ++m_radioWakeGeneration;
+    if (m_radioWakeActive) {
+        m_radioWakeActive = false;
+        emit radioWakeProgress(tr("Wake cancelled."), false);
+    }
+}
+
+void RadioModel::finishRadioWake(const QString& message, bool success)
+{
+    if (!m_radioWakeActive) { return; }
+    m_radioWakeActive = false;
+    ++m_radioWakeGeneration;
+    if (!success) {
+        // Do not destroy a backend while delivering its capability signal.
+        m_intentionalDisconnect = true;
+        m_reconnectTimer.stop();
+        emit radioWakeFailed(message);
+        const quint64 generation = m_radioWakeGeneration;
+        QTimer::singleShot(0, this, [this, generation] {
+            if (generation == m_radioWakeGeneration) { disconnectFromRadio(); }
+        });
+    }
+    emit radioWakeProgress(message, false);
+}
+
+bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
+{
+    if (m_radioWakeActive || m_family != QLatin1String("icom") || !isConnected()
+        || !m_backend || m_lastInfo.address.isNull()) {
+        if (error) { *error = tr("Connect to the Icom network first, and finish any active wake."); }
+        return false;
+    }
+    bool sent = false;
+    QVariantMap result;
+    QString failure = tr("Wake is unavailable for this backend.");
+    // The extension replies synchronously. The reserved local ID is scoped to
+    // these connections and cannot consume another caller's asynchronous reply.
+    constexpr quint64 requestId = std::numeric_limits<quint64>::max();
+    const QMetaObject::Connection ok = connect(m_backend.get(), &IRadioBackend::extensionResult,
+        this, [&](quint64 id, const QVariant& value) {
+            if (id == requestId) { result = value.toMap(); sent = result.value("sent").toBool(); }
+        }, Qt::DirectConnection);
+    const QMetaObject::Connection bad = connect(m_backend.get(), &IRadioBackend::extensionError,
+        this, [&](quint64 id, const QString& message) {
+            if (id == requestId) { failure = message; }
+        }, Qt::DirectConnection);
+    m_backend->invokeExtension(QStringLiteral("icom"), QStringLiteral("power.wake"), requestId,
+        QVariantMap{{QStringLiteral("modelId"), modelId}, {QStringLiteral("address"), address}});
+    disconnect(ok);
+    disconnect(bad);
+    if (!sent) {
+        if (error) { *error = failure; }
+        return false;
+    }
+    const RadioInfo selectedRadio = m_lastInfo;
+    m_intentionalDisconnect = true;
+    m_reconnectTimer.stop();
+    m_pingTimer.stop();
+    m_radioWakeActive = true;
+    m_connectAttemptActive = true;
+    m_backend->disconnectRadio();
+    m_radioWakeModel = result.value("model").toString();
+    const quint64 generation = m_radioWakeGeneration;
+    emit radioWakeProgress(tr("Waking radio…"), true);
+    QTimer::singleShot(result.value("delayMs").toInt(), this, [this, generation, selectedRadio, address] {
+        if (!m_radioWakeActive || generation != m_radioWakeGeneration) { return; }
+        // Own this single reconnect instead of arming the repeating retry timer.
+        // Pin only this attempt to the operator's wake destination, never settings.
+        RadioConnectRequest request;
+        request.host = selectedRadio.address.toString();
+        request.port = selectedRadio.port;
+        request.serial = selectedRadio.serial;
+        populateFamilyParams(request, m_family);
+        request.params.insert(QStringLiteral("icom.wakeOnConnect"), false);
+        request.params.insert(QStringLiteral("icom.civAddress"), address);
+        request.params.insert(QStringLiteral("icom.civAddressPinned"), true);
+        m_intentionalDisconnect = false;
+        m_connectAttemptActive = true;
+        m_backend->connectRadio(request);
+        const quint64 reconnectGeneration = m_radioWakeGeneration;
+        emit radioWakeProgress(tr("Waiting for radio identity…"), true);
+        QTimer::singleShot(20000, this, [this, reconnectGeneration] {
+            if (m_radioWakeActive && reconnectGeneration == m_radioWakeGeneration) {
+                finishRadioWake(tr("Wake did not complete. Check the radio and reconnect."), false);
+            }
+        });
+    });
+    return true;
+}
+
 void RadioModel::disconnectFromRadio()
 {
+    cancelRadioWake();
     m_intentionalDisconnect = true;
     m_rebootInProgress = false;
     m_connectAttemptActive = false;  // the operator abandoned it (#4912)
@@ -7244,7 +7364,7 @@ void RadioModel::onDisconnected()
         qCDebug(lcProtocol) << "RadioModel: WAN disconnected";
         m_wanConn->disconnect(this);
         m_wanConn = nullptr;
-    } else if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
+    } else if (!m_intentionalDisconnect && !m_radioWakeActive && !m_lastInfo.address.isNull()) {
         qCDebug(lcProtocol) << "RadioModel: unexpected disconnect — reconnecting in 3s";
         m_reconnectTimer.start();
     }
@@ -7261,6 +7381,15 @@ void RadioModel::onDisconnected()
 
 void RadioModel::onConnectionError(const QString& msg)
 {
+    if (m_radioWakeActive) {
+        const quint64 generation = m_radioWakeGeneration;
+        QTimer::singleShot(0, this, [this, generation, msg] {
+            if (m_radioWakeActive && generation == m_radioWakeGeneration) {
+                finishRadioWake(msg, false);
+            }
+        });
+        return;
+    }
     qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
     // The attempt ended (#4912). If the reconnect below arms, its own lambda
     // re-arms the flag when it actually re-drives the connect — so the window

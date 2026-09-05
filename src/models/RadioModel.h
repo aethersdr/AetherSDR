@@ -776,6 +776,9 @@ public:
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
+    // One explicit wake, followed by one bounded connection attempt. Never persisted.
+    bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
+    bool radioWakeActive() const { return m_radioWakeActive; }
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     void setPendingClientDisconnects(const QList<quint32>& handles);
     bool disconnectClient(quint32 handle);
@@ -1034,6 +1037,8 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    void radioWakeProgress(const QString& message, bool active);
+    void radioWakeFailed(const QString& message);
     // Radio CONFIGURATION advice that does not end the session. See
     // IRadioBackend::configurationWarning for why this is a separate channel.
     void configurationWarning(const QString& msg);
@@ -1374,6 +1379,7 @@ private slots:
     void onBackendSpectrumFrame(int panId, const QByteArray& frame);
 
 private:
+    friend struct RadioModelWakeTestAccess;
     void handleRadioStatus(const QMap<QString, QString>& kvs);
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
@@ -2056,6 +2062,11 @@ private:
     void restoreAutomationSliceFixtureBaseline();
 
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
+    bool m_radioWakeActive = false;
+    quint64 m_radioWakeGeneration = 0;
+    QString m_radioWakeModel;
+    void cancelRadioWake();
+    void finishRadioWake(const QString& message, bool success);
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
     // See isConnectAttemptInFlight(). Set by the connect entry points, cleared

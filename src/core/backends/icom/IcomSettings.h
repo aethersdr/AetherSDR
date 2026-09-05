@@ -30,6 +30,9 @@ class IcomSettings {
 public:
     // The operator's network username on the radio. NOT a secret — the radio
     // pairs it with a password and the username alone grants nothing.
+    // Client-owned, opt-in connection policy, stored in the Icom document.
+    static bool wakeOnConnect();
+    static void setWakeOnConnect(bool enabled);
     static QString username();
     static void setUsername(const QString& username);
 

@@ -1150,6 +1150,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     });
     root->addWidget(m_autoConnectCheck);
 
+    auto* wakeOnConnect = new QCheckBox(tr("Wake on connect"), this);
+    wakeOnConnect->setObjectName(QStringLiteral("connectionWakeOnConnect"));
+    wakeOnConnect->setAccessibleName(tr("Wake on connect"));
+    wakeOnConnect->setAccessibleDescription(tr(
+        "If Icom identity does not answer, wake the selected supported model once. "
+        "Currently verified for IC-9700. Select its model before connecting."));
+    wakeOnConnect->setToolTip(tr(
+        "Wake a supported Icom from standby only if it does not answer identification. "
+        "Currently verified for IC-9700 with its model selected. "
+        "Does not put the radio to sleep on disconnect."));
+    wakeOnConnect->setChecked(IcomSettings::wakeOnConnect());
+    wakeOnConnect->setStyleSheet(lowBandwidthCheckStyle);
+    connect(wakeOnConnect, &QCheckBox::toggled, this, [](bool on) {
+        IcomSettings::setWakeOnConnect(on);
+    });
+    root->addWidget(wakeOnConnect);
+
     // Demo mode (RFC #4288): offer the synthetic "AetherSDR Demo — Simulator"
     // entry in the radio list. Default on for discoverability; the choice
     // persists. Toggling just writes the setting and shows/hides the entry — the

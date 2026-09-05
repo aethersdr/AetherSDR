@@ -80,6 +80,10 @@ struct CivFrame {
 // Build a frame. `to` is the radio's CI-V address.
 [[nodiscard]] std::vector<std::uint8_t> buildFrame(std::uint8_t to, std::uint8_t cmd,
                                                    std::span<const std::uint8_t> payload = {});
+// Explicit Power ON only. Native-network framing is selected by the model profile.
+[[nodiscard]] std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to,
+    std::size_t extraPreambleBytes = 0, std::uint8_t from = kControllerAddress);
+
 [[nodiscard]] std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd,
                                                       std::uint8_t sub,
                                                       std::span<const std::uint8_t> payload = {});

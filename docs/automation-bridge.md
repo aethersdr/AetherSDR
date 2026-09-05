@@ -3304,6 +3304,23 @@ The `icom.profile.show` extension distinguishes `modelId` (the `19 00` payload)
 from `civAddress` (the current command destination). A custom address can differ
 from the model ID; Network Radio Name does not select either value.
 
+**`civ wake <model-id-hex> <address-hex>`** explicitly requests one wake and one
+bounded reconnect on the current Icom network session. Currently only the
+hardware-verified IC-9700 profile is enabled, e.g. `civ wake a2 a2` (or its
+custom radio address). The model selection authorizes framing only; CI-V still
+establishes identity and capabilities after reconnect. The response acknowledges
+the request, not radio readiness. No power-off command is exposed. Read-only
+mode refuses this action. Disconnect or another connection selection cancels it.
+
+The connection panel's **Wake on connect** checkbox persists in the `Icom`
+settings document (`wakeOnConnect`, default false). It requests wake only after
+identity discovery exhausts, and only with an explicitly selected supported
+model. Auto-detect and custom address alone cannot identify an asleep radio.
+The post-wake reconnect disables another wake and expires after 20 seconds;
+the IC-9700 has a 10-second pre-reconnect boot delay. Settings on the radio are
+never modified. IC-705 and IC-7300MK2 document `18 01`, but their native-network
+wake sequences remain disabled pending separate hardware verification.
+
 ### `controls`
 
 The CI-V control and meter registry, joined against what is actually wired.
@@ -3825,7 +3842,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |

@@ -49,6 +49,15 @@ std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd, std::
     return buildFrame(to, cmd, body);
 }
 
+std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to, std::size_t extraPreambleBytes,
+                                     std::uint8_t from)
+{
+    std::vector<std::uint8_t> frame = buildFrameSub(to, cmd::kPower, 0x01, {});
+    frame[3] = from;
+    frame.insert(frame.begin(), extraPreambleBytes, kCivPreamble);
+    return frame;
+}
+
 // Which commands carry a subcommand is a per-command fact, not a positional
 // one. Treating every second byte as a subcommand would turn command 0x05's
 // first frequency digit into a "subcommand"; treating none of them as one

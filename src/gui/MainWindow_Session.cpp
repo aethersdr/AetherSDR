@@ -766,8 +766,7 @@ void MainWindow::wireRadioModel()
         qCWarning(lcProtocol).noquote() << "radio configuration:" << message;
         statusBar()->showMessage(message, 15000);
     });
-    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
-            this, [this](const QString& message) {
+    const auto showTerminalConnectionFailure = [this](const QString& message) {
         // A rejected GUI registration is terminal for this attempt. Keep the
         // reason visible, suppress both LAN and WAN automatic reconnect loops,
         // and let the operator retry normally after freeing a radio slot.
@@ -782,9 +781,20 @@ void MainWindow::wireRadioModel()
             reconnectDialog->close();
             reconnectDialog->deleteLater();
         }
-    });
+    };
+    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
+            this, showTerminalConnectionFailure);
+    connect(&m_radioModel, &RadioModel::radioWakeFailed,
+            this, showTerminalConnectionFailure);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
             this, &MainWindow::onWanCertFingerprintMismatch);
+    connect(&m_radioModel, &RadioModel::radioWakeProgress, this,
+            [this](const QString& message, bool active) {
+        m_connPanel->setStatusText(message);
+        m_connStatusLabel->setText(active ? tr("Connecting") : message);
+        setPanadapterConnectionAnimation(active, message);
+        statusBar()->showMessage(message, active ? 30000 : 10000);
+    });
     connect(&m_radioModel, &RadioModel::forcedDisconnectRequested,
             this, [this] {
         const bool wasWan = m_radioModel.isWan();

@@ -6458,7 +6458,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));

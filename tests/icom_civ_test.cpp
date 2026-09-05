@@ -640,6 +640,15 @@ static void testModes()
 
 static void testCommands()
 {
+    check(bytesAre(cmdPowerOn(0xA4), {0xFE, 0xFE, 0xA4, 0xE0, 0x18, 0x01, 0xFD}),
+          "Power ON uses the guide's literal 18 01 encoding");
+    const std::vector<std::uint8_t> wake = cmdPowerOn(0x50, 150, 0xE1);
+    check(wake.size() == 157
+              && std::all_of(wake.begin(), wake.begin() + 152,
+                             [](std::uint8_t byte) { return byte == 0xFE; })
+              && std::vector<std::uint8_t>(wake.begin() + 152, wake.end())
+                    == std::vector<std::uint8_t>{0x50, 0xE1, 0x18, 0x01, 0xFD},
+          "contributed native IC-9700 wake framing preserves destination and E1 source");
     check(bytesAre(cmdSetPtt(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0x01, 0xFD}),
           "PTT on is 1C 00 01");
     check(bytesAre(cmdSetTransmitFrequencyCheck(kIc705, true),

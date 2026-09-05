@@ -1406,3 +1406,29 @@ Icom's per-model CI-V guides define `19 00` as the transceiver-ID read. The
 IC-7300MK2 `B6` payload and destination were also confirmed by a receive-only
 connection for this change. For example, `FE FE E0 50 19 00 A4 FD` identifies an
 IC-705 whose operating address is `50`, regardless of its Network Radio Name.
+
+
+### Optional standby wake (#5349, superseding #5360)
+
+The connection panel exposes **Wake on connect**, default off and persisted in
+the existing Icom JSON settings document. An awake identity completes normally
+without sending power commands. Only exhausted identity discovery with explicit
+opt-in and a selected verified model requests wake via the namespaced extension
+channel. Nicknames and arbitrary CI-V addresses never establish model identity.
+
+RadioModel owns one wake operation: one `18 01`, intentional session release,
+10-second IC-9700 boot delay, then one fresh network session with wake disabled.
+The ordinary repeating reconnect timer is not armed during this operation.
+Wire identity must match the selection within 20 seconds after reconnect starts;
+failure terminates the attempt. Generation checks invalidate delayed work on
+operator disconnect, radio changes, success and failure. No power-off is sent
+on disconnect or exit, and no wake request or transient model claim is persisted.
+
+Credit: W5JWP (@w5jwp) established the IC-9700 native-LAN wake sequence and
+standby/readiness distinction in #5360. Its 150 additional FE bytes, E1 controller
+address and 10-second delay are retained as contributed hardware evidence, not
+as the guide's serial baud-rate requirements. The official IC-9700 guide lists
+approximately 119 FE bytes at 115200 baud. IC-705 documents `18 01` from
+Standby/Shutdown; IC-7300MK2 documents baud-dependent fill specifically for its
+REMOTE jack. Neither statement alone validates a native-network wake sequence,
+so those two profiles remain disabled.

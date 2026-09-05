@@ -3,10 +3,13 @@
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomSession.h"
 #include "core/AudioEngine.h"
+#include "models/RadioModel.h"
+#include "core/backends/icom/IcomSettings.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -44,6 +47,8 @@ struct IcomCivBackendTestAccess {
     static bool ambiguous(const IcomCivBackend& b) { return b.m_civAmbiguous; }
     static void markKeyed(IcomCivBackend& b) { b.m_keyed = true; }
     static bool keyed(const IcomCivBackend& b) { return b.m_keyed; }
+    static void enableWake(IcomCivBackend& b, uint modelId)
+    { b.m_wakeOnConnect = true; b.m_wakeModelId = modelId; }
     static void timeout(IcomCivBackend& b) { b.requestCivIdentity(b.m_sessionGeneration); }
     static void staleRetry(IcomCivBackend& b, std::uint64_t generation)
     { b.requestCivIdentity(generation); }
@@ -58,6 +63,22 @@ struct IcomCivBackendTestAccess {
         }
         return frames;
     }
+};
+}
+
+namespace AetherSDR {
+struct RadioModelWakeTestAccess {
+    static IcomCivBackend& prepare(RadioModel& model)
+    {
+        model.teardownBackend();
+        model.setupBackend(QStringLiteral("icom"));
+        model.m_lastInfo.address = QHostAddress(QStringLiteral("127.0.0.1"));
+        model.m_lastInfo.family = QStringLiteral("icom");
+        return *static_cast<IcomCivBackend*>(model.m_backend.get());
+    }
+    static bool retrying(const RadioModel& model) { return model.m_reconnectTimer.isActive(); }
+    static quint64 generation(const RadioModel& model) { return model.m_radioWakeGeneration; }
+    static void fail(RadioModel& model) { model.onConnectionError(QStringLiteral("injected wake failure")); }
 };
 }
 
@@ -81,6 +102,13 @@ void check(bool ok, const char* message)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    QTemporaryDir settings;
+    qputenv("AETHER_SETTINGS_DIR", settings.path().toUtf8());
+    IcomSettings::reset();
+    check(!IcomSettings::wakeOnConnect(), "wake-on-connect defaults off");
+    IcomSettings::setWakeOnConnect(true);
+    check(IcomSettings::wakeOnConnect(), "wake policy round-trips through the Icom document");
+    IcomSettings::setWakeOnConnect(false);
     AudioEngine audio;
     IcomCivBackend backend;
     QString nickname;
@@ -251,6 +279,80 @@ int main(int argc, char** argv)
     check(!IcomCivBackendTestAccess::retrying(backend),
           "disconnect cancels pending discovery");
     backend.disconnectRadio();
+    int wakeRequests = 0;
+    QObject::connect(&backend, &IRadioBackend::extensionStatus,
+        [&](const QString& ns, const QString& kind, const QVariantMap&) {
+            if (ns == "icom" && kind == "power.wakeNeeded") { ++wakeRequests; }
+        });
+    IcomCivBackendTestAccess::connect(backend, "IC-9700");
+    for (int i = 0; i < 5; ++i) { IcomCivBackendTestAccess::timeout(backend); }
+    check(wakeRequests == 0, "ordinary connect never requests power despite its nickname");
+    IcomCivBackendTestAccess::connect(backend, "Renamed radio", 0xA2);
+    IcomCivBackendTestAccess::enableWake(backend, 0xA2);
+    for (int i = 0; i < 5; ++i) { IcomCivBackendTestAccess::timeout(backend); }
+    check(wakeRequests == 1, "opt-in plus explicit model requests wake after bounded discovery");
+    IcomCivBackendTestAccess::timeout(backend);
+    check(wakeRequests == 1, "the same failed discovery cannot request a second wake");
+    backend.disconnectRadio();
+    // The real model and backend, with an UNSTARTED session: neither wake
+    // nor teardown opens a socket. Cancel every reconnect before its delay.
+    {
+        RadioModel radio;
+        IcomCivBackend& wakeBackend = RadioModelWakeTestAccess::prepare(radio);
+        IcomCivBackendTestAccess::connect(wakeBackend, "IC-9700");
+        QString error;
+        check(!radio.wakeIcomRadio(0xA4, 0xA4, &error)
+                  && !radio.wakeIcomRadio(0xB6, 0xB6, &error),
+              "IC-705 and MK2 do not inherit the IC-9700 network wake profile");
+        check(!radio.wakeIcomRadio(0xA2, 0, &error)
+                  && !radio.wakeIcomRadio(0xA2, 0xE0, &error)
+                  && !radio.wakeIcomRadio(0x1A2, 0xA2, &error),
+              "broadcast, controller and out-of-range model selections refuse wake");
+        check(radio.wakeIcomRadio(0xA2, 0x50, &error),
+              "explicit IC-9700 wake accepts an independently chosen address");
+        QStringList frames = IcomCivBackendTestAccess::outbound(wakeBackend);
+        int wakeWrites = 0;
+        for (const QString& frame : frames) {
+            if (frame.endsWith(QStringLiteral("50 e1 18 01 fd"))) { ++wakeWrites; }
+        }
+        check(wakeWrites == 1 && radio.radioWakeActive()
+                  && !RadioModelWakeTestAccess::retrying(radio),
+              "one explicit wake has no repeating reconnect timer");
+        check(!radio.wakeIcomRadio(0xA2, 0x50, &error),
+              "an active wake cannot send another power command");
+        const quint64 wakeGeneration = RadioModelWakeTestAccess::generation(radio);
+        radio.disconnectFromRadio();
+        check(!radio.radioWakeActive()
+                  && RadioModelWakeTestAccess::generation(radio) != wakeGeneration
+                  && !RadioModelWakeTestAccess::retrying(radio),
+              "operator disconnect invalidates delayed wake callbacks");
+        IcomCivBackendTestAccess::connect(wakeBackend, "IC-9700");
+        IcomCivBackendTestAccess::inject(wakeBackend, "fefee0b61900b6fd");
+        check(!radio.wakeIcomRadio(0xA2, 0xB6, &error),
+              "a misleading nickname cannot override wire identity for wake");
+        IcomCivBackendTestAccess::connect(wakeBackend, "Custom name", 0x50, true);
+        check(!radio.wakeIcomRadio(0xA2, 0xA2, &error),
+              "wake cannot redirect a pinned session");
+        IcomCivBackendTestAccess::markKeyed(wakeBackend);
+        check(!radio.wakeIcomRadio(0xA2, 0x50, &error),
+              "wake refuses an active transmitter");
+        IcomCivBackendTestAccess::inject(wakeBackend, "fefee0501c0000fd");
+        IcomCivBackendTestAccess::connect(wakeBackend, "Custom name");
+        check(radio.wakeIcomRadio(0xA2, 0xA2, &error), "second explicit operation starts");
+        RadioModelWakeTestAccess::fail(radio);
+        waitMs(20);
+        check(!radio.radioWakeActive() && !radio.isConnected()
+                  && !RadioModelWakeTestAccess::retrying(radio),
+              "terminal wake failure disconnects without scheduling another attempt");
+        IcomCivBackendTestAccess::connect(wakeBackend, "Custom name");
+        check(radio.wakeIcomRadio(0xA2, 0xA2, &error), "readiness operation starts");
+        // Inject the post-wake session and its identity, without running start().
+        IcomCivBackendTestAccess::connect(wakeBackend, "Renamed IC-9700", 0xA2, true);
+        IcomCivBackendTestAccess::inject(wakeBackend, "fefee0a21900a2fd");
+        check(!radio.radioWakeActive() && radio.isConnected(),
+              "matching wire identity completes wake and invalidates its deadline");
+        radio.disconnectFromRadio();
+    }
     std::printf("icom_identity_test: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

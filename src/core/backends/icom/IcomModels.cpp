@@ -650,6 +650,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .powerConversion = MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
             .hasPaCurrentTelemetry = true,
         },
+        // Native LAN sequence measured by W5JWP in #5360: 150 extra FE, E1.
+        // This is hardware-derived, not the guide's serial 115200-baud count
+        // (approximately 119 FE). Do not copy it to another model/transport.
+        .powerOn = PowerOnProfile{150, 0xE1, 10000},
         .civRecovery = CivRecoveryProfile{1000, 3},
         .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
         // IC-9700 CI-V Reference Guide 2019, printed p. 8.

@@ -347,6 +347,8 @@ private:
     // and picking either at random mis-decodes the rest of the session.
     bool m_civAmbiguous = false;
     int m_civDetectAttempts = 0;
+    bool m_wakeOnConnect = false;
+    uint m_wakeModelId = 0;
     bool m_memoryRefreshActive = false;
     quint64 m_memoryRefreshGeneration = 0;
     QSet<int> m_memoryRefreshReplies;

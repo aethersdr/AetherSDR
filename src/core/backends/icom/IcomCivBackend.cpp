@@ -841,6 +841,8 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_civModelId = 0;
     m_civAmbiguous = false;
     m_civDetectAttempts = 0;
+    m_wakeOnConnect = request.params.value(QStringLiteral("icom.wakeOnConnect")).toBool();
+    m_wakeModelId = request.params.value(QStringLiteral("icom.wakeModelId")).toUInt();
     // 48 kHz, FIXED — the rate is deliberately not negotiable here.
     //
     // It is tempting on a weak link: 48 kHz LPCM is ~768 kbps each way, and a
@@ -1330,6 +1332,21 @@ void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
         m_civDetectTimer->stop();
         qCWarning(lcIcomAddr) << "CI-V identification failed after"
                              << m_civDetectAttempts << "attempts";
+        if (m_wakeOnConnect) {
+            m_wakeOnConnect = false; // one request per initial connection attempt
+            const IcomModel* chosen = m_wakeModelId <= 255
+                ? modelForId(static_cast<std::uint8_t>(m_wakeModelId)) : nullptr;
+            if (chosen && profileFor(*chosen).powerOn) {
+                emit extensionStatus(QStringLiteral("icom"), QStringLiteral("power.wakeNeeded"),
+                    QVariantMap{{QStringLiteral("modelId"), m_wakeModelId},
+                                {QStringLiteral("address"), m_session->civAddress()}});
+                return;
+            }
+            emit configurationWarning(QStringLiteral(
+                "Wake on connect requires an explicitly selected, network-verified model "
+                "(currently IC-9700). The network name is not a model identity."));
+            return;
+        }
         emit configurationWarning(QStringLiteral(
             "The Icom network connection is open, but the radio did not answer "
             "model identification. Check its network CI-V settings and selected "
@@ -5631,6 +5648,48 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
 {
     if (ns != QLatin1String("icom")) {
         emit extensionError(requestId, QStringLiteral("unknown namespace %1").arg(ns));
+        return;
+    }
+    if (verb == QLatin1String("power.wake")) {
+        const QVariantMap selection = arg.toMap();
+        bool modelOk = false;
+        bool addressOk = false;
+        const uint modelId = selection.value(QStringLiteral("modelId")).toUInt(&modelOk);
+        const uint address = selection.value(QStringLiteral("address")).toUInt(&addressOk);
+        const IcomModel* selected = modelOk && modelId <= 255
+            ? modelForId(static_cast<std::uint8_t>(modelId)) : nullptr;
+        if (!m_connected || !m_session || m_civAmbiguous
+            || !addressOk || address == 0 || address >= 0xE0
+            || !selected || !profileFor(*selected).powerOn) {
+            emit extensionError(requestId, QStringLiteral(
+                "Wake requires an open Icom network session, a verified model and a radio address (01-DF)."));
+            return;
+        }
+        if ((m_civReported && (m_civReported != address || m_civModelId != modelId))
+            || (m_civAddressPinned && m_session->civAddress() != address)) {
+            emit extensionError(requestId, QStringLiteral(
+                "Wake selection disagrees with the identified or pinned radio."));
+            return;
+        }
+        if (m_keyed || m_tuning || m_pendingPttIntent.value_or(false)) {
+            emit extensionError(requestId, QStringLiteral("Release transmit before waking the radio."));
+            return;
+        }
+        const PowerOnProfile& power = *profileFor(*selected).powerOn;
+        for (QTimer* timer : {m_meterTimer, m_linkTimer, m_civDetectTimer}) {
+            if (timer) { timer->stop(); }
+        }
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
+        const std::vector<std::uint8_t> frame = cmdPowerOn(
+            static_cast<std::uint8_t>(address), power.extraPreambleBytes,
+            power.controllerAddress);
+        traceCiv(true, frame);
+        m_session->sendCiv(frame);
+        emit extensionResult(requestId, QVariantMap{
+            {QStringLiteral("delayMs"), power.readyDelayMs},
+            {QStringLiteral("model"), QString::fromUtf8(selected->name.data(), static_cast<int>(selected->name.size()))},
+            {QStringLiteral("sent"), true}});
         return;
     }
     if (verb.startsWith(QLatin1String("gps."))) {
