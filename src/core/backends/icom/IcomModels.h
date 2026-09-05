@@ -439,7 +439,7 @@ struct MeterCalibrationProfile {
 struct PowerOnProfile {
     std::size_t extraPreambleBytes = 0;
     std::uint8_t controllerAddress = kControllerAddress;
-    int readyDelayMs = 10000;
+    int readyDelayMs = 1000;
 };
 
 // Recovery policy is model capability, not shared Icom scheduler policy.

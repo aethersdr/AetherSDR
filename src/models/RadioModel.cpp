@@ -1209,9 +1209,10 @@ void RadioModel::setupBackend(const QString& family)
             [this] {
         publishCapabilities(isConnected());
         if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
-            finishRadioWake(m_backend->capabilities().model == m_radioWakeModel
-                ? tr("Radio ready.") : tr("The radio identified as a different model."),
-                m_backend->capabilities().model == m_radioWakeModel);
+            const bool matches = m_radioWakeModel.isEmpty()
+                || m_backend->capabilities().model == m_radioWakeModel;
+            finishRadioWake(matches ? tr("Radio ready.")
+                                    : tr("The radio identified as a different model."), matches);
         }
     });
     connect(m_backend.get(), &IRadioBackend::transmitFrequencyCheckChanged, this,
@@ -3873,6 +3874,7 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
         request.serial = selectedRadio.serial;
         populateFamilyParams(request, m_family);
         request.params.insert(QStringLiteral("icom.wakeOnConnect"), false);
+        request.params.insert(QStringLiteral("icom.waitingForWake"), true);
         request.params.insert(QStringLiteral("icom.civAddress"), address);
         request.params.insert(QStringLiteral("icom.civAddressPinned"), true);
         m_intentionalDisconnect = false;

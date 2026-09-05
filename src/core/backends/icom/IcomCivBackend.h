@@ -348,6 +348,7 @@ private:
     bool m_civAmbiguous = false;
     int m_civDetectAttempts = 0;
     bool m_wakeOnConnect = false;
+    bool m_waitingForWake = false;
     uint m_wakeModelId = 0;
     bool m_memoryRefreshActive = false;
     quint64 m_memoryRefreshGeneration = 0;

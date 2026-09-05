@@ -74,6 +74,7 @@ public:
     Q_INVOKABLE void stop();
 
     [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
+    [[nodiscard]] std::uint8_t advertisedCivAddress() const noexcept { return m_advertisedCivAddress; }
     [[nodiscard]] QString deviceName() const { return m_deviceName; }
     [[nodiscard]] std::uint8_t civAddress() const noexcept { return m_params.civAddress; }
 
@@ -160,6 +161,8 @@ private:
     // Auth state. A grant may replace the auth ID, but only after its header
     // IDs prove it belongs to this control session.
     AuthId m_authId{};
+    friend struct IcomCivBackendTestAccess;
+    std::uint8_t m_advertisedCivAddress = 0;
     RadioId m_radioId{};
     QString m_radioName;
     QString m_deviceName;

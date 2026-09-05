@@ -47,8 +47,11 @@ struct IcomCivBackendTestAccess {
     static bool ambiguous(const IcomCivBackend& b) { return b.m_civAmbiguous; }
     static void markKeyed(IcomCivBackend& b) { b.m_keyed = true; }
     static bool keyed(const IcomCivBackend& b) { return b.m_keyed; }
+    static void advertise(IcomCivBackend& b, std::uint8_t address)
+    { b.m_session->m_advertisedCivAddress = address; }
     static void enableWake(IcomCivBackend& b, uint modelId)
     { b.m_wakeOnConnect = true; b.m_wakeModelId = modelId; }
+    static void awaitWake(IcomCivBackend& b) { b.m_waitingForWake = true; }
     static void timeout(IcomCivBackend& b) { b.requestCivIdentity(b.m_sessionGeneration); }
     static void staleRetry(IcomCivBackend& b, std::uint64_t generation)
     { b.requestCivIdentity(generation); }
@@ -288,11 +291,22 @@ int main(int argc, char** argv)
     for (int i = 0; i < 5; ++i) { IcomCivBackendTestAccess::timeout(backend); }
     check(wakeRequests == 0, "ordinary connect never requests power despite its nickname");
     IcomCivBackendTestAccess::connect(backend, "Renamed radio", 0xA2);
+    IcomCivBackendTestAccess::advertise(backend, 0xA2);
     IcomCivBackendTestAccess::enableWake(backend, 0xA2);
     for (int i = 0; i < 5; ++i) { IcomCivBackendTestAccess::timeout(backend); }
     check(wakeRequests == 1, "opt-in plus explicit model requests wake after bounded discovery");
     IcomCivBackendTestAccess::timeout(backend);
     check(wakeRequests == 1, "the same failed discovery cannot request a second wake");
+    backend.disconnectRadio();
+    IcomCivBackendTestAccess::connect(backend, "Booting MK2", 0xB6, true);
+    IcomCivBackendTestAccess::awaitWake(backend);
+    for (int i = 0; i < 7; ++i) { IcomCivBackendTestAccess::timeout(backend); }
+    check(IcomCivBackendTestAccess::retrying(backend)
+              && IcomCivBackendTestAccess::attempts(backend) == 8,
+          "post-wake identity probes continue beyond the initial five-second discovery window");
+    IcomCivBackendTestAccess::inject(backend, "fefee0b61900b6fd");
+    check(!IcomCivBackendTestAccess::retrying(backend),
+          "post-wake probing stops immediately when the radio answers identity");
     backend.disconnectRadio();
     // The real model and backend, with an UNSTARTED session: neither wake
     // nor teardown opens a socket. Cancel every reconnect before its delay.
@@ -301,6 +315,22 @@ int main(int argc, char** argv)
         IcomCivBackend& wakeBackend = RadioModelWakeTestAccess::prepare(radio);
         IcomCivBackendTestAccess::connect(wakeBackend, "IC-9700");
         QString error;
+        // Reported failure: default Auto + an arbitrary network name must wake
+        // the advertised MK2 destination, not the IC-705 seed from settings.
+        IcomCivBackendTestAccess::advertise(wakeBackend, 0xB6);
+        IcomCivBackendTestAccess::enableWake(wakeBackend, 0);
+        for (int i = 0; i < 5; ++i) { IcomCivBackendTestAccess::timeout(wakeBackend); }
+        waitMs(20); // deliver the real backend -> RadioModel automatic wake path
+        check(radio.radioWakeActive()
+                  && IcomCivBackendTestAccess::outbound(wakeBackend).contains(
+                      QStringLiteral("fe fe b6 e0 18 01 fd")),
+              "Auto plus wake-on-connect sends power-on to the network-advertised MK2");
+        IcomCivBackendTestAccess::connect(wakeBackend, "Pat", 0xB6, true);
+        IcomCivBackendTestAccess::inject(wakeBackend, "fefee0b61900b6fd");
+        check(!radio.radioWakeActive() && radio.model() == "IC-7300MK2",
+              "Auto wake learns MK2 identity from the reply, never the name or seed");
+        radio.disconnectFromRadio();
+        IcomCivBackendTestAccess::connect(wakeBackend, "IC-9700");
         check(!radio.wakeIcomRadio(0x94, 0x94, &error)
                   && !radio.wakeIcomRadio(0x98, 0x98, &error),
               "unprofiled IC-7300 and IC-7610 do not inherit network wake");
@@ -359,7 +389,8 @@ int main(int argc, char** argv)
             const IcomModel* model = modelForId(static_cast<std::uint8_t>(modelId));
             check(model && profileFor(*model).powerOn
                       && profileFor(*model).powerOn->extraPreambleBytes == 0
-                      && profileFor(*model).powerOn->controllerAddress == 0xE0,
+                      && profileFor(*model).powerOn->controllerAddress == 0xE0
+                      && profileFor(*model).powerOn->readyDelayMs == 1000,
                   "705 and MK2 use standard framing, independently of the 9700 profile");
             IcomCivBackendTestAccess::connect(wakeBackend, "Custom network name", 0x50, true);
             check(radio.wakeIcomRadio(modelId, 0x50, &error),

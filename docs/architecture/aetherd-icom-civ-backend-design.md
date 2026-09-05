@@ -1413,13 +1413,22 @@ IC-705 whose operating address is `50`, regardless of its Network Radio Name.
 The connection panel exposes **Wake on connect**, default off and persisted in
 the existing Icom JSON settings document. An awake identity completes normally
 without sending power commands. Only exhausted identity discovery with explicit
-opt-in and a selected supported model requests wake via the namespaced extension
-channel. Nicknames and arbitrary CI-V addresses never establish model identity.
+opt-in requests wake via the namespaced extension channel. Auto obtains the
+wake destination from the capabilities record (absolute byte 0x94), not the
+editable network name or the default settings seed. Pinned addresses remain
+explicit overrides. This network metadata authorizes a destination only;
+`19 00` remains the authority for the model and capabilities. Standard framing
+works without a model selection. The default advertised A2 destination selects
+the legacy IC-9700 framing hint without claiming model identity; an explicit
+IC-9700 selection also supports that model at custom addresses.
 
 RadioModel owns one wake operation: one `18 01`, intentional session release,
-10-second readiness allowance, then one fresh network session with wake disabled.
+a short initial allowance, then one fresh network session with wake disabled.
+IC-705 and IC-7300MK2 start after one second and send per-second identity probes
+until ready; IC-9700 retains the contributed ten-second delay.
 The ordinary repeating reconnect timer is not armed during this operation.
-Wire identity must match the selection within 20 seconds after reconnect starts;
+Wire identity must arrive within 20 seconds after reconnect starts (and match
+a model when one was explicitly selected);
 failure terminates the attempt. Generation checks invalidate delayed work on
 operator disconnect, radio changes, success and failure. No power-off is sent
 on disconnect or exit, and no wake request or transient model claim is persisted.
@@ -1432,7 +1441,7 @@ approximately 119 FE bytes at 115200 baud. IC-705 documents `18 01` from
 Standby/Shutdown; IC-7300MK2 documents baud-dependent fill specifically for its
 REMOTE jack. Both models have explicit profiles that send the standard E0-controller
 `18 01` frame over the existing RS-BA1 serial envelope, without the IC-9700's
-extra FE prefix. Their 10-second allowance is client policy, not a guide timing.
+extra FE prefix. Their one-second initial allowance is client policy, not a guide timing.
 These profiles implement the documented command; live network wake remains to
 be checked on each model. Network control must remain reachable in standby;
 an offline WLAN interface cannot receive CI-V wake.

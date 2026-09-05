@@ -339,6 +339,8 @@ struct AuthReply {
 // there is exactly what stops this backend reaching an IC-9700 or an RS-BA1
 // server fronting an IC-7300.
 [[nodiscard]] std::string parseCapabilitiesName(std::span<const std::uint8_t> pkt);
+// RS-BA1 destination, not model identity. Zero means missing/invalid.
+[[nodiscard]] std::uint8_t parseCapabilitiesCivAddress(std::span<const std::uint8_t> pkt);
 
 // What the 0x50 status packet is telling us. The radio uses one packet shape
 // for "your auth failed" and "you have been disconnected", distinguished by

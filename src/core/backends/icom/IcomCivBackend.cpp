@@ -841,6 +841,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_civModelId = 0;
     m_civAmbiguous = false;
     m_civDetectAttempts = 0;
+    m_waitingForWake = request.params.value(QStringLiteral("icom.waitingForWake")).toBool();
     m_wakeOnConnect = request.params.value(QStringLiteral("icom.wakeOnConnect")).toBool();
     m_wakeModelId = request.params.value(QStringLiteral("icom.wakeModelId")).toUInt();
     // 48 kHz, FIXED — the rate is deliberately not negotiable here.
@@ -1328,23 +1329,24 @@ void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
         || m_civReported != 0 || m_civAmbiguous) {
         return;
     }
-    if (m_civDetectAttempts >= kCivDetectMaxAttempts) {
+    const int maxAttempts = m_waitingForWake ? 20 : kCivDetectMaxAttempts;
+    if (m_civDetectAttempts >= maxAttempts) {
         m_civDetectTimer->stop();
         qCWarning(lcIcomAddr) << "CI-V identification failed after"
                              << m_civDetectAttempts << "attempts";
         if (m_wakeOnConnect) {
             m_wakeOnConnect = false; // one request per initial connection attempt
-            const IcomModel* chosen = m_wakeModelId <= 255
-                ? modelForId(static_cast<std::uint8_t>(m_wakeModelId)) : nullptr;
-            if (chosen && profileFor(*chosen).powerOn) {
+            // Auto uses the authenticated network radio's advertised destination.
+            // This selects where to send power-on, never a capability identity.
+            const uint address = m_civAddressPinned ? m_session->civAddress()
+                                                   : m_session->advertisedCivAddress();
+            if (address > 0 && address < 0xE0) {
                 emit extensionStatus(QStringLiteral("icom"), QStringLiteral("power.wakeNeeded"),
                     QVariantMap{{QStringLiteral("modelId"), m_wakeModelId},
-                                {QStringLiteral("address"), m_session->civAddress()}});
+                                {QStringLiteral("address"), address}});
                 return;
             }
-            emit configurationWarning(QStringLiteral(
-                "Wake on connect requires an explicitly selected supported model "
-                "(IC-705, IC-7300MK2 or IC-9700). The network name is not a model identity."));
+            emit configurationWarning(QStringLiteral("Radio did not provide a wake address. Retry the connection."));
             return;
         }
         emit configurationWarning(QStringLiteral(
@@ -1355,7 +1357,7 @@ void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
     }
     ++m_civDetectAttempts;
     qCInfo(lcIcomAddr) << "CI-V identification attempt" << m_civDetectAttempts
-                      << "of" << kCivDetectMaxAttempts;
+                      << "of" << maxAttempts;
     queueRead(cmdReadId(m_civAddressPinned ? m_session->civAddress()
                                          : kBroadcastAddress),
               m_civAddressPinned ? "identity.directed" : "identity.broadcast",
@@ -5660,12 +5662,12 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             ? modelForId(static_cast<std::uint8_t>(modelId)) : nullptr;
         if (!m_connected || !m_session || m_civAmbiguous
             || !addressOk || address == 0 || address >= 0xE0
-            || !selected || !profileFor(*selected).powerOn) {
+            || !modelOk || (modelId != 0 && (!selected || !profileFor(*selected).powerOn))) {
             emit extensionError(requestId, QStringLiteral(
                 "Wake requires an open Icom network session, a supported model and a radio address (01-DF)."));
             return;
         }
-        if ((m_civReported && (m_civReported != address || m_civModelId != modelId))
+        if ((m_civReported && (m_civReported != address || (modelId != 0 && m_civModelId != modelId)))
             || (m_civAddressPinned && m_session->civAddress() != address)) {
             emit extensionError(requestId, QStringLiteral(
                 "Wake selection disagrees with the identified or pinned radio."));
@@ -5675,7 +5677,16 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             emit extensionError(requestId, QStringLiteral("Release transmit before waking the radio."));
             return;
         }
-        const PowerOnProfile& power = *profileFor(*selected).powerOn;
+        // Unknown model is normal in standby. Standard 18 01 does not require
+        // a capability profile. Retain the IC-9700 framing hint for its default
+        // advertised destination, without publishing a model or enforcing it on
+        // the later identity reply. An explicit model also handles custom 9700s.
+        const PowerOnProfile standard{};
+        const IcomModel* framing = selected;
+        if (!framing && address == 0xA2 && m_session->advertisedCivAddress() == 0xA2) {
+            framing = modelForId(0xA2);
+        }
+        const PowerOnProfile& power = framing ? *profileFor(*framing).powerOn : standard;
         for (QTimer* timer : {m_meterTimer, m_linkTimer, m_civDetectTimer}) {
             if (timer) { timer->stop(); }
         }
@@ -5688,7 +5699,9 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         m_session->sendCiv(frame);
         emit extensionResult(requestId, QVariantMap{
             {QStringLiteral("delayMs"), power.readyDelayMs},
-            {QStringLiteral("model"), QString::fromUtf8(selected->name.data(), static_cast<int>(selected->name.size()))},
+            {QStringLiteral("model"), selected
+                ? QString::fromUtf8(selected->name.data(), static_cast<int>(selected->name.size()))
+                : QString{}},
             {QStringLiteral("sent"), true}});
         return;
     }
