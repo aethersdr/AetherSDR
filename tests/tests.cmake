@@ -3973,6 +3973,26 @@ add_executable(connect_state_policy_test
 )
 target_include_directories(connect_state_policy_test PRIVATE src)
 add_test(NAME connect_state_policy_test COMMAND connect_state_policy_test)
+
+# The same field, through RadioModel and radioSnapshot rather than through the
+# policy header — a pure test cannot prove the model feeds the policy the right
+# lifecycle (#5416 review).
+#
+# SOCKETS: it binds nothing and starts no listener — the bridge's line
+# dispatcher is called directly rather than through a QLocalServer. It does
+# make one OUTBOUND TCP attempt, because connectToRadio() is the production path
+# under test and the family backend dials on the way through. The target is
+# 192.0.2.1 (TEST-NET-1, RFC 5737), which is not routable, so the attempt
+# reaches nothing on this machine or off it. No discovery, no radio, and nothing
+# here can key a transmitter.
+add_executable(connect_state_model_test
+    tests/connect_state_model_test.cpp
+)
+target_include_directories(connect_state_model_test PRIVATE src tests)
+target_link_libraries(connect_state_model_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME connect_state_model_test COMMAND connect_state_model_test)
 add_executable(hl2_tx_level_policy_test
     tests/hl2_tx_level_policy_test.cpp
 )
@@ -4372,6 +4392,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_drag_at_test
     automation_tx_watchdog_test
     automation_rn2_probe_test
+    connect_state_model_test
     tci_automation_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)

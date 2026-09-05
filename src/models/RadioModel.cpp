@@ -1612,25 +1612,6 @@ void RadioModel::setupBackend(const QString& family)
         // which starts the reconnect timer. Re-emitted for the UI to surface.
         connect(m_backend.get(), &IRadioBackend::configurationWarning,
                 this, &RadioModel::configurationWarning);
-
-        // The DSP-setup phase, so the bridge can say "connecting" rather than
-        // reporting the same `connected: false` it reports when nothing is
-        // happening (#5413 item 3). HL2-specific by the same dynamic_cast
-        // MainWindow uses: these signals live on Hl2Backend, not on the seam,
-        // and the phase they describe is the HL2's — a Flex connect has its own
-        // timeout and never enters it.
-        //
-        // Disconnected first, and for the reason the MainWindow site states:
-        // the helper is idempotent for a live backend and Qt::UniqueConnection
-        // cannot cover a lambda.
-        if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(m_backend.get())) {
-            disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this, nullptr);
-            disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this, nullptr);
-            connect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this,
-                    [this](const QString&, int, int) { m_dspSetupInFlight = true; });
-            connect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this,
-                    [this] { m_dspSetupInFlight = false; });
-        }
     }
 
     // Transport counters from a backend that owns its own socket. Wired
@@ -2611,8 +2592,13 @@ QString RadioModel::connectState() const
 {
     // The bool stays exactly as it was — existing scripts read `connected` and
     // must not change meaning. This is the third value beside it.
+    //
+    // Derived from THE ATTEMPT, not from the DSP sub-phase. m_connectAttemptActive
+    // already spans the whole thing #5413 asks about: set at the request edge in
+    // connectToRadio(), cleared when the attempt lands, fails, or is abandoned.
+    // See connectStateFor() for what a DSP-only flag got wrong here.
     return QString::fromLatin1(AetherSDR::connectStateName(
-        AetherSDR::connectStateFor(isConnected(), m_dspSetupInFlight)));
+        AetherSDR::connectStateFor(isConnected(), m_connectAttemptActive)));
 }
 
 bool RadioModel::isConnected() const
@@ -7002,10 +6988,6 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
-    // A build that was in flight is over whatever else happens now; without
-    // this a disconnect during the DSP phase would leave the bridge reporting
-    // "connecting" for a session nobody is in.
-    m_dspSetupInFlight = false;
     qCDebug(lcProtocol) << "RadioModel: disconnected";
     m_guiClientRegistrationState.reset();
 
