@@ -8151,12 +8151,19 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     // find the row previously imported from that radio/channel, or allocate a
     // new client slot. This keeps manual/CSV memories visible and prevents a
     // radio's channel 1 from overwriting the operator's client slot 1.
+    const QString importSource = MemoryFields::sanitizeText(d.importSource.value_or(QString()));
+    const QString importKey = MemoryFields::sanitizeText(d.importKey.value_or(QString()));
+    if ((d.importSource || d.importKey) && (importSource.isEmpty() || importKey.isEmpty())) {
+        qCWarning(lcProtocol) << "RadioModel: refused incomplete memory import identity";
+        return;
+    }
     int targetIndex = d.index;
-    const bool isImport = d.importSource && !d.importSource->isEmpty()
-        && d.importKey && !d.importKey->isEmpty();
+    const bool isImport = !importSource.isEmpty() && !importKey.isEmpty();
+    bool preserveAnnotations = false;
     if (isImport) {
         m_localMemories.load();
-        targetIndex = m_localMemories.importedSlot(*d.importSource, *d.importKey);
+        targetIndex = m_localMemories.importedSlot(importSource, importKey);
+        preserveAnnotations = targetIndex >= 0;
 
         if (d.removed) {
             if (targetIndex >= 0) {
@@ -8190,6 +8197,10 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     }
 
     auto& m = m_memories[targetIndex];
+    if (preserveAnnotations) {
+        // A fresh session may not have published its local cache yet.
+        m = m_localMemories.entries().value(targetIndex);
+    }
     m.index = targetIndex;
 
     // Decode the protocol space-encoding (0x7f -> ' ') for free-text fields,
@@ -8204,12 +8215,16 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
         return AetherSDR::MemoryFields::sanitizeText(v);
     };
 
-    if (d.group)          m.group          = decodeText(*d.group);
-    if (d.owner)          m.owner          = decodeText(*d.owner);
+    // Sync refreshes tuning state; the operator owns these annotations after
+    // the first insert, including deliberately empty names/groups/owners.
+    if (!preserveAnnotations) {
+        if (d.group) { m.group = decodeText(*d.group); }
+        if (d.owner) { m.owner = decodeText(*d.owner); }
+        if (d.name) { m.name = decodeText(*d.name); }
+    }
     if (d.channel)        m.channel        = decodeText(*d.channel);
-    if (d.importSource)   m.importSource   = sanitize(*d.importSource);
-    if (d.importKey)      m.importKey      = sanitize(*d.importKey);
-    if (d.name)           m.name           = decodeText(*d.name);
+    if (d.importSource)   m.importSource   = importSource;
+    if (d.importKey)      m.importKey      = importKey;
     if (d.mode)           m.mode           = sanitize(*d.mode);
     if (d.offsetDir)      m.offsetDir      = sanitize(*d.offsetDir);
     if (d.toneMode)       m.toneMode       = sanitize(*d.toneMode);

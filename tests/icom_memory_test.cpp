@@ -108,8 +108,15 @@ int main()
     ic7300SplitRecord[2] = 0x10;
     const auto m7300Split = decodeMemory(
         MemoryDialect::Ic7300Mk2, ic7300SplitRecord);
-    check(m7300Split && m7300Split->split && m7300Split->recallable,
-          "IC-7300MK2 split memory can recall its neutral RX side");
+    check(m7300Split && m7300Split->split && !m7300Split->recallable,
+          "IC-7300MK2 split memory remains display-only");
+
+    auto cwRecord = ic7300Record();
+    cwRecord[8] = 0x07;
+    cwRecord[10] = 0x00;
+    const auto cw = decodeMemory(MemoryDialect::Ic7300Mk2, cwRecord);
+    check(cw && cw->mode == "CWL" && cw->recallable && !cw->split,
+          "ordinary 47-byte CW-R memory is recallable on explicit sync");
 
     for (int toneMode = 0; toneMode <= 3; ++toneMode) {
         auto record = ic9700Record();
@@ -125,10 +132,10 @@ int main()
     auto reverseSplit = ic9700Record();
     reverseSplit[12] = 0x31;
     const auto rps = decodeMemory(MemoryDialect::Ic9700, reverseSplit);
-    check(rps && rps->recallable, "IC-9700 RPS can recall its neutral RX side");
+    check(rps && !rps->recallable, "IC-9700 RPS remains display-only");
     const auto split = decodeMemory(MemoryDialect::Ic9700, ic9700Record(114));
-    check(split && split->split && split->recallable,
-          "split records can recall their neutral RX side");
+    check(split && split->split && !split->recallable,
+          "split records remain display-only");
     auto dvRecord = ic705Record();
     dvRecord[10] = 0x17; dvRecord[11] = 0x00;
     const auto dv = decodeMemory(MemoryDialect::Ic705, dvRecord);

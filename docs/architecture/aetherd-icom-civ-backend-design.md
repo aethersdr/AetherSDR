@@ -709,8 +709,17 @@ captures from our own radio.
   recalls the durable database row like a manual or CSV-imported memory.
   Imported rows are keyed by the 16-byte radio GUID from the authenticated
   RS-BA1 capabilities record plus the native group/channel, so DHCP, mDNS and
-  NAT endpoint changes cannot duplicate a radio's channel set. Reads are
-  button-only; IC-705 requires a selected native group so a click queues 100
+  NAT endpoint changes cannot duplicate a radio's channel set. Repeat Sync
+  refreshes tuning fields while preserving the name, owner and group assigned
+  at first import or edited locally. Clearing a native channel removes its
+  matching imported row. Split/RPS/DV/DD records remain display-only.
+  Existing experimental imports with incorrect recallability need one explicit
+  Sync: they did not retain enough split metadata for a safe load-time repair.
+  Loading an existing bank never rewrites it. Ordinary local memories remain
+  schema 1; saves containing native recall fields use schema 2 so an older
+  writer cannot erase recallability, DTCS state or provenance. Downgrading
+  after such a save requires a compatible build or a pre-Sync settings backup.
+  Reads are button-only; IC-705 requires a selected native group so a click queues 100
   requests rather than scanning its 10,000-address space. Flex global/TX
   profiles are not valid Icom group selectors. Writing or deleting the radio's
   own channels, plus scan-edge, call, and satellite memories, remain deferred.

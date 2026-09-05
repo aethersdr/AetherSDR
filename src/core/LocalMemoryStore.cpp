@@ -89,12 +89,26 @@ MemoryEntry entryFromJson(const QJsonObject& o)
 
 }  // namespace
 
+int LocalMemoryStore::formatVersionFor(const QMap<int, MemoryEntry>& memories)
+{
+    for (const MemoryEntry& memory : memories) {
+        if (!memory.channel.isEmpty() || !memory.importSource.isEmpty()
+            || !memory.importKey.isEmpty() || memory.nativeFilter != 0
+            || memory.dataMode != 0 || memory.rxToneValue != 0.0
+            || memory.dtcsCode != 23 || memory.dtcsTxReverse
+            || memory.dtcsRxReverse || !memory.recallable) {
+            return kFormatVersion;
+        }
+    }
+    return 1;
+}
+
 QByteArray LocalMemoryStore::serialize(const QMap<int, MemoryEntry>& memories,
                                        const QString& savedAtIso)
 {
     QJsonObject root;
     root["format"] = kFormatId;
-    root["version"] = kFormatVersion;
+    root["version"] = formatVersionFor(memories);
     if (!savedAtIso.isEmpty())
         root["savedAt"] = savedAtIso;
     root["savedBy"] = "AetherSDR";

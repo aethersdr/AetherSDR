@@ -80,6 +80,24 @@ int main()
         ok &= expect(g == sampleMemory(7), "every MemoryEntry field preserved");
     }
 
+    // A version bump is needed only for fields older writers cannot preserve.
+    {
+        MemoryEntry ordinary;
+        ordinary.index = 0;
+        ordinary.mode = "USB";
+        ordinary.freq = 14.25;
+        QMap<int, MemoryEntry> bank{{0, ordinary}};
+        ok &= expect(LocalMemoryStore::parse(LocalMemoryStore::serialize(bank)).version == 1,
+                     "ordinary memories keep the version-1 format");
+        bank[0].recallable = false;
+        ok &= expect(LocalMemoryStore::parse(LocalMemoryStore::serialize(bank)).version == 2,
+                     "display-only safety metadata requires the protected version-2 format");
+        bank[0] = ordinary;
+        bank[0].nativeFilter = 2;
+        ok &= expect(LocalMemoryStore::formatVersionFor(bank) == 2,
+                     "native recall metadata requires version 2 even without provenance");
+    }
+
     // --- the map key wins over a disagreeing index field ------------------
     {
         QMap<int, MemoryEntry> memories;

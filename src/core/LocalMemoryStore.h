@@ -17,7 +17,7 @@ namespace AetherSDR {
 // Envelope:
 //   {
 //     "format": "aether.memories",
-//     "version": 2,
+//     "version": 1 or 2,
 //     "savedAt": "2026-07-29T14:00:00Z",
 //     "savedBy": "AetherSDR",
 //     "memories": [ { "index": 0, ...MemoryEntry... } ]
@@ -36,6 +36,9 @@ namespace AetherSDR {
 class LocalMemoryStore {
 public:
     static constexpr int kFormatVersion = 2;
+    // Keep ordinary client memories readable by version-1 builds. Imported
+    // recall state needs version 2: older writers would drop safety metadata.
+    static int formatVersionFor(const QMap<int, MemoryEntry>& memories);
     static constexpr const char* kFormatId = "aether.memories";
 
     // The bank's home since RFC #4603 PR 6: ONE shared feature document in

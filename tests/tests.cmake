@@ -3642,7 +3642,6 @@ add_executable(local_memory_bank_test
     tests/local_memory_bank_test.cpp
     src/core/LocalMemoryBank.cpp
     src/core/LocalMemoryStore.cpp
-    src/core/MemoryFieldValues.cpp
     src/core/backends/MemoryWireCodec.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
@@ -3651,6 +3650,12 @@ add_executable(local_memory_bank_test
 target_include_directories(local_memory_bank_test PRIVATE src)
 target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
 add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
+
+# Socket-free injection of backend memory deltas; no radio connection or peer.
+add_executable(memory_import_test tests/memory_import_test.cpp)
+target_include_directories(memory_import_test PRIVATE src tests)
+target_link_libraries(memory_import_test PRIVATE aethercore Qt6::Core)
+add_test(NAME memory_import_test COMMAND memory_import_test)
 
 add_executable(memory_csv_compat_test
     tests/memory_csv_compat_test.cpp
@@ -4354,6 +4359,7 @@ set(AETHER_SETTINGS_CONSUMERS
     meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
+    memory_import_test
     transmit_model_apd_test
     help_dialog_test
     flex_control_dialog_size_test

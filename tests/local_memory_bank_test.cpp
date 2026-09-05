@@ -147,9 +147,9 @@ int main(int argc, char** argv)
         imported.mode = QStringLiteral("DIGU");
         imported.nativeFilter = 2;
         imported.dataMode = 1;
-        // Reproduce the poisoned flag written by the first IC-7300MK2 import
-        // implementation. Reopening the bank must repair it without requiring
-        // another live-radio sync.
+        // The bank cannot distinguish a poisoned experimental import from a
+        // deliberately blocked split record. Load must preserve the codec's
+        // decision; an explicit Sync is required to reclassify it.
         imported.recallable = false;
         bank.record(0, imported);
 
@@ -161,6 +161,7 @@ int main(int argc, char** argv)
                      "a different native channel does not alias");
 
         bank.flush();
+        const QJsonObject beforeLoad = bankDocument();
         LocalMemoryBank reopened;
         reopened.setFilePath(dir.path() + "/unused-imports.json");
         reopened.load();
@@ -170,16 +171,37 @@ int main(int argc, char** argv)
         ok &= expect(stored.channel == "42" && stored.nativeFilter == 2
                          && stored.dataMode == 1,
                      "radio recall fields survive a database reopen");
-        ok &= expect(stored.recallable,
-                     "stale Icom display-only metadata is repaired on reopen");
-        ok &= expect(bankDocument()
-                         .value(QStringLiteral("memories"))
-                         .toArray()
-                         .at(0)
-                         .toObject()
-                         .value(QStringLiteral("recallable"))
-                         .toBool(),
-                     "the repaired Icom recallability is persisted");
+        ok &= expect(!stored.recallable,
+                     "load preserves a display-only import instead of guessing");
+        ok &= expect(bankDocument() == beforeLoad,
+                     "loading existing imports does not write or upgrade the document");
+    }
+
+    // Opening a version-1 database is not a schema migration. Ordinary local
+    // edits also keep version 1; only the new recall fields require version 2.
+    {
+        resetBankDocument();
+        QJsonObject legacy{{"format", "aether.memories"}, {"version", 1},
+                           {"savedAt", "2026-08-01T00:00:00Z"},
+                           {"memories", QJsonArray{QJsonObject{{"index", 0},
+                               {"freq", 14.074}, {"mode", "DIGU"}}}}};
+        ok &= expect(AppSettings::instance().setRadioFeature(
+                         LocalMemoryStore::documentFamily(), QString(),
+                         LocalMemoryStore::documentFeature(), 1, legacy),
+                     "version-1 database fixture saved");
+        LocalMemoryBank bank;
+        bank.load();
+        ok &= expect(bankDocument() == legacy, "load leaves version-1 bytes unchanged");
+        MemoryEntry edited = bank.entries().value(0);
+        edited.name = "Local annotation";
+        bank.record(0, edited);
+        bank.flush();
+        int rowVersion = 0;
+        const QJsonObject saved = AppSettings::instance().radioFeatureExact(
+            LocalMemoryStore::documentFamily(), QString(),
+            LocalMemoryStore::documentFeature(), &rowVersion);
+        ok &= expect(rowVersion == 1 && saved.value("version").toInt() == 1,
+                     "ordinary local edit keeps row and envelope at version 1");
     }
 
     // --- rejections -------------------------------------------------------
