@@ -1498,6 +1498,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
     c.hasDownwardExpander = false;
+    c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};

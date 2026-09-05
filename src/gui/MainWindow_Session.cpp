@@ -1386,7 +1386,7 @@ void MainWindow::wireRadioModel()
         m_appletPanel->meterApplet()->setTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
-            m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
+            m_appletPanel->phoneCwApplet()->resetAlc();
         }
         if (tx) {
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "

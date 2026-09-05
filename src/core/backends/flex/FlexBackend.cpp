@@ -199,6 +199,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR's compander command is the authoritative DEXP path used by
     // TransmitModel::setDexp/setDexpLevel.
     caps.hasDownwardExpander = true;
+    caps.hasAgcThreshold = true;
+    caps.hasAmCarrierLevel = true;
+    caps.hasVoxDelay = true;
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one

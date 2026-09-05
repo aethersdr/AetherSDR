@@ -298,6 +298,13 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.cwTextKeyerName = QStringLiteral("CWK");
     c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
     c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;
+    // CI-V 14 0C and 14 09 use these physical endpoints; the UI must
+    // advertise the same limits as setCwSpeed()/setCwPitch().
+    c.cwSpeedMinWpm = 6;
+    c.cwSpeedMaxWpm = 48;
+    c.cwPitchMinHz = 300;
+    c.cwPitchMaxHz = 900;
+    c.cwPitchStepHz = profile.cwPitchStepHz > 1 ? profile.cwPitchStepHz : 10;
     c.cwTextMaxMessageChars = profile.cwTextKeyer
         ? profile.cwTextKeyer->maxMessageChars : 30;
     c.cwTextAllowedCharacters =
@@ -348,6 +355,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     if (basicFmProfileFor(m_model)) {
         c.fmTonePresentation = FmTonePresentation::Legacy;
     }
+    const FmRepeaterProfile* repeaterProfile = basicFmProfileFor(m_model);
+    c.hasFmRepeaterOffset = repeaterProfile && repeaterProfile->hasDuplex;
     if (ctcssRxProfileFor(m_model)) {
         c.fmTonePresentation = FmTonePresentation::Ctcss;
         const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
@@ -475,6 +484,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // path. In particular, the IC-9700 must not inherit Flex's compander
     // surface merely because both radios perform other DSP on-radio.
     c.hasDownwardExpander = false;
+    c.alcMeterUnit = QStringLiteral("Percent");
+    c.compressionMaximumDb = profile.meters.calibration == MeterCalibration::Ic7300Mk2
+        ? 30.0f : 25.0f;
+    c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
+    c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
+    c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
+    c.hasCwTune = profile.hasCwTune;
+    c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
+    c.hasVoxDelay = false; // setVox implements enable/gain only.
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -2351,7 +2369,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         case level::kCwPitch: {
             TransmitDelta t;
-            t.cwPitch = 300 + std::lround(static_cast<double>(*raw) * 600.0 / 255.0);
+            const int step = profileFor(*m_model).cwPitchStepHz;
+            t.cwPitch = 300 + step * std::lround(
+                static_cast<double>(*raw) * 600.0 / (255.0 * step));
             emit transmitChanged(t);
             return;
         }
@@ -2884,8 +2904,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
 
         // TRANSMIT PASSBAND EDGES, which are a different shape from every other
-        // SET item: one packed BCD byte whose high digit indexes this model's
-        // low-edge table and whose low digit indexes the high-edge table.
+        // SET item: the high nibble indexes the high edge; the low nibble
+        // indexes the low edge (MK2 CI-V guide p. 20; IC-705 guide p. 19).
         //
         // PUBLISHED FROM THE REPLY, never from the request. The tables are
         // short and model-specific, so a Phone applet asking for 150 Hz on an
@@ -2897,8 +2917,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (isTbwItem) {
                 if (item != activeTxBandwidthItem())
                     return;   // a slot the transmitter is not using
-                const int lowIdx  = (frame.data[2] >> 4) & 0x0f;
-                const int highIdx = frame.data[2] & 0x0f;
+                const int lowIdx  = frame.data[2] & 0x0f;
+                const int highIdx = (frame.data[2] >> 4) & 0x0f;
                 if (lowIdx >= static_cast<int>(profile->lowEdgesHz.size())
                     || highIdx >= static_cast<int>(profile->highEdgesHz.size()))
                     return;   // not the packed-nibble shape we expect; do not guess
@@ -4120,12 +4140,10 @@ void IcomCivBackend::setTxFilter(int lowHz, int highHz)
     const int lowIdx  = edgeIndexFor(profile->lowEdgesHz, lowHz);
     const int highIdx = edgeIndexFor(profile->highEdgesHz, highHz);
 
-    // ONE PACKED BCD BYTE: high digit indexes the low-edge table, low digit the
-    // high-edge table. Both tables are shorter than ten entries, so each index
-    // is a single BCD digit and the pair fits one byte — which is how the guide
-    // draws it (two Xs, one per digit, exactly as the four-X RX HPF/LPF item
-    // carries two two-digit values).
-    const auto packed = static_cast<std::uint8_t>((lowIdx << 4) | highIdx);
+    // The diagrams put the higher edge in the upper nibble and the lower
+    // edge in the lower nibble (MK2 guide p. 20; IC-705 guide p. 19).
+    // For example, MK2 100–2900 Hz is 0x30, not 0x03.
+    const auto packed = static_cast<std::uint8_t>((highIdx << 4) | lowIdx);
     sendUserCommand(cmdWriteSetting(m_session->civAddress(), item, packed));
     // No optimistic publish. Unlike the receive passband, the operator cannot
     // hear this one, so there is nothing to be owed an instant answer about —
@@ -4136,6 +4154,14 @@ void IcomCivBackend::setTxFilter(int lowHz, int highHz)
 
 void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
 {
+    if (!capabilities().agcModes.contains(mode.toLower())) {
+        // OFF is 1A 04 time-constant editing, not a 16 12 selector value.
+        // Do not substitute FAST or overwrite the radio's stored constants.
+        SliceDelta delta;
+        delta.agcMode = m_agcMode;
+        emit sliceChanged(sliceId(), delta);
+        return;
+    }
     m_agcMode = mode;
     // thresholdDb has NOWHERE to go: the radio offers FAST/MID/SLOW and no
     // threshold. A documented no-op beats inventing a mapping.
@@ -4145,8 +4171,6 @@ void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
         value = 1;
     else if (m == QLatin1String("SLOW"))
         value = 3;
-    else if (m == QLatin1String("OFF"))
-        value = 1;   // the radio has no AGC-off; FAST is the closest honest thing
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kAgc, value));
 }
@@ -4944,7 +4968,10 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
         // reaching it from here would already have moved the RF-power setpoint
         // to the tune level and latched m_tuning — leaving the operator's drive
         // overwritten by a carrier that was then refused.
-        if (!m_session || !m_connected || !m_model->hasTransmit
+        const QString mode = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
+        const bool cwMode = mode.startsWith(QLatin1String("CW"));
+        if ((!capabilities().hasCwTune && cwMode)
+            || !m_session || !m_connected || !m_model->hasTransmit
             || refuseKeyingInReceiveOnlyMode()) {
             return;
         }
@@ -5039,8 +5066,11 @@ void IcomCivBackend::setCwSpeed(int wpm)
 
 void IcomCivBackend::setCwPitch(int hz)
 {
+    const int step = profileFor(*m_model).cwPitchStepHz;
     const int clamped = std::clamp(hz, 300, 900);
-    const int raw = std::lround(static_cast<double>(clamped - 300) * 255.0 / 600.0);
+    const int snapped = 300 + step * std::lround(static_cast<double>(clamped - 300) / step);
+    const double scaled = static_cast<double>(snapped - 300) * 255.0 / 600.0;
+    const int raw = step > 1 ? static_cast<int>(std::ceil(scaled)) : std::lround(scaled);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kCwPitch, raw));
 }
@@ -6246,6 +6276,9 @@ void IcomCivBackend::publishMeterDefs()
             } else {
                 d.high = curve.back().value;
             }
+        } else if (s.id == MeterId::Comp
+                   && profileFor(*m_model).meters.calibration == MeterCalibration::Ic7300Mk2) {
+            d.high = 30.0;
         } else if (s.id == MeterId::Id) {
             d.high = profileFor(*m_model).meters.currentFullScaleAmps;
         }
@@ -6461,6 +6494,18 @@ void IcomCivBackend::onLinkTick()
     }
 
     if (phase % 3 == 0) {
+        // Write confirmations are not subscriptions. Native front-panel edits
+        // of these MK2 controls need periodic reads even without Transceive.
+        if (profile.pollCwSquelchAndTxBandwidth) {
+            for (std::uint8_t which : {level::kSquelch, level::kCwPitch, level::kKeySpeed}) {
+                queueControl(cmdReadLevel(addr, which));
+            }
+            queueControl(cmdReadFunction(addr, func::kTxBandwidth));
+            const int item = activeTxBandwidthItem();
+            if (item >= 0) {
+                queueControl(cmdReadSetting(addr, item));
+            }
+        }
         for (std::uint8_t which : {level::kRf, level::kMicGain, level::kMonitor,
                                    level::kVoxGain, level::kNotchPos,
                                    level::kNrLevel, level::kNbLevel}) {

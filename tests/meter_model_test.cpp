@@ -1,4 +1,5 @@
 #include "models/MeterModel.h"
+#include "core/MeterObservationWindow.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -8,6 +9,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace AetherSDR;
 
@@ -348,6 +350,9 @@ void testAlcPercentIsMappedOntoTheGaugeRange()
 
     model.updateValues({11}, {50});
     report("50 % ALC lands mid-scale", nearlyEqual(alc, -10.0f));
+    report("canonical ALC retains50percent and its own timestamp",
+           nearlyEqual(model.alcValue(), 50.0f) && model.alcUnit() == "Percent"
+               && model.alcUpdatedAtMs() > 0);
 
     model.updateValues({11}, {100});
     report("100 % ALC lands at the gauge ceiling", nearlyEqual(alc, 0.0f));
@@ -361,6 +366,8 @@ void testAlcPercentIsMappedOntoTheGaugeRange()
                      [&passthrough](float v) { passthrough = v; });
     dbfs.updateValues({11}, {rawDb(-6.0f)});
     report("a dBFS ALC meter passes through unchanged", nearlyEqual(passthrough, -6.0f));
+    report("canonical Flex/HL2 ALC retains dBFS",
+           nearlyEqual(dbfs.alcValue(), -6.0f) && dbfs.alcUnit() == "dBFS");
 }
 
 void testDirectionalPowerUsesDirectReflectedMeter()
@@ -897,6 +904,79 @@ void testPaCurrentIsDistinctFromTemperature()
                && nearlyEqual(published, 7.5f) && !model.hasPaTemp());
 }
 
+void testConvertedPowerPreservesPrecision()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "Watts"));
+    float signalled = -1.0f;
+    QObject::connect(&model, &MeterModel::txPeakChanged,
+                     [&signalled](float watts) { signalled = watts; });
+    const float watts = 100.0f / 143.0f; // IC-7300MK2 Po raw 2, below one watt.
+    report("converted native power update is accepted",
+           model.updateValueByName("TX-", "FWDPWR", watts, 8));
+    report("sub-watt native power survives both model and signal",
+           std::fabs(model.fwdPowerInstant() - watts) < 0.00001f
+               && std::fabs(signalled - watts) < 0.00001f
+               && model.fwdPowerUpdatedAtMs() > 0);
+    const qint64 timestamp = model.fwdPowerUpdatedAtMs();
+    report("non-finite converted power is rejected without a fresh timestamp",
+           !model.updateValueByName("TX-", "FWDPWR",
+                                    std::numeric_limits<float>::quiet_NaN(), 8)
+               && !model.updateValueByName("TX-", "FWDPWR",
+                                          std::numeric_limits<float>::infinity(), 8)
+               && model.fwdPowerUpdatedAtMs() == timestamp
+               && std::fabs(model.fwdPowerInstant() - watts) < 0.00001f);
+    model.updateValues({8}, {5});
+    report("legacy wire Watts remain integer-valued",
+           nearlyEqual(model.fwdPowerInstant(), 5.0f));
+
+    MeterModel flex;
+    flex.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    flex.updateValues({8}, {rawDb(40.0f)});
+    report("Flex fixed-point dBm decoding still produces ten watts",
+           nearlyEqual(flex.fwdPowerInstant(), 10.0f));
+}
+
+void testMeterObservationWindow()
+{
+    MeterObservationWindow window;
+    const MeterDef power = txMeter(8, "FWDPWR", "Watts", 8);
+    window.start(1000, 1000);
+    window.observe(power, 900, 10.0f, 1000);
+    auto meter = [&window]() {
+        return window.snapshot().value("meters").toArray().first().toObject();
+    };
+    report("window excludes cached pre-window RF from peak",
+           meter().value("peakInWindow").isNull()
+               && !meter().value("receivedInWindow").toBool());
+    window.observe(power, 1500, 0.6993f, 1500);
+    report("fresh arrival preserves the preceding 600 ms gap",
+           meter().value("maxAgeMs").toInt() == 600);
+    report("window peak keeps fractional watts",
+           std::fabs(meter().value("peakInWindow").toDouble() - 0.6993) < 0.00001);
+    report("window reports first-sample wait separately",
+           meter().value("firstSampleDelayMs").toInt() == 500);
+    // A timer delayed beyond the deadline must not extend the window or
+    // include the next transmission's higher peak.
+    window.observe(power, 2600, 20.0f, 2600);
+    report("late callback clamps age and peak to the requested window",
+           meter().value("maxAgeMs").toInt() == 600
+               && window.snapshot().value("observedMs").toInt() == 1000
+               && meter().value("peakInWindow").toDouble() < 1.0);
+    window.start(3000, 1000);
+    window.observe(power, 0, 0.0f, 3000);
+    window.observe(power, 0, 0.0f, 4000);
+    report("unfed meter does not claim zero age or measured zero watts",
+           meter().value("maxAgeMs").isNull()
+               && meter().value("peakInWindow").isNull()
+               && !meter().value("receivedInWindow").toBool());
+    window.start(5000, 1000);
+    window.observe(power, 5000, 0.5f, 5000);
+    window.observe(power, 5000, 0.5f, 6500);
+    report("a completely stalled stream accumulates age through deadline",
+           meter().value("maxAgeMs").toInt() == 1000);
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -904,6 +984,19 @@ int main(int argc, char** argv)
     testAdjacentMetersDoNotSynthesizeCompression();
     testCompPeakDirectlyExposesCompression();
     testCompPeakClampsToGaugeRange();
+    {
+        MeterModel model;
+        MeterDef comp = txMeter(28, "COMPPEAK");
+        comp.source = "TX";
+        comp.sourceIndex = 0;
+        model.defineMeter(comp);
+        model.setActiveTxSlice(0);
+        model.setCompressionMaximumDb(30.0f);
+        model.updateValueByName("TX", "COMPPEAK", 30.0f);
+        report("declared30dB compression survives model and signal path", nearlyEqual(model.compPeak(),30.0f));
+        model.setCompressionMaximumDb(25.0f);
+        report("next default session restores25dB compression range", nearlyEqual(model.compPeak(),25.0f));
+    }
     testActiveTxSliceSelectsCompPeak();
     testZeroSourceCompPeakUsesSliceContext();
     testSingleImplicitCompPeakFollowsTransmitToAnySlice();
@@ -937,6 +1030,8 @@ int main(int argc, char** argv)
     testChangingActiveTxSliceDropsStaleFilterLevels();
     testRemovingATxFilterTapInvalidatesThePair();
     testPaCurrentIsDistinctFromTemperature();
+    testConvertedPowerPreservesPrecision();
+    testMeterObservationWindow();
 
     return g_failed == 0 ? 0 : 1;
 }

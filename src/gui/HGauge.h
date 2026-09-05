@@ -84,6 +84,13 @@ public:
             activeHoverGauge() = nullptr;
     }
 
+    void setUnit(const QString& unit) {
+        if (m_unit == unit) return;
+        m_unit = unit;
+        publishAutomationState();
+        update();
+    }
+
     void setLabel(const QString& label) {
         if (m_label == label) return;
         m_label = label;
@@ -410,6 +417,7 @@ private:
         static const bool kAutomation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
         if (!kAutomation) return;
         setProperty("gaugeLabel", m_label);
+        setProperty("gaugeUnit", m_unit);
         setProperty("gaugeValue", m_value);
         // The DERIVED state — see filledFraction(). Every property above and
         // below reads correct while the bar paints something else, so without

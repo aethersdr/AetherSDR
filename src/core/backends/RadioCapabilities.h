@@ -188,6 +188,11 @@ struct RadioCapabilities {
     // its proven CTCSS/DTCS registers without changing another radio family's
     // controls. fmToneModes is the authoritative per-model mode vocabulary.
     // Hidden is the safe default; established backends opt into Legacy.
+    // Existing backends retain their offset controls; model-profile backends
+    // explicitly decline this when their protocol has no repeater duplex verb.
+    bool hasFmRepeaterOffset = true;
+    // Some audio-tone tune implementations cannot key a CW carrier.
+    bool hasCwTune = true;
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
     QList<int> fmDtcsCodes;
@@ -454,6 +459,23 @@ struct RadioCapabilities {
     // False hides the complete row rather than leaving an optimistic control
     // with no authoritative command path.
     bool hasDownwardExpander = false;
+    // Compression amount in physical dB; preserve the existing Flex face by default.
+    float compressionMaximumDb = 25.0f;
+    QString alcMeterUnit{QStringLiteral("dBFS")};
+
+    // Independent controls require an implemented command or host DSP path.
+    // AGC mode selection alone does not imply a writable threshold/off level.
+    bool hasAgcThreshold = false;
+    // Modes the implemented selector can honor. A native OFF time-constant
+    // editor is a different contract from selecting a fast/medium/slow bank.
+    QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
+                         QStringLiteral("med"), QStringLiteral("fast")};
+    // The radio accepts manual SQL in CW/data modes and owns its persistence.
+    // False preserves the existing mode-specific client squelch policy.
+    bool hasModeIndependentSquelch = false;
+    bool hasAmCarrierLevel = false;
+    bool hasVoxDelay = false;
+
 
     // Transmit audio reaches this backend through IRadioBackend::submitTxAudio
     // rather than through a Flex DAX/VITA-49 stream.
@@ -628,6 +650,14 @@ struct RadioCapabilities {
     // Flex CWX has a progress counter, stored F-key macros, live typing and
     // per-word speed changes; the verified Icom CI-V command 17 path has none
     // of those and accepts one documented 30-character message at a time.
+    // Physical CW controls, independent of whether a text keyer is present.
+    // Defaults preserve the continuous controls used by existing backends.
+    int cwSpeedMinWpm = 5;
+    int cwSpeedMaxWpm = 100;
+    int cwPitchMinHz = 100;
+    int cwPitchMaxHz = 6000;
+    int cwPitchStepHz = 10;
+
     QString cwTextKeyerName{QStringLiteral("CWX")};
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;

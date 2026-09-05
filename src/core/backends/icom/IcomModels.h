@@ -469,6 +469,12 @@ struct NetworkConfigurationProfile {
 struct IcomModelProfile {
     bool supportedBringup = false;
     bool hasGpsHardware = false;
+    // Physical pitch detent; 1 preserves legacy decoding on unverified models.
+    int cwPitchStepHz = 1;
+    bool hasModeIndependentSquelch = false;
+    bool hasCwTune = true;
+    // Additional native control readbacks verified for this model.
+    bool pollCwSquelchAndTxBandwidth = false;
     int speechProcessorLevelMaximum = 2;
     std::string_view speechProcessorLabel = "PROC";
     std::string_view guideRevision;

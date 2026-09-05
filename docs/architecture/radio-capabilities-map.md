@@ -109,6 +109,44 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
 | `notchMinWidthHz` / `notchMaxWidthHz` | 10 / 6000 | 50 / 6000 | 0 / 0 | `SpectrumWidget::setNotchCapabilities` | Clamps drag-resize and the width presets. HL2's floor is set by the RX filter length and WDSP **silently widens** anything narrower, so a UI offering less draws a notch narrower than the one being heard |
 
+### Control ranges and native meter units
+
+The shared RX/VFO/Phone/CW surfaces consume these declarations through
+`RadioModel::backendCapabilities()`, without inspecting a radio family:
+
+- `hasAgcThreshold`, `hasAmCarrierLevel`, and `hasVoxDelay` disable controls
+  whose setters have no native implementation. Icom reports false; Flex keeps
+  all three, and HL2/ANAN retain their host AGC threshold.
+- `agcModes` controls individual AGC choices. Icom exposes Slow/Med/Fast.
+  Off requires native CI-V time-constant editing, which is not implemented;
+  selecting it must not silently select Fast. Disabled choices are also
+  rejected by the automation bridge.
+- CW speed/pitch limits preserve other backends' ranges. Icom uses 6–48 WPM
+  and 300–900 Hz; MK2 pitch steps/readback are 5 Hz.
+- `hasCwTune` disables MK2 audio-tone Tune in CW/CW-R, where it cannot
+  produce a carrier. RadioModel updates TransmitModel on TX-slice mode/selection
+  changes; both Tune starts are refused before side effects, and the UI keeps
+  Stop usable while already tuning. Other profiles retain their existing policy.
+- `hasModeIndependentSquelch` keeps MK2 squelch usable in CW/data. Other
+  profiles keep their existing mode rules.
+- `hasFmRepeaterOffset` dims offset magnitude and direction when absent.
+  MK2 has split operation, but not CI-V repeater commands 0C/0D or 0F 10–12;
+  its profile suppresses those reads and writes. IC-705/9700 retain them.
+  The independent transmit-frequency check remains available.
+- `alcMeterUnit` selects the native ALC gauge: Icom percent, otherwise the
+  existing dBFS scale. The legacy normalized `swAlc` signal remains for TCI;
+  GUI and automation consume native `alcValue`/`alcUnit` instead.
+- `compressionMaximumDb` is 30 dB for MK2 and retains 25 dB elsewhere. MK2
+  calibration uses its official raw 0/130/210 points for 0/15/30 dB.
+
+TX bandwidth still uses each model's own CI-V profile and radio readback.
+For both supported profiles (MK2 and IC-705), the high nibble indexes the high
+edge and the low nibble indexes the low edge. MK2 data TBW 100–2900 Hz is
+`1A 05 00 17 30`; the SET item is model-specific and must not be borrowed.
+The MK2 additionally polls CW pitch/speed, squelch and the active TBW item
+every three seconds. These reads reconcile front-panel changes independently
+of command confirmations; other model polling profiles are unchanged.
+
 ### RTL-SDR experimental profile
 
 RTL-SDR is receive-only and mostly inherits the false/empty capability

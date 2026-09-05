@@ -625,6 +625,8 @@ the no-op is an explicit, assertable signal.
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 
+Combo selection refuses disabled items; `setCurrentIndex` also rejects invalid or out-of-range combo indices (`-1` still clears the selection). This keeps automation from bypassing capability-disabled choices.
+
 **`submit` vs `setText`.** `setText` only sets the field — deliberately
 side-effect-free, because several bridge-reachable fields wire irreversible
 actions to `returnPressed` (SmartLink login, manual-connect host, DX-cluster
@@ -772,6 +774,46 @@ callbacks and unread bytes remains a fallback for backends that do not expose a
 useful capacity. The same evidence is written to the Audio Summary support log
 only when Help → Support's **TCI / CAT / rigctld** logging toggle is enabled;
 TX capture-health summaries are off by default.
+
+### `meterwindow`
+
+`meterwindow start [duration_ms]` observes the connected radio's meters for a
+bounded window (default 5000 ms, allowed 1–60000 ms). `meterwindow status` reads
+progress; `meterwindow stop` closes it early and returns the final report.
+Starting a second active window is refused. This verb never changes radio
+controls or keys TX. Begin it at the point whose freshness you want to measure;
+TX permission and unkey checks remain separate.
+
+The report includes `active`, `startedAtMs`, `durationMs`, `observedMs`, and one
+`meters` entry per observed meter, with its index, source, name, and native unit:
+
+- `maxAgeMs`: greatest sample age observed during the window, including the age
+  just before each replacement sample. A fresh reply cannot hide the preceding
+  polling gap. A cached sample's starting age is included; an unfed meter has null.
+- `receivedInWindow` and `firstSampleDelayMs`: distinguish a new sample from a
+  cached value or a meter that never answered.
+- `peakInWindow`: maximum converted value from samples timestamped within the
+  window, with fractional precision. Pre-window values are excluded; no new
+  sample means null. For meters declared in dBm this remains dBm, not watts.
+
+Observations use MeterModel arrival timestamps, plus a 20 ms timer to measure
+silence, and stop at the requested deadline even if a callback arrives late.
+These measure delivery to the application, not the radio's internal sampling
+clock. Disconnect stops the observation. Meter arrival hooks and the timer run
+only while an explicit window is active.
+
+`get meters` exposes `alc: {value, unit, ageMs}` in the native meter units.
+Icom's ALC percentage is not a dBFS measurement. `swAlc` remains a legacy
+normalized value for compatibility; use `alc` for physical readings. The
+Phone/CW gauges use the native units, including percent on Icom, and retain
+dBFS on Flex/HL2. IC-7300MK2 compression uses the guide's 0/15/30 dB calibration
+points and a 30 dB face; other radio compression faces retain their old range.
+
+`get meters` also exposes `fwdPowerUnrounded` in watts (the same unsmoothed
+converted reading as `fwdPowerInstant`). Native floating-point values retain
+fractional watts through MeterModel; Flex wire decoding is unchanged. This
+removes display-integer truncation, but adds no precision beyond the radio's
+native meter resolution. Check `fwdPowerAgeMs` before treating it as current RF.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies

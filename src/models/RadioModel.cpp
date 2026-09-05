@@ -1870,6 +1870,13 @@ RadioModel::RadioModel(QObject* parent)
     // if a backend is ever moved to a worker thread the connection becomes queued;
     // without registration Qt would log "Cannot queue arguments of type …" and
     // silently drop the emit. Idempotent + cheap. (#4071 review.)
+    connect(this, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
+        connect(slice, &SliceModel::modeChanged, this, &RadioModel::updateTuneAvailability);
+        connect(slice, &SliceModel::txSliceChanged, this, &RadioModel::updateTuneAvailability);
+        updateTuneAvailability();
+    });
+    connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
@@ -4059,9 +4066,18 @@ bool RadioModel::hasDaxStreams() const
 // the connect edge and a mid-session revision by the backend take identical
 // paths. Adding a capability means adding one line here, not another
 // connect-time lambda.
+void RadioModel::updateTuneAvailability()
+{
+    const SliceModel* slice = txSlice();
+    const bool cwMode = slice && slice->mode().startsWith(QLatin1String("CW"));
+    m_transmitModel.setTuneAvailable(!isConnected() || !cwMode
+                                     || backendCapabilities().hasCwTune);
+}
+
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    m_meterModel.setCompressionMaximumDb(connected ? caps.compressionMaximumDb : 25.0f);
     m_cwxModel.setSpeedModifiersEnabled(!connected
                                         || caps.cwTextSupportsSpeedModifiers);
     m_txPowerBands = connected ? caps.txPowerBands : QVector<TxPowerBand>{};

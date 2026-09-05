@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <cmath>
+#include <type_traits>
 
 namespace AetherSDR {
 
@@ -36,12 +37,11 @@ constexpr qint64 kCompressionSummaryLogIntervalMs = 500;
 constexpr qint64 kDirectionalMeterFreshnessMs = 500;
 constexpr int kMinTxWaveformSourceIndex = 8;
 
-float compressionValueForGauge(float compPeakDb)
+float compressionValueForGauge(float compPeakDb, float maximumDb)
 {
     // The radio reports COMPPEAK directly as the compression amount.
-    // Keep the model value positive (0 = none, 25 = heavy) and let widgets
-    // adapt it to their visible meter face.
-    return qBound(0.0f, compPeakDb, 25.0f);
+    // Keep the physical amount positive and honor the backend's declared face.
+    return qBound(0.0f, compPeakDb, maximumDb);
 }
 
 QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value, qint64 ageMs)
@@ -308,6 +308,9 @@ float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const
 bool MeterModel::updateValueByName(const QString& source, const QString& name,
                                    float converted, int sourceIndex)
 {
+    if (!std::isfinite(converted)) {
+        return false;
+    }
     const int idx = findMeter(source, name, sourceIndex);
     if (idx < 0)
         return false;
@@ -315,7 +318,8 @@ bool MeterModel::updateValueByName(const QString& source, const QString& name,
     if (!def)
         return false;
 
-    // Inverse of convertRaw(). Kept adjacent to it so the two cannot drift.
+    // Preserve the established physical range limits without quantizing.
+    // Flex wire packets still use convertRaw() unchanged.
     float scale = 1.0f;
     if (def->unit == "dBm" || def->unit == "dB" || def->unit == "dBFS" || def->unit == "SWR")
         scale = 128.0f;
@@ -324,14 +328,8 @@ bool MeterModel::updateValueByName(const QString& source, const QString& name,
     else if (def->unit == "degF" || def->unit == "degC")
         scale = 64.0f;
 
-    const float scaled = converted * scale;
-    // Saturate rather than wrap: a wrapped qint16 turns a large positive
-    // reading into a large NEGATIVE one, which on a power meter reads as
-    // "no output" at exactly the moment there is the most of it.
-    const qint16 raw = static_cast<qint16>(
-        std::clamp(scaled, -32768.0f, 32767.0f));
-
-    updateValues(QVector<quint16>{static_cast<quint16>(idx)}, QVector<qint16>{raw});
+    const float bounded = std::clamp(converted, -32768.0f / scale, 32767.0f / scale);
+    applyValues(QVector<quint16>{static_cast<quint16>(idx)}, QVector<float>{bounded});
     return true;
 }
 
@@ -399,12 +397,23 @@ void MeterModel::clear()
     m_compLevel = 0.0f;
     m_hwAlc = 0.0f;
     m_swAlc = 0.0f;
+    m_nativeAlc = 0.0f;
     m_paTemp = 0.0f;
     m_paCurrent = 0.0f;
     m_supplyVolts = 0.0f;
     m_ampFwdPwr = 0.0f;
     m_ampSwr = 1.0f;
     m_ampTemp = 0.0f;
+}
+
+void MeterModel::setCompressionMaximumDb(float maximum)
+{
+    if (!std::isfinite(maximum) || maximum <= 0.0f || maximum == m_compressionMaximumDb) {
+        return;
+    }
+    m_compressionMaximumDb = maximum;
+    m_compPeak = compressionValueForGauge(m_compPeakLevel, maximum);
+    emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
 }
 
 void MeterModel::setActiveTxSlice(int sliceIndex)
@@ -643,6 +652,12 @@ bool MeterModel::hasRecentReflectedPower(qint64 maxAgeMs) const
 
 void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals)
 {
+    applyValues(ids, vals);
+}
+
+template<typename Value>
+void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& vals)
+{
     const int n = qMin(ids.size(), vals.size());
     const qint64 packetUpdatedMs = QDateTime::currentMSecsSinceEpoch();
     const int activeCompPeakIdx = compPeakIndexForActiveTxSlice();
@@ -668,7 +683,13 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         auto it = m_defs.constFind(idx);
         if (it == m_defs.constEnd()) continue;
 
-        const float v = convertRaw(*it, vals[i]);
+        const float v = [this, &it, &vals, i]() {
+            if constexpr (std::is_same_v<Value, qint16>) {
+                return convertRaw(*it, vals[i]);
+            } else {
+                return vals[i];
+            }
+        }();
         m_values[idx] = v;
         m_valueUpdatedMs[idx] = packetUpdatedMs;  // per-meter freshness (#3646)
 
@@ -768,7 +789,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             m_compPeakLevel = v;
             m_hasCompPeakLevel = true;
             m_compPeakUpdatedMs = packetUpdatedMs;
-            m_compPeak = compressionValueForGauge(v);
+            m_compPeak = compressionValueForGauge(v, m_compressionMaximumDb);
             m_hasCompPeakValue = true;
             logCompressionSummary("ok");
             micChanged = true;
@@ -782,15 +803,10 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             m_hwAlc = v;
             hwAlcChangedFlag = true;
         } else if (idx == m_swAlcIdx) {
-            // The ALC consumers are a dBFS gauge (-20..0). A radio that runs its
-            // OWN ALC has no dBFS to give — the IC-705 reports 0..100 % of full
-            // scale — so a percentage handed straight over pins the gauge at the
-            // top and stays there, which is what "ALC is completely pegged"
-            // looked like.
-            //
-            // Map it onto the gauge instead. This is a PRESENTATION mapping and
-            // not a measurement: it says "this fraction of the radio's own ALC
-            // range", and the only honest claim it makes is proportionality.
+            // Keep native units for GUI, certification and automation. The
+            // legacy swAlc signal retains its normalized dBFS-shaped value for
+            // TCI compatibility; that percentage mapping is not physical dBFS.
+            m_nativeAlc = v;
             m_swAlc = convertAlcToGaugeDbfs(v);
             swAlcChangedFlag = true;
         } else if (activeScMicIdx >= 0 && idx == activeScMicIdx) {
@@ -903,8 +919,10 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
     if (hwAlcChangedFlag)
         emit this->hwAlcChanged(m_hwAlc);
-    if (swAlcChangedFlag)
+    if (swAlcChangedFlag) {
         emit this->swAlcChanged(m_swAlc);
+        emit alcValueChanged(m_nativeAlc, m_swAlcUnit);
+    }
     if (txFilterLevelsChangedFlag)
         emit txFilterLevelsChanged(m_scFilt1, m_scFilt2);
     if (hwChanged)

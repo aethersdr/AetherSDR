@@ -1523,6 +1523,7 @@ private:
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
+    void updateTuneAvailability();
     // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
     // without per-band data leave the existing radio-reported limit alone.
     void refreshTxPowerLimit();

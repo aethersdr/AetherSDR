@@ -310,6 +310,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
     caps.hasDownwardExpander = false;
+    caps.hasAgcThreshold = true;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;

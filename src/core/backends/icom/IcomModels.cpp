@@ -655,15 +655,22 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
+        // CI-V 14 09 endpoints plus wfview funcCwPitch's 5 Hz decoding.
+        .cwPitchStepHz = 5,
+        .hasModeIndependentSquelch = true,
+        .hasCwTune = false,
+        .pollCwSquelchAndTxBandwidth = true,
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,
         .modulation = ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
                                         kIc7300Mk2ModInputs},
         .txBandwidth = TxBandwidthProfile{kTbwLowIc7300Mk2, kTbwHigh,
                                           14, 15, 16, 17},
+        // MK2 guide p. 3: 0F is split 00/01 only; 0C/0D and duplex
+        // 10/11/12 are absent. Its SET-menu split offset is a different control.
         .fmRepeater = FmRepeaterProfile{FmRepeaterDialect::Basic,
                                        kToneSquelchFmAccessModes,
-                                       true, true, true, false, true, true},
+                                       false, true, true, false, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},

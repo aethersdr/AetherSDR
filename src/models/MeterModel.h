@@ -55,14 +55,11 @@ public:
 
     // Set one meter from an ALREADY-CONVERTED value, addressed by source+name.
     //
-    // For backends that decode their own telemetry (HL2) rather than streaming
-    // Flex's raw meter packets. It converts back to the raw fixed-point form and
-    // goes through updateValues() on purpose: every derived quantity — forward
-    // power smoothing, SWR, TX-meter freshness timestamps, the change signals —
-    // lives in that path, and a second entry point that recomputed any of it
-    // would drift from the first.
-    //
-    // Returns false if no such meter is defined.
+    // Backends that decode their own telemetry supply physical values directly.
+    // Both entry points share the derived-value/signal path, but converted
+    // values must not round-trip through Flex's int16 wire representation:
+    // native Watts have no fractional wire scale and would lose sub-watt RF.
+    // Returns false for an undefined meter or a non-finite input.
     bool updateValueByName(const QString& source, const QString& name,
                            float converted, int sourceIndex = -1);
 
@@ -80,6 +77,8 @@ public:
     // exposed this as age_ms; this makes it available in C++ for the same
     // reason.
     qint64 valueAgeMs(int index) const;
+    // Last accepted sample timestamp, including unchanged values; zero if unfed.
+    qint64 valueUpdatedAtMs(int index) const { return m_valueUpdatedMs.value(index, 0); }
     // Age of the FRESHEST value across every meter, or -1 when none has ever
     // been fed. Proof that the metering path as a whole is still answering,
     // which no single meter can give: a TX meter is legitimately silent while
@@ -180,6 +179,7 @@ public:
     // says a dead meter and a real reading of nothing look identical.
     bool hasMicPeakMeter() const { return m_micPeakIdx >= 0; }
     float compPeak() const { return m_compPeak; }
+    void setCompressionMaximumDb(float maximum);
     bool hasCompressionMeterValue() const { return m_hasCompPeakValue; }
 
     // Convenience: instantaneous mic level and compression (non-peak).
@@ -191,10 +191,13 @@ public:
     // connection is wired into the radio's HWALC RCA — kept around for
     // SliceTroubleshootingDialog telemetry; not what users normally watch.
     float hwAlc() const { return m_hwAlc; }
-    // Convenience: post-software-ALC SSB-peak meter (dBFS, from TX "ALC").
-    // This is the indicator users actually want — moves with voice peaks
-    // and CW keying envelope.  Drives the ALC gauges in the Phone/CW applet.
+    // Legacy normalized ALC for TCI compatibility. Native percent meters are
+    // mapped to -20..0 here; this is not a physical dBFS measurement on Icom.
     float swAlc() const { return m_swAlc; }
+    // Canonical ALC retains the meter's declared units and accepted sample.
+    float alcValue() const { return m_nativeAlc; }
+    QString alcUnit() const { return m_swAlcUnit; }
+    qint64 alcUpdatedAtMs() const { return valueUpdatedAtMs(m_swAlcIdx); }
 
     // Convenience: the TX-filter input/output pair (dBFS, from TX "SC_MIC" and
     // TX "SC_FILT_2").  SC_MIC is where PC/remote audio enters the TX chain;
@@ -290,6 +293,7 @@ signals:
     // Emitted when the post-software-ALC SSB-peak meter changes (dBFS).
     // Drives the in-app ALC gauges; fires during voice peaks and CW keying.
     void swAlcChanged(float dbfs);
+    void alcValueChanged(float value, const QString& unit);
 
     // Emitted when either side of the TX-filter pair changes (dBFS in, dBFS out).
     void txFilterLevelsChanged(float scFilt1, float scFilt2);
@@ -307,6 +311,8 @@ signals:
 
 private:
     float convertRaw(const MeterDef& def, qint16 raw) const;
+    template<typename Value>
+    void applyValues(const QVector<quint16>& ids, const QVector<Value>& vals);
     void clearCompressionState();
     void recomputeSourceIndexMins();
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
@@ -351,6 +357,7 @@ private:
     QString m_fwdPwrUnit;
     QString m_refPwrUnit;
     QString m_swAlcUnit;
+    float m_nativeAlc{0.0f};
 
     int m_fwdPwrIdx{-1};     // "FWDPWR"
     int m_refPwrIdx{-1};     // "REFPWR"
@@ -396,7 +403,8 @@ private:
     qint64 m_lastReflectedPowerUpdateMs{0};
     qint64 m_lastSwrUpdateMs{0};
     float m_micPeak{-50.0f};
-    float m_compPeak{0.0f};       // radio-provided compression amount, 0..25 dB
+    float m_compressionMaximumDb{25.0f};
+    float m_compPeak{0.0f};       // radio-provided compression amount in dB
     bool m_hasCompPeakValue{false};
     float m_compPeakLevel{0.0f};  // last raw converted COMPPEAK sample
     bool m_hasCompPeakLevel{false};
