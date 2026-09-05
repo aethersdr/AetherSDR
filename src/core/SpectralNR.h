@@ -78,6 +78,17 @@ public:
     // Reset all internal state (call when toggling on or stream restarts).
     void reset();
 
+    // Flush only the transient state — overlap-add rings, gain masks, the
+    // AGC common-mode references, and the dry→wet startup ramp — while
+    // retaining the converged OSMS/MMSE/NSTAT noise estimates. For the
+    // TX→RX edge, where the stream resumes on the same band and the stale
+    // overlap-add ring is the hazard (#3340): a full reset() there re-seeds
+    // the noise floor and costs a fresh estimator convergence on every
+    // over, heard as un-suppressed band noise after unkey (#3821). Not a
+    // substitute for reset() on enable or source switches, where the old
+    // noise profile does not describe the new stream.
+    void resetTransient();
+
     // User-adjustable parameters (thread-safe, called from main thread)
     void setGainMax(float v);
     void setGainFloor(float v);
@@ -301,6 +312,7 @@ private:
 
     // ── Internal methods ───────────────────────────────────────────────
     void initWindow();
+    void resetNoiseEstimate();
     void processFrame();
     bool updateMaskFromCurrentFrame();
     void synthesizeCurrentFrequencyBinsWithMask();

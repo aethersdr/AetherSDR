@@ -9093,18 +9093,24 @@ void AudioEngine::setRadioTransmitting(bool tx, bool ownedByUs)
     // adapt its internal state to TX silence, #367/#1505). But that leaves NR2
     // holding pre-TX state when RX resumes: a stale overlap-add ring (read out
     // as a faint whistle, #3340) and a maxed-out startup-ramp counter, so
-    // suppression slams to full-wet on a stale noise estimate that then takes
-    // ~3-4s to reconverge — the audio "gap" users hear with NR2 engaged
-    // (#1863). reset() flushes the OA ring, re-seeds the noise floor high
-    // (gentle suppression), and re-arms the ~1s dry→wet ramp so audio returns
-    // immediately on the dry signal and NR2 fades back in cleanly.
+    // suppression slams to full-wet the instant RX resumes. resetTransient()
+    // flushes exactly that — the OA ring, the gain masks, the AGC common-mode
+    // references — and re-arms the ~1s dry→wet ramp, while RETAINING the
+    // converged noise estimate. The full reset() used here previously also
+    // re-seeded the noise floor, forcing a fresh multi-second estimator
+    // convergence on every over, heard as un-suppressed band noise after
+    // unkey (#3821); with the profile retained, suppression is back at full
+    // depth as the ramp completes. If the band or the AGC level moved during
+    // TX the estimator adapts from the retained floor — quickly downward,
+    // and upward within one minimum-statistics window (~1.5 s), which is no
+    // slower than the full convergence it replaced.
     //
     // Scoped to NR2 for now: it's the reported filter and this keeps testing
     // localized. RN2/NR4/DFNR/MNR share the same bypass + stale-state path and
     // can get the same flush as a follow-up once this is validated in the field.
     if (previous && !tx) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-        if (m_nr2Enabled && m_nr2) m_nr2->reset();
+        if (m_nr2Enabled && m_nr2) m_nr2->resetTransient();
     }
 
     emit radioTransmittingChanged(tx);

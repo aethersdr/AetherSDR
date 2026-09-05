@@ -2392,6 +2392,162 @@ std::pair<double, double> stereoRmsAfter(const std::vector<float>& interleaved,
     };
 }
 
+void test_transient_reset_retains_noise_profile()
+{
+    // #3821: after the TX→RX edge, NR2 must re-engage within one dry→wet
+    // ramp, not a full estimator re-convergence. resetTransient() flushes
+    // the overlap-add ring (the #3340 stale-audio hazard), the gain masks,
+    // and the ramp, while retaining the converged noise estimate; a full
+    // reset() at the same point re-seeds the noise floor and leaves the
+    // band noise audibly louder for roughly half a second after the ramp
+    // completes — the window in which the reporter's quick callbacks were
+    // being drowned out.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int overlap = 4;
+    constexpr int blockSamples = 73;
+    constexpr int settleSamples = 6 * sampleRate;
+    constexpr int resumeSamples = 6 * sampleRate;
+
+    // One continuous synthetic noise timeline; the reset point models the TX
+    // gap, during which the bypassed filter sees no audio at all.
+    std::vector<float> settle(settleSamples);
+    std::vector<float> resume(resumeSamples);
+    std::uint32_t randomState = 0x33383231u;
+    auto nextWhite = [&randomState]() {
+        randomState = 1664525u * randomState + 1013904223u;
+        return 2.0 * (static_cast<double>(randomState) / 4294967295.0) - 1.0;
+    };
+    for (float& s : settle) {
+        s = static_cast<float>(0.25 * nextWhite());
+    }
+    for (float& s : resume) {
+        s = static_cast<float>(0.25 * nextWhite());
+    }
+
+    struct Run {
+        double settledDb = 0.0;      // depth reached before the edge
+        std::vector<float> input;    // what the filter saw after it
+        std::vector<float> output;   // what it produced
+    };
+    // resumeScale models a receiver AGC that re-levelled during the over: the
+    // noise that comes back is louder (> 1) or quieter (< 1) than the profile
+    // NR2 retained. Each run measures its own settled depth so no assertion
+    // depends on the order the runs are made in.
+    const auto runResumed = [&](bool transientReset, double resumeScale) {
+        SpectralNR nr(fftSize, sampleRate, overlap);
+        std::vector<float> out(settleSamples);
+        int offset = 0;
+        while (offset < settleSamples) {
+            const int count = std::min(blockSamples, settleSamples - offset);
+            nr.process(settle.data() + offset, out.data() + offset, count);
+            offset += count;
+        }
+        Run run;
+        run.settledDb = rmsGainDb(settle, out, 4 * sampleRate, 5 * sampleRate,
+                                  fftSize);
+        if (transientReset) {
+            nr.resetTransient();
+        } else {
+            nr.reset();
+        }
+        run.input.resize(resumeSamples);
+        for (int i = 0; i < resumeSamples; ++i) {
+            run.input[i] = static_cast<float>(resume[i] * resumeScale);
+        }
+        run.output.assign(resumeSamples, 0.0f);
+        offset = 0;
+        while (offset < resumeSamples) {
+            const int count = std::min(blockSamples, resumeSamples - offset);
+            nr.process(run.input.data() + offset, run.output.data() + offset,
+                       count);
+            offset += count;
+        }
+        return run;
+    };
+    // Post-ramp window: the ~1 s ramp has completed, the full reset has not
+    // yet re-converged. Late window: both must agree with the settled depth.
+    const auto postRampDb = [&](const Run& r) {
+        return rmsGainDb(r.input, r.output, 11 * sampleRate / 10,
+                         8 * sampleRate / 5, fftSize);
+    };
+    const auto lateDb = [&](const Run& r) {
+        return rmsGainDb(r.input, r.output, 5 * sampleRate / 2, 3 * sampleRate,
+                         fftSize);
+    };
+
+    const Run transient = runResumed(true, 1.0);
+    const Run full = runResumed(false, 1.0);
+    const double settledDb = transient.settledDb;
+
+    // #3340 guard: the flushed ring re-queues one frame of zero latency
+    // padding, so nothing recorded before the reset can leak out after it.
+    double stalePeak = 0.0;
+    bool allFinite = true;
+    for (int i = 0; i < fftSize; ++i) {
+        stalePeak = std::max(stalePeak,
+                             static_cast<double>(std::abs(transient.output[i])));
+    }
+    for (const float sample : transient.output) {
+        allFinite = allFinite && std::isfinite(sample);
+    }
+
+    // Audio must return immediately on the dry signal (ramp re-armed). The
+    // latency offset inside rmsGainDb() starts this window just past the
+    // zero padding checked above, so it measures real dry audio.
+    const double immediateDb = rmsGainDb(transient.input, transient.output, 0,
+                                         3 * sampleRate / 20, fftSize);
+    const double transientPostRampDb = postRampDb(transient);
+    const double fullPostRampDb = postRampDb(full);
+
+    std::printf(" settled %+.2f dB, post-reset 0-0.15 s %+.2f dB\n"
+                " 1.1-1.6 s transient %+.2f dB vs full-reset %+.2f dB "
+                "(gap %.1f dB), 2.5-3.0 s %+.2f vs %+.2f dB, stale peak %.3g\n",
+                settledDb, immediateDb, transientPostRampDb, fullPostRampDb,
+                fullPostRampDb - transientPostRampDb, lateDb(transient),
+                lateDb(full), stalePeak);
+    report("transient_reset: settle phase is identical across runs",
+           std::abs(full.settledDb - transient.settledDb) < 0.01);
+    report("transient_reset: output is finite", allFinite);
+    report("transient_reset: no stale ring audio leaks through the reset",
+           stalePeak < 1e-9);
+    report("transient_reset: audio returns immediately on the dry signal",
+           immediateDb > -3.0);
+    // The behavioural invariant, and the assertion that fails against the
+    // unfixed code: a full reset() is still several dB short of the settled
+    // depth in this window. Not asserted as an inter-path gap, so a future
+    // estimator retune that converges faster from cold does not fail it.
+    report("transient_reset: settled depth restored right at ramp end",
+           std::abs(transientPostRampDb - settledDb) < 2.5);
+    report("transient_reset: both variants converge again well after the edge",
+           std::abs(lateDb(transient) - settledDb) < 2.5
+               && std::abs(lateDb(full) - settledDb) < 2.5);
+
+    // A receiver AGC that re-levelled during the over. NR2 sees post-AGC
+    // audio on every path, and the retained profile cannot be rescaled for a
+    // step it never observed (see resetTransient()). The fallout must stay
+    // bounded: never worse than the full reset() this path replaced in the
+    // post-ramp window, and back at the settled depth once one
+    // minimum-statistics window (~1.5 s) has passed.
+    for (const double scale : {2.0, 0.5}) {
+        const Run stepTransient = runResumed(true, scale);
+        const Run stepFull = runResumed(false, scale);
+        const double stepPostRampT = postRampDb(stepTransient);
+        const double stepPostRampF = postRampDb(stepFull);
+        const double stepLateT = lateDb(stepTransient);
+        const double stepLateF = lateDb(stepFull);
+        std::printf(" %+.0f dB step: 1.1-1.6 s transient %+.2f dB vs full-reset "
+                    "%+.2f dB, 2.5-3.0 s %+.2f vs %+.2f dB\n",
+                    20.0 * std::log10(scale), stepPostRampT, stepPostRampF,
+                    stepLateT, stepLateF);
+        report("transient_reset: level step — no worse than a full reset post-ramp",
+               stepPostRampT <= stepPostRampF + 1.0);
+        report("transient_reset: level step — settled depth within one window",
+               std::abs(stepLateT - stepTransient.settledDb) < 2.5
+                   && std::abs(stepLateF - stepFull.settledDb) < 2.5);
+    }
+}
+
 void test_block_size_invariance()
 {
     // KiwiSDR audio arrives in packet-sized bursts, while native Flex RX audio
@@ -2628,6 +2784,9 @@ int main()
 
     std::printf("\n-- NR2 live NPE switching --\n");
     test_npe_switch_transients();
+
+    std::printf("\n-- NR2 TX->RX transient reset (#3821) --\n");
+    test_transient_reset_retains_noise_profile();
 
     std::printf("\n-- NR2 quick reply after speech release --\n");
     test_quick_reply_after_speech_release();
