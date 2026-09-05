@@ -6,6 +6,7 @@
 #include <QFontMetrics>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -35,9 +36,10 @@ void FilterPassbandWidget::setMode(const QString& mode)
 
 void FilterPassbandWidget::setWidthRange(int minimumHz, int maximumHz, int stepHz)
 {
-    m_minimumWidthHz = minimumHz > 0 ? minimumHz : 50;
-    m_maximumWidthHz = maximumHz >= m_minimumWidthHz ? maximumHz : 6000;
-    m_widthStepHz = stepHz > 0 ? stepHz : 50;
+    const bool validRange = minimumHz > 0 && maximumHz >= minimumHz;
+    m_minimumWidthHz = validRange ? minimumHz : 50;
+    m_maximumWidthHz = validRange ? maximumHz : 0;
+    m_widthStepHz = validRange && stepHz > 0 ? stepHz : 50;
     update();
 }
 
@@ -164,9 +166,20 @@ void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
 
     const int usableW = width() - 32;
     const int usableH = height();
-    const double hzPerPxH = passbandDragScaleHzPerPixel(m_maximumWidthHz, usableW);
+    const bool radioWidthRange = m_maximumWidthHz > 0;
+    // The legacy 6 kHz / 4 kHz spans are gesture scales, not filter limits.
+    // Empty capabilities (including disconnect) must restore that contract.
+    const double hzPerPxH = passbandDragScaleHzPerPixel(
+        radioWidthRange ? m_maximumWidthHz : 6000, usableW);
     const double hzPerPxV = passbandDragScaleHzPerPixel(
-        m_maximumWidthHz - m_minimumWidthHz, usableH);
+        radioWidthRange ? m_maximumWidthHz - m_minimumWidthHz : 4000, usableH);
+    const auto snapHz = [this, radioWidthRange](int hz) {
+        if (!radioWidthRange) {
+            return (hz / 50) * 50;
+        }
+        return static_cast<int>(std::round(
+            static_cast<double>(hz) / m_widthStepHz)) * m_widthStepHz;
+    };
 
     int newLo = m_dragStartLo;
     int newHi = m_dragStartHi;
@@ -175,21 +188,17 @@ void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
         // Horizontal: shift passband, vertical: symmetric width
         int shiftHz = static_cast<int>(dx * hzPerPxH);
         int bwChange = static_cast<int>(-dy * hzPerPxV);
-        shiftHz = static_cast<int>(std::round(
-            static_cast<double>(shiftHz) / m_widthStepHz)) * m_widthStepHz;
-        bwChange = static_cast<int>(std::round(
-            static_cast<double>(bwChange) / m_widthStepHz)) * m_widthStepHz;
+        shiftHz = snapHz(shiftHz);
+        bwChange = snapHz(bwChange);
         newLo = m_dragStartLo + shiftHz - bwChange / 2;
         newHi = m_dragStartHi + shiftHz + bwChange / 2;
     } else if (m_dragMode == DragLo) {
         int deltaHz = static_cast<int>(dx * hzPerPxH);
-        deltaHz = static_cast<int>(std::round(
-            static_cast<double>(deltaHz) / m_widthStepHz)) * m_widthStepHz;
+        deltaHz = snapHz(deltaHz);
         newLo = m_dragStartLo + deltaHz;
     } else if (m_dragMode == DragHi) {
         int deltaHz = static_cast<int>(dx * hzPerPxH);
-        deltaHz = static_cast<int>(std::round(
-            static_cast<double>(deltaHz) / m_widthStepHz)) * m_widthStepHz;
+        deltaHz = snapHz(deltaHz);
         newHi = m_dragStartHi + deltaHz;
     }
 
@@ -199,15 +208,15 @@ void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
         ? PassbandDragEdge::Low
         : m_dragMode == DragHi ? PassbandDragEdge::High : PassbandDragEdge::Both;
     const PassbandEdgePair constrained = constrainPassbandWidth(
-        newLo, newHi, m_minimumWidthHz, m_maximumWidthHz, draggedEdge);
+        newLo, newHi, m_minimumWidthHz,
+        radioWidthRange ? m_maximumWidthHz : std::numeric_limits<int>::max(),
+        draggedEdge);
     newLo = constrained.lowHz;
     newHi = constrained.highHz;
 
     // Snap to the radio's width grid.
-    newLo = static_cast<int>(std::round(
-        static_cast<double>(newLo) / m_widthStepHz)) * m_widthStepHz;
-    newHi = static_cast<int>(std::round(
-        static_cast<double>(newHi) / m_widthStepHz)) * m_widthStepHz;
+    newLo = snapHz(newLo);
+    newHi = snapHz(newHi);
 
     if (newLo != m_lo || newHi != m_hi) {
         m_lo = newLo;

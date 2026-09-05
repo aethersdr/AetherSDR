@@ -4132,6 +4132,17 @@ target_include_directories(filter_passband_math_test PRIVATE src)
 target_link_libraries(filter_passband_math_test PRIVATE Qt6::Core)
 add_test(NAME filter_passband_math_test COMMAND filter_passband_math_test)
 
+# Socket-free Qt event injection: empty capabilities preserve legacy gestures,
+# while advertised limits still reach the production widget (PR #5363).
+add_executable(filter_passband_widget_test
+    tests/filter_passband_widget_test.cpp
+    src/gui/FilterPassbandWidget.cpp)
+target_include_directories(filter_passband_widget_test PRIVATE src)
+target_link_libraries(filter_passband_widget_test PRIVATE Qt6::Widgets)
+add_test(NAME filter_passband_widget_test COMMAND filter_passband_widget_test)
+set_tests_properties(filter_passband_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp

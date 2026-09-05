@@ -594,6 +594,48 @@ static void testModes()
     checkRecall("CW", 1, -600, 600);
     checkRecall("CW", 2, -250, 250);
     checkRecall("CW", 3, -125, 125);
+
+    // Fixed-width modes still own selectable FIL identities. They must emit
+    // only the mode/slot command, never an IF-width or Twin-PBT write.
+    struct FixedRecallCase {
+        const char* mode;
+        CivMode wireMode;
+        bool dataMode;
+        int slots;
+    };
+    for (const FixedRecallCase& test : {
+             FixedRecallCase{"FM", CivMode::Fm, false, 3},
+             FixedRecallCase{"NFM", CivMode::Fm, false, 3},
+             FixedRecallCase{"DFM", CivMode::Fm, true, 3},
+             FixedRecallCase{"WFM", CivMode::Wfm, false, 1},
+             FixedRecallCase{"DV", CivMode::Dv, false, 3},
+             FixedRecallCase{"DSTAR", CivMode::Dv, false, 3}}) {
+        for (bool useVfoMode : {false, true}) {
+            for (int presetId = 1; presetId <= test.slots; ++presetId) {
+                const auto plan = filterPresetRecallPlan(
+                    kIc705, test.mode, test.wireMode, test.dataMode,
+                    presetId, useVfoMode);
+                check(plan.has_value(), "fixed-mode FIL selection has a plan");
+                if (!plan) {
+                    continue;
+                }
+                const auto select = useVfoMode
+                    ? cmdSetVfoMode(kIc705, test.wireMode, test.dataMode, presetId)
+                    : cmdSetMode(kIc705, test.wireMode, presetId);
+                check(plan->commands == std::vector<std::vector<std::uint8_t>>{select},
+                      "fixed-mode recall sends only the requested slot selection");
+                check(plan->widthHz == 0,
+                      "fixed-mode recall does not claim a programmable IF width");
+                const auto [low, high] = passbandForModeAndFilter(test.mode, presetId);
+                check(plan->lowHz == low && plan->highHz == high,
+                      "fixed-mode recall retains the selected slot's display edges");
+            }
+        }
+    }
+    check(!filterPresetRecallPlan(kIc705, "FM", CivMode::Fm, false, 0, true),
+          "fixed-mode recall rejects undeclared slot zero");
+    check(!filterPresetRecallPlan(kIc705, "WFM", CivMode::Wfm, false, 2, true),
+          "WFM recall rejects a second slot");
 }
 
 static void testCommands()

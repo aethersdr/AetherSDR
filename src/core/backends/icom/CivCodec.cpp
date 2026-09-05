@@ -534,7 +534,11 @@ std::optional<FilterPresetRecallPlan> filterPresetRecallPlan(
     const std::optional<std::uint8_t> widthCode =
         filterWidthCodeFor(ladderMode, plan.widthHz);
     if (!widthCode) {
-        return std::nullopt;
+        // Fixed-width modes still select a FIL slot, but have no 1A 03 or
+        // Twin-PBT write. Zero keeps the backend's programmable-width cache
+        // invalid; the display edges above still describe the selected slot.
+        plan.widthHz = 0;
+        return plan;
     }
     plan.commands.push_back(cmdSetFilterWidth(to, *widthCode));
     plan.commands.push_back(cmdSetLevel(to, level::kPbtInner, plan.pbtCode));

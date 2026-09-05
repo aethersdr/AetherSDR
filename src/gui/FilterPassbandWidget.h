@@ -40,7 +40,7 @@ private:
     int m_hi{2800};
     QString m_mode{"USB"};
     int m_minimumWidthHz{50};
-    int m_maximumWidthHz{6000};
+    int m_maximumWidthHz{0};  // no advertised limit: preserve legacy gestures
     int m_widthStepHz{50};
 
     enum DragMode { DragNone, DragShift, DragLo, DragHi };
