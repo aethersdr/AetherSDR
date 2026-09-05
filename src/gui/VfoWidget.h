@@ -214,6 +214,22 @@ public:
         return 1000 + std::max(sliceId, 0);
     }
 
+    // Locked flag side for one member of an attached diversity pair, keyed by
+    // its position after diversityPairOrderKey ordering. Order index 0 is the
+    // parent / master slice — the one DIV was enabled on, which SmartSDR tags
+    // "DIV" — whenever the radio reports diversity_parent or diversity_index;
+    // with neither field present the key falls back to slice ID and index 0 is
+    // simply the lower-numbered slice. In the reported case index 0 locks RIGHT
+    // to match SmartSDR's layout, so a cross-client operator finds the DIV flag
+    // where muscle memory reaches for it; in the fallback case the swap still
+    // yields stable opposite sides, which is all the pre-metadata path promised.
+    // index 1 locks LEFT. Both are Lock* (not Force*) so the pair holds opposite
+    // sides through a pan edge instead of collapsing together (#2663, #3880).
+    static FlagDir diversityPairFlagDir(int orderIndex)
+    {
+        return orderIndex == 0 ? LockRight : LockLeft;
+    }
+
     static FlagPlacement placementForMarker(int markerX,
                                             int specTop,
                                             int widgetWidth,
