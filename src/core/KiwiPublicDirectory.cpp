@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -183,10 +184,12 @@ KiwiDirectoryParse KiwiPublicDirectory::parse(const QByteArray& json)
         return result;
     }
 
+    // toUTC() converts; setTimeSpec() would only relabel, discarding the offset
+    // of a "+02:00" form and mis-aging the list by exactly that offset.
     result.fetchedAt = QDateTime::fromString(
         boundedString(root.value(QStringLiteral("fetched_at"))), Qt::ISODate);
     if (result.fetchedAt.isValid())
-        result.fetchedAt.setTimeSpec(Qt::UTC);
+        result.fetchedAt = result.fetchedAt.toUTC();
 
     QVector<KiwiPublicReceiver> receivers;
     receivers.reserve(arr.size());
@@ -265,7 +268,7 @@ KiwiDirectoryParse KiwiPublicDirectory::parse(const QByteArray& json)
     }
 
     if (receivers.isEmpty()) {
-        result.error = QStringLiteral("receiver directory contained no usable receivers");
+        result.error = QStringLiteral("the receiver directory is empty");
         return result;
     }
 
@@ -288,8 +291,25 @@ void KiwiPublicDirectory::fetch()
     req.setTransferTimeout(kDirectoryFetchTimeoutMs);
     QNetworkReply* reply = m_net->get(req);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    // Bound the transfer where the bytes actually enter (Principle VII):
+    // QNetworkReply buffers the whole response, so a cap checked only in
+    // parse() would reject an oversized body we had already allocated in full.
+    auto oversized = std::make_shared<bool>(false);
+    connect(reply, &QNetworkReply::downloadProgress, this,
+            [reply, oversized](qint64 received, qint64 total) {
+                if (received <= kMaxBodyBytes && total <= kMaxBodyBytes)
+                    return;
+                *oversized = true;
+                reply->abort();
+            });
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, oversized]() {
         reply->deleteLater();
+        if (*oversized) {
+            emit failed(QStringLiteral("receiver directory is implausibly large "
+                                       "(over %1 MB)").arg(kMaxBodyBytes / (1024 * 1024)));
+            return;
+        }
         if (reply->error() != QNetworkReply::NoError) {
             emit failed(reply->errorString());
             return;

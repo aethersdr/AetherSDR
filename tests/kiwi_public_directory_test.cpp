@@ -173,18 +173,36 @@ int main()
     if (silent.hasGps || silent.hasBands) return fail("absent gps/bands must stay unset");
     if (silent.snrAll != -1 || silent.snrHf != -1) return fail("absent snr must stay -1");
 
-    // The picker filter: only API-permitted, unflagged receivers are shown, and
-    // the two hidden-for-policy reasons are counted apart.
+    // The offer policy. This exercises KiwiPublicReceiver::offerDecision() —
+    // the same function KiwiPublicReceiverPicker::onReady() switches on — so a
+    // regression in the picker's filtering shows up here. (A test that
+    // re-implemented the loop would keep passing after the loop broke.)
+    using Offer = KiwiPublicReceiver::Offer;
+    if (web.offerDecision() != Offer::HiddenWebOnly)
+        return fail("ext_api=0 must be hidden as web-only");
+    if (open.offerDecision() != Offer::Yes)
+        return fail("an API-open receiver must be offered");
+    if (limited.offerDecision() != Offer::HiddenFlagged)
+        return fail("a flagged receiver must be hidden, even when API-permitted");
+    if (silent.offerDecision() != Offer::HiddenPolicyUnknown)
+        return fail("a policy-unknown receiver must be hidden as policy-unknown");
+
+    // Offline outranks every other reason, so the picker's status line never
+    // reports an unreachable receiver as an operator policy decision.
+    KiwiPublicReceiver down = open;
+    down.offline = true;
+    if (down.offerDecision() != Offer::HiddenOffline)
+        return fail("an offline receiver must be hidden as offline");
+
     int shown = 0, hiddenWebOnly = 0, hiddenUnknown = 0, hiddenFlagged = 0;
     for (const auto& r : rxs) {
-        if (r.offline) continue;
-        if (r.flagged) { ++hiddenFlagged; continue; }
-        if (!r.mayConnectViaApi()) {
-            if (r.apiPolicy() == ApiPolicy::Disabled) ++hiddenWebOnly;
-            else ++hiddenUnknown;
-            continue;
+        switch (r.offerDecision()) {
+            case Offer::Yes:                 ++shown; break;
+            case Offer::HiddenWebOnly:       ++hiddenWebOnly; break;
+            case Offer::HiddenPolicyUnknown: ++hiddenUnknown; break;
+            case Offer::HiddenFlagged:       ++hiddenFlagged; break;
+            case Offer::HiddenOffline:       break;
         }
-        ++shown;
     }
     if (shown != 1) return fail("exactly 1 receiver should survive the picker filter");
     if (hiddenWebOnly != 1) return fail("exactly 1 web-only hidden");
@@ -211,6 +229,29 @@ int main()
         return fail("a rejected schema must yield no receivers");
     if (!future.error.contains(QStringLiteral("update AetherSDR")))
         return fail("a schema mismatch must tell the user to update AetherSDR");
+
+    // The receiver-count cap is a boundary, so exercise it rather than trusting
+    // the constant: one entry past it must be refused outright, not truncated
+    // to the cap and served as if it were the whole directory.
+    QByteArray flood = QByteArrayLiteral("{\"schema\": 1, \"receivers\": [");
+    for (int i = 0; i <= KiwiPublicDirectory::kMaxReceivers; ++i) {
+        if (i) flood += ',';
+        flood += QByteArrayLiteral("{\"url\":\"http://x:8073\",\"ext_api\":1,\"users_max\":1}");
+    }
+    flood += QByteArrayLiteral("]}");
+    const KiwiDirectoryParse flooded = KiwiPublicDirectory::parse(flood);
+    if (flooded.ok())
+        return fail("a receiver list past kMaxReceivers must be refused");
+    if (!flooded.receivers.isEmpty())
+        return fail("a refused receiver list must yield no receivers, not a truncated one");
+
+    // An empty list is empty, not malformed — the message must not claim the
+    // payload was unparseable.
+    const KiwiDirectoryParse empty =
+        KiwiPublicDirectory::parse(QByteArrayLiteral("{\"schema\": 1, \"receivers\": []}"));
+    if (empty.ok()) return fail("an empty receiver list must not report success");
+    if (!empty.error.contains(QStringLiteral("empty")))
+        return fail("an empty receiver list must say so, not blame the payload");
 
     std::printf("kiwi_public_directory_test: OK (4 parsed; web-only, "
                 "policy-unknown and flagged all filtered out separately)\n");

@@ -125,9 +125,10 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
         // have none.
         if (g_haveSessionCache) {
             m_fromCache = true;
+            // Held in a member, not appended to the label: applyFilter()
+            // rebuilds the status from scratch on every keystroke.
+            m_refreshError = err;
             onReady(g_sessionCache, g_cacheFetchedAt);
-            m_status->setText(m_status->text()
-                              + tr("  ·  could not refresh: %1").arg(err));
         } else {
             m_status->setText(tr("Receiver directory unavailable (%1) — "
                                  "try again later.").arg(err));
@@ -147,6 +148,7 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
 void KiwiPublicReceiverPicker::startFetch()
 {
     m_fromCache = false;
+    m_refreshError.clear();
     m_status->setText(tr("Loading public receivers…"));
     m_refresh->setEnabled(false);
     m_dir->fetch();
@@ -168,24 +170,19 @@ void KiwiPublicReceiverPicker::onReady(const QVector<KiwiPublicReceiver>& receiv
     m_hiddenWebOnly = 0;
     m_hiddenUnknown = 0;
     m_hiddenFlagged = 0;
+    // Honor the operator: only receivers that allow the external API are
+    // listed. Web-only (ext_api == 0) are excluded entirely, as are receivers
+    // that don't publish a policy (we can't confirm API is OK) and entries the
+    // origin has flagged. The policy itself lives on KiwiPublicReceiver so the
+    // test locks the same code this loop runs.
     for (const auto& r : receivers) {
-        if (r.offline) continue;
-        // The origin itself marks these entries as bad; don't offer them.
-        if (r.flagged) {
-            ++m_hiddenFlagged;
-            continue;
+        switch (r.offerDecision()) {
+            case KiwiPublicReceiver::Offer::Yes:                 m_apiReceivers.push_back(r); break;
+            case KiwiPublicReceiver::Offer::HiddenFlagged:       ++m_hiddenFlagged; break;
+            case KiwiPublicReceiver::Offer::HiddenWebOnly:       ++m_hiddenWebOnly; break;
+            case KiwiPublicReceiver::Offer::HiddenPolicyUnknown: ++m_hiddenUnknown; break;
+            case KiwiPublicReceiver::Offer::HiddenOffline:       break;
         }
-        // Honor the operator: only receivers that allow the external API are
-        // listed. Web-only (ext_api == 0) are excluded entirely, as are
-        // receivers that don't publish a policy (we can't confirm API is OK).
-        if (!r.mayConnectViaApi()) {
-            if (r.apiPolicy() == KiwiPublicReceiver::ApiPolicy::Disabled)
-                ++m_hiddenWebOnly;
-            else
-                ++m_hiddenUnknown;
-            continue;
-        }
-        m_apiReceivers.push_back(r);
     }
     applyFilter();
 }
@@ -251,6 +248,8 @@ void KiwiPublicReceiverPicker::applyFilter()
                 : tr("  ·  list is %1 hours old").arg(mins / 60);
         }
     }
+    if (!m_refreshError.isEmpty())
+        status += tr("  ·  could not refresh: %1").arg(m_refreshError);
     m_status->setText(status);
     m_ok->setEnabled(!m_table->selectedItems().isEmpty());
 }

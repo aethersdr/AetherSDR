@@ -23,7 +23,9 @@ parses it into JSON, and publishes it:
 | `https://kiwi-status.aethersdr.com/` | mirror health, for humans |
 
 `kiwi.json` is one object — `schema`, `source`, `fetched_at`, `receiver_count`
-and a `receivers` array — served with `cache-control: public, max-age=1800`.
+and a `receivers` array — served with `cache-control: public, max-age=1800`. The payload's field-by-field contract
+is **[`kiwi-json-schema.md`](kiwi-json-schema.md)** — the in-tree source of
+truth that `KiwiPublicDirectory::kSupportedSchema` pins to.
 
 **There is deliberately no fallback to `kiwisdr.com`.** Keeping the old
 HTML-scraping path as a CDN-outage fallback would look free, but it would mean
@@ -71,8 +73,10 @@ parser reads it as `-1` unless the key is actually present, and
   never spoofs a browser. With the mirror in place there is no interactive gate
   to pass and no one-time token to replay — the client makes one plain `GET`
   against our own CDN.
-- **Clients never contact `kiwisdr.com`.** Only AetherSDR's mirror and, once the
-  user chooses a receiver, that receiver itself.
+- **Clients never contact the `kiwisdr.com` directory origin.** Only AetherSDR's
+  mirror and, once the user chooses a receiver, that receiver itself — which for
+  a proxied KiwiSDR is itself a `*.proxy.kiwisdr.com` host. That connection is
+  unchanged by this arrangement.
 - **Refresh respects the mirror's own 30-minute `max-age`.** Opening the picker
   re-serves the session's cached list while it is inside that window and fetches
   once it is past; "Refresh list" always fetches. We never poll faster than the

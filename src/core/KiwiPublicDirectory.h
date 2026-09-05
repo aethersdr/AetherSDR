@@ -69,6 +69,28 @@ struct KiwiPublicReceiver {
     // treated conservatively as "do not assume API is allowed".
     bool mayConnectViaApi() const { return extApi > 0; }
 
+    // Why this receiver is, or is not, offered in the picker.  The policy
+    // lives here rather than inside the picker's loop so the GUI and the test
+    // cannot drift apart — a test that re-implements the loop would keep
+    // passing after the loop regressed.
+    enum class Offer {
+        Yes,
+        HiddenOffline,
+        HiddenFlagged,        // the origin itself marks the entry as bad
+        HiddenWebOnly,        // ext_api == 0: operator disabled the API
+        HiddenPolicyUnknown,  // no ext_api published: we can't confirm it's OK
+    };
+    Offer offerDecision() const
+    {
+        if (offline) return Offer::HiddenOffline;
+        if (flagged) return Offer::HiddenFlagged;
+        if (!mayConnectViaApi()) {
+            return apiPolicy() == ApiPolicy::Disabled ? Offer::HiddenWebOnly
+                                                      : Offer::HiddenPolicyUnknown;
+        }
+        return Offer::Yes;
+    }
+
     // Short human-readable badge for the receiver picker.
     QString apiBadge() const;
     bool advertisesConnectionLimit() const;
@@ -101,7 +123,9 @@ struct KiwiDirectoryParse {
 //     Cloudflare Worker pulls kiwisdr.com/public hourly under a shared secret
 //     he provided and republishes it as JSON.  His server now sees one hourly
 //     request from us rather than one per user, per browse.
-//   • Clients read AetherSDR's copy and NEVER contact kiwisdr.com.  There is
+//   • Clients read AetherSDR's copy and NEVER contact the kiwisdr.com
+//     directory origin (a receiver the user then picks may itself be a
+//     *.proxy.kiwisdr.com host — that connection is unchanged).  There is
 //     deliberately no origin fallback: a CDN outage must not turn every
 //     AetherSDR install in the world into a thundering herd aimed at the
 //     server we were asked to relieve.  When the mirror is unreachable we
@@ -135,6 +159,8 @@ public:
     // The only kiwi.json schema this build understands.  A different value is
     // a hard failure telling the user to update, not something to parse on
     // hopefully — the fields we honor could have moved under our feet.
+    // The producer lives outside this repo, so docs/kiwi-json-schema.md is the
+    // in-tree contract this pins to; change one and change the other.
     static constexpr int kSupportedSchema = 1;
 
     // The mirror publishes cache-control: max-age=1800; refreshing faster than
@@ -145,8 +171,11 @@ public:
     // picker tells the user how old the list is.
     static constexpr int kStaleAfterMinutes = 360;
 
-    // Boundary caps (Principle VII).  A hostile or corrupt body must not be
-    // able to make us allocate without bound.
+    // Boundary caps (Principle VII).  kMaxBodyBytes is enforced twice: on the
+    // wire, where fetch() aborts the reply as soon as the advertised or
+    // received length passes it (so an oversized body is never buffered whole),
+    // and again in parse(), which is also reachable with bytes we did not
+    // download — a saved payload handed to the POC.
     static constexpr int kMaxBodyBytes = 32 * 1024 * 1024;
     static constexpr int kMaxReceivers = 20000;
 

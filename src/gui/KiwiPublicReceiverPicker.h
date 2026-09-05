@@ -41,6 +41,7 @@ private:
     int m_hiddenFlagged{0};  // the origin itself marks these entries as bad
     bool m_fromCache{false};  // current list came from the session cache
     QDateTime m_fetchedAt;   // when the mirror last pulled the origin (UTC)
+    QString m_refreshError;  // last failed refresh, re-rendered by applyFilter()
 
     QLineEdit*    m_search{nullptr};
     QTableWidget* m_table{nullptr};
