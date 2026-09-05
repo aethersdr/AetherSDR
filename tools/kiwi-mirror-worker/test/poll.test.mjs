@@ -150,9 +150,60 @@ await t('history caps at 20, newest first', async () => {
   const kv = makeKV();
   stub(() => ok(SAMPLE));
   let h;
-  for (let i = 0; i < 25; i++) h = await runPoll(baseEnv(kv), new Date(Date.UTC(2026, 8, 5, i % 24)));
+  // Distinct, strictly increasing stamps. The old loop used hour `i % 24` over
+  // 25 iterations, so `at` was not monotonic and no honest ordering assert
+  // could hold — and the assert it did make was `... || h.recent.length === 20`,
+  // whose right operand the line above had just proven, so reversing the
+  // history would have left it green.
+  for (let i = 0; i < 25; i++) h = await runPoll(baseEnv(kv), new Date(Date.UTC(2026, 8, 5, 0, i)));
   assert.equal(h.recent.length, 20);
-  assert.ok(h.recent[0].at > h.recent[1].at || h.recent.length === 20);
+  assert.ok(h.recent[0].at > h.recent[1].at, 'history is not newest-first');
+});
+
+// 13. A mode originRequest cannot speak is OUR misconfiguration, not the
+// origin's. Without membership validation it reached the `else throw` inside
+// the retry loop and was reported as fault 'origin', three times over.
+await t('an unknown auth mode -> mirror fault, zero origin requests', async () => {
+  const kv = makeKV();
+  stub(() => ok('should never be called'));
+  const h = await runPoll(baseEnv(kv, { KIWI_AUTH_MODE: 'Header' }));
+  assert.equal(h.fault, 'mirror');
+  assert.equal(h.last_run_reason, 'auth-misconfigured');
+  assert.equal(h.last_run_attempts, 0);
+  assert.equal(calls.length, 0, 'made ' + calls.length + ' origin requests');
+});
+
+// 14. A 304 is a success, so it must refresh last_success_at — the status page
+// reads that as "the origin confirmed our copy", and reading the publish time
+// instead made healthy 304 streams look stale and hid the frozen-mirror alarm.
+await t('304 refreshes last_success_at without republishing', async () => {
+  const kv = makeKV({
+    'directory:payload': JSON.stringify({ receivers: [1, 2, 3] }),
+    'directory:status': JSON.stringify({ receiver_count: SAMPLE_COUNT, etag: 'W/"abc"',
+                                         fetched_at: '2026-09-01T00:00:00.000Z' }),
+  });
+  stub(() => new Response(null, { status: 304 }));
+  const h = await runPoll(baseEnv(kv), new Date(Date.UTC(2026, 8, 5, 12)));
+  assert.equal(h.last_run_result, 'not-modified');
+  assert.equal(h.last_success_at, '2026-09-05T12:00:00.000Z');
+  // The publish record must NOT move: nothing was republished.
+  assert.equal(JSON.parse(kv.store.get('directory:status')).fetched_at,
+               '2026-09-01T00:00:00.000Z');
+});
+
+// 15. The URL cross-check the parser's comment promises.
+await t('an entry whose anchors disagree is skipped, not silently reurled', async () => {
+  const kv = makeKV();
+  // Derived from the fixture, not hardcoded: rewrite only the FIRST anchor of
+  // the first entry so its two anchors disagree. A hardcoded host silently
+  // stops testing anything the moment the fixture is retrimmed.
+  const first = SAMPLE.match(/<a\s+href='([^']+)'\s+target='_blank'>/);
+  assert.ok(first, 'fixture has no receiver anchor');
+  const swapped = SAMPLE.replace(first[0], first[0].replace(first[1], 'http://swapped.example:8073'));
+  assert.notEqual(swapped, SAMPLE, 'fixture rewrite was a no-op');
+  stub(() => ok(swapped));
+  const h = await runPoll(baseEnv(kv));
+  assert.equal(h.receiver_count, SAMPLE_COUNT - 1, 'disagreeing entry was not skipped');
 });
 
 // 10. The weak-validator bug: Cloudflare hands us W/"x" for a gzip response the

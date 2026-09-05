@@ -59,6 +59,9 @@ const notFound = () =>
  * public source is its own kind of disclosure, and a silent one. pollOrigin()
  * rejects a missing transport before we ever reach here.
  */
+/** The transports originRequest() knows how to speak. */
+const AUTH_MODES = new Set(['query', 'header', 'cookie', 'bearer']);
+
 function originRequest(env, etag) {
   const url = new URL(env.KIWI_SOURCE_URL);
   const headers = { 'user-agent': env.KIWI_USER_AGENT };
@@ -99,11 +102,17 @@ async function pollOrigin(env, state) {
     return { result: 'failed', reason: 'no-secret', fault: 'auth', attempts: 0 };
   }
 
-  if (!env.KIWI_AUTH_MODE || !env.KIWI_AUTH_NAME) {
-    // Same restraint, different culprit. A half-configured deploy is OUR
-    // mistake, so it must not be reported as an origin failure and must not
-    // burn three retries against his server discovering that we forgot to
-    // finish setting ourselves up.
+  // Membership, not merely non-empty: a typo'd or stale mode would otherwise
+  // reach originRequest()'s `else throw`, which runs INSIDE the retry loop's
+  // try, so it lands in the catch as fault 'origin' and gets repeated three
+  // times. The operator page would then say kiwisdr.com is not answering and
+  // that it clears itself when the origin comes back — both false, and the
+  // fault taxonomy is the whole reason that page exists. With this check the
+  // `else throw` is genuinely unreachable, which is the right shape for it.
+  if (!AUTH_MODES.has(env.KIWI_AUTH_MODE) || !env.KIWI_AUTH_NAME) {
+    // A half-configured deploy is OUR mistake, so it must not be reported as
+    // an origin failure and must not burn three retries against his server
+    // discovering that we forgot to finish setting ourselves up.
     return { result: 'failed', reason: 'auth-misconfigured', fault: 'mirror', attempts: 0 };
   }
 

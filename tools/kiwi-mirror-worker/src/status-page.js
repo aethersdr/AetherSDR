@@ -310,7 +310,15 @@ const FAULT = {
 
 function verdictFor(h, s) {
   const runAge = mins(h && h.last_run_at);
-  const contentAge = mins(s && s.fetched_at);
+  // last_success_at, NOT status.fetched_at. fetched_at is written only in the
+  // publish branch of runPoll, so it is the age of the last PUBLISH; a 304
+  // never rewrites it. Reading it here made four healthy 304s (240 min) turn
+  // the page amber with "the list is old" while nothing was wrong, and made
+  // contentAge identical to publishAge by construction — so the frozen-mirror
+  // branch below, gated at 1440, could never be reached. last_success_at is
+  // set on every non-failed poll, 304s included, which is exactly "the origin
+  // confirmed our copy is current".
+  const contentAge = mins(h && h.last_success_at);
 
   if (!h) return { tone: 'var(--unknown)', text: 'Cannot read the health record', fault: null };
 
@@ -377,7 +385,9 @@ async function render() {
   $('count').textContent = count == null ? '—' : count.toLocaleString('en-US');
   $('countlab').textContent = count === 1 ? 'receiver in the published list' : 'receivers in the published list';
 
-  const contentAge = mins(s && s.fetched_at);
+  // Same reasoning as verdictFor: this line says "Origin confirmed the list",
+  // so it has to read the confirmation, not the publish.
+  const contentAge = mins(h && h.last_success_at);
   const runAge = mins(h && h.last_run_at);
   const publishAgeMin = mins(s && s.published_at);
   $('sub').textContent = s

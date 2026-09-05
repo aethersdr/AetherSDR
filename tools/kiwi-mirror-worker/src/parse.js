@@ -115,9 +115,12 @@ export function parseDirectory(html) {
     if (!rx.id) { skipped++; continue; }
 
     // Both anchors point at the receiver; the avatar link comes first. Taking
-    // the first and checking the rest agree means a future layout change that
-    // adds an unrelated link cannot silently swap the URL.
+    // the first only once the rest agree means a future layout change that adds
+    // an unrelated link cannot silently swap the URL — it drops the entry
+    // instead, visibly, in the skipped count. Every entry in the directory
+    // carries at least two anchors and they have always agreed.
     const hrefs = [...body.matchAll(HREF_RE)].map((m) => decodeEntities(m[1]));
+    if (hrefs.length && !hrefs.every((h) => h === hrefs[0])) { skipped++; continue; }
     if (hrefs.length) rx.url = hrefs[0];
 
     const seq = classes.match(/seq_(\d+)/);

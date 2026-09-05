@@ -7,13 +7,14 @@ Both sides of this contract are in this repository:
 
 | Side | Where |
 |---|---|
-| **Producer** — the Cloudflare Worker that pulls `kiwisdr.com/public` hourly under a shared secret the KiwiSDR maintainer provided, and emits this payload | [`tools/kiwi-mirror-worker/`](../tools/kiwi-mirror-worker/), field mapping in `src/parse.js` |
+| **Producer** — the Cloudflare Worker that pulls `kiwisdr.com/public` hourly under a shared secret the KiwiSDR maintainer provided, and emits this payload | [`tools/kiwi-mirror-worker/`](../tools/kiwi-mirror-worker/) — field mapping in `src/parse.js`, the `schema` literals in `src/index.js` |
 | **Consumer** — the client that reads it | `src/core/KiwiPublicDirectory.cpp`, pinned by `kSupportedSchema` |
 
 Change one and change the other, in the same PR.
 
 **Changing anything below is a schema break.** Bump `schema` in
-`tools/kiwi-mirror-worker/src/parse.js`, and bump
+`tools/kiwi-mirror-worker/src/index.js` (both the published payload and the
+status document), and bump
 `kSupportedSchema` in `src/core/KiwiPublicDirectory.h` in the same breath — the
 client rejects an unrecognised `schema` outright rather than parsing on
 hopefully, so an unannounced field change turns into "please update AetherSDR"
