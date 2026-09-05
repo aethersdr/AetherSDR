@@ -157,6 +157,7 @@ public:
     static constexpr int kSlotMs = 25;
     static constexpr int kReadTimeoutMs = 350;
     static constexpr int kPriorityAgingMs = 1000;
+    static constexpr int kMeterQueueBudgetMs = 100;
     // How long a timed-out or displaced transaction stays recognisable, so a
     // late answer is still generation-checked rather than adopted as fresh
     // radio truth. Comfortably longer than kReadTimeoutMs and shorter than the
@@ -183,7 +184,8 @@ private:
     [[nodiscard]] static bool sameReplyShape(const Request& a, const Request& b) noexcept;
     [[nodiscard]] bool matches(const CivFrame& frame, const Queued& request) const noexcept;
     [[nodiscard]] Priority effectivePriority(const Queued& request,
-                                             std::int64_t nowMs) const noexcept;
+                                             std::int64_t nowMs,
+                                             bool meterOverdue) const noexcept;
     void expireRead(std::int64_t nowMs);
     void dropStaleExpired(std::int64_t nowMs);
     void recordTransaction(const Queued& request, Completion completion,
@@ -202,6 +204,9 @@ private:
     std::uint64_t m_sequence = 0;
     std::int64_t m_lastDispatchMs = 0;
     std::int64_t m_inFlightAtMs = 0;
+    // Background aging may win one meter-band slot, then yields until an
+    // actual meter is dispatched. PTT/operator traffic does not reset it.
+    bool m_backgroundSinceMeter = false;
     Stats m_stats;
     std::deque<TransactionEvent> m_recentTransactions;
 };

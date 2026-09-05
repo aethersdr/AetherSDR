@@ -375,6 +375,16 @@ of the older entry, so work that aged all the way to `Ptt` would be dispatched
 *ahead* of the keyed-state poll rather than merely tying with it. Stopping one
 band short still beats fresh meter traffic on that tie — which is all
 anti-starvation needs — while leaving PTT an edge no amount of waiting erodes.
+Only one background request may take that meter-band turn before a ready
+meter runs. After any background dispatch, aging is capped at `Control`
+until an actual `ActiveMeter` dispatch. PTT/operator/emergency requests do
+not reset this alternation. This prevents a whole aged reconciliation burst
+from draining ahead of fresh TX power/SWR reads while retaining background
+progress. Additionally, once a ready meter has spent 100 ms in the queue,
+background aging is capped at `Control` until those overdue meters drain.
+This protects freshness when dispatches are slower than the nominal slot.
+It bounds interference by background requests, not radio reply time:
+a lost in-flight reply can still consume the 350 ms timeout.
 
 Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
 retired before a later read is sent, or that ACK can be mistaken for the read's
