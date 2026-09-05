@@ -70,6 +70,9 @@ public:
     // handshake needs a username and password before the radio will answer with
     // anything useful, which is why the manual page grows credential fields.
     static constexpr const char* kFamilyIcom = "icom";
+    // RTL-SDR USB dongles (RTL2832U / R820T). USB-addressed (device index +
+    // serial), not network. Receive-only (Principle VI).
+    static constexpr const char* kFamilyRtl  = "rtl";
 
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;

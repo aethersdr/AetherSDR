@@ -496,6 +496,17 @@ static void testCapabilityProfiles()
     check(p9700.setMenu.voxDelayItem < 0 && p9700.setMenu.civTransceiveItem < 0
               && !p9700.txBandwidth,
           "IC-9700 borrows no unverified SET-menu or TX-bandwidth map");
+    check(p705.gps && p705.gps->ntpEnabledItem == 167
+              && p705.gps->ntpServerItem == 168
+              && p705.gps->timeCorrectItem == 169 && p705.gps->hasNtpAccess,
+          "IC-705 owns its GPS/NTP command shape in the model profile");
+    check(p705.supports(IcomFeature::GpsPosition)
+              && p705.supports(IcomFeature::GpsTimeConfiguration),
+          "IC-705 GPS position and clock configuration carry independent evidence");
+    check(!p9700.gps && !pMk2.gps
+              && !p9700.supports(IcomFeature::GpsPosition)
+              && !pMk2.supports(IcomFeature::GpsTimeConfiguration),
+          "other supported profiles do not inherit IC-705 GPS commands");
 
     check(p705.fmRepeater && p705.fmRepeater->dialect == FmRepeaterDialect::Extended
               && p705.fmRepeater->hasDtcs,
@@ -531,6 +542,8 @@ static void testCapabilityProfiles()
     const ControlSpec* dataMode = spec("data.mode");
     const ControlSpec* txBandwidth = spec("tx.bandwidth.edges");
     const ControlSpec* dtcs = spec("repeater.dtcs");
+    const ControlSpec* gpsPosition = spec("gps.position");
+    const ControlSpec* gpsNtpServer = spec("gps.ntp.server");
     const IcomModel& model705 = *modelForCivAddress(0xA4);
     const IcomModel& model9700 = *modelForCivAddress(0xA2);
     const IcomModel& modelMk2 = *modelForCivAddress(0xB6);
@@ -563,6 +576,12 @@ static void testCapabilityProfiles()
     check(scopeMode && controlSupported(identityOnly, identityOnlyProfile, *scopeMode)
               && !identityOnlyProfile.supports(IcomFeature::Scope),
           "scope reachability follows identity geometry while attestation remains absent");
+    check(gpsPosition && gpsNtpServer
+              && controlSupported(model705, p705, *gpsPosition)
+              && controlSupported(model705, p705, *gpsNtpServer)
+              && !controlSupported(model9700, p9700, *gpsPosition)
+              && !controlSupported(modelMk2, pMk2, *gpsNtpServer),
+          "effective registry maps GPS/NTP only onto the attested IC-705 profile");
 }
 
 static void testModelDiscovery()

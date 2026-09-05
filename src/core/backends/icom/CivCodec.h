@@ -203,6 +203,7 @@ inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceive
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
 inline constexpr std::uint8_t kTone         = 0x1B;   // sub 00: repeater CTCSS frequency
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
+inline constexpr std::uint8_t kGps          = 0x23;   // position / GPS source
 inline constexpr std::uint8_t kScope        = 0x27;
 // The attenuator, and it is NOT sub-addressed like 0x14/0x16 — the single
 // data byte IS the setting, in BCD dB. The IC-705 takes 00 (off) and 20
@@ -330,6 +331,9 @@ inline constexpr std::uint8_t kDialLock      = 0x50;
 // that is listening somewhere else.
 namespace setting {
 inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
+inline constexpr int kNtpEnabled      = 167;   // 00 off, 01 on
+inline constexpr int kNtpServer       = 168;   // up to 64 ASCII characters
+inline constexpr int kGpsTimeCorrect  = 169;   // 00 off, 01 auto
 }  // namespace setting
 
 // The SUBCOMMANDS of 0x1A. 0x05 is the SET menu everything above reaches
@@ -337,6 +341,8 @@ inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
 namespace settingSub {
 inline constexpr std::uint8_t kFilterWidth = 0x03;   // the IF width, in circuit now
 inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET menu
+inline constexpr std::uint8_t kNtpAccess   = 0x07;   // terminate/initiate NTP access
+inline constexpr std::uint8_t kNtpResult   = 0x08;   // accessing / succeeded / failed
 }  // namespace settingSub
 
 // Read or write a 1A 05 SET-menu item. `item` is the DECIMAL menu number as
@@ -348,6 +354,34 @@ inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET
 // unlike the one-byte enums written by cmdWriteSetting().
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
                                                              int value);
+[[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingData(
+    std::uint8_t to, int item, std::span<const std::uint8_t> value);
+
+// IC-705 GPS and clock control. The position wire shape is documented by
+// Icom's IC-705 CI-V Reference Guide pp. 21 and 25. It is intentionally kept
+// in this transport-free codec so a future local-serial Icom path gets exactly
+// the same validation as the RS-BA1 network path.
+namespace gps {
+inline constexpr std::uint8_t kPosition = 0x00;
+inline constexpr std::uint8_t kSource   = 0x01;
+inline constexpr std::uint8_t kManual   = 0x02;
+}  // namespace gps
+
+struct GpsPosition {
+    double latitude = 0.0;
+    double longitude = 0.0;
+    std::optional<double> altitudeMetres;
+    std::optional<int> courseDegrees;
+    std::optional<double> speedKmh;
+    std::optional<std::string> utcIso8601;
+};
+
+[[nodiscard]] std::optional<GpsPosition>
+decodeGpsPosition(std::span<const std::uint8_t> data);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadGpsPosition(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadGpsSource(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdNtpAccess(std::uint8_t to, bool initiate);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadNtpAccessResult(std::uint8_t to);
 
 // Four zero-padded decimal IPv4 octets, each encoded in two BCD bytes, as used
 // by the Icom SET-menu network registers. Invalid BCD and octets >255 fail.

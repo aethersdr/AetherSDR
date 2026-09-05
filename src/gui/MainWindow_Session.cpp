@@ -279,6 +279,15 @@ void MainWindow::wireDiscovery()
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_ananDiscovery.start();
 
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    if (RtlSdrDiscovery::isAvailable()) {
+        m_rtlDiscovery.start();
+    }
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
@@ -303,10 +312,16 @@ void MainWindow::wireDiscovery()
                     m_autoConnectSerial.clear();
             });
     connect(m_connPanel, &ConnectionPanel::retryDiscoveryRequested, this, [this] {
-        m_connPanel->setStatusText("Searching your local network…");
+        m_connPanel->setStatusText(RtlSdrDiscovery::isAvailable()
+                                       ? "Searching local network & USB devices…"
+                                       : "Searching your local network…");
         if (m_titleBar) m_titleBar->setDiscovering(true);
         m_discovery.stopListening();
         m_discovery.startListening();
+        if (RtlSdrDiscovery::isAvailable()) {
+            m_rtlDiscovery.stop();
+            m_rtlDiscovery.start();
+        }
     });
     connect(m_connPanel, &ConnectionPanel::networkDiagnosticsRequested,
             this, &MainWindow::showNetworkDiagnosticsDialog);
@@ -1186,19 +1201,29 @@ void MainWindow::wireRadioModel()
         // VITA-49 burst pressure on the GUI event loop can't gap CW elements
         // (#3623) — same reason the iambic keyer below avoids QTimer.
         m_cwxLocalKeyer = std::make_unique<CwxLocalKeyer>();
-        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
+        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down,
+                                                   std::chrono::steady_clock::time_point when) {
             // Lock-free atomic gate; safe to call directly from the keyer
-            // thread, matching the iambic keyer's gate path below.
-            // CWX: same fix pending (#4890).  This keyer runs the same
-            // absolute-grid schedule (#3644) and knows each edge's instant
-            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
-            // so its sidetone renders wake rhythm while the iambic path
-            // below renders scheduled rhythm.
+            // thread, matching the iambic keyer's gate path below.  `when`
+            // is the element's absolute grid instant (#4890/#4977), so a
+            // machine-formed CWX macro renders the rhythm it was scheduled
+            // with rather than the worker's wake rhythm.
             if (m_audio)
-                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
+                m_audio->setCwKeyDown(down, when);   // keys audible + recorder sidetone
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
                 this, [this](const QString& text, int wpm) {
+            // The over-hang must outlast THIS over's slowest inter-word gap,
+            // and CWX keys at its own per-segment speed, independent of the
+            // TransmitModel::cwSpeed mirror that sizes the hang — a 15 WPM
+            // segment against a 30 WPM mirror would age the latch inside every
+            // word gap and split the over per word (#4281). Every segment of a
+            // message announces here at send time, so min-tracking them sizes
+            // the hang from the message's slowest speed; the pump clears the
+            // override when the over ends.
+            if (m_audio) {
+                m_audio->noteCwOverSpeed(wpm);
+            }
             if (m_cwxLocalKeyer) m_cwxLocalKeyer->start(text, wpm);
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionCancelled,
@@ -1332,7 +1357,11 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool tx) {
         if (m_audio) {
-            m_audio->setRadioTransmitting(tx);
+            // Ownership rides along: the interlock parse stores its
+            // tx_client_handle attribution before emitting this signal, so the
+            // pair is one consistent snapshot — the CW over machinery tracks
+            // OUR transmission, not any client's (#4281).
+            m_audio->setRadioTransmitting(tx, m_radioModel.txOwnedByUs());
         }
         // Waterfall freeze/unfreeze: gate on the actual interlock TRANSMITTING
         // state, not the MOX edge. moxChanged fires the instant the user releases

@@ -15,6 +15,13 @@
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
+#if defined(__MINGW32__)
+// This mingw-w64 header snapshot doesn't declare GetThreadDescription even
+// though kernel32.dll exports it (Windows 10 1607+, MSVC's SDK already has
+// it). Widening _WIN32_WINNT doesn't help — the prototype is absent outright.
+extern "C" __declspec(dllimport) HRESULT WINAPI
+    GetThreadDescription(HANDLE hThread, PWSTR* ppszThreadDescription);
+#endif
 #elif defined(Q_OS_MAC)
 #include <mach/mach.h>
 #include <mach/thread_act.h>

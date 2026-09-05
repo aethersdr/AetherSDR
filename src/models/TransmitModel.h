@@ -208,6 +208,10 @@ public:
     // than briefly greying out a control that does exist.
     void setHasTuner(bool present);
     [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
+    // Independent from matching: Flex exposes radio-side ATU memory recall
+    // and database operations, while an Icom 1C 01 tuner path does not.
+    void setHasTunerMemories(bool present);
+    [[nodiscard]] bool hasTunerMemories() const { return m_hasTunerMemories; }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -320,6 +324,7 @@ signals:
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
     void hasTunerChanged(bool present);
+    void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
@@ -424,6 +429,7 @@ private:
     int    m_rfPower{100};
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
+    bool   m_hasTunerMemories{true};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};

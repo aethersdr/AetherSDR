@@ -54,6 +54,13 @@ public:
     // and applied during connect/pushInitialState; capture reports through
     // currentOperatingState() + operatingStateChanged().
     void applyRestoredState(const RestoredRadioState& state) override;
+    // The validated document applyRestoredState() kept — what the session will
+    // seed from at linkUp. Test seam only: currentOperatingState() reads the
+    // RECEIVERS, which are seeded at linkUp and not before, so a pre-connect
+    // test asserting on the snapshot sees construction defaults regardless of
+    // what the validator did (#5031). Assert here for validator behaviour;
+    // assert on the snapshot only after a connect has settled.
+    const RestoredRadioState& restoredStateForTest() const { return m_restoredState; }
     RestoredRadioState currentOperatingState() const override;
     void disconnectRadio() override;
     bool isConnected() const override;
