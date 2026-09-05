@@ -1,6 +1,6 @@
 {
   "name": "aethersdr-ulanzi-plugin",
-  "version": "0.1.0",
+  "version": "0.1.7",
   "description": "Ulanzi Studio plugin that drives AetherSDR via its TCI WebSocket interface.",
   "type": "module",
   "main": "plugin/app.js",

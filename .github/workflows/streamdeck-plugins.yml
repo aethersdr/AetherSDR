@@ -48,6 +48,17 @@ jobs:
           zip -r ../streamcontroller-aethersdr.zip streamcontroller-aethersdr/ \
             -x "*/__pycache__/*"
 
+      # The Ulanzi Studio plugin ships the same way as the Elgato one: the
+      # bundle directory is zipped as-is. Its `ws` dependency is NOT vendored
+      # into node_modules -- Studio resolves it at load time -- so there is no
+      # install step here, and the packaged file set matches the bundle
+      # exactly. (#3485)
+      - name: Package Ulanzi plugin
+        run: |
+          cd plugins/ulanzi-aethersdr
+          zip -r ../../com.g0jkn.aethersdr.ulanziPlugin.zip \
+            com.g0jkn.aethersdr.ulanziPlugin/
+
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,4 +79,5 @@ jobs:
           gh release upload "$TAG" \
             com.aethersdr.radio.streamDeckPlugin \
             streamcontroller-aethersdr.zip \
+            com.g0jkn.aethersdr.ulanziPlugin.zip \
             --clobber
