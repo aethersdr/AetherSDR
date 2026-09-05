@@ -56,6 +56,11 @@ struct Hl2Backend::PendingConnect {
     // How long this phase has been running. Belongs to the connect rather than
     // to the backend so a superseded build cannot report the new one's elapsed.
     QElapsedTimer clock;
+    // Set when the phase watchdog has already released the caller with a
+    // dspSetupFinished(). The build is still running and finishDspSetup() will
+    // reach its stale branch later; this stops that branch emitting a second
+    // end-of-phase edge for one connect.
+    bool finishSignalled = false;
 };
 
 // What the I/O thread carries back. Parallel arrays indexed by DDC rather than
@@ -2109,16 +2114,30 @@ void Hl2Backend::onDspSetupWatchdog()
     // INVALIDATE, DO NOT TEAR DOWN. The I/O thread may be inside configure() on
     // these very chains — WDSP's OpenChannel does not return early, so the build
     // cannot be cancelled — and freeing them from this thread would be a
-    // use-after-free. Bumping the generation is the same one-liner
-    // disconnectRadio() uses: the build runs to completion and finishDspSetup()
-    // takes its stale branch, which releases what it built. (#5413 triage.)
+    // use-after-free. So do exactly what disconnectRadio() does: bump the
+    // generation and LEAVE m_pendingConnect SET. The build runs to completion,
+    // finishDspSetup() takes its stale branch, and that branch is what releases
+    // the chains and re-drives anything queued behind them.
+    //
+    // Resetting pending here instead would disable the very mechanism this
+    // comment relies on: finishDspSetup() would return at its
+    // `if (!m_pendingConnect)` guard, tearDownReceivers() would never run, and
+    // every timed-out connect would leak its WDSP channels out of the 32-slot
+    // pool. Worse, connectRadio() queues behind an in-flight build only while
+    // m_pendingConnect is set, so a retry after this error would call
+    // buildReceivers() on the chains the I/O thread is still opening — a
+    // use-after-free reached by the ordinary "connect failed, try again"
+    // gesture. (#5413 triage; #5415 review.)
     ++m_connectGeneration;
-    m_pendingConnect.reset();
+    // Before the emits, not after: a connectionError handler can re-enter this
+    // object, and the stale branch must see this flag whatever it does.
+    m_pendingConnect->finishSignalled = true;
     emit connectionError(
         tr("Hermes-Lite 2: the DSP setup did not finish within %1 seconds")
             .arg(AetherSDR::hl2::kDspSetupFailMs / 1000));
     // So a caller waiting on the phase is released rather than left hanging on
-    // a signal that now never comes.
+    // a signal that now never comes. The build is still running; the flag above
+    // keeps the stale branch from emitting this a second time.
     emit dspSetupFinished();
 }
 
@@ -2142,11 +2161,16 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     if (m_pendingConnect->generation != m_connectGeneration) {
         qCInfo(lcHl2) << "HL2: connect superseded while the DSP was opening —"
                       << "releasing the chains it built";
+        // Read before the reset: the phase watchdog may already have ended the
+        // phase for a caller that could not wait for this moment.
+        const bool alreadyFinished = m_pendingConnect->finishSignalled;
         m_pendingConnect.reset();
         // Safe to block inside here: the build has finished, so the I/O thread
         // is back at its event loop and publishIoDsps() returns promptly.
         tearDownReceivers();
-        emit dspSetupFinished();
+        if (!alreadyFinished) {
+            emit dspSetupFinished();
+        }
         // A connect that arrived mid-build has been waiting for exactly this.
         if (m_queuedConnect) {
             const RadioConnectRequest queued = *m_queuedConnect;
