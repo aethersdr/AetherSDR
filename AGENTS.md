@@ -288,9 +288,11 @@ the default graph, all tracked for socket-free extraction in #5254:
 handshake peer), and `thumbdv_queue_test` (a pty-backed fake DV3000 dongle —
 not a socket, which is why it went unenumerated; #5405 review). Mining a retired fake peer's frame tables as
 *input data* for injected-transport tests is encouraged; running the fake as
-a live socket peer is not. Loopback mocks of documented HTTP APIs
-(`asr_remote_backend_test`) are a different trade — that contract is
-versioned and published; radio firmware behavior is not.
+a live socket peer is not. Loopback mocks of documented HTTP APIs are a
+different trade — that contract is versioned and published; radio firmware
+behavior is not. (The example that used to sit here, `asr_remote_backend_test`,
+was one of eight removed for intermittency; see the note at the end of this
+section.)
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under

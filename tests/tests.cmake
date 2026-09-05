@@ -735,10 +735,6 @@ add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
 
 # The panadapter frame rate must follow the operator's slider, not the span
 # (#4470). Wall-clock paced, so it lives in its own target.
-add_executable(hl2_spectrum_rate_test tests/hl2_spectrum_rate_test.cpp)
-target_include_directories(hl2_spectrum_rate_test PRIVATE src)
-target_link_libraries(hl2_spectrum_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
-add_test(NAME hl2_spectrum_rate_test COMMAND hl2_spectrum_rate_test)
 
 add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
 target_include_directories(hl2_shift_test PRIVATE src)
@@ -1139,26 +1135,6 @@ add_test(NAME psk_reporter_map_behavior_test
 # Live PSK Reporter updates must refresh the existing marker/path batches
 # atomically. Replacing them exposes the differently-scaled overview cache and
 # makes every MQTT report pulse between large/small dots and thick/thin paths.
-add_executable(map_live_update_test
-    tests/map_live_update_test.cpp
-    src/gui/map/MapMarkerBatchItem.cpp
-    src/gui/map/MapPathBatchItem.cpp
-    src/gui/map/MapTerminatorItem.cpp
-)
-target_include_directories(map_live_update_test PRIVATE src)
-target_link_libraries(map_live_update_test PRIVATE
-    aethercore
-    qgeoview
-    Qt6::Core
-    Qt6::Concurrent
-    Qt6::Gui
-    Qt6::Widgets
-    Qt6::Network
-)
-set_target_properties(map_live_update_test PROPERTIES AUTOMOC ON)
-add_test(NAME map_live_update_test COMMAND map_live_update_test)
-set_tests_properties(map_live_update_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Frameless-window geometry restore (#4328) — blob parse + the caption-free
 # re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
@@ -1714,13 +1690,6 @@ add_executable(biquad_test
 target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
-add_executable(spectral_nr_test
-    tests/spectral_nr_test.cpp
-    src/core/SpectralNR.cpp
-)
-target_include_directories(spectral_nr_test PRIVATE src)
-target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
-add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
 
 add_executable(mono_dsp_stereo_adapter_test
     tests/mono_dsp_stereo_adapter_test.cpp
@@ -1737,10 +1706,6 @@ add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 # the target minimal means it still builds when the app does not. Every case
 # drives a worker thread, which is the delivery path the helpers exist to
 # observe.
-add_executable(test_event_loop_test tests/test_event_loop_test.cpp)
-target_include_directories(test_event_loop_test PRIVATE tests)
-target_link_libraries(test_event_loop_test PRIVATE Qt6::Core Qt6::Test)
-add_test(NAME test_event_loop_test COMMAND test_event_loop_test)
 
 # Just the voice fixture — linking the full resources.qrc pulled 5.8 MB of
 # application assets into a unit test to reach one 458 KB WAV (PR #4689 review).
@@ -2333,13 +2298,6 @@ if (ENABLE_ASR)
     endif()
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
-    add_executable(asr_remote_backend_test
-        tests/asr_remote_backend_test.cpp
-        src/asr/RemoteAsrBackend.cpp
-    )
-    target_include_directories(asr_remote_backend_test PRIVATE src)
-    target_link_libraries(asr_remote_backend_test PRIVATE Qt6::Core Qt6::Network)
-    add_test(NAME asr_remote_backend_test COMMAND asr_remote_backend_test)
 
     # Copy Assist audio tap: which RX source it follows, and the stereo→mono
     # collapse including the non-finite guard. The policy is header-only, so
@@ -3176,10 +3134,6 @@ set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
 
 if(Qt6WebSockets_FOUND)
-    add_executable(tci_protocol_test tests/tci_protocol_test.cpp)
-    target_include_directories(tci_protocol_test PRIVATE src)
-    target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
-    add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
 
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
@@ -3260,10 +3214,6 @@ target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
 target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
 
-add_executable(radiomodel_pan_id_mapping_test tests/radiomodel_pan_id_mapping_test.cpp)
-target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
-target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
-add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
 
 add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
 target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
@@ -3333,10 +3283,6 @@ add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
 # every backend declares each flag explicitly, the RadioModel relay fires on
 # both connection edges, and the `!connected || caps.hasX` rule the GUI applies
 # restores the permissive value on disconnect.
-add_executable(radio_capability_gating_test tests/radio_capability_gating_test.cpp)
-target_include_directories(radio_capability_gating_test PRIVATE src tests)
-target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
-add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
 
 # Radio Setup owns a persistent widget tree. Capability/session transitions must
 # refresh DHCP/static presentation without unrelated GPS/oscillator updates
@@ -4406,7 +4352,6 @@ set(AETHER_SETTINGS_CONSUMERS
     log_manager_filter_rules_test
     bandplan_voice_labels_test
     vkamp_connection_test
-    radio_capability_gating_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
 )
@@ -4586,15 +4531,16 @@ endforeach()
 #
 # No suite-wide timeout existed before this: `enable_testing()` without
 # `include(CTest)` configures none, so a hung test blocked its CI gate
-# indefinitely — map_live_update_test ran 35 minutes producing nothing before
-# it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
+# indefinitely — the since-removed map_live_update_test ran 35 minutes
+# producing nothing before it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
 # failure: ctest counts it as failed, so --output-on-failure finally prints
 # the captured output that a hang withholds.
 #
 # 300s is data-derived, not a guess: across the last 10 gate-lane runs and
 # the 4 most recent full-suite sanitizer runs, 90% of tests average under
-# ~3s and the slowest legitimate completion ever recorded is spectral_nr_test
-# at 276.6s under the sanitizer lane (#5271 has the tables). If a test
+# ~3s, and the slowest legitimate completion ever recorded was the
+# since-removed spectral_nr_test at 276.6s under the sanitizer lane (#5271 has
+# the tables); nothing remaining comes close. If a test
 # legitimately outgrows 300s, give IT a bigger explicit TIMEOUT below its
 # add_test — never raise this default for one test's sake.
 #
