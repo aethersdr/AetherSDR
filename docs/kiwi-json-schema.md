@@ -1,12 +1,19 @@
 # `kiwi.json` — schema 1
 
 The reviewable, in-tree contract for the payload AetherSDR's directory mirror
-publishes at `https://cdn.aethersdr.com/kiwi.json`. The producer (a Cloudflare
-Worker that pulls `kiwisdr.com/public` hourly under a shared secret the KiwiSDR
-maintainer provided) lives outside this repository, so this file is what
-`KiwiPublicDirectory::kSupportedSchema` actually pins the client to.
+publishes at `https://cdn.aethersdr.com/kiwi.json`.
 
-**Changing anything below is a schema break.** Bump `schema`, and bump
+Both sides of this contract are in this repository:
+
+| Side | Where |
+|---|---|
+| **Producer** — the Cloudflare Worker that pulls `kiwisdr.com/public` hourly under a shared secret the KiwiSDR maintainer provided, and emits this payload | [`tools/kiwi-mirror-worker/`](../tools/kiwi-mirror-worker/), field mapping in `src/parse.js` |
+| **Consumer** — the client that reads it | `src/core/KiwiPublicDirectory.cpp`, pinned by `kSupportedSchema` |
+
+Change one and change the other, in the same PR.
+
+**Changing anything below is a schema break.** Bump `schema` in
+`tools/kiwi-mirror-worker/src/parse.js`, and bump
 `kSupportedSchema` in `src/core/KiwiPublicDirectory.h` in the same breath — the
 client rejects an unrecognised `schema` outright rather than parsing on
 hopefully, so an unannounced field change turns into "please update AetherSDR"
