@@ -27,6 +27,12 @@ and a `receivers` array — served with `cache-control: public, max-age=1800`. T
 is **[`kiwi-json-schema.md`](kiwi-json-schema.md)** — the in-tree source of
 truth that `KiwiPublicDirectory::kSupportedSchema` pins to.
 
+This also moves the browse off a third party. The old client fetched
+`http://kiwisdr.com/public/` — **plaintext HTTP**, so each user's directory
+browse exposed their IP and User-Agent both to an operator we have no agreement
+with and to any on-path observer. The mirror is HTTPS and first-party: the same
+request now goes somewhere the project can actually answer questions about.
+
 **There is deliberately no fallback to `kiwisdr.com`.** Keeping the old
 HTML-scraping path as a CDN-outage fallback would look free, but it would mean
 that the moment our CDN has a bad day, every AetherSDR install in the world
