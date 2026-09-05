@@ -89,6 +89,20 @@ parser reads it as `-1` unless the key is actually present, and
   plaintext HTTP. The version is deliberately retained: it is what tells us
   which builds are still live if a new schema URL is ever needed. Recorded as
   collected, in [`kiwi-json-schema.md`](kiwi-json-schema.md#what-the-mirror-sees).
+- **A stale list is shown, never withheld.** Age is advisory: past
+  `kStaleAfterMinutes` (360) the picker appends the list's age to its status
+  line, and that is all it does — no row is removed, no button is disabled, no
+  error replaces the list.
+
+  This is deliberate. A receiver directory ages gracefully — receivers do not
+  move, so a two-day-old list is still almost entirely correct, and a user
+  browsing it is far better served than one shown an empty dialog. The realistic
+  cause of a stale list is an outage at the **origin** (an expired certificate,
+  a host down), during which our mirror keeps serving its last good copy exactly
+  as designed. Gating on age would take the KiwiSDR maintainer's outage and turn
+  it into an AetherSDR outage — precisely backwards, since the mirror exists to
+  absorb his problems rather than amplify them. The same holds for any staleness
+  hint the mirror publishes: advice to display, never a gate.
 - **Refresh respects the mirror's own 30-minute `max-age`.** Opening the picker
   re-serves the session's cached list while it is inside that window and fetches
   once it is past; "Refresh list" always fetches. We never poll faster than the
