@@ -110,6 +110,17 @@ struct KiwiDirectoryParse {
     QString   error;          // empty iff the parse succeeded
 
     bool ok() const { return error.isEmpty(); }
+
+    // How old the mirror's copy is, or -1 when it published no usable
+    // fetched_at.  Advisory: something to SHOW, never something to gate on —
+    // ok() is deliberately independent of it, so no age can turn a served list
+    // into a withheld one.  See kStaleAfterMinutes.
+    qint64 ageMinutes() const
+    {
+        return fetchedAt.isValid()
+            ? fetchedAt.secsTo(QDateTime::currentDateTimeUtc()) / 60
+            : -1;
+    }
 };
 
 // Fetches and parses the public KiwiSDR receiver directory from AetherSDR's
@@ -138,6 +149,10 @@ struct KiwiDirectoryParse {
 //   • Refresh respects the mirror's own 30-minute cache lifetime; we do not
 //     poll faster than the data can change, and a manual refresh stays
 //     available for users who want one.
+//   • A stale list is shown, never withheld.  If the origin is down — an
+//     expired certificate, a dead host — the mirror keeps serving its last
+//     good copy, and the client keeps offering it with its age displayed.
+//     Refusing to populate would convert his outage into ours.
 //
 // See docs/kiwisdr-public-directory.md.
 class KiwiPublicDirectory : public QObject {
@@ -174,8 +189,24 @@ public:
     // that only re-reads bytes the CDN is still serving from cache.
     static constexpr int kMinRefreshSeconds = 1800;
 
-    // The mirror's own client-facing staleness threshold.  Past this the
-    // picker tells the user how old the list is.
+    // ADVISORY ONLY.  Past this age the picker tells the user how old the list
+    // is; it never withholds the list, and no code path may make it do so.
+    //
+    // This is a deliberate invariant, not an oversight.  A receiver directory
+    // ages gracefully: receivers do not move, so a list two days old is still
+    // almost entirely correct, and a user browsing it is far better served than
+    // one shown an empty dialog.  The realistic cause of a stale list is an
+    // outage at the ORIGIN — an expired certificate, a host down — during which
+    // our mirror keeps serving the last good copy exactly as designed.  Gating
+    // on age would take the KiwiSDR maintainer's outage and turn it into an
+    // AetherSDR outage, which is precisely backwards: the mirror exists to
+    // absorb his problems, not to amplify them.
+    //
+    // The same rule holds for any staleness hint the mirror itself publishes
+    // (it advertises stale_after_minutes on its status document).  Should such
+    // a field ever appear in kiwi.json, it is advice to display, never a gate.
+    // See docs/kiwisdr-public-directory.md and kiwi_public_directory_test.cpp,
+    // which locks this.
     static constexpr int kStaleAfterMinutes = 360;
 
     // Boundary caps (Principle VII).  kMaxBodyBytes is enforced twice: on the

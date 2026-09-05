@@ -252,6 +252,12 @@ void KiwiPublicReceiverPicker::applyFilter()
         status += tr("  ·  cached — use “Refresh list” to update");
     // Surface the list's age only once it is genuinely old: the mirror refreshes
     // hourly, so anything inside its own staleness threshold is unremarkable.
+    //
+    // Note what this does NOT do: it never removes a row, never disables "Add
+    // selected", and never replaces the list with an error. Age is advice. A
+    // stale list means the ORIGIN is having a bad day while our mirror keeps
+    // serving its last good copy — withholding it would turn the KiwiSDR
+    // maintainer's outage into an AetherSDR one. See kStaleAfterMinutes.
     if (m_fetchedAt.isValid()) {
         const qint64 mins = m_fetchedAt.secsTo(QDateTime::currentDateTimeUtc()) / 60;
         if (mins >= KiwiPublicDirectory::kStaleAfterMinutes) {

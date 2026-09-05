@@ -130,6 +130,19 @@ reading the URL they were built against, and a rollout becomes additive rather
 than a flag day. Retire an old path only when the builds that request it are
 genuinely gone, and treat that as its own decision.
 
+## Staleness is advisory
+
+`fetched_at` tells the client how old the mirror's copy is. It is something to
+**display**, never something to gate on: the client shows the list at any age,
+and adds its age to the picker's status line past 360 minutes.
+
+The producer should not expect a client to refuse stale data, and should not add
+a field trying to make it. The mirror advertises `stale_after_minutes` on its
+**status document** for humans reading the status page; if anything of that kind
+ever appears in `kiwi.json`, it remains advice. A stale list almost always means
+the origin is down while the mirror correctly serves its last good copy —
+withholding it at that moment converts an origin outage into a client outage.
+
 ## Compatibility rules for the producer
 
 1. **Adding an ignored field** — safe, no bump.

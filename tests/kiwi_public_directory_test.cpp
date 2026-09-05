@@ -253,6 +253,47 @@ int main()
     if (!empty.error.contains(QStringLiteral("empty")))
         return fail("an empty receiver list must say so, not blame the payload");
 
+    // ---- staleness is advisory, never a gate ------------------------
+    // The realistic cause of a stale list is an outage at the ORIGIN, during
+    // which our mirror correctly keeps serving its last good copy. A client
+    // that refused to populate would convert the KiwiSDR maintainer's outage
+    // into an AetherSDR one. These cases fail if anyone ever makes age gate.
+    const auto withFetchedAt = [](const char* stamp) {
+        QByteArray body = kSample;
+        body.replace("\"2026-09-05T14:00:01Z\"", stamp);
+        return KiwiPublicDirectory::parse(body);
+    };
+
+    const KiwiDirectoryParse ancient = withFetchedAt("\"2019-01-01T00:00:00Z\"");
+    if (!ancient.ok())
+        return fail("a years-old list must still parse — age is advice, not a gate");
+    if (ancient.receivers.size() != 4)
+        return fail("a years-old list must still yield every receiver");
+    if (ancient.ageMinutes() < 60)
+        return fail("a years-old list must report a large age");
+
+    // No fetched_at at all: still usable, just with no age to show.
+    const KiwiDirectoryParse undated = withFetchedAt("null");
+    if (!undated.ok())
+        return fail("a list with no fetched_at must still parse");
+    if (undated.receivers.size() != 4)
+        return fail("a list with no fetched_at must still yield every receiver");
+    if (undated.ageMinutes() != -1)
+        return fail("an unpublished fetched_at must report age -1, not 0");
+
+    // Malformed timestamp: same rule. A producer typo must not empty the picker.
+    const KiwiDirectoryParse garbled = withFetchedAt("\"not-a-timestamp\"");
+    if (!garbled.ok())
+        return fail("a malformed fetched_at must not fail the parse");
+    if (garbled.receivers.size() != 4)
+        return fail("a malformed fetched_at must still yield every receiver");
+    if (garbled.ageMinutes() != -1)
+        return fail("a malformed fetched_at must report age -1");
+
+    // A fresh list reports a small age, so the threshold means something.
+    if (parsed.ageMinutes() < 0)
+        return fail("a valid fetched_at must report a real age");
+
     std::printf("kiwi_public_directory_test: OK (4 parsed; web-only, "
                 "policy-unknown and flagged all filtered out separately)\n");
     return 0;
