@@ -474,6 +474,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         pushInitialState();
         emitAllSliceState();
         defineMeters();
+        // Tell the IO board where we came up. applyBandFilter() is NOT called on
+        // this path — the connect-time filter byte is primed straight into
+        // MetisClient::Params instead — so without this the board would hold
+        // whatever the last session left it, and an amplifier would stay on that
+        // band until the operator's first retune. Placed after pushInitialState()
+        // so the receiver frequencies it reads are the restored ones.
+        applyIoBoardFrequency();
         // At connect there is one receiver, so this is always "not wide" — but
         // it is published rather than assumed, so the indicator starts from a
         // stated value instead of whatever the widget happened to hold.
@@ -483,6 +490,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         if (m_connected) {
             m_connected = false;
             m_linkStatsTimer->stop();
+            resetIoBoardSchedule();
             emit disconnected();
         }
     });
@@ -498,6 +506,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
         m_connected = false;
         m_linkStatsTimer->stop();
+        resetIoBoardSchedule();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -1461,18 +1470,22 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
+    // No PTT status plane: the command edge is the only keyed edge there is.
+    c.hasRadioPttReadback = false;
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
     c.hasRadioDialLock = false;
     c.hasTuner = false;
+    c.hasTunerMemories = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
     // Both moot while hasRadioSideDsp is false — the host runs every filter
     // this radio has — but stated rather than defaulted, per the struct's
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
+    c.hasAudioPeakingFilter = false;
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;
@@ -1497,6 +1510,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
     c.hasDownwardExpander = false;
+    c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
@@ -1546,6 +1560,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.notchMinWidthHz = Hl2RxDsp::kMinNotchWidthHz;
     c.notchMaxWidthHz = 6000.0;
     c.hasGpsLocation = false;           // no GNSS receiver on the board
+    c.hasGpsSatelliteTelemetry = false;
+    c.hasGpsFrequencyReference = false;
+    c.hasGpsTimeConfiguration = false;
     c.hasGpsHardware = false;
     c.gpsHardwareRequiresPresence = false;
     // The HL2 declares PATEMP but no "+13.8A": PA temperature is a real reading
@@ -3957,14 +3974,22 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("ptt", QStringLiteral("PTT (radio)"), m_telemetry.ptt);
     put("keyed", QStringLiteral("Keyed (app)"), m_keyed);
     put("tuning", QStringLiteral("Tune carrier"), m_tuning);
-    // "The most important number in the protocol" (oracle §6): the depth of the
-    // FPGA's transmit sample buffer. Drifting up means we are sending faster
-    // than the radio consumes; drifting down is an impending underrun.
-    put("txFifoCount", QStringLiteral("TX FIFO depth"), opt(m_telemetry.txFifoCount));
-    put("txFifoUnderflow", QStringLiteral("TX FIFO underflow"),
-        opt(m_telemetry.txFifoUnderflow));
-    put("txFifoOverflow", QStringLiteral("TX FIFO overflow"),
-        opt(m_telemetry.txFifoOverflow));
+    // The FPGA's transmit sample buffer. The oracle calls its depth "the most
+    // important number in the protocol"; the gateware at 883a338 does not send
+    // a depth. It sends the TOP 7 BITS of the fill level and one fault flag
+    // (fifos.v:100-110) — so this reads as a level out of 127, not a count, and
+    // the label says so rather than inviting the reader to treat 64 as samples.
+    // Rising means we are sending faster than the radio consumes; falling is an
+    // impending underrun. See MetisProtocol.cpp's apply() for the full layout
+    // and for what the previous three rows here got wrong.
+    put("txFifoFillMsbs", QStringLiteral("TX FIFO fill (0-127, coarse)"),
+        opt(m_telemetry.txFifoFillMsbs));
+    // ONE bit for TWO faults: ran empty, or writes blocked after filling. The
+    // gateware does not distinguish them, so this must not be split into an
+    // underflow row and an overflow row — the two rows that stood here reported
+    // opposite faults for the same flag depending on fill-level bit 6.
+    put("txFifoRecovery", QStringLiteral("TX pacing fault (under OR overrun)"),
+        opt(m_telemetry.txFifoRecovery));
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
@@ -4924,14 +4949,14 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve)";
     }
-    // TX IQ FIFO depth — the oracle calls this the most important number in the
-    // protocol. A queue-fed transmission can starve the radio's buffer in a way
-    // a per-packet generated tone never can, so this is what distinguishes
-    // "the audio is wrong" from "the audio never arrived".
-    if (m_keyed && t.txFifoCount)
-        qCDebug(lcHl2Tx) << "HL2 fifo:" << *t.txFifoCount
-                         << "under" << t.txFifoUnderflow.value_or(false)
-                         << "over" << t.txFifoOverflow.value_or(false);
+    // TX IQ FIFO — a queue-fed transmission can starve the radio's buffer in a
+    // way a per-packet generated tone never can, so this is what distinguishes
+    // "the audio is wrong" from "the audio never arrived". `fill` is the top 7
+    // bits of the level, 0-127, not a sample count; `pacingFault` is the one
+    // flag the gateware sends for both underrun and blocked writes.
+    if (m_keyed && t.txFifoFillMsbs)
+        qCDebug(lcHl2Tx) << "HL2 fifo: fill" << *t.txFifoFillMsbs << "/127"
+                         << "pacingFault" << t.txFifoRecovery.value_or(false);
     if (t.temperatureRaw) {
         const double c = temperatureCelsius(*t.temperatureRaw);
         // The instrumentation ADC's low bits are noisy enough that the displayed
@@ -5033,10 +5058,119 @@ double Hl2Backend::temperatureCelsius(int raw)
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
 }
 
+void Hl2Backend::applyIoBoardFrequency()
+{
+    if (!m_metis || m_rx.empty())
+        return;
+
+    // The TRANSMIT receiver's frequency — NOT the agree-or-bypass answer the
+    // filter board gets. The IO board switches amplifiers, antenna relays and
+    // transverters, all of which must follow where the operator will RADIATE.
+    // Receive slices parked on other bands are irrelevant to that, and the
+    // bypass result (kOcNone) is a relay pattern with no frequency to offer.
+    const Receiver* txRx = rx(m_txDdc);
+    const double hz = txRx ? txRx->sliceFreqHz : m_rx[0].sliceFreqHz;
+    if (!std::isfinite(hz) || hz <= 0.0 || hz > static_cast<double>(0xFF'FF'FF'FF'FFULL)) {
+        return;                 // validate before converting to the 40-bit field
+    }
+
+    // sliceFreqHz is TRUE-RF and the board's field wants true RF: it compares
+    // against band edges to pick a relay. The frequency-calibration scaling in
+    // ncoCommandHz() exists to correct the HL2's own reference and belongs only
+    // on values going to an NCO register — applying it here would hand the
+    // board a slightly wrong frequency for no reason.
+    const auto target = static_cast<quint64>(hz + 0.5);
+
+    // The band, from the same bandKeyForHz() table the per-band memory uses, so
+    // "which band is this" has exactly one answer in this backend.
+    const QString targetBand = bandKeyForHz(hz);
+    const bool bandChanged = (targetBand != m_ioBoardBandKey);
+
+    if (!m_ioBoardThrottle) {
+        m_ioBoardThrottle = new QTimer(this);
+        m_ioBoardThrottle->setSingleShot(true);
+        m_ioBoardThrottle->setInterval(kIoBoardThrottleMs);
+        connect(m_ioBoardThrottle, &QTimer::timeout, this, [this] {
+            const quint64 pending = m_ioBoardSchedule.takePending();
+            if (pending == 0) {
+                return;                  // cooldown expired with nothing waiting
+            }
+            if (!sendIoBoardFrequency(pending))
+                return;                  // disconnected: nothing to re-arm for
+            // Re-arm: a tune still in progress must keep coalescing.
+            m_ioBoardThrottle->start();
+        });
+    }
+
+    // Neither MOX nor TUNE defers the amplifier alone: the TX NCO/filter
+    // already follow the requested band. Immediate sends also discard an older
+    // coalesced value so the timeout cannot send the board back to that band.
+    switch (m_ioBoardSchedule.request(m_connected, m_ioBoardThrottle->isActive(),
+                                      bandChanged, target)) {
+    case IoBoardAction::DropDisconnected:
+    case IoBoardAction::Coalesce:
+        return;
+    case IoBoardAction::Send:
+        break;
+    }
+
+    if (!sendIoBoardFrequency(target))
+        return;
+    m_ioBoardBandKey = targetBand;
+    // Restarted rather than left running, so the cooldown is measured from the
+    // push that actually went out — a band change mid-sweep resets the window
+    // instead of inheriting the remainder of the previous one.
+    m_ioBoardThrottle->start();
+}
+
+bool Hl2Backend::sendIoBoardFrequency(quint64 hz)
+{
+    // THE ONE PLACE either edge of the throttle reaches the wire.
+    //
+    // It exists because the guard below was originally written into the
+    // trailing edge only, and the leading edge — the commoner path — silently
+    // lacked it. Two call sites that must agree about a hardware safety
+    // condition is one call site too many, so both now go through here and the
+    // asymmetry cannot come back.
+    //
+    // Do not let a disconnected tune enqueue work for a future session.
+    // The MetisClient guard and stop-time purge also enforce this at the wire.
+    if (!m_connected) {
+        m_ioBoardSchedule.reset();
+        return false;
+    }
+    QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
+                              Qt::QueuedConnection, Q_ARG(quint64, hz));
+    return true;
+}
+
+void Hl2Backend::resetIoBoardSchedule()
+{
+    // Called on linkDown. The timer's armed/pending state is about a session:
+    // left running across a disconnect, a reconnect inside the residual window
+    // takes the coalescing branch and stores the connect-time frequency as
+    // PENDING instead of pushing it — delaying the board by up to the cooldown
+    // at exactly the moment linkUp() intends an immediate push.
+    //
+    // The band key is cleared too, so the first push of the next session is
+    // always treated as a band change and takes the leading edge. Assuming the
+    // previous session's band still applies is precisely the assumption that
+    // cannot be made across a disconnect.
+    if (m_ioBoardThrottle)
+        m_ioBoardThrottle->stop();
+    m_ioBoardSchedule.reset();
+    m_ioBoardBandKey.clear();
+}
+
 void Hl2Backend::applyBandFilter(const char* reason)
 {
     if (!m_metis || m_rx.empty())
         return;
+
+    // BEFORE the filter-byte comparison below, deliberately. The relay pattern
+    // is unchanged across a move from 7.100 to 7.200 MHz and this function
+    // returns early for it, but the IO board still needs the new frequency.
+    applyIoBoardFrequency();
 
     // ONE filter board, N receivers.
     //

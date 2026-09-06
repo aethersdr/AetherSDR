@@ -106,9 +106,10 @@ not (see below):
   `docs/theming/slider-knob-tokens.md`)
 - `color.meter.*` (bars, peak/RMS/threshold marks)
 - `color.spectrum.*`, `color.waterfall.*` (traces, grid, colormaps)
+- `color.spe.lcd.*` (hardware-display glass, pixels, idle text, bezel)
 - `color.slice.a…h` + `color.slice.dim.*` (slice identity colours)
 
-The full semantic-token inventory is greppable — 103 tokens, the same
+The full semantic-token inventory is greppable — 109 tokens, the same
 set the bundled themes carry at root scope:
 
 ```bash

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/AudioEngine.h"
+#include "core/backends/RadioCapabilities.h"
 
 #include <QWidget>
 #include <QMap>
@@ -35,6 +36,7 @@ class DemoApplet;
 class AcomApplet;
 class SpeApplet;
 class VkampApplet;
+class LpMeterApplet;
 class TxApplet;
 class PhoneCwApplet;
 enum class MicMeterSessionState;
@@ -105,6 +107,7 @@ public:
     AcomApplet*   acomApplet()    { return m_acomApplet; }
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
+    LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -186,6 +189,19 @@ public:
     // VK3AMP all present at once, each fully independent hardware.
     void setVkampVisible(bool visible);
 
+    // Show/hide the LP100 button and applet based on a direct LP-100A
+    // wattmeter connection. Independent of every amplifier applet: the
+    // LP-100A is an instrument, not an amplifier, and a station may have any
+    // combination of the two.
+    //
+    // Gated on the CONNECTION, matching ACOM/SPE/VKAMP. The "configured but
+    // powered off shows no tile" objection (#4944) does not bite here the way
+    // it does for those three, because LpMeterConnection deliberately does
+    // NOT drop the link when the meter stops answering — a wedged meter keeps
+    // its tile and shows NO DATA in it. Only a genuinely absent transport
+    // hides the tile.
+    void setLpMeterVisible(bool visible);
+
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
 
@@ -208,6 +224,7 @@ public:
     void setSelectableMicInputs(bool selectable);
     void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
 
     // Show/hide the DAX and DAX-IQ buttons and applets based on whether the
     // connected radio produces per-slice audio / per-pan IQ streams
@@ -398,6 +415,7 @@ private:
     SpeApplet*   m_speApplet{nullptr};
     QPushButton* m_speBtn{nullptr};
     VkampApplet* m_vkampApplet{nullptr};
+    LpMeterApplet* m_lpMeterApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};

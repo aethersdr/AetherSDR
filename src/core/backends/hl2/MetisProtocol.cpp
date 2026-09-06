@@ -156,6 +156,36 @@ Cc ccTxDrive(int level, bool paEnable) noexcept
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
 }
 
+Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
+{
+    // The chip address is MASKED to 7 bits rather than asserted, because C2
+    // bit 7 is the stop flag: an 8-bit I2C address passed by a caller who
+    // pre-shifted it would otherwise clear the stop bit and leave the bus
+    // held between transactions.
+    return {kC0I2c2,
+            kI2cCookieWrite,
+            static_cast<std::uint8_t>(kI2cStopAtEnd | (chip & 0x7F)),
+            reg,
+            data};
+}
+
+std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept
+{
+    std::array<Cc, kIoBoardTxFreqBanks> out{};
+    for (std::size_t i = 0; i < kIoBoardTxFreqBanks; ++i) {
+        const auto reg = static_cast<std::uint8_t>(kIoBoardRegTxFreqMsb + i);
+        // Register 0 carries bits 39:32 and register 4 bits 7:0, so the shift
+        // counts DOWN as the register number counts up. Writing this as
+        // (8 * i) would invert the byte order and hand the board a frequency
+        // in the wrong endianness, which reads as a wildly wrong band rather
+        // than as a small error.
+        const unsigned shift = 8u * static_cast<unsigned>(kIoBoardRegTxFreqLsb - reg);
+        out[i] = ccI2c2Write(kIoBoardI2cAddr, reg,
+                             static_cast<std::uint8_t>((hz >> shift) & 0xFFu));
+    }
+    return out;
+}
+
 void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
                   std::span<const std::complex<float>> iq) noexcept
 {
@@ -221,19 +251,46 @@ void Hl2Telemetry::apply(const Ep6Response& r) noexcept
         // ACTIVE LOW on the wire: the bit is SET when transmit is permitted.
         // Decoded here so nothing above this layer has to remember the inversion.
         txInhibited     = (r.data & (1u << 25)) == 0;
-        // TX IQ FIFO depth. hpsdrsim writes a 15-bit count as C2[6:0]:C3[7:0],
-        // i.e. DATA[22:8], and that is what this decodes because it is what we
-        // can actually verify.
+        // TX IQ FIFO status. CHECKED against the gateware at 883a338, which is
+        // what the comment that stood here asked for and did not have. It said
+        // hpsdrsim writes a 15-bit count at DATA[22:8], that the oracle's §6
+        // disagreed with itself about bit 14, and that nothing should servo on
+        // this field until someone read the RTL. Read; all three of the old
+        // fields were wrong.
         //
-        // THE ORACLE DISAGREES: §6 lists [14:8] as "FIFO count MSBs" and [15:14]
-        // as an under/overflow code, which overlaps bit 14 and cannot both be
-        // right. The gateware RTL is the authority and this has NOT been checked
-        // against it. Do not build FIFO-servoed TX pacing on this field until it
-        // has been — a pacing loop driven by a misread depth is exactly the kind
-        // of unverified assumption that wedged a radio once already.
-        txFifoCount     = static_cast<int>((r.data >> 8) & 0x7FFF);
-        txFifoUnderflow = ((r.data >> 14) & 0x3) == 0x2;
-        txFifoOverflow  = ((r.data >> 14) & 0x3) == 0x3;
+        // control.v:472 builds this slot as
+        //
+        //   data = {6'b000111, ~ext_txinhibit, (&clip_cnt), 8'h00,
+        //    bits    31:26     25              24           23:16
+        //           dsiq_status, VERSION_MAJOR}
+        //           15:8         7:0
+        //
+        // The FIFO field is DATA[15:8] and nothing more. DATA[23:16] is a
+        // constant zero, which is exactly why the old expression survived:
+        // (data >> 8) & 0x7FFF returns dsiq_status itself, the right number
+        // under a name claiming fifteen bits of sample count. Nothing it ever
+        // displayed looked absurd, so nothing ever prompted the read.
+        //
+        // dsiq_fifo composes the byte at fifos.v:100-110 as
+        // {recovery_flag_d1, rd_count[6:0]}, so:
+        //
+        //   [7]   one recovery flag, set by the FIFO running empty OR by its
+        //         writes being blocked after it filled. The gateware carries no
+        //         under/overflow distinction, so the two old booleans were
+        //         decoding a difference that is not on the wire — and they
+        //         disagreed with each other on the same event depending on
+        //         fill-level bit 6, reporting "underflow" at 0x80 and
+        //         "overflow" at 0xC0.
+        //   [6:0] the TOP 7 bits of the read-side fill level: coarse occupancy,
+        //         not a count of samples.
+        //
+        // Still NOT established, and so still not safe to servo on: what one
+        // unit of [6:0] is worth. rdbits is 12 for this board's
+        // DSIQ_FIFO_DEPTH of 16384 (hermeslite_core.v:136), making the unit 32
+        // read-side words, but words-to-samples is an inference. #17 needs that
+        // number measured before a pacing loop uses this field.
+        txFifoFillMsbs  = static_cast<int>((r.data >> 8) & 0x7F);
+        txFifoRecovery  = ((r.data >> 15) & 0x1) != 0;
         break;
     case 0x01:
         temperatureRaw  = static_cast<int>((r.data >> 16) & 0xFFFF);

@@ -34,8 +34,12 @@ void TunerModel::applyChanges(const TunerDelta& d)
     // fields (nickname/version/ant/dhcp/netmask/gateway/ptta/pttb) are dropped there.
     // Edge-signal emit order matches the old QMap key-sorted iteration:
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
+    const bool wasPresent = isPresent();
     bool changed = false;
+    std::optional<int> pendingAntennaA;
+    std::optional<bool> pendingTuning;
 
+    if (d.handle && m_handle != *d.handle)           { m_handle = *d.handle;       changed = true; }
     if (d.serialNum && m_serialNum != *d.serialNum) { m_serialNum = *d.serialNum; changed = true; }
     if (d.model && m_model != *d.model)             { m_model = *d.model;         changed = true; }
     if (d.operate && m_operate != *d.operate)       { m_operate = *d.operate;     changed = true; }
@@ -43,12 +47,12 @@ void TunerModel::applyChanges(const TunerDelta& d)
     if (d.antennaA && m_antennaA != *d.antennaA) {
         m_antennaA = *d.antennaA;
         changed = true;
-        emit antennaAChanged(m_antennaA);        // "antA" sorts before "tuning"
+        pendingAntennaA = m_antennaA;
     }
     if (d.tuning && m_tuning != *d.tuning) {
         m_tuning = *d.tuning;
         changed = true;
-        emit tuningChanged(m_tuning);
+        pendingTuning = m_tuning;
     }
     if (d.relayC1 && m_relayC1 != *d.relayC1) { m_relayC1 = *d.relayC1; changed = true; }
     if (d.relayC2 && m_relayC2 != *d.relayC2) { m_relayC2 = *d.relayC2; changed = true; }
@@ -56,8 +60,19 @@ void TunerModel::applyChanges(const TunerDelta& d)
     if (d.oneByThree && m_oneByThree != *d.oneByThree) { m_oneByThree = *d.oneByThree; changed = true; }
     if (d.ip && m_tgxlIp != *d.ip)                     { m_tgxlIp = *d.ip;              changed = true; }
 
-    if (changed)
+    const bool nowPresent = isPresent();
+    if (wasPresent != nowPresent) {
+        emit presenceChanged(nowPresent);
+    }
+    if (pendingAntennaA) {
+        emit antennaAChanged(*pendingAntennaA);  // "antA" sorts before "tuning"
+    }
+    if (pendingTuning) {
+        emit tuningChanged(*pendingTuning);
+    }
+    if (changed) {
         emit stateChanged();
+    }
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────

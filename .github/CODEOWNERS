@@ -56,7 +56,8 @@
 #         single-member team for no governance gain.
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
-# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust, @chibondking).
+# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T,
+#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton).
 #         AetherSDR source code and anything else not enumerated
 #         above (src/ — including the whole of MainWindow —
 #         third_party/, plugins/, hal-plugin/, resources/, packaging/,
@@ -212,6 +213,11 @@ LICENSE                      @aethersdr/maintainers
 # as the .claude/commands/ line above — do not narrow it back to a literal.
 SECURITY*                    @aethersdr/maintainers
 .github/CODEOWNERS           @aethersdr/maintainers
+# The per-PR test gate's frozen allow-list. Tier 1, not Tier 2, on purpose:
+# the file exists so that GROWING the gate is a visible, maintainer-reviewed
+# diff rather than one more "rides along" step in ci.yml (which is Tier 2).
+# See tools/check_ci_test_gate.py.
+.github/ci-test-gate.txt     @aethersdr/maintainers
 .github/codeql/              @aethersdr/maintainers
 docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 
