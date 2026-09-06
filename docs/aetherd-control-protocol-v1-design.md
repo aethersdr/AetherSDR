@@ -271,8 +271,10 @@ JSON fields cannot grant access.
 An authenticated session with no grants can negotiate and call
 `capabilities.get`, but advertises empty grants/resource capabilities and gets
 `auth.grant_denied` for every resource method. Both the service and direct
-subscription entry points enforce observe permission. No control or transmit
-grant is representable in this implementation yet.
+subscription entry points enforce observe permission. Control is independently
+representable; transmit remains absent. The local connection-control sub-slice
+and its explicit daemon flag are specified in
+[`aetherd-local-connection-control.md`](aetherd-local-connection-control.md).
 
 The owning thread can revoke a session through `revokeAuthorization()`. It
 clears subscriptions and queued frames before notifying the transport, stops

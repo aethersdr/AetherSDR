@@ -34,6 +34,10 @@ int main(int argc, char* argv[])
         QStringLiteral("Publish the simulator discovery identity without accessing radio hardware."));
     parser.addOption(localDiscoveryOption);
     parser.addOption(simDiscoveryOption);
+    const QCommandLineOption controlOption(
+        QStringLiteral("allow-local-control"),
+        QStringLiteral("Grant current-user local clients non-TX connect/disconnect permission."));
+    parser.addOption(controlOption);
     parser.process(app);
 
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
@@ -41,12 +45,21 @@ int main(int argc, char* argv[])
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
-    AetherSDR::control::LocalControlServer server;
+    std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
+    if (parser.isSet(controlOption)) {
+        connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
+        if (!connectionTarget) {
+            QTextStream(stderr) << "aetherd: cannot initialize connection control\n";
+            return 1;
+        }
+    }
+    AetherSDR::control::LocalControlServer server(
+        nullptr, {}, connectionTarget.get(), parser.isSet(controlOption));
     AetherSDR::control::RadioCatalogue catalogue(
         std::move(discoverySource), &server.resourceStore());
     [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
         &radioSession.radioModel(), &server.resourceStore(),
-        QStringLiteral("radio-1"));
+        QStringLiteral("radio-1"), nullptr, connectionTarget.get());
     if (!server.listen(parser.value(socketOption))) {
         QTextStream(stderr) << "aetherd: cannot listen on local socket '"
                             << parser.value(socketOption) << "'\n";

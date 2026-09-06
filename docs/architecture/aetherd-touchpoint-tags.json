@@ -1,4 +1,10 @@
 {
+ "core/control/RadioConnectionTarget.h": {
+  "tag": "universal",
+  "note": "Typed non-TX connection lifecycle seam; trusted target receives only catalogue observations after service authorization.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/control/RadioCatalogue.h": {
   "tag": "universal",
   "note": "Bounded read-only discovery resource projected from normalized observations; no vendor wire types or connection intents.",

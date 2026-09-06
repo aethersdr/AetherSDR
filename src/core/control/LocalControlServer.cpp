@@ -31,10 +31,11 @@ QJsonObject serverValue(const QString& localTransport)
 } // namespace
 
 struct LocalControlServer::Client {
-    Client(ControlResourceStore* resources, qint64 maxQueuedOutputBytes)
+    Client(ControlResourceStore* resources, qint64 maxQueuedOutputBytes,
+           SessionAuthorization authorization)
         // Only created for sockets accepted by the current-user endpoint.
         : session(std::make_unique<ControlSession>(
-              resources, maxQueuedOutputBytes, SessionAuthorization::Observer))
+              resources, maxQueuedOutputBytes, authorization))
     {
     }
 
@@ -48,8 +49,12 @@ LocalControlServer::LocalControlServer(QObject* parent)
 {
 }
 
-LocalControlServer::LocalControlServer(QObject* parent, Limits limits)
-    : QObject(parent), m_resources(), m_service(&m_resources), m_limits(limits)
+LocalControlServer::LocalControlServer(QObject* parent, Limits limits,
+                                     RadioConnectionTarget* connectionTarget,
+                                     bool allowLocalControl)
+    : QObject(parent), m_resources(), m_service(&m_resources, connectionTarget), m_limits(limits),
+      m_localAuthorization(allowLocalControl ? SessionAuthorization::ObserverController
+                                            : SessionAuthorization::Observer)
 {
     m_resources.upsert(
         {QStringLiteral("server"), {}, {}},
@@ -148,7 +153,8 @@ void LocalControlServer::acceptConnections()
         }
 
         std::unique_ptr<Client> ownedClient =
-            std::make_unique<Client>(&m_resources, m_limits.maxQueuedOutputBytes);
+            std::make_unique<Client>(&m_resources, m_limits.maxQueuedOutputBytes,
+                                     m_localAuthorization);
         Client* client = ownedClient.get();
         client->handshakeTimer.setSingleShot(true);
         client->handshakeTimer.setInterval(m_limits.handshakeTimeoutMs);
