@@ -102,6 +102,10 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.slider.handle", QString("#c8d8e8"));
     m_tokens.insert("color.slider.handle.disabled", QString("#506070"));
+    m_tokens.insert("color.spe.lcd.background", QString("#102010"));
+    m_tokens.insert("color.spe.lcd.bezel", QString("#222822"));
+    m_tokens.insert("color.spe.lcd.dim", QString("#3a553a"));
+    m_tokens.insert("color.spe.lcd.foreground", QString("#d6f5d6"));
     m_tokens.insert("color.spectrum.average", QString("#8ea8c0"));
     m_tokens.insert("color.spectrum.grid", QString("#1a2330"));
     m_tokens.insert("color.spectrum.peakHold", QString("#ffb84d"));

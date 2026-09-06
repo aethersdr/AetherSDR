@@ -157,7 +157,17 @@ if(APPLE)
     execute_process(COMMAND brew --prefix OUTPUT_VARIABLE HOMEBREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(HOMEBREW_PREFIX)
         link_directories("${HOMEBREW_PREFIX}/lib")
-        include_directories("${HOMEBREW_PREFIX}/include")
+        # SYSTEM is load-bearing, not cosmetic. A plain include_directories()
+        # here is directory-scoped at the TOP level, so it is inherited by every
+        # add_subdirectory() and initialises every target's INCLUDE_DIRECTORIES
+        # ahead of whatever that target adds for itself -- which means
+        # /opt/homebrew/include outranks every vendored include dir in the tree.
+        # Any Homebrew formula whose headers share a basename with a vendored one
+        # then silently wins, reversing the choice USE_SYSTEM_* made in CMake:
+        # ggml.h and whisper.h are both shadowed on the affected setup.
+        # SYSTEM emits -isystem, which the compiler searches AFTER all -I paths,
+        # so Homebrew stays findable and stops taking precedence.
+        include_directories(SYSTEM "${HOMEBREW_PREFIX}/include")
     endif()
 endif()
 
@@ -687,7 +697,10 @@ set(CORE_SOURCES
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
     src/core/control/ControlService.cpp       # aetherd v1 observe-only dispatch
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/RadioCatalogue.cpp       # bounded normalized discovery resource
     src/core/control/LocalControlServer.cpp   # current-user local transport
+    src/core/discovery/RadioDiscoverySource.h  # socket-free discovery interface (AUTOMOC)
+    src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
@@ -887,6 +900,7 @@ set(CORE_SOURCES
     src/core/WfmDemodulator.cpp
     src/core/WfmDsp.cpp
     src/core/WaveOutWriter.cpp
+    src/core/tnc/Ax25AudioCapture.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
@@ -1045,6 +1059,7 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/MeterApplet.cpp

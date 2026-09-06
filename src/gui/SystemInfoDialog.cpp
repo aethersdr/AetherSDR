@@ -2,11 +2,13 @@
 
 #include "LogSyntaxHighlighter.h"
 #include "SparklineDelegate.h"
+#include "TimeSeriesGraphWidget.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
-#include "core/SystemInfoCollector.h"
 
+#include <QAccessible>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -24,6 +26,12 @@
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
+
+// The gui-side ring repeats the collector's cadence rather than including the
+// core header (aetherd touchpoint burndown); this is where the two are pinned.
+static_assert(AetherSDR::MemoryHistoryRing::kSampleIntervalMs
+                  == AetherSDR::SystemInfoCollector::kSampleIntervalMs,
+              "MemoryHistoryRing::kSampleIntervalMs must match the collector's cadence");
 
 namespace AetherSDR {
 
@@ -110,7 +118,7 @@ QString stateText(ThreadRunState state)
 
 }  // namespace
 
-SystemInfoDialog::SystemInfoDialog(QWidget* parent)
+SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, QWidget* parent)
     // Title tracks the menu entry — see MainWindow_Menus.cpp for why it is not
     // "System Info". The geometry KEY deliberately does not follow: it is a
     // settings id, and changing it would silently discard the saved window
@@ -119,9 +127,13 @@ SystemInfoDialog::SystemInfoDialog(QWidget* parent)
     : PersistentDialog(QStringLiteral("Runtime Monitor"),
                        QStringLiteral("SystemInfoDialogGeometry"), parent)
 {
+    if (history != nullptr) {
+        m_memoryRing = history;
+    }
     auto* layout = new QVBoxLayout(bodyWidget());
     auto* tabs = new QTabWidget(bodyWidget());
     tabs->addTab(buildThreadsTab(), QStringLiteral("Threads"));
+    tabs->addTab(buildMemoryTab(), QStringLiteral("Memory"));
     tabs->addTab(buildLogsTab(), QStringLiteral("Logs"));
     layout->addWidget(tabs);
 
@@ -132,6 +144,10 @@ SystemInfoDialog::SystemInfoDialog(QWidget* parent)
     connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
     buttonRow->addWidget(closeButton);
     layout->addLayout(buttonRow);
+
+    // A reopened dialog shows the history it was handed before the first new
+    // sample arrives; with an empty ring this is a no-op.
+    refreshMemoryChart();
 
     resize(900, 600);
 }
@@ -379,6 +395,12 @@ void SystemInfoDialog::startSampling()
                     onThresholdExceeded(threadName, percentOfCore);
                 }
             });
+    connect(m_collector, &SystemInfoCollector::memorySampleReady, this,
+            [this, generation](const MemorySample& sample) {
+                if (generation == m_samplingGeneration) {
+                    applyMemorySample(sample);
+                }
+            });
     m_collectorThread->start();
 }
 
@@ -406,6 +428,9 @@ void SystemInfoDialog::stopSampling()
     // hidden, so a ring carried across that gap would describe a minute nobody
     // observed.
     m_ring.clear();
+    // The memory ring deliberately stays (and, injected, outlives this dialog):
+    // see its declaration. The chart shows the gap instead of pretending the
+    // minute was observed.
 
     // The alert goes with it. A red summary line left standing over a table
     // that stopped updating claims a thread is saturating a core right now,
@@ -414,6 +439,220 @@ void SystemInfoDialog::stopSampling()
     m_alertThreadName.clear();
     m_alertPercent = 0.0;
     applyAlertStyle();
+}
+
+// ── Memory ──────────────────────────────────────────────────────────────────
+
+namespace {
+
+// What "resident" means on this platform, in words an operator can read next
+// to the number. The snapshot's own names are identifiers, not labels.
+QString memoryMetricLabel(const QString& metric)
+{
+    if (metric == QLatin1String("physicalFootprint")) return QStringLiteral("physical footprint");
+    if (metric == QLatin1String("workingSet"))        return QStringLiteral("working set");
+    if (metric == QLatin1String("vmRss"))             return QStringLiteral("VmRSS");
+    return QStringLiteral("unsupported on this platform");
+}
+
+QString megabytesText(quint64 bytes)
+{
+    return QStringLiteral("%1 MB").arg(MemoryHistoryRing::megabytes(bytes), 0, 'f', 1);
+}
+
+}  // namespace
+
+QWidget* SystemInfoDialog::buildMemoryTab()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+
+    // Header row: what is being measured, and — top-right, where the network
+    // dialog keeps its own — how much history the chart shows. The selector
+    // lives on this tab rather than the window because Threads has a fixed
+    // 60 s window and Logs has none; the network dialog reaches the same
+    // outcome by hiding its combo on those pages.
+    auto* header = new QHBoxLayout;
+    m_memorySummary = new QLabel(QStringLiteral("Sampling…"), page);
+    m_memorySummary->setObjectName(QStringLiteral("systemInfoMemorySummary"));
+    m_memorySummary->setAccessibleName(QStringLiteral("Process memory summary"));
+    header->addWidget(m_memorySummary);
+    header->addStretch(1);
+    auto* rangeLabel = new QLabel(QStringLiteral("Timeframe"), page);
+    rangeLabel->setAccessibleName(QStringLiteral("Chart timeframe"));
+    m_memoryRange = new QComboBox(page);
+    m_memoryRange->setObjectName(QStringLiteral("systemInfoTimeframe"));
+    m_memoryRange->setAccessibleName(QStringLiteral("Chart timeframe"));
+    m_memoryRange->setAccessibleDescription(
+        QStringLiteral("Choose how much recent memory history the chart displays."));
+    m_memoryRange->setFixedWidth(132);
+    // The issue's four; the ring holds an hour raw, so nothing longer is offered
+    // until the compacting history arrives with the Overview tab.
+    m_memoryRange->addItem(QStringLiteral("1 minute"), 60);
+    m_memoryRange->addItem(QStringLiteral("5 minutes"), 5 * 60);
+    m_memoryRange->addItem(QStringLiteral("15 minutes"), 15 * 60);
+    m_memoryRange->addItem(QStringLiteral("1 hour"), 60 * 60);
+    m_memoryRange->setCurrentIndex(1);   // 5 minutes: 200 points at 1.5 s
+    connect(m_memoryRange, &QComboBox::currentIndexChanged, this,
+            &SystemInfoDialog::refreshMemoryChart);
+    header->addWidget(rangeLabel);
+    header->addWidget(m_memoryRange);
+    layout->addLayout(header);
+
+    // Readouts: the numbers, not only the line. Virtual is a readout only —
+    // on the chart its scale would flatten the three that move.
+    auto* readouts = new QHBoxLayout;
+    auto makeReadout = [&](const QString& caption, const QString& objectName,
+                           const QString& accessible, const QString& tip) {
+        auto* box = new QVBoxLayout;
+        auto* cap = new QLabel(caption, page);
+        ThemeManager::instance().applyStyleSheet(
+            cap, QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
+        auto* value = new QLabel(QStringLiteral("—"), page);
+        value->setObjectName(objectName);
+        value->setAccessibleName(accessible);
+        value->setToolTip(tip);
+        ThemeManager::instance().applyStyleSheet(
+            value, QStringLiteral("QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 16px; }"));
+        box->addWidget(cap);
+        box->addWidget(value);
+        readouts->addLayout(box);
+        return value;
+    };
+    m_memoryResident = makeReadout(
+        QStringLiteral("Resident"), QStringLiteral("systemInfoMemoryResident"),
+        QStringLiteral("Resident memory"),
+        QStringLiteral("Memory the OS currently holds for this process. What "
+                       "\"resident\" measures differs per platform — physical "
+                       "footprint on macOS, working set on Windows, VmRSS on "
+                       "Linux — and the summary line names which."));
+    m_memoryPeak = makeReadout(
+        QStringLiteral("Peak"), QStringLiteral("systemInfoMemoryPeak"),
+        QStringLiteral("Peak resident memory"),
+        QStringLiteral("The highest resident figure the OS has recorded for this "
+                       "process since it started. It only goes up, which is why "
+                       "the chart plots the current figure beside it. On macOS the "
+                       "peak is of the resident size, a different accounting from "
+                       "the physical footprint shown as Resident, so it can sit well "
+                       "above it."));
+    m_memoryPrivate = makeReadout(
+        QStringLiteral("Private"), QStringLiteral("systemInfoMemoryPrivate"),
+        QStringLiteral("Private memory"),
+        QStringLiteral("Memory that belongs to this process alone — not shared "
+                       "libraries, not the framebuffer. Growth here that the "
+                       "resident figure does not show is a leak's usual shape."));
+    m_memoryVirtual = makeReadout(
+        QStringLiteral("Virtual"), QStringLiteral("systemInfoMemoryVirtual"),
+        QStringLiteral("Virtual address space"),
+        QStringLiteral("Address space reserved, not memory used; gigabytes here "
+                       "are normal for a GPU-backed Qt process. A readout only: "
+                       "on the chart it would flatten the lines that matter."));
+    readouts->addStretch(1);
+    layout->addLayout(readouts);
+
+    m_memoryGraph = new TimeSeriesGraphWidget(QStringLiteral("Process memory"),
+                                              QStringLiteral(" MB"), page);
+    m_memoryGraph->setObjectName(QStringLiteral("systemInfoMemoryGraph"));
+    m_memoryGraph->setAccessibleName(QStringLiteral("Process memory over time"));
+    m_memoryGraph->setToolTip(
+        QStringLiteral("Resident, private and peak memory over the selected "
+                       "timeframe, sampled every %1 ms while this dialog is "
+                       "open. A break in a line is time with no samples: the dialog "
+                       "hidden, the machine asleep, or a late tick. "
+                       "Click a legend entry to show that series alone.")
+            .arg(SystemInfoCollector::kSampleIntervalMs));
+    layout->addWidget(m_memoryGraph, 1);
+    return page;
+}
+
+int SystemInfoDialog::selectedMemoryRangeSeconds() const
+{
+    if (m_memoryRange == nullptr) {
+        return 5 * 60;
+    }
+    return m_memoryRange->currentData().toInt();
+}
+
+void SystemInfoDialog::applyMemorySample(const MemorySample& sample)
+{
+    // Flat copy into the ring's own record: the ring stays free of core includes.
+    MemoryHistoryRing::Record record;
+    record.wallMs = sample.wallMs;
+    record.valid = sample.valid;
+    record.residentMetric = sample.residentMetric;
+    record.residentBytes = sample.residentBytes;
+    record.peakResidentBytes = sample.peakResidentBytes;
+    record.privateBytes = sample.privateBytes;
+    record.virtualBytes = sample.virtualBytes;
+    m_memoryRing->push(record);
+    refreshMemoryChart();
+}
+
+void SystemInfoDialog::refreshMemoryChart()
+{
+    // Readouts come from the ring, not the argument, so a sample that never
+    // reached the history cannot look as though it did.
+    const MemoryHistoryRing::Record* latest = m_memoryRing->latest();
+    if (latest == nullptr) {
+        return;
+    }
+    if (m_memorySummary != nullptr) {
+        // An invalid sample names no metric: on Linux residentMetric is set even
+        // when the VmRSS read failed (MemoryTelemetry.cpp), and "VmRSS" over four
+        // dashes would still read as a measurement.
+        m_memorySummary->setText(
+            latest->valid
+                ? QStringLiteral("Resident = %1 · %2 samples")
+                      .arg(memoryMetricLabel(latest->residentMetric))
+                      .arg(m_memoryRing->size())
+                : QStringLiteral("Process memory: not available on this platform"));
+    }
+    // A field the platform left at zero is not a measurement — Windows never
+    // fills virtualBytes, Linux leaves privateBytes at zero without
+    // /proc/self/smaps_rollup, an invalid sample fills nothing — so it reads
+    // "—", never "0.0 MB". Each readout then announces its new value the way
+    // docs/a11y.md asks for live values (name = caption + value, NameChanged);
+    // at 1.5 s this is far below the rate the doc says to throttle.
+    const auto show = [&](QLabel* label, const QString& caption, quint64 bytes) {
+        if (label == nullptr) {
+            return;
+        }
+        label->setText(latest->valid && bytes > 0 ? megabytesText(bytes)
+                                                  : QStringLiteral("\u2014"));
+        label->setAccessibleName(QStringLiteral("%1 %2").arg(caption, label->text()));
+        QAccessibleEvent event(label, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    };
+    show(m_memoryResident, QStringLiteral("Resident memory"), latest->residentBytes);
+    show(m_memoryPeak, QStringLiteral("Peak resident memory"), latest->peakResidentBytes);
+    show(m_memoryPrivate, QStringLiteral("Private memory"), latest->privateBytes);
+    show(m_memoryVirtual, QStringLiteral("Virtual address space"), latest->virtualBytes);
+
+    if (m_memoryGraph == nullptr) {
+        return;
+    }
+    const int rangeSeconds = selectedMemoryRangeSeconds();
+    // The window ends at the newest sample, not at the wall clock: a dialog
+    // whose sampling is paused shows the history it has, in place, instead of
+    // sliding it off the left edge while nothing new arrives.
+    const qint64 nowMs = latest->wallMs;
+    // Three samples' (or, once bucketed, three buckets') worth: a break drawn
+    // where the dialog was hidden, not at every late timer tick, and not
+    // between every bucket point of a long range.
+    const double gapSeconds = MemoryHistoryRing::connectGapSecondsFor(rangeSeconds);
+    using Field = MemoryHistoryRing::Field;
+    auto series = [&](const QString& label, const QColor& color, Field field) {
+        TimeSeriesGraphWidget::Series s{label, color, {}, QStringLiteral(" MB")};
+        s.points = m_memoryRing->series(field, rangeSeconds, nowMs);
+        s.maxConnectGapSeconds = gapSeconds;
+        return s;
+    };
+    ThemeManager& theme = ThemeManager::instance();
+    m_memoryGraph->setSeries(
+        {series(QStringLiteral("Resident"), theme.color("color.accent"), Field::Resident),
+         series(QStringLiteral("Private"),  theme.color("color.accent.success"), Field::Private),
+         series(QStringLiteral("Peak"),     theme.color("color.accent.warning"), Field::Peak)},
+        rangeSeconds);
 }
 
 // ── Logs ────────────────────────────────────────────────────────────────────

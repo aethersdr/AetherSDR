@@ -6,7 +6,7 @@ slice of RFC #3849. It supplements
 the envelope, limits, errors, authentication, and TX rules in that document
 remain normative.
 
-Only the four resource types below exist in this slice. `meter` and
+Only the five resource types below exist in this slice. `meter` and
 `transmitState` remain unimplemented. No method in this catalogue mutates a
 model or can reach a radio backend intent.
 
@@ -16,6 +16,7 @@ An exact identity has one of these shapes:
 
 ```json
 {"type":"server"}
+{"type":"radioCatalogue"}
 {"type":"radioSession","id":"radio-1"}
 {"type":"slice","radioSession":"radio-1","id":"0"}
 {"type":"panadapter","radioSession":"radio-1","id":"0x40000000"}
@@ -25,6 +26,8 @@ An exact identity has one of these shapes:
 an omitted `id` as an all-current-and-future selector for `radioSession`,
 `slice`, or `panadapter`; `slice` and `panadapter` still require
 `radioSession`. Unknown fields and unsupported resource types are rejected.
+`server` and `radioCatalogue` are singletons: neither accepts `id` or
+`radioSession`, including empty or null values.
 
 ## Methods
 
@@ -132,6 +135,72 @@ written; after reconnecting it must establish a new session and baseline.
 
 No endpoint path, process environment, hostname, or filesystem value is
 exported.
+
+### `radioCatalogue`
+
+The daemon owns this singleton through `RadioCatalogue`. It is readable with
+the same `observe` grant as the other resources; `radioCatalogue.read` is
+advertised only while an adapter has published the singleton. Other service
+embedders need not provide a discovery source. No new wire method is added.
+
+- `running`: the catalogue's started/not-stopped lifecycle, **not** a claim
+  that every native source successfully bound a socket or found a device.
+- `sources`: sorted enabled source families. This records startup configuration
+  and build availability, not scan health or the families currently visible.
+- `limited`: a valid new identity was dropped at capacity. It stays true until
+  a new catalogue instance is created, even after entries are lost or stopped.
+- `maxEntries`: 64.
+- `entries`: complete list, sorted by family then serial, of objects with:
+  - `id`: opaque stable identity derived from family plus serial; independent
+    of address, nickname, and arrival order. It is not a resource selector or
+    a connection authorization. Native sources with no unique serial (such as
+    RTL-SDR's USB-index fallback) retain their existing identity limitations.
+  - `family`: 1–16 ASCII lowercase letters/digits, starting with a letter.
+  - `serial`: nonempty, at most 128 UTF-16 code units.
+  - `name`, `model`, `nickname`, `version`: display observations, each at most
+    128 UTF-16 code units; empty means unavailable. Native discovery's existing
+    client-owned nickname behavior is retained for families that use it. Which
+    of these a family populates differs — a Flex publishes an empty `name`, and
+    the simulator an empty `nickname` — so a client renders the first nonempty
+    of `nickname`, `name`, `model`, and falls back to `serial`.
+  - `transport`: `lan`, `usb`, or `sim`.
+  - `address`, `port`: numeric IP address (at most 64 code units) and port
+    1–65535 for LAN; empty address and zero port for USB/simulator.
+  - `inUse`: native discovery's advisory busy observation, not ownership or a
+    control grant.
+
+Text must be valid UTF-16 without NUL or Unicode control characters. Invalid
+observations are discarded, not truncated into potentially colliding identities.
+No credentials, raw packets, connected-client identities, or saved connection
+entries are projected. The entry and string bounds keep the complete catalogue
+within the existing message limit. Unchanged duplicate announcements consume
+no revision; a changed value or loss publishes the complete new catalogue.
+Existing identities can still update at capacity, and newly freed capacity can
+accept another observation. `limited` discloses that the list may be incomplete.
+
+Daemon startup is passive by default (`sources: []`, `entries: []`).
+`--discover-local` explicitly enables existing Flex/HL2/ANAN LAN discovery and
+RTL-SDR USB enumeration when built in. `--discover-sim` independently publishes
+the existing simulator identity without constructing a radio backend or scanning
+LAN/USB. The flags may be combined. No discovered radio is connected. Icom's
+manual address/credentials, SmartLink and external directories are outside this
+slice; desktop discovery and autoconnect remain unchanged.
+
+Only `--discover-local` initializes the daemon's `AppSettings` store, before
+model/discovery consumers are constructed, so client-owned HL2/ANAN Identity
+nicknames remain available. This uses the normal settings load, migration,
+recovery and read-only protections; it does not create discovery entries from
+saved configuration. The flag is not inert against the store, though: the
+daemon and the desktop share one store, so on a machine where the desktop has
+never run, `--discover-local` is what creates `AetherSDR.db` and claims the
+one-shot legacy migration. The store is loaded only after the daemon owns its
+local endpoint, so a daemon that fails to listen never touches it. Passive and
+simulator-only startup do not load the store at all.
+
+One adapter/source instance has one lifecycle. `start()` is idempotent;
+`stop()` is terminal, clears observations and ignores late callbacks. Disposal
+removes the singleton. These are internal lifecycle calls, never protocol
+commands. Create a new instance to restart discovery.
 
 ### `radioSession`
 

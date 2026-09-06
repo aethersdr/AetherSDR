@@ -21,6 +21,7 @@
 #include "core/DtcsCodes.h"
 #include "core/aprs/AprsPacket.h"
 #include "core/Resampler.h"
+#include "core/tnc/Ax25AudioCapture.h"
 
 namespace AetherSDR::icom {
 namespace {
@@ -254,6 +255,7 @@ qint64 IcomCivBackend::nowMs() const
 
 IcomCivBackend::~IcomCivBackend()
 {
+    finishAx25PostResampleCapture();
     // QObject direct connections may run while this destructor body is still
     // active, so terminate before member destruction begins. The scheduler is
     // reset before results are emitted (terminateScheduler), which makes a
@@ -292,12 +294,23 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+    // setKeying() is intent; the decoded CI-V `1C 00` readback is the keyed
+    // state. AetherModem waits for that edge before releasing sample zero, and
+    // RadioModel does not synthesise a command-edge fallback here.
+    c.hasRadioPttReadback = true;
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
     c.cwTextKeyerName = QStringLiteral("CWK");
     c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
     c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;
+    // CI-V 14 0C and 14 09 use these physical endpoints; the UI must
+    // advertise the same limits as setCwSpeed()/setCwPitch().
+    c.cwSpeedMinWpm = 6;
+    c.cwSpeedMaxWpm = 48;
+    c.cwPitchMinHz = 300;
+    c.cwPitchMaxHz = 900;
+    c.cwPitchStepHz = profile.cwPitchStepHz > 1 ? profile.cwPitchStepHz : 10;
     c.cwTextMaxMessageChars = profile.cwTextKeyer
         ? profile.cwTextKeyer->maxMessageChars : 30;
     c.cwTextAllowedCharacters =
@@ -348,6 +361,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     if (basicFmProfileFor(m_model)) {
         c.fmTonePresentation = FmTonePresentation::Legacy;
     }
+    const FmRepeaterProfile* repeaterProfile = basicFmProfileFor(m_model);
+    c.hasFmRepeaterOffset = repeaterProfile && repeaterProfile->hasDuplex;
     if (ctcssRxProfileFor(m_model)) {
         c.fmTonePresentation = FmTonePresentation::Ctcss;
         const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
@@ -475,6 +490,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // path. In particular, the IC-9700 must not inherit Flex's compander
     // surface merely because both radios perform other DSP on-radio.
     c.hasDownwardExpander = false;
+    c.alcMeterUnit = QStringLiteral("Percent");
+    c.compressionMaximumDb = profile.meters.calibration == MeterCalibration::Ic7300Mk2
+        ? 30.0f : 25.0f;
+    c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
+    c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
+    c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
+    c.hasCwTune = profile.hasCwTune;
+    c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
+    c.hasVoxDelay = false; // setVox implements enable/gain only.
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -543,10 +567,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasRadioSideWaterfallAutoBlack = false;
     const MemoryProfile* memory = m_model && profileFor(*m_model).memory
         ? &*profileFor(*m_model).memory : nullptr;
-    c.persistsMemories = memory != nullptr;
+    // The AetherSDR memory model is always the shared client database for
+    // Icom. A model-specific codec only adds an explicit radio-to-database
+    // Sync source; it does not hand ownership of the working store to the
+    // radio.
+    c.persistsMemories = false;
     c.canWriteMemories = false;
     c.canApplyMemories = false;
-    c.canRefreshMemories = c.persistsMemories;
+    c.canRefreshMemories = memory != nullptr;
     if (memory) {
         c.memoryGroupColumnTitle = QString::fromLatin1(memory->groupColumnTitle.data(),
             static_cast<qsizetype>(memory->groupColumnTitle.size()));
@@ -808,6 +836,11 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
     disconnectRadio();
 
+    // The stable import identity arrives in the authenticated RS-BA1
+    // capabilities record. An endpoint is deliberately not used here: DHCP,
+    // mDNS and NAT changes must not turn one radio into a second import source.
+    m_memoryImportSource.clear();
+
     IcomSession::Params p;
     p.host = QHostAddress(request.host);
     p.controlPort = request.port ? request.port : kControlPort;
@@ -826,10 +859,8 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     // radio simply never answers, so the session comes up, publishes the
     // conservative unknown capabilities, and reads as a half-finished backend.
     //
-    // An absent parameter now means AUTO: seed the address from whatever the
-    // RS-BA1 handshake names the radio, then let its own 0x19 0x00 reply correct
-    // that. 0xA4 survives only as the last fallback, for a radio that neither
-    // names itself recognisably nor answers the broadcast.
+    // Auto learns the destination from the source of the CI-V ID reply.
+    // The seed cannot authorize ordinary polling before identification.
     const bool haveCiv = request.params.contains(QStringLiteral("icom.civAddress"));
     const uint civParam = request.params.value(QStringLiteral("icom.civAddress"), 0).toUInt();
     const bool civValid = haveCiv && civParam > 0 && civParam <= 0xFF;
@@ -840,9 +871,13 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
         civValid && request.params.value(QStringLiteral("icom.civAddressPinned")).toBool();
     m_civSeedAddress = p.civAddress;
     m_civReported = 0;
+    m_civModelId = 0;
     m_civAmbiguous = false;
-    m_connectBurstSent = false;
-    m_modelByName = nullptr;
+    m_civUnexpectedResponderWarned = false;
+    m_civDetectAttempts = 0;
+    m_waitingForWake = request.params.value(QStringLiteral("icom.waitingForWake")).toBool();
+    m_wakeOnConnect = request.params.value(QStringLiteral("icom.wakeOnConnect")).toBool();
+    m_wakeModelId = request.params.value(QStringLiteral("icom.wakeModelId")).toUInt();
     // 48 kHz, FIXED — the rate is deliberately not negotiable here.
     //
     // It is tempting on a weak link: 48 kHz LPCM is ~768 kbps each way, and a
@@ -881,6 +916,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    finishAx25PostResampleCapture();
     finishMemoryRefresh(false);
     m_tuneTimer->stop();
     ++m_sessionGeneration;
@@ -972,9 +1008,10 @@ void IcomCivBackend::disconnectRadio()
     // between sessions. An auto-detected value is DETECTED, never CHOSEN — it is
     // never written back to settings, so "auto" survives more than one session.
     m_civReported = 0;
+    m_civModelId = 0;
     m_civAmbiguous = false;
-    m_connectBurstSent = false;
-    m_modelByName = nullptr;
+    m_civUnexpectedResponderWarned = false;
+    m_civDetectAttempts = 0;
     m_scopeStarted = false;
     m_tuning = false;
     m_cwBreakInMode = 1;
@@ -1006,8 +1043,7 @@ void IcomCivBackend::sendConnectReadBurst()
 {
     if (!m_session)
         return;
-    // Re-entrancy: a retarget arriving mid-burst would otherwise stack.
-    m_connectBurstSent = true;
+    // A valid identity ends discovery before the model-shaped snapshot starts.
     if (m_civDetectTimer)
         m_civDetectTimer->stop();
 
@@ -1207,16 +1243,30 @@ void IcomCivBackend::refreshMemories(const QString& groupName)
         return;
     }
     const MemoryProfile& memory = *profileFor(*m_model).memory;
+    if (m_memoryImportSource.isEmpty()) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: RS-BA1 supplied no stable radio identity";
+        emit configurationWarning(
+            QStringLiteral("This radio did not provide a stable RS-BA1 identity, so its "
+                           "memories cannot be synced safely."));
+        return;
+    }
     int selectedGroup = -1;
     if (!groupName.isEmpty() && memory.firstGroup >= 0) {
         for (int group = memory.firstGroup; group <= memory.lastGroup; ++group) {
-            if (groupName == QString::fromStdString(memoryGroupName(memory.dialect, group))) {
+            if (groupName.trimmed().compare(
+                    QString::fromStdString(memoryGroupName(memory.dialect, group)),
+                    Qt::CaseInsensitive) == 0) {
                 selectedGroup = group;
                 break;
             }
         }
     }
     if (memory.requiresGroupSelection && selectedGroup < memory.firstGroup) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: invalid group selection" << groupName;
+        emit configurationWarning(
+            QStringLiteral("Choose a valid Icom memory group before syncing."));
         return;
     }
     m_memoryRefreshActive = true;
@@ -1261,221 +1311,128 @@ void IcomCivBackend::finishMemoryRefresh(bool success)
     emit memoryRefreshFinished(success, m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
 }
 
-// The radio answered 0x19 0x00. Decide whether to believe it, and where that
-// leaves the destination.
-//
-// IDENTITY always comes from here — modelForCivAddress() is one of exactly two
-// writers of m_model, and both read the wire rather than the operator's pick, so
-// capabilities have always followed the actual radio. What is new is that the
-// DESTINATION can follow it too.
-void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
+// CI-V 19 00 carries two independent facts: the envelope's source is the
+// operating address, and its payload is the model ID (wfview icomcommander,
+// funcTransceiverId / determineRigCaps). A changed address is not a changed model.
+bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId)
 {
-    if (reported == 0)
-        return;
-
-    // ONCE AMBIGUOUS, ALWAYS AMBIGUOUS for this session — and this guard is
-    // load-bearing rather than defensive.
-    //
-    // The revert below re-issues the read burst at the seed address, but the
-    // burst sent at the *adopted* address is already in flight and carries its
-    // own directed 0x19 0x00. That reply lands after the revert, matches
-    // m_civReported exactly (so it is not a third address), falls through to the
-    // retarget branch, and quietly puts the session back on the responder we had
-    // just decided we could not trust — undoing the revert with no warning.
-    //
-    // Found by tracing the two-responder test rather than by running it: the
-    // test asserted the identity and the warning, both of which survive the
-    // regression, and passed either way.
-    if (m_civAmbiguous)
-        return;
-
-    // TWO DIFFERENT RESPONDERS — adopt NEITHER, and go back to the seed.
-    //
-    // Broadcast on a point-to-point LAN radio is unambiguous, and both lab
-    // radios behaved that way. But Icom's own RS-BA1 server can front a real
-    // serial CI-V bus carrying a second radio, a rotator or an amplifier, and
-    // every one of those answers 0x00. Picking whichever replied first would
-    // decode the rest of the session against a device the operator never chose
-    // — silently, and with a plausible-looking result.
-    //
-    // Unmeasured here: both lab radios are single direct-LAN devices. The
-    // handling is deliberately the conservative one for a case we have reasoned
-    // about but not reproduced.
-    if (m_civReported != 0 && m_civReported != reported) {
-        if (!m_civAmbiguous) {
-            m_civAmbiguous = true;
-            qCWarning(lcIcomAddr) << "two CI-V addresses answered the broadcast:"
-                              << Qt::hex << m_civReported << "and" << reported
-                              << "- adopting neither";
-            emit configurationWarning(
-                QStringLiteral("More than one device answered on this CI-V bus "
-                               "(%1 and %2). Choose the radio's model, or enter its "
-                               "CI-V address, so AetherSDR knows which one to use.")
-                    .arg(QString::number(m_civReported, 16).toUpper(),
-                         QString::number(reported, 16).toUpper()));
-            // GIVE BACK THE IDENTITY FIRST, which the first responder had
-            // already been allowed to set. Reverting the address alone leaves
-            // the far worse half of the problem in place: capabilities — TX
-            // power ceiling, band ranges, scope geometry — would go on
-            // describing a device we have just decided we cannot identify,
-            // while the frames go somewhere else entirely. Caught by the
-            // two-responder test, which passed on the address assertion alone.
-            //
-            // BEFORE the revert below, because the burst that revert re-issues
-            // is shaped by m_model: reverting the address first would send it
-            // built against the very identity we are withdrawing.
-            m_model = m_modelByName ? m_modelByName : &unknownModel();
-
-            // Back to what the operator or the handshake gave us. That is a
-            // choice with a reason behind it; "whoever spoke first" is not.
-            // Discard everything queued for the responder we no longer trust,
-            // including a directed identity read that may already be in flight.
-            // The replacement snapshot below is the only work allowed to
-            // survive the destination change.
-            terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
-                               SchedulerWaiterOutcome::Cancelled);
-            if (m_session) {
-                if (m_session->civAddress() != m_civSeedAddress)
-                    m_session->setCivAddress(m_civSeedAddress);
-                sendConnectReadBurst();
-                // Same destination argument as the retarget path below: the
-                // switches went to a responder we have just walked away from.
-                m_scopeStarted = false;
-                applyScopeStartup();
-            }
-            publishCapabilities();
-            // The mode vocabulary is withdrawn with the rest of the identity.
-            // modeListFor() answers empty for the unknown model, so the model
-            // stops asserting the first responder's list for a radio we have
-            // just decided we cannot identify.
-            publishModeList();
-            publishIdentity();
+    if (m_civAmbiguous || !m_session) {
+        return false;
+    }
+    if (m_civAddressPinned && address != m_session->civAddress()) {
+        return false; // a reply from another bus device cannot identify our selection
+    }
+    if (m_civReported != 0) {
+        if (m_civReported == address && m_civModelId == modelId) {
+            return false; // directed confirmation must not restart the snapshot
         }
-        return;
-    }
-    m_civReported = reported;
-
-    if (!m_session)
-        return;
-
-    // A TYPED address is a device selection and outranks the wire on
-    // destination — but the disagreement is still worth naming, because on a
-    // point-to-point radio it means the typed address is simply wrong and the
-    // symptom (a connected radio that answers nothing) names no cause at all.
-    if (m_civAddressPinned) {
-        if (reported != m_session->civAddress()) {
-            qCWarning(lcIcomAddr) << "radio reports CI-V address" << Qt::hex << reported
-                              << "but the entered address" << m_session->civAddress()
-                              << "was kept - it selects the device";
-            emit configurationWarning(
-                QStringLiteral("This radio reports CI-V address %1, not the %2 that "
-                               "was entered. The entered address is being used.")
-                    .arg(QString::number(reported, 16).toUpper(),
-                         QString::number(m_session->civAddress(), 16).toUpper()));
+        m_civAmbiguous = true;
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
+        // Native CW may still be queued in the radio even when PTT reads RX.
+        // Send a response-free abort before withdrawing its keyer capability;
+        // Clear/ESC can no longer route to that keyer after publication below.
+        if (capabilities().hasRadioSideCwKeyer) {
+            queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
+                                       "cw.message");
+            pumpCiv(nowMs());
         }
-        return;
+        // Release the destination previously selected by this session before
+        // withdrawing its profile. Do not redirect an unkey to the seed address.
+        if (m_keyed || m_tuning || m_pendingPttIntent.value_or(false)) {
+            setKeying(false);
+        }
+        m_model = &unknownModel();
+        if (m_civDetectTimer) {
+            m_civDetectTimer->stop();
+        }
+        if (m_meterTimer) {
+            m_meterTimer->stop();
+        }
+        m_scopeStarted = false;
+        publishCapabilities();
+        publishMeterDefs();
+        publishModeList();
+        publishIdentity();
+        emit configurationWarning(QStringLiteral(
+            "Conflicting CI-V identification replies. Transmit is disabled; "
+            "select the radio's CI-V address and reconnect."));
+        return false;
     }
 
-    if (reported == m_session->civAddress()) {
-        qCInfo(lcIcomAddr) << "CI-V address confirmed by the radio:" << Qt::hex << reported;
-        return;
-    }
-
-    // RETARGET. The seed was a model-table lookup or an operator's model pick,
-    // and the radio has just said otherwise about itself — which it is entitled
-    // to do, because the address is changeable on the radio's own front panel
-    // and nothing on our side can know that.
-    // No queued or in-flight command addressed to the old destination can be
-    // reused after this point. In particular, semantic read coalescing must not
-    // mistake an old-address startup read for the replacement snapshot.
+    m_civReported = address;
+    m_civModelId = modelId;
+    const IcomModel* identified = modelForId(modelId);
+    m_model = identified ? identified : &unknownModel();
+    // Cancel the identity read and any fallback snapshot before selecting the
+    // destination. The new snapshot must use the resolved model's vocabulary.
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                        SchedulerWaiterOutcome::Cancelled);
-    qCInfo(lcIcomAddr) << "retargeting CI-V from" << Qt::hex << m_session->civAddress()
-                   << "to the address the radio reported:" << reported;
-    m_session->setCivAddress(reported);
-
-    // RESOLVE THE MODEL BEFORE THE BURST, not after it.
-    //
-    // onCivFrame does this same lookup a few lines further on, together with the
-    // publishing that belongs with it - but it runs AFTER this, and the burst
-    // below is not model-neutral: it gates the 0x26 DATA-mode read on
-    // hasVfoModeCommand, which only a resolved model sets. Re-issuing first and
-    // resolving second therefore drops that read on precisely the path that
-    // needs it most - an unrecognised handshake name in front of a radio the
-    // table does know, which is the RS-BA1-server shape this feature exists to
-    // survive. Without the read, a radio left in USB-D is adopted as plain USB
-    // and our first write pushes it the rest of the way out of DATA (#4984).
-    //
-    // Cheap and idempotent: the lookup below repeats it and does the publishing.
-    if (const IcomModel* byAddress = modelForCivAddress(reported))
-        m_model = byAddress;
-
-    // The burst either has not run yet (unknown model, waiting on exactly this
-    // reply) or ran against an address nobody answered on. Both want it sent at
-    // the address that just answered, so there is no branch here.
-    sendConnectReadBurst();
-
-    // AND THE SCOPE SWITCHES, for the same reason the burst goes again.
-    //
-    // "Started" was per SESSION, but these are addressed frames, so what it has
-    // to mean is per DESTINATION. A radio whose name resolved had its scope
-    // switched on at the connect edge - addressed to the seed, where by this
-    // function's own premise nobody is listening - and the latch then refused to
-    // send them anywhere else for the rest of the session. Everything else
-    // recovers here, so the session reads as healthy while capabilities() goes
-    // on advertising a panadapter that can never fill: the exact black-panadapter
-    // symptom applyScopeStartup() exists to prevent.
+    m_session->setCivAddress(address);
     m_scopeStarted = false;
-    applyScopeStartup();
-
-    // SAY WHAT HAPPENED — but only when it is something the operator could not
-    // work out from the radio name and a working panadapter.
-    //
-    // "Auto" that never explains itself is undebuggable, and it is also how this
-    // feature gets judged. But a message on every ordinary resolution is noise:
-    // when the reported address maps straight back to a model in the table, the
-    // operator already sees that model's name and its scope, and there is
-    // nothing to report.
-    const IcomModel* byWire = modelForCivAddress(reported);
-    const QString addrHex = QString::number(reported, 16).toUpper();
-    if (byWire && m_modelByName && byWire != m_modelByName) {
-        // The radio's NAME and its ADDRESS name different models. Rare, and
-        // genuinely ambiguous — an RS-BA1 server fronting one radio while
-        // reporting its own name would look exactly like this.
-        emit configurationWarning(
-            QStringLiteral("This radio reports its name as %1 but its CI-V address "
-                           "(%2) belongs to an %3. Using the address.")
-                .arg(QString::fromUtf8(m_modelByName->name.data(),
-                                       static_cast<int>(m_modelByName->name.size())),
-                     addrHex,
-                     QString::fromUtf8(byWire->name.data(),
-                                       static_cast<int>(byWire->name.size()))));
-    } else if (!byWire && m_modelByName) {
-        // The address was changed on the radio's own front panel. Nothing is
-        // wrong and nothing needs doing — this is the case auto-detect exists
-        // for, and it is worth one line so "why does it say 50?" has an answer.
-        emit configurationWarning(
-            QStringLiteral("%1 is using CI-V address %2 — detected automatically.")
-                .arg(QString::fromUtf8(m_modelByName->name.data(),
-                                       static_cast<int>(m_modelByName->name.size())),
-                     addrHex));
-    } else if (!byWire) {
-        // Neither signal resolved a model, so unknownModel()'s conservative
-        // capabilities stand: no scope, no transmit. EXPLAINING that is the
-        // point — today the operator gets the same reduced radio with no clue
-        // why, and reads it as a half-finished backend rather than a model we
-        // have no numbers for.
-        emit configurationWarning(
-            QStringLiteral("Connected on CI-V address %1, which is not a model "
-                           "AetherSDR has data for — scope and transmit stay off. "
-                           "Frequency and mode still work.")
-                .arg(addrHex));
+    sendConnectReadBurst();
+    qCInfo(lcIcomAddr) << "CI-V identity: model ID" << Qt::hex << modelId
+                     << "at address" << address;
+    if (!identified) {
+        emit configurationWarning(QStringLiteral(
+            "Unrecognized Icom model ID %1. Model-specific controls and transmit "
+            "remain disabled.").arg(QString::number(modelId, 16).toUpper()));
     }
+    return true;
+}
+
+void IcomCivBackend::requestCivIdentity(std::uint64_t sessionGeneration)
+{
+    if (!m_connected || !m_session || sessionGeneration != m_sessionGeneration
+        || m_civReported != 0 || m_civAmbiguous) {
+        return;
+    }
+    const int maxAttempts = m_waitingForWake ? 20 : kCivDetectMaxAttempts;
+    if (m_civDetectAttempts >= maxAttempts) {
+        m_civDetectTimer->stop();
+        qCWarning(lcIcomAddr) << "CI-V identification failed after"
+                             << m_civDetectAttempts << "attempts";
+        if (m_wakeOnConnect) {
+            m_wakeOnConnect = false; // one request per initial connection attempt
+            // Auto uses the authenticated network radio's advertised destination.
+            // This selects where to send power-on, never a capability identity.
+            const uint address = m_civAddressPinned ? m_session->civAddress()
+                                                   : m_session->advertisedCivAddress();
+            if (address > 0 && address < 0xE0) {
+                emit extensionStatus(QStringLiteral("icom"), QStringLiteral("power.wakeNeeded"),
+                    QVariantMap{{QStringLiteral("modelId"), m_wakeModelId},
+                                {QStringLiteral("address"), address}});
+                return;
+            }
+            emit configurationWarning(QStringLiteral("Radio did not provide a wake address. Retry the connection."));
+            return;
+        }
+        emit configurationWarning(QStringLiteral(
+            "The Icom network connection is open, but the radio did not answer "
+            "model identification. Check its network CI-V settings and selected "
+            "CI-V address, then reconnect. Transmit remains disabled."));
+        return;
+    }
+    ++m_civDetectAttempts;
+    qCInfo(lcIcomAddr) << "CI-V identification attempt" << m_civDetectAttempts
+                      << "of" << maxAttempts;
+    queueRead(cmdReadId(m_civAddressPinned ? m_session->civAddress()
+                                         : kBroadcastAddress),
+              m_civAddressPinned ? "identity.directed" : "identity.broadcast",
+              IcomCivScheduler::Priority::Maintenance);
+    pumpCiv(nowMs());
 }
 
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
     m_deviceName = deviceName.trimmed();
+    const std::string stableRadioId = radioIdHex(m_session->radioId());
+    if (stableRadioId.empty()) {
+        m_memoryImportSource.clear();
+    } else {
+        m_memoryImportSource = QStringLiteral("icom:%1").arg(
+            QString::fromStdString(stableRadioId));
+    }
     m_connected = true;
     m_connectedAtMs = nowMs();
     m_lastIncident.clear();
@@ -1487,69 +1444,10 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_lastOutboundCivKey.clear();
     m_lastOutboundCivAtMs = 0;
 
-    // RESOLVE THE MODEL FROM THE NAME, NOW.
-    //
-    // capabilities() answers from m_model, which starts as unknownModel() —
-    // deliberately conservative: no scope, NO TRANSMIT. That default is right
-    // for a radio we cannot characterise, and wrong the moment we can: the
-    // 0x19 0x00 address query needs a serial stream that does not exist until
-    // after this point, so anything reading capabilities on the connect edge
-    // saw canTransmit=false and refused to key a radio that transmits fine.
-    // radiocert's meters and tx phases both did exactly that.
-    //
-    // The capabilities packet already told us the name during the handshake, so
-    // use it. The address query still runs and still wins — it is the
-    // authority, this is just early enough to be useful.
-    m_modelByName = modelForName(m_deviceName.toStdString());
-    if (m_modelByName) {
-        m_model = m_modelByName;
-        // And declare the bands NOW, for the same reason the model is resolved
-        // now: the band menu is built on the connect edge, while the 0x19 0x00
-        // query that would confirm this identity still has no serial stream to
-        // run on. That query re-publishes when it answers; this is just early
-        // enough to be useful. Left inside the guard on purpose — an
-        // unidentified radio declares nothing and keeps the HF grid, rather
-        // than announcing itself as "Unknown Icom" with no bands at all.
-        publishIdentity();
-    } else {
-        // A custom Network Radio Name is intentionally not a model name. Publish
-        // it before connected() anyway so the status bar never exposes the
-        // manual-connect placeholder while the broadcast 0x19 0x00 query learns
-        // the canonical model. A present-but-empty nickname also clears that
-        // placeholder; publishIdentity() supplies the model fallback later.
-        RadioDelta r;
-        r.nickname = m_deviceName;
-        emit radioChanged(r);
-    }
-
-    // WRONG DEVICE, said as early as it can be said.
-    //
-    // Keyed on the NAME, not the address, and that distinction is the whole
-    // check. An address difference is the ordinary case — an operator who picked
-    // "IC-9700" and later changed the address on the radio gets corrected below
-    // and should hear nothing about it. A NAME difference is the operator having
-    // reached a different radio than the one they selected, usually by typing
-    // the bench rig's IP, and it is worth saying out loud: capabilities follow
-    // the wire, so a 10 W radio quietly replaces the 100 W one they chose.
-    //
-    // A warning rather than a refusal. capabilities() answers from m_model,
-    // which only modelForName() and modelForCivAddress() ever set — the wire,
-    // never the pick — so TX ceilings, band ranges and scope geometry already
-    // track the actual radio. That makes this a LABELLING problem, and blocking
-    // the connect would ask the operator to fix by hand what we have already
-    // fixed ourselves.
-    if (m_civAddressPinned && m_modelByName) {
-        if (const IcomModel* picked = modelForCivAddress(m_civSeedAddress);
-            picked && picked != m_modelByName) {
-            emit configurationWarning(
-                QStringLiteral("Connected to %1, not the %2 this CI-V address "
-                               "selects. Check the radio's IP address.")
-                    .arg(QString::fromUtf8(m_modelByName->name.data(),
-                                           static_cast<int>(m_modelByName->name.size())),
-                         QString::fromUtf8(picked->name.data(),
-                                           static_cast<int>(picked->name.size()))));
-        }
-    }
+    // Network Radio Name is operator-defined presentation text. Even a name
+    // matching a supported model cannot grant capabilities before CI-V replies.
+    m_model = &unknownModel();
+    publishIdentity();
 
     // The radio's audio is 48 kHz mono; the seam's per-slice contract is 24 kHz
     // interleaved stereo. Built once here rather than per-buffer: r8brain is
@@ -1558,75 +1456,16 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_rxResampler = std::make_unique<Resampler>(
         static_cast<double>(m_audioRateHz), static_cast<double>(kEngineAudioRateHz), 4096);
 
-    // SEED THE DESTINATION FROM THE NAME, before anything is addressed.
-    //
-    // This is the one wire the whole feature hangs on. The name resolved above
-    // already IS a CI-V address — kModels holds both — and it is the only
-    // identity that exists at this instant, because the 0x19 0x00 query needs a
-    // serial stream that only just opened. Seeding here costs nothing and closes
-    // the silent-dead-session gap on its own, for every model in the table.
-    //
-    // Skipped when the operator TYPED an address: that is a device selection on
-    // a possibly-shared bus, and our table lookup does not get to overrule it.
-    if (!m_civAddressPinned && m_modelByName) {
-        m_session->setCivAddress(m_modelByName->civAddress);
-        // ...AND THIS IS NOW THE SEED. m_civSeedAddress is where the two-
-        // responder path reverts to when it decides no reported address can be
-        // trusted, and its comment there promises "what the operator or the
-        // handshake gave us" - but it was captured in connectRadio() from the
-        // request param and never updated here, so the handshake half was not
-        // true. An ambiguous bus therefore threw away a name-resolved address
-        // that was very likely correct and fell back to the 0xA4 default.
-        m_civSeedAddress = m_modelByName->civAddress;
-    }
-
-    // ONE BROADCAST 0x19 0x00 — the actual auto-detect, and the only frame this
-    // change adds to the connect edge.
-    //
-    // CI-V is addressed, so a directed query can only ever confirm an address we
-    // already believe; asked at 0x00 the radio answers with the address it
-    // actually uses, whatever that is. Measured 2026-08-14 on both lab radios:
-    // an IC-9700 replied fe fe e0 a2 19 00 a2 fd and an IC-705 fe fe e0 a4 19 00
-    // a4 fd, while the same session's query to a bogus 0x12 drew only the bus
-    // echo — so the answer discriminates rather than the radio replying to
-    // everything. It needs no model table, so it resolves a radio kModels has
-    // never heard of, and it is correct when the address was changed ON the
-    // radio, which no table can be.
-    //
-    // SENT ONCE PER CONNECT. Never polled, never retried on a timer — see the
-    // bounded wait below and RFC #4983.
-    if (!m_civAddressPinned) {
-        queueRead(cmdReadId(kBroadcastAddress), "identity.broadcast",
-                  IcomCivScheduler::Priority::Maintenance);
-    }
-
-    // THE COMMON PATH STARTS WITHOUT AN AUTO-DETECT WAIT.
-    //
-    // Whenever the name resolved — both lab radios and all seven models in
-    // kModels — the address is already right, so the snapshot is admitted now
-    // and the broadcast above leads it through the shared scheduler as a
-    // correction path. Only a radio whose name we do not recognise waits, and
-    // only for as long as it takes to learn where to send the snapshot; sending
-    // it to a guessed address first would be twenty frames to nobody.
-    if (m_civAddressPinned || m_modelByName) {
-        sendConnectReadBurst();
-    } else {
-        m_civDetectTimer = new QTimer(this);
-        m_civDetectTimer->setSingleShot(true);
-        connect(m_civDetectTimer, &QTimer::timeout, this, [this] {
-            if (m_connectBurstSent)
-                return;
-            // NO REPLY. Burst at the fallback address anyway rather than leaving
-            // the operator with a connected radio and no state at all — a silent
-            // radio still deserves whatever a wrong-address session can give,
-            // and this is exactly today's behaviour, reached only now.
-            qCInfo(lcIcomAddr) << "no CI-V id reply within" << kCivDetectTimeoutMs
-                           << "ms; falling back to address"
-                           << Qt::hex << m_session->civAddress();
-            sendConnectReadBurst();
-        });
-        m_civDetectTimer->start(kCivDetectTimeoutMs);
-    }
+    // A freshly opened serial pipe can echo traffic before the radio answers
+    // 19 00. Retry identity itself; polling the seed cannot recover Auto when
+    // the actual radio is at a different address (#5164, IC-7300MK2 logs).
+    m_civDetectTimer = new QTimer(this);
+    const std::uint64_t generation = m_sessionGeneration;
+    connect(m_civDetectTimer, &QTimer::timeout, this, [this, generation] {
+        requestCivIdentity(generation);
+    });
+    m_civDetectTimer->start(kCivDetectIntervalMs);
+    requestCivIdentity(generation);
     applyScopeStartup();
 
     // CONNECTED FIRST, then the state.
@@ -1662,22 +1501,9 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     s.inUse = true;
     s.active = true;
     s.txSlice = true;   // one receiver IS the transmitter
-    if (m_model && profileFor(*m_model).rxAntenna
-        && profileFor(*m_model).rxAntenna->selectable) {
-        s.rxAntennaList = QStringList{QStringLiteral("ANT1"),
-                                      QStringLiteral("RX-ANT")};
-        s.txAntennaList = QStringList{QStringLiteral("ANT1")};
-        s.txAntenna = QStringLiteral("ANT1");
-        // The documented read form returns only FB on live B6 firmware, so no
-        // current selection is claimed here. A user selection is optimistic
-        // for this session; reconnect never replays client-owned state.
-    }
     emit sliceChanged(sliceId(), s);
 
-    // AFTER the slice exists, and from the name-resolved model. The address
-    // query that would correct it needs a serial stream that only just opened,
-    // so this is the earliest the vocabulary can be published — and the 0x19
-    // 0x00 reply republishes it below if it names a different radio.
+    // Publish conservative placeholders until the identity reply arrives.
     publishModeList();
 
     publishMeterDefs();
@@ -1695,6 +1521,46 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // dB label here would be the same invention in a new place.
     emit panRfGainInfoChanged(panId(), 0, 100, 1, QStringLiteral("%"));
 
+    // A small default set so the status bar is alive before any UI declares
+    // what it is showing. setMeterVisible() narrows or widens this.
+    m_meters.setVisible(MeterId::SMeter, true);
+    m_meters.setVisible(MeterId::Overflow, true);
+    // The transmit meters. Visible so the poller WILL ask for them — it still
+    // only does so while transmitting, which is what the TX/RX split is for.
+    m_meters.setVisible(MeterId::Power, true);
+    m_meters.setVisible(MeterId::Swr, true);
+    m_meters.setVisible(MeterId::Alc, true);
+    m_meters.setVisible(MeterId::Comp, true);
+
+    m_meterTimer = new QTimer(this);
+    connect(m_meterTimer, &QTimer::timeout, this, &IcomCivBackend::onMeterTick);
+    m_meterTimer->start(kMeterTickMs);
+
+    m_linkTimer = new QTimer(this);
+    connect(m_linkTimer, &QTimer::timeout, this, &IcomCivBackend::onLinkTick);
+    m_linkTimer->start(kLinkTickMs);
+
+    // Start the first snapshot request now.  Every remaining startup/control/
+    // meter request leaves through the same paced writer on timer ticks.
+    pumpCiv(nowMs());
+
+
+}
+
+void IcomCivBackend::publishModelControls()
+{
+    SliceDelta s;
+    if (m_model && profileFor(*m_model).rxAntenna
+        && profileFor(*m_model).rxAntenna->selectable) {
+        s.rxAntennaList = QStringList{QStringLiteral("ANT1"),
+                                      QStringLiteral("RX-ANT")};
+        s.txAntennaList = QStringList{QStringLiteral("ANT1")};
+        s.txAntenna = QStringLiteral("ANT1");
+        // The documented read form returns only FB on live B6 firmware, so no
+        // current selection is claimed here. A user selection is optimistic
+        // for this session; reconnect never replays client-owned state.
+    }
+    emit sliceChanged(sliceId(), s);
     // The two DISCRETE stages, published as named positions. Their size is the
     // control's range, so a model with a different preamp ladder or a different
     // attenuator step describes itself correctly without a UI change.
@@ -1728,30 +1594,6 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
             labels << QString::fromUtf8(a.label.data(), static_cast<int>(a.label.size()));
         emit panAttenuatorInfoChanged(panId(), labels);
     }
-
-    // A small default set so the status bar is alive before any UI declares
-    // what it is showing. setMeterVisible() narrows or widens this.
-    m_meters.setVisible(MeterId::SMeter, true);
-    m_meters.setVisible(MeterId::Overflow, true);
-    // The transmit meters. Visible so the poller WILL ask for them — it still
-    // only does so while transmitting, which is what the TX/RX split is for.
-    m_meters.setVisible(MeterId::Power, true);
-    m_meters.setVisible(MeterId::Swr, true);
-    m_meters.setVisible(MeterId::Alc, true);
-    m_meters.setVisible(MeterId::Comp, true);
-
-    m_meterTimer = new QTimer(this);
-    connect(m_meterTimer, &QTimer::timeout, this, &IcomCivBackend::onMeterTick);
-    m_meterTimer->start(kMeterTickMs);
-
-    m_linkTimer = new QTimer(this);
-    connect(m_linkTimer, &QTimer::timeout, this, &IcomCivBackend::onLinkTick);
-    m_linkTimer->start(kLinkTickMs);
-
-    // Start the first snapshot request now.  Every remaining startup/control/
-    // meter request leaves through the same paced writer on timer ticks.
-    pumpCiv(nowMs());
-
 
 }
 
@@ -1912,6 +1754,24 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     if (!m_connected || sessionGeneration != m_sessionGeneration) {
         return;
     }
+    // Reject invalid/foreign ID replies before they can retire a scheduler
+    // transaction. Model ID and source need not match on a customized bus.
+    if (frame.cmd == cmd::kReadId) {
+        if (!parseModelIdReply(frame)) {
+            return;
+        }
+        if (m_civAddressPinned && m_session && frame.from != m_session->civAddress()) {
+            if (m_civReported == 0 && !m_civUnexpectedResponderWarned) {
+                m_civUnexpectedResponderWarned = true;
+                emit configurationWarning(QStringLiteral(
+                    "A CI-V device answered at %1, but the selected address %2 has not "
+                    "identified. Check the selected CI-V address; it has not been changed.")
+                    .arg(QString::number(frame.from, 16).toUpper(),
+                         QString::number(m_session->civAddress(), 16).toUpper()));
+            }
+            return;
+        }
+    }
     const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
         && frame.cmd == cmd::kReadFreq
         && m_session && frame.from == m_session->civAddress();
@@ -1983,7 +1843,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         m_civStallReported = false;
     }
     // Identity can retarget the CI-V destination. Do not dispatch the next
-    // queued startup frame until adoptReportedCivAddress() has either confirmed
+    // queued startup frame until adoptCivIdentity() has either confirmed
     // the address or discarded all work aimed at the old one.
     const bool identityReply = frame.cmd == cmd::kReadId;
     if (!identityReply)
@@ -2002,67 +1862,19 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
 
     switch (frame.cmd) {
     case cmd::kReadId: {
-        if (auto addr = parseModelIdReply(frame)) {
-            // THE ADDRESS ARRIVES TWICE — in the frame's `from` byte and in the
-            // payload — and they agreed on every measured run. Prefer the
-            // payload, because that is what the command is defined to answer,
-            // but say so when they differ rather than silently picking one: a
-            // disagreement means something is rewriting frames between the radio
-            // and us, and that is worth knowing before it is diagnosed as a
-            // wrong address.
-            if (frame.from != 0 && frame.from != *addr) {
-                qCWarning(lcIcomAddr) << "0x19 0x00 reply disagrees with itself: from"
-                                  << Qt::hex << frame.from << "payload" << *addr
-                                  << "- using the payload";
+        if (const auto id = parseModelIdReply(frame);
+            id && adoptCivIdentity(frame.from, *id)) {
+            const auto widths = availableBandwidthsHz();
+            if (!widths.empty() && m_model->hasScope) {
+                emit panBandwidthLimitsChanged(panId(), widths.front() / 1e6,
+                                               widths.back() / 1e6);
             }
-            adoptReportedCivAddress(*addr);
-            // AMBIGUOUS BUS: two devices answered with different addresses, so
-            // neither one's identity can be trusted either. Leave m_model where
-            // the name put it.
-            if (m_civAmbiguous) {
-                pumpCiv(frameAtMs);
-                return;
-            }
-            if (const IcomModel* m = modelForCivAddress(*addr)) {
-                m_model = m;
-                // The span limits and scope geometry are model facts, so they
-                // can only be published once the radio has named itself.
-                const auto widths = availableBandwidthsHz();
-                if (!widths.empty() && m_model->hasScope)
-                    emit panBandwidthLimitsChanged(panId(), widths.front() / 1e6,
-                                                   widths.back() / 1e6);
-
-                // ⛔ Publish the Y axis too, or the display invents one and
-                // never stops. Without a range from the backend the pan
-                // auto-ranges from its own noise-floor estimate, and because
-                // MainWindow refuses anything below -180 dBm
-                // (dbmRangeLooksPlausible) the radio never adopts the value —
-                // so the estimate is never corrected and drifts further every
-                // cycle. Observed on a live IC-9700 2026-08-05: a linear
-                // runaway of -24 dB/s, 84 rejected `display pan set` commands
-                // in 90 s, min falling -202 -> -898 dBm and still going. The
-                // operator sees the waterfall reset each time the drift crosses
-                // the guard, and the radio menu stops responding behind the
-                // command flood.
-                //
-                // The numbers are m_scopeCal's own — ESTIMATES, as its header
-                // says at length, not a measurement. Publishing an estimate is
-                // right here: the axis is anchored and stable, and the estimate
-                // is already the one toDbm() decodes with, so the display and
-                // the decoder agree. An uncalibrated-but-consistent axis beats
-                // a self-referential one.
-                publishScopeDbmRange();
-
-                publishMeterDefs();
-                publishCapabilities();
-                // The mode vocabulary is a model fact too, and this is the
-                // authority: a name-resolved list published at connect is
-                // replaced here if the address names a different radio.
-                publishModeList();
-                // The scope switches are per-model, so a radio that only became
-                // known just now has not had them sent. No-op once started.
-                applyScopeStartup();
-            }
+            publishScopeDbmRange();
+            publishMeterDefs();
+            publishCapabilities();
+            publishModeList();
+            publishModelControls();
+            applyScopeStartup();
             publishIdentity();
         }
         pumpCiv(frameAtMs);
@@ -2370,7 +2182,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         case level::kCwPitch: {
             TransmitDelta t;
-            t.cwPitch = 300 + std::lround(static_cast<double>(*raw) * 600.0 / 255.0);
+            const int step = profileFor(*m_model).cwPitchStepHz;
+            t.cwPitch = 300 + step * std::lround(
+                static_cast<double>(*raw) * 600.0 / (255.0 * step));
             emit transmitChanged(t);
             return;
         }
@@ -2710,18 +2524,31 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (index < 0) {
                 return;
             }
-            if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
-                m_memoryRefreshReplies.insert(index);
-                emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
-                if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
-                    finishMemoryRefresh(true);
+            // Publish the delta before completion: the model must have the last
+            // row (including an empty-channel removal) before it saves the bank.
+            const auto publishMemory = [this, index](const MemoryDelta& delta) {
+                emit memoryChanged(delta);
+                if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
+                    m_memoryRefreshReplies.insert(index);
+                    emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
+                    if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
+                        finishMemoryRefresh(true);
+                    }
                 }
-            }
+            };
             MemoryDelta delta;
             delta.index = index;
+            delta.importSource = m_memoryImportSource;
+            delta.importKey = QStringLiteral("%1:%2")
+                .arg(memory->group)
+                .arg(memory->channel);
+            delta.owner = m_model
+                ? QString::fromLatin1(m_model->name.data(),
+                                      static_cast<qsizetype>(m_model->name.size()))
+                : QStringLiteral("Icom");
             if (!memory->occupied) {
                 delta.removed = true;
-                emit memoryChanged(delta);
+                publishMemory(delta);
                 return;
             }
 
@@ -2762,7 +2589,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 delta.toneMode = QStringLiteral("off");
                 break;
             }
-            emit memoryChanged(delta);
+            publishMemory(delta);
             return;
         }
         // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its
@@ -2903,8 +2730,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
 
         // TRANSMIT PASSBAND EDGES, which are a different shape from every other
-        // SET item: one packed BCD byte whose high digit indexes this model's
-        // low-edge table and whose low digit indexes the high-edge table.
+        // SET item: the high nibble indexes the high edge; the low nibble
+        // indexes the low edge (MK2 CI-V guide p. 20; IC-705 guide p. 19).
         //
         // PUBLISHED FROM THE REPLY, never from the request. The tables are
         // short and model-specific, so a Phone applet asking for 150 Hz on an
@@ -2916,8 +2743,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (isTbwItem) {
                 if (item != activeTxBandwidthItem())
                     return;   // a slot the transmitter is not using
-                const int lowIdx  = (frame.data[2] >> 4) & 0x0f;
-                const int highIdx = frame.data[2] & 0x0f;
+                const int lowIdx  = frame.data[2] & 0x0f;
+                const int highIdx = (frame.data[2] >> 4) & 0x0f;
                 if (lowIdx >= static_cast<int>(profile->lowEdgesHz.size())
                     || highIdx >= static_cast<int>(profile->highEdgesHz.size()))
                     return;   // not the packed-nibble shape we expect; do not guess
@@ -3077,6 +2904,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // "Explicit PTT OFF and fail-safe unkey are never suppressed by a
             // key-on transition guard", and Constitution VI wants every path
             // that can transmit to fail closed.
+            bool republishContradiction = false;
             if (m_pendingPttIntent) {
                 const bool confirmsIntent = keyed == *m_pendingPttIntent;
                 const bool guarding = *m_pendingPttIntent
@@ -3090,9 +2918,17 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 if (!confirmsIntent && !*m_pendingPttIntent) {
                     // The radio says it is keyed while we asked it to stop.
                     // Publish it and say so — this is the fail-closed path.
+                    //
+                    // FORCE the publication. setKeying(false) no longer moves
+                    // m_keyed optimistically, so a radio that stays keyed
+                    // answers with the value m_keyed already holds and the
+                    // on-change gate below would swallow it — leaving
+                    // RadioModel's optimistic RX presentation uncorrected while
+                    // the transmitter is on the air.
                     qCWarning(lcIcomScheduler)
                         << "radio reports KEYED after an unkey request; "
                            "publishing radio truth";
+                    republishContradiction = true;
                 } else if (!confirmsIntent && *m_pendingPttIntent) {
                     qCWarning(lcIcomScheduler)
                         << "radio did not confirm key-on before the PTT intent window expired";
@@ -3125,7 +2961,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // Republishing unchanged state is never merely wasteful on a path
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
-            if (keyed == m_keyed) {
+            if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
                     emit keyingStateConfirmed(keyed);
                 }
@@ -3136,6 +2972,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             m_meters.setTransmitting(m_keyed);
             if (!keyed && m_session) {
                 m_session->flushTxAudio();
+            }
+            if (!keyed && m_txResampler) {
+                m_txResampler->reset();
             }
             if (!m_keyed) {
                 clearDerivedForwardPower();
@@ -3324,7 +3163,15 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     // TUNE has a backend-owned, radio-rate producer. Letting microphone
     // callbacks feed this path at the same time creates a second packet cadence
     // and can overrun the bounded transmit queue.
-    if (m_tuning || !m_keyed) {
+    //
+    // BOTH terms are load-bearing, for different reasons. txAudioGateOpen()
+    // (#5311) follows PTT INTENT inside the bounded key-on window, so a finite
+    // AX.25 packet's resampler tail is not dropped between the unkey intent and
+    // the radio's 1C 00 readback. hasTransmit is about WHICH RADIO: identity is
+    // late on this backend, and until 19 00 answers m_model is unknownModel(),
+    // which has no transmit. Keeping only the first would submit audio against
+    // an unidentified radio; keeping only the second reopens #5311.
+    if (m_tuning || !txAudioGateOpen() || !m_model->hasTransmit) {
         return;
     }
     // The engine hands us interleaved int16 stereo; the radio wants mono at its
@@ -3370,12 +3217,79 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         const auto* f = reinterpret_cast<const float*>(out.constData());
         mono.assign(f, f + out.size() / static_cast<int>(sizeof(float)));
     }
+
+    appendAx25PostResampleCapture(mono);
     m_session->sendAudio(mono);
+}
+
+// The transmit-audio admission gate, shared by the seam feed, the TUNE tone
+// producer and the finite-stream barrier.
+//
+// Commanded intent leads inside its bounded confirmation window; radio truth
+// decides everywhere else. setKeying() no longer moves m_keyed on its own
+// (the readback does), so gating on m_keyed alone would head-clip every voice,
+// DAX and TCI over by one CI-V round trip — up to the 250 ms fallback poll —
+// and leave the TUNE carrier silent until the radio answered, the exact edge
+// setTune()'s priming frame exists to cover. Admitting audio on the key-on
+// intent restores the established timing; refusing it on the unkey intent
+// keeps audio out of a queue that setKeying(false) has just flushed. Past the
+// window an unconfirmed key-on stops admitting audio to a radio that still
+// says RX (fail closed), and a refused unkey re-admits it once the radio has
+// said it is still keyed — audio into a keyed transmitter is the truthful
+// state, not a stray emission.
+bool IcomCivBackend::txAudioGateOpen() const
+{
+    if (m_pendingPttIntent && nowMs() < m_pendingPttUntilMs) {
+        return *m_pendingPttIntent;
+    }
+    return m_keyed;
+}
+
+int IcomCivBackend::finishTxAudio()
+{
+    if (!m_session || !m_connected || !txAudioGateOpen() || m_tuning) {
+        if (m_txResampler) {
+            m_txResampler->reset();
+        }
+        return 0;
+    }
+
+    // A finite packet ends while r8brain still holds one linear-phase group
+    // delay of real samples. The 24->48 kHz converter measures about 70 ms on
+    // this path — enough to hide the AX.25 FCS and postamble. Drain those
+    // samples while PTT is still confirmed, then finish the packetizer's last
+    // 20 ms frame with silence so none of that recovered tail remains pending
+    // when unkey flushes the queue.
+    //
+    // The padding is unconditional: a producer already at the negotiated rate
+    // has no resampler and no tail, but its final partial frame would be lost
+    // to the unkey flush exactly the same way.
+    int drainedSamples = 0;
+    if (m_txResampler) {
+        const QByteArray tail = m_txResampler->drain();
+        if (!tail.isEmpty()) {
+            const auto* samples = reinterpret_cast<const float*>(tail.constData());
+            const std::span<const float> mono(
+                samples, static_cast<std::size_t>(tail.size() / sizeof(float)));
+            appendAx25PostResampleCapture(mono);
+            m_session->sendAudio(mono);
+            drainedSamples = tail.size() / static_cast<int>(sizeof(float));
+        }
+    }
+    const std::size_t paddedBytes = m_session->padTxAudioToFrame();
+    // What is actually still queued, host plus radio — not the packetizer's
+    // worst case. After padding, a normal packet holds a single 20 ms frame.
+    const int drainMs = m_session->txAudioDrainMs();
+    qCInfo(lcIcomTx) << "Icom finite TX audio drained"
+                     << drainedSamples
+                     << "samples; packetizer silence padding"
+                     << paddedBytes << "bytes; drain budget" << drainMs << "ms";
+    return drainMs;
 }
 
 void IcomCivBackend::onTuneAudioTick()
 {
-    if (!m_tuning || !m_keyed || !m_session || !m_connected) {
+    if (!m_tuning || !txAudioGateOpen() || !m_session || !m_connected) {
         return;
     }
 
@@ -4117,12 +4031,10 @@ void IcomCivBackend::setTxFilter(int lowHz, int highHz)
     const int lowIdx  = edgeIndexFor(profile->lowEdgesHz, lowHz);
     const int highIdx = edgeIndexFor(profile->highEdgesHz, highHz);
 
-    // ONE PACKED BCD BYTE: high digit indexes the low-edge table, low digit the
-    // high-edge table. Both tables are shorter than ten entries, so each index
-    // is a single BCD digit and the pair fits one byte — which is how the guide
-    // draws it (two Xs, one per digit, exactly as the four-X RX HPF/LPF item
-    // carries two two-digit values).
-    const auto packed = static_cast<std::uint8_t>((lowIdx << 4) | highIdx);
+    // The diagrams put the higher edge in the upper nibble and the lower
+    // edge in the lower nibble (MK2 guide p. 20; IC-705 guide p. 19).
+    // For example, MK2 100–2900 Hz is 0x30, not 0x03.
+    const auto packed = static_cast<std::uint8_t>((highIdx << 4) | lowIdx);
     sendUserCommand(cmdWriteSetting(m_session->civAddress(), item, packed));
     // No optimistic publish. Unlike the receive passband, the operator cannot
     // hear this one, so there is nothing to be owed an instant answer about —
@@ -4133,6 +4045,14 @@ void IcomCivBackend::setTxFilter(int lowHz, int highHz)
 
 void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
 {
+    if (!capabilities().agcModes.contains(mode.toLower())) {
+        // OFF is 1A 04 time-constant editing, not a 16 12 selector value.
+        // Do not substitute FAST or overwrite the radio's stored constants.
+        SliceDelta delta;
+        delta.agcMode = m_agcMode;
+        emit sliceChanged(sliceId(), delta);
+        return;
+    }
     m_agcMode = mode;
     // thresholdDb has NOWHERE to go: the radio offers FAST/MID/SLOW and no
     // threshold. A documented no-op beats inventing a mapping.
@@ -4142,8 +4062,6 @@ void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
         value = 1;
     else if (m == QLatin1String("SLOW"))
         value = 3;
-    else if (m == QLatin1String("OFF"))
-        value = 1;   // the radio has no AGC-off; FAST is the closest honest thing
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kAgc, value));
 }
@@ -4870,8 +4788,9 @@ bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
 
 void IcomCivBackend::setKeying(bool key)
 {
-    if (!m_model->hasTransmit)
-        return;   // an unknown radio is not advertised as transmit-capable
+    if (key && !m_model->hasTransmit) {
+        return; // identity withdrawal must never swallow an unkey
+    }
 
     // A RECEIVE-ONLY MODE DOES NOT KEY, and the refusal is ONE-DIRECTIONAL:
     // gated on the KEY edge only, so an unkey always reaches the radio whatever
@@ -4889,25 +4808,28 @@ void IcomCivBackend::setKeying(bool key)
     m_pendingPttUntilMs = nowMs() + 1000;
     m_pttIncidentReported = false;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
-    // PUBLISH IT. Setting m_keyed silently here and leaving the announcement to
-    // the poll does not work now that the poll only speaks on change: our own
-    // keying moved the variable, so the poll's answer matched it and nothing
-    // was ever emitted. The model then read mox=false through an entire live
-    // transmission — with the radio plainly on the air and its own meters
-    // moving — which silently mis-gates everything downstream that asks
-    // "are we transmitting".
-    if (m_keyed != key) {
-        m_keyed = key;
-        if (!m_keyed) {
-            clearDerivedForwardPower();
-        }
-        TransmitDelta t;
-        t.mox = key;
-        emit transmitChanged(t);
+    // DO NOT publish intent as radio state. The scheduler sends a confirming
+    // 1C 00 read and the normal 250 ms fallback poll keeps asking. Only that
+    // decoded reply moves m_keyed, the meters, and transmitChanged. Publishing
+    // here made AetherModem release sample zero while the IC-705 still reported
+    // RX, truncating the AX.25 preamble and header on air.
+    //
+    // Three things still happen on the command, because none of them is a
+    // claim about the air: the transmit-audio gate follows this intent inside
+    // its window (txAudioGateOpen), the queued audio of a finished transmission
+    // is discarded, and the DERIVED IC-9700 forward-power estimate is zeroed —
+    // CI-V stops Po polling at unkey, so waiting for the readback would leave a
+    // stale wattage on the meter for as long as that reply takes, or forever
+    // if it is lost. A readback that then contradicts the unkey is republished
+    // by onCivFrame; nothing here pre-empts it.
+    if (!key) {
+        clearDerivedForwardPower();
     }
-    m_meters.setTransmitting(key);
     if (!key && m_session) {
         m_session->flushTxAudio();   // queued audio belongs to the transmission that ended
+    }
+    if (!key && m_txResampler) {
+        m_txResampler->reset();
     }
     if (restoreTunePower >= 0) {
         setTxPower(restoreTunePower);
@@ -4941,7 +4863,10 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
         // reaching it from here would already have moved the RF-power setpoint
         // to the tune level and latched m_tuning — leaving the operator's drive
         // overwritten by a carrier that was then refused.
-        if (!m_session || !m_connected || !m_model->hasTransmit
+        const QString mode = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
+        const bool cwMode = mode.startsWith(QLatin1String("CW"));
+        if ((!capabilities().hasCwTune && cwMode)
+            || !m_session || !m_connected || !m_model->hasTransmit
             || refuseKeyingInReceiveOnlyMode()) {
             return;
         }
@@ -5036,8 +4961,11 @@ void IcomCivBackend::setCwSpeed(int wpm)
 
 void IcomCivBackend::setCwPitch(int hz)
 {
+    const int step = profileFor(*m_model).cwPitchStepHz;
     const int clamped = std::clamp(hz, 300, 900);
-    const int raw = std::lround(static_cast<double>(clamped - 300) * 255.0 / 600.0);
+    const int snapped = 300 + step * std::lround(static_cast<double>(clamped - 300) / step);
+    const double scaled = static_cast<double>(snapped - 300) * 255.0 / 600.0;
+    const int raw = step > 1 ? static_cast<int>(std::ceil(scaled)) : std::lround(scaled);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kCwPitch, raw));
 }
@@ -5219,8 +5147,11 @@ QVariantMap IcomCivBackend::profileMap() const
     const IcomModelProfile& profile = profileFor(*m_model);
     QVariantMap out;
     out.insert(QStringLiteral("model"), sv(m_model->name));
+    out.insert(QStringLiteral("modelId"),
+               QStringLiteral("0x%1").arg(m_civModelId, 2, 16, QLatin1Char('0')));
     out.insert(QStringLiteral("civAddress"),
-               QStringLiteral("0x%1").arg(m_model->civAddress, 2, 16, QLatin1Char('0')));
+               QStringLiteral("0x%1").arg(m_session ? m_session->civAddress() : m_civSeedAddress,
+                                         2, 16, QLatin1Char('0')));
     out.insert(QStringLiteral("supportedBringup"), profile.supportedBringup);
     out.insert(QStringLiteral("guideRevision"), sv(profile.guideRevision));
     out.insert(QStringLiteral("voxDelaySetItem"), profile.setMenu.voxDelayItem);
@@ -5855,6 +5786,78 @@ std::optional<std::vector<std::uint8_t>> parseHexBytes(const QString& in)
 }
 }  // namespace
 
+void IcomCivBackend::appendAx25PostResampleCapture(
+    std::span<const float> mono)
+{
+    if (m_ax25PostResampleCapturePath.isEmpty()
+        || m_ax25PostResampleCaptureTruncated) {
+        return;
+    }
+
+    const qsizetype captureBytes = static_cast<qsizetype>(mono.size())
+        * static_cast<qsizetype>(sizeof(float));
+    const qsizetype remaining = kAx25PostResampleCaptureMaxBytes
+        - m_ax25PostResampleCapturePcm.size();
+    const qsizetype appendBytes = std::min(captureBytes, remaining);
+    if (appendBytes > 0) {
+        m_ax25PostResampleCapturePcm.append(
+            reinterpret_cast<const char*>(mono.data()), appendBytes);
+    }
+    if (appendBytes < captureBytes) {
+        m_ax25PostResampleCaptureTruncated = true;
+        qCWarning(lcIcomTx)
+            << "AX.25 post-resample capture reached its 64 MiB bound";
+    }
+}
+
+QVariantMap IcomCivBackend::finishAx25PostResampleCapture()
+{
+    QVariantMap result;
+    if (m_ax25PostResampleCapturePath.isEmpty()) {
+        result.insert(QStringLiteral("active"), false);
+        result.insert(QStringLiteral("written"), false);
+        return result;
+    }
+
+    const QString path = m_ax25PostResampleCapturePath;
+    const QByteArray pcm = std::move(m_ax25PostResampleCapturePcm);
+    const bool truncated = m_ax25PostResampleCaptureTruncated;
+    m_ax25PostResampleCapturePath.clear();
+    m_ax25PostResampleCapturePcm.clear();
+    m_ax25PostResampleCaptureTruncated = false;
+
+    result.insert(QStringLiteral("active"), false);
+    result.insert(QStringLiteral("path"), path);
+    result.insert(QStringLiteral("bytes"), pcm.size());
+    result.insert(QStringLiteral("truncated"), truncated);
+    if (pcm.isEmpty()) {
+        result.insert(QStringLiteral("written"), false);
+        result.insert(QStringLiteral("error"),
+                      QStringLiteral("no TX audio reached the Icom backend"));
+        qCInfo(lcIcomTx)
+            << "AX.25 post-resample capture ended without audio" << path;
+        return result;
+    }
+
+    QString error;
+    const bool written = writeAx25Float32Wav(
+        path, pcm, m_audioRateHz, 1, &error);
+    result.insert(QStringLiteral("written"), written);
+    if (!written) {
+        result.insert(QStringLiteral("error"), error);
+        qCWarning(lcIcomTx)
+            << "AX.25 post-resample capture failed" << path << error;
+        return result;
+    }
+
+    qCInfo(lcIcomTx)
+        << "AX.25 post-resample capture saved" << path
+        << "bytes" << pcm.size()
+        << "sampleRate" << m_audioRateHz
+        << "truncated" << truncated;
+    return result;
+}
+
 void IcomCivBackend::startNtpAccess(qint64 now)
 {
     m_ntpAccess.start(now);
@@ -5909,6 +5912,104 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
 {
     if (ns != QLatin1String("icom")) {
         emit extensionError(requestId, QStringLiteral("unknown namespace %1").arg(ns));
+        return;
+    }
+    if (verb == QLatin1String("power.wake")) {
+        const QVariantMap selection = arg.toMap();
+        bool modelOk = false;
+        bool addressOk = false;
+        const uint modelId = selection.value(QStringLiteral("modelId")).toUInt(&modelOk);
+        const uint address = selection.value(QStringLiteral("address")).toUInt(&addressOk);
+        const IcomModel* selected = modelOk && modelId <= 255
+            ? modelForId(static_cast<std::uint8_t>(modelId)) : nullptr;
+        if (!m_connected || !m_session || m_civAmbiguous
+            || !addressOk || address == 0 || address >= 0xE0
+            || !modelOk || (modelId != 0 && (!selected || !profileFor(*selected).powerOn))) {
+            emit extensionError(requestId, QStringLiteral(
+                "Wake requires an open Icom network session, a supported model and a radio address (01-DF)."));
+            return;
+        }
+        if ((m_civReported && (m_civReported != address || (modelId != 0 && m_civModelId != modelId)))
+            || (m_civAddressPinned && m_session->civAddress() != address)) {
+            emit extensionError(requestId, QStringLiteral(
+                "Wake selection disagrees with the identified or pinned radio."));
+            return;
+        }
+        if (m_keyed || m_tuning || m_pendingPttIntent.value_or(false)) {
+            emit extensionError(requestId, QStringLiteral("Release transmit before waking the radio."));
+            return;
+        }
+        // A saved address or editable nickname is not a model hint. Prefer
+        // verified identity, then an explicit model. For an unidentified Auto
+        // connection, only a supported factory destination advertised by this
+        // network session selects framing (never capabilities). At an unknown
+        // custom address there is no way to distinguish standard framing from
+        // the IC-9700's measured FE/E1 sequence: explain instead of guessing.
+        const IcomModel* framing = m_civReported ? m_model : selected;
+        if (!framing && address == m_session->advertisedCivAddress()) {
+            framing = modelForId(static_cast<std::uint8_t>(address));
+        }
+        if (!framing || !profileFor(*framing).powerOn) {
+            emit extensionError(requestId, QStringLiteral(
+                "Cannot choose wake framing for this CI-V address. Select the Icom "
+                "model in Connect by IP and retry, or use an explicit model and "
+                "address with civ wake. The network name cannot identify the model."));
+            return;
+        }
+        const PowerOnProfile& power = *profileFor(*framing).powerOn;
+        for (QTimer* timer : {m_meterTimer, m_linkTimer, m_civDetectTimer}) {
+            if (timer) { timer->stop(); }
+        }
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
+        const std::vector<std::uint8_t> frame = cmdPowerOn(
+            static_cast<std::uint8_t>(address), power.extraPreambleBytes,
+            power.controllerAddress);
+        traceCiv(true, frame);
+        m_session->sendCiv(frame);
+        emit extensionResult(requestId, QVariantMap{
+            {QStringLiteral("delayMs"), power.readyDelayMs},
+            {QStringLiteral("model"), selected
+                ? QString::fromUtf8(selected->name.data(), static_cast<int>(selected->name.size()))
+                : QString{}},
+            {QStringLiteral("sent"), true}});
+        return;
+    }
+    if (verb == QLatin1String("debug.ax25.capture.begin")) {
+        const QVariantMap args = arg.toMap();
+        const QString captureId = args.value(QStringLiteral("captureId"))
+                                      .toString().trimmed();
+        const int packetSequence =
+            args.value(QStringLiteral("packetSequence")).toInt();
+        const QString path = ax25AudioCapturePath(
+            Ax25AudioCaptureStage::TxIcomPostResample,
+            captureId,
+            packetSequence);
+        if (path.isEmpty()) {
+            emit extensionError(
+                requestId,
+                QStringLiteral("invalid AX.25 capture id or packet sequence"));
+            return;
+        }
+
+        finishAx25PostResampleCapture();
+        m_ax25PostResampleCapturePath = path;
+        m_ax25PostResampleCapturePcm.clear();
+        m_ax25PostResampleCaptureTruncated = false;
+        qCInfo(lcIcomTx) << "AX.25 post-resample capture armed" << path;
+        if (requestId != 0) {
+            QVariantMap result;
+            result.insert(QStringLiteral("active"), true);
+            result.insert(QStringLiteral("path"), path);
+            emit extensionResult(requestId, result);
+        }
+        return;
+    }
+    if (verb == QLatin1String("debug.ax25.capture.end")) {
+        const QVariantMap result = finishAx25PostResampleCapture();
+        if (requestId != 0) {
+            emit extensionResult(requestId, result);
+        }
         return;
     }
     if (verb.startsWith(QLatin1String("gps."))) {
@@ -6207,7 +6308,7 @@ void IcomCivBackend::publishMeterDefs()
     const bool hasVoltage = hasVoltageCalibration(calibration);
     const bool hasCurrent = hasCurrentCalibration(calibration);
     // Poll eligibility follows the active profile too. This runs both for the
-    // handshake name and for an authoritative 0x19 identity correction.
+    // conservative startup and for an authoritative CI-V identity reply.
     m_meters.setVisible(MeterId::Vd, hasVoltage);
     m_meters.setVisible(MeterId::Id, hasCurrent);
 
@@ -6243,6 +6344,9 @@ void IcomCivBackend::publishMeterDefs()
             } else {
                 d.high = curve.back().value;
             }
+        } else if (s.id == MeterId::Comp
+                   && profileFor(*m_model).meters.calibration == MeterCalibration::Ic7300Mk2) {
+            d.high = 30.0;
         } else if (s.id == MeterId::Id) {
             d.high = profileFor(*m_model).meters.currentFullScaleAmps;
         }
@@ -6255,6 +6359,12 @@ void IcomCivBackend::onMeterTick()
     if (!m_session || !m_connected)
         return;
     const std::int64_t now = nowMs();
+    if (m_civReported == 0 || m_civAmbiguous) {
+        // Expire/dispatch identity transactions without creating a backlog of
+        // meter and PTT reads at a destination we have not identified yet.
+        pumpCiv(now);
+        return;
+    }
 
     // ASK THE RADIO WHETHER IT IS TRANSMITTING, rather than assuming we are the
     // only thing that can key it.
@@ -6398,6 +6508,10 @@ void IcomCivBackend::onLinkTick()
         return;
     }
 
+    if (m_civReported == 0 || m_civAmbiguous) {
+        return; // identity discovery owns startup; do not poll the seed address
+    }
+
     // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
     // reconciliation groups; the scheduler turns them into one paced stream,
     // coalesces duplicates and lets an operator command overtake all of them.
@@ -6458,6 +6572,18 @@ void IcomCivBackend::onLinkTick()
     }
 
     if (phase % 3 == 0) {
+        // Write confirmations are not subscriptions. Native front-panel edits
+        // of these MK2 controls need periodic reads even without Transceive.
+        if (profile.pollCwSquelchAndTxBandwidth) {
+            for (std::uint8_t which : {level::kSquelch, level::kCwPitch, level::kKeySpeed}) {
+                queueControl(cmdReadLevel(addr, which));
+            }
+            queueControl(cmdReadFunction(addr, func::kTxBandwidth));
+            const int item = activeTxBandwidthItem();
+            if (item >= 0) {
+                queueControl(cmdReadSetting(addr, item));
+            }
+        }
         for (std::uint8_t which : {level::kRf, level::kMicGain, level::kMonitor,
                                    level::kVoxGain, level::kNotchPos,
                                    level::kNrLevel, level::kNbLevel}) {
@@ -6567,7 +6693,8 @@ IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const
     h.order << QStringLiteral("model");
 
     h.values.insert(QStringLiteral("civ"),
-                    QStringLiteral("0x%1").arg(m_model->civAddress, 2, 16, QLatin1Char('0')));
+                    QStringLiteral("0x%1").arg(m_session ? m_session->civAddress() : m_civSeedAddress,
+                                              2, 16, QLatin1Char('0')));
     h.labels.insert(QStringLiteral("civ"), QStringLiteral("CI-V address"));
 
     // WHERE THE RADIO TAKES ITS MODULATION FROM, plus the level of every source

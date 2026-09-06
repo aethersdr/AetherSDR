@@ -104,6 +104,7 @@
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "SystemInfoDialog.h"
+#include "MemoryHistoryRing.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -1427,6 +1428,7 @@ MainWindow::MainWindow(QWidget* parent)
             });
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
+    m_memoryHistory = std::make_unique<MemoryHistoryRing>();
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
             this, [this](const QString& message) {
         if (!message.isEmpty()) {
@@ -1723,6 +1725,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
                                    clientLeveled);
     });
+    wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and
@@ -3649,7 +3652,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
+        || !statusBar()->currentMessage().isEmpty()) {
         return;
     }
 
@@ -4272,7 +4276,7 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog);
+    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get());
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
@@ -5852,6 +5856,7 @@ void MainWindow::buildUI()
     hbox->addWidget(timeStack);
 
     statusBar()->addWidget(m_statusBarContainer, 1);
+    wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 
@@ -6458,7 +6463,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));
@@ -7288,6 +7293,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         if (auto* phone = m_appletPanel->phoneApplet()) {
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
+            phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
+            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
@@ -7434,6 +7441,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // rides hasAudioPeakingFilter (permissive while disconnected, like LMS).
     // The DSP-tab APF button is still ungated — pre-existing, left alone.
     if (m_appletPanel && m_appletPanel->phoneCwApplet()) {
+        const RadioCapabilities cwCaps = connected ? caps : RadioCapabilities{};
+        m_appletPanel->phoneCwApplet()->setCompressionMaximumDb(cwCaps.compressionMaximumDb);
+        m_appletPanel->phoneCwApplet()->setAlcMeterUnit(cwCaps.alcMeterUnit);
+        m_appletPanel->phoneCwApplet()->setCwControlLimits(
+            cwCaps.cwSpeedMinWpm, cwCaps.cwSpeedMaxWpm,
+            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
         m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
             m_radioModel.hasAudioPeakingFilter());
     }

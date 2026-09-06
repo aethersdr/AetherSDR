@@ -45,6 +45,7 @@ std::optional<ProtocolError> parseSelector(
     const QString type = typeValue.toString();
     const QSet<QString> supportedTypes{
         QStringLiteral("server"), QStringLiteral("radioSession"),
+        QStringLiteral("radioCatalogue"),
         QStringLiteral("slice"), QStringLiteral("panadapter")};
     if (!supportedTypes.contains(type)) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
@@ -67,10 +68,10 @@ std::optional<ProtocolError> parseSelector(
 
     const QString radioSession = radioSessionValue.toString();
     const QString id = idValue.toString();
-    if (type == QStringLiteral("server")) {
+    if (type == QStringLiteral("server") || type == QStringLiteral("radioCatalogue")) {
         if (!radioSessionValue.isUndefined() || !idValue.isUndefined()) {
             return ProtocolError{QStringLiteral("request.invalid_params"),
-                                 QStringLiteral("server selector takes only type"), {}, false};
+                                 QStringLiteral("singleton selector takes only type"), {}, false};
         }
     } else if (type == QStringLiteral("radioSession")) {
         if (!radioSessionValue.isUndefined() || (!wildcardAllowed && id.isEmpty())) {
@@ -259,7 +260,7 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
 {
     const bool observe = session.canObserve();
     const QJsonArray grants = observe ? QJsonArray{QStringLiteral("observe")} : QJsonArray{};
-    const QJsonArray available = observe ? QJsonArray{
+    QJsonArray available = observe ? QJsonArray{
         QStringLiteral("server.read"),
         QStringLiteral("radioSession.read"),
         QStringLiteral("slice.read"),
@@ -267,6 +268,9 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
         QStringLiteral("resource.get"),
         QStringLiteral("resource.subscribe"),
         QStringLiteral("resource.unsubscribe")} : QJsonArray{};
+    if (observe && m_resources->get({QStringLiteral("radioCatalogue"), {}, {}})) {
+        available.append(QStringLiteral("radioCatalogue.read"));
+    }
     return {
         {QStringLiteral("sessionId"), session.sessionId()},
         {QStringLiteral("version"), 1},

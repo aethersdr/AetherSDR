@@ -116,6 +116,39 @@ target_link_libraries(control_resource_service_test PRIVATE
     aethercore Qt6::Core)
 add_test(NAME control_resource_service_test COMMAND control_resource_service_test)
 
+# Socket-free catalogue/protocol tests: injected normalized discovery signals,
+# plus the native RadioInfo -> DiscoveredRadio projection table-tested per family.
+# QtNetwork is used only for QHostAddress validation, never a socket or peer.
+add_executable(radio_catalogue_test
+    tests/radio_catalogue_test.cpp
+    src/core/discovery/RadioDiscoverySource.h
+    src/core/control/RadioCatalogue.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlProtocolCodec.cpp
+)
+target_include_directories(radio_catalogue_test PRIVATE src)
+target_compile_definitions(radio_catalogue_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(radio_catalogue_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME radio_catalogue_test COMMAND radio_catalogue_test)
+
+# Real factory wiring, with local=false: simulator metadata only, no sockets,
+# device scans, radio connections or third-party firmware stand-ins.
+add_executable(radio_discovery_source_test tests/radio_discovery_source_test.cpp)
+target_include_directories(radio_discovery_source_test PRIVATE src)
+target_link_libraries(radio_discovery_source_test PRIVATE aethercore Qt6::Core)
+add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
+
+# Socket-free daemon startup policy: a fresh child process reads isolated saved
+# nicknames through native static helpers; no discovery source is started with
+# local=true and no socket, USB scan or synthetic firmware peer is used.
+add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
+target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
+target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(aetherd_discovery_startup_test PRIVATE aethercore Qt6::Core)
+add_test(NAME aetherd_discovery_startup_test COMMAND aetherd_discovery_startup_test)
+
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
 # DIGITAL_VOICE_WAVEFORM_DIR, CRDV_DIR and crdv::crdv are all defined by the time
@@ -462,6 +495,13 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
+add_executable(hl2_io_board_policy_test
+    tests/hl2_io_board_policy_test.cpp
+)
+target_include_directories(hl2_io_board_policy_test PRIVATE src)
+add_test(NAME hl2_io_board_policy_test COMMAND hl2_io_board_policy_test)
+
 # ANAN P2 protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 # Direct port of the live-validated anan/spike/phase1a.py spike (aetherd ANAN
 # P2 Phase 1a), run against a real ANAN-G2 on the bench.
@@ -521,6 +561,13 @@ add_executable(icom_civ_scheduler_test
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
+
+# Socket-free PR #5436 coverage recovered from the retired capability fixture.
+# Uses an unstarted IcomSession and direct frame/state injection; never binds.
+add_executable(icom_control_profile_test tests/icom_control_profile_test.cpp)
+target_include_directories(icom_control_profile_test PRIVATE src tests)
+target_link_libraries(icom_control_profile_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_control_profile_test COMMAND icom_control_profile_test)
 
 # Socket-free backend incident-state transition. Positive session convergence
 # is certified against real firmware through the automation bridge.
@@ -583,6 +630,25 @@ target_include_directories(icom_power_derivation_test PRIVATE src)
 target_link_libraries(icom_power_derivation_test PRIVATE
     aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
+
+# Socket-free CI-V identity and late TX-audio lifecycle. IcomSession is never
+# started; literal replies enter the existing injected frame-handler seam.
+add_executable(icom_identity_test tests/icom_identity_test.cpp)
+target_include_directories(icom_identity_test PRIVATE src)
+target_link_libraries(icom_identity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_identity_test COMMAND icom_identity_test)
+
+# Socket-free coverage for the Icom PTT seam contract (#5311): setKeying() is
+# intent, the decoded 1C 00 readback is state, a contradicting readback after
+# an unkey is republished, the key-on window is bounded, and the TX-audio gate
+# follows intent inside that window. Frames are injected through the same test
+# seam as icom_power_derivation_test — no session, no UDP peer.
+add_executable(icom_ptt_authority_test
+    tests/icom_ptt_authority_test.cpp)
+target_include_directories(icom_ptt_authority_test PRIVATE src)
+target_link_libraries(icom_ptt_authority_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME icom_ptt_authority_test COMMAND icom_ptt_authority_test)
 
 # Retired fake-radio fixtures. Positive session and backend convergence is
 # certified against real firmware through the automation bridge and radiocert;
@@ -2473,6 +2539,18 @@ add_test(NAME native_widget_topology_test COMMAND native_widget_topology_test)
 set_tests_properties(native_widget_topology_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Windows Store publication policy: socket-free PowerShell with an injected
+# CLI command. Runs in the full suite wherever PowerShell is installed and in
+# Windows Installer before packaging. The frozen per-PR CTest gate is unchanged.
+# pwsh first: the suite is developed and verified on PowerShell 7, and on a
+# Windows box `powershell` would otherwise silently select 5.1 instead.
+find_program(AETHER_POWERSHELL_EXECUTABLE NAMES pwsh powershell)
+if(AETHER_POWERSHELL_EXECUTABLE)
+    add_test(NAME windows_store_policy
+             COMMAND ${AETHER_POWERSHELL_EXECUTABLE} -NoProfile -ExecutionPolicy Bypass
+                     -File ${CMAKE_CURRENT_SOURCE_DIR}/tests/windows_store_policy_test.ps1)
+endif()
+
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
@@ -2752,6 +2830,8 @@ add_test(NAME ax25_frame_formatter_test COMMAND ax25_frame_formatter_test)
 
 add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
+    src/core/Resampler.cpp
+    src/core/tnc/Ax25AudioCapture.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
@@ -2765,7 +2845,10 @@ add_executable(ax25_libmodem_shim_test
     src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(ax25_libmodem_shim_test PRIVATE src)
+target_include_directories(ax25_libmodem_shim_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core
     aether_afskdemod)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)
@@ -3147,6 +3230,12 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
 
+    # Socket-owning test: our own TCI server is the subject, so this is inside
+    # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
+    # via TciServer::start(0)) on 127.0.0.1 and connects QWebSocket clients to
+    # it in-process — no fixed port, no external peer, no fake radio firmware.
+    # Each case that binds fails fast when it cannot, rather than consuming the
+    # test timeout.
     add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
     target_include_directories(tci_server_review_test PRIVATE src tests)
     target_link_libraries(tci_server_review_test PRIVATE
@@ -3500,6 +3589,7 @@ if(UNIX)
     target_link_libraries(async_log_writer_test PRIVATE pthread)
 endif()
 set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
+add_test(NAME async_log_writer_test COMMAND async_log_writer_test)
 
 # Support & Diagnostics category toggle must enable Info alongside Debug
 # (#4419): most categories declare a QtWarningMsg threshold, and the filter
@@ -3533,6 +3623,7 @@ if(UNIX)
     target_link_libraries(issue_report_test PRIVATE pthread)
 endif()
 set_target_properties(issue_report_test PROPERTIES AUTOMOC ON)
+add_test(NAME issue_report_test COMMAND issue_report_test)
 
 add_executable(perf_telemetry_test
     tests/perf_telemetry_test.cpp
@@ -3632,6 +3723,18 @@ target_include_directories(local_memory_bank_test PRIVATE src)
 target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
 add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
 
+# Socket-free injection of backend memory deltas; no radio connection or peer.
+add_executable(memory_import_test tests/memory_import_test.cpp)
+target_include_directories(memory_import_test PRIVATE src tests)
+target_link_libraries(memory_import_test PRIVATE aethercore Qt6::Core)
+add_test(NAME memory_import_test COMMAND memory_import_test)
+
+# Pure policy assertions extracted from the retired broad capability target.
+add_executable(memory_filter_policy_test tests/memory_filter_policy_test.cpp)
+target_include_directories(memory_filter_policy_test PRIVATE src)
+target_link_libraries(memory_filter_policy_test PRIVATE Qt6::Core)
+add_test(NAME memory_filter_policy_test COMMAND memory_filter_policy_test)
+
 add_executable(memory_csv_compat_test
     tests/memory_csv_compat_test.cpp
     src/core/MemoryCsvCompat.cpp
@@ -3672,6 +3775,7 @@ add_executable(system_info_dialog_test
     src/core/ThemeSeedGenerated.cpp
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
+    src/core/MemoryTelemetry.cpp
     src/core/ThreadName.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -3976,6 +4080,16 @@ add_executable(host_voice_chain_policy_test
 )
 target_include_directories(host_voice_chain_policy_test PRIVATE src)
 add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
+add_executable(hl2_overload_policy_test
+    tests/hl2_overload_policy_test.cpp
+)
+target_include_directories(hl2_overload_policy_test PRIVATE src)
+add_test(NAME hl2_overload_policy_test COMMAND hl2_overload_policy_test)
+add_executable(hl2_dsp_setup_policy_test
+    tests/hl2_dsp_setup_policy_test.cpp
+)
+target_include_directories(hl2_dsp_setup_policy_test PRIVATE src)
+add_test(NAME hl2_dsp_setup_policy_test COMMAND hl2_dsp_setup_policy_test)
 add_executable(hl2_tx_level_policy_test
     tests/hl2_tx_level_policy_test.cpp
 )
@@ -4005,6 +4119,17 @@ target_link_libraries(automation_dsp_backend_readback_test PRIVATE
 )
 add_test(NAME automation_dsp_backend_readback_test
          COMMAND automation_dsp_backend_readback_test)
+# Socket-free HL2 gain persistence: boardMaxRx bypasses discovery; the test
+# never pumps events and cancels DSP setup before it can start Metis UDP.
+add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
+target_include_directories(hl2_gain_restore_test PRIVATE src tests)
+target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
+add_executable(hl2_band_memory_test
+    tests/hl2_band_memory_test.cpp
+)
+target_include_directories(hl2_band_memory_test PRIVATE src)
+add_test(NAME hl2_band_memory_test COMMAND hl2_band_memory_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -4336,7 +4461,11 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    hl2_gain_restore_test
+    icom_identity_test
+    icom_control_profile_test
     control_resource_service_test
+    aetherd_discovery_startup_test
     slice_label_test
     ulanzi_mapping_migration_test
     theme_manager_test
@@ -4376,6 +4505,7 @@ set(AETHER_SETTINGS_CONSUMERS
     meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
+    memory_import_test
     transmit_model_apd_test
     help_dialog_test
     flex_control_dialog_size_test
@@ -4495,6 +4625,32 @@ target_include_directories(system_info_test PRIVATE src)
 target_link_libraries(system_info_test PRIVATE Qt6::Core)
 set_target_properties(system_info_test PROPERTIES AUTOMOC ON)
 add_test(NAME system_info_test COMMAND system_info_test)
+
+# #2554 (Memory tab): the collector publishes a process-memory sample on every
+# tick through a queued signal; this drives the real thread wiring (moveToThread,
+# init on started, the 1.5 s timer) and reads the live process. No socket, no
+# radio, no widget.
+add_executable(system_info_collector_test
+    tests/system_info_collector_test.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/SystemInfo.cpp
+    src/core/MemoryTelemetry.cpp
+    src/core/ThreadName.cpp
+)
+target_include_directories(system_info_collector_test PRIVATE src)
+target_link_libraries(system_info_collector_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(system_info_collector_test PROPERTIES AUTOMOC ON)
+add_test(NAME system_info_collector_test COMMAND system_info_collector_test)
+
+# #2554 (Memory tab): the dialog's bounded memory history and the chart slicing it
+# shares with NetworkDiagnosticsDialog (1 s raw to 5 min, bucket averages beyond).
+# Header-only class; pure logic, constructed samples; no widget, no socket.
+add_executable(memory_history_ring_test
+    tests/memory_history_ring_test.cpp
+)
+target_include_directories(memory_history_ring_test PRIVATE src)
+target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
+add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
 
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host

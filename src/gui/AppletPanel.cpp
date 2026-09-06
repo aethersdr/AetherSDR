@@ -806,6 +806,20 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_speBtn = entry.btn;
         markHardwareConditional("SPE");
+        // Popped out, the applet switches to its roomier presentation and
+        // reveals the FRONT PANEL key group (SpeApplet::setFloating) — same
+        // pattern as the PWR cross-needle above.
+        if (ContainerWidget* container =
+                qobject_cast<ContainerWidget*>(entry.widget)) {
+            // Wide enough for the LCD mirror's 2x glass (480px + bezel).
+            container->setDefaultFloatingSize(QSize(540, 760));
+            connect(container, &ContainerWidget::dockModeChanged,
+                    m_speApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        m_speApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
+                    });
+        }
         m_appletOrder.append(entry);
     }
 
