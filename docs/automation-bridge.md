@@ -2281,11 +2281,16 @@ issues `connect ip` and then reads `connected: false` gets the same answer
 whether the connect is still working or nothing is happening at all, which is
 the whole of #5413 item 3.
 
-It is derived from the same whole-attempt lifecycle as `connect wait`'s `phase`
-below — set when a connect is requested, cleared when it lands, fails or is
-abandoned — so the two agree by construction rather than by coincidence, and
-they use the same words. `connected` wins whenever the link is up, whatever
-order the underlying edges arrive in.
+It is derived from the same model lifecycle as `connect wait`'s `phase`
+below — set when RadioModel starts a connection attempt (for example, in
+`connectToRadio()`), cleared when it lands, fails or is abandoned. `connected` wins whenever the link is up,
+whatever order the underlying edges arrive in.
+
+The field describes the model's current attempt, not every part of an accepted
+connect command: address probing before `connectToRadio()` may still report
+`idle`. Retry backoff after a failed attempt also reports `idle`; the flag is
+re-armed when the retry starts. An `idle` reading therefore does not by itself
+prove that the deferred command has failed or that no retry is scheduled.
 
 This is the polling form of what `connect wait` blocks for: use `wait` when you
 can hold a request open, and `assert_state` / `wait_for` on
@@ -2296,9 +2301,10 @@ connects, the connect fails, or the timeout expires — the preferred unattended
 "request then assert" flow.
 
 A reply that is not `connected` carries `"phase"`: `"connecting"` means an
-attempt is still in flight and waiting again is the right move, `"idle"` means
-nothing is pending and another wait will time out identically. **This matters on
-the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+attempt is still in flight and waiting again is the right move; `"idle"` means
+no model attempt is currently active, including the probing and retry-backoff
+windows described above. **This matters on the HL2**, which queues a connect
+behind its DSP open and re-drives it later, so
 a wait can legitimately expire on a connect that then succeeds. A connect that
 fails outright returns immediately with the backend's own message instead of
 running out the clock.

@@ -36,8 +36,9 @@
 // or a GUI — the layer #5358 asks for. But a pure function cannot prove the
 // model passes it the right arguments: the production mapping is covered
 // through RadioModel and the bridge snapshot in
-// tests/automation_connect_wait_phase_test.cpp, which is where #4912's
-// lifecycle is already exercised.
+// tests/connect_state_model_test.cpp, using injected attempt state and the
+// production cancellation/error handlers. Request-edge assignment is not
+// exercised by that socket-free fixture.
 //
 // The strings are fixed here rather than at the call site because they are
 // protocol: a caller matching on "connecting" must not have to care which file
