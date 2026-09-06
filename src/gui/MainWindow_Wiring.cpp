@@ -3642,6 +3642,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
+    // This connection belongs to the pane's wiring, not decoder routing:
+    // routeRttyDecoderOutput() may already have selected this same applet,
+    // and its unchanged-target fast path cannot restore a connection removed
+    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
+            this, &MainWindow::onRttyPanelCloseRequested);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]

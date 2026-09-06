@@ -208,8 +208,6 @@ void MainWindow::routeRttyDecoderOutput()
                    &m_rttyDecoder, &RttyDecoder::setBaudRate);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                    &m_rttyDecoder, &RttyDecoder::setReversePolarity);
-        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyPanelCloseRequested,
-                   this, &MainWindow::onRttyPanelCloseRequested);
     }
 
     m_rttyDecoderApplet = target;
@@ -227,12 +225,6 @@ void MainWindow::routeRttyDecoderOutput()
                 &m_rttyDecoder, &RttyDecoder::setBaudRate);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
-        // Not RttyDecoder::stop directly: dismissing the pane also has to
-        // persist the operator's intent, or the next refresh reopens it
-        // (#5353).  onRttyPanelCloseRequested() stops the decoder via that
-        // refresh, so the stop still happens.
-        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyPanelCloseRequested,
-                this, &MainWindow::onRttyPanelCloseRequested);
     }
 }
 
