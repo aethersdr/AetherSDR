@@ -89,6 +89,18 @@ private slots:
     void onAccessRequired(const QString& deviceName);
     void onGrantAccessClicked();
 #endif
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+    // A known OEM variant (KEHWIN D100H / Zkswe D200) is present but cannot
+    // be driven over HID — point the user at the Ulanzi Studio plugin.  An
+    // EMPTY name withdraws the advisory (unplugged / scanning off). (#3485)
+    void onUnsupportedVariant(const QString& deviceName);
+    // Opens the readable, clickable setup instructions the short status
+    // label has no room for. (#3485)
+    void onVariantHelpClicked();
+#endif
+    // Amber advisory status text — the single styled call site every
+    // advisory state shares (colour-ratchet discipline).
+    void showAttentionStatus(const QString& text);
 
 private:
     struct Pill {
@@ -135,6 +147,17 @@ private:
 #ifdef Q_OS_LINUX
     QPushButton* m_grantAccessBtn{nullptr};  // shown only on accessRequired
 #endif
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+    QPushButton* m_variantHelpBtn{nullptr};  // shown only on unsupported variant
+    QString m_unsupportedVariant;            // GUI-thread copy, queued-signal fed
+    // Re-render the advisory for the current variant.
+    void refreshVariantStatus();
+#endif
+    // GUI-thread mirror of the backend's connection state.  The advisory
+    // handlers must NOT call m_manager->isConnected() directly: on Windows the
+    // backend lives on the ExtControllers thread and that read would race
+    // rescan(). (#3485)
+    bool m_connected{false};
 };
 
 } // namespace AetherSDR
