@@ -104,6 +104,7 @@
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "SystemInfoDialog.h"
+#include "MemoryHistoryRing.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -1427,6 +1428,7 @@ MainWindow::MainWindow(QWidget* parent)
             });
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
+    m_memoryHistory = std::make_unique<MemoryHistoryRing>();
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
             this, [this](const QString& message) {
         if (!message.isEmpty()) {
@@ -4274,7 +4276,7 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog);
+    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get());
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
