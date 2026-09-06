@@ -59,20 +59,49 @@ captured FLEX-6600 four-slice manifest, `COMPPEAK` appeared in repeated TX
 blocks such as `23`, `45`, `67`, and `89`. Those numeric IDs are not stable API
 contracts; they are manifest slots for that session.
 
-AetherSDR stores `COMPPEAK` meter IDs by explicit TX waveform `sourceIndex`
-when the manifest provides one. In 8000-style captures where repeated TX
-blocks all report `num=0`, AetherSDR keys those block-local meters to the most
-recent `SLC` slice context from the manifest. Runtime updates then resolve the
-active TX slice to the correct manifest meter ID.
+FlexLib only treats `Meter.SourceIndex` as a slice ID when
+`Meter.Source == Meter.SOURCE_SLICE` (`"SLC"`). It attaches those meters to
+`Slice.Meters` with `FindSliceByIndex(m.SourceIndex)`. `TX-` waveform meters
+remain radio-level meters; FlexLib does not attach them to a slice or promise
+that their `num` field is a slice index.
+
+AetherSDR associates new TX waveform meters with the preceding `SLC` slice
+context in the observed ordered meter manifest. The Flex decoder preserves
+first-appearance wire order when grouping a status message's fields; it never
+sorts the definitions by meter ID. Existing meter identities retain their
+association when re-announced, including unit or description changes. A removed
+or repurposed ID loses its old routes and samples, and removal or a non-TX/non-SLC
+block invalidates the context for subsequent new definitions.
+
+Definitions are registered in either the slice map or the explicit TX
+`sourceIndex` fallback map, never both. A contextual meter cannot become another
+slice's fallback when that slice's own meter disappears. The fallback keeps the
+legacy arithmetic `txBase = min(TX sourceIndex >= 8) - min(SLC sourceIndex)`
+(or just the TX minimum when no SLC is present), then looks up
+`txBase + activeTxSlice`. This is compatibility behavior for context-free
+manifests, not a FlexLib guarantee. The observed SLC association
+also handles the FLEX-8400M 4.2.18 shape observed on hardware: slice A's TX
+block used `num=0`, while slice B's used `num=9`. Arithmetic over those values
+cannot recover slice IDs, but their preceding SLC blocks identify slices 0 and
+1 directly. This block-order association comes from captured firmware behavior;
+FlexLib's SLC-only ownership rule does not itself guarantee TX block ordering.
+Runtime updates resolve the active TX slice to that block's meter ID.
 
 The implementation intentionally derives a slice/source key and then looks up
 the manifest ID for that key. It does not calculate final meter IDs directly.
 
 | Radio family / manifest shape | Slice/source resolution | Compression meter | Model value | UI gauge value |
 |---|---|---|---|---|
-| FLEX-6000-style explicit TX source | `txBase = min(TX sourceIndex >= 8) - min(SLC sourceIndex)`, then `activeTxSource = txBase + activeTxSlice` | `COMPPEAK` at `activeTxSource` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
-| FLEX-8000-style explicit TX source | Same explicit TX-source lookup when the manifest provides per-slice TX source indices | `COMPPEAK` at `activeTxSource` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
-| FLEX-8000-style repeated `TX- num=0` blocks | Use the most recent `SLC` source index as manifest context, then resolve by `activeTxSlice` at runtime | `COMPPEAK` mapped to `activeTxSlice` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
+| FLEX-6000/8000 ordered per-slice blocks | Use the most recent `SLC` source index as manifest context, then resolve by `activeTxSlice` at runtime | `COMPPEAK` mapped to `activeTxSlice` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
+| TX block without preceding SLC context | Fall back to the explicit TX `sourceIndex` map | `COMPPEAK` at the resolved TX source | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
+| Exactly one implicit COMPPEAK meter and no explicit fallback entries | Follow the single modulator across receivers, including before a TX slice is selected | The unique implicit meter | Same conversion as above | Same conversion as above |
+
+The ALC/COMPPEAK singleton fallback never volunteers an explicitly associated
+meter for a different active slice. SC_MIC/SC_FILT_1/SC_FILT_2 require active-slice resolution
+without that fallback so filter diagnostics cannot combine unrelated chains.
+ALC resolves its conversion unit from the selected definition and resets to its
+presentation floor, -20 dBFS, at startup, disconnect, TX-slice changes and active
+meter removal. That reset is already in gauge units even for Percent meters.
 
 Issue #2040 describes the 6600 failure mode this avoids: the old scalar meter
 index approach was last-match-wins, so a multi-slice session could bind to the

@@ -625,7 +625,7 @@ the no-op is an explicit, assertable signal.
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 
-Combo selection refuses disabled items; `setCurrentIndex` also rejects invalid or out-of-range combo indices (`-1` still clears the selection). This keeps automation from bypassing capability-disabled choices.
+Combo selection refuses disabled items. `setCurrentIndex` also rejects invalid or out-of-range combo indices (`-1` still clears the selection); `setCurrentText` rejects missing items on non-editable combos. Editable combos still accept free text. These boundary checks report unreachable requests instead of claiming success and keep automation from bypassing capability-disabled choices.
 
 **`submit` vs `setText`.** `setText` only sets the field — deliberately
 side-effect-free, because several bridge-reachable fields wire irreversible
@@ -726,7 +726,7 @@ connects).
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
 | `slices` | — | array of all slice snapshots |
-| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), txSlice, …) |
+| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, **filterPresetId/filterPreset** for a radio-owned FIL slot, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), txSlice, …) |
 | `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the DSP: `{receivers:[{ddc,panId,on,level,threshold,requestedOn,requestedLevel,hasChain}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. `on`/`level` here are what the WDSP stage actually has; `requestedOn`/`requestedLevel` are what the backend was asked for, reported alongside so the two can be COMPARED. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
 | `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
@@ -798,6 +798,8 @@ The report includes `active`, `startedAtMs`, `durationMs`, `observedMs`, and one
 
 Observations use MeterModel arrival timestamps, plus a 20 ms timer to measure
 silence, and stop at the requested deadline even if a callback arrives late.
+Equal-millisecond arrivals each contribute to the peak; cached observations
+cannot discard a higher arrival with the same timestamp.
 These measure delivery to the application, not the radio's internal sampling
 clock. Disconnect stops the observation. Meter arrival hooks and the timer run
 only while an explicit window is active.
@@ -809,8 +811,7 @@ Phone/CW gauges use the native units, including percent on Icom, and retain
 dBFS on Flex/HL2. IC-7300MK2 compression uses the guide's 0/15/30 dB calibration
 points and a 30 dB face; other radio compression faces retain their old range.
 
-`get meters` also exposes `fwdPowerUnrounded` in watts (the same unsmoothed
-converted reading as `fwdPowerInstant`). Native floating-point values retain
+`get meters.fwdPowerInstant` exposes unsmoothed watts. Native floating-point values retain
 fractional watts through MeterModel; Flex wire decoding is unchanged. This
 removes display-integer truncation, but adds no precision beyond the radio's
 native meter resolution. Check `fwdPowerAgeMs` before treating it as current RF.
@@ -1462,6 +1463,7 @@ re-poll `get slices`.
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
 | `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
+| `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
 | `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
 | `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
@@ -3804,7 +3806,7 @@ receiver capacity. It never enables transmit and remains available without
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 71 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 72 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3831,6 +3833,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
+| `meterwindow` | — | meterwindow <start [duration_ms]\|status\|stop> — bounded meter ages and unrounded peaks; never keys TX |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |

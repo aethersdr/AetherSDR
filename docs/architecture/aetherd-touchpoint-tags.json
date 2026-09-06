@@ -271,7 +271,7 @@
  },
  "core/KiwiPublicDirectory.h": {
   "tag": "vendor(kiwi)",
-  "note": "Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
+  "note": "Fetches/parses AetherSDR's kiwi.json mirror of the kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
   "split": "",
   "confidence": "high"
  },
@@ -722,6 +722,12 @@
  "core/tnc/Ax25.h": {
   "tag": "universal",
   "note": "AX.25 frame data types/constants; radio-agnostic protocol layer.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/Ax25AudioCapture.h": {
+  "tag": "universal",
+  "note": "AX.25 Capture 3m diagnostics: capture-id/path naming and the shared float32 WAV writer for the RX, generated-TX and post-resample stages; radio-agnostic diagnostic I/O (#5311).",
   "split": "",
   "confidence": "high"
  },

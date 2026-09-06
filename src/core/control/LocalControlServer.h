@@ -44,7 +44,6 @@ private:
 
     void acceptConnections();
     void readClient(QLocalSocket* socket);
-    void drainSessionOutput(QLocalSocket* socket);
     void dropClient(QLocalSocket* socket);
     [[nodiscard]] bool send(QLocalSocket* socket, const QJsonObject& message);
     // Writes a frame the session already encoded, so an event is serialized

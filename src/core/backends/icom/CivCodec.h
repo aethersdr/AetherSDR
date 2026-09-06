@@ -510,12 +510,39 @@ struct VfoModeState {
 // the same narrow-to-wide order as every other filter row in the app.
 [[nodiscard]] std::vector<int> filterWidthsForMode(const std::string& mode);
 
+struct FilterPresetState {
+    int id = 0;
+    int widthHz = 0;
+
+    bool operator==(const FilterPresetState&) const = default;
+};
+
+// FIL1/FIL2/FIL3 in radio order. The selected slot may carry a custom width;
+// replacing its content must never reorder or rename the slot.
+[[nodiscard]] std::vector<FilterPresetState> filterPresetsForMode(
+    const std::string& mode, int selectedPresetId = 0, int selectedWidthHz = 0);
+
 // The passband that filter gives in that mode, in Hz relative to the carrier,
 // sign carrying the sideband (SliceModel's convention). The backend needs this
 // because an IC-705's IF filters cannot be read back as Hz — nothing else in
 // the chain can fill the window in.
 [[nodiscard]] std::pair<int, int> passbandForModeAndFilter(const std::string& mode,
                                                           int filter);
+
+// Complete wire plan for recalling a FIL button. The select command comes
+// first, followed (where the mode permits it) by the slot's factory width and
+// centred Twin-PBT writes. Keeping this Qt- and transport-free lets the exact
+// operator command sequence be mutation-tested without a fake radio socket.
+struct FilterPresetRecallPlan {
+    std::vector<std::vector<std::uint8_t>> commands;
+    int widthHz = 0;
+    int lowHz = 0;
+    int highHz = 0;
+    int pbtCode = 128;
+};
+[[nodiscard]] std::optional<FilterPresetRecallPlan> filterPresetRecallPlan(
+    std::uint8_t to, const std::string& ladderMode, CivMode wireMode,
+    bool dataMode, int presetId, bool useVfoMode);
 
 // ---------------------------------------------------------------------------
 // IF filter WIDTH (1A 03) — the actual passband, not the slot that holds it

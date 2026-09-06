@@ -2,7 +2,6 @@
 
 #include <QJsonArray>
 #include <QSet>
-#include <QUuid>
 
 #include <cmath>
 
@@ -104,17 +103,29 @@ ControlService::ControlService(ControlResourceStore* resources)
 ServiceReply ControlService::handle(
     const QByteArray& bytes, ControlSession* session) const
 {
+    if (!session || session->isRevoked()) {
+        return failure({},
+                       {QStringLiteral("auth.invalid"),
+                        QStringLiteral("session authorization is unavailable"), {}, false},
+                       true);
+    }
     const ParseResult parsed = ControlProtocolCodec::parseRequest(bytes);
     if (!parsed.ok()) {
         return failure(parsed.requestId,
                        parsed.error.value_or(ProtocolError{
                            QStringLiteral("protocol.invalid_envelope"),
                            QStringLiteral("request could not be parsed"), {}, false}),
-                       !session->negotiated);
+                       !session->isNegotiated());
     }
 
     const ProtocolRequest& request = *parsed.request;
-    if (!session->negotiated) {
+    if (!session->isNegotiated()) {
+        if (!session->isAuthenticated()) {
+            return failure(request.id,
+                           {QStringLiteral("auth.required"),
+                            QStringLiteral("authenticated transport context required"), {}, false},
+                           true);
+        }
         if (!request.isHello()) {
             return failure(request.id,
                            {QStringLiteral("protocol.invalid_envelope"),
@@ -133,8 +144,7 @@ ServiceReply ControlService::handle(
                            true);
         }
 
-        session->sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        session->negotiated = true;
+        session->completeNegotiation();
         return {ControlProtocolCodec::successResponse(
                     request.id, capabilities(*session)), false};
     }
@@ -144,7 +154,7 @@ ServiceReply ControlService::handle(
                        {QStringLiteral("protocol.invalid_envelope"),
                         QStringLiteral("hello may only be sent once"), {}, false});
     }
-    if (request.sessionId != session->sessionId) {
+    if (request.sessionId != session->sessionId()) {
         return failure(request.id,
                        {QStringLiteral("session.invalid"),
                         QStringLiteral("session does not belong to this connection"), {}, false});
@@ -159,6 +169,9 @@ ServiceReply ControlService::handle(
                     request.id, capabilities(*session)), false};
     }
     if (request.method == QStringLiteral("resource.get")) {
+        if (const std::optional<ProtocolError> error = session->observationError()) {
+            return failure(request.id, *error);
+        }
         if (const std::optional<ProtocolError> keyError = onlyKeys(
                 request.params, {QStringLiteral("resource")})) {
             return failure(request.id, *keyError);
@@ -178,6 +191,9 @@ ServiceReply ControlService::handle(
         return {ControlProtocolCodec::successResponse(request.id, snapshot->toJson()), false};
     }
     if (request.method == QStringLiteral("resource.subscribe")) {
+        if (const std::optional<ProtocolError> error = session->observationError()) {
+            return failure(request.id, *error);
+        }
         if (const std::optional<ProtocolError> keyError = onlyKeys(
                 request.params, {QStringLiteral("resources")})) {
             return failure(request.id, *keyError);
@@ -209,6 +225,9 @@ ServiceReply ControlService::handle(
         return {ControlProtocolCodec::successResponse(request.id, result), false};
     }
     if (request.method == QStringLiteral("resource.unsubscribe")) {
+        if (const std::optional<ProtocolError> error = session->observationError()) {
+            return failure(request.id, *error);
+        }
         if (const std::optional<ProtocolError> keyError = onlyKeys(
                 request.params, {QStringLiteral("subscription")})) {
             return failure(request.id, *keyError);
@@ -238,21 +257,24 @@ ServiceReply ControlService::handle(
 
 QJsonObject ControlService::capabilities(const ControlSession& session) const
 {
+    const bool observe = session.canObserve();
+    const QJsonArray grants = observe ? QJsonArray{QStringLiteral("observe")} : QJsonArray{};
+    const QJsonArray available = observe ? QJsonArray{
+        QStringLiteral("server.read"),
+        QStringLiteral("radioSession.read"),
+        QStringLiteral("slice.read"),
+        QStringLiteral("panadapter.read"),
+        QStringLiteral("resource.get"),
+        QStringLiteral("resource.subscribe"),
+        QStringLiteral("resource.unsubscribe")} : QJsonArray{};
     return {
-        {QStringLiteral("sessionId"), session.sessionId},
+        {QStringLiteral("sessionId"), session.sessionId()},
         {QStringLiteral("version"), 1},
         {QStringLiteral("server"), QJsonObject{
              {QStringLiteral("name"), QStringLiteral("aetherd")},
              {QStringLiteral("version"), QStringLiteral(AETHERSDR_VERSION)}}},
-        {QStringLiteral("grants"), QJsonArray{QStringLiteral("observe")}},
-        {QStringLiteral("capabilities"), QJsonArray{
-             QStringLiteral("server.read"),
-             QStringLiteral("radioSession.read"),
-             QStringLiteral("slice.read"),
-             QStringLiteral("panadapter.read"),
-             QStringLiteral("resource.get"),
-             QStringLiteral("resource.subscribe"),
-             QStringLiteral("resource.unsubscribe")}},
+        {QStringLiteral("grants"), grants},
+        {QStringLiteral("capabilities"), available},
         {QStringLiteral("limits"), QJsonObject{
              {QStringLiteral("maxMessageBytes"), ProtocolLimits::kMaxMessageBytes},
              {QStringLiteral("maxSubscriptions"), ControlSession::kMaxSubscriptions},

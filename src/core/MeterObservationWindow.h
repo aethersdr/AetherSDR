@@ -38,7 +38,10 @@ public:
         }
         if (sampleAt > 0 && sampleAt <= until) {
             entry.maxAgeMs = std::max(entry.maxAgeMs, until - sampleAt);
-            if (sampleAt >= m_start && sampleAt > entry.lastSampleAt && std::isfinite(value)) {
+            // Epoch milliseconds are not a unique arrival ID: queued samples
+            // may share a timestamp. Reobserving a cached value is harmless
+            // for a maximum, while discarding an equal-timestamp peak is not.
+            if (sampleAt >= m_start && std::isfinite(value)) {
                 entry.peak = entry.peak ? std::max(*entry.peak, value) : value;
                 if (!entry.firstSampleAt) {
                     entry.firstSampleAt = sampleAt;

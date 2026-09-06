@@ -721,6 +721,8 @@ int main(int argc, char** argv)
     check(!caps.hasDaxStreams, "no IQ on any networked Icom — absent, not deferred");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "the radio remembers its own state, so the client restores NOTHING");
+    check(caps.hasRadioPttReadback,
+          "Icom declares hasRadioPttReadback: setKeying() is intent, 1C 00 is state");
     check(caps.hasRadioSideDsp, "NR/NB/notch run in the radio's firmware");
     check(caps.hasRadioSideCwKeyer && caps.cwTextKeyerName == QLatin1String("CWK"),
           "CWK capability follows the resolved CI-V model, not its display string");
@@ -1106,6 +1108,8 @@ int main(int argc, char** argv)
                                      movesPttOrTuner);
               }, 1000),
               "the keyed intent reaches the radio through the scheduler");
+        check(waitFor([&] { return lastTransmitState.mox.value_or(false); }, 1000),
+              "the radio-confirmed PTT state reaches the backend seam");
         for (int i = 0; i < 20; ++i)
             backend.submitTxAudio(pcm, 24000, /*clientLeveled=*/false);
         QTest::qWait(200);
@@ -1139,14 +1143,10 @@ int main(int argc, char** argv)
 
     // ---- THE PTT CONFIRMATION WINDOW, IN BOTH DIRECTIONS ------------------
     //
-    // RFC #4983's captured FT8 failure and its explicit counter-rule live here.
-    // The window is what lets a newer key-on intent outlive an older poll's OFF
-    // answer; it must NOT also let a client's unkey request outlive the radio
-    // saying it is still transmitting.
+    // Command intent is NOT radio state. AetherModem waits on the true edge
+    // from this path before releasing sample zero, so a delayed/refused Icom
+    // key must leave the seam unkeyed and keep TX audio gated.
     {
-        // (a) THE CAPTURED FAILURE. Key on, then have the radio insist it is
-        //     still RX — exactly the pre-key poll answer arriving late. The
-        //     model must not follow it back to RX inside the window.
         backend.setKeying(false);
         check(waitSchedulerIdle(), "PTT fixture starts unkeyed");
         moxPublications.clear();
@@ -1154,39 +1154,42 @@ int main(int argc, char** argv)
         radio.m_pttOverride = false;         // radio keeps answering "RX"
         backend.setKeying(true);
         QTest::qWait(600);                   // several 250 ms fallback polls
-        check(std::find(moxPublications.begin(), moxPublications.end(), false)
-                  == moxPublications.end(),
-              "a contradictory PTT OFF is suppressed while a key-on intent is "
-              "pending — the captured FT8 transmit-audio teardown");
-        check(lastTransmitState.mox.value_or(false),
-              "and the model stays keyed for the operator who asked to transmit");
-
-        // The window is BOUNDED. Past it the radio wins again (Constitution II),
-        // otherwise a client belief outlives the hardware indefinitely.
-        QTest::qWait(700);
         check(!lastTransmitState.mox.value_or(true),
-              "once the 1 s window expires the radio's own report wins again");
+              "a key-on command never publishes TX while the radio still reports RX");
+        check(std::find(moxPublications.begin(), moxPublications.end(), true)
+                  == moxPublications.end(),
+              "no optimistic true edge escapes before radio confirmation");
 
-        // (b) THE DIRECTION THAT MUST NEVER BE SUPPRESSED. Ask to unkey while
-        //     the radio insists it is transmitting — a lost or refused unkey.
-        //     Swallowing this is the one failure that leaves an operator on the
-        //     air with a UI that says otherwise (Constitution VI fails closed).
+        // The radio applies the command later. The next fallback poll is the
+        // authoritative transition that AetherModem is allowed to follow.
         radio.m_pttOverride = true;
+        check(waitFor([&] { return lastTransmitState.mox.value_or(false); }, 1000),
+              "a delayed radio PTT true is eventually published");
+        check(std::find(moxPublications.begin(), moxPublications.end(), true)
+                  != moxPublications.end(),
+              "the confirmed true edge is visible to the TX coordinator");
+
+        // Unkey remains fail-closed: until the radio itself reports RX, the
+        // backend continues to publish/show that the transmitter is keyed —
+        // and a readback that CONTRADICTS the unkey is republished even though
+        // the backend's own keyed flag did not change, so RadioModel's
+        // optimistic RX presentation is corrected (Constitution VI).
         moxPublications.clear();
         backend.setKeying(false);
         check(waitFor([&] {
                   return std::find(moxPublications.begin(), moxPublications.end(),
                                    true) != moxPublications.end();
               }, 1000),
-              "a radio reporting KEYED after an unkey request is published "
-              "immediately, NOT suppressed by the confirmation window");
+              "a radio reporting KEYED after an unkey request is republished "
+              "immediately, NOT swallowed by the on-change gate");
         check(lastTransmitState.mox.value_or(false),
-              "and the model shows the transmitter that is actually on the air");
+              "a refused/delayed unkey cannot make the UI claim the radio is RX");
 
-        radio.m_pttOverride.reset();
+        radio.m_pttOverride = false;
         backend.setKeying(false);
         check(waitFor([&] { return !lastTransmitState.mox.value_or(true); }, 2000),
               "an obedient radio then unkeys normally");
+        radio.m_pttOverride.reset();
         check(waitSchedulerIdle(), "PTT fixture drains");
     }
 

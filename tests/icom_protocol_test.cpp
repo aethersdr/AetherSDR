@@ -274,6 +274,10 @@ static void testCapabilities()
     RadioId id{};
     check(parseCapabilities(caps, id), "recognises the capabilities packet");
     check(id[0] == 1 && id[15] == 16, "radio id is the 16 bytes at 0x42");
+    check(radioIdHex(id) == "0102030405060708090a0b0c0d0e0f10",
+          "radio id has a stable address-independent import key");
+    check(radioIdHex(RadioId{}).empty(),
+          "an absent radio id is rejected rather than aliasing every radio");
     check(parseCapabilitiesName(caps) == "IC-705",
           "the radio names itself — hardcoding IC-705 is what blocks other models");
 }

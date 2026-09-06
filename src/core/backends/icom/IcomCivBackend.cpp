@@ -21,6 +21,7 @@
 #include "core/DtcsCodes.h"
 #include "core/aprs/AprsPacket.h"
 #include "core/Resampler.h"
+#include "core/tnc/Ax25AudioCapture.h"
 
 namespace AetherSDR::icom {
 namespace {
@@ -254,6 +255,7 @@ qint64 IcomCivBackend::nowMs() const
 
 IcomCivBackend::~IcomCivBackend()
 {
+    finishAx25PostResampleCapture();
     // QObject direct connections may run while this destructor body is still
     // active, so terminate before member destruction begins. The scheduler is
     // reset before results are emitted (terminateScheduler), which makes a
@@ -292,6 +294,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+    // setKeying() is intent; the decoded CI-V `1C 00` readback is the keyed
+    // state. AetherModem waits for that edge before releasing sample zero, and
+    // RadioModel does not synthesise a command-edge fallback here.
+    c.hasRadioPttReadback = true;
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
@@ -503,17 +509,36 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // 1A 03 reports only the SELECTED slot's actual width. Replace that slot's
     // factory value once the reply is current, while retaining the documented
     // defaults for the two unselected slots that the protocol cannot expose.
-    if (m_model->hasScope || m_model->isKnown())
-        {
+    if (m_model->hasScope || m_model->isKnown()) {
         // std::vector<int> from the codec (which stays Qt-free) into the
         // QList the capability struct carries.
-        auto widths = filterWidthsForMode(currentLadderMode().toStdString());
+        std::vector<int> widths = filterWidthsForMode(currentLadderMode().toStdString());
         if (widths.size() == 3 && passbandWidthIsCurrent() && m_ifWidthHz > 0
             && m_filter >= 1 && m_filter <= 3) {
             widths[static_cast<std::size_t>(3 - m_filter)] = m_ifWidthHz;
             std::sort(widths.begin(), widths.end());
         }
         c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
+
+        // FIL1/FIL2/FIL3 are identities, not widths. The selected slot's
+        // width is mutable through 1A 03, so publish the identity separately
+        // and keep it in radio order even when its content changes. Width-only
+        // consumers retain the legacy narrow-to-wide list above.
+        const FilterWidthLimits limits =
+            filterWidthLimitsFor(currentLadderMode().toStdString());
+        c.rxFilterControl.minimumWidthHz = limits.minHz;
+        c.rxFilterControl.maximumWidthHz = limits.maxHz;
+        c.rxFilterControl.widthStepHz = limits.minHz == 200 ? 200 : 50;
+        c.rxFilterControl.selectedPresetId = m_filter;
+        const int selectedWidth = passbandWidthIsCurrent() ? m_ifWidthHz : 0;
+        const std::vector<FilterPresetState> presets = filterPresetsForMode(
+            currentLadderMode().toStdString(), m_filter, selectedWidth);
+        for (const FilterPresetState& preset : presets) {
+            c.rxFilterControl.presets.append(RxFilterPreset{
+                preset.id,
+                QStringLiteral("FIL%1").arg(preset.id),
+                preset.widthHz});
+        }
     }
 
     // THE TRANSMIT PASSBAND IS A SHORT LIST, NOT A SLIDER. Published so the
@@ -542,10 +567,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasRadioSideWaterfallAutoBlack = false;
     const MemoryProfile* memory = m_model && profileFor(*m_model).memory
         ? &*profileFor(*m_model).memory : nullptr;
-    c.persistsMemories = memory != nullptr;
+    // The AetherSDR memory model is always the shared client database for
+    // Icom. A model-specific codec only adds an explicit radio-to-database
+    // Sync source; it does not hand ownership of the working store to the
+    // radio.
+    c.persistsMemories = false;
     c.canWriteMemories = false;
     c.canApplyMemories = false;
-    c.canRefreshMemories = c.persistsMemories;
+    c.canRefreshMemories = memory != nullptr;
     if (memory) {
         c.memoryGroupColumnTitle = QString::fromLatin1(memory->groupColumnTitle.data(),
             static_cast<qsizetype>(memory->groupColumnTitle.size()));
@@ -807,6 +836,11 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
     disconnectRadio();
 
+    // The stable import identity arrives in the authenticated RS-BA1
+    // capabilities record. An endpoint is deliberately not used here: DHCP,
+    // mDNS and NAT changes must not turn one radio into a second import source.
+    m_memoryImportSource.clear();
+
     IcomSession::Params p;
     p.host = QHostAddress(request.host);
     p.controlPort = request.port ? request.port : kControlPort;
@@ -880,6 +914,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    finishAx25PostResampleCapture();
     finishMemoryRefresh(false);
     m_tuneTimer->stop();
     ++m_sessionGeneration;
@@ -1206,16 +1241,30 @@ void IcomCivBackend::refreshMemories(const QString& groupName)
         return;
     }
     const MemoryProfile& memory = *profileFor(*m_model).memory;
+    if (m_memoryImportSource.isEmpty()) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: RS-BA1 supplied no stable radio identity";
+        emit configurationWarning(
+            QStringLiteral("This radio did not provide a stable RS-BA1 identity, so its "
+                           "memories cannot be synced safely."));
+        return;
+    }
     int selectedGroup = -1;
     if (!groupName.isEmpty() && memory.firstGroup >= 0) {
         for (int group = memory.firstGroup; group <= memory.lastGroup; ++group) {
-            if (groupName == QString::fromStdString(memoryGroupName(memory.dialect, group))) {
+            if (groupName.trimmed().compare(
+                    QString::fromStdString(memoryGroupName(memory.dialect, group)),
+                    Qt::CaseInsensitive) == 0) {
                 selectedGroup = group;
                 break;
             }
         }
     }
     if (memory.requiresGroupSelection && selectedGroup < memory.firstGroup) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: invalid group selection" << groupName;
+        emit configurationWarning(
+            QStringLiteral("Choose a valid Icom memory group before syncing."));
         return;
     }
     m_memoryRefreshActive = true;
@@ -1475,6 +1524,13 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
     m_deviceName = deviceName.trimmed();
+    const std::string stableRadioId = radioIdHex(m_session->radioId());
+    if (stableRadioId.empty()) {
+        m_memoryImportSource.clear();
+    } else {
+        m_memoryImportSource = QStringLiteral("icom:%1").arg(
+            QString::fromStdString(stableRadioId));
+    }
     m_connected = true;
     m_connectedAtMs = nowMs();
     m_lastIncident.clear();
@@ -2711,18 +2767,31 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (index < 0) {
                 return;
             }
-            if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
-                m_memoryRefreshReplies.insert(index);
-                emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
-                if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
-                    finishMemoryRefresh(true);
+            // Publish the delta before completion: the model must have the last
+            // row (including an empty-channel removal) before it saves the bank.
+            const auto publishMemory = [this, index](const MemoryDelta& delta) {
+                emit memoryChanged(delta);
+                if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
+                    m_memoryRefreshReplies.insert(index);
+                    emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
+                    if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
+                        finishMemoryRefresh(true);
+                    }
                 }
-            }
+            };
             MemoryDelta delta;
             delta.index = index;
+            delta.importSource = m_memoryImportSource;
+            delta.importKey = QStringLiteral("%1:%2")
+                .arg(memory->group)
+                .arg(memory->channel);
+            delta.owner = m_model
+                ? QString::fromLatin1(m_model->name.data(),
+                                      static_cast<qsizetype>(m_model->name.size()))
+                : QStringLiteral("Icom");
             if (!memory->occupied) {
                 delta.removed = true;
-                emit memoryChanged(delta);
+                publishMemory(delta);
                 return;
             }
 
@@ -2763,7 +2832,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 delta.toneMode = QStringLiteral("off");
                 break;
             }
-            emit memoryChanged(delta);
+            publishMemory(delta);
             return;
         }
         // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its
@@ -3078,6 +3147,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // "Explicit PTT OFF and fail-safe unkey are never suppressed by a
             // key-on transition guard", and Constitution VI wants every path
             // that can transmit to fail closed.
+            bool republishContradiction = false;
             if (m_pendingPttIntent) {
                 const bool confirmsIntent = keyed == *m_pendingPttIntent;
                 const bool guarding = *m_pendingPttIntent
@@ -3091,9 +3161,17 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 if (!confirmsIntent && !*m_pendingPttIntent) {
                     // The radio says it is keyed while we asked it to stop.
                     // Publish it and say so — this is the fail-closed path.
+                    //
+                    // FORCE the publication. setKeying(false) no longer moves
+                    // m_keyed optimistically, so a radio that stays keyed
+                    // answers with the value m_keyed already holds and the
+                    // on-change gate below would swallow it — leaving
+                    // RadioModel's optimistic RX presentation uncorrected while
+                    // the transmitter is on the air.
                     qCWarning(lcIcomScheduler)
                         << "radio reports KEYED after an unkey request; "
                            "publishing radio truth";
+                    republishContradiction = true;
                 } else if (!confirmsIntent && *m_pendingPttIntent) {
                     qCWarning(lcIcomScheduler)
                         << "radio did not confirm key-on before the PTT intent window expired";
@@ -3126,7 +3204,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // Republishing unchanged state is never merely wasteful on a path
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
-            if (keyed == m_keyed) {
+            if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
                     emit keyingStateConfirmed(keyed);
                 }
@@ -3137,6 +3215,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             m_meters.setTransmitting(m_keyed);
             if (!keyed && m_session) {
                 m_session->flushTxAudio();
+            }
+            if (!keyed && m_txResampler) {
+                m_txResampler->reset();
             }
             if (!m_keyed) {
                 clearDerivedForwardPower();
@@ -3325,7 +3406,7 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     // TUNE has a backend-owned, radio-rate producer. Letting microphone
     // callbacks feed this path at the same time creates a second packet cadence
     // and can overrun the bounded transmit queue.
-    if (m_tuning || !m_keyed) {
+    if (m_tuning || !txAudioGateOpen()) {
         return;
     }
     // The engine hands us interleaved int16 stereo; the radio wants mono at its
@@ -3371,12 +3452,79 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         const auto* f = reinterpret_cast<const float*>(out.constData());
         mono.assign(f, f + out.size() / static_cast<int>(sizeof(float)));
     }
+
+    appendAx25PostResampleCapture(mono);
     m_session->sendAudio(mono);
+}
+
+// The transmit-audio admission gate, shared by the seam feed, the TUNE tone
+// producer and the finite-stream barrier.
+//
+// Commanded intent leads inside its bounded confirmation window; radio truth
+// decides everywhere else. setKeying() no longer moves m_keyed on its own
+// (the readback does), so gating on m_keyed alone would head-clip every voice,
+// DAX and TCI over by one CI-V round trip — up to the 250 ms fallback poll —
+// and leave the TUNE carrier silent until the radio answered, the exact edge
+// setTune()'s priming frame exists to cover. Admitting audio on the key-on
+// intent restores the established timing; refusing it on the unkey intent
+// keeps audio out of a queue that setKeying(false) has just flushed. Past the
+// window an unconfirmed key-on stops admitting audio to a radio that still
+// says RX (fail closed), and a refused unkey re-admits it once the radio has
+// said it is still keyed — audio into a keyed transmitter is the truthful
+// state, not a stray emission.
+bool IcomCivBackend::txAudioGateOpen() const
+{
+    if (m_pendingPttIntent && nowMs() < m_pendingPttUntilMs) {
+        return *m_pendingPttIntent;
+    }
+    return m_keyed;
+}
+
+int IcomCivBackend::finishTxAudio()
+{
+    if (!m_session || !m_connected || !txAudioGateOpen() || m_tuning) {
+        if (m_txResampler) {
+            m_txResampler->reset();
+        }
+        return 0;
+    }
+
+    // A finite packet ends while r8brain still holds one linear-phase group
+    // delay of real samples. The 24->48 kHz converter measures about 70 ms on
+    // this path — enough to hide the AX.25 FCS and postamble. Drain those
+    // samples while PTT is still confirmed, then finish the packetizer's last
+    // 20 ms frame with silence so none of that recovered tail remains pending
+    // when unkey flushes the queue.
+    //
+    // The padding is unconditional: a producer already at the negotiated rate
+    // has no resampler and no tail, but its final partial frame would be lost
+    // to the unkey flush exactly the same way.
+    int drainedSamples = 0;
+    if (m_txResampler) {
+        const QByteArray tail = m_txResampler->drain();
+        if (!tail.isEmpty()) {
+            const auto* samples = reinterpret_cast<const float*>(tail.constData());
+            const std::span<const float> mono(
+                samples, static_cast<std::size_t>(tail.size() / sizeof(float)));
+            appendAx25PostResampleCapture(mono);
+            m_session->sendAudio(mono);
+            drainedSamples = tail.size() / static_cast<int>(sizeof(float));
+        }
+    }
+    const std::size_t paddedBytes = m_session->padTxAudioToFrame();
+    // What is actually still queued, host plus radio — not the packetizer's
+    // worst case. After padding, a normal packet holds a single 20 ms frame.
+    const int drainMs = m_session->txAudioDrainMs();
+    qCInfo(lcIcomTx) << "Icom finite TX audio drained"
+                     << drainedSamples
+                     << "samples; packetizer silence padding"
+                     << paddedBytes << "bytes; drain budget" << drainMs << "ms";
+    return drainMs;
 }
 
 void IcomCivBackend::onTuneAudioTick()
 {
-    if (!m_tuning || !m_keyed || !m_session || !m_connected) {
+    if (!m_tuning || !txAudioGateOpen() || !m_session || !m_connected) {
         return;
     }
 
@@ -3998,69 +4146,11 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     const std::string ladder = currentLadderMode().toStdString();
     const int width = std::abs(highHz - lowHz);
 
-    // ── Which control did the operator actually touch? ────────────────────
-    //
-    // ONE SEAM VERB, TWO RADIO CONTROLS, and conflating them is how an Icom
-    // ends up with three filter buttons that all select the same width.
-    //
-    //   * The FILTER BUTTONS emit one of the three widths this backend
-    //     published as rxFilterWidthsHz. On the radio that is a SLOT change —
-    //     FIL1/FIL2/FIL3 — and it must stay one, because the slots are the
-    //     operator's own three presets and clicking through them must not
-    //     redefine them.
-    //   * DRAGGING A PASSBAND EDGE emits anything at all. On the radio that is
-    //     a WIDTH change (1A 03) on the slot already selected, plus a PBT shift
-    //     if the window also moved — exactly what turning the radio's own
-    //     FILTER and PBT knobs does.
-    //
-    // An exact factory-ladder match is therefore read as a button press. A drag
-    // that lands on one is inherently ambiguous at this seam; preserve the
-    // operator's stored preset instead of silently redefining it.
-    const auto ladderWidths = filterWidthsForMode(ladder);
-    const bool isSlotPick = std::find(ladderWidths.begin(), ladderWidths.end(), width)
-                            != ladderWidths.end();
     const FilterWidthLimits limits = filterWidthLimitsFor(ladder);
 
-    // FM, DV and WFM have no settable width at all, so the slot IS the only
-    // filter control the radio offers there and every request has to be a slot
-    // pick. Sending 1A 03 in FM writes a width into whichever mode the radio
-    // last had one for.
-    if (isSlotPick || limits.maxHz <= 0) {
-        // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
-        // every AM width on FIL1 and every CW width on FIL3 — three buttons and
-        // one filter, in both directions.
-        const int filter = filterForWidthHz(ladder, width);
-        m_filter = filter;
-        // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06
-        // carries mode and slot with no DATA byte, and writing it is what
-        // clears DATA on the radio — so a filter change sent as 06 took an
-        // operator running FT8 in USB-D back to plain USB and their transmit
-        // audio back to the microphone, from a button that says nothing about
-        // the mode. 26 restates DATA with the new slot in the same frame.
-        //
-        // m_dataMode here is the RADIO's reported state, not a guess: it is
-        // read at connect, re-read after every front-panel mode change, and
-        // confirmed after every mode write, so this re-asserts what the radio
-        // said (Constitution II) rather than pushing a client belief over it.
-        if (profileFor(*m_model).supports(IcomFeature::VfoMode))
-            sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
-        else
-            sendUserCommand(cmdSetMode(addr, m_mode, filter));
-
-        // THE NEW SLOT'S WIDTH IS A DIFFERENT NUMBER and only the radio knows
-        // it. Drop the width we hold for the old slot so the fallback ladder
-        // draws the window until 1A 03 answers, rather than leaving the
-        // previous slot's Hz on screen under a new slot's label.
-        m_ifWidthHz = 0;
-        // A write is intent; the radio's own reply is state. sendUserCommand
-        // schedules the mode readback itself (confirmationFor maps 26 -> read
-        // 26, 06 -> read 04), and that reply's handler asks for the width and
-        // PBT of whatever slot the radio actually landed on.
-        SliceDelta d;
-        const auto [low, high] = passbandForModeAndFilter(ladder, filter);
-        d.filterLow  = low;
-        d.filterHigh = high;
-        emit sliceChanged(sliceId(), d);
+    // FM, DV and WFM have no settable width. Their FIL selection travels
+    // through setSliceFilterPreset(); a skirt edit has no radio command.
+    if (limits.maxHz <= 0) {
         return;
     }
 
@@ -4113,6 +4203,42 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     SliceDelta d;
     d.filterLow  = edges.lowHz;
     d.filterHigh = edges.highHz;
+    emit sliceChanged(sliceId(), d);
+}
+
+void IcomCivBackend::setSliceFilterPreset(int, int presetId)
+{
+    const std::string ladder = currentLadderMode().toStdString();
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
+        addr, ladder, m_mode, m_dataMode, presetId,
+        profileFor(*m_model).supports(IcomFeature::VfoMode));
+    if (!plan) {
+        return;
+    }
+    for (const std::vector<std::uint8_t>& command : plan->commands) {
+        sendUserCommand(command);
+    }
+
+    // A filter button is a PRESET RECALL, not merely a slot selector. This is
+    // also how the Flex buttons behave: after an operator drags the skirts,
+    // clicking the active button reapplies its stored passband. Icom remembers
+    // a mutable width and Twin-PBT position inside each FIL slot, so selecting
+    // FIL2 alone would immediately read the customised shape back and appear
+    // to do nothing. The recall plan therefore follows the slot-select command
+    // with the mode's factory 1A 03 width and centred 14 07/08 PBT writes.
+    // Radio readback remains authoritative and corrects any value it quantises.
+    m_filter = presetId;
+    m_ifWidthHz = plan->widthHz;
+    m_ifWidthMode = m_mode;
+    m_ifWidthData = m_dataMode;
+    m_ifWidthSlot = m_filter;
+    m_pbtInner = plan->pbtCode;
+    m_pbtOuter = plan->pbtCode;
+    publishCapabilities();
+    SliceDelta d;
+    d.filterLow = plan->lowHz;
+    d.filterHigh = plan->highHz;
     emit sliceChanged(sliceId(), d);
 }
 
@@ -4916,25 +5042,28 @@ void IcomCivBackend::setKeying(bool key)
     m_pendingPttUntilMs = nowMs() + 1000;
     m_pttIncidentReported = false;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
-    // PUBLISH IT. Setting m_keyed silently here and leaving the announcement to
-    // the poll does not work now that the poll only speaks on change: our own
-    // keying moved the variable, so the poll's answer matched it and nothing
-    // was ever emitted. The model then read mox=false through an entire live
-    // transmission — with the radio plainly on the air and its own meters
-    // moving — which silently mis-gates everything downstream that asks
-    // "are we transmitting".
-    if (m_keyed != key) {
-        m_keyed = key;
-        if (!m_keyed) {
-            clearDerivedForwardPower();
-        }
-        TransmitDelta t;
-        t.mox = key;
-        emit transmitChanged(t);
+    // DO NOT publish intent as radio state. The scheduler sends a confirming
+    // 1C 00 read and the normal 250 ms fallback poll keeps asking. Only that
+    // decoded reply moves m_keyed, the meters, and transmitChanged. Publishing
+    // here made AetherModem release sample zero while the IC-705 still reported
+    // RX, truncating the AX.25 preamble and header on air.
+    //
+    // Three things still happen on the command, because none of them is a
+    // claim about the air: the transmit-audio gate follows this intent inside
+    // its window (txAudioGateOpen), the queued audio of a finished transmission
+    // is discarded, and the DERIVED IC-9700 forward-power estimate is zeroed —
+    // CI-V stops Po polling at unkey, so waiting for the readback would leave a
+    // stale wattage on the meter for as long as that reply takes, or forever
+    // if it is lost. A readback that then contradicts the unkey is republished
+    // by onCivFrame; nothing here pre-empts it.
+    if (!key) {
+        clearDerivedForwardPower();
     }
-    m_meters.setTransmitting(key);
     if (!key && m_session) {
         m_session->flushTxAudio();   // queued audio belongs to the transmission that ended
+    }
+    if (!key && m_txResampler) {
+        m_txResampler->reset();
     }
     if (restoreTunePower >= 0) {
         setTxPower(restoreTunePower);
@@ -5888,6 +6017,78 @@ std::optional<std::vector<std::uint8_t>> parseHexBytes(const QString& in)
 }
 }  // namespace
 
+void IcomCivBackend::appendAx25PostResampleCapture(
+    std::span<const float> mono)
+{
+    if (m_ax25PostResampleCapturePath.isEmpty()
+        || m_ax25PostResampleCaptureTruncated) {
+        return;
+    }
+
+    const qsizetype captureBytes = static_cast<qsizetype>(mono.size())
+        * static_cast<qsizetype>(sizeof(float));
+    const qsizetype remaining = kAx25PostResampleCaptureMaxBytes
+        - m_ax25PostResampleCapturePcm.size();
+    const qsizetype appendBytes = std::min(captureBytes, remaining);
+    if (appendBytes > 0) {
+        m_ax25PostResampleCapturePcm.append(
+            reinterpret_cast<const char*>(mono.data()), appendBytes);
+    }
+    if (appendBytes < captureBytes) {
+        m_ax25PostResampleCaptureTruncated = true;
+        qCWarning(lcIcomTx)
+            << "AX.25 post-resample capture reached its 64 MiB bound";
+    }
+}
+
+QVariantMap IcomCivBackend::finishAx25PostResampleCapture()
+{
+    QVariantMap result;
+    if (m_ax25PostResampleCapturePath.isEmpty()) {
+        result.insert(QStringLiteral("active"), false);
+        result.insert(QStringLiteral("written"), false);
+        return result;
+    }
+
+    const QString path = m_ax25PostResampleCapturePath;
+    const QByteArray pcm = std::move(m_ax25PostResampleCapturePcm);
+    const bool truncated = m_ax25PostResampleCaptureTruncated;
+    m_ax25PostResampleCapturePath.clear();
+    m_ax25PostResampleCapturePcm.clear();
+    m_ax25PostResampleCaptureTruncated = false;
+
+    result.insert(QStringLiteral("active"), false);
+    result.insert(QStringLiteral("path"), path);
+    result.insert(QStringLiteral("bytes"), pcm.size());
+    result.insert(QStringLiteral("truncated"), truncated);
+    if (pcm.isEmpty()) {
+        result.insert(QStringLiteral("written"), false);
+        result.insert(QStringLiteral("error"),
+                      QStringLiteral("no TX audio reached the Icom backend"));
+        qCInfo(lcIcomTx)
+            << "AX.25 post-resample capture ended without audio" << path;
+        return result;
+    }
+
+    QString error;
+    const bool written = writeAx25Float32Wav(
+        path, pcm, m_audioRateHz, 1, &error);
+    result.insert(QStringLiteral("written"), written);
+    if (!written) {
+        result.insert(QStringLiteral("error"), error);
+        qCWarning(lcIcomTx)
+            << "AX.25 post-resample capture failed" << path << error;
+        return result;
+    }
+
+    qCInfo(lcIcomTx)
+        << "AX.25 post-resample capture saved" << path
+        << "bytes" << pcm.size()
+        << "sampleRate" << m_audioRateHz
+        << "truncated" << truncated;
+    return result;
+}
+
 void IcomCivBackend::startNtpAccess(qint64 now)
 {
     m_ntpAccess.start(now);
@@ -5942,6 +6143,43 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
 {
     if (ns != QLatin1String("icom")) {
         emit extensionError(requestId, QStringLiteral("unknown namespace %1").arg(ns));
+        return;
+    }
+    if (verb == QLatin1String("debug.ax25.capture.begin")) {
+        const QVariantMap args = arg.toMap();
+        const QString captureId = args.value(QStringLiteral("captureId"))
+                                      .toString().trimmed();
+        const int packetSequence =
+            args.value(QStringLiteral("packetSequence")).toInt();
+        const QString path = ax25AudioCapturePath(
+            Ax25AudioCaptureStage::TxIcomPostResample,
+            captureId,
+            packetSequence);
+        if (path.isEmpty()) {
+            emit extensionError(
+                requestId,
+                QStringLiteral("invalid AX.25 capture id or packet sequence"));
+            return;
+        }
+
+        finishAx25PostResampleCapture();
+        m_ax25PostResampleCapturePath = path;
+        m_ax25PostResampleCapturePcm.clear();
+        m_ax25PostResampleCaptureTruncated = false;
+        qCInfo(lcIcomTx) << "AX.25 post-resample capture armed" << path;
+        if (requestId != 0) {
+            QVariantMap result;
+            result.insert(QStringLiteral("active"), true);
+            result.insert(QStringLiteral("path"), path);
+            emit extensionResult(requestId, result);
+        }
+        return;
+    }
+    if (verb == QLatin1String("debug.ax25.capture.end")) {
+        const QVariantMap result = finishAx25PostResampleCapture();
+        if (requestId != 0) {
+            emit extensionResult(requestId, result);
+        }
         return;
     }
     if (verb.startsWith(QLatin1String("gps."))) {

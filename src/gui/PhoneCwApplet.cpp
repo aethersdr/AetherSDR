@@ -549,6 +549,9 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     auto* speedValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_speedEdit->validator()));
     speedValidator->setRange(minWpm, maxWpm);
+    if (!m_speedEdit->hasFocus() || !m_speedEdit->hasAcceptableInput()) {
+        m_speedEdit->setText(QString::number(m_speedSlider->value()));
+    }
     m_speedEdit->setAccessibleDescription(
         tr("CW keying speed in words per minute, %1 to %2").arg(minWpm).arg(maxWpm));
     m_pitchMinHz = minPitchHz;
@@ -1269,7 +1272,14 @@ void PhoneCwApplet::setAlcMeterUnit(const QString& unit)
                 return QStringLiteral("%1 %").arg(QString::number(value, 'f', 1));
               }) : alcHoverFormatter());
     }
-    resetAlc();
+    // A unit change invalidates the old animation coordinates immediately.
+    const float floor = percent ? 0.0f : kAlcGaugeFloorDbfs;
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (gauge) {
+            gauge->setValueImmediate(floor);
+            gauge->clearPeak();
+        }
+    }
 }
 
 void PhoneCwApplet::resetAlc()
@@ -1277,7 +1287,7 @@ void PhoneCwApplet::resetAlc()
     const float floor = m_alcMeterUnit == QLatin1String("Percent") ? 0.0f : -20.0f;
     for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
         if (gauge) {
-            gauge->setValueImmediate(floor);
+            gauge->setValue(floor);
             gauge->clearPeak();
         }
     }

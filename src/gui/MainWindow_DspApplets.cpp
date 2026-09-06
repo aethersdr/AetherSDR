@@ -260,7 +260,7 @@ void MainWindow::wireDspApplets()
         // FLEX-8000 TX-chain meters can publish quiescent RX values near 0 dBFS.
         // Only show SW ALC while the radio interlock says RF is actually keyed.
         m_appletPanel->phoneCwApplet()->setAlcMeterUnit(unit);
-        if (m_radioModel.isRadioTransmitting()) {
+        if (!unit.isEmpty() && m_radioModel.isRadioTransmitting()) {
             m_appletPanel->phoneCwApplet()->updateAlc(alc);
         } else {
             m_appletPanel->phoneCwApplet()->resetAlc();

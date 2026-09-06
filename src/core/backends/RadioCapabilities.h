@@ -26,6 +26,37 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+// A stable, radio-owned receive-filter preset. `id` is the identity used on
+// the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
+// that preset and must never be used as its identity.
+struct RxFilterPreset {
+    int id = 0;
+    QString label;
+    int widthHz = 0;
+
+    bool operator==(const RxFilterPreset&) const = default;
+};
+
+struct RxFilterControl {
+    QList<RxFilterPreset> presets;
+    int selectedPresetId = 0;
+    int minimumWidthHz = 0;
+    int maximumWidthHz = 0;
+    int widthStepHz = 0;
+
+    bool operator==(const RxFilterControl&) const = default;
+};
+
+// A capability update reaches the two legacy/new presentation setters one at
+// a time. Treat the preset metadata as usable only when it describes every
+// width in the current presentation list; this keeps a disconnect or mode
+// transition from indexing stale FIL metadata against a newly rebuilt list.
+[[nodiscard]] inline bool hasCompleteRxFilterPresets(const RxFilterControl& control,
+                                                      qsizetype widthCount)
+{
+    return !control.presets.isEmpty() && control.presets.size() == widthCount;
+}
+
 enum class FmTonePresentation {
     Legacy,
     Hidden,
@@ -239,11 +270,11 @@ struct RadioCapabilities {
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
 
-    // Whether the radio-backed memory store accepts mutations and native
-    // recalls. These are deliberately separate from persistsMemories: an
-    // initial backend may prove that it can enumerate radio-owned channels
-    // before it is safe to overwrite them, and may expose those channels as
-    // tune presets without putting the radio into its vendor Memory mode.
+    // Whether the active memory store accepts mutations/native recalls, and
+    // whether the radio can be read as an explicit import source. Refresh is
+    // deliberately independent of persistsMemories: Icom keeps AetherSDR's
+    // shared client database as the working store while model-specific codecs
+    // ingest snapshots from the radio into it.
     bool canWriteMemories = false;
     bool canApplyMemories = false;
     bool canRefreshMemories = false;
@@ -497,6 +528,21 @@ struct RadioCapabilities {
     // which is the same mistake read from the other end.
     bool takesTxAudioOverSeam = false;
 
+    // The backend publishes IRadioBackend::transmitChanged / keyingStateConfirmed
+    // from the RADIO'S OWN PTT readback, and a setKeying() command is intent
+    // only — it never moves the published keyed state by itself. A consumer
+    // that must not act before the transmitter is really keyed (a modem
+    // releasing sample zero, TCI's key confirmation) waits for
+    // RadioModel::radioTransmittingChanged / radioTransmitConfirmed instead of
+    // trusting the command edge, and RadioModel does not synthesise a
+    // command-edge fallback for such a backend.
+    //
+    // False for a backend with no readback plane (HL2), where the command edge
+    // is the only edge there is. Also false for Flex: its interlock status is
+    // decoded by RadioModel directly, not published through this seam.
+    // Icom: ✅ (decoded CI-V `1C 00`).
+    bool hasRadioPttReadback = false;
+
     // The RX filter widths this radio can actually reach, in Hz. EMPTY means
     // "continuous, or unknown" and the UI keeps its own configurable list.
     //
@@ -508,6 +554,11 @@ struct RadioCapabilities {
     // advertise the real, discrete set rather than let a continuous-looking
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
+
+    // Stable preset identity and continuous-width limits for radios where a
+    // preset selects a mutable hardware slot. Empty preserves the legacy
+    // width-only button contract above (Flex/HL2/ANAN/Sim).
+    RxFilterControl rxFilterControl;
 
     // Whether the radio implements the independent TX low/high cutoff controls
     // presented by PhoneApplet. False hides the complete control row rather

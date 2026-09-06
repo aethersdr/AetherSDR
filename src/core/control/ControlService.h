@@ -16,7 +16,8 @@ struct ServiceReply {
 
 // Transport-neutral Stage-3 service kernel. The current surface is strictly
 // observe-only: negotiation, capability discovery, typed resource reads, and
-// subscriptions. Non-TX control methods attach in a subsequent slice.
+// subscriptions. A session's trusted transport context supplies authorization;
+// hello cannot grant permissions. Non-TX methods attach in a subsequent slice.
 class ControlService final {
 public:
     explicit ControlService(ControlResourceStore* resources);

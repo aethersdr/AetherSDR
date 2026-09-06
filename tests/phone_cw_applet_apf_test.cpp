@@ -27,6 +27,7 @@
 
 #include "gui/PhoneCwApplet.h"
 #include "gui/AgcModeAvailability.h"
+#include "gui/HGauge.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
@@ -128,7 +129,11 @@ int main(int argc, char** argv)
                   && gauge->property("gaugeValue").toFloat() == 37.5f
                   && gauge->property("gaugeUnit").toString() == "%");
     }
+    auto* animatedAlc = static_cast<AetherSDR::HGauge*>(alcPhone);
+    animatedAlc->setValueImmediate(37.5f);
     applet.resetAlc();
+    check("unkey retains the established ALC decay instead of snapping",
+          animatedAlc->filledFraction() > 0.0f);
     check("percent ALC resets to0at unkey", alcPhone->property("gaugeValue").toFloat() == 0.0f);
     applet.setAlcMeterUnit("dBFS");
     applet.updateAlc(-8.5f);
@@ -144,21 +149,29 @@ int main(int argc, char** argv)
     QSignalSpy cwCommands(&tx, &AetherSDR::TransmitModel::commandReady);
     QSlider* speed = nullptr;
     QLineEdit* pitch = nullptr;
+    QLineEdit* speedText = nullptr;
     for (QSlider* slider : applet.findChildren<QSlider*>()) {
         if (slider->accessibleName() == QStringLiteral("CW speed")) {
             speed = slider;
         }
     }
     for (QLineEdit* editor : applet.findChildren<QLineEdit*>()) {
+        if (editor->accessibleName() == QStringLiteral("CW speed value")) {
+            speedText = editor;
+        }
         if (editor->accessibleName() == QStringLiteral("CW pitch frequency")) {
             pitch = editor;
         }
     }
-    check("CW controls are accessible", speed && pitch);
-    if (!speed || !pitch) {
+    check("CW controls are accessible", speed && pitch && speedText);
+    if (!speed || !pitch || !speedText) {
         return 1;
     }
+    speed->setValue(60);
+    cwCommands.clear();
     applet.setCwControlLimits(6, 48, 300, 900, 5);
+    check("capability clamp reconciles speed slider and text",
+          speed->value() == 48 && speedText->text() == QStringLiteral("48"));
     check("Icom CW speed endpoints", speed->minimum() == 6 && speed->maximum() == 48);
     check("changing CW capabilities emits no command", cwCommands.isEmpty());
     pitch->setText(QStringLiteral("950"));

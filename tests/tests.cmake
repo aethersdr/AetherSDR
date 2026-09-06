@@ -77,6 +77,21 @@ target_include_directories(control_protocol_codec_test PRIVATE src)
 target_link_libraries(control_protocol_codec_test PRIVATE Qt6::Core)
 add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
 
+# Socket-free session authorization and revocation; only the real protocol
+# service/store/session are compiled. No sockets, radio models, or settings.
+add_executable(control_authorization_test
+    tests/control_authorization_test.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlSession.cpp
+)
+target_include_directories(control_authorization_test PRIVATE src)
+target_compile_definitions(control_authorization_test PRIVATE
+    AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
+add_test(NAME control_authorization_test COMMAND control_authorization_test)
+
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
 # grants observation only; no control or transmit capability may appear.
@@ -507,6 +522,13 @@ add_executable(icom_civ_scheduler_test
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
+# Socket-free PR #5436 coverage recovered from the retired capability fixture.
+# Uses an unstarted IcomSession and direct frame/state injection; never binds.
+add_executable(icom_control_profile_test tests/icom_control_profile_test.cpp)
+target_include_directories(icom_control_profile_test PRIVATE src tests)
+target_link_libraries(icom_control_profile_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_control_profile_test COMMAND icom_control_profile_test)
+
 # Socket-free backend incident-state transition. Positive session convergence
 # is certified against real firmware through the automation bridge.
 add_executable(icom_incident_telemetry_test
@@ -568,6 +590,18 @@ target_include_directories(icom_power_derivation_test PRIVATE src)
 target_link_libraries(icom_power_derivation_test PRIVATE
     aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
+
+# Socket-free coverage for the Icom PTT seam contract (#5311): setKeying() is
+# intent, the decoded 1C 00 readback is state, a contradicting readback after
+# an unkey is republished, the key-on window is bounded, and the TX-audio gate
+# follows intent inside that window. Frames are injected through the same test
+# seam as icom_power_derivation_test — no session, no UDP peer.
+add_executable(icom_ptt_authority_test
+    tests/icom_ptt_authority_test.cpp)
+target_include_directories(icom_ptt_authority_test PRIVATE src)
+target_link_libraries(icom_ptt_authority_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME icom_ptt_authority_test COMMAND icom_ptt_authority_test)
 
 # Retired fake-radio fixtures. Positive session and backend convergence is
 # certified against real firmware through the automation bridge and radiocert;
@@ -678,12 +712,14 @@ target_include_directories(hl2_receivers_test PRIVATE src)
 target_link_libraries(hl2_receivers_test PRIVATE Qt6::Core)
 add_test(NAME hl2_receivers_test COMMAND hl2_receivers_test)
 
-# HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
-add_executable(hl2_spectrum_test
-    tests/hl2_spectrum_test.cpp
-    src/core/backends/hl2/Hl2Spectrum.cpp)
+# HL2 spectrum (FFT panadapter). This compiled Hl2Spectrum.cpp standalone
+# against FFTW3 with no Qt at all, which stopped working when the class took
+# WdspChannel::fftwSetupLock() to serialise the process-global FFTW planner:
+# WdspChannel.h includes <QMetaType>, and the lock is defined in
+# WdspChannel.cpp. Links aethercore for both, like its RX-DSP siblings below.
+add_executable(hl2_spectrum_test tests/hl2_spectrum_test.cpp)
 target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
-target_link_libraries(hl2_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
 # HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
@@ -718,10 +754,6 @@ add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
 
 # The panadapter frame rate must follow the operator's slider, not the span
 # (#4470). Wall-clock paced, so it lives in its own target.
-add_executable(hl2_spectrum_rate_test tests/hl2_spectrum_rate_test.cpp)
-target_include_directories(hl2_spectrum_rate_test PRIVATE src)
-target_link_libraries(hl2_spectrum_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
-add_test(NAME hl2_spectrum_rate_test COMMAND hl2_spectrum_rate_test)
 
 add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
 target_include_directories(hl2_shift_test PRIVATE src)
@@ -1122,26 +1154,6 @@ add_test(NAME psk_reporter_map_behavior_test
 # Live PSK Reporter updates must refresh the existing marker/path batches
 # atomically. Replacing them exposes the differently-scaled overview cache and
 # makes every MQTT report pulse between large/small dots and thick/thin paths.
-add_executable(map_live_update_test
-    tests/map_live_update_test.cpp
-    src/gui/map/MapMarkerBatchItem.cpp
-    src/gui/map/MapPathBatchItem.cpp
-    src/gui/map/MapTerminatorItem.cpp
-)
-target_include_directories(map_live_update_test PRIVATE src)
-target_link_libraries(map_live_update_test PRIVATE
-    aethercore
-    qgeoview
-    Qt6::Core
-    Qt6::Concurrent
-    Qt6::Gui
-    Qt6::Widgets
-    Qt6::Network
-)
-set_target_properties(map_live_update_test PROPERTIES AUTOMOC ON)
-add_test(NAME map_live_update_test COMMAND map_live_update_test)
-set_tests_properties(map_live_update_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Frameless-window geometry restore (#4328) — blob parse + the caption-free
 # re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
@@ -1697,13 +1709,6 @@ add_executable(biquad_test
 target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
-add_executable(spectral_nr_test
-    tests/spectral_nr_test.cpp
-    src/core/SpectralNR.cpp
-)
-target_include_directories(spectral_nr_test PRIVATE src)
-target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
-add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
 
 add_executable(mono_dsp_stereo_adapter_test
     tests/mono_dsp_stereo_adapter_test.cpp
@@ -1720,10 +1725,6 @@ add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 # the target minimal means it still builds when the app does not. Every case
 # drives a worker thread, which is the delivery path the helpers exist to
 # observe.
-add_executable(test_event_loop_test tests/test_event_loop_test.cpp)
-target_include_directories(test_event_loop_test PRIVATE tests)
-target_link_libraries(test_event_loop_test PRIVATE Qt6::Core Qt6::Test)
-add_test(NAME test_event_loop_test COMMAND test_event_loop_test)
 
 # Just the voice fixture — linking the full resources.qrc pulled 5.8 MB of
 # application assets into a unit test to reach one 458 KB WAV (PR #4689 review).
@@ -1883,7 +1884,7 @@ target_include_directories(receive_presentation_sync_test PRIVATE src)
 target_link_libraries(receive_presentation_sync_test PRIVATE Qt6::Core)
 add_test(NAME receive_presentation_sync_test COMMAND receive_presentation_sync_test)
 
-# Public-directory parser + external-API (ext_api) policy honoring.
+# Directory-mirror JSON parser + external-API (ext_api) policy honoring.
 add_executable(kiwi_public_directory_test
     tests/kiwi_public_directory_test.cpp
     src/core/KiwiPublicDirectory.cpp
@@ -1894,7 +1895,7 @@ target_compile_definitions(kiwi_public_directory_test PRIVATE AETHERSDR_VERSION=
 set_target_properties(kiwi_public_directory_test PROPERTIES AUTOMOC ON)
 add_test(NAME kiwi_public_directory_test COMMAND kiwi_public_directory_test)
 
-# Demonstration tool: honest, API-policy-aware read of kiwisdr.com/public
+# Demonstration tool: honest, API-policy-aware read of the AetherSDR mirror
 # (proof-of-concept shown to operators — see docs/kiwisdr-public-directory.md).
 add_executable(kiwi_directory_poc
     tools/kiwi_directory_poc.cpp
@@ -2316,13 +2317,6 @@ if (ENABLE_ASR)
     endif()
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
-    add_executable(asr_remote_backend_test
-        tests/asr_remote_backend_test.cpp
-        src/asr/RemoteAsrBackend.cpp
-    )
-    target_include_directories(asr_remote_backend_test PRIVATE src)
-    target_link_libraries(asr_remote_backend_test PRIVATE Qt6::Core Qt6::Network)
-    add_test(NAME asr_remote_backend_test COMMAND asr_remote_backend_test)
 
     # Copy Assist audio tap: which RX source it follows, and the stereo→mono
     # collapse including the non-finite guard. The policy is header-only, so
@@ -2777,6 +2771,8 @@ add_test(NAME ax25_frame_formatter_test COMMAND ax25_frame_formatter_test)
 
 add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
+    src/core/Resampler.cpp
+    src/core/tnc/Ax25AudioCapture.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
@@ -2790,7 +2786,10 @@ add_executable(ax25_libmodem_shim_test
     src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(ax25_libmodem_shim_test PRIVATE src)
+target_include_directories(ax25_libmodem_shim_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core
     aether_afskdemod)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)
@@ -3159,10 +3158,6 @@ set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
 
 if(Qt6WebSockets_FOUND)
-    add_executable(tci_protocol_test tests/tci_protocol_test.cpp)
-    target_include_directories(tci_protocol_test PRIVATE src)
-    target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
-    add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
 
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
@@ -3176,6 +3171,12 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
 
+    # Socket-owning test: our own TCI server is the subject, so this is inside
+    # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
+    # via TciServer::start(0)) on 127.0.0.1 and connects QWebSocket clients to
+    # it in-process — no fixed port, no external peer, no fake radio firmware.
+    # Each case that binds fails fast when it cannot, rather than consuming the
+    # test timeout.
     add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
     target_include_directories(tci_server_review_test PRIVATE src tests)
     target_link_libraries(tci_server_review_test PRIVATE
@@ -3243,10 +3244,6 @@ target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
 target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
 
-add_executable(radiomodel_pan_id_mapping_test tests/radiomodel_pan_id_mapping_test.cpp)
-target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
-target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
-add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
 
 add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
 target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
@@ -3316,10 +3313,6 @@ add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
 # every backend declares each flag explicitly, the RadioModel relay fires on
 # both connection edges, and the `!connected || caps.hasX` rule the GUI applies
 # restores the permissive value on disconnect.
-add_executable(radio_capability_gating_test tests/radio_capability_gating_test.cpp)
-target_include_directories(radio_capability_gating_test PRIVATE src tests)
-target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
-add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
 
 # Radio Setup owns a persistent widget tree. Capability/session transitions must
 # refresh DHCP/static presentation without unrelated GPS/oscillator updates
@@ -3650,6 +3643,18 @@ add_executable(local_memory_bank_test
 target_include_directories(local_memory_bank_test PRIVATE src)
 target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
 add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
+
+# Socket-free injection of backend memory deltas; no radio connection or peer.
+add_executable(memory_import_test tests/memory_import_test.cpp)
+target_include_directories(memory_import_test PRIVATE src tests)
+target_link_libraries(memory_import_test PRIVATE aethercore Qt6::Core)
+add_test(NAME memory_import_test COMMAND memory_import_test)
+
+# Pure policy assertions extracted from the retired broad capability target.
+add_executable(memory_filter_policy_test tests/memory_filter_policy_test.cpp)
+target_include_directories(memory_filter_policy_test PRIVATE src)
+target_link_libraries(memory_filter_policy_test PRIVATE Qt6::Core)
+add_test(NAME memory_filter_policy_test COMMAND memory_filter_policy_test)
 
 add_executable(memory_csv_compat_test
     tests/memory_csv_compat_test.cpp
@@ -4125,6 +4130,24 @@ target_include_directories(rx_filter_step_test PRIVATE src)
 target_link_libraries(rx_filter_step_test PRIVATE Qt6::Core)
 add_test(NAME rx_filter_step_test COMMAND rx_filter_step_test)
 
+# Socket-free passband interaction math. Pins mode-aware skirt scaling and the
+# untouched-edge anchor contract without constructing the full desktop applet.
+add_executable(filter_passband_math_test tests/filter_passband_math_test.cpp)
+target_include_directories(filter_passband_math_test PRIVATE src)
+target_link_libraries(filter_passband_math_test PRIVATE Qt6::Core)
+add_test(NAME filter_passband_math_test COMMAND filter_passband_math_test)
+
+# Socket-free Qt event injection: empty capabilities preserve legacy gestures,
+# while advertised limits still reach the production widget (PR #5363).
+add_executable(filter_passband_widget_test
+    tests/filter_passband_widget_test.cpp
+    src/gui/FilterPassbandWidget.cpp)
+target_include_directories(filter_passband_widget_test PRIVATE src)
+target_link_libraries(filter_passband_widget_test PRIVATE Qt6::Widgets)
+add_test(NAME filter_passband_widget_test COMMAND filter_passband_widget_test)
+set_tests_properties(filter_passband_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
@@ -4313,6 +4336,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    icom_control_profile_test
     control_resource_service_test
     slice_label_test
     ulanzi_mapping_migration_test
@@ -4353,6 +4377,7 @@ set(AETHER_SETTINGS_CONSUMERS
     meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
+    memory_import_test
     transmit_model_apd_test
     help_dialog_test
     flex_control_dialog_size_test
@@ -4371,7 +4396,6 @@ set(AETHER_SETTINGS_CONSUMERS
     log_manager_filter_rules_test
     bandplan_voice_labels_test
     vkamp_connection_test
-    radio_capability_gating_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
 )
@@ -4551,15 +4575,16 @@ endforeach()
 #
 # No suite-wide timeout existed before this: `enable_testing()` without
 # `include(CTest)` configures none, so a hung test blocked its CI gate
-# indefinitely — map_live_update_test ran 35 minutes producing nothing before
-# it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
+# indefinitely — the since-removed map_live_update_test ran 35 minutes
+# producing nothing before it was killed by hand (#5271). A timeout turns a hang into a fast, LOGGED
 # failure: ctest counts it as failed, so --output-on-failure finally prints
 # the captured output that a hang withholds.
 #
 # 300s is data-derived, not a guess: across the last 10 gate-lane runs and
 # the 4 most recent full-suite sanitizer runs, 90% of tests average under
-# ~3s and the slowest legitimate completion ever recorded is spectral_nr_test
-# at 276.6s under the sanitizer lane (#5271 has the tables). If a test
+# ~3s, and the slowest legitimate completion ever recorded was the
+# since-removed spectral_nr_test at 276.6s under the sanitizer lane (#5271 has
+# the tables); nothing remaining comes close. If a test
 # legitimately outgrows 300s, give IT a bigger explicit TIMEOUT below its
 # add_test — never raise this default for one test's sake.
 #

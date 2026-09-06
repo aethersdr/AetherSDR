@@ -887,6 +887,7 @@ set(CORE_SOURCES
     src/core/WfmDemodulator.cpp
     src/core/WfmDsp.cpp
     src/core/WaveOutWriter.cpp
+    src/core/tnc/Ax25AudioCapture.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp

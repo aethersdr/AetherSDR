@@ -59,11 +59,11 @@ registered with CTest:
 Three socket fixtures remain registered until their negative assertions have
 socket-free replacements: `vkamp_connection_test` (bypass/antenna interlocks),
 `automation_server_gesture_test` (TX-keying refusals and cleanup), and
-`hl2_receiver_count_restart_test` (dropped Metis-start retry). The fake IC-9700
-connection in `radio_capability_gating_test` is replaced by a socket-free
-capability-table assertion of its 100/75/10 W band ceilings; RadioModel's
-application of that ceiling to the transmit model currently has no registered
-test, and its socket-free replacement is tracked in #5254.
+`hl2_receiver_count_restart_test` (dropped Metis-start retry). The IC-9700
+capability-table assertion that used to carry this lived in
+`radio_capability_gating_test`, which was removed for intermittency — so
+RadioModel's application of that band ceiling to the transmit model now has no
+registered test at all, alongside its socket-free replacement in #5254.
 
 Two HL2 tests are explicit rather than part of the default graph:
 

@@ -89,6 +89,12 @@ public:
     // the socket. Enforcing it in the setter keeps the invariant independent of
     // any caller remembering (Principle VII). Sanitizing is idempotent, so the
     // server sanitizing first costs nothing.
+    // The IQ sample rate is shared server state (TciServer owns it across all
+    // clients and all four channels), but it is announced in this client's init
+    // burst — so the server seeds it here rather than the burst hardcoding a
+    // default a later SET has already moved off.
+    void setIqSampleRate(int rate) { m_iqSampleRate = rate; }
+
     void setActiveSlice(int trx, const QString& letter)
     {
         m_activeTrx = trx;
@@ -142,9 +148,6 @@ private:
     QString cmdStart();
     QString cmdStop();
     QString cmdTxEnable(const QStringList& args);
-    QString cmdIqStart(const QStringList& args);
-    QString cmdIqStop(const QStringList& args);
-    QString cmdIqSampleRate(const QStringList& args, bool isSet);
     QString cmdKeyer(const QStringList& args);
     QString cmdCwKeyerSpeed(const QStringList& args, bool isSet);
     QString cmdCwMacrosDelay(const QStringList& args, bool isSet);
@@ -244,6 +247,7 @@ private:
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
     int         m_activeTrx{-1};             // -1 = focus not yet known (#4160)
+    int         m_iqSampleRate{48000};       // seeded by TciServer, see setIqSampleRate
     QString     m_activeLetter;              // focused slice's display letter (#4160)
     bool        m_started{false};  // client sent START
 };

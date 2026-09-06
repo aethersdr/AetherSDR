@@ -166,11 +166,16 @@ private:
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);
+    void captureGeneratedTxAudio(const Ax25TransmitResult& tx);
+    void finishIcomPostResampleCapture();
     void startTransmitFromUi();
     void startTransmit(const QString& text);
     void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
     void beginTransmitWhenReady();
+    void startTransmitAudioAfterPtt();
     void paceTransmitAudio();
+    void disconnectPttConfirmation();
+    void handleTxAudioFinished(quint64 token, int drainMs);
     void finishTransmit(bool aborted, const QString& reason);
 
     // APRS client (APRS tab): station table, timed beacon, messaging.
@@ -289,9 +294,12 @@ private:
     quint64 m_lastActivityHdlc{0};
     quint64 m_lastActivityAccepted{0};
     QByteArray m_capturePcm;
+    QString m_captureId;
     int m_captureSampleRate{0};
     qsizetype m_captureTargetBytes{0};
+    int m_captureTxSequence{0};
     bool m_captureActive{false};
+    bool m_captureIcomPostResampleActive{false};
     bool m_diagnosticsDebugEnabled{false};
     QByteArray m_txPcm;
     Ax25TransmitResult m_pendingTx;
@@ -300,10 +308,13 @@ private:
     int m_txChunkCount{0};
     // TX pacing health: detects GUI-thread stalls starving the 20 ms pacer.
     QElapsedTimer m_txPaceClock;
+    QElapsedTimer m_txPttClock;
     qint64 m_txPaceLastChunkMs{-1};
     qint64 m_txPaceMaxGapMs{0};
     int m_txPaceLateChunks{0};
     bool m_txActive{false};
+    bool m_txAudioStartArmed{false};
+    bool m_txAwaitingAudioFinish{false};
     bool m_txPendingStream{false};
     bool m_txRestoreAudioDaxMode{false};
     bool m_txRestoreTransmitDax{false};
@@ -313,6 +324,8 @@ private:
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
+    QMetaObject::Connection m_txPttConfirmConnection;
+    QMetaObject::Connection m_txPttConfirmedConnection;
 
     // KISS TNC server (TCP) and its controls.
     KissTncServer* m_kissServer{nullptr};

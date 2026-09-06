@@ -461,6 +461,30 @@ std::vector<int> filterWidthsForMode(const std::string& mode)
     return {l.fil3, l.fil2, l.fil1};
 }
 
+std::vector<FilterPresetState> filterPresetsForMode(const std::string& mode,
+                                                     int selectedPresetId,
+                                                     int selectedWidthHz)
+{
+    const FilterLadder ladder = ladderFor(mode);
+    std::vector<FilterPresetState> presets{
+        {1, ladder.fil1},
+        {2, ladder.fil2},
+        {3, ladder.fil3},
+    };
+    if (ladder.fil1 == ladder.fil2 && ladder.fil2 == ladder.fil3) {
+        presets.resize(1);
+    }
+    if (selectedWidthHz > 0) {
+        for (FilterPresetState& preset : presets) {
+            if (preset.id == selectedPresetId) {
+                preset.widthHz = selectedWidthHz;
+                break;
+            }
+        }
+    }
+    return presets;
+}
+
 std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter)
 {
     const FilterLadder l = ladderFor(mode);
@@ -483,6 +507,43 @@ std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter
     const int high = low + width;
     return isLowerSideband(mode) ? std::pair<int, int>{-high, -low}
                                  : std::pair<int, int>{low, high};
+}
+
+std::optional<FilterPresetRecallPlan> filterPresetRecallPlan(
+    std::uint8_t to, const std::string& ladderMode, CivMode wireMode,
+    bool dataMode, int presetId, bool useVfoMode)
+{
+    const std::vector<FilterPresetState> presets = filterPresetsForMode(ladderMode);
+    if (presetId < 1 || presetId > static_cast<int>(presets.size())) {
+        return std::nullopt;
+    }
+
+    FilterPresetRecallPlan plan;
+    plan.commands.push_back(useVfoMode
+        ? cmdSetVfoMode(to, wireMode, dataMode, presetId)
+        : cmdSetMode(to, wireMode, presetId));
+
+    plan.widthHz = presets[static_cast<std::size_t>(presetId - 1)].widthHz;
+    plan.pbtCode = kPbtCentreCode;
+    const PassbandEdges centred = passbandFromWidthAndPbt(
+        passbandCentreHz(ladderMode, plan.widthHz), plan.widthHz,
+        plan.pbtCode, plan.pbtCode);
+    plan.lowHz = centred.lowHz;
+    plan.highHz = centred.highHz;
+
+    const std::optional<std::uint8_t> widthCode =
+        filterWidthCodeFor(ladderMode, plan.widthHz);
+    if (!widthCode) {
+        // Fixed-width modes still select a FIL slot, but have no 1A 03 or
+        // Twin-PBT write. Zero keeps the backend's programmable-width cache
+        // invalid; the display edges above still describe the selected slot.
+        plan.widthHz = 0;
+        return plan;
+    }
+    plan.commands.push_back(cmdSetFilterWidth(to, *widthCode));
+    plan.commands.push_back(cmdSetLevel(to, level::kPbtInner, plan.pbtCode));
+    plan.commands.push_back(cmdSetLevel(to, level::kPbtOuter, plan.pbtCode));
+    return plan;
 }
 
 // ---------------------------------------------------------------------------
