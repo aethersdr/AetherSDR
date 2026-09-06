@@ -9,6 +9,7 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
@@ -5081,7 +5082,59 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)
+            ++m_adcOverloadAssertions;
+    }
+    // Rate-limited, not merely edge-gated. The edge gate above is necessary and
+    // was never sufficient: the comparator genuinely chatters on a strong band,
+    // so nearly every telemetry sample is an edge and one message repeats at the
+    // full telemetry cadence (see the members' comment in the header for the
+    // rate, and for why the historical figure there is not repeated as a
+    // current one).
+    //
+    // Deliberately OUTSIDE the edge test, and this is the whole reason the two
+    // are separate: a burst that stops must still report its tally. Flushing
+    // only on the next edge would hold the count until the band goes loud
+    // again, which could be hours away or never. publishTelemetry runs on every
+    // telemetry update, so the window closes on time whether or not the
+    // condition is still happening.
+    //
+    // Reported rather than dropped because the rate IS the severity here — a
+    // flag that sets once is a hint, one that sets on every sample for a minute
+    // is a front end being slammed.
+    const AetherSDR::hl2::AdcOverloadWarn w = AetherSDR::hl2::adcOverloadWarn(
+        m_adcOverloadAssertions,
+        m_adcOverloadClock.isValid(),
+        m_adcOverloadClock.isValid() ? m_adcOverloadClock.elapsed() : 0,
+        kAdcOverloadWarnIntervalMs);
+    if (w.warn) {
+        // What the aggregate branch does NOT mean. It is not "this is the first
+        // overload ever" — it is "exactly one assertion was seen in this
+        // window". That lone assertion may have arrived at any point since the
+        // window opened, so a bare message can lag the event by up to
+        // kAdcOverloadWarnIntervalMs. Accepted deliberately: it is the cost of
+        // the rate limit, one assertion is a hint rather than an emergency, and
+        // an isolated overload after a quiet period still reports immediately
+        // because the clock is long expired by then.
+        if (w.aggregate) {
+            // noquote + one composed string: streaming "(" as its own item makes
+            // QDebug insert a space after it and print "( 51 times in 10000 ms)".
+            qWarning().noquote()
+                << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate"
+                << QStringLiteral("(%1 times in %2 ms)")
+                       .arg(w.count)
+                       .arg(m_adcOverloadClock.elapsed());
+        } else {
             qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate";
+        }
+        if (w.restartClock) {
+            // start(), NOT restart(). restart() reads the elapsed time first,
+            // and reading it on a timer that was never started is undefined —
+            // which is exactly the first-assertion path, where the clock is
+            // invalid by construction. start() is defined on both, and the
+            // value restart() returns was discarded anyway. (#5381 review.)
+            m_adcOverloadClock.start();
+        }
+        m_adcOverloadAssertions = 0;
     }
 }
 
