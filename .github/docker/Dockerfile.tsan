@@ -1,0 +1,135 @@
+# ThreadSanitizer variant of the CI image: the same base, with Qt itself
+# built -sanitize thread. Published as ghcr.io/aethersdr/aethersdr-ci:tsan and
+# used only by the TSan entry of .github/workflows/sanitizers.yml.
+#
+# Why a second image exists at all. TSan reasons about happens-before from the
+# synchronization it can see. The prebuilt Qt in the base image is not
+# instrumented, so every lock inside it — the postEvent mutex that hands a
+# queued signal's payload across threads, the raster paint engine's worker
+# handoff — is invisible, and TSan reports each of those handoffs as a data
+# race in whichever of OUR frames touches the payload next. ~95% of the weekly
+# lane's reports were that one artefact (#5275), and there is no honest
+# suppression for it: the frames involved are exactly where a real race in a
+# slot body would show. Building Qt with TSan makes its locks visible and the
+# artefact disappears, leaving the lane reporting what it exists to report.
+#
+# Layout mirrors the base image one directory over: /opt/Qt-tsan/<ver>/gcc_64
+# and /opt/qtkeychain-tsan, with the same ENV names re-pointed, so nothing in
+# the workflow or the build system knows the difference.
+#
+# Modules: exactly the set aqt installs in the base image (qtbase plus
+# qtmultimedia, qtwebsockets, qtserialport, qtshadertools), each cloned at
+# its release tag and built in dependency order with qt-configure-module. No
+# qtdeclarative: nothing in the tree links QML, and it is the largest module.
+# Multimedia has no ffmpeg/gstreamer backend here: AetherSDR uses the audio
+# device classes, which live in QtMultimedia itself, not playback.
+
+FROM ghcr.io/aethersdr/aethersdr-ci:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+LABEL org.opencontainers.image.source=https://github.com/aethersdr/AetherSDR
+
+# xcb/xkb/gl DEV headers so qtbase still builds its xcb platform plugin and
+# the OpenGL integration the GPU spectrum path compiles against; the base
+# image carries most as runtime libs only because aqt's Qt is prebuilt.
+RUN apt-get update && apt-get install -y \
+    libegl1-mesa-dev \
+    libxcb-cursor-dev \
+    libxcb-glx0-dev \
+    libxcb-icccm4-dev \
+    libxcb-image0-dev \
+    libxcb-keysyms1-dev \
+    libxcb-randr0-dev \
+    libxcb-render-util0-dev \
+    libxcb-shape0-dev \
+    libxcb-sync-dev \
+    libxcb-util-dev \
+    libxcb-xfixes0-dev \
+    libxcb-xinerama0-dev \
+    libxcb-xkb-dev \
+    # Qt 6's xcb QPA links libxcb-xinput directly (ldd libqxcb.so). The base
+    # image does not carry it: that one installs Qt from aqt BINARIES and never
+    # compiles qtbase, so the gap only appears here. With -DFEATURE_xcb=ON
+    # forced below, a missing xcb dependency is a fatal configure error, not a
+    # silent feature drop (#5411 review).
+    libxcb-xinput-dev \
+    libxrender-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV QT_TSAN_ROOT=/opt/Qt-tsan/${QT_VERSION}/gcc_64
+ENV QT_GIT=https://code.qt.io/qt
+
+# qtbase. -sanitize thread is Qt's own configure switch (FEATURE_sanitize_thread);
+# -force-debug-info keeps frames symbolised in reports without a Debug build's
+# cost. -no-pch because sanitizer flags and precompiled headers disagree on
+# some GCC versions. Examples/tests off. The build is single-shot and the
+# sources are removed afterwards; nothing is cached because the image is the
+# cache.
+RUN git clone --depth 1 --branch "v${QT_VERSION}" "${QT_GIT}/qtbase.git" /tmp/qtbase-src \
+    && cmake -S /tmp/qtbase-src -B /tmp/qtbase-build -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_INSTALL_PREFIX="${QT_TSAN_ROOT}" \
+        -DFEATURE_sanitize_thread=ON \
+        -DBUILD_WITH_PCH=OFF \
+        -DQT_BUILD_EXAMPLES=OFF \
+        -DQT_BUILD_TESTS=OFF \
+        -DFEATURE_xcb=ON \
+        -DFEATURE_opengl=ON \
+        -DINPUT_opengl=desktop \
+    && cmake --build /tmp/qtbase-build --parallel "$(nproc)" \
+    && cmake --install /tmp/qtbase-build \
+    && rm -rf /tmp/qtbase-src /tmp/qtbase-build \
+    && test -x "${QT_TSAN_ROOT}/bin/qmake" \
+    && "${QT_TSAN_ROOT}/bin/qmake" -query QT_VERSION \
+    # Proof the instrumentation is really in: libtsan must be a DT_NEEDED of
+    # QtCore, or the whole image is a slower copy of the base one.
+    && ldd "${QT_TSAN_ROOT}/lib/libQt6Core.so.6" | grep -q libtsan
+
+# Addon modules, dependency order: shadertools before multimedia. Each is
+# configured through the installed qtbase (qt-configure-module), which
+# carries the sanitizer feature over.
+RUN for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
+        git clone --depth 1 --branch "v${QT_VERSION}" "${QT_GIT}/${m}.git" "/tmp/${m}-src" \
+        && "${QT_TSAN_ROOT}/bin/qt-configure-module" "/tmp/${m}-src" -- \
+            -B "/tmp/${m}-build" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DQT_BUILD_EXAMPLES=OFF \
+            -DQT_BUILD_TESTS=OFF \
+        && cmake --build "/tmp/${m}-build" --parallel "$(nproc)" \
+        && cmake --install "/tmp/${m}-build" \
+        && rm -rf "/tmp/${m}-src" "/tmp/${m}-build" \
+        || exit 1; \
+    done \
+    && for m in Multimedia WebSockets SerialPort ShaderTools; do \
+           test -f "${QT_TSAN_ROOT}/lib/cmake/Qt6${m}/Qt6${m}Config.cmake" \
+           || { echo "Qt6${m} did not install"; exit 1; }; \
+       done
+
+# qtkeychain against THAT Qt, itself instrumented, same pin as the base image.
+ENV QTKEYCHAIN_TSAN_ROOT=/opt/qtkeychain-tsan
+RUN git clone --depth 1 --branch "${QTKEYCHAIN_VERSION}" \
+        https://github.com/frankosterfeld/qtkeychain.git /tmp/qtkeychain-src \
+    && test "$(git -C /tmp/qtkeychain-src rev-parse HEAD)" = "${QTKEYCHAIN_COMMIT}" \
+    && CXXFLAGS="-fsanitize=thread -fno-omit-frame-pointer" LDFLAGS="-fsanitize=thread" \
+       cmake -B /tmp/qtkeychain-build -S /tmp/qtkeychain-src -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_WITH_QT6=ON \
+        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_TRANSLATIONS=OFF \
+        -DLIBSECRET_SUPPORT=OFF \
+        -DCMAKE_PREFIX_PATH="${QT_TSAN_ROOT}" \
+        -DCMAKE_INSTALL_PREFIX="${QTKEYCHAIN_TSAN_ROOT}" \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+    && cmake --build /tmp/qtkeychain-build -j"$(nproc)" \
+    && cmake --install /tmp/qtkeychain-build \
+    && test -f "${QTKEYCHAIN_TSAN_ROOT}/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" \
+    && rm -rf /tmp/qtkeychain-src /tmp/qtkeychain-build
+
+# Re-point every discovery variable the base image set, so a workflow that
+# says `container: …:tsan` gets the instrumented Qt with no other change.
+ENV QT_ROOT=${QT_TSAN_ROOT}
+ENV QTKEYCHAIN_ROOT=${QTKEYCHAIN_TSAN_ROOT}
+ENV CMAKE_PREFIX_PATH=${QT_TSAN_ROOT}:${QTKEYCHAIN_TSAN_ROOT}
+ENV Qt6_DIR=${QT_TSAN_ROOT}/lib/cmake/Qt6
+ENV PATH=${QT_TSAN_ROOT}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${QT_TSAN_ROOT}/lib:${QTKEYCHAIN_TSAN_ROOT}/lib

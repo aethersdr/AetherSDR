@@ -346,7 +346,10 @@ enum class IcomFeature : std::uint8_t {
     TxFrequencyCheck,
     DialLock,
     CivDataRestart,
+    GpsPosition,
+    GpsTimeConfiguration,
     MemoryChannels,
+    AntennaTuner,
 };
 
 enum class MemoryDialect : std::uint8_t {
@@ -403,6 +406,17 @@ struct RxAntennaProfile {
     bool readbackAvailable = false;
 };
 
+// Model-specific GPS and clock command shape. SET-menu item numbers are not
+// stable across Icom models, so they belong in the profile rather than in an
+// IC-705 address branch at the call site. Feature evidence independently gates
+// position and clock support: a future radio may implement only one half.
+struct GpsProfile {
+    int ntpEnabledItem = -1;
+    int ntpServerItem = -1;
+    int timeCorrectItem = -1;
+    bool hasNtpAccess = false;
+};
+
 struct MeterCalibrationProfile {
     enum class PowerConversion : std::uint8_t {
         NativeWatts,
@@ -412,6 +426,10 @@ struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
     PowerConversion powerConversion = PowerConversion::NativeWatts;
+    // Opt into a forward-power face derived from this model's published
+    // txPowerMaxWatts even when it has one continuous tuning range. Keep this
+    // model-specific: a low-power face must not leak to sibling Icom profiles.
+    bool scaleForwardPowerToRatedOutput = false;
     // UI exposure is narrower than wire decoding. Several Icom profiles have
     // an Id calibration, but each model must be approved independently before
     // Radio Vitals offers that instrument.
@@ -451,6 +469,12 @@ struct NetworkConfigurationProfile {
 struct IcomModelProfile {
     bool supportedBringup = false;
     bool hasGpsHardware = false;
+    // Physical pitch detent; 1 preserves legacy decoding on unverified models.
+    int cwPitchStepHz = 1;
+    bool hasModeIndependentSquelch = false;
+    bool hasCwTune = true;
+    // Additional native control readbacks verified for this model.
+    bool pollCwSquelchAndTxBandwidth = false;
     int speechProcessorLevelMaximum = 2;
     std::string_view speechProcessorLabel = "PROC";
     std::string_view guideRevision;
@@ -462,6 +486,7 @@ struct IcomModelProfile {
     std::optional<FmRepeaterProfile> fmRepeater;
     std::optional<CwTextKeyerProfile> cwTextKeyer;
     std::optional<RxAntennaProfile> rxAntenna;
+    std::optional<GpsProfile> gps;
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;

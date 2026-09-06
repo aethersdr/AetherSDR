@@ -106,7 +106,8 @@ jobs:
             libasound2-dev \
             zlib1g-dev \
             libmosquitto-dev \
-            libwhisper-dev
+            libwhisper-dev \
+            libsqlite3-dev
 
       # ccache IS safe here, despite the intuition that a canary wants a
       # from-scratch build. ccache is content-addressed: direct mode hashes the
@@ -138,7 +139,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF \
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIBWHISPER=ON -DUSE_SYSTEM_SQLITE=ON -DENABLE_RADE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -148,6 +149,18 @@ jobs:
       - name: Build
         run: |
           cmake --build build -j$(nproc)
+
+      # Socket-free runtime guard for the one system-library substitution with
+      # security behavior re-established by our wrapper rather than pkg-config.
+      # The count assertion prevents a renamed/deregistered scenario from
+      # silently shrinking this filtered canary to zero tests.
+      - name: Test system SQLite settings hardening
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ctest --test-dir build -N --no-tests=error -R '^app_settings_safety_database-file-permissions$' | tee /tmp/sqlite-hardening-tests.txt
+          grep -q 'Total Tests: 1' /tmp/sqlite-hardening-tests.txt
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^app_settings_safety_database-file-permissions$'
 
       # Same reason as the equivalent steps in ci.yml: #1963 disabled the
       # Windows compiler cache for three months because nothing surfaced the

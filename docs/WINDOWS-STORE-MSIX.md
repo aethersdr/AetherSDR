@@ -98,8 +98,8 @@ Not fully automatable until account setup:
 Microsoft Store crash reports in Partner Center only resolve to a symbolized
 stack trace if the submitted `.msixupload` carries matching debug symbols.
 There is no separate "upload symbols" step in Partner Center — the symbols
-travel *inside* the upload package as a `.appxsym` file (a zip of the PDB),
-which Partner Center auto-ingests on submission.
+travel *inside* the upload package as a `.appxsym` file (a zip of PDBs), which
+Partner Center ingests with the submission.
 
 The Windows installer workflow produces this automatically:
 
@@ -108,15 +108,44 @@ The Windows installer workflow produces this automatically:
    `build/AetherSDR.pdb` would never exist. `RelWithDebInfo` keeps the same
    `-O2` optimization level (only the inliner threshold, `/Ob1` vs. `/Ob2`,
    differs) while producing a full PDB.
-2. `create-msix.ps1 -CreateUpload -RequirePdb` zips `build/AetherSDR.pdb` into
-   `<package>.appxsym` (`New-AppxSym`) and bundles it alongside the `.msix`
-   into `<package>.msixupload` (`New-MsixUpload`). `-RequirePdb` makes the
-   step fail the build if no PDB was found, instead of silently shipping a
-   symbol-less upload package — CI passes it; local dev builds can omit it.
-3. CI uploads `build/AetherSDR.pdb` as its own **Windows-Symbols** artifact
-   (90-day retention) and the standalone `.appxsym` alongside the other
-   Windows-Installer artifacts, so a maintainer can pull matching symbols for
-   local WinDbg/Visual Studio debugging without unzipping a `.msixupload`.
+2. The Qt install includes the base `debug_info` archive plus each deployed
+   add-on's `.debug_information` companion. `windeployqt --pdb` copies PDBs
+   only for the exact Qt DLLs and plugins selected for the runtime payload.
+3. `stage-debug-symbols.ps1` verifies that every deployed Qt DLL/plugin has
+   its same-named PDB beside it. It then moves those PDBs out of `deploy/` and
+   flattens them beside `AetherSDR.pdb` in `symbols/`. This is important:
+   `deploy/` feeds the portable ZIP, Inno installer, and MSIX, none of which
+   should ship PDB payload files.
+4. `create-msix.ps1 -CreateUpload -RequirePdb` consumes the staged application
+   PDB and dependency PDBs. Pass `-PdbPath symbols\AetherSDR.pdb` and
+   `-SymbolDir symbols` so both inputs describe the same verified symbol set.
+   The script places the PDBs at the root of `<package>.appxsym`, then places
+   that `.appxsym` beside the `.msix` at the root of `<package>.msixupload`.
+   This mirrors Visual Studio's single-architecture Store upload layout; there
+   is no extra `symbols/` directory inside either archive. Microsoft documents
+   the outer upload/symbol relationship in its
+   [MSIX package requirements](https://learn.microsoft.com/windows/apps/publish/publish-your-app/msix/app-package-requirements),
+   and a Microsoft WinUI engineer's
+   [manual packaging walkthrough](https://github.com/microsoft/microsoft-ui-xaml/discussions/9121)
+   shows all PDBs for one architecture together in one flat `.appxsym`.
+5. `check-symbol-package.ps1` opens both archives and verifies the topology,
+   required AetherSDR/Qt/Windows Multimedia PDBs, and that the `.appxsym`
+   embedded in `.msixupload` is byte-identical to the verified standalone
+   file.
+6. CI uploads the complete `symbols/` directory as **Windows-Symbols** with a
+   SHA-256 manifest (90-day retention), and uploads the standalone `.appxsym`
+   alongside the other Windows-Installer artifacts. Maintainers therefore get
+   the same AetherSDR and Qt PDB set for local WinDbg/Visual Studio debugging
+   without unpacking a `.msixupload`.
+
+The Qt-provided PDBs are packaged unchanged. `windeployqt` selects them from
+the same exact Qt installation that supplied the deployed DLLs; `pdbcopy` is
+not needed to discover or match them. If Partner Center later requires
+public-only/stripped copies, that can be added as a separate transformation
+without changing this archive topology. Store acceptance alone does not prove
+that third-party Qt symbols were indexed, so confirm the first qualifying
+Health report for this package version resolves Qt function names rather than
+only `Qt6*.dll+offset`.
 
 Submitting the `.msixupload` to Partner Center (manually today, or via the
 automated draft-staging flow below) is the only "publish" step needed —
@@ -133,27 +162,28 @@ works cross-platform against the same PDB:
    `%LOCALAPPDATA%\CrashDumps\AetherSDR.exe.<pid>.dmp` (enable full dumps via
    the `HKLM\...\Windows Error Reporting\LocalDumps` key, `DumpType=2`). Store
    Partner Center TSVs are unsymbolized — always request the `.dmp`.
-2. **Get the matching PDB** — it must be the *exact* build that crashed or the
-   debug-id won't match. Pull the `Windows-Symbols` artifact from the
+2. **Get the matching PDBs** — they must be from the *exact* build that crashed
+   or the debug-ids won't match. Pull the `Windows-Symbols` artifact from the
    `windows-installer.yml` CI run for that tag/branch:
    `gh run download <run-id> -R aethersdr/AetherSDR -n Windows-Symbols`.
 3. **Convert + walk.** [`dump_syms`](https://github.com/mozilla/dump_syms)
-   turns the PDB into a Breakpad `.sym`; `minidump-stackwalk` walks the dump
-   and matches modules by debug-id:
+   turns each needed PDB into a Breakpad `.sym`; `minidump-stackwalk` walks
+   the dump and matches modules by debug-id:
    ```sh
    dump_syms --store ./symbols AetherSDR.pdb          # → symbols/AetherSDR.pdb/<id>/AetherSDR.sym
+   dump_syms --store ./symbols Qt6Multimedia.pdb      # matching Qt frames
    minidump-stackwalk --human --symbols-path ./symbols \
      --symbols-url https://msdl.microsoft.com/download/symbols \
      AetherSDR.exe.<pid>.dmp
    ```
-   Our frames symbolize from the `.sym`; the `--symbols-url` resolves Windows
-   system DLLs. Third-party GPU/driver frames (e.g. Intel `igd10iumd64.dll`)
-   stay as `module+offset` — usually enough, since the value is in *our*
-   caller frames leading into the driver. If the crashing thread won't unwind
-   past a driver frame (no CFI), fall back to a manual stack scan: parse the
-   dump's `Memory64ListStream`, find the region containing the thread's `rsp`,
-   and scan 8-byte-aligned values for pointers into `AetherSDR.exe` (resolve
-   offsets against the `.sym` `FUNC` table).
+   AetherSDR and packaged Qt frames symbolize from those `.sym` files; the
+   `--symbols-url` resolves Windows system DLLs. Other third-party GPU/driver
+   frames (e.g. Intel `igd10iumd64.dll`) stay as `module+offset` — usually
+   enough, since the value is in our caller frames leading into the driver. If
+   the crashing thread won't unwind past a driver frame (no CFI), fall back to
+   a manual stack scan: parse the dump's `Memory64ListStream`, find the region
+   containing the thread's `rsp`, and scan 8-byte-aligned values for pointers
+   into `AetherSDR.exe` (resolve offsets against the `.sym` `FUNC` table).
 
 ## Known WACK Follow-Ups
 
@@ -204,27 +234,42 @@ On a `v*` tag push the workflow:
 
 1. Builds `AetherSDR.exe`, runs `windeployqt`, packages the MSIX, and creates
    the `.msixupload` (existing steps).
-2. `microsoft/microsoft-store-apppublisher@v1.1` puts the `msstore` CLI on PATH.
+2. The pinned `microsoft/microsoft-store-apppublisher` action puts the pinned
+   `msstore` CLI v0.4.1 on PATH and the workflow logs `msstore --version`.
 3. `msstore reconfigure` authenticates from the four GitHub secrets.
 4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
-   `msstore publish <pkg>.msixupload -id <ProductId> --noCommit` — staging a
-   **draft**. `--noCommit` is the safety gate that keeps it out of
-   certification. A maintainer reviews the pending submission in Partner Center
-   and clicks **Submit to Store** to start certification. **CI never publishes
-   to the live channel on its own.**
+   `msstore publish <pkg>.msixupload -id <ProductId> --uploadTimeout 300
+   --noCommit` — staging a **draft**. `--noCommit` is the safety gate that keeps
+   it out of certification. A maintainer reviews the pending submission in
+   Partner Center and clicks **Submit to Store** to start certification. **CI
+   never publishes to the live channel on its own.**
 
 Guard rails (all three must pass before Partner Center is touched):
 
-- The step runs only on a `refs/tags/` ref — never on PRs or branch
-  `workflow_dispatch` runs.
+- The step runs only on a `push` event for a `refs/tags/v*` ref. Manual
+  dispatches, including those targeting a tag, never attach release assets or
+  stage a production Store draft.
 - The step is skipped unless the `AETHERSDR_STORE_PRODUCT_ID` **repository
   variable** is set — so the feature is dormant until you opt in.
-- Forks cannot read the repo secrets, so the `reconfigure` step is a no-op
-  there even on a tag.
+- The publication plan requires the upstream `aethersdr/AetherSDR` repository;
+  forks cannot select production publication even if they configure secrets.
 
 If the MSIX packaging step (which is `continue-on-error`) produced no
 `.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
 otherwise-successful release red.
+
+The upload timeout is deliberately explicit. `msstore` CLI v0.4.0 and v0.4.1
+have a regression where omitting `--uploadTimeout` supplies a zero-second Azure
+blob network timeout, producing the characteristic `Uploading Bundle to Azure
+blob: 0%` failure and exit code `-1`
+([microsoft/msstore-cli#162](https://github.com/microsoft/msstore-cli/issues/162)).
+The script uses the documented workaround of 300 seconds. It deliberately
+leaves verbose logging disabled because Actions logs are public and expanded
+authentication or upload diagnostics could expose derived credentials that
+GitHub cannot mask by their registered secret values. The affected CLI is
+pinned to prevent `latest` from silently changing publish behavior; advance
+that pin only after validating a released version containing
+[microsoft/msstore-cli#163](https://github.com/microsoft/msstore-cli/pull/163).
 
 ### One-time setup (maintainer, outside the repo)
 
@@ -279,18 +324,101 @@ secrets + one variable in GitHub.
 
 ### Version discipline
 
-Each Store submission must carry a higher `Identity.Version` than the live one.
-The MSIX version is derived from `project(AetherSDR VERSION ...)` in
-`CMakeLists.txt` and normalized to four parts. Within a single month, weekly
-releases must bump the CalVer **patch** (and the 4th hotfix component if
-needed), or Partner Center will reject the package as not newer.
+Microsoft Store [reserves the fourth version component for its own use](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements);
+submitted packages must end in `.0`. The Windows Installer workflow uses
+`YY.M.<workflow run number>.0` for **both production and flight MSIX packages**.
+For example, run 203 builds `26.9.203.0`; the next production run 204 builds
+`26.9.204.0`, which outranks the flight. The first two components come from
+`project(AetherSDR VERSION ...)`; the app's CalVer, portable ZIP, Inno installer,
+and release tags keep their existing versioning.
+
+Use the current or a later CalVer year/month when submitting a ref. Selecting
+an older source series can produce a lower Store version. Before the first
+upload with this scheme, compare it with the highest package already submitted
+in Partner Center. The shared workflow counter must be greater than that
+package's third component within the same year/month. Do not reset the counter
+or move publication to another workflow without checking this ordering.
+Rerunning the same workflow run reuses its version; dispatch a new run when a
+new version is required. Run numbers outside `1..65535` fail before building
+instead of wrapping or emitting an invalid package.
+
+Local `create-msix.ps1` builds still default to the normalized source version.
+With `-CreateUpload`, a nonzero fourth component is rejected before staging
+files; pass a suitable `-Version YY.M.BUILD.0` for a CalVer hotfix upload.
 
 ### Promoting to fully automatic later
 
-To move from draft to auto-publish, drop `--noCommit` (each tag goes straight to
-certification), or publish to a **flight/insider ring** first with
-`-f <flightId>` and promote manually. Keep the draft gate until the weekly
-cadence has proven stable.
+Production certification requires **both** `-Commit` and `-CommitProduction`
+when invoking `publish-store.ps1`. `-Commit` alone is accepted only with a
+nonempty explicit `-FlightId`; a missing flight ID fails before invoking the
+CLI. `-CommitProduction` is rejected with a flight or without `-Commit`.
+The production tag workflow passes neither switch and keeps the draft gate.
+
+### Manually triggered developer package flight
+
+The Windows Installer workflow can build any explicitly selected ref and fully
+submit its `.msixupload` to an existing Partner Center developer package
+flight. This path runs only through **Run workflow** when **Build and fully
+submit this ref to the Microsoft Store developer flight** is selected. It has
+no schedule and creates no Git tag or GitHub Release.
+
+The manual flight path is isolated from production:
+
+- production tag submissions retain `--noCommit` and remain drafts;
+- the flight job runs only for an explicit `workflow_dispatch` request in the
+  upstream `aethersdr/AetherSDR` repository;
+- `AETHERSDR_STORE_FLIGHT_ID` is required and validated before building, then
+  checked again before authentication; a missing flight ID fails the workflow
+  rather than falling back to production;
+- the flight ID is passed explicitly as `--flightId`, and `-Commit` omits
+  `--noCommit`, so Partner Center starts ingestion/certification automatically;
+- the shared publisher keeps `--verbose` disabled so the public flight log does
+  not expand authentication or upload diagnostics.
+
+Create the package flight and its known-user group in Partner Center first,
+then add the flight ID as the repository Actions secret
+`AETHERSDR_STORE_FLIGHT_ID`. Keep `AETHERSDR_STORE_PRODUCT_ID` pointed at the
+existing production app; a flight is a restricted channel under that product,
+not a second product identity.
+
+Before the first CI upload, remove any pending submission that was created for
+the flight in Partner Center. The Store CLI cannot upload into a portal-created
+first draft because that draft has no API file-upload URL; the workflow must be
+allowed to create the first API-backed submission itself. This is a one-time
+flight setup concern, not part of the production submission path.
+
+Expect the first dispatch to be the first real exercise of the Store CLI's
+flight contract. The regression suite substitutes an in-process `msstore`
+command, so it proves which arguments `publish-store.ps1` assembles but not
+that the pinned CLI accepts `--flightId` on `publish`. A wrong option name
+fails the step loudly rather than publishing anywhere, but budget for it —
+along with credentials and certification — on the first attempt.
+
+The flight uses the shared MSIX sequence described under **Version discipline**
+above. This also changes production MSIX version numbers; production remains a
+draft and its certification requires maintainer action.
+
+The socket-free regression suite is `tests/windows_store_policy_test.ps1`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_store_policy_test.ps1
+```
+
+It exercises the actual build-plan script with tag/branch dispatches and the
+publisher with an in-process CLI substitute. It performs no Store requests.
+Windows Installer runs it before packaging; CTest registers
+`windows_store_policy` when PowerShell is installed, for the unfiltered full
+suite. It is not added to the frozen per-PR CTest gate. A passing test does not
+prove Partner Center credentials, flight configuration, or Store certification;
+verify those separately during the first intended flight publication.
+
+Microsoft warns that an API-created flight submission must continue to be
+managed through the API. Do not edit the in-progress submission in Partner
+Center. The pinned Store CLI replaces an existing pending submission after the
+flight has a published submission, and replaces a failed or expired API-created
+first submission; it then commits and polls the new submission. After a
+successful commit, Partner Center moves the flight through preprocessing,
+certification, and publication to the flight's known-user group.
 
 ## Local Sideload Signing
 
