@@ -16,9 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### New receivers and multi-band skimming
 
+- **Four concurrent TCI DAX IQ subscriptions** let compatible Flex setups feed several skimmers through one TCI server. Receivers on the same panadapter share its IQ stream; four independent band spectra require four panadapters (#4951).
 - **Experimental ANAN-G2 reception** adds openHPSDR Protocol 2 discovery, a single receive path, spectrum and audio, with live tuning and zoom. This phase is receive-only; transmit remains a future phase (#5143).
 - **Experimental RTL-SDR USB reception** adds a single slice and panadapter with basic AM, FM, SSB and CW demodulation on builds with the required RTL libraries. Availability varies by package; selectable sharp passband filtering is not yet implemented (#4862).
-- **Four concurrent TCI DAX IQ subscriptions** let compatible Flex setups feed several skimmers through one TCI server. Receivers on the same panadapter share its IQ stream; four independent band spectra require four panadapters (#4951).
 
 ### Amplifiers, wattmeters and operator workflow
 
