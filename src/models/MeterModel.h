@@ -311,7 +311,14 @@ private:
     void recomputeSourceIndexMins();
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
     // for. Identity when the backend already declares dBFS.
-    float convertAlcToGaugeDbfs(float raw, const QString& unit) const;
+    // Mirrors the Phone/CW gauge's floor without introducing a gui dependency.
+    static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+    static float convertAlcToGaugeDbfs(float raw, const QString& unit);
+    void registerTxWaveformMeter(const MeterDef& def, bool redefinition,
+                                 QMap<int, int>& byTxSource, QMap<int, int>& bySlice);
+    int resolveTxWaveformIndex(const QMap<int, int>& byTxSource,
+                               const QMap<int, int>& bySlice,
+                               bool allowSingleImplicit = false) const;
     bool isTxWaveformMeter(const MeterDef& def) const;
     bool hasExplicitTxWaveformSourceIndex(const MeterDef& def) const;
     int implicitTxWaveformSliceIndex() const;
@@ -336,7 +343,7 @@ private:
     QMap<int, int> m_compPeakIdxBySlice;    // preceding SLC manifest block → "COMPPEAK"
     int m_minSliceSourceIndex{-1};
     int m_minTxWaveformSourceIndex{-1};
-    int m_manifestSliceContext{-1};
+    int m_manifestSliceContext{-1}; // new definitions only; cleared by removal/non-TX blocks
     int m_activeTxSlice{-1};
     // The UNIT each directional-power meter was DECLARED with, cached at
     // definition time. ALC resolves the unit from the active meter definition.
@@ -408,7 +415,7 @@ private:
     float m_micLevel{-50.0f};
     float m_compLevel{0.0f};
     float m_hwAlc{0.0f};
-    float m_swAlc{0.0f};
+    float m_swAlc{kAlcGaugeFloorDbfs};
     float m_scMic{0.0f};
     float m_scFilt1{0.0f};
     float m_scFilt2{0.0f};

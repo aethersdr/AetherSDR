@@ -683,8 +683,12 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         return;
     }
 
-    // Group tokens by meter index.
+    // Group fields by meter ID, but publish in first-appearance wire order.
+    // MeterModel associates a TX waveform block with its preceding SLC block
+    // (observed FLEX-8400M fw 4.2.18); sorting IDs can move a reused TX ID
+    // ahead of its own SLC context.
     QMap<int, QMap<QString, QString>> grouped;
+    QList<int> meterOrder;
     const QStringList tokens = rawBody.split('#', Qt::SkipEmptyParts);
     for (const QString& token : tokens) {
         const int dot = token.indexOf('.');
@@ -694,11 +698,14 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         bool ok = false;
         const int idx = token.left(dot).toInt(&ok);
         if (!ok) continue;
+        if (!grouped.contains(idx)) {
+            meterOrder.append(idx);
+        }
         grouped[idx][token.mid(dot + 1, eq - dot - 1)] = token.mid(eq + 1);
     }
 
-    for (auto it = grouped.constBegin(); it != grouped.constEnd(); ++it) {
-        const QMap<QString, QString>& f = it.value();
+    for (int index : meterOrder) {
+        const QMap<QString, QString>& f = grouped.constFind(index).value();
         // Build the typed MeterDef directly (#4070). Present-only: a field the
         // wire didn't report keeps its MeterDef default. The carry() ok-guard is
         // defensive/consistency only here — a plain MeterDef field's default IS
@@ -709,7 +716,7 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         // (slice/transmit), where a dropped value leaves the field disengaged.
         // (#4075 review.)
         MeterDef def;
-        def.index = it.key();
+        def.index = index;
         carry(f, "src", def.source);
         carry(f, "num", def.sourceIndex, /*base=*/0);
         carry(f, "nam", def.name);

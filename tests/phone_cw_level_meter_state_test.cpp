@@ -4,8 +4,10 @@
 #include "TestSettingsProfile.h"
 #include "gui/HGauge.h"
 #include "gui/PhoneCwApplet.h"
+#include "models/MeterModel.h"
 
 #include <QApplication>
+#include <QList>
 
 #include <cstdio>
 
@@ -78,6 +80,49 @@ int main(int argc, char** argv)
     applet.setMicLevelMeterState(MicMeterSessionState::Disconnected, false);
     check(levelGauge->value() == -16.0f,
           "a repeated disconnected state preserves live PC-mic telemetry");
+
+    // Drive the actual ALC consumer with normalized model values, including
+    // Percent input. There is no backend, transport or keyed transmitter.
+    MeterModel meters;
+    for (int slice = 0; slice < 2; ++slice) {
+        MeterDef slc;
+        slc.index = 10 + slice;
+        slc.source = "SLC";
+        slc.sourceIndex = slice;
+        slc.name = "LEVEL";
+        slc.unit = "dBm";
+        meters.defineMeter(slc);
+        MeterDef alc;
+        alc.index = 20 + slice;
+        alc.source = "TX-";
+        alc.sourceIndex = 8 + slice;
+        alc.name = "ALC";
+        alc.unit = "Percent";
+        meters.defineMeter(alc);
+    }
+    meters.setActiveTxSlice(1);
+    QObject::connect(&meters, &MeterModel::swAlcChanged,
+                     &applet, &PhoneCwApplet::updateAlc);
+    QList<HGauge*> alcGauges;
+    for (QWidget* widget : applet.findChildren<QWidget*>()) {
+        if (widget->accessibleName() == "ALC gauge (Phone)"
+            || widget->accessibleName() == "ALC gauge (CW)") {
+            alcGauges.append(static_cast<HGauge*>(widget));
+        }
+    }
+    check(alcGauges.size() == 2, "both Phone and CW ALC mirrors are present");
+    const auto checkAlc = [&](float expected, const char* description) {
+        for (const HGauge* gauge : alcGauges) {
+            check(gauge->value() == expected, description);
+        }
+    };
+    meters.updateValues({21}, {50});
+    checkAlc(-10.0f, "a percentage ALC sample reaches both gauges in dBFS");
+    meters.setActiveTxSlice(0);
+    checkAlc(-20.0f, "changing TX slice sets both ALC gauges to empty");
+    meters.updateValues({20}, {50});
+    meters.removeMeter(20);
+    checkAlc(-20.0f, "active meter removal sets both ALC gauges to empty");
 
     return failures == 0 ? 0 : 1;
 }

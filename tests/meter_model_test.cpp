@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QStringList>
 #include <QVector>
 
 #include <cmath>
@@ -382,7 +383,7 @@ void testActiveTxSliceSelectsAlcAndItsUnit()
     report("inactive ALC meter is ignored", nearlyEqual(model.swAlc(), -6.0f));
 
     model.setActiveTxSlice(1);
-    report("changing active TX slice clears stale ALC", nearlyEqual(model.swAlc(), 0.0f));
+    report("changing active TX slice clears stale ALC", nearlyEqual(model.swAlc(), -20.0f));
 
     model.updateValues({45}, {50});
     report("active TX slice 1 uses its ALC meter and Percent unit",
@@ -403,7 +404,7 @@ void testMixedSourceAlcUsesManifestSliceContext()
     model.setActiveTxSlice(1);
     model.updateValues({22}, {rawDb(-3.0f)});
     report("8400M slice B ignores slice A's zero-source ALC",
-           nearlyEqual(model.swAlc(), 0.0f));
+           nearlyEqual(model.swAlc(), -20.0f));
 
     model.updateValues({40}, {rawDb(-6.4f)});
     report("8400M slice B resolves ALC from manifest context",
@@ -445,7 +446,7 @@ void testZeroSourceAlcUsesSliceContext()
 
     model.setActiveTxSlice(1);
     model.updateValues({20}, {rawDb(-4.0f)});
-    report("inactive zero-source ALC meter is ignored", nearlyEqual(model.swAlc(), 0.0f));
+    report("inactive zero-source ALC meter is ignored", nearlyEqual(model.swAlc(), -20.0f));
 
     model.updateValues({44}, {rawDb(-12.0f)});
     report("zero-source ALC meter follows active slice context",
@@ -465,7 +466,158 @@ void testSingleImplicitAlcFollowsTransmitToAnySlice()
 
     model.removeMeter(8);
     report("removing the active ALC meter clears its value",
-           nearlyEqual(model.swAlc(), 0.0f));
+           nearlyEqual(model.swAlc(), -20.0f));
+}
+
+void testTxMeterRedefinitionsPreserveTheirSlice()
+{
+    for (bool implicit : {false, true}) {
+        MeterModel model;
+        const QStringList names{"ALC", "COMPPEAK", "SC_MIC", "SC_FILT_1", "SC_FILT_2"};
+        for (int slice = 0; slice < 2; ++slice) {
+            model.defineMeter(slcMeter(10 + 20 * slice, slice));
+            for (int i = 0; i < names.size(); ++i) {
+                model.defineMeter(txMeter(20 + 20 * slice + i, names[i],
+                                          names[i] == "COMPPEAK" ? "dB" : "dBFS",
+                                          implicit ? 0 : 8 + slice));
+            }
+        }
+        model.setActiveTxSlice(1);
+        // A profile re-announces A's definitions after B's SLC context. The
+        // same meter identity must retain its original ownership and units
+        // must still update. No synthetic radio or socket is involved.
+        for (int i = 0; i < names.size(); ++i) {
+            model.defineMeter(txMeter(20 + i, names[i],
+                                      names[i] == "ALC" ? "Percent"
+                                          : names[i] == "COMPPEAK" ? "dB" : "dBFS",
+                                      implicit ? 0 : 8));
+        }
+        model.updateValues({20, 21, 22, 23, 24, 40, 41, 42, 43, 44},
+                           {50, rawDb(3), rawDb(-3), rawDb(-4), rawDb(-5),
+                            rawDb(-8), rawDb(12), rawDb(-10), rawDb(-11), rawDb(-12)});
+        report("A's redefinition cannot replace B's ALC/compression/filter ownership",
+               nearlyEqual(model.swAlc(), -8) && nearlyEqual(model.compPeak(), 12)
+                   && nearlyEqual(model.scMic(), -10) && nearlyEqual(model.scFilt1(), -11)
+                   && nearlyEqual(model.scFilt2(), -12));
+        model.setActiveTxSlice(0);
+        model.updateValues({20}, {50});
+        report("a redefined ALC unit updates without changing its slice",
+               nearlyEqual(model.swAlc(), -10));
+        model.removeMeter(40);
+        model.setActiveTxSlice(1);
+        model.updateValues({20}, {50});
+        report("a redefinition leaves no duplicate slice alias for an ALC meter",
+               implicit ? nearlyEqual(model.swAlc(), -10)
+                        : nearlyEqual(model.swAlc(), -20));
+    }
+}
+
+void testAlcClearsToPresentationFloor()
+{
+    for (const QString& unit : {QStringLiteral("dBFS"), QStringLiteral("Percent")}) {
+        MeterModel model;
+        report("ALC starts at the presentation floor", nearlyEqual(model.swAlc(), -20));
+        model.defineMeter(slcMeter(10, 0));
+        model.defineMeter(txMeter(20, "ALC", unit, 8));
+        model.defineMeter(slcMeter(30, 1));
+        model.defineMeter(txMeter(40, "ALC", unit, 9));
+        model.setActiveTxSlice(1);
+        model.updateValues({40}, {unit == "Percent" ? qint16(50) : rawDb(-8)});
+        float emitted = 999;
+        int emissions = 0;
+        QObject::connect(&model, &MeterModel::swAlcChanged, [&](float value) {
+            emitted = value;
+            ++emissions;
+        });
+        model.setActiveTxSlice(0);
+        report("a TX slice change emits the empty ALC presentation value",
+               emissions == 1 && nearlyEqual(emitted, -20));
+        model.setActiveTxSlice(0);
+        report("re-selecting the TX slice does not emit another clear", emissions == 1);
+        model.updateValues({20}, {unit == "Percent" ? qint16(50) : rawDb(-8)});
+        model.removeMeter(20);
+        report("active ALC removal emits the empty presentation value",
+               emissions == 3 && nearlyEqual(emitted, -20));
+        model.clear();
+        report("disconnect resets ALC to the presentation floor", nearlyEqual(model.swAlc(), -20));
+    }
+}
+
+void testTxMeterIdentityReuseAndContextLifetime()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(txMeter(20, "ALC", "dBFS", 8));
+    model.defineMeter(slcMeter(30, 1));
+    model.defineMeter(txMeter(40, "ALC", "dBFS", 9));
+    model.setActiveTxSlice(1);
+    model.updateValues({40}, {rawDb(-8)});
+    MeterDef replacement = txMeter(40, "UNRELATED", "dBFS", 9);
+    model.defineMeter(replacement);
+    model.updateValues({40}, {rawDb(-3)});
+    report("an index reused for another meter cannot keep its ALC route",
+           nearlyEqual(model.swAlc(), -20));
+    model.removeMeter(30);
+    model.removeMeter(10);
+    model.removeMeter(20);
+    model.removeMeter(40);
+    model.defineMeter(txMeter(60, "ALC", "dBFS", 8));
+    model.defineMeter(txMeter(80, "ALC", "dBFS", 9));
+    model.setActiveTxSlice(0);
+    model.updateValues({60, 80}, {rawDb(-6), rawDb(-12)});
+    report("removed SLC context cannot poison a later context-free explicit map",
+           nearlyEqual(model.swAlc(), -6));
+    model.setActiveTxSlice(1);
+    model.updateValues({60, 80}, {rawDb(-6), rawDb(-12)});
+    report("context-free explicit ALC resolves the second slice", nearlyEqual(model.swAlc(), -12));
+
+    MeterModel repurposed;
+    repurposed.defineMeter(slcMeter(10, 0));
+    repurposed.defineMeter(txMeter(20, "ALC", "dBFS", 0));
+    repurposed.defineMeter(txMeter(40, "SC_MIC", "dBFS", 0));
+    repurposed.defineMeter(slcMeter(30, 1));
+    repurposed.defineMeter(txMeter(40, "ALC", "dBFS", 9));
+    repurposed.setActiveTxSlice(1);
+    repurposed.updateValues({20, 40}, {rawDb(-6), rawDb(-12)});
+    report("repurposing an ID retains the incoming definition's SLC context",
+           nearlyEqual(repurposed.swAlc(), -12));
+}
+
+void testExplicitAlcIsNotVolunteeredToAnotherSlice()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(txMeter(20, "ALC", "dBFS", 8));
+    model.defineMeter(slcMeter(30, 1));
+    model.setActiveTxSlice(1);
+    model.updateValues({20}, {rawDb(-3)});
+    report("a lone explicitly associated ALC is not assigned to another slice",
+           nearlyEqual(model.swAlc(), -20));
+}
+
+void testImplicitModulatorBeforeTxSelectionAndUnrelatedContext()
+{
+    MeterModel implicit;
+    implicit.defineMeter(txMeter(20, "ALC", "dBFS", 0));
+    implicit.defineMeter(txMeter(21, "COMPPEAK", "dB", 0));
+    implicit.updateValues({20, 21}, {rawDb(-8), rawDb(6)});
+    report("one implicit modulator can publish before a TX slice is selected",
+           nearlyEqual(implicit.swAlc(), -8) && nearlyEqual(implicit.compPeak(), 6));
+    MeterModel separate;
+    separate.defineMeter(slcMeter(10, 1));
+    MeterDef unrelated;
+    unrelated.index = 15;
+    unrelated.source = "RAD";
+    unrelated.name = "PATEMP";
+    unrelated.unit = "degC";
+    separate.defineMeter(unrelated);
+    separate.defineMeter(txMeter(20, "ALC", "dBFS", 8));
+    separate.defineMeter(txMeter(40, "ALC", "dBFS", 9));
+    separate.setActiveTxSlice(1);
+    // The legacy fallback's base is 8 - min(SLC=1); slice 1 resolves source 8.
+    separate.updateValues({20, 40}, {rawDb(-6), rawDb(-12)});
+    report("an unrelated manifest block ends SLC context before explicit fallback",
+           nearlyEqual(separate.swAlc(), -6));
 }
 
 void testDirectionalPowerUsesDirectReflectedMeter()
@@ -948,9 +1100,10 @@ void testChangingActiveTxSliceDropsStaleFilterLevels()
 {
     MeterModel model;
     model.defineMeter(slcMeter(10, 0));
-    model.defineMeter(slcMeter(11, 1));
     model.defineMeter(txMeter(29, "SC_FILT_1", "dBFS", 8));
     model.defineMeter(txMeter(32, "SC_FILT_2", "dBFS", 8));
+    // Declare the taps in slice A's block before moving to slice B's block.
+    model.defineMeter(slcMeter(11, 1));
     model.setActiveTxSlice(0);
     model.updateValues({29, 32}, {rawDb(-8.0f), rawDb(-70.0f)});
     const bool hadLevels = model.hasTxFilterLevels();
@@ -1026,6 +1179,11 @@ int main(int argc, char** argv)
     testMixedSourceTxWaveformMetersUseManifestSliceContext();
     testZeroSourceAlcUsesSliceContext();
     testSingleImplicitAlcFollowsTransmitToAnySlice();
+    testTxMeterRedefinitionsPreserveTheirSlice();
+    testAlcClearsToPresentationFloor();
+    testTxMeterIdentityReuseAndContextLifetime();
+    testExplicitAlcIsNotVolunteeredToAnotherSlice();
+    testImplicitModulatorBeforeTxSelectionAndUnrelatedContext();
     testDirectionalPowerUsesDirectReflectedMeter();
     testNativeSwrRemainsRadioProvidedAtLowPower();
     testForwardPowerSnapsToZeroWhenTheCarrierStops();
