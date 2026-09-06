@@ -117,6 +117,17 @@ int main()
 
     // ---- The measured reality this exists to tolerate ----------------------
     //
+    // WHAT WOULD HAVE TO CHANGE FOR THESE TO STOP BEING WORTH ASSERTING: the
+    // cost itself. They are load-bearing because a cold FFTW_PATIENT plan
+    // measurement really does take minutes (#4877, still the largest documented
+    // figure). If that issue's fix lands — CI caching the wisdom file — or WDSP
+    // stops planning with FFTW_PATIENT, these durations stop describing
+    // anything real. They would still PASS, because they only assert that such
+    // durations must not fail, so they would go green and pointless rather than
+    // green and wrong. That is the better of the two failure modes, but it is
+    // still a reason to re-read this block rather than trust it, if the cold
+    // cost is ever fixed at the source.
+    //
     // These are the numbers that moved the bound from 90 s to 600 s. A cold
     // first open on a QUIET machine is 98.3 s; under load the same open is
     // 188.1 s and a whole cold connect is 193-219 s. Every one of those is a
