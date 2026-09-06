@@ -248,6 +248,74 @@ int testSaveTablesReportsWhyItDidNotPersist()
     return 0;
 }
 
+int testLoadTablesRefusesANewerSchema()
+{
+    const QString radioId = QStringLiteral("AA:BB:CC:00:00:05");
+    const RadioSettingsScope scope(QStringLiteral("anan"), radioId);
+
+    // A well-formed, correctly-sized row -- the ONLY thing wrong with it is
+    // that a future build wrote it. Shape alone cannot distinguish it, which
+    // is exactly why the schema version has to be consulted.
+    QJsonArray future;
+    for (std::size_t k = 0; k < anan::kDroopCorrectionFftSize; ++k)
+        future.append(7.5);
+    const QJsonObject planted{{QStringLiteral("48"), future}};
+    if (!AppSettings::instance().setRadioFeature(
+            QStringLiteral("anan"), radioId,
+            QLatin1String(AnanDroopCalibrator::kFeature),
+            AnanDroopCalibrator::kSchemaVersion + 1, planted)) {
+        return fail("planting a newer-schema row should succeed");
+    }
+
+    // saveTables() already refused to WRITE over this; reading it back and
+    // applying it as v1 was the other half of the same hazard.
+    if (!AnanDroopCalibrator::loadTables(scope).isEmpty()) {
+        return fail("loading a NEWER schema version must be refused, not applied as v1 "
+                    "-- a wrong correction reaches the DSP silently");
+    }
+
+    // And the refusal is about the VERSION, not the content: the identical
+    // document at the current version loads fine.
+    if (!AppSettings::instance().setRadioFeature(
+            QStringLiteral("anan"), radioId,
+            QLatin1String(AnanDroopCalibrator::kFeature),
+            AnanDroopCalibrator::kSchemaVersion, planted)) {
+        return fail("re-planting at the current schema should succeed");
+    }
+    const auto loaded = AnanDroopCalibrator::loadTables(scope);
+    if (!loaded.contains(48))
+        return fail("the same document at the CURRENT schema must load");
+    if (!nearlyEqual(loaded.value(48)[0], 7.5f))
+        return fail("a loaded table keeps its values");
+    return 0;
+}
+
+int testApplyResultRefusesLoudlyRatherThanSilently()
+{
+    // No RadioModel: applyResult() cannot do anything here whatever it is
+    // asked. The point of the test is that it SAYS SO. The silent early
+    // return this replaced let `droopcal apply` answer ok:true, because
+    // AutomationServer's apply branch reports a failure only when error()
+    // fires.
+    AnanDroopCalibrator cal(nullptr);
+    QString reason;
+    int errors = 0;
+    QObject::connect(&cal, &AnanDroopCalibrator::error, &cal,
+                     [&reason, &errors](const QString& why) { reason = why; ++errors; });
+
+    cal.applyResult();
+    if (errors != 1)
+        return fail("applying with nothing measured must emit error(), not return silently");
+    if (reason.isEmpty())
+        return fail("the refusal carries an operator-facing reason");
+
+    // hasResult() is what the dialog gates its Apply button on, so the two
+    // must agree about there being nothing to apply.
+    if (cal.hasResult())
+        return fail("a calibrator that never swept has no result");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -280,6 +348,10 @@ int main(int argc, char** argv)
     if (const int result = testSaveTablesRefusesANewerSchema(); result != 0)
         return result;
     if (const int result = testSaveTablesReportsWhyItDidNotPersist(); result != 0)
+        return result;
+    if (const int result = testLoadTablesRefusesANewerSchema(); result != 0)
+        return result;
+    if (const int result = testApplyResultRefusesLoudlyRatherThanSilently(); result != 0)
         return result;
     std::printf("anan_droop_calibrator_test: all checks passed\n");
     return 0;

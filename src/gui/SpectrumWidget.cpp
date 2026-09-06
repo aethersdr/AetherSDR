@@ -13954,7 +13954,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 // margin. fftSize is fixed at 1024 for every rate, and this
                 // fraction applies uniformly to pixel width, so a bin-count
                 // fraction and a pixel-width fraction are the same number
-                // with no unit conversion needed. Superseded value: 0.05,
+                // with no unit conversion needed. paintEvent()'s software
+                // path carries the SAME constant and must be changed with
+                // this one -- they are one fade drawn by two renderers, and
+                // letting them drift means the same radio hides a different
+                // fraction of its span depending only on whether RHI came
+                // up. Superseded value: 0.05,
                 // from the pre-AnanDroopCorrection era when this fade was
                 // the ONLY mitigation and had to cover the whole droop
                 // region, not just its unrecoverable edge.
@@ -15130,10 +15135,13 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     // flags/TNF/spot markers/SWR overlay below, so those stay fully
     // visible on top of it, same ordering as the GPU path.
     if (m_edgeTaperEnabled) {
-        // 0.05 (5% margin per side) -- see renderGpuFrame()'s own comment
-        // for why this exact fraction, and why guessing a gentler-looking
-        // smaller value was wrong.
-        static constexpr double kEdgeTaperFraction = 0.05;
+        // 0.09 (9% margin per side) -- see renderGpuFrame()'s own comment
+        // for the derivation, and why guessing a gentler-looking smaller
+        // value was wrong. This value is PAIRED with that one on purpose:
+        // it is the same fade, drawn by whichever path is live, and the two
+        // drifting apart means the same radio fades a different fraction of
+        // its span depending only on whether RHI came up. Change both.
+        static constexpr double kEdgeTaperFraction = 0.09;
         const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
         QColor bgOpaque = bg; bgOpaque.setAlpha(255);
         QColor bgClear = bg; bgClear.setAlpha(0);

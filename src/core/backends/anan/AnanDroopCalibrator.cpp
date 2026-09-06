@@ -94,7 +94,24 @@ QMap<int, anan::DroopCorrectionTable> AnanDroopCalibrator::loadTables(
     QMap<int, anan::DroopCorrectionTable> tables;
     if (!scope.isValid())
         return tables;
-    const QJsonObject doc = scope.feature(QLatin1String(kFeature));
+
+    int storedSchema = 0;
+    const QJsonObject doc = scope.feature(QLatin1String(kFeature), &storedSchema);
+    if (storedSchema > kSchemaVersion) {
+        // Symmetric with saveTables()'s own refusal, which was already here --
+        // the asymmetry was accidental, not a decision. A v2 row's numbers
+        // need not mean what v1's mean (a different reference level, cap, or
+        // length convention), so reading one back as v1 pushes a WRONG
+        // correction into the DSP, silently: nothing ever reads a table back
+        // off the radio to notice. Better uncorrected than wrongly corrected,
+        // and AnanRxDsp's per-rate kDroopCorrectionZero fallback already
+        // covers a rate with no table at all.
+        qCWarning(lcAnanDroopCal)
+            << "stored droop calibration is schema v" << storedSchema
+            << "-- newer than this build understands (v" << kSchemaVersion
+            << "); ignoring it rather than applying it as v1";
+        return tables;
+    }
     for (auto it = doc.constBegin(); it != doc.constEnd(); ++it) {
         bool okRate = false;
         const int rateKsps = it.key().toInt(&okRate);
@@ -195,8 +212,33 @@ void AnanDroopCalibrator::stop()
 
 void AnanDroopCalibrator::applyResult()
 {
-    if (isRunning() || m_measuredTables.isEmpty() || !m_radio)
+    // Every refusal below is LOUD. The single silent `return` these replaced
+    // covered three quite different states and told nobody about any of them:
+    // `droopcal apply` answered ok:true for a correction that was never
+    // applied or saved (AutomationServer's apply branch reports a failure
+    // only when error() fires), and the dialog's Apply button did nothing
+    // visible. Same #5263 loud-drop reasoning as start()'s own refusals, and
+    // as the "radio went away" case immediately below -- which was already
+    // loud, which is what made the silence here look accidental.
+    if (isRunning()) {
+        // error() only, no finished(): the sweep really is still running, and
+        // the dialog's finished handler unconditionally relabels the button
+        // "Start Sweep", which would be a lie while it is mid-sweep.
+        emit error(QStringLiteral("a sweep is still running -- stop it before applying "
+                                  "the measured correction"));
         return;
+    }
+    if (m_measuredTables.isEmpty()) {
+        emit error(QStringLiteral("no measured correction to apply -- run a sweep first"));
+        emit finished(false);
+        return;
+    }
+    if (!m_radio) {
+        emit error(QStringLiteral("no radio model -- the measured correction was not "
+                                  "applied or saved"));
+        emit finished(false);
+        return;
+    }
 
     IRadioBackend* backend = m_radio->backend();
     if (!backend) {
@@ -365,6 +407,25 @@ void AnanDroopCalibrator::advance()
         break;
 
     case Phase::Sampling: {
+        // The rate can change out from under an ALREADY-RUNNING Sampling
+        // phase -- a mouse-wheel zoom on the panadapter, or a `zoom`/`panbw`
+        // bridge call. WaitingForRateLanded's own target-match test cannot
+        // catch that; it has already passed. Without this the loop keeps
+        // capturing and files the new rate's frames under the old rate's key,
+        // persisting a table measured at the wrong rate -- the same
+        // cross-rate corruption the per-rate keying and finishRateChange()'s
+        // m_preRateChangeKsps rollback exist to prevent, reached through a
+        // different door. The sweep drives the rate itself, so anything else
+        // moving it mid-measurement is a genuine conflict, not a race to
+        // absorb: abort loudly and keep the rates already measured.
+        if (std::abs(pan->bandwidthMhz() - currentTargetRateKsps() / 1000.0) >= 1.0e-6) {
+            abortSweep(QStringLiteral("the panadapter rate changed to %1 ksps while "
+                                      "measuring %2 ksps -- nothing else may drive the "
+                                      "rate while a sweep runs")
+                          .arg(std::lround(pan->bandwidthMhz() * 1000.0))
+                          .arg(currentTargetRateKsps()));
+            break;
+        }
         if (!m_haveLatestFrame) {
             // The only unbounded wait in the machine used to be right here.
             if (now - m_phaseStartedAtMs >= kSampleStallTimeoutMs) {

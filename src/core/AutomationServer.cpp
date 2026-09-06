@@ -7919,6 +7919,15 @@ QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& v
             return err(QStringLiteral("droopcal: no radio identity yet — connect the radio "
                                       "before calibrating"));
         }
+        // BEFORE the call, not after. start() is a documented no-op while a
+        // sweep is running, so the isRunning() re-check below would pass on
+        // the FIRST sweep still running and answer ok:true as though a second
+        // had begun -- a script would then read the first sweep's progress as
+        // its own.
+        if (cal.isRunning()) {
+            return err(QStringLiteral("droopcal: a sweep is already running -- stop it "
+                                      "before starting another"));
+        }
         cal.start();
         // start() refuses (no active panadapter) by emitting error() and
         // returning, leaving the phase Idle. Reporting ok:true with
@@ -7937,11 +7946,15 @@ QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& v
     }
     if (verb == QLatin1String("apply")) {
         // applyResult() completes synchronously (AnanBackend's droop.apply
-        // handler has no device round trip), reporting any refusal -- no
-        // radio connected, a write the settings store declined, a stored row
-        // with a newer schema -- through error() just before finished(false).
-        // Capturing it here is what keeps `droopcal apply` from answering
-        // ok:true for a correction that was never saved.
+        // handler has no device round trip), reporting EVERY refusal -- a
+        // sweep still running, nothing measured yet, no radio connected, a
+        // write the settings store declined, a stored row with a newer schema
+        // -- through error(). Capturing it here is what keeps `droopcal
+        // apply` from answering ok:true for a correction that was never
+        // saved. That claim only became true when applyResult()'s own
+        // preconditions stopped returning silently; the guard belongs there
+        // rather than duplicated here, so the dialog's Apply button is
+        // covered by the same fix.
         QString failure;
         const QMetaObject::Connection conn =
             QObject::connect(&cal, &AnanDroopCalibrator::error, &cal,
