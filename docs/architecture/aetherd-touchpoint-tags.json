@@ -1,4 +1,16 @@
 {
+ "core/control/RadioCatalogue.h": {
+  "tag": "universal",
+  "note": "Bounded read-only discovery resource projected from normalized observations; no vendor wire types or connection intents.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/discovery/RadioDiscoverySource.h": {
+  "tag": "universal",
+  "note": "QtCore normalized discovery/lifecycle seam; native implementations and vendor payloads stay below the backend boundary.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AcomConnection.h": {
   "tag": "peripheral(acom)",
   "note": "Direct serial/ser2net client for the ACOM S-series amplifier line (600S primary target, protocol shared across 500S/700S/1200S/2020S) — a standalone RS-232 accessory with no FlexRadio awareness at all, same precedent as core/PgxlConnection.h and core/TgxlConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/acom-600s-amplifier-design.md.",

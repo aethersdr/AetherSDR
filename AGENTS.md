@@ -478,6 +478,14 @@ observe-only local handshake/capability service, and a QtWidgets-free
 `resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
 coalescing/session resync, and an independent local-socket hard disconnect cap
 are live over the current-user local transport.
+The headless daemon also owns a bounded, observe-only `radioCatalogue` through
+the normalized `RadioDiscoverySource` seam. Native discovery adapters stay under
+`src/core/backends/`; desktop discovery/autoconnect is unchanged. Discovery is
+passive by default: `--discover-local` opts into Flex/HL2/ANAN LAN discovery and
+available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata.
+Neither option connects a radio. Icom manual setup, SmartLink and external
+directories are excluded. Catalogue fields and lifecycle are specified in
+`docs/aetherd-control-resource-v1-catalogue.md`.
 Sessions now require explicit trusted authorization; the local transport grants
 observe permission, and reads/subscriptions enforce it. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon

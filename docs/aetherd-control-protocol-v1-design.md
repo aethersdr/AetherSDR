@@ -174,6 +174,7 @@ unambiguous.
 V1 begins with the smallest useful canonical set:
 
 - `server` — build/protocol versions, health and transport state;
+- `radioCatalogue` — bounded read-only discovery identities and endpoints;
 - `radioSession` — identity, family, connection state and capabilities;
 - `slice` — frequency, mode, filter, receive controls and ownership;
 - `panadapter` — center, bandwidth, dBm range and display cadence;
@@ -414,6 +415,8 @@ and are reported privately rather than demonstrated against public radios.
    `aetherd` target with a CI assertion that it cannot link QtWidgets.
 3. **Read-only service:** implement negotiation, auth, snapshots, revisions,
    subscriptions, limits and read-only resources over the local transport.
+   The headless discovery catalogue is also observe-only: daemon startup flags
+   opt into LAN/USB discovery or simulator metadata, never radio connection.
 4. **Non-TX control:** add authenticated typed connect/slice/pan methods and
    prove authoritative echo behavior across every supported backend, currently
    Flex, HL2, Icom, Sim, ANAN and RTL-SDR.

@@ -116,6 +116,38 @@ target_link_libraries(control_resource_service_test PRIVATE
     aethercore Qt6::Core)
 add_test(NAME control_resource_service_test COMMAND control_resource_service_test)
 
+# Socket-free catalogue/protocol tests: injected normalized discovery signals.
+# QtNetwork is used only for QHostAddress validation, never a socket or peer.
+add_executable(radio_catalogue_test
+    tests/radio_catalogue_test.cpp
+    src/core/discovery/RadioDiscoverySource.h
+    src/core/control/RadioCatalogue.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlProtocolCodec.cpp
+)
+target_include_directories(radio_catalogue_test PRIVATE src)
+target_compile_definitions(radio_catalogue_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(radio_catalogue_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME radio_catalogue_test COMMAND radio_catalogue_test)
+
+# Real factory wiring, with local=false: simulator metadata only, no sockets,
+# device scans, radio connections or third-party firmware stand-ins.
+add_executable(radio_discovery_source_test tests/radio_discovery_source_test.cpp)
+target_include_directories(radio_discovery_source_test PRIVATE src)
+target_link_libraries(radio_discovery_source_test PRIVATE aethercore Qt6::Core)
+add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
+
+# Socket-free daemon startup policy: a fresh child process reads isolated saved
+# nicknames through native static helpers; no discovery source is started with
+# local=true and no socket, USB scan or synthetic firmware peer is used.
+add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
+target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
+target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(aetherd_discovery_startup_test PRIVATE aethercore Qt6::Core)
+add_test(NAME aetherd_discovery_startup_test COMMAND aetherd_discovery_startup_test)
+
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
 # DIGITAL_VOICE_WAVEFORM_DIR, CRDV_DIR and crdv::crdv are all defined by the time
@@ -4295,6 +4327,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     control_resource_service_test
+    aetherd_discovery_startup_test
     slice_label_test
     ulanzi_mapping_migration_test
     theme_manager_test

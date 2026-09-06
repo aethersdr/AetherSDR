@@ -687,6 +687,9 @@ set(CORE_SOURCES
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
     src/core/control/ControlService.cpp       # aetherd v1 observe-only dispatch
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/RadioCatalogue.cpp      # bounded normalized discovery resource
+    src/core/discovery/RadioDiscoverySource.h # socket-free discovery interface
+    src/core/backends/LocalRadioDiscoverySource.cpp # native discovery below vendor seam
     src/core/control/LocalControlServer.cpp   # current-user local transport
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
