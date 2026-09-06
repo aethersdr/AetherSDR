@@ -5,10 +5,9 @@
 // slice mode, so the ✕ button lasted only until the next refresh — a slice
 // switch, an active-pan change, or the rtty_mark echo the radio sends on a
 // band change all recomputed `mode == "RTTY"` and put the pane back up.
-// refreshRttyDecodeState() now gates on `isRtty && RttyDecodeSettings::
-// enabled()`; the load-bearing property is that the disabled state SURVIVES
-// those events, which here means it survives being re-read from the settings
-// store the way each refresh re-reads it.
+// This test covers the persisted enable flag and its shared settings object.
+// MainWindow's close signal, slice refreshes and Radio Setup re-enable wiring
+// require separate UI validation; reading this flag does not exercise them.
 //
 // The other assertion is the one the shared blob makes easy to get wrong:
 // `enabled` and `sensitivity` live in the same object, so writing either must
@@ -53,21 +52,9 @@ int main(int argc, char** argv)
     check(RttyDecodeSettings::sensitivity() == kRttySensitivityDefault,
           "sensitivity default is unchanged by the new field");
 
-    // ---- the ✕ button, and its survival across refreshes --------------------
+    // ---- persisted dismissal state ----------------------------------------
     RttyDecodeSettings::setEnabled(false);
-    check(!RttyDecodeSettings::enabled(), "✕ records the operator's dismissal");
-
-    // Every refreshRttyDecodeState() call re-reads the flag; a slice switch,
-    // an active-pan change and an rttyMarkChanged echo are all just more of
-    // those reads.  Re-reading must never resurrect the pane.
-    for (int refresh = 0; refresh < 5; ++refresh) {
-        if (RttyDecodeSettings::enabled()) {
-            check(false, "disabled state must survive repeated refreshes");
-            break;
-        }
-    }
-    check(!RttyDecodeSettings::enabled(),
-          "still disabled after repeated slice/frequency-driven refreshes");
+    check(!RttyDecodeSettings::enabled(), "disabled state round-trips");
 
     // Survives a full reload of the settings document too — the operator's
     // choice outlives the session, like the CW decode toggles.
@@ -77,7 +64,7 @@ int main(int argc, char** argv)
     // ---- the re-enable control ---------------------------------------------
     RttyDecodeSettings::setEnabled(true);
     check(RttyDecodeSettings::enabled(),
-          "Radio Setup → Digital → RTTY Decode brings the pane back");
+          "enabled state round-trips");
 
     // ---- neither field clobbers the other ----------------------------------
     RttyDecodeSettings::setSensitivity(38);

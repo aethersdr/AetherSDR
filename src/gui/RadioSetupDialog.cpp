@@ -2733,11 +2733,15 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         // Decode RX/TX toggles above.  MainWindow re-evaluates panel and
         // run state on dialog close via refreshRttyDecodeState().
         auto* rttyDecodeLbl = new QLabel("RTTY Decode:");
-        rttyDecodeLbl->setStyleSheet(kLabelStyle);
+        ThemeManager::instance().applyStyleSheet(rttyDecodeLbl,
+            "QLabel { color: {{color.text.primary}}; font-size: 12px; }");
         grid->addWidget(rttyDecodeLbl, 1, 0);
         auto* rttyDecodeBtn = mkTogBtn(
             RttyDecodeSettings::enabled() ? "Enabled" : "Disabled",
             RttyDecodeSettings::enabled());
+        rttyDecodeBtn->setObjectName("rttyDecodeEnabled");
+        rttyDecodeBtn->setAccessibleName("RTTY Decode");
+        rttyDecodeBtn->setAccessibleDescription("Enable or disable the RTTY decoder pane.");
         connect(rttyDecodeBtn, &QPushButton::toggled, this, [rttyDecodeBtn](bool on) {
             RttyDecodeSettings::setEnabled(on);
             rttyDecodeBtn->setText(on ? "Enabled" : "Disabled");
