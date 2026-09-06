@@ -663,39 +663,41 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   not a bug and cannot be optimised away, but it is now paid **off the GUI
   thread** and reported in the connect animation; see §22.
 
-- **"Every later open" assumes the wisdom cache survives, and a redirected
-  `HOME` starts you without one.** This is the most expensive thing on this
-  page to get wrong, because it presents as a hang rather than as slowness.
+- **"Every later open" assumes the wisdom cache survives. Redirecting `HOME`
+  can move that cache too, depending on the other environment variables.**
+  An isolated profile can therefore turn a warm open into a cold one.
 
-  Read the table below for `HOME` specifically. The other two variables move
-  where Qt looks for config; `HOME` moves that *and* the WDSP wisdom cache,
-  which is the one nobody expects:
+  For this macOS recipe, the config variables and the WDSP cache have separate
+  resolution rules. `HOME` affects the cache only when neither a non-empty
+  `AETHER_WDSP_WISDOM_DIR` nor `XDG_CACHE_HOME` overrides it:
 
   | variable | what it moves |
   |---|---|
   | `CFFIXED_USER_HOME` | Qt's config and log locations — `QStandardPaths::writableLocation(GenericConfigLocation)`, so the settings store and `LogManager`'s rotated log |
   | `XDG_CONFIG_HOME` | the same locations on platforms that consult it |
-  | **`HOME`** | everything resolved from `QDir::homePath()` — **and the WDSP wisdom cache** |
+  | **`HOME`** | locations resolved from `QDir::homePath()`; also the WDSP wisdom cache on macOS/Linux when `AETHER_WDSP_WISDOM_DIR` and `XDG_CACHE_HOME` do not override it |
 
-  `WdspChannel::wisdomPath()` resolves to `$XDG_CACHE_HOME`, **else**
-  `$HOME/.cache`, then `/aethersdr/wdsp-fftw-wisdom` — and that `else` is not a
-  detail. It is imported before the channels are built and exported after.
+  After the explicit `AETHER_WDSP_WISDOM_DIR` override, macOS/Linux resolve
+  `WdspChannel::wisdomPath()` through `$XDG_CACHE_HOME`, **else** `$HOME/.cache`,
+  with `/aethersdr/wdsp-fftw-wisdom` appended. Windows uses `LOCALAPPDATA`
+  instead of those two variables. An empty resolved directory falls back to
+  the system temporary directory. Wisdom is imported before the channels are
+  built and exported after.
 
-  **Where `XDG_CACHE_HOME` is exported, redirecting `HOME` moves the wisdom
-  cache NOWHERE.** `HOME` is never consulted, so the "isolated" run reads the
-  operator's real cache — and, because the export is unconditional in an app
-  process, **writes to it too**. That is the dangerous outcome, not the slow
+  **Without the explicit override, an inherited `XDG_CACHE_HOME` means that
+  redirecting `HOME` does not move the wisdom cache.** If that inherited path
+  still names the operator's cache, the "isolated" run reads it — and, because
+  the export is unconditional in an app process, **writes to it too**. That is the dangerous outcome, not the slow
   one: the run is fast, looks correct, and quietly rewrites a file outside the
   profile it was supposed to be confined to. `XDG_CACHE_HOME` is commonly
   exported on Linux and rarely on macOS, which is exactly the kind of difference
   that makes a harness behave one way on a developer's machine and another in
   CI.
 
-  So the sentence to carry is conditional. Where `XDG_CACHE_HOME` is **unset**,
-  a redirected `HOME` does point the cache at a directory the operator's own is
-  not in, and the first isolated run is a cold open even on a machine that has
-  connected a hundred times. Where it is **set**, none of that happens and the
-  isolation is an illusion.
+  Without either cache override, redirecting `HOME` to a fresh directory on
+  macOS/Linux gives the first isolated run a cold cache even on a machine that
+  has connected a hundred times. If an inherited `XDG_CACHE_HOME` still points
+  at the operator's cache, redirecting `HOME` alone does not isolate it.
 
   **VERIFY THE PATH THE PROCESS GOT, NOT THE ONE YOU ASKED FOR.** This is the
   general form and it is worth more than the specific trap: a harness that
@@ -708,11 +710,11 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
 
   **How often you pay that depends on your profile's lifetime, so be deliberate
   about it.** The recipe above exports a stable `$T=/tmp/aether-hl2-test` and
-  `mkdir -p`s it, so its cache survives between runs and only the first launch
-  is slow — until something clears `/tmp`. A harness that builds its profile
-  with `mktemp -d`, or removes it in a trap, or runs each case in a fresh
-  container, has **no warm run at all**: every launch is a first open, for ever,
-  and that is the case that reads as a hang. Which shape you have is not
+  `mkdir -p`s it, so a cache resolved under that profile survives between runs
+  and only the first launch is slow — until something clears `/tmp`. A harness
+  that discards both the profile and its cache, using `mktemp -d`, a cleanup
+  trap, or a fresh container, has **no warm run at all**: every launch is a
+  first open, and that is the case that reads as a hang. Which shape you have is not
   visible from the symptom, so decide it rather than discover it.
 
   It is far worse than the ~19 s above. WDSP builds every FFT with
@@ -731,7 +733,8 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   `d57_bench_quiet.py`. Quiet throughout — 21 load samples at 5 s intervals, all
   between 3.3 and 4.1. Note what it says about the first
   row: **150 s was not a failure**, it was a working open that had not finished
-  yet. Do not set a timeout against it.
+  yet. That abandoned observation does not justify a 150 s failure bound;
+  the landed #5415 watchdog allows 600 s for this phase.
 
   **The fix is one variable**, and the code already provides it for its own
   tests — see the `AETHER_WDSP_WISDOM_DIR` branch at the top of
@@ -764,12 +767,17 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   FFTW wisdom files — `AudioEngine::wisdomFilePath()` under
   `~/.config/AetherSDR/` for NR2, and `WdspChannel::wisdomPath()` under
   `~/.cache/aethersdr/` for the channels — and the startup log line
-  `Audio NR2 wisdom summary: status=missing` refers to the **first**, which is
-  routinely absent and says nothing about the second. And a slow DSP open still
-  produces **no diagnostic at all**: the phase has no timeout and no log line,
-  so a caller sees `ok`/`deferred` from `connect ip` and then silence. #5413
-  reports that; #5415 is the fix and is not merged as of this writing, so on
-  current `main` the silence is what you get.
+  `Audio NR2 wisdom summary:` followed by `status=missing` refers to the
+  **first**, which is routinely absent and says nothing about the second.
+
+  **The DSP-setup diagnostic from #5415 has landed.** `Hl2Backend` logs
+  `HL2 DSP setup: opening` at phase start and `HL2 DSP setup: chains open after`
+  when setup returns. The watchdog warns after 10 s, repeats every 30 s while
+  waiting, and reports a connection error at 600 s. A timeout invalidates the
+  attempt; it cannot interrupt an in-progress WDSP open, whose eventual
+  completion releases the stale chains. These logs and the bounded wait answer
+  the silence reported in #5413. The initial `ok`/`deferred` reply still means
+  the connect was accepted, not that the radio is connected.
 - The `tools/hl2/` Python spike defaults to broadcasting
   `255.255.255.255`, which fails on macOS with `OSError 65` when multiple
   interfaces are up. Use `--bcast <subnet>.255`. The in-app Qt sweep is fine.
