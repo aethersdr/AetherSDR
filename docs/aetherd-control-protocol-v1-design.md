@@ -263,8 +263,9 @@ The service now enforces an explicit, immutable authorization context on each
 `ControlSession`. The default context is unauthenticated: after envelope
 parsing, `hello` returns `auth.required` and requests closure before parameter
 or version negotiation. Invalid envelopes still receive protocol errors. The
-existing local transport supplies observer authorization only for connections
-admitted through its current-user endpoint. Trusted in-process callers must
+existing local transport defaults to observer authorization for connections
+admitted through its current-user endpoint; explicit local-control opt-in adds
+control for those clients. Trusted in-process callers must
 also provide their authorization explicitly. Client names, session IDs, and
 JSON fields cannot grant access.
 
@@ -284,8 +285,8 @@ already delivered bytes cannot be recalled. Revocation is idempotent and
 terminal even before negotiation or while a resync notice is pending. A newly
 verified connection creates a new session and must take a fresh baseline.
 There is no wire revocation method, daemon caller of the revocation hook, or
-credential provisioning in this slice; these are lifecycle hooks for subsequent
-authenticated non-TX control. The no-grants context likewise has no production
+credential provisioning in this slice; revocation remains a trusted embedding
+hook. The no-grants context likewise has no production
 producer yet. Output binding rejects duplicate bindings, missing callbacks, and
 mismatched calling/endpoint threads in release builds as well as debug builds.
 Both endpoints must remain on their owning thread after binding.
