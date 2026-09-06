@@ -246,12 +246,13 @@ On a `v*` tag push the workflow:
 
 Guard rails (all three must pass before Partner Center is touched):
 
-- The step runs only on a `refs/tags/` ref — never on PRs or branch
-  `workflow_dispatch` runs.
+- The step runs only on a `push` event for a `refs/tags/v*` ref. Manual
+  dispatches, including those targeting a tag, never attach release assets or
+  stage a production Store draft.
 - The step is skipped unless the `AETHERSDR_STORE_PRODUCT_ID` **repository
   variable** is set — so the feature is dormant until you opt in.
-- Forks cannot read the repo secrets, so the `reconfigure` step is a no-op
-  there even on a tag.
+- The publication plan requires the upstream `aethersdr/AetherSDR` repository;
+  forks cannot select production publication even if they configure secrets.
 
 If the MSIX packaging step (which is `continue-on-error`) produced no
 `.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
@@ -323,18 +324,101 @@ secrets + one variable in GitHub.
 
 ### Version discipline
 
-Each Store submission must carry a higher `Identity.Version` than the live one.
-The MSIX version is derived from `project(AetherSDR VERSION ...)` in
-`CMakeLists.txt` and normalized to four parts. Within a single month, weekly
-releases must bump the CalVer **patch** (and the 4th hotfix component if
-needed), or Partner Center will reject the package as not newer.
+Microsoft Store [reserves the fourth version component for its own use](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements);
+submitted packages must end in `.0`. The Windows Installer workflow uses
+`YY.M.<workflow run number>.0` for **both production and flight MSIX packages**.
+For example, run 203 builds `26.9.203.0`; the next production run 204 builds
+`26.9.204.0`, which outranks the flight. The first two components come from
+`project(AetherSDR VERSION ...)`; the app's CalVer, portable ZIP, Inno installer,
+and release tags keep their existing versioning.
+
+Use the current or a later CalVer year/month when submitting a ref. Selecting
+an older source series can produce a lower Store version. Before the first
+upload with this scheme, compare it with the highest package already submitted
+in Partner Center. The shared workflow counter must be greater than that
+package's third component within the same year/month. Do not reset the counter
+or move publication to another workflow without checking this ordering.
+Rerunning the same workflow run reuses its version; dispatch a new run when a
+new version is required. Run numbers outside `1..65535` fail before building
+instead of wrapping or emitting an invalid package.
+
+Local `create-msix.ps1` builds still default to the normalized source version.
+With `-CreateUpload`, a nonzero fourth component is rejected before staging
+files; pass a suitable `-Version YY.M.BUILD.0` for a CalVer hotfix upload.
 
 ### Promoting to fully automatic later
 
-To move from draft to auto-publish, drop `--noCommit` (each tag goes straight to
-certification), or publish to a **flight/insider ring** first with
-`-f <flightId>` and promote manually. Keep the draft gate until the weekly
-cadence has proven stable.
+Production certification requires **both** `-Commit` and `-CommitProduction`
+when invoking `publish-store.ps1`. `-Commit` alone is accepted only with a
+nonempty explicit `-FlightId`; a missing flight ID fails before invoking the
+CLI. `-CommitProduction` is rejected with a flight or without `-Commit`.
+The production tag workflow passes neither switch and keeps the draft gate.
+
+### Manually triggered developer package flight
+
+The Windows Installer workflow can build any explicitly selected ref and fully
+submit its `.msixupload` to an existing Partner Center developer package
+flight. This path runs only through **Run workflow** when **Build and fully
+submit this ref to the Microsoft Store developer flight** is selected. It has
+no schedule and creates no Git tag or GitHub Release.
+
+The manual flight path is isolated from production:
+
+- production tag submissions retain `--noCommit` and remain drafts;
+- the flight job runs only for an explicit `workflow_dispatch` request in the
+  upstream `aethersdr/AetherSDR` repository;
+- `AETHERSDR_STORE_FLIGHT_ID` is required and validated before building, then
+  checked again before authentication; a missing flight ID fails the workflow
+  rather than falling back to production;
+- the flight ID is passed explicitly as `--flightId`, and `-Commit` omits
+  `--noCommit`, so Partner Center starts ingestion/certification automatically;
+- the shared publisher keeps `--verbose` disabled so the public flight log does
+  not expand authentication or upload diagnostics.
+
+Create the package flight and its known-user group in Partner Center first,
+then add the flight ID as the repository Actions secret
+`AETHERSDR_STORE_FLIGHT_ID`. Keep `AETHERSDR_STORE_PRODUCT_ID` pointed at the
+existing production app; a flight is a restricted channel under that product,
+not a second product identity.
+
+Before the first CI upload, remove any pending submission that was created for
+the flight in Partner Center. The Store CLI cannot upload into a portal-created
+first draft because that draft has no API file-upload URL; the workflow must be
+allowed to create the first API-backed submission itself. This is a one-time
+flight setup concern, not part of the production submission path.
+
+Expect the first dispatch to be the first real exercise of the Store CLI's
+flight contract. The regression suite substitutes an in-process `msstore`
+command, so it proves which arguments `publish-store.ps1` assembles but not
+that the pinned CLI accepts `--flightId` on `publish`. A wrong option name
+fails the step loudly rather than publishing anywhere, but budget for it —
+along with credentials and certification — on the first attempt.
+
+The flight uses the shared MSIX sequence described under **Version discipline**
+above. This also changes production MSIX version numbers; production remains a
+draft and its certification requires maintainer action.
+
+The socket-free regression suite is `tests/windows_store_policy_test.ps1`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_store_policy_test.ps1
+```
+
+It exercises the actual build-plan script with tag/branch dispatches and the
+publisher with an in-process CLI substitute. It performs no Store requests.
+Windows Installer runs it before packaging; CTest registers
+`windows_store_policy` when PowerShell is installed, for the unfiltered full
+suite. It is not added to the frozen per-PR CTest gate. A passing test does not
+prove Partner Center credentials, flight configuration, or Store certification;
+verify those separately during the first intended flight publication.
+
+Microsoft warns that an API-created flight submission must continue to be
+managed through the API. Do not edit the in-progress submission in Partner
+Center. The pinned Store CLI replaces an existing pending submission after the
+flight has a published submission, and replaces a failed or expired API-created
+first submission; it then commits and polls the new submission. After a
+successful commit, Partner Center moves the flight through preprocessing,
+certification, and publication to the flight's known-user group.
 
 ## Local Sideload Signing
 

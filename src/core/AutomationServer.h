@@ -21,6 +21,7 @@ class QWebSocket;
 
 #include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
 #include "MemoryTelemetry.h"
+#include "MeterObservationWindow.h"
 
 class QLocalServer;
 class QLocalSocket;
@@ -592,6 +593,13 @@ private:
                                const QString& path) const;
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
+    QJsonObject doMeterWindow(const QString& action, const QString& value);
+    void sampleMeterWindow();
+    MeterObservationWindow m_meterWindow;
+    QTimer* m_meterWindowTimer{nullptr};
+    QMetaObject::Connection m_meterWindowSamples;
+    bool m_meterWindowStarted{false};
+    bool m_meterWindowActive{false};
     // Digital-voice helper lifecycle and non-keying radio waveform maintenance.
     // `unregister` is generic by design; legacy names are not retained in the
     // production cleanup path.

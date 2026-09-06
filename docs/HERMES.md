@@ -743,7 +743,7 @@ receiver, and **backend teardown**, which waits out an in-flight DSP build.
 | ADC overload bit + clip counter (§6) | Addendum 2 §A3: the CORRECT driver for any gain decision. Audio level in one slice says nothing about what saturates a converter seeing 0–38.4 MHz |
 | Discovery telemetry (§1) | Temperature, power, clip count, PTT are pollable WITHOUT a stream — cheapest possible first increment, and a diagnostic when the stream itself is broken |
 | ~~Receiver count at discovery `0x13`~~ | **DONE — §19.** Read and clamped against; skimmer variants 9–12 with NO transmit are still untested |
-| TX FIFO depth (§6) | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift |
+| TX FIFO status (§6) | The oracle calls a FIFO depth "the most important number in the protocol", but **this radio does not send one**: `dsiq_status` is a recovery flag plus the top 7 bits of the fill level (`fifos.v:100-110` at `883a338`). Useful as coarse occupancy and a pacing-fault flag; **not servo-ready** until one unit of that field is measured in samples |
 | Wideband bandscope (§7) | Unimplemented by piHPSDR (dead code) and declined by SDR Console. A differentiation opportunity, with the 4-vs-32 packets-per-block trap already documented |
 
 ### 11.5 Smaller corrections
@@ -927,7 +927,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 4 | Pipeline reset `0x39[7:4]=0x8` after an NCO move | A2 §B2 | Decimation state smears a transient across band-scale jumps — which `a1cbe154` made routine | XS |
 | 5 | Normalize by `2^23-1`, not `2^23` | A1 §A2 | dBFS parity with piHPSDR. Numerically trivial, but parity is the point | XS |
 | 6 | `RXASetNC` / `RXASetMP` after `OpenChannel` | A3 §7 | Selectivity vs latency; matters to CW operators. We silently take defaults | XS |
-| 6a | Rate-limit the ADC-overload warning | §15.7 | Edge-gated, but the value chatters: **~133 warnings/second** on MW, which flushes the log ring and hides everything else | XS |
+| ~~6a~~ | ~~Rate-limit the ADC-overload warning~~ **DONE** | §15.7 | The edge gate stays and a 10 s rate limit sits behind it, carrying the count of transitions the window swallowed. Note the severity here was already overstated when this row was written — see §15.7 | — |
 
 ### Tier 2 — correctness gaps
 
@@ -950,7 +950,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 14 | ADC overload bit + clip counter | O §6, A2 §A3 | The *correct* driver for gain decisions — audio level in one slice says nothing about what saturates a converter seeing 0–38.4 MHz | S |
 | 15 | Discovery-reply telemetry (temp, power, PTT, clip) | O §1 | Pollable **without a stream** — cheapest first increment, and a diagnostic when the stream is broken | S |
 | 16 | Pair WDSP `RXA_ADC_PK` with the hardware clip indicator | A3 §7 | Post-DDC slice vs pre-DDC full spectrum. They disagree by design; A3 calls this the most useful diagnostic pairing on the HL2 | S |
-| 17 | TX IQ FIFO depth + servo | O §6, A1 §B3 | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift | M |
+| 17 | TX IQ FIFO servo | O §6, A1 §B3 | The oracle wants pacing servoed against a FIFO depth rather than a host timer. **The wire carries no depth** — `dsiq_status` is a recovery flag plus the top 7 bits of the fill level. So this item first has to establish what one unit of that field is worth in samples; until then there is nothing to servo against | M |
 | 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
 | ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
 | 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
@@ -1177,7 +1177,7 @@ consistent with each other while both disagreed with the rest of the band:
 | `hl2_tx_loopback_test` through hpsdrsim | tone at the expected bin | passed, measuring the sim's feedback in wire order |
 | Panadapter during TX, live radio | clean single sideband, correct side of centre | looked perfect |
 | Forward power, USB vs LSB at 14.200 | 3875 vs 3876 | identical, both "working" |
-| TX FIFO depth | stable 27–31, no under/overflow | refuted the starvation theory |
+| TX FIFO "depth" *(as the client then reported it)* | stable 27–31, no under/overflow | refuted the starvation theory. **Both figures were misread**: the field is a recovery flag plus a coarse fill level, and the client's under/overflow split decoded a distinction the gateware does not carry. The verdict happens to survive — a steady value is still a steady value — but it was reached from a number that was not what it was labelled |
 
 It was found by an operator with a second receiver: *"I heard the LSB side of
 AetherSDR on the USB side of the Yaesu."*
@@ -1751,11 +1751,26 @@ value the assertion depends on, even when it looks like a constant.
 
 ### 15.7 Noticed, not fixed
 
-- **ADC overload chatter.** On the MW broadcast band with the default +20 dB LNA
-  the overload flag dithers, and the warning in `publishTelemetry` — although
-  edge-gated — fires **~133 times/second**, flushing the log ring. The gate is on
-  the value changing, but the value genuinely chatters. It also buries every
-  other log line, which is how it obstructed the diagnosis in §15.5.
+- **ADC overload chatter — fixed, and the figure below was already stale.** On
+  the MW broadcast band with the default +20 dB LNA the overload flag dithers,
+  and the warning in `publishTelemetry` — although edge-gated — was measured at
+  **~133 times/second**, flushing the log ring and burying every other line,
+  which is how it obstructed the diagnosis in §15.5. The gate is on the value
+  changing; the value genuinely chatters.
+
+  **That rate has not been reachable since #4449.** `MetisClient` coalesces
+  `telemetryUpdated` to 10 Hz (`kTelemetryMinIntervalMs`), with no
+  change-bypass, so `publishTelemetry` cannot run faster than 10 Hz however hard
+  the comparator chatters — which capped this at ~10/s and ended the
+  ring-flushing without anyone recording that it had. **Kept rather than
+  rewritten**, because a symptom that stops being reproducible for a reason
+  nobody wrote down is worth more as a corrected entry than as a deleted one.
+
+  The remainder — one message repeating up to ten times a second for as long as
+  the band stays strong — is fixed: the edge gate stays and a 10 s rate limit
+  sits behind it, reporting the count of transitions the window swallowed.
+  That count is transitions *seen*, at the 10 Hz telemetry cadence, not
+  comparator edges, which are sampled far below their true rate and always were.
 - **The HL2 LNA gain is only settable at connect time** (`lnaGainDb` param).
   There is no seam verb for RF gain, so an operator on a strong band cannot back
   it off without reconnecting. This is why the overload above could not simply be
@@ -1941,8 +1956,8 @@ receiver somewhere it cannot hear.
 
 **The HL2 has no switchable filters of its own.** It has seven open-collector
 outputs at `0x00[23:17]`, which the *gateware* forwards as one byte to I2C
-address `0x20`. Nothing in this codebase writes I2C — setting the config bits
-IS the whole mechanism (oracle §8).
+address `0x20`. For this J16 path, setting the config bits is the whole mechanism
+(oracle §8); the separate IO-board path below uses direct I2C2 writes.
 
 Two things make this the riskiest change in the area:
 
@@ -1973,6 +1988,19 @@ Two deliberate departures from "always engage the HPF":
 readback anywhere in the protocol — the gateware writes to I2C and nothing
 answers — so that log line is the only evidence of what the relays were told to
 do, and a support log captured after the fact has to already contain it.
+
+The external HL2 IO Board at I2C2 address `0x1D` is separate from J16.
+It receives true transmit RF frequency as five single-byte writes to registers
+0 through 4, MSB first; register 4 commits the value. Connect and band changes
+push immediately, while same-band movement coalesces over 500 ms. An immediate
+push supersedes any older pending frequency, and link loss clears the schedule.
+
+MOX/TUNE do not defer the IO board alone: the existing TX NCO and filter paths
+already follow a retune, so withholding only the amplifier leaves it on the
+wrong band until unkey. This path does not provide cold relay sequencing or
+acknowledged amplifier readiness. Ending transmission before changing bands
+requires a separately approved change to the keying behavior. No IO-board
+write asserts transmit intent; C0 MOX remains owned by the existing TX gate.
 
 ### 17.3 Verifying something with no readback
 

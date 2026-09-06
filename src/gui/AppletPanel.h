@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/AudioEngine.h"
+#include "core/backends/RadioCapabilities.h"
 
 #include <QWidget>
 #include <QMap>
@@ -223,6 +224,7 @@ public:
     void setSelectableMicInputs(bool selectable);
     void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
 
     // Show/hide the DAX and DAX-IQ buttons and applets based on whether the
     // connected radio produces per-slice audio / per-pan IQ streams

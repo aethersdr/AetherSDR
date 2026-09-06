@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QHostAddress>
 #include <QObject>
 #include <QSet>
@@ -34,6 +35,10 @@ class IcomSession : public QObject {
     Q_OBJECT
 
 public:
+    // Live IC-705 validation in #4799 matched kappanhang at 300 ms. Keep the
+    // session default and every drain calculation on this one source.
+    static constexpr quint16 kDefaultTxBufferMs = 300;
+
     struct Params {
         QHostAddress host;
         quint16 controlPort = kControlPort;
@@ -47,7 +52,7 @@ public:
         // radio with no TX codec, which is a stronger guarantee than simply
         // not sending audio — a receive-only session cannot key by accident.
         bool enableTx = true;
-        quint16 txBufferMs = 200;
+        quint16 txBufferMs = kDefaultTxBufferMs;
         // Production lease timing. Tests override these values to exercise the
         // renewal watchdog without waiting more than a minute.
         int tokenRenewalMs = 60000;
@@ -74,14 +79,16 @@ public:
     Q_INVOKABLE void stop();
 
     [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
+    [[nodiscard]] std::uint8_t advertisedCivAddress() const noexcept { return m_advertisedCivAddress; }
     [[nodiscard]] QString deviceName() const { return m_deviceName; }
+    [[nodiscard]] const RadioId& radioId() const noexcept { return m_radioId; }
     [[nodiscard]] std::uint8_t civAddress() const noexcept { return m_params.civAddress; }
 
     // RETARGET the session at a different CI-V address, mid-session.
     //
-    // The address the session opened with is a SEED — from the operator's pick,
-    // or from the model the RS-BA1 handshake named — and the radio's own
-    // 0x19 0x00 reply is what corrects it. Without a setter the correction had
+    // The address the session opened with is a seed from settings. The source
+    // address of the radio's 19 00 reply corrects it independently of the model
+    // ID carried in the payload. Without a setter the correction had
     // nowhere to land: Params::civAddress is baked at start() and read through a
     // const getter, so an IC-9700 seeded at the IC-705's 0xA4 went on being
     // addressed at 0xA4 for the whole session and answered nothing.
@@ -100,6 +107,14 @@ public:
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.
     void sendAudio(std::span<const float> mono);
+    // Complete the last 20 ms transport frame with silence. Returns bytes
+    // appended; the normal TX pump still sends the completed frame on cadence.
+    [[nodiscard]] std::size_t padTxAudioToFrame();
+    // Milliseconds of already-queued transmit audio still to be played: the
+    // host queue at wire cadence, plus the TX buffer the radio was asked to
+    // hold before its modulator. Measured from what is pending NOW, so a
+    // finite-stream caller holds PTT for what is actually queued.
+    [[nodiscard]] int txAudioDrainMs() const;
     // Discard queued transmit audio. Call on unkey.
     void flushTxAudio();
 
@@ -160,6 +175,8 @@ private:
     // Auth state. A grant may replace the auth ID, but only after its header
     // IDs prove it belongs to this control session.
     AuthId m_authId{};
+    friend struct IcomCivBackendTestAccess;
+    std::uint8_t m_advertisedCivAddress = 0;
     RadioId m_radioId{};
     QString m_radioName;
     QString m_deviceName;
@@ -193,6 +210,11 @@ private:
 
     std::uint16_t m_serialSendSeq = 0;
     std::uint16_t m_audioSendSeq = 1;
+    // Wire clock for the transmit pump: frames owed since the current stream
+    // started flowing, so a late or coalesced tick can pay back what it missed
+    // (bounded) instead of leaving a permanent backlog. Invalid while idle.
+    QElapsedTimer m_txPumpClock;
+    qint64 m_txFramesSent = 0;
 
     CivReassembler m_civ;
     TxPacketizer m_tx;

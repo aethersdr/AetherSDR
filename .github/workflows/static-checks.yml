@@ -46,6 +46,86 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Configure-only gate for the tree-wide sanitizer switch (#5406, #5419).
+  #
+  # Nothing else in CI exercises AETHERSDR_SANITIZER in either state: the
+  # sanitizer lane injects flags through CFLAGS/CXXFLAGS/LDFLAGS and never
+  # passes -D, and every other job builds with the option off. So the one
+  # thing that could silently rot is the option itself.
+  #
+  # Configure-only, deliberately. Every assertion below is decided during
+  # cmake's configure step, which is seconds; building anything would cost
+  # tens of minutes and prove nothing extra about the switch.
+  #
+  # A separate job rather than a step in static-checks: this needs the CI
+  # image for Qt and the rest of the dependency set, and that job is a
+  # containerless stdlib-Python runner. NOTE for branch protection: this is
+  # its own check context, so it does not gate a merge until it is added to
+  # the required list alongside `Static checks`.
+  sanitizer-option:
+    name: Sanitizer option configures
+    runs-on: ubuntu-latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: A valid sanitizer configures, an impossible one is refused
+        shell: bash
+        run: |
+          set -u
+          fail=0
+
+          # 1. thread — the configuration that was IMPOSSIBLE before #5419,
+          #    because Debug hardcoded -fsanitize=address onto four targets and
+          #    address cannot coexist with thread. This is the whole point.
+          if cmake -B /tmp/cfg-thread -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=thread > /tmp/thread.log 2>&1; then
+            grep -q 'sanitizer = thread' /tmp/thread.log \
+              || { echo "::error::configure succeeded but did not report the sanitizer"; fail=1; }
+          else
+            echo "::error::-DAETHERSDR_SANITIZER=thread failed to configure"
+            tail -30 /tmp/thread.log
+            fail=1
+          fi
+
+          # 2. The digital-voice opt-in must STAND DOWN under thread. This is
+          #    the regression #5419 introduced and caught by hand: the guard
+          #    reads CMAKE_{C,CXX}_FLAGS, add_compile_options never lands
+          #    there, and without the third source 77 translation units got
+          #    both -fsanitize=thread and -fsanitize=address,undefined — a
+          #    COMPILE error, invisible to a configure that succeeds. Assert on
+          #    the generated ninja file, not on the log line, so a reworded
+          #    message cannot make this pass vacuously.
+          if [ -f /tmp/cfg-thread/build.ninja ]; then
+            both=$(grep 'fsanitize=address' /tmp/cfg-thread/build.ninja | grep -c 'fsanitize=thread' || true)
+            if [ "${both:-0}" -ne 0 ]; then
+              echo "::error::$both translation units carry BOTH thread and address sanitizers (#4360 shape)"
+              fail=1
+            fi
+          fi
+
+          # 3. address+thread must be refused AT CONFIGURE, with the reason.
+          #    Discovering it at link is what cost five weeks in #4360.
+          if cmake -B /tmp/cfg-both -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=address,thread > /tmp/both.log 2>&1; then
+            echo "::error::address,thread configured successfully; it must be refused"
+            fail=1
+          else
+            grep -q 'cannot be combined' /tmp/both.log \
+              || { echo "::error::address,thread was refused, but not with the expected reason"; tail -20 /tmp/both.log; fail=1; }
+          fi
+
+          # 4. An unknown value must be refused too, so a typo is not silently
+          #    passed to the compiler.
+          if cmake -B /tmp/cfg-bogus -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=bogus > /tmp/bogus.log 2>&1; then
+            echo "::error::an unknown sanitizer name configured successfully"
+            fail=1
+          fi
+
+          exit "$fail"
+
   static-checks:
     name: Static checks
     runs-on: ubuntu-latest
