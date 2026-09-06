@@ -379,12 +379,37 @@ Only one background request may take that meter-band turn before a ready
 meter runs. After any background dispatch, aging is capped at `Control`
 until an actual `ActiveMeter` dispatch. PTT/operator/emergency requests do
 not reset this alternation. This prevents a whole aged reconciliation burst
-from draining ahead of fresh TX power/SWR reads while retaining background
-progress. Additionally, once a ready meter has spent 100 ms in the queue,
-background aging is capped at `Control` until those overdue meters drain.
-This protects freshness when dispatches are slower than the nominal slot.
-It bounds interference by background requests, not radio reply time:
-a lost in-flight reply can still consume the 350 ms timeout.
+from draining ahead of fresh TX power/SWR reads. Additionally, once a ready
+meter has spent 100 ms in the queue, background aging is capped at `Control`
+as well, which protects freshness when dispatches are slower than the
+nominal slot.
+
+Both caps are DELAYS, NOT HOLDS, and the difference is the whole design.
+`MeterPoller` re-arms each meter from the ANSWER, so on any link whose round
+trip is slower than the meter demand there is always a ready meter past its
+budget: an overdue-meter cap with no ceiling never lifts, and background work
+stops for the session rather than being deferred. Measured on the production
+scheduler and poller with an injected clock, that cost every `Control`
+reconciliation read from 75 ms round trip upward, and left the startup
+snapshot unable to complete at all at 150 ms — on receive, with no
+transmission involved. So the cap lifts for exactly one request once
+`kBackgroundStarvationCeilingMs` (1500 ms) has passed with no background
+dispatch; that dispatch re-arms both caps, making the admission single-shot
+and the background rate a ceiling rather than a share of the link.
+
+1500 ms is where the two pressures stop trading against each other. Over the
+same 60 s sustained-TX measurement, worst-case forward-power age is 620/710/
+1190 ms at 63/75/100 ms round trip — identical to an unbounded hold at 63 and
+75 ms — while control reconciliation still lands roughly 39-45 times a minute
+instead of never. A larger ceiling buys no further freshness; the ages
+plateau and only background progress is lost. The residual cost is startup on
+a slow link: the connect snapshot converges in 46 s at 150 ms round trip
+against 13 s with no overdue-meter cap at all — slower, but it converges,
+where an uncapped hold never finished it.
+
+Note what this bounds and what it does not: interference by background
+requests, not radio reply time. A lost in-flight reply can still consume the
+350 ms timeout.
 
 Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
 retired before a later read is sent, or that ACK can be mistaken for the read's

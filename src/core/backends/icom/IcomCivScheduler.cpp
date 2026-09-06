@@ -193,12 +193,39 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         return std::nullopt;
     }
 
-    const bool meterOverdue = std::any_of(m_queue.cbegin(), m_queue.cend(),
-        [nowMs](const Queued& queued) {
-            return queued.request.priority == Priority::ActiveMeter
-                && queued.request.notBeforeMs <= nowMs
-                && nowMs - queued.enqueuedAtMs >= kMeterQueueBudgetMs;
-        });
+    // Two opposing pressures, both measured on the ready queue.
+    //
+    // meterOverdue: a visible meter has been waiting longer than its freshness
+    // budget, so background aging should stand down.
+    //
+    // backgroundStarved: the ceiling on that stand-down. A meter set that
+    // replenishes faster than the link drains it keeps meterOverdue true
+    // forever, and a floor that never lifts is not pacing — it is the
+    // starvation the aging rule exists to prevent, reappearing on the other
+    // side. Measured from the LATER of the request's own enqueue and the last
+    // background dispatch, so it is a rate limit on background work rather
+    // than a queue-age trigger that a backlog would latch permanently on.
+    bool meterOverdue = false;
+    bool backgroundStarved = false;
+    for (const Queued& queued : m_queue) {
+        if (queued.request.notBeforeMs > nowMs) {
+            continue;
+        }
+        if (queued.request.priority == Priority::ActiveMeter) {
+            if (nowMs - queued.enqueuedAtMs >= kMeterQueueBudgetMs) {
+                meterOverdue = true;
+            }
+        } else if (queued.request.priority > Priority::ActiveMeter) {
+            const std::int64_t since = nowMs - std::max(queued.enqueuedAtMs,
+                                                        m_lastBackgroundDispatchMs);
+            if (since >= kBackgroundStarvationCeilingMs) {
+                backgroundStarved = true;
+            }
+        }
+    }
+    // One background request is admitted when the ceiling is reached; the
+    // dispatch below re-arms both guards, so the admission is single-shot.
+    const bool yieldToMeters = (m_backgroundSinceMeter || meterOverdue) && !backgroundStarved;
     auto best = m_queue.end();
     for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
         if (it->request.notBeforeMs > nowMs) {
@@ -211,9 +238,9 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         if (!emergency && m_lastDispatchMs > 0 && nowMs - m_lastDispatchMs < kSlotMs) {
             continue;
         }
-        const Priority candidatePriority = effectivePriority(*it, nowMs, meterOverdue);
+        const Priority candidatePriority = effectivePriority(*it, nowMs, yieldToMeters);
         const Priority bestPriority = best == m_queue.end()
-            ? Priority::Maintenance : effectivePriority(*best, nowMs, meterOverdue);
+            ? Priority::Maintenance : effectivePriority(*best, nowMs, yieldToMeters);
         if (best == m_queue.end()
             || candidatePriority < bestPriority
             || (candidatePriority == bestPriority
@@ -231,6 +258,7 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         m_backgroundSinceMeter = false;
     } else if (selected.request.priority > Priority::ActiveMeter) {
         m_backgroundSinceMeter = true;
+        m_lastBackgroundDispatchMs = nowMs;
     }
     m_lastDispatchMs = nowMs;
     selected.dispatchedAtMs = nowMs;
@@ -270,21 +298,27 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
 
 IcomCivScheduler::Priority
 IcomCivScheduler::effectivePriority(const Queued& request, std::int64_t nowMs,
-                                     bool meterOverdue) const noexcept
+                                     bool yieldToMeters) const noexcept
 {
     // Aging lets background reconciliation make progress under meter load,
     // but only one background request may win before the next ready meter.
     // Otherwise an old control burst drains in FIFO order ahead of every TX
     // meter, creating a gap even on a radio that answers promptly. Higher
     // priority PTT/operator/emergency dispatches do not consume the meter turn.
-    // On slower dispatch loops, even alternating can exceed freshness budgets.
-    // Once any ready meter has waited 100 ms, drain ready meters ahead of
-    // background work; the radio reply timeout remains a separate bound.
+    // On slower dispatch loops, even alternating can exceed freshness budgets,
+    // so an overdue meter stands background aging down as well.
+    //
+    // BOTH OF THOSE ARE DELAYS, NEVER A HOLD. takeNext() lifts the floor again
+    // once kBackgroundStarvationCeilingMs has passed with no background
+    // dispatch: on a link whose meters replenish faster than it drains them,
+    // an overdue meter is always queued, and a floor conditioned on that alone
+    // would stop control reconciliation and the startup snapshot outright
+    // rather than merely deferring them.
     const int base = static_cast<int>(request.request.priority);
     if (base <= static_cast<int>(Priority::ActiveMeter)) {
         return request.request.priority;
     }
-    const int floor = static_cast<int>((m_backgroundSinceMeter || meterOverdue)
+    const int floor = static_cast<int>(yieldToMeters
         ? Priority::Control : Priority::ActiveMeter);
     const std::int64_t waitedMs = std::max<std::int64_t>(0, nowMs - request.enqueuedAtMs);
     const int aged = base - static_cast<int>(waitedMs / kPriorityAgingMs);
@@ -401,6 +435,7 @@ IcomCivScheduler::ResetResult IcomCivScheduler::reset(TerminalOutcome outcome) n
     m_lastDispatchMs = 0;
     m_inFlightAtMs = 0;
     m_backgroundSinceMeter = false;
+    m_lastBackgroundDispatchMs = 0;
     m_stats = Stats{};
     return result;
 }

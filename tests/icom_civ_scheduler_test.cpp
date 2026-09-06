@@ -314,9 +314,68 @@ int main()
             if (next->priority == Priority::ActiveMeter) {
                 ++meters;
             }
-            (void)scheduler.observe(ok(), now + 15);
+            check(scheduler.observe(ok(), now + 15) == IcomCivScheduler::Observation::Accepted,
+                  "injected reply frees each slow-cadence slot");
         }
         check(meters == 6, "slow cadence drains six meters by 300 ms");
+    }
+
+    // Yielding to overdue meters is a DELAY, NOT A HOLD.
+    //
+    // The two fixtures above enqueue a finite meter set, so the overdue
+    // condition necessarily clears once those meters drain and background work
+    // necessarily resumes. Production does not stop: MeterPoller re-arms each
+    // meter from the ANSWER, so on a link slower than the meter demand there is
+    // always a ready meter past its budget, the overdue condition never clears
+    // on its own, and a floor conditioned on it alone starves control
+    // reconciliation and the startup snapshot for the whole session rather than
+    // deferring them. Hold the meters permanently overdue and assert that
+    // background work still reaches the radio at the ceiling's rate.
+    {
+        IcomCivScheduler scheduler;
+        for (int i = 0; i < 40; ++i) {
+            scheduler.enqueue(read("background." + std::to_string(i), 0x16,
+                                   static_cast<std::uint8_t>(i), Priority::Control), 0);
+        }
+        int meters = 0;
+        int controls = 0;
+        long lastControlMs = -1;
+        long maxControlGapMs = 0;
+        // A meter is always queued and always past kMeterQueueBudgetMs: each
+        // one is enqueued a full budget in the past, exactly as a replenishing
+        // poller presents them.
+        for (int now = 2000; now <= 12000; now += 50) {
+            scheduler.enqueue(read("meter." + std::to_string(now), 0x15,
+                                   static_cast<std::uint8_t>(now % 8), Priority::ActiveMeter),
+                              now - IcomCivScheduler::kMeterQueueBudgetMs);
+            const auto next = scheduler.takeNext(now);
+            if (!next) {
+                continue;
+            }
+            if (next->priority == Priority::ActiveMeter) {
+                ++meters;
+            } else if (next->priority == Priority::Control) {
+                ++controls;
+                if (lastControlMs >= 0) {
+                    maxControlGapMs = std::max(maxControlGapMs,
+                                               static_cast<long>(now) - lastControlMs);
+                }
+                lastControlMs = now;
+            }
+            check(scheduler.observe(ok(), now + 5) == IcomCivScheduler::Observation::Accepted,
+                  "injected reply frees each sustained-load slot");
+        }
+        check(meters > 0, "meters still dominate the sustained-load stream");
+        check(controls > 0,
+              "background work is not held off indefinitely by permanently overdue meters");
+        // The ceiling is the contract: background work waits for it, and no
+        // longer. Allow one dispatch slot of slack on either side.
+        check(maxControlGapMs > 0
+                  && maxControlGapMs <= IcomCivScheduler::kBackgroundStarvationCeilingMs
+                         + IcomCivScheduler::kSlotMs * 2,
+              "each background dispatch lands within the starvation ceiling");
+        check(controls * 4 < meters,
+              "the admitted background rate stays well below the meter rate");
     }
 
     // Two DIFFERENT registers share the coarse "mode" semantic key on purpose,
