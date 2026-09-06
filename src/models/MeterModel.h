@@ -311,13 +311,21 @@ private:
     void recomputeSourceIndexMins();
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
     // for. Identity when the backend already declares dBFS.
-    float convertAlcToGaugeDbfs(float raw) const;
+    // Mirrors the Phone/CW gauge's floor without introducing a gui dependency.
+    static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+    static float convertAlcToGaugeDbfs(float raw, const QString& unit);
+    void registerTxWaveformMeter(const MeterDef& def, bool redefinition,
+                                 QMap<int, int>& byTxSource, QMap<int, int>& bySlice);
+    int resolveTxWaveformIndex(const QMap<int, int>& byTxSource,
+                               const QMap<int, int>& bySlice,
+                               bool allowSingleImplicit = false) const;
     bool isTxWaveformMeter(const MeterDef& def) const;
     bool hasExplicitTxWaveformSourceIndex(const MeterDef& def) const;
     int implicitTxWaveformSliceIndex() const;
     int txWaveformBase() const;
     int activeTxWaveformSourceIndex() const;
     int compPeakIndexForActiveTxSlice() const;
+    int swAlcIndexForActiveTxSlice() const;
     void logCompressionMeterMap(const MeterDef& def) const;
     void logCompressionSummary(const char* reason, bool force = false);
 
@@ -331,13 +339,14 @@ private:
     // Cached indices for fast lookup of important meters
     QMap<int, int> m_sLevelIdxBySlice;  // sliceIndex → meter index for "SLC"/"LEVEL"
     QMap<int, int> m_escLevelIdxBySlice; // sliceIndex → meter index for "SLC"/"ESC"
-    QMap<int, int> m_compPeakIdxByTxSource; // TX waveform sourceIndex → "COMPPEAK"
-    QMap<int, int> m_compPeakIdxBySlice;    // active slice → "COMPPEAK" for TX blocks with num=0
+    QMap<int, int> m_compPeakIdxByTxSource; // TX waveform sourceIndex → "COMPPEAK" fallback
+    QMap<int, int> m_compPeakIdxBySlice;    // preceding SLC manifest block → "COMPPEAK"
     int m_minSliceSourceIndex{-1};
     int m_minTxWaveformSourceIndex{-1};
-    int m_manifestSliceContext{-1};
+    int m_manifestSliceContext{-1}; // new definitions only; cleared by removal/non-TX blocks
     int m_activeTxSlice{-1};
-    // The UNIT each of these was DECLARED with, cached at definition time.
+    // The UNIT each directional-power meter was DECLARED with, cached at
+    // definition time. ALC resolves the unit from the active meter definition.
     //
     // Load-bearing, and the absence of it was a real defect. This model used to
     // interpret a meter purely by NAME and apply a unit it ASSUMED — FWDPWR was
@@ -350,7 +359,6 @@ private:
     // correctly reported both as fed.
     QString m_fwdPwrUnit;
     QString m_refPwrUnit;
-    QString m_swAlcUnit;
 
     int m_fwdPwrIdx{-1};     // "FWDPWR"
     int m_refPwrIdx{-1};     // "REFPWR"
@@ -359,14 +367,15 @@ private:
     int m_micLevelIdx{-1};   // "COD-" / "MIC" (hardware mic RX level)
     int m_compLevelIdx{-1};  // "TX" / "COMP" (instantaneous)
     int m_hwAlcIdx{-1};      // "TX" / "HWALC" — external RCA jack voltage
-    int m_swAlcIdx{-1};      // "TX" / "ALC"   — post-software-ALC SSB peak
+    QMap<int, int> m_swAlcIdxByTxSource; // TX waveform sourceIndex → "ALC" fallback
+    QMap<int, int> m_swAlcIdxBySlice;    // preceding SLC manifest block → "ALC"
     // Per-slice, exactly like COMPPEAK above: a radio can publish one TX
-    // waveform meter block PER ACTIVE SLICE (6600 uses distinct sourceIndex
-    // values, 8000 repeats "TX- num=0" after each SLC block). A single index
-    // per meter would be last-definition-wins, and the TX-filter check would
-    // silently watch some other slice's filter.
-    QMap<int, int> m_scMicIdxByTxSource;    // "TX" / "SC_MIC"    (explicit sourceIndex)
-    QMap<int, int> m_scMicIdxBySlice;       //                    (implicit, num=0)
+    // waveform meter block PER ACTIVE SLICE. TX- sourceIndex is not a slice-ID
+    // contract: models may use distinct values, repeated zero, or mixed 0/9.
+    // The preceding SLC block supplies the slice association. A single index
+    // per meter would be last-definition-wins and silently watch another slice.
+    QMap<int, int> m_scMicIdxByTxSource;    // "TX" / "SC_MIC" sourceIndex fallback
+    QMap<int, int> m_scMicIdxBySlice;       // preceding SLC manifest block
     QMap<int, int> m_scFilt1IdxByTxSource;  // "TX" / "SC_FILT_1"
     QMap<int, int> m_scFilt1IdxBySlice;
     QMap<int, int> m_scFilt2IdxByTxSource;  // "TX" / "SC_FILT_2"
@@ -406,7 +415,7 @@ private:
     float m_micLevel{-50.0f};
     float m_compLevel{0.0f};
     float m_hwAlc{0.0f};
-    float m_swAlc{0.0f};
+    float m_swAlc{kAlcGaugeFloorDbfs};
     float m_scMic{0.0f};
     float m_scFilt1{0.0f};
     float m_scFilt2{0.0f};

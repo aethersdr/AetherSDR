@@ -506,6 +506,21 @@ struct RadioCapabilities {
     // which is the same mistake read from the other end.
     bool takesTxAudioOverSeam = false;
 
+    // The backend publishes IRadioBackend::transmitChanged / keyingStateConfirmed
+    // from the RADIO'S OWN PTT readback, and a setKeying() command is intent
+    // only — it never moves the published keyed state by itself. A consumer
+    // that must not act before the transmitter is really keyed (a modem
+    // releasing sample zero, TCI's key confirmation) waits for
+    // RadioModel::radioTransmittingChanged / radioTransmitConfirmed instead of
+    // trusting the command edge, and RadioModel does not synthesise a
+    // command-edge fallback for such a backend.
+    //
+    // False for a backend with no readback plane (HL2), where the command edge
+    // is the only edge there is. Also false for Flex: its interlock status is
+    // decoded by RadioModel directly, not published through this seam.
+    // Icom: ✅ (decoded CI-V `1C 00`).
+    bool hasRadioPttReadback = false;
+
     // The RX filter widths this radio can actually reach, in Hz. EMPTY means
     // "continuous, or unknown" and the UI keeps its own configurable list.
     //

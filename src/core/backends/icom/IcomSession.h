@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QHostAddress>
 #include <QObject>
 #include <QSet>
@@ -34,6 +35,10 @@ class IcomSession : public QObject {
     Q_OBJECT
 
 public:
+    // Live IC-705 validation in #4799 matched kappanhang at 300 ms. Keep the
+    // session default and every drain calculation on this one source.
+    static constexpr quint16 kDefaultTxBufferMs = 300;
+
     struct Params {
         QHostAddress host;
         quint16 controlPort = kControlPort;
@@ -47,7 +52,7 @@ public:
         // radio with no TX codec, which is a stronger guarantee than simply
         // not sending audio — a receive-only session cannot key by accident.
         bool enableTx = true;
-        quint16 txBufferMs = 200;
+        quint16 txBufferMs = kDefaultTxBufferMs;
         // Production lease timing. Tests override these values to exercise the
         // renewal watchdog without waiting more than a minute.
         int tokenRenewalMs = 60000;
@@ -100,6 +105,14 @@ public:
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.
     void sendAudio(std::span<const float> mono);
+    // Complete the last 20 ms transport frame with silence. Returns bytes
+    // appended; the normal TX pump still sends the completed frame on cadence.
+    [[nodiscard]] std::size_t padTxAudioToFrame();
+    // Milliseconds of already-queued transmit audio still to be played: the
+    // host queue at wire cadence, plus the TX buffer the radio was asked to
+    // hold before its modulator. Measured from what is pending NOW, so a
+    // finite-stream caller holds PTT for what is actually queued.
+    [[nodiscard]] int txAudioDrainMs() const;
     // Discard queued transmit audio. Call on unkey.
     void flushTxAudio();
 
@@ -193,6 +206,11 @@ private:
 
     std::uint16_t m_serialSendSeq = 0;
     std::uint16_t m_audioSendSeq = 1;
+    // Wire clock for the transmit pump: frames owed since the current stream
+    // started flowing, so a late or coalesced tick can pay back what it missed
+    // (bounded) instead of leaving a permanent backlog. Invalid while idle.
+    QElapsedTimer m_txPumpClock;
+    qint64 m_txFramesSent = 0;
 
     CivReassembler m_civ;
     TxPacketizer m_tx;

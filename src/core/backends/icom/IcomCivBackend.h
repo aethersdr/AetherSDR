@@ -124,6 +124,7 @@ public:
     void setRitOffset(int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled) override;
+    int finishTxAudio() override;
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg = {}) override;
 
@@ -185,6 +186,9 @@ private:
 
     void queueTuneAudioFrame();
     [[nodiscard]] int stopTuneProducer();
+    // Commanded PTT intent inside its confirmation window, radio truth
+    // otherwise. See the definition for why neither alone is right.
+    [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
     [[nodiscard]] bool tunerSupported() const;
     bool sendTunerCommandIfSupported(bool start);
@@ -682,6 +686,17 @@ private:
     void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     LinkStats m_link;
+
+    // Armed only by AetherModem's explicit Capture 3m action. One buffer covers
+    // one modem transmission and contains the exact mono float PCM handed to
+    // IcomSession after rate conversion, immediately before RS-BA1 framing.
+    QString m_ax25PostResampleCapturePath;
+    QByteArray m_ax25PostResampleCapturePcm;
+    bool m_ax25PostResampleCaptureTruncated = false;
+    void appendAx25PostResampleCapture(std::span<const float> mono);
+    QVariantMap finishAx25PostResampleCapture();
+    static constexpr qsizetype kAx25PostResampleCaptureMaxBytes =
+        64 * 1024 * 1024;
 };
 
 }  // namespace AetherSDR::icom

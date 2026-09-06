@@ -1187,6 +1187,10 @@ signals:
     void networkQualityChanged(const QString& quality, int pingMs);
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
+    // Emitted only after the active backend has drained finite TX-audio state.
+    // drainMs is how much already-submitted audio (host queue plus radio
+    // buffer) is still to be played — hold PTT for that long, then the tail.
+    void txAudioFinished(quint64 token, int drainMs);
     // Emitted when the radio assigns a remote audio TX stream ID (voice/VOX).
     void remoteTxStreamReady(quint32 streamId);
     // Audio TX gate for sample pipeline (separate from optimistic MOX UI state).
@@ -1324,6 +1328,9 @@ public:
     // audio, whose level the sender owns (#4796).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled);
+    // Ordered completion barrier for a finite modem stream. The token lets the
+    // producer reject a stale completion from an aborted transmission.
+    void finishTxAudio(quint64 token);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1876,6 +1883,10 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Command-edge fallback for a backend with no radio TX readback. One that
+    // declares RadioCapabilities::hasRadioPttReadback (Icom) waits for the
+    // decoded backend edge instead.
+    void publishCommandedBackendTransmitEdge(bool tx);
     // Key-on guard for the MOX/TUNE seam paths, which do not run through
     // setTransmit() and therefore missed its canTransmit test. Returns true when
     // keying may proceed; on refusal it rolls back the optimistic transmit state

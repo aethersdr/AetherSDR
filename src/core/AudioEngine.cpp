@@ -9010,6 +9010,14 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     }
 }
 
+void AudioEngine::finishModemTxAudio(quint64 token)
+{
+    // This method is queued onto the AudioEngine thread after every modem PCM
+    // block. Emitting from here creates an ordered barrier: cross-thread
+    // txFinalMonitorPcmReady deliveries are already ahead of this event.
+    emit modemTxAudioFinished(token);
+}
+
 void AudioEngine::setDaxTxMode(bool on)
 {
     const bool previous = m_daxTxMode.exchange(on);

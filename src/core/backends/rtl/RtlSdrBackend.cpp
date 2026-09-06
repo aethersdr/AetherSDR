@@ -100,6 +100,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.canTransmit = false;
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = false;  // CRITICAL: must not open mic on connect (#4449)
+    c.hasRadioPttReadback = false;  // receive-only: nothing to key, nothing to read back
 
     // Receiver limits
     c.maxSlices = 1;
