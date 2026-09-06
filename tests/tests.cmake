@@ -2807,6 +2807,15 @@ add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test
 target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
 add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
 
+# #5353 — the RTTY decoder's enable flag: dismissing the pane with ✕ must
+# outlive the slice/frequency events that used to re-derive its visibility
+# from the mode, and must not clobber the sensitivity field it shares an
+# object with.
+add_executable(rtty_decode_settings_test tests/rtty_decode_settings_test.cpp)
+target_include_directories(rtty_decode_settings_test PRIVATE src tests)
+target_link_libraries(rtty_decode_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME rtty_decode_settings_test COMMAND rtty_decode_settings_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp

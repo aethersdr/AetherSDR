@@ -1,7 +1,6 @@
 #include "PanadapterApplet.h"
+#include "RttyDecodeSettings.h"
 #include "RttyDecoderSensitivity.h"
-#include <QJsonDocument>
-#include <QJsonObject>
 #include "CallsignCard.h"
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistPanel.h"
@@ -36,35 +35,6 @@
 #include <algorithm>
 
 namespace AetherSDR {
-
-namespace {
-
-// RTTY decoder sensitivity lives as one field of a single nested object under
-// the root key "RttyDecoder" (Constitution Principle V: new configuration is
-// never another loose flat key).  The pane's older Mark/Shift/Baud/Reverse
-// keys stay grandfathered as flat keys until they are migrated as a unit.
-const QString kRttyDecoderRootKey = QStringLiteral("RttyDecoder");
-const QString kRttySensitivityField = QStringLiteral("sensitivity");
-
-int readRttySensitivity()
-{
-    const QJsonObject o = QJsonDocument::fromJson(
-        AppSettings::instance().value(kRttyDecoderRootKey).toString().toUtf8()).object();
-    return qBound(0, o.value(kRttySensitivityField).toInt(kRttySensitivityDefault), 100);
-}
-
-void writeRttySensitivity(int v)
-{
-    auto& s = AppSettings::instance();
-    QJsonObject o = QJsonDocument::fromJson(
-        s.value(kRttyDecoderRootKey).toString().toUtf8()).object();
-    o.insert(kRttySensitivityField, v);
-    s.setValue(kRttyDecoderRootKey,
-               QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
-    s.save();
-}
-
-} // namespace
 
 PanadapterApplet::PanadapterApplet(QWidget* parent)
     : QWidget(parent)
@@ -523,14 +493,14 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
         "nothing is retuned and no audio changes."));
     m_rttySensSlider->setRange(0, 100);
-    const int savedRttySens = readRttySensitivity();
+    const int savedRttySens = RttyDecodeSettings::sensitivity();
     m_rttySensSlider->setValue(savedRttySens);
     m_rttySensSlider->setFixedWidth(60);
     applyPrimarySliderStyle(m_rttySensSlider);
     m_rttyConfThreshold = rttyConfThresholdFor(savedRttySens);
     connectSliderSetting(m_rttySensSlider,
         [this](int v) { m_rttyConfThreshold = rttyConfThresholdFor(v); },
-        [](int v) { writeRttySensitivity(v); });
+        [](int v) { RttyDecodeSettings::setSensitivity(v); });
     rttyBar->addWidget(m_rttySensSlider);
 
     // Stats
