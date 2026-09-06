@@ -18,6 +18,9 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QStatusBar>
 
 #include "AetherDspWidget.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -88,6 +91,33 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::wireStatusBarMessages()
+{
+    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
+    const int stationIndex = layout->indexOf(m_stationNickLabel);
+    connect(statusBar(), &QStatusBar::messageChanged, this,
+            [this, layout, stationIndex](const QString& message) {
+        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
+            // Only the existing Connect control is permanent while a message
+            // is shown. Making the full-width bar permanent hides Qt's text.
+            layout->removeWidget(m_stationNickLabel);
+            statusBar()->addPermanentWidget(m_stationNickLabel);
+            m_stationNickLabel->show();
+            // addPermanentWidget reformats the bar and can re-show normal
+            // children; explicitly leave Qt's temporary-message area clear.
+            m_statusBarContainer->hide();
+        } else if (message.isEmpty()
+                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
+            statusBar()->removeWidget(m_stationNickLabel);
+            layout->insertWidget(stationIndex, m_stationNickLabel);
+            m_stationNickLabel->show();
+            m_statusBarContainer->show();
+            updateStatusBarMinimumWidth();
+        }
+    });
+}
+
 
 namespace {
 
@@ -1599,6 +1629,7 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
             targetVfo->setHasManualNotch(m_radioModel.hasManualNotch());
             targetVfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
+            targetVfo->setRadioFilterControl(m_radioModel.radioFilterControl());
             targetVfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
@@ -2171,6 +2202,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         vfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
         vfo->setHasManualNotch(m_radioModel.hasManualNotch());
         vfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
+        vfo->setRadioFilterControl(m_radioModel.radioFilterControl());
         vfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
 
         wireVfoWidget(vfo, s);
@@ -5939,6 +5971,14 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 // MTR / HLTH / TX applet routing. Runs once at construction; kept in this
 // TU with the rest of the model→UI wiring.
 
+void MainWindow::wireModemAudioCompletion()
+{
+    connect(m_audio, &AudioEngine::modemTxAudioFinished,
+            this, [this](quint64 token) {
+        m_radioModel.finishTxAudio(token);
+    });
+}
+
 void MainWindow::wireMeters()
 {
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
@@ -6396,6 +6436,41 @@ void MainWindow::wireMeters()
         });
         connect(spe, &SpeApplet::driveUpClicked, this, [this]() {
             m_speConn.sendKey(AetherSDR::Spe::Key::RightArrow);
+        });
+        // FRONT PANEL group (floating layout): manual band, the amp-menu SET
+        // key, and manual ATU L/C stepping — each a literal keystroke.
+        connect(spe, &SpeApplet::bandDownClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandDown);
+        });
+        connect(spe, &SpeApplet::bandUpClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandUp);
+        });
+        connect(spe, &SpeApplet::setKeyClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::Set);
+        });
+        connect(spe, &SpeApplet::lMinusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LMinus);
+        });
+        connect(spe, &SpeApplet::lPlusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LPlus);
+        });
+        connect(spe, &SpeApplet::cMinusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::CMinus);
+        });
+        connect(spe, &SpeApplet::cPlusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::CPlus);
+        });
+        // LCD mirror: poll only while the floating presentation shows it.
+        connect(spe, &SpeApplet::lcdPollingWanted, this, [this](bool wanted) {
+            m_speConn.setLcdPolling(wanted);
+        });
+        connect(&m_speConn, &SpeConnection::lcdFrameReceived, this,
+                [this](const AetherSDR::Spe::Lcd::Frame& frame) {
+            m_appletPanel->speApplet()->setLcdFrame(frame);
+        });
+        connect(&m_speConn, &SpeConnection::lcdFreshChanged, this,
+                [this](bool fresh) {
+            m_appletPanel->speApplet()->setLcdFresh(fresh);
         });
     }
 

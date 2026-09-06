@@ -460,6 +460,16 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     // Transmit state changes → update sliders, tune button
     connect(m_model, &TransmitModel::stateChanged, this, &TxApplet::syncFromModel);
 
+    const auto updateTuneAvailability = [this]() {
+        const bool available = m_model->tuneAvailable() || m_model->isTuning();
+        m_tuneBtn->setEnabled(available);
+        m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
+            : tr("Tune carrier is unavailable in this mode through the current radio backend"));
+    };
+    connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
+    connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);
+    updateTuneAvailability();
+
     // Tune state → red button
     connect(m_model, &TransmitModel::tuneChanged, this, [this](bool tuning) {
         if (tuning) {

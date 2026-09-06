@@ -8,6 +8,7 @@
 #include "Theme.h"
 #include "core/AppSettings.h"
 
+#include <cmath>
 #include <QPushButton>
 #include <QAccessible>
 #include <QStyle>
@@ -256,7 +257,7 @@ void PhoneCwApplet::buildPhonePanel()
     vbox->addWidget(m_compGauge);
 
     // ── ALC gauge (post-SW-ALC SSB-peak, dBFS) ──────────────────────────
-    // Mirrored in m_cwPanel; both gauges read from MeterModel::swAlcChanged
+    // Mirrored in m_cwPanel; both gauges read from MeterModel::alcValueChanged
     // so SSB operators watching mic gain see the same indicator CW
     // operators use to verify clean keying envelope shape.
     m_alcGaugePhone = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
@@ -536,6 +537,33 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
 
 // ── CW sub-panel ─────────────────────────────────────────────────────────────
 
+void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
+                                      int maxPitchHz, int pitchStepHz)
+{
+    if (minWpm > maxWpm || minPitchHz > maxPitchHz || pitchStepHz < 1) {
+        return;
+    }
+    // Changing sessions must not turn a range clamp into a radio command.
+    const QSignalBlocker blocker(m_speedSlider);
+    m_speedSlider->setRange(minWpm, maxWpm);
+    auto* speedValidator = qobject_cast<QIntValidator*>(
+        const_cast<QValidator*>(m_speedEdit->validator()));
+    speedValidator->setRange(minWpm, maxWpm);
+    if (!m_speedEdit->hasFocus() || !m_speedEdit->hasAcceptableInput()) {
+        m_speedEdit->setText(QString::number(m_speedSlider->value()));
+    }
+    m_speedEdit->setAccessibleDescription(
+        tr("CW keying speed in words per minute, %1 to %2").arg(minWpm).arg(maxWpm));
+    m_pitchMinHz = minPitchHz;
+    m_pitchMaxHz = maxPitchHz;
+    m_pitchStepHz = pitchStepHz;
+    auto* pitchValidator = qobject_cast<QIntValidator*>(
+        const_cast<QValidator*>(m_pitchEdit->validator()));
+    pitchValidator->setRange(minPitchHz, maxPitchHz);
+    m_pitchEdit->setAccessibleDescription(
+        tr("CW sidetone pitch in Hz, %1 to %2").arg(minPitchHz).arg(maxPitchHz));
+}
+
 void PhoneCwApplet::buildCwPanel()
 {
     m_cwPanel = new QWidget;
@@ -545,8 +573,8 @@ void PhoneCwApplet::buildCwPanel()
 
     // ── ALC gauge (post-SW-ALC SSB-peak, dBFS) ──────────────────────────
     // Mirrors the Phone-panel ALC gauge — both read from the same
-    // MeterModel::swAlcChanged source.  Range covers normal operating
-    // window (-20…0 dBFS); excessive ALC pins at 0.
+    // MeterModel::alcValueChanged source.  Range covers normal operating
+    // window by default (-20…0 dBFS); capabilities select native percent.
     m_alcGaugeCw = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugeCw->setFillFromRight(true);  // empty at -20, fills leftward toward 0
@@ -641,7 +669,7 @@ void PhoneCwApplet::buildCwPanel()
                 m_model->setCwSpeed(v);
         });
         connect(m_speedEdit, &QLineEdit::editingFinished, this, [this]() {
-            int v = qBound(5, m_speedEdit->text().toInt(), 100);
+            int v = qBound(m_speedSlider->minimum(), m_speedEdit->text().toInt(), m_speedSlider->maximum());
             m_speedEdit->setText(QString::number(v));
             m_speedSlider->setValue(v);
         });
@@ -791,24 +819,24 @@ void PhoneCwApplet::buildCwPanel()
                 m_model->setCwIambic(on);
         });
 
-        // Pitch steps by 10 Hz (matching SmartSDR).
+        // Pitch steps and bounds follow the connected radio capabilities.
         // Read current value from the edit so rapid clicks accumulate
         // correctly without waiting for the radio roundtrip.
         connect(m_pitchDown, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
-            int hz = qBound(100, m_pitchEdit->text().toInt() - 10, 6000);
+            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt() - m_pitchStepHz, m_pitchMaxHz);
             m_model->setCwPitch(hz);
             m_pitchEdit->setText(QString::number(hz));
         });
         connect(m_pitchUp, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
-            int hz = qBound(100, m_pitchEdit->text().toInt() + 10, 6000);
+            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt() + m_pitchStepHz, m_pitchMaxHz);
             m_model->setCwPitch(hz);
             m_pitchEdit->setText(QString::number(hz));
         });
         connect(m_pitchEdit, &QLineEdit::editingFinished, this, [this]() {
             if (!m_model) return;
-            int hz = qBound(100, m_pitchEdit->text().toInt(), 6000);
+            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt(), m_pitchMaxHz);
             m_pitchEdit->setText(QString::number(hz));
             m_model->setCwPitch(hz);
         });
@@ -1194,19 +1222,82 @@ void PhoneCwApplet::resetLevelMeter()
     m_levelGauge->clearPeak();
 }
 
+void PhoneCwApplet::setCompressionMaximumDb(float maximum)
+{
+    if (!std::isfinite(maximum) || maximum <= 0.0f || maximum == m_compressionMaximumDb) {
+        return;
+    }
+    m_compressionMaximumDb = maximum;
+    QVector<HGauge::Tick> ticks;
+    for (float value = maximum; value > 0.0f; value -= 5.0f) {
+        ticks.append({-value, value == maximum
+            ? QStringLiteral("-%1dB").arg(value) : QString::number(-value)});
+    }
+    ticks.append({0.0f, QStringLiteral("0")});
+    m_compGauge->setRange(-maximum, 0.0f, 1.0f, ticks);
+}
+
 void PhoneCwApplet::updateCompression(float compPeak)
 {
-    // MeterModel exposes COMPPEAK as a positive 0..25 dB compression amount.
-    // The P/CW gauge face is reversed: 0 = none, -25 = full.
-    const float compressionDb = qBound(0.0f, compPeak, 25.0f);
+    // MeterModel exposes a positive physical amount; the face fills in reverse.
+    const float compressionDb = qBound(0.0f, compPeak, m_compressionMaximumDb);
     m_compGauge->setValue(-compressionDb);
+}
+
+void PhoneCwApplet::setAlcMeterUnit(const QString& unit)
+{
+    if (unit == m_alcMeterUnit) {
+        return;
+    }
+    if (unit != QLatin1String("Percent") && unit != QLatin1String("dBFS")) {
+        return;
+    }
+    m_alcMeterUnit = unit;
+    const bool percent = unit == QLatin1String("Percent");
+    const QVector<HGauge::Tick> ticks = percent
+        ? QVector<HGauge::Tick>{{0, "0"}, {25, "25"}, {50, "50"}, {75, "75"}, {100, "100"}}
+        : QVector<HGauge::Tick>{{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}};
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (!gauge) {
+            continue;
+        }
+        gauge->setUnit(percent ? QStringLiteral("%") : QStringLiteral("dBFS"));
+        gauge->setRange(percent ? 0.0f : -20.0f, percent ? 100.0f : 0.0f,
+                        percent ? 85.0f : -3.0f, ticks);
+        gauge->setAccessibleDescription(percent
+            ? tr("Automatic level control — radio-reported percent")
+            : tr("Automatic level control — post-software-ALC SSB peak (dBFS)"));
+        gauge->setHoverValueFormatter(percent
+            ? std::function<QString(float)>([](float value) {
+                return QStringLiteral("%1 %").arg(QString::number(value, 'f', 1));
+              }) : alcHoverFormatter());
+    }
+    // A unit change invalidates the old animation coordinates immediately.
+    const float floor = percent ? 0.0f : kAlcGaugeFloorDbfs;
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (gauge) {
+            gauge->setValueImmediate(floor);
+            gauge->clearPeak();
+        }
+    }
+}
+
+void PhoneCwApplet::resetAlc()
+{
+    const float floor = m_alcMeterUnit == QLatin1String("Percent") ? 0.0f : -20.0f;
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (gauge) {
+            gauge->setValue(floor);
+            gauge->clearPeak();
+        }
+    }
 }
 
 void PhoneCwApplet::updateAlc(float alc)
 {
-    // Single source (MeterModel::swAlcChanged) → both panel mirrors.
-    // HGauge clamps to its construction range, so values outside [-20, 0]
-    // pin at the appropriate end.
+    // Single source (MeterModel::alcValueChanged) → both panel mirrors.
+    // HGauge clamps to the capability-selected native range: percent for
+    // Icom and the existing dBFS range for host ALC.
     if (m_alcGaugePhone) m_alcGaugePhone->setValue(alc);
     if (m_alcGaugeCw)    m_alcGaugeCw->setValue(alc);
 }

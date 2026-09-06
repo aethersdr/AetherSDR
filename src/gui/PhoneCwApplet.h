@@ -36,6 +36,9 @@ public:
     // and read as a fault rather than as an absence.
     void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setDaxVisible(bool visible);
+    void setCompressionMaximumDb(float maximum);
+    void setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
+                           int maxPitchHz, int pitchStepHz);
     void setSpeechProcessorPresentation(const QString& label, int maximum);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
@@ -82,6 +85,8 @@ public slots:
 
     // CW meter (ALC 0–100)
     void updateAlc(float alc);
+    void setAlcMeterUnit(const QString& unit);
+    void resetAlc();
 
     // Switch between Phone and CW sub-panels based on slice mode.
     void setMode(const QString& mode);
@@ -158,6 +163,11 @@ private:
     QPushButton* m_breakinBtn{nullptr};
     QPushButton* m_iambicBtn{nullptr};
 
+    QString m_alcMeterUnit{QStringLiteral("dBFS")};
+    float m_compressionMaximumDb{25.0f};
+    int m_pitchMinHz{100};
+    int m_pitchMaxHz{6000};
+    int m_pitchStepHz{10};
     QLineEdit*   m_pitchEdit{nullptr};
     QPushButton* m_pitchDown{nullptr};
     QPushButton* m_pitchUp{nullptr};

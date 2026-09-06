@@ -247,7 +247,7 @@ from Tune Power, not RF Power.
 |---|---|---|
 | ADC overload | `0x00[24]` | clipping the converter; invisible in any audio meter |
 | ADC clip count | discovery `0x1B[1:0]` | saturating counter — "did we clip at all recently" |
-| TX IQ FIFO depth | RADDR `0x00` | the oracle calls it the most important number in the protocol |
+| TX IQ FIFO status | RADDR `0x00`, `DATA[15:8]` | recovery flag + coarse fill (top 7 bits), **not a depth** — see `MetisProtocol.cpp`. Not servo-ready |
 | TX inhibit | `0x00[25]`, **active low** | the radio refusing to key, distinct from us not asking |
 
 ---

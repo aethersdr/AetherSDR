@@ -118,6 +118,12 @@ static void testPowerAndOthers()
     check(meterValue(MeterId::Swr, 200, 0) > 3.5, "a severe mismatch reads above 3.0");
 
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
+    check(near(meterValue(MeterId::Comp, 210, 0, MeterCalibration::Ic7300Mk2), 30.0),
+          "IC-7300MK2 COMP raw210 is30dB");
+    check(near(meterValue(MeterId::Comp, 170, 0, MeterCalibration::Ic7300Mk2), 22.5),
+          "IC-7300MK2 COMP interpolates its own upper segment");
+    check(near(meterValue(MeterId::Comp, 210, 0, MeterCalibration::Ic705), 25.5),
+          "IC-705 COMP calibration remains unchanged");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
     check(near(meterValue(MeterId::Vd, 13, 0, MeterCalibration::Ic7300Mk2), 10.0),
@@ -299,7 +305,7 @@ static void testPolledTxMeterMinimumHold()
 
 static void testModelTable()
 {
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    const IcomModel* ic705 = modelForId(0xA4);
     check(ic705 != nullptr, "the IC-705 is in the table");
     check(ic705 && ic705->name == "IC-705", "by name");
     check(ic705 && ic705->verified, "and its numbers are tier-1 verified");
@@ -311,7 +317,7 @@ static void testModelTable()
 
     // Geometry genuinely varies, which is why it cannot be a compile-time
     // constant shared across models.
-    const IcomModel* ic7610 = modelForCivAddress(0x98);
+    const IcomModel* ic7610 = modelForId(0x98);
     check(ic7610 && ic7610->scopePoints == 689 && ic7610->scopeMaxAmplitude == 200,
           "the IC-7610 has a DIFFERENT scope geometry");
     check(ic7610 && !ic7610->verified, "and is honestly marked unverified");
@@ -324,7 +330,7 @@ static void testModelTable()
     // flag is true. Without the flag, selecting FM-D falls to the legacy 06
     // branch, which sends no DATA byte and takes the radio back OUT of data
     // mode — the failure #4931 reported, on the radio that reported it.
-    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* ic9700 = modelForId(0xA2);
     check(ic9700 != nullptr, "the IC-9700 is in the table");
     check(ic9700 && !ic9700->verified,
           "its geometry is cross-referenced, not confirmed against its own guide");
@@ -333,18 +339,18 @@ static void testModelTable()
 
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.
-    const IcomModel* ic905 = modelForCivAddress(0xAC);
+    const IcomModel* ic905 = modelForId(0xAC);
     check(ic905 && ic905->freqBytes == 6, "the IC-905 uses 6-byte frequencies");
 
     // No RS-BA1 transport — reachable over serial, or via Icom's own server.
-    const IcomModel* ic7300 = modelForCivAddress(0x94);
+    const IcomModel* ic7300 = modelForId(0x94);
     check(ic7300 && !ic7300->hasNetwork, "the IC-7300 has no network transport");
 
     // The MK2 is the same radio family with a LAN port bolted on, and that one
     // difference is what puts it in reach of this backend directly rather than
     // through Icom's RS-BA1 server. Verified from its own CI-V guide, whose
     // frame diagram reads FE FE E0 B6.
-    const IcomModel* mk2 = modelForCivAddress(0xB6);
+    const IcomModel* mk2 = modelForId(0xB6);
     check(mk2 != nullptr, "the IC-7300MK2 is in the table");
     check(mk2 && mk2->name == "IC-7300MK2", "by name");
     check(mk2 && mk2->hasNetwork, "and unlike the original IC-7300 it HAS a network transport");
@@ -372,7 +378,7 @@ static void testModelTable()
     // a number Icom published.
     check(15 + mk2->scopePoints == 490, "15-byte header + 475 points == the published 490");
 
-    check(modelForCivAddress(0x01) == nullptr,
+    check(modelForId(0x01) == nullptr,
           "an unrecognised address resolves to nothing — a normal outcome, not an error");
     check(!knownModels().empty(), "the table is populated");
     if (ic9700) {
@@ -404,7 +410,7 @@ static void testModelTable()
         // and that emptiness is what keeps its tune path untouched. #5116
         // names both of these as non-goals.
         for (const std::uint8_t addr : {std::uint8_t(0xA4), std::uint8_t(0xB6)}) {
-            const IcomModel* m = modelForCivAddress(addr);
+            const IcomModel* m = modelForId(addr);
             check(m && bandsFor(*m).empty(),
                   "a continuous model (IC-705, IC-7300MK2) declares no band "
                   "table, so the IC-9700 gate cannot reach it");
@@ -451,7 +457,7 @@ static void testModelTable()
     // no longer set the flag.
     check(std::all_of(kAttestedVfoMode.begin(), kAttestedVfoMode.end(),
                       [](std::uint8_t addr) {
-                          const IcomModel* m = modelForCivAddress(addr);
+                          const IcomModel* m = modelForId(addr);
                           return m && profileFor(*m).supports(IcomFeature::VfoMode);
                       }),
           "every attested address is a real model that actually sets the flag");
@@ -473,9 +479,9 @@ static void testUnknownModelIsConservative()
 
 static void testCapabilityProfiles()
 {
-    const IcomModel& ic705 = *modelForCivAddress(0xA4);
-    const IcomModel& ic9700 = *modelForCivAddress(0xA2);
-    const IcomModel& mk2 = *modelForCivAddress(0xB6);
+    const IcomModel& ic705 = *modelForId(0xA4);
+    const IcomModel& ic9700 = *modelForId(0xA2);
+    const IcomModel& mk2 = *modelForId(0xB6);
     const IcomModelProfile& p705 = profileFor(ic705);
     const IcomModelProfile& p9700 = profileFor(ic9700);
     const IcomModelProfile& pMk2 = profileFor(mk2);
@@ -544,9 +550,9 @@ static void testCapabilityProfiles()
     const ControlSpec* dtcs = spec("repeater.dtcs");
     const ControlSpec* gpsPosition = spec("gps.position");
     const ControlSpec* gpsNtpServer = spec("gps.ntp.server");
-    const IcomModel& model705 = *modelForCivAddress(0xA4);
-    const IcomModel& model9700 = *modelForCivAddress(0xA2);
-    const IcomModel& modelMk2 = *modelForCivAddress(0xB6);
+    const IcomModel& model705 = *modelForId(0xA4);
+    const IcomModel& model9700 = *modelForId(0xA2);
+    const IcomModel& modelMk2 = *modelForId(0xB6);
     check(rxAntenna && !controlSupported(model705, p705, *rxAntenna)
               && controlSupported(modelMk2, pMk2, *rxAntenna),
           "effective registry gates RX-ANT to the IC-7300MK2 profile");
@@ -564,7 +570,7 @@ static void testCapabilityProfiles()
               && controlSupported(model705, p705, *dtcs)
               && !controlSupported(modelMk2, pMk2, *dtcs),
           "DTCS write/read wiring is effective only for documented model profiles");
-    const IcomModel& identityOnly = *modelForCivAddress(0x98);
+    const IcomModel& identityOnly = *modelForId(0x98);
     const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
     const ControlSpec* frequency = spec("freq");
     const ControlSpec* scopeMode = spec("scope.onoff");
@@ -600,9 +606,9 @@ static void testModelDiscovery()
 
 static void testPowerCurveIsNotShared()
 {
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
-    const IcomModel* ic9700 = modelForCivAddress(0xA2);
-    const IcomModel* ic7300mk2 = modelForCivAddress(0xB6);
+    const IcomModel* ic705 = modelForId(0xA4);
+    const IcomModel* ic9700 = modelForId(0xA2);
+    const IcomModel* ic7300mk2 = modelForId(0xB6);
     check(ic705 && !powerCurveFor(*ic705).empty(), "the IC-705 has a measured watts curve");
     // Handing back the IC-705's curve for another radio would produce a watts
     // figure an operator would act on, derived from a different PA. The 9700
@@ -654,7 +660,7 @@ static void testPowerCurveIsNotShared()
 // compiled-in FlexRadio one — which has no WFM because a FLEX-6000 has no WFM.
 static void testModeList()
 {
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    const IcomModel* ic705 = modelForId(0xA4);
     check(ic705 != nullptr, "the IC-705 is in the table");
     if (!ic705)
         return;
@@ -685,8 +691,8 @@ static void testModeList()
 
     // The same provenance rule powerCurveFor states: a row nobody has read that
     // model's own guide for gets NOTHING, not the IC-705's list.
-    const IcomModel* ic9700 = modelForCivAddress(0xA2);
-    const IcomModel* mk2 = modelForCivAddress(0xB6);
+    const IcomModel* ic9700 = modelForId(0xA2);
+    const IcomModel* mk2 = modelForId(0xB6);
     check(ic9700 && modeListFor(*ic9700).empty(), "another model gets no borrowed list");
     check(mk2 && modeListFor(*mk2).empty(), "including the verified IC-7300MK2");
     check(modeListFor(unknownModel()).empty(), "and nor does an unknown radio");
@@ -695,7 +701,7 @@ static void testModeList()
 // WFM receives 76-108 MHz broadcast; the transmitter does not follow.
 static void testWfmIsReceiveOnly()
 {
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    const IcomModel* ic705 = modelForId(0xA4);
     check(ic705 && modeIsReceiveOnly(*ic705, "WFM"), "the IC-705 does not transmit in WFM");
     check(ic705 && !modeIsReceiveOnly(*ic705, "FM"), "but FM keys normally");
     check(ic705 && !modeIsReceiveOnly(*ic705, "USB"), "and so does USB");

@@ -157,6 +157,20 @@ public:
     static constexpr int kSlotMs = 25;
     static constexpr int kReadTimeoutMs = 350;
     static constexpr int kPriorityAgingMs = 1000;
+    static constexpr int kMeterQueueBudgetMs = 100;
+    // The ceiling on how long overdue meters may hold background work off.
+    // Without it, meters that replenish faster than the link drains them keep
+    // kMeterQueueBudgetMs satisfied forever and background aging never fires
+    // again — which is starvation, not pacing.
+    //
+    // 1500 ms is where the two pressures stop trading against each other.
+    // Measured on the production scheduler and poller over 60 s of sustained
+    // TX with every meter visible, worst-case forward-power age is 620/710/1190
+    // ms at 63/75/100 ms round trip — matching an unbounded hold to the
+    // millisecond at 63 and 75 ms — while control reconciliation still lands
+    // ~39-45 times a minute instead of never. Raising it further buys no
+    // freshness at all (the ages plateau) and only costs background progress.
+    static constexpr int kBackgroundStarvationCeilingMs = 1500;
     // How long a timed-out or displaced transaction stays recognisable, so a
     // late answer is still generation-checked rather than adopted as fresh
     // radio truth. Comfortably longer than kReadTimeoutMs and shorter than the
@@ -183,7 +197,8 @@ private:
     [[nodiscard]] static bool sameReplyShape(const Request& a, const Request& b) noexcept;
     [[nodiscard]] bool matches(const CivFrame& frame, const Queued& request) const noexcept;
     [[nodiscard]] Priority effectivePriority(const Queued& request,
-                                             std::int64_t nowMs) const noexcept;
+                                             std::int64_t nowMs,
+                                             bool yieldToMeters) const noexcept;
     void expireRead(std::int64_t nowMs);
     void dropStaleExpired(std::int64_t nowMs);
     void recordTransaction(const Queued& request, Completion completion,
@@ -202,6 +217,12 @@ private:
     std::uint64_t m_sequence = 0;
     std::int64_t m_lastDispatchMs = 0;
     std::int64_t m_inFlightAtMs = 0;
+    // Background aging may win one meter-band slot, then yields until an
+    // actual meter is dispatched. PTT/operator traffic does not reset it.
+    bool m_backgroundSinceMeter = false;
+    // When background work last reached the radio, so yielding to overdue
+    // meters stays a delay rather than an indefinite hold.
+    std::int64_t m_lastBackgroundDispatchMs = 0;
     Stats m_stats;
     std::deque<TransactionEvent> m_recentTransactions;
 };

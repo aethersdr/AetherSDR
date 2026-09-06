@@ -33,6 +33,8 @@ public:
     // Hide the complete DEXP row when the connected backend has no
     // authoritative downward-expander command path.
     void setDexpVisible(bool visible);
+    void setAmCarrierAvailable(bool available);
+    void setVoxDelayAvailable(bool available);
 
     // The TX passband edges the connected radio can actually reach, ascending
     // (RadioCapabilities::txFilterLowEdgesHz / txFilterHighEdgesHz). Empty
@@ -54,6 +56,9 @@ private:
     void syncFromModel();
 
     TransmitModel* m_model{nullptr};
+
+    QWidget* m_amCarrierRow{nullptr};
+    QWidget* m_voxDelayRow{nullptr};
 
     // AM Carrier
     GuardedSlider* m_amCarrierSlider{nullptr};

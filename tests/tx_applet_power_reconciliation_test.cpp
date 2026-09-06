@@ -351,6 +351,32 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && memory->styleSheet() != activeMemoryStyle);
 }
 
+void testTuneAvailability()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    auto* tune = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("Tune")));
+    report("Tune button exists", tune != nullptr);
+    if (!tune) {
+        return;
+    }
+    QSignalSpy commands(&model, &TransmitModel::commandReady);
+    model.setTuneAvailable(false);
+    report("unsupported Tune button is disabled", !tune->isEnabled());
+    model.startTune();
+    model.startTwoToneTune();
+    report("both Tune paths refuse without commands or optimistic state",
+           commands.isEmpty() && !model.isTuning());
+    model.setTuneAvailable(true);
+    report("capable mode restores Tune", tune->isEnabled());
+    model.startTune();
+    model.setTuneAvailable(false);
+    report("active Tune retains an enabled stop control", tune->isEnabled() && model.isTuning());
+    tune->click();
+    report("stop remains usable and restores disabled state", !model.isTuning() && !tune->isEnabled());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -377,6 +403,7 @@ int main(int argc, char** argv)
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
     testAtuCapabilityUsesThreeVisibleStates();
+    testTuneAvailability();
 
     std::printf("\n%s\n",
                 g_failed == 0

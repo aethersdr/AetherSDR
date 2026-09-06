@@ -16,6 +16,14 @@
 #include <cstdio>
 #include <vector>
 
+namespace AetherSDR::hl2 {
+struct MetisClientTestAccess {
+    // No start(), bind(), peer or datagrams: inject streaming state and inspect
+    // packets using the same builder as the transport.
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+};
+}
+
 using namespace AetherSDR::hl2;
 
 static int g_failures = 0;
@@ -54,6 +62,43 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     MetisClient client;
+
+    {
+        MetisClient board;
+        const auto isBoardWrite = [](const auto& packet) {
+            return (packet[8 + kFrameSize + 3] & ~kC0MoxBit) == kC0I2c2;
+        };
+        board.setIoBoardTxFrequencyHz(7'100'000);
+        check(!isBoardWrite(board.buildNextControlPacket()),
+              "disconnected IO-board request queues nothing");
+        MetisClientTestAccess::setStreaming(board);
+        board.setIoBoardTxFrequencyHz(7'100'000);
+        check(isBoardWrite(board.buildNextControlPacket()), "connected IO-board push reaches packet builder");
+        board.stop(); // interrupt after only the MSB: four stale banks remain
+        for (int i = 0; i < 8; ++i) {
+            check(!isBoardWrite(board.buildNextControlPacket()),
+                  "stop discards every unfinished IO-board bank");
+        }
+        MetisClientTestAccess::setStreaming(board);
+        board.setIoBoardTxFrequencyHz(7'100'000);
+        for (int reg = 0; reg < 5; ++reg) {
+            const auto packet = board.buildNextControlPacket();
+            check(isBoardWrite(packet), "same frequency is resent after session reset");
+            check(packet[8 + kFrameSize + 6] == reg, "session restarts at MSB and commits LSB last");
+            check(!anyFrameKeyed(packet), "IO-board writes never key an unkeyed transmitter");
+        }
+        board.enableTransmit(true);
+        board.setMox(true);
+        board.setIoBoardTxFrequencyHz(14'225'000);
+        bool sawBoard = false;
+        for (int i = 0; i < 12; ++i) {
+            const auto packet = board.buildNextControlPacket();
+            sawBoard = sawBoard || isBoardWrite(packet);
+            check(anyFrameKeyed(packet), "IO-board update preserves explicit key state");
+        }
+        check(sawBoard, "IO-board band update is not withheld while keyed");
+        board.setMox(false);
+    }
 
     check(!client.transmitEnabled(), "transmit is DISABLED by default");
     check(!client.isKeyed(), "not keyed by default");

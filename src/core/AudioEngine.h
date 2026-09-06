@@ -41,6 +41,8 @@ class QMediaDevices;
 
 namespace AetherSDR {
 
+struct RadioCapabilities;
+
 class SpecbleachFilter;
 class RNNoiseFilter;
 class DeepFilterFilter;
@@ -135,6 +137,10 @@ public:
     // test tone as well, since the tone is injected inside that callback.
     Q_INVOKABLE void setHostModulation(bool on) { m_hostModulation = on; }
     bool hostModulation() const { return m_hostModulation; }
+    // Called on the audio thread for connection and capability revisions.
+    void applyBackendAudioCapabilities(bool connected, const RadioCapabilities& caps,
+                                       bool pcAudioEnabled, const QHostAddress& address);
+
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
@@ -281,6 +287,9 @@ public:
 
     // Sends RADE modem output (float32 PCM) as VITA-49 packets via m_txSocket
     void sendModemTxAudio(const QByteArray& float32pcm);
+    // Queue behind the last modem block. The token crosses the radio seam so a
+    // finite-stream backend can drain conversion state before PTT is released.
+    Q_INVOKABLE void finishModemTxAudio(quint64 token);
 
     // DAX TX: VirtualAudioBridge feeds float32 PCM for VITA-49 TX
     void setDaxTxMode(bool on);
@@ -713,6 +722,7 @@ signals:
     // or meter the stream can ignore the flag (Qt permits connecting to a slot
     // with fewer arguments).
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo, bool clientLeveled);
+    void modemTxAudioFinished(quint64 token);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
     // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
