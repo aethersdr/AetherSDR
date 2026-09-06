@@ -159,7 +159,10 @@ embedders need not provide a discovery source. No new wire method is added.
   - `serial`: nonempty, at most 128 UTF-16 code units.
   - `name`, `model`, `nickname`, `version`: display observations, each at most
     128 UTF-16 code units; empty means unavailable. Native discovery's existing
-    client-owned nickname behavior is retained for families that use it.
+    client-owned nickname behavior is retained for families that use it. Which
+    of these a family populates differs — a Flex publishes an empty `name`, and
+    the simulator an empty `nickname` — so a client renders the first nonempty
+    of `nickname`, `name`, `model`, and falls back to `serial`.
   - `transport`: `lan`, `usb`, or `sim`.
   - `address`, `port`: numeric IP address (at most 64 code units) and port
     1–65535 for LAN; empty address and zero port for USB/simulator.

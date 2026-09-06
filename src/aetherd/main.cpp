@@ -8,8 +8,6 @@
 #include <QCoreApplication>
 #include <QTextStream>
 
-#include <utility>
-
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -36,14 +34,9 @@ int main(int argc, char* argv[])
     parser.addOption(simDiscoveryOption);
     parser.process(app);
 
-    std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
-        AetherSDR::aetherd::makeDiscoverySource(
-            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     AetherSDR::control::LocalControlServer server;
-    AetherSDR::control::RadioCatalogue catalogue(
-        std::move(discoverySource), &server.resourceStore());
     [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
         &radioSession.radioModel(), &server.resourceStore(),
         QStringLiteral("radio-1"));
@@ -52,6 +45,13 @@ int main(int argc, char* argv[])
                             << parser.value(socketOption) << "'\n";
         return 1;
     }
+    // Constructed only once the endpoint is ours: makeDiscoverySource() loads
+    // the shared settings store for --discover-local, and a daemon that never
+    // serves a request must not create or migrate the operator's store.
+    AetherSDR::control::RadioCatalogue catalogue(
+        AetherSDR::aetherd::makeDiscoverySource(
+            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)}),
+        &server.resourceStore());
     catalogue.start();
     return app.exec();
 }
