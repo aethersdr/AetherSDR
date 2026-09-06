@@ -88,7 +88,7 @@ if(APPLE)
         # /opt/homebrew/include outranks every vendored include dir in the tree.
         # Any Homebrew formula whose headers share a basename with a vendored one
         # then silently wins, reversing the choice USE_SYSTEM_* made in CMake:
-        # ggml.h, whisper.h and fftw3.h are all shadowed on a stock dev machine.
+        # ggml.h and whisper.h are both shadowed on the affected setup.
         # SYSTEM emits -isystem, which the compiler searches AFTER all -I paths,
         # so Homebrew stays findable and stops taking precedence.
         include_directories(SYSTEM "${HOMEBREW_PREFIX}/include")
