@@ -4,6 +4,7 @@
 #include "core/discovery/RadioDiscoverySource.h"
 
 #include <QMap>
+#include <QSet>
 
 namespace AetherSDR::control {
 
@@ -31,6 +32,9 @@ private:
     std::unique_ptr<RadioDiscoverySource> m_source;
     ControlResourceStore* m_resources;
     QMap<QString, QJsonObject> m_entries;
+    // Families already warned about a malformed endpoint, so a flood of bad
+    // observations cannot turn diagnosability into a log-volume attack.
+    QSet<QString> m_endpointWarnings;
     bool m_started{false};
     bool m_running{false};
     bool m_limited{false};

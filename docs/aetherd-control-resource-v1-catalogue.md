@@ -190,7 +190,12 @@ Only `--discover-local` initializes the daemon's `AppSettings` store, before
 model/discovery consumers are constructed, so client-owned HL2/ANAN Identity
 nicknames remain available. This uses the normal settings load, migration,
 recovery and read-only protections; it does not create discovery entries from
-saved configuration. Passive and simulator-only startup do not load the store.
+saved configuration. The flag is not inert against the store, though: the
+daemon and the desktop share one store, so on a machine where the desktop has
+never run, `--discover-local` is what creates `AetherSDR.db` and claims the
+one-shot legacy migration. The store is loaded only after the daemon owns its
+local endpoint, so a daemon that fails to listen never touches it. Passive and
+simulator-only startup do not load the store at all.
 
 One adapter/source instance has one lifecycle. `start()` is idempotent;
 `stop()` is terminal, clears observations and ignores late callbacks. Disposal

@@ -1,10 +1,12 @@
 #include "core/control/RadioCatalogue.h"
 #include "core/control/ControlService.h"
+#include "core/backends/LocalRadioDiscoveryMapping.h"
 
 #include <QCoreApplication>
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLoggingCategory>
 
 #include <cstdio>
 #include <utility>
@@ -158,6 +160,84 @@ bool testBounds()
                  "freed capacity must accept new observations without hiding prior incompleteness");
 }
 
+// One row per shape a native adapter actually emits. RadioCatalogue rejects a
+// malformed endpoint silently, so without this a family that stopped setting
+// `port` would just vanish from the catalogue and read as "no radio on the LAN".
+bool testNativeMapping()
+{
+    struct Row {
+        const char* family;
+        const char* transport;
+        quint16 port;      // as the adapter leaves RadioInfo::port
+        const char* address;
+    };
+    // flex: RadioInfo::port defaults to 4992. hl2: kMetisPort. anan: kRadioPort.
+    // rtl: USB, and its RadioInfo carries an address the projection must drop.
+    const Row rows[] = {{"flex", "lan", 4992, "192.0.2.10"},
+                        {"hl2", "lan", 1024, "192.0.2.11"},
+                        {"anan", "lan", 1024, "192.0.2.12"},
+                        {"rtl", "usb", 0, "192.0.2.13"}};
+    for (const Row& row : rows) {
+        Fixture f;
+        f.catalogue.start();
+        RadioInfo info;
+        info.serial = QStringLiteral("serial-1");
+        info.model = QStringLiteral("Model");
+        info.nickname = QStringLiteral("Nick");
+        info.version = QStringLiteral("1.2.3");
+        info.inUse = true;
+        info.port = row.port;
+        info.address = QHostAddress(QString::fromLatin1(row.address));
+        const DiscoveredRadio radio = discovery::normalize(
+            info, QString::fromLatin1(row.family), QString::fromLatin1(row.transport));
+        const bool lan = radio.transport == QStringLiteral("lan");
+        if (!check(radio.address == (lan ? QString::fromLatin1(row.address) : QString())
+                       && radio.port == (lan ? row.port : quint16{0})
+                       && radio.nickname == info.nickname && radio.inUse,
+                   "endpoint fields are LAN-only and display fields survive the projection")) {
+            return false;
+        }
+        f.source->radioChanged(radio);
+        if (!check(f.entries().size() == 1
+                       && f.entries().first().toObject().value(QStringLiteral("family"))
+                           == QString::fromLatin1(row.family),
+                   "every native adapter shape must survive catalogue validation")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The endpoint reject is the one an adapter regression trips, so it warns —
+// once per family, so malformed observations cannot become a log-volume attack.
+int g_warnings = 0;
+bool testRejectDiagnostics()
+{
+    Fixture f;
+    f.catalogue.start();
+    QtMessageHandler previous = qInstallMessageHandler(
+        [](QtMsgType type, const QMessageLogContext& context, const QString&) {
+            if (type == QtWarningMsg && context.category
+                && QLatin1StringView(context.category) == QLatin1StringView("aether.control.catalogue")) {
+                ++g_warnings;
+            }
+        });
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        DiscoveredRadio broken = radio(QStringLiteral("hl2"));
+        broken.transport = QStringLiteral("lan"); // LAN with no endpoint: the regression shape.
+        f.source->radioChanged(broken);
+    }
+    DiscoveredRadio other = radio(QStringLiteral("anan"));
+    other.transport = QStringLiteral("lan");
+    f.source->radioChanged(other);
+    DiscoveredRadio unbounded = radio();
+    unbounded.serial = QString(129, QLatin1Char('x')); // A bounds reject stays silent.
+    f.source->radioChanged(unbounded);
+    qInstallMessageHandler(previous);
+    return check(f.entries().isEmpty() && g_warnings == 2,
+                 "endpoint rejects warn once per family; bounds rejects stay quiet");
+}
+
 bool testProtocolAndIsolation()
 {
     Fixture f;
@@ -208,5 +288,8 @@ bool testProtocolAndIsolation()
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
-    return testIdentityAndLifecycle() && testBounds() && testProtocolAndIsolation() ? 0 : 1;
+    return testIdentityAndLifecycle() && testBounds() && testNativeMapping()
+                   && testRejectDiagnostics() && testProtocolAndIsolation()
+               ? 0
+               : 1;
 }

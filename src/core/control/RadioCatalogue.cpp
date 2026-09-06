@@ -110,6 +110,20 @@ void RadioCatalogue::upsert(const DiscoveredRadio& radio)
     if ((!lan && radio.transport != QStringLiteral("usb") && radio.transport != QStringLiteral("sim"))
         || (lan && (QHostAddress(radio.address).isNull() || radio.port == 0))
         || (!lan && (!radio.address.isEmpty() || radio.port != 0))) {
+        // Every other reject above is a bounds violation on attacker-reachable
+        // text; this one is the shape a native adapter regression takes, and it
+        // is otherwise invisible — the family simply stops appearing, which
+        // reads exactly like "no radio on the LAN". Warn once per family, and
+        // log no serial or address: `family` is the only field validated above.
+        if (!m_endpointWarnings.contains(radio.family)
+            && m_endpointWarnings.size() < kMaxEntries) {
+            m_endpointWarnings.insert(radio.family);
+            qCWarning(lcRadioCatalogue).nospace()
+                << "Discarding " << radio.family
+                << " discovery observation: transport '" << radio.transport
+                << "' with port " << radio.port
+                << (radio.address.isEmpty() ? " and no address" : " and an address");
+        }
         return;
     }
     const QString key = identityKey(radio.family, radio.serial);

@@ -116,7 +116,8 @@ target_link_libraries(control_resource_service_test PRIVATE
     aethercore Qt6::Core)
 add_test(NAME control_resource_service_test COMMAND control_resource_service_test)
 
-# Socket-free catalogue/protocol tests: injected normalized discovery signals.
+# Socket-free catalogue/protocol tests: injected normalized discovery signals,
+# plus the native RadioInfo -> DiscoveredRadio projection table-tested per family.
 # QtNetwork is used only for QHostAddress validation, never a socket or peer.
 add_executable(radio_catalogue_test
     tests/radio_catalogue_test.cpp
