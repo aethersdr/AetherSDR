@@ -157,6 +157,7 @@ private:
 
     QPushButton* m_breakinBtn{nullptr};
     QPushButton* m_iambicBtn{nullptr};
+    QPushButton* m_holdDelayBtn{nullptr};   // "Hold Dly" — opt-in, AppSettings-backed
 
     QLineEdit*   m_pitchEdit{nullptr};
     QPushButton* m_pitchDown{nullptr};

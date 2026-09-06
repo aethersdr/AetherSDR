@@ -752,8 +752,26 @@ void PhoneCwApplet::buildCwPanel()
         m_iambicBtn->setFixedHeight(22);
         m_iambicBtn->setAccessibleName("Iambic keyer");
         m_iambicBtn->setAccessibleDescription("Toggle iambic paddle keyer mode");
-        m_iambicBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         row->addWidget(m_iambicBtn);
+
+        // Opt-in: re-send the set break-in delay after every CW speed change so
+        // SmartSDR's speed-linked QSK-floor walk can't drop an inline amp into
+        // hot-switching (#5288). Off by default; persisted client-side.
+        m_holdDelayBtn = new QPushButton("Hold Dly");
+        m_holdDelayBtn->setCheckable(true);
+        m_holdDelayBtn->setFixedHeight(22);
+        m_holdDelayBtn->setAccessibleName("Hold break-in delay");
+        m_holdDelayBtn->setAccessibleDescription(
+            "Re-assert the set CW break-in delay after a speed change, so the "
+            "radio's speed-linked QSK floor cannot hot-switch an inline amplifier");
+        row->addWidget(m_holdDelayBtn);
+
+        // Both blue toggles share one style call site — the hardcoded-colour
+        // ratchet (tools/audit_colours.py) counts call sites, so a per-button
+        // line would trip it even while reusing the same constants.
+        for (auto* blueToggle : { m_iambicBtn, m_holdDelayBtn }) {
+            blueToggle->setStyleSheet(QString(kButtonBase) + kBlueActive);
+        }
 
         row->addStretch();
 
@@ -789,6 +807,19 @@ void PhoneCwApplet::buildCwPanel()
         connect(m_iambicBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model)
                 m_model->setCwIambic(on);
+        });
+
+        connect(m_holdDelayBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (m_updatingFromModel)
+                return;
+            // Client-side preference, not radio state — persist it here and
+            // hand the flag to the model (Constitution III: the radio has no
+            // concept to store).
+            AppSettings::instance().setValue("CwHoldBreakInDelay",
+                                             on ? "True" : "False");
+            AppSettings::instance().save();
+            if (m_model)
+                m_model->setHoldBreakInDelay(on);
         });
 
         // Pitch steps by 10 Hz (matching SmartSDR).
@@ -927,6 +958,18 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
     m_model = model;
     if (!m_model) return;
 
+    // "Hold break-in delay" is a client-side opt-in (default off): seed the
+    // model and the button from AppSettings once, at bind time. syncCwFromModel
+    // reflects it thereafter; the button's own toggled handler writes it back.
+    {
+        const bool hold = AppSettings::instance()
+                              .value("CwHoldBreakInDelay", "False")
+                              .toString() == "True";
+        m_model->setHoldBreakInDelay(hold);
+        const QSignalBlocker b(m_holdDelayBtn);
+        m_holdDelayBtn->setChecked(hold);
+    }
+
     // Phone signals
     connect(m_model, &TransmitModel::micStateChanged,
             this, &PhoneCwApplet::syncPhoneFromModel);
@@ -983,6 +1026,13 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
     // CW signals — phoneStateChanged covers CW field updates too
     connect(m_model, &TransmitModel::phoneStateChanged,
             this, &PhoneCwApplet::syncCwFromModel);
+    // holdBreakInDelay is a UI-only opt-in and rides its own signal, not
+    // phoneStateChanged — keep the button mirroring the model whatever moves it.
+    connect(m_model, &TransmitModel::holdBreakInDelayChanged, this,
+            [this](bool on) {
+        const QSignalBlocker b(m_holdDelayBtn);
+        m_holdDelayBtn->setChecked(on);
+    });
 
     syncPhoneFromModel();
     syncCwFromModel();
@@ -1137,6 +1187,7 @@ void PhoneCwApplet::syncCwFromModel()
 
     m_breakinBtn->setChecked(m_model->cwBreakIn());
     m_iambicBtn->setChecked(m_model->cwIambic());
+    m_holdDelayBtn->setChecked(m_model->holdBreakInDelay());
 
     if (!m_pitchEdit->hasFocus())
         m_pitchEdit->setText(QString::number(m_model->cwPitch()));
