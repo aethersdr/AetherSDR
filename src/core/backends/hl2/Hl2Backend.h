@@ -9,6 +9,9 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
+#include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
+#include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -124,6 +127,19 @@ public:
     HealthSnapshot healthSnapshot() const override;
     LinkStats linkStats() const override;
 
+    // Point the stream-free telemetry poller at a radio (roadmap #15).
+    //
+    // Separate from connectRadio() ON PURPOSE: the case this feature exists for
+    // is a radio we are NOT connected to, because somebody else has the stream.
+    // The caller that knows this is the picker — Hl2Discovery already parses
+    // the in-use flag out of the same reply — so `heldByOther` is passed in
+    // rather than guessed here. A null address stops the poller and releases
+    // its socket.
+    void setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther);
+    // Injected by RadioModel, which owns it. Null is legitimate: a backend
+    // built before the service exists simply does not drive it.
+    void setTelemetryService(Hl2TelemetryService* svc) { m_telemetryService = svc; }
+
 signals:
     // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
     // on the IRadioBackend seam: WDSP is this backend's alone (a Flex
@@ -211,6 +227,14 @@ private:
     void seedReceiverAgc();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
+
+    // ---- stream-free telemetry (roadmap #15) ----
+    //
+    // Drive the poller's LinkState from what the IQ path is actually doing, so
+    // the cadence rule in Hl2TelemetryCadence.h is CONNECTED rather than merely
+    // consulted. Called from publishLinkStats() (which already computes the
+    // EP6-arriving signal on a fixed tick) and from connect/disconnect.
+    void updateTelemetryPollState();
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
@@ -224,6 +248,40 @@ private:
     MetisClient* m_metis = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
+
+    // ---- stream-free telemetry (roadmap #15) ----
+    //
+    // Reads the radio over the alternate control port while the in-band EP6
+    // path cannot: another client holds the radio, our stream has stalled, or
+    // we are not connected. Its own socket, never MetisClient's — the point is
+    // to keep working when that one has stopped.
+    // BORROWED, not owned. The service's lifetime is RadioModel's, because it
+    // has to answer when this backend does not exist -- which is the state the
+    // stream-free path is for. Owning it here was the original defect.
+    Hl2TelemetryService* m_telemetryService = nullptr;
+    // What the picker last said about this radio. Only meaningful while we are
+    // not connected: it is the difference between "idle radio nobody is using"
+    // and "someone else's session", which is the case A-telemetry is about.
+    bool m_pollTargetHeldByOther = false;
+    // WHEN the mirrored EP6 counter last went up, not what it was at some
+    // previous tick.
+    //
+    // This was a tick-to-tick comparison and that was a category error. The
+    // counter is mirrored by linkCountersUpdated at 1 Hz and the tick that read
+    // it also ran at 1 Hz, so whenever two ticks fell between two publishes the
+    // second saw no change and declared a healthy stream stalled -- and the app
+    // polled port 1025 through its own live session. Observed on hardware
+    // 2026-09-04; reproduced in hl2_link_state_alias_test; the rule and its
+    // threshold are in Hl2TelemetryCadence.h.
+    //
+    // Restarted from the MIRROR, which runs at the publish rate, so the value
+    // this records does not depend on the tick rate at all.
+    QElapsedTimer m_rxAdvanceClock;
+    quint64 m_rxPacketsAtLastAdvance = 0;
+    // How often the poll state is re-evaluated. Independent of the link-stats
+    // cadence on purpose: see the timer's construction for why sharing that
+    // one would silence the poller in exactly the states it is for.
+    static constexpr int kTelemetryPollStateIntervalMs = 1000;
 
     // ---- manual frequency calibration (Hl2FreqCal) ----
     //

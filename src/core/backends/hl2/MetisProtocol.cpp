@@ -221,19 +221,46 @@ void Hl2Telemetry::apply(const Ep6Response& r) noexcept
         // ACTIVE LOW on the wire: the bit is SET when transmit is permitted.
         // Decoded here so nothing above this layer has to remember the inversion.
         txInhibited     = (r.data & (1u << 25)) == 0;
-        // TX IQ FIFO depth. hpsdrsim writes a 15-bit count as C2[6:0]:C3[7:0],
-        // i.e. DATA[22:8], and that is what this decodes because it is what we
-        // can actually verify.
+        // TX IQ FIFO status. CHECKED against the gateware at 883a338, which is
+        // what the comment that stood here asked for and did not have. It said
+        // hpsdrsim writes a 15-bit count at DATA[22:8], that the oracle's §6
+        // disagreed with itself about bit 14, and that nothing should servo on
+        // this field until someone read the RTL. Read; all three of the old
+        // fields were wrong.
         //
-        // THE ORACLE DISAGREES: §6 lists [14:8] as "FIFO count MSBs" and [15:14]
-        // as an under/overflow code, which overlaps bit 14 and cannot both be
-        // right. The gateware RTL is the authority and this has NOT been checked
-        // against it. Do not build FIFO-servoed TX pacing on this field until it
-        // has been — a pacing loop driven by a misread depth is exactly the kind
-        // of unverified assumption that wedged a radio once already.
-        txFifoCount     = static_cast<int>((r.data >> 8) & 0x7FFF);
-        txFifoUnderflow = ((r.data >> 14) & 0x3) == 0x2;
-        txFifoOverflow  = ((r.data >> 14) & 0x3) == 0x3;
+        // control.v:472 builds this slot as
+        //
+        //   data = {6'b000111, ~ext_txinhibit, (&clip_cnt), 8'h00,
+        //    bits    31:26     25              24           23:16
+        //           dsiq_status, VERSION_MAJOR}
+        //           15:8         7:0
+        //
+        // The FIFO field is DATA[15:8] and nothing more. DATA[23:16] is a
+        // constant zero, which is exactly why the old expression survived:
+        // (data >> 8) & 0x7FFF returns dsiq_status itself, the right number
+        // under a name claiming fifteen bits of sample count. Nothing it ever
+        // displayed looked absurd, so nothing ever prompted the read.
+        //
+        // dsiq_fifo composes the byte at fifos.v:100-110 as
+        // {recovery_flag_d1, rd_count[6:0]}, so:
+        //
+        //   [7]   one recovery flag, set by the FIFO running empty OR by its
+        //         writes being blocked after it filled. The gateware carries no
+        //         under/overflow distinction, so the two old booleans were
+        //         decoding a difference that is not on the wire — and they
+        //         disagreed with each other on the same event depending on
+        //         fill-level bit 6, reporting "underflow" at 0x80 and
+        //         "overflow" at 0xC0.
+        //   [6:0] the TOP 7 bits of the read-side fill level: coarse occupancy,
+        //         not a count of samples.
+        //
+        // Still NOT established, and so still not safe to servo on: what one
+        // unit of [6:0] is worth. rdbits is 12 for this board's
+        // DSIQ_FIFO_DEPTH of 16384 (hermeslite_core.v:136), making the unit 32
+        // read-side words, but words-to-samples is an inference. #17 needs that
+        // number measured before a pacing loop uses this field.
+        txFifoFillMsbs  = static_cast<int>((r.data >> 8) & 0x7F);
+        txFifoRecovery  = ((r.data >> 15) & 0x1) != 0;
         break;
     case 0x01:
         temperatureRaw  = static_cast<int>((r.data >> 16) & 0xFFFF);
@@ -293,7 +320,22 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     if (pkt.size() < 11 || pkt[0] != 0xEF || pkt[1] != 0xFE)
         return std::nullopt;
     DiscoveryReply r;
-    r.streaming = (pkt[2] == 0x03);                      // 0x02 idle, 0x03 already sending
+    // 0x02 idle, 0x03 already sending. NOT only that: on the HL2 gateware at
+    // 883a338 this byte is
+    //
+    //   usopenhpsdr1.v:266
+    //   discover_data_next = usethasmi_erase_done ? 8'h03
+    //                      : (usethasmi_send_more ? 8'h04
+    //                      : (run ? 8'h03 : 8'h02));
+    //
+    // so 0x03 means "streaming" OR "a gateware flash erase just completed", and
+    // 0x04 — which nothing here decodes — means a flash write is in progress.
+    // Reading 0x03 as `streaming` is therefore a judgement, not what the byte
+    // says: an application that discovers while someone is flashing the radio
+    // will be told the radio is busy sending IQ. Harmless while nobody flashes
+    // over Ethernet, wrong the moment anybody does, and named here so the next
+    // reader does not have to re-derive it from the RTL.
+    r.streaming = (pkt[2] == 0x03);
     for (std::size_t i = 0; i < 6; ++i)
         r.mac[i] = pkt[3 + i];
     r.gatewareVersion = pkt[9];
@@ -324,6 +366,95 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     // Short replies omit it; leave 0 so callers apply their own default.
     if (pkt.size() > 19)
         r.numRx = pkt[19];
+
+    // ---- Telemetry, offsets 0x17-0x29 ----
+    //
+    // The radio has been sending all of this at every discovery and we have
+    // been discarding it since the parser was written. It is the same set the
+    // EP6 response cycle carries, in the same raw units — but obtainable
+    // WITHOUT a stream, which is the only way to read the radio while another
+    // client holds it or while our own stream is broken. Roadmap item #15; it
+    // needs nothing from item #13's RQST/ACK machinery, because none of these
+    // are command responses. resp_control is a combinational assign
+    // (control.v:899) and the discovery path has no `run` gate
+    // (dsopenhpsdr1.v:185-207).
+    //
+    // Offsets come from usopenhpsdr1.v:261-307, which emits the reply from a
+    // DOWN-counting state: offset = 0x3B - dbyte_no. Anchored on the two bytes
+    // parsed above — 6'h32 (VERSION_MAJOR) at 9 and 6'h31 (board) at 10 — with
+    // the same arithmetic putting 6'h28 (NR) at 0x13. hermeslite.py decodes the
+    // same packet identically and is the cross-check, not the source.
+    //
+    // Everything here stays absent unless the reply is long enough to have
+    // carried it. A gateware built without EXTENDED_RESP (control.v:826) sends
+    // hard zeros in these bytes rather than readings, and we cannot tell that
+    // apart from a genuine zero at this layer — a caller that needs to must
+    // compare across polls, and this comment is the warning that it is not
+    // free. Our board sets EXTENDED_RESP(1)
+    // (gateware/variants/hl2b5up_main/hermeslite.v:110).
+    const auto be16 = [](std::span<const std::uint8_t> p, std::size_t at) {
+        return static_cast<int>((std::uint32_t(p[at]) << 8) | std::uint32_t(p[at + 1]));
+    };
+
+    if (pkt.size() > 0x1a) {
+        r.responseData = (std::uint32_t(pkt[0x17]) << 24) | (std::uint32_t(pkt[0x18]) << 16)
+                       | (std::uint32_t(pkt[0x19]) << 8)  |  std::uint32_t(pkt[0x1a]);
+    }
+    if (pkt.size() > 0x1b) {
+        // control.v:899:
+        //   resp_control = {ext_cwkey, ptt_resp, pa_exttr, pa_inttr,
+        //                   tx_on, cw_on, clip_cnt}
+        const std::uint8_t c = pkt[0x1b];
+        r.extCwKey = (c & 0x80) != 0;
+        r.ptt      = (c & 0x40) != 0;          // ptt_resp = cw_on | ext_ptt (control.v:456)
+        r.paExtTr  = (c & 0x20) != 0;
+        r.paIntTr  = (c & 0x10) != 0;
+        r.txOn     = (c & 0x08) != 0;
+        r.cwOn     = (c & 0x04) != 0;
+        // TWO MEANINGS, and which one applies depends on whether the radio is
+        // streaming. `clip_cnt` is cleared on every EP6 packet (control.v:465)
+        // and by NOTHING else, so:
+        //   streaming  -> clip windows in the last EP6 interval (~2.6 ms), 0-3
+        //   idle       -> "clipped at least once since the last stream ended",
+        //                 saturated at 3 and unclearable by a discovery poller
+        // It is also not a count: rxclip is a sticky rail latch added as a
+        // LEVEL (control.v:479, ad9866.v:232-241), so three clock edges
+        // saturate it. Treat this as a flag with a range, never as a rate — the
+        // window length in wall-clock terms is not established. A caller must
+        // pair it with `streaming` above before showing it to anyone.
+        r.adcClipCount = static_cast<int>(c & 0x03);
+    }
+    // The four slow-ADC readings, each 12 bits in a big-endian pair with a zero
+    // top nibble. Same converter and same scaling as the EP6 cycle's
+    // temperatureRaw / forwardPowerRaw / reversePowerRaw / biasCurrentRaw, so
+    // the stream-free reading and the in-band reading are directly comparable
+    // with no conversion — which is what makes the two a cross-check on each
+    // other rather than two unrelated numbers.
+    if (pkt.size() > 0x23) {
+        r.temperatureRaw  = be16(pkt, 0x1c);
+        r.forwardPowerRaw = be16(pkt, 0x1e);
+        r.reversePowerRaw = be16(pkt, 0x20);
+        r.biasCurrentRaw  = be16(pkt, 0x22);
+    }
+    if (pkt.size() > 0x24) {
+        // dsiq_status, identical to the byte the EP6 path decodes at DATA[15:8]
+        // — one recovery flag covering underrun AND blocked writes, then the
+        // top 7 bits of the fill level. See Hl2Telemetry::apply().
+        r.txFifoRecovery = (pkt[0x24] & 0x80) != 0;
+        r.txFifoFillMsbs = static_cast<int>(pkt[0x24] & 0x7F);
+    }
+    if (pkt.size() > 0x26)
+        r.txBufferLatencyMs = static_cast<int>(pkt[0x26] & 0x7F);   // 6'h15: {1'b0, [6:0]}
+    if (pkt.size() > 0x28) {
+        // 6'h13: {cw_hang_time[9:8], 1'b0, ptt_hang_time[4:0]}. The mask is
+        // 0x1F and not a byte, and that is load-bearing rather than tidy: 31 in
+        // this field does not mean "the longest hang time", it DISABLES the
+        // gateware's PTT auto-unkey altogether (softerhardware/Hermes-Lite2
+        // issue #178). A decode that let cw_hang_time's two high bits bleed in
+        // would report a disabled dead-man's switch as some other number, or
+        // some other number as disabled.
+        r.pttHangTimeMs = static_cast<int>(pkt[0x28] & 0x1F);
+    }
     return r;
 }
 

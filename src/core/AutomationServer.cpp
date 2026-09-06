@@ -15,6 +15,7 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
+#include "core/backends/hl2/Hl2TelemetrySource.h"   // hl2MergeHealth, the shared merge rule
 #include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
@@ -3581,6 +3582,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doHealth(); });
 
+        add("telemetry", {}, "telemetry target <ip> — aim the stream-free HL2 poller "
+                             "WITHOUT connecting (read-only; `telemetry target off` stops it)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTelemetry(a.action, a.value);
+            });
+
         add("log", {}, "log <categories|get|set|reset|tail|subscribe|unsubscribe> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) {
@@ -6579,15 +6587,79 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
 // diagnosis.
 //
 // Read-only and TX-safe: it keys nothing and changes nothing.
+QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (action != QStringLiteral("target"))
+        return err(QStringLiteral("telemetry requires an action (target)"));
+    if (value.isEmpty())
+        return err(QStringLiteral("telemetry target requires an IP, or 'off'"));
+
+    // WHY THIS VERB EXISTS, because "just connect first" is the obvious
+    // alternative and it is wrong.
+    //
+    // The stream-free poller's whole purpose is reading a radio we are NOT
+    // connected to -- typically because another client is holding it. The only
+    // way to give it an address used to be connectRadio(), which sets the
+    // target on its way to sending Metis START. Against a radio somebody else
+    // holds, that is a WRITE during their session: it risks disturbing the very
+    // stream the measurement is about, and "the holder was undisturbed" is a
+    // pass criterion of the run this serves.
+    //
+    // Discovery cannot supply it either. Discovery is a broadcast, so it only
+    // finds radios on the local segment; a radio behind a gateway is invisible
+    // to it, and the broadcast itself lands on whatever else shares that
+    // segment. On this bench that is exactly backwards -- the radio is off-net
+    // and the segment holds a receiver that must not be polled.
+    //
+    // So: name the radio, send nothing but read-only status requests to it, and
+    // never connect.
+    if (value.compare(QStringLiteral("off"), Qt::CaseInsensitive) == 0) {
+        m_radioModel->setTelemetryPollTarget(QHostAddress());
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("telemetry"), QStringLiteral("target")},
+                           {QStringLiteral("target"), QJsonValue::Null}};
+    }
+
+    const QHostAddress addr(value);
+    if (addr.isNull())
+        return err(QStringLiteral("telemetry target: '%1' is not an IP address").arg(value));
+
+    m_radioModel->setTelemetryPollTarget(addr);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("telemetry"), QStringLiteral("target")},
+                       {QStringLiteral("target"), addr.toString()},
+                       // Say plainly that nothing was connected, because the
+                       // caller's next question is always "did that grab the
+                       // radio?" and the answer must not require reading source.
+                       {QStringLiteral("connected"), m_radioModel->isConnected()},
+                       {QStringLiteral("readOnly"), true}};
+}
+
 QJsonObject AutomationServer::doHealth()
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
 
-    const IRadioBackend::HealthSnapshot snap = m_radioModel->backendHealthSnapshot();
+    // TWO SOURCES, merged, and the order matters.
+    //
+    // The backend answers only while one exists — it is constructed inside
+    // connectToRadio() — so on a disconnected app it contributes nothing. The
+    // stream-free telemetry service answers always, because its lifetime is the
+    // model's rather than a connection's. Reading `health` on an app that is
+    // not connected used to return zero rows for exactly that reason, in the
+    // state the stream-free feature exists to serve.
+    //
+    // The backend WINS on key collision: its readings are in-band, arrive at
+    // 10 Hz against the poller's 1-2 Hz, and their cadence is ours. The service
+    // fills the gaps and owns the source/age/unanswered rows that say which
+    // path spoke.
+    IRadioBackend::HealthSnapshot snap = hl2::hl2MergeHealth(
+        m_radioModel->streamFreeTelemetryRows(),   // base: stream-free
+        m_radioModel->backendHealthSnapshot());    // winner: in-band
     if (snap.isEmpty()) {
-        // Not an error: a backend with nothing to report is a real state (no
-        // radio connected, or a family that publishes no health rows). Say which
+        // Still a real state: no backend AND nothing stream-free to say. Name it
         // rather than returning an empty object the caller has to guess about.
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("connected"), m_radioModel->isConnected()},

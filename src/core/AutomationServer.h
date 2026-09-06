@@ -617,6 +617,10 @@ private:
     // Backend-sourced radio health. Read-only; see the definition for why it is
     // deliberately not assembled from the models.
     QJsonObject doHealth();
+    // `telemetry target <ip>` — aim the stream-free HL2 poller without
+    // connecting. See the definition for why connecting is not an
+    // acceptable way to supply the address.
+    QJsonObject doTelemetry(const QString& action, const QString& value);
     QJsonObject doAtu(const QString& action);
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)

@@ -387,9 +387,23 @@ struct Hl2Telemetry {
     std::optional<int>  firmwareVersion;
     std::optional<bool> adcOverload;
     std::optional<bool> txInhibited;      // register bit is ACTIVE LOW; decoded here
-    std::optional<int>  txFifoCount;
-    std::optional<bool> txFifoUnderflow;
-    std::optional<bool> txFifoOverflow;
+
+    // TX IQ FIFO status: DATA[15:8] of RADDR 0, the gateware's `dsiq_status`.
+    // Settled against the gateware at 883a338; see apply() for the layout and
+    // for what the old txFifoCount/txFifoUnderflow/txFifoOverflow got wrong.
+    //
+    // Coarse occupancy: the TOP 7 bits of the read-side fill level, 0..127
+    // (fifos.v:101, `rd_count <= rd_tlength[(rdbits-1):(rdbits-7)]`). NOT a
+    // sample count, and deliberately not converted to one — the words-to-
+    // samples mapping is an inference this layer has not established. #17's
+    // pacing servo needs that conversion; nothing else does.
+    std::optional<int>  txFifoFillMsbs;
+    // ONE flag for TWO faults: the FIFO ran empty (`rd_tvalidn`) OR its writes
+    // were blocked because it filled (`~allow_push`) — fifos.v:105-106. The
+    // gateware does not distinguish them, so neither do we. A consumer that
+    // wants to say which one happened cannot get it from this word, and must
+    // say "TX pacing fault" rather than pick a side.
+    std::optional<bool> txFifoRecovery;
     std::optional<int>  temperatureRaw;
     std::optional<int>  forwardPowerRaw;
     std::optional<int>  reversePowerRaw;
@@ -446,6 +460,44 @@ struct DiscoveryReply {
     // 19 and not 20, and what the byte at 20 actually is.
     std::uint8_t numRx = 0;
     [[nodiscard]] bool isHermesLite2() const noexcept { return boardId == 0x06; }
+
+    // ---- Telemetry, discovery-reply offsets 0x17-0x29 ----
+    //
+    // The SAME quantities the EP6 response cycle carries, in the SAME raw
+    // units, but all at once and WITHOUT a stream — which is the whole point:
+    // this is the only route that answers while another client holds the radio,
+    // and the only one that answers at all when the stream is broken.
+    //
+    // Every field is optional because a reply may be short, or may come from a
+    // gateware built without EXTENDED_RESP (control.v:826), where these bytes
+    // are hard zeros rather than readings. nullopt is "this reply did not carry
+    // it"; 0 is a measurement. A forward-power reading of zero is real.
+    //
+    // Offsets are the gateware's, derived from usopenhpsdr1.v's DOWN-counting
+    // emitter (offset = 0x3B - dbyte_no) at 883a338 and cross-checked against
+    // hermeslite.py's independent decoder. See the test for the full map.
+    std::optional<std::uint32_t> responseData;   // 0x17-0x1a, `resp_data`
+    std::optional<bool> extCwKey;                // 0x1b[7]
+    std::optional<bool> ptt;                     // 0x1b[6]  `ptt_resp` = cw_on|ext_ptt
+    std::optional<bool> paExtTr;                 // 0x1b[5]
+    std::optional<bool> paIntTr;                 // 0x1b[4]
+    std::optional<bool> txOn;                    // 0x1b[3]
+    std::optional<bool> cwOn;                    // 0x1b[2]
+    // 0x1b[1:0]. NOT a count of clips — see the two-state warning in the .cpp.
+    std::optional<int>  adcClipCount;
+    std::optional<int>  temperatureRaw;          // 0x1c-0x1d, 12 bits
+    std::optional<int>  forwardPowerRaw;         // 0x1e-0x1f, 12 bits
+    std::optional<int>  reversePowerRaw;         // 0x20-0x21, 12 bits
+    std::optional<int>  biasCurrentRaw;          // 0x22-0x23, 12 bits
+    std::optional<int>  txFifoFillMsbs;          // 0x24[6:0], as in Hl2Telemetry
+    std::optional<bool> txFifoRecovery;          // 0x24[7],   as in Hl2Telemetry
+    std::optional<int>  txBufferLatencyMs;       // 0x26[6:0]
+    // 0x28[4:0]. SAFETY-RELEVANT: 31 does not mean "the longest hang"; it
+    // disables the gateware's PTT auto-unkey entirely (softerhardware/
+    // Hermes-Lite2 issue #178). Reading it without a stream is how an
+    // application can tell the operator their radio's own dead-man's switch is
+    // off — which is a thing worth knowing before keying, not after.
+    std::optional<int>  pttHangTimeMs;
 };
 // Parse a >=60-byte Metis discovery reply (EF FE <st> MAC[6] gwver board ...).
 std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> pkt) noexcept;

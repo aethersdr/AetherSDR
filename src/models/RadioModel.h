@@ -9,6 +9,9 @@
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
+#include "core/backends/hl2/Hl2TelemetryService.h"  // stream-free telemetry (#15)
+
+#include <QHostAddress>
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -317,6 +320,24 @@ public:
     // which the dialog renders as "this radio reports no health registers"
     // rather than as an empty table.
     IRadioBackend::HealthSnapshot backendHealthSnapshot() const;
+
+    // Stream-free HL2 telemetry rows (roadmap #15).
+    //
+    // SEPARATE FROM backendHealthSnapshot() ON PURPOSE. That one returns an
+    // empty snapshot when m_backend is null, and m_backend is built inside
+    // connectToRadio() — so routing these through it would make them absent in
+    // exactly the states they exist for: another client holding the radio, or
+    // nothing connected yet. That was the original defect; this seam is the
+    // fix. The service's lifetime is this model's, not a connection's.
+    [[nodiscard]] IRadioBackend::HealthSnapshot streamFreeTelemetryRows() const;
+    // Reading the rows is the poller's demand signal, so a caller that only
+    // wants to arm it (without rendering) can say so explicitly.
+    void noteTelemetryDemand();
+    // Aim the stream-free poller at a radio WITHOUT connecting. A null address
+    // stops it. Read-only: the poller sends the EF FE 02 status request and
+    // nothing else, never START/STOP and never a register write, which is what
+    // makes it safe to point at a radio another operator is using.
+    void setTelemetryPollTarget(const QHostAddress& addr);
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -1548,6 +1569,13 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    // Stream-free HL2 telemetry (roadmap #15). A VALUE MEMBER, so its lifetime
+    // is this model's and not a connection's — it must answer when m_backend
+    // above is null, which is the whole reason it does not live inside the
+    // backend. It is idle until something reads it: the cadence rule polls at
+    // zero unless a health consumer has asked, so a Flex or Icom session pays
+    // nothing for its presence.
+    mutable hl2::Hl2TelemetryService m_hl2Telemetry;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;

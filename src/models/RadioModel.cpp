@@ -804,6 +804,12 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        // Hand the HL2 backend the stream-free telemetry service this model
+        // owns. It is a borrow, not a transfer: the service must outlive every
+        // backend, because its job is answering when there is no backend at all.
+        if (auto* hl2 = dynamic_cast<hl2::Hl2Backend*>(m_backend.get()))
+            hl2->setTelemetryService(&m_hl2Telemetry);
+
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
@@ -4153,6 +4159,28 @@ IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const
 {
     return m_backend ? m_backend->healthSnapshot()
                      : IRadioBackend::HealthSnapshot{};
+}
+
+IRadioBackend::HealthSnapshot RadioModel::streamFreeTelemetryRows() const
+{
+    // Deliberately does NOT consult m_backend. See the header.
+    m_hl2Telemetry.noteDemand();
+    return m_hl2Telemetry.healthRows();
+}
+
+void RadioModel::noteTelemetryDemand()
+{
+    m_hl2Telemetry.noteDemand();
+}
+
+void RadioModel::setTelemetryPollTarget(const QHostAddress& addr)
+{
+    m_hl2Telemetry.setTarget(addr);
+    // Deliberately does NOT touch m_backend, does not set m_family, and does
+    // not begin a connection. Aiming the read-only poller at a radio and
+    // connecting to it are different acts, and conflating them is what made
+    // this impossible to do safely against a radio somebody else was holding.
+    m_hl2Telemetry.noteDemand();
 }
 
 // Shared key-on guard for the paths that do NOT go through setTransmit().
