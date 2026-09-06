@@ -24,26 +24,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **SPE floating front panel** adds a live amplifier LCD mirror and guarded front-panel keys (#5393).
 - **TelePost LP-100A support** displays the wattmeter's readings over local serial or a serial-to-network proxy. This first version is read-only (#5320).
-- Runtime Monitor gains process-memory history (#5397), while the KiwiSDR browser uses the AetherSDR CDN directory mirror and treats stale directory data as advisory (#5445, #5449).
-- PGXL and TGXL startup synchronization improves initial status presentation (#5337, #5339). Power gauges scale appropriately for HL2 and IC-705 (#5369), and PA current appears when PTT originates at the radio (#5307).
+- Runtime Monitor gains process-memory history (#5397).
+- PGXL and TGXL startup synchronization improves initial status presentation (#5337, #5339). PA current appears when PTT originates at the radio (#5307).
 - The connection panel stays visible at startup (#5334), CTCSS choices are easier to read (#5259), and radio-specific settings and Flex-only zoom controls are gated to compatible backends (#5299, #5166).
 
-### CW, audio and Flex controls
+### KiwiSDR
 
-- Client-side recordings capture sent CW instead of microphone input, and CWX sidetone follows scheduled keying edges (#5278, #5129).
-- The P/CW pane gains APF toggle and level controls; APF wheel input is ignored while APF is disabled (#4883, #5163).
-- CW settings remain stable on backends that do not echo them (#5380), and controller AGC-T input reaches the correct level control with AGC off (#5387).
-- Active-slice ALC and TX waveform meter routing are corrected (#5344). Ulanzi TCI volume handling now converts the wire's dB values correctly (#5389).
+- The public-receiver browser reads its directory from the AetherSDR CDN mirror (#5445).
+- The directory-mirror Worker is included in the repository, and stale directory data is advisory so operators can continue browsing available receivers (#5449).
 
-### Networked Icom
+### CW
+
+- Client-side recordings capture sent CW instead of microphone input (#5278).
+- CWX sidetone follows the keyer's scheduled edges (#5129).
+- The P/CW pane gains APF toggle and level controls (#4883).
+- APF wheel input is ignored while APF is disabled (#5163).
+- CW settings remain stable on backends that do not echo them (#5380).
+
+### Audio and Flex controls
+
+- Controller AGC-T input reaches the correct level control with AGC off (#5387).
+- Active-slice ALC and TX waveform meter routing are corrected (#5344).
+- Ulanzi TCI volume handling now converts the wire's dB values correctly (#5389).
+
+### Icom
 
 - **Wire-based model identification and optional wake on connect** replace reliance on an editable network nickname. Wake defaults off and uses model-specific profiles for IC-705, IC-7300MK2 and IC-9700; the radio's network interface must remain reachable (#5438).
-- Durable memory ownership and synchronized recall are restored, alongside RX filter preset identity, skirt mapping and recall corrections (#5328, #5363).
-- Background polling no longer starves TX meters; native control handling and meter precision improve (#5435, #5436).
-- Finite AX.25 transmit audio is preserved over RS-BA1 (#5311). IC-705 GPS location and NTP controls are added (#5146), and unavailable tuner controls are dimmed (#5292).
+- Durable memory ownership and synchronized recall are restored (#5328).
+- RX filter preset identity, skirt mapping and recall are corrected (#5363).
+- Background polling no longer starves TX meters (#5435).
+- Native control handling and meter precision improve (#5436).
+- Finite AX.25 transmit audio is preserved over RS-BA1 (#5311).
+- IC-705 GPS location and NTP controls are added (#5146).
+- Unavailable tuner controls are dimmed (#5292).
+- IC-705 power gauges use the appropriate QRP scale (#5369).
 
 ### Hermes-Lite 2 reliability and diagnostics
 
+- HL2 power gauges use the appropriate 5 W scale (#5369).
 - Per-band gain survives startup and temporary overrides (#5402), and the HL2 IO Board gains band-following amplifier control (#5362).
 - DSP setup is bounded and logged; diagnostics expose actual DSP configuration and connection progress (#5415, #5401, #5416).
 - TX FIFO status decoding follows the gateware, repeated ADC-overload warnings are rate-limited, and spectrum FFTW operations are serialized (#5398, #5381, #5424).
@@ -62,6 +80,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 Thanks to **@jensenpat** (13 commits — Icom, TCI, Flex meters and Windows packaging), **@ten9876** (11 commits — maintainer; Kiwi directory, sanitizer recovery and CI), **@on8st** (9 commits — HL2 reliability and diagnostics), **@skerker** (6 commits — CW, audio, controls and Runtime Monitor), **@w5jwp** (6 commits — amplifier startup and radio controls), **@rfoust** (4 commits — headless engine protocol and discovery), **@NF0T** (3 commits — LP-100A and MinGW compatibility), **@dawkagaming** (2 commits — Linux packaging and SQLite), **@nigelfenton** (2 commits — PA current and Ulanzi volume), **@randal007** (2 commits — HL2 IO Board and QRP gauges), **@tropo1234** (2 commits — ANAN-G2 and capability gating), **@aethersdr-agent** (1 commit — AetherClaude orchestrator; APF controls), **@azchohfi** (1 commit — Windows Store CLI), **@opalito** (1 commit — SPE front panel), **@Ozy311** (1 commit — CW control persistence), **@pcarff** (1 commit — RTL-SDR reception). Dependabot contributed two dependency updates. Counts cover primary commit authors; co-author credit remains in the commit history.
 
 Welcome to first-time contributors **@on8st**, **@randal007**, **@azchohfi**, **@pcarff**!
+
+Thank you to **Microsoft** for their first commit and for helping us improve our publishing automation!
 
 73, Pat KI6BCJ & Codex (AI dev partner)
 
