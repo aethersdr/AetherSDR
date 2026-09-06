@@ -147,8 +147,8 @@ int main()
     // before the first band change, and protecting only rememberCurrentBandState()
     // left the pin free to be persisted through it. (#5402 review, Ozy311.)
     //
-    // Both call sites ask THIS function, so these cases cover the production
-    // snapshot decision rather than a re-typed copy of it.
+    // These cases cover the shared policy. hl2_gain_restore_test separately
+    // exercises the actual backend snapshot writer and its caller state.
     {
         // The reviewer's exact scenario: 20 m stored at -12, connect pins 20,
         // then a same-band tune triggers a capture. The capture must record -12.

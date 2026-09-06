@@ -4216,6 +4216,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_driveByBand.clear();
     m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
     m_lnaGainDb = 20;
+    m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
     m_sampleRateHz = 48000;       // construction default — radio B must not
@@ -4585,9 +4586,8 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
     // review: the drive that makes 5 W on 80 m is not polite on 10 m, so a
     // band change must never carry the old band's drive along.
     rememberCurrentBandState();
-    // The pin described the START band's entry, and that entry has now been
-    // preserved past the only write that threatened it. Leaving the flag set
-    // would quietly make every later band non-recordable too.
+    // Clear only AFTER writeback preserves the start band. Later bands must
+    // record their own gains normally.
     m_lnaSessionPin = false;
     const QString oldBand = m_currentBandKey;
     m_currentBandKey = newBand;

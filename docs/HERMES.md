@@ -2946,6 +2946,19 @@ Backend pan ids are now translated through a first-seen-order allocator and stay
 OPAQUE in both directions — `RadioModel` does not parse a family's naming scheme,
 and a backend does not learn about the `0xE1000000` stream-id space.
 
+HL2 RF gain is stored per band in the radio's `OperatingState` document.
+On reconnect, the backend restores the start band's entry (or its default for
+an unvisited band). The display mirrors that value; the legacy
+`DisplayRfGain_hl2` setting is ignored during startup so it cannot overwrite
+the band's entry (#5400). The `RfGain` client-settings domain remains enabled:
+`RadioStateMemory` needs it to load and save the per-band map.
+
+An explicit `lnaGainDb` connection parameter can temporarily override the live
+gain without replacing an existing start-band entry (#5402). A band change
+restores the new band's gain; an operator gain change updates the current band.
+All panadapters still share the one hardware LNA. Flex and Icom restoration
+behavior is unchanged.
+
 ### 20.10 The dynamic lifecycle: receivers come and go while the radio runs
 
 The count was fixed at connect, from a persisted setting. It is now the

@@ -56,6 +56,8 @@ inline ConnectLna connectLna(bool haveRestoredState,
     // pins the gain outright, and a stored entry must not silently ignore what
     // the caller asked for. This header does not reverse it.
     if (paramPresent) {
+        // Preserve the pre-existing explicit-parameter behavior; this PR
+        // changes persistence, not the connect parameter's range handling.
         out.liveDb = paramDb;
         out.sessionPin = haveRestoredState && hasStoredEntry && paramDb != storedDb;
         return out;

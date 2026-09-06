@@ -32,6 +32,7 @@
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "RfGainRestore.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
@@ -1722,19 +1723,15 @@ void MainWindow::wirePanLifecycle()
             const bool clientOwnsRfGain =
                 m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
                     RadioCapabilities::ClientSettingsDomain::RfGain);
-            // Flex deliberately declares no client-owned RF-gain domain: the
-            // radio persists and reports its pan gain. Sim likewise regenerates
-            // its scene. Only a backend that explicitly delegates this domain
-            // (currently HL2) may receive a saved client replay.
-            const bool restoreSavedRfGain = clientOwnsRfGain && haveSavedRfGain;
             PanadapterModel* activePan = m_radioModel.activePanadapter();
-            const int rfGain = restoreSavedRfGain
-                ? s.value(rfGainKey).toInt()
-                : (activePan ? activePan->rfGain() : 0);
             m_radioModel.setPanWnb(wnbOn);
             m_radioModel.setPanWnbLevel(wnbLevel);
-            if (restoreSavedRfGain)
-                m_radioModel.setPanRfGain(rfGain);
+            const int rfGain = restoreLegacyRfGain(
+                m_radioModel.backendCapabilities().family, clientOwnsRfGain,
+                haveSavedRfGain ? std::optional<int>(s.value(rfGainKey).toInt())
+                               : std::nullopt,
+                activePan ? activePan->rfGain() : 0,
+                [this](int gain) { m_radioModel.setPanRfGain(gain); });
             sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);

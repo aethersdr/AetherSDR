@@ -4059,6 +4059,12 @@ add_executable(hl2_tx_level_policy_test
 )
 target_include_directories(hl2_tx_level_policy_test PRIVATE src)
 add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
+# Socket-free HL2 gain persistence: boardMaxRx bypasses discovery; the test
+# never pumps events and cancels DSP setup before it can start Metis UDP.
+add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
+target_include_directories(hl2_gain_restore_test PRIVATE src tests)
+target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
 add_executable(hl2_band_memory_test
     tests/hl2_band_memory_test.cpp
 )
@@ -4395,6 +4401,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    hl2_gain_restore_test
     icom_control_profile_test
     control_resource_service_test
     aetherd_discovery_startup_test
