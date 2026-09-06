@@ -335,26 +335,31 @@ secrets + one variable in GitHub.
 ### Version discipline
 
 Microsoft Store [reserves the fourth version component for its own use](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements);
-submitted packages must end in `.0`. The Windows Installer workflow uses
-`YY.M.<workflow run number>.0` for **both production and flight MSIX packages**.
-For example, run 203 builds `26.9.203.0`; the next production run 204 builds
-`26.9.204.0`, which outranks the flight. The first two components come from
-`project(AetherSDR VERSION ...)`; the app's CalVer, portable ZIP, Inno installer,
-and release tags keep their existing versioning.
+submitted packages must end in `.0`.
 
-Use the current or a later CalVer year/month when submitting a ref. Selecting
-an older source series can produce a lower Store version. Before the first
-upload with this scheme, compare it with the highest package already submitted
-in Partner Center. The shared workflow counter must be greater than that
-package's third component within the same year/month. Do not reset the counter
-or move publication to another workflow without checking this ordering.
-Rerunning the same workflow run reuses its version; dispatch a new run when a
-new version is required. Run numbers outside `1..65535` fail before building
-instead of wrapping or emitting an invalid package.
+Production tag pushes use the source release version: `26.9.2` becomes
+`26.9.2.0`, independent of the workflow run number and flight configuration.
+The tag must exactly match `project(AetherSDR VERSION ...)`. Three-component
+versions and explicit zero fourth components are supported; a nonzero CalVer
+hotfix revision is refused until an explicit Store version policy is selected.
+The planner must not silently replace a release patch or discard a hotfix.
 
-Local `create-msix.ps1` builds still default to the normalized source version.
+Development builds, including manual flights, retain `YY.M.<workflow run
+number>.0`. Their run number must fit `1..65535`; that limit does not apply to
+production because production does not use it. Rerunning a development workflow
+reuses its version.
+
+**Flight upgrade ordering is separate from production naming.** A flight such
+as `26.9.205.0` is higher than production `26.9.2.0`; do not assume the next
+production release supersedes it for flight users. Before another flight,
+select a version strategy against the highest package accepted in Partner
+Center. This production correction does not redesign flight numbering or reset
+any accepted Store version.
+
+Local `create-msix.ps1` builds also default to the normalized source version.
 With `-CreateUpload`, a nonzero fourth component is rejected before staging
-files; pass a suitable `-Version YY.M.BUILD.0` for a CalVer hotfix upload.
+files. The app's CalVer, portable ZIP, Inno installer and release tags are
+unchanged by MSIX packaging.
 
 ### Promoting to fully automatic later
 
@@ -404,9 +409,9 @@ that the pinned CLI accepts `--flightId` on `publish`. A wrong option name
 fails the step loudly rather than publishing anywhere, but budget for it —
 along with credentials and certification — on the first attempt.
 
-The flight uses the shared MSIX sequence described under **Version discipline**
-above. This also changes production MSIX version numbers; production remains a
-draft and its certification requires maintainer action.
+The flight uses the development MSIX sequence described under **Version discipline**
+above. Production uses its source release version, remains a draft, and requires
+maintainer action for certification.
 
 The socket-free regression suite is `tests/windows_store_policy_test.ps1`:
 

@@ -44,7 +44,8 @@ try {
                 Assert-True ($plan.releaseArtifacts -eq $releaseExpected) "Release routing: $eventName $ref $requested"
                 Assert-True ($plan.productionDraft -eq $releaseExpected) "Production routing: $eventName $ref $requested"
                 Assert-True ($plan.publishFlight -eq ($eventName -eq 'workflow_dispatch' -and $requested)) 'Flight routing'
-                Assert-True ($plan.msixVersion -eq '26.9.203.0') 'Store version must reserve revision zero'
+                $expectedVersion = if ($releaseExpected) { '26.9.1.0' } else { '26.9.203.0' }
+                Assert-True ($plan.msixVersion -eq $expectedVersion) "Version routing: $eventName $ref $requested"
             }
         }
     }
@@ -63,19 +64,36 @@ try {
     $inputs.EventName = 'workflow_dispatch'
     Assert-Throws { & $planScript @inputs -RequestFlight $true } 'require workflow_dispatch'
     $inputs.Repository = 'aethersdr/AetherSDR'
-    $flightVersion = [version](& $planScript @inputs -RequestFlight $true).msixVersion
-    $inputs.RunNumber = 204; $inputs.EventName = 'push'
-    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2.1 LANGUAGES CXX)'
-    $productionVersion = [version](& $planScript @inputs).msixVersion
-    Assert-True ($productionVersion -gt $flightVersion) 'Next production must outrank a flight'
-    Assert-True ($productionVersion.Revision -eq 0) 'CalVer hotfix must not occupy Store revision'
+    Assert-True ((& $planScript @inputs -RequestFlight $true).msixVersion -eq '26.9.203.0') 'Flight keeps development numbering'
+    $inputs.EventName = 'push'; $inputs.Ref = 'refs/tags/v26.9.2'
+    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2 LANGUAGES CXX)'
+    foreach ($run in @(1, 205, 65535, 65536)) {
+        $inputs.RunNumber = $run
+        foreach ($flightId in @('', 'FLIGHT')) {
+            $inputs.FlightId = $flightId
+            $plan = & $planScript @inputs
+            Assert-True ($plan.msixVersion -eq '26.9.2.0') 'Production version must ignore run number and flight ID'
+            Assert-True ($plan.productionDraft -and -not $plan.publishFlight) 'Production remains draft-only'
+        }
+    }
+    $inputs.Ref = 'refs/tags/v26.9.1'
+    Assert-Throws { & $planScript @inputs } 'does not match the source version'
+    foreach ($invalidVersion in @('26.9.2.1', '26.9.65536', '26.9')) {
+        Set-Content -LiteralPath $project -Value "project(AetherSDR VERSION $invalidVersion LANGUAGES CXX)"
+        $inputs.Ref = "refs/tags/v$invalidVersion"
+        Assert-Throws { & $planScript @inputs } 'Production Store versions require'
+    }
+    $inputs.Ref = 'refs/tags/v26.9.2.0'
+    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2.0 LANGUAGES CXX)'
+    Assert-True ((& $planScript @inputs).msixVersion -eq '26.9.2.0') 'Explicit zero revision stays unchanged'
+    $inputs.EventName = 'workflow_dispatch'; $inputs.FlightId = 'FLIGHT'
     foreach ($valid in @(1, 65535)) {
         $inputs.RunNumber = $valid
-        Assert-True (([version](& $planScript @inputs).msixVersion).Build -eq $valid) 'Run number boundary'
+        Assert-True (([version](& $planScript @inputs -RequestFlight $true).msixVersion).Build -eq $valid) 'Development run number boundary'
     }
     foreach ($invalid in @(0, -1, 65536)) {
         $inputs.RunNumber = $invalid
-        Assert-Throws { & $planScript @inputs } 'MSIX component range 1\.\.65535'
+        Assert-Throws { & $planScript @inputs -RequestFlight $true } 'MSIX component range 1\.\.65535'
     }
     $inputs.RunNumber = 204
     Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION invalid)'
