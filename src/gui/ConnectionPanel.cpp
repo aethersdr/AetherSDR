@@ -1269,11 +1269,20 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
             this, &ConnectionPanel::onManualConnectClicked);
     connect(m_manualIpEdit, &QLineEdit::textChanged,
             this, &ConnectionPanel::onManualIpChanged);
+    // Editing the route hands control back to the operator, including while
+    // the asynchronous startup credential read is still pending.
+    connect(m_manualIpEdit, &QLineEdit::textEdited, this, [this] {
+        m_startupProbe = false;
+    });
+    connect(m_manualRadioTypeCombo, &QComboBox::activated, this, [this] {
+        m_startupProbe = false;
+    });
     // The address was CHOSEN, not typed — restore its remembered radio type.
     // `activated` fires only for a pick out of the popup, which is exactly the
     // gesture the per-address family restore was written for; the keystroke
     // path deliberately does not carry it (see applySavedSourceSelection).
     connect(m_manualIpCombo, &QComboBox::activated, this, [this](int) {
+        m_startupProbe = false;
         applySavedSourceSelection(m_manualIpEdit->text().trimmed(),
                                   /*restoreFamily=*/true);
     });
@@ -1553,6 +1562,10 @@ void ConnectionPanel::setConnected(bool connected)
         // Cleared on BOTH edges: a failed attempt must not commit on the next
         // unrelated connect, and a committed one must not commit twice.
         clearPendingIcomCredentials();
+    }
+
+    if (connected) {
+        m_startupProbe = false;
     }
 
     m_connected = connected;
@@ -2674,6 +2687,7 @@ void ConnectionPanel::onManualConnectClicked()
         return;
 
     m_manualConnectPending = true;
+    m_startupProbe = false;
     setManualMessage(QStringLiteral("Checking %1…").arg(ip));
     probeRadio(ip);
 }
@@ -2684,11 +2698,34 @@ void ConnectionPanel::onManualAdvancedToggled(bool checked)
     m_manualAdvancedWidget->setVisible(checked);
 }
 
+void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
+{
+    // A startup probe is the one probe with nobody reading the manual page.
+    // MainWindow has covered the window with "Looking for your radio…", and it
+    // suppressed the no-saved-radio dialog popup precisely BECAUSE a radio is
+    // saved — so setManualMessage() alone writes the reason onto a page behind a
+    // dialog that will never open. The operator is left with a spinner and no
+    // route back to the connection UI. Hand the reason up instead.
+    if (!m_startupProbe) {
+        return;
+    }
+    m_startupProbe = false;
+    emit startupConnectUnavailable(reason);
+}
+
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
         return;
+
+    // Latched, not assigned: the Icom keychain read below re-enters probeRadio()
+    // without restoreSavedFamily, and that second pass is still the same startup
+    // attempt. Cleared on failure, probe dispatch, a proven connection, or
+    // an operator route edit/manual connect.
+    if (restoreSavedFamily) {
+        m_startupProbe = true;
+    }
 
     // Interactive and automation probes keep the family currently selected by
     // the operator. Startup is the exception: it has no current operator
@@ -2713,6 +2750,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         updateManualAdvancedVisibility();
         setManualMessage("Choose a live source path before trying again.", true);
         m_manualConnectPending = false;
+        reportStartupProbeFailure(
+            QStringLiteral("The saved source path for this radio is unavailable."));
         return;
     }
 
@@ -2754,6 +2793,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                "radio. Check Network Control is ON in the radio's menu, then "
                                "enter the same credentials here."),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("This Icom needs its network user name and password."));
             return;
         }
         if (pass.isEmpty()) {
@@ -2774,6 +2815,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                     || panel->m_manualIpEdit->text().trimmed() != requestedHost) {
                     panel->resetManualConnectButton();
                     panel->m_manualConnectPending = false;
+                    panel->m_startupProbe = false;
                     return;
                 }
                 if (password.isEmpty()) {
@@ -2784,6 +2826,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                             "set on the radio, then connect once to remember it."),
                         true);
                     panel->m_manualConnectPending = false;
+                    panel->reportStartupProbeFailure(
+                        QStringLiteral("No saved password for this Icom."));
                     return;
                 }
                 if (panel->m_manualIcomPassEdit
@@ -2848,6 +2892,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                           .arg(m_manualIcomCivEdit->text().trimmed()));
                         m_manualIcomCivEdit->setFocus();
                         m_manualIcomCivEdit->selectAll();
+                        reportStartupProbeFailure(tr("The saved Icom CI-V address is invalid."));
                         return;
                     }
                 }
@@ -2902,6 +2947,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                     QStringLiteral("Could not resolve \"%1\". Check the name, or enter the "
                                    "radio's IP address instead.").arg(trimmedIp),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("Could not resolve \"%1\".").arg(trimmedIp));
                 return;
             }
             resolved = hostInfo.addresses().first();
@@ -2930,7 +2977,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         info.sessionBindAddress = m_pendingIcomSessionBindAddress;
         rememberManualIp(trimmedIp);
         resetManualConnectButton();
-        emit connectRequested(info);
+        finishManualProbe(info);
         return;
     }
 
@@ -2939,16 +2986,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // failure has already reported itself, and pointing the operator at the
         // radio would be actively wrong. (PR #4528 review.)
         const Hl2ProbeResult probe = probeHermesLite2(trimmedIp, bindSettings);
-        if (probe == Hl2ProbeResult::NoAnswer) {
-            resetManualConnectButton();
-            setManualMessage(
-                QStringLiteral("No Hermes-Lite 2 answered at %1. Check the address, and that the "
-                               "radio is powered, idle, and reachable on UDP port 1024.")
-                    .arg(trimmedIp),
-                true);
-        } else if (probe == Hl2ProbeResult::NotAttempted) {
-            resetManualConnectButton();
-        }
+        handleHl2ProbeResult(probe, trimmedIp);
         return;
     }
 
@@ -2961,6 +2999,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                "radio is powered, idle, and reachable on UDP port 1024.")
                     .arg(trimmedIp),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("No ANAN-G2 answered at %1.").arg(trimmedIp));
         } else if (probe == AnanProbeResult::NotAttempted) {
             resetManualConnectButton();
         }
@@ -2968,6 +3008,36 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
     }
 
     probeFlexRadio(trimmedIp, bindSettings);
+}
+
+void ConnectionPanel::handleHl2ProbeResult(Hl2ProbeResult probe, const QString& trimmedIp)
+{
+    if (probe == Hl2ProbeResult::NoAnswer) {
+        resetManualConnectButton();
+        setManualMessage(
+            QStringLiteral("No Hermes-Lite 2 answered at %1. Check the address, and that the "
+                           "radio is powered, idle, and reachable on UDP port 1024.")
+                .arg(trimmedIp),
+            true);
+        reportStartupProbeFailure(
+            QStringLiteral("No Hermes-Lite 2 answered at %1.").arg(trimmedIp));
+    } else if (probe == Hl2ProbeResult::NotAttempted) {
+        // probeHermesLite2() has already reported its own reason, upward
+        // included; only the button needs restoring here.
+        resetManualConnectButton();
+    }
+}
+
+void ConnectionPanel::finishManualProbe(const RadioInfo& info, bool routedOnly)
+{
+    // Discovery has handed off to the session layer. A later session failure
+    // or interactive probe must not inherit this startup probe's ownership.
+    m_startupProbe = false;
+    if (routedOnly) {
+        emit routedRadioFound(info);
+    } else {
+        emit connectRequested(info);
+    }
 }
 
 void ConnectionPanel::refitToContent()
@@ -3030,11 +3100,15 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 QStringLiteral("AetherSDR could not use that VPN source path. "
                                "Try Auto or choose another path."),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("The saved source path for this radio is unavailable."));
         } else {
             setManualMessage(
                 QStringLiteral("Could not open a UDP socket to probe for a "
                                "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not open a UDP socket to reach the Hermes-Lite 2."));
         }
         return Hl2ProbeResult::NotAttempted;
     }
@@ -3072,6 +3146,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     : QStringLiteral("“%1” has no IPv4 address, and a Hermes-Lite 2 "
                                      "is reachable over IPv4 only.").arg(ip),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not resolve “%1” to an IPv4 address.").arg(ip));
             return Hl2ProbeResult::NotAttempted;
         }
     }
@@ -3087,6 +3163,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
             QStringLiteral("Could not send a discovery request to %1: %2")
                 .arg(dest.toString(), hpsdr.errorString()),
             true);
+        reportStartupProbeFailure(
+            QStringLiteral("Could not send a discovery request to %1.").arg(dest.toString()));
         return Hl2ProbeResult::NotAttempted;
     }
 
@@ -3147,6 +3225,9 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
                                    "and can't be shared.").arg(ip),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("The Hermes-Lite 2 at %1 is in use by another client.")
+                        .arg(ip));
                 return Hl2ProbeResult::Answered;
             }
 
@@ -3160,7 +3241,7 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
             // A staged Icom credential belongs to the attempt it was staged for.
             clearPendingIcomCredentials();
-            emit connectRequested(info);
+            finishManualProbe(info);
             return Hl2ProbeResult::Answered;
         }
     }
@@ -3199,6 +3280,8 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
                                "ANAN-G2: %1").arg(hpsdr.errorString()),
                 true);
         }
+        reportStartupProbeFailure(
+            QStringLiteral("Could not probe the ANAN-G2 at %1. Check the source path and address.").arg(ip));
         return AnanProbeResult::NotAttempted;
     }
 
@@ -3221,6 +3304,8 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
                     : QStringLiteral("“%1” has no IPv4 address, and an ANAN-G2 "
                                      "is reachable over IPv4 only.").arg(ip),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not resolve an IPv4 address for the ANAN-G2 at %1.").arg(ip));
             return AnanProbeResult::NotAttempted;
         }
     }
@@ -3234,6 +3319,8 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
             QStringLiteral("Could not send a discovery request to %1: %2")
                 .arg(dest.toString(), hpsdr.errorString()),
             true);
+        reportStartupProbeFailure(
+            QStringLiteral("Could not probe the ANAN-G2 at %1. Check the source path and address.").arg(ip));
         return AnanProbeResult::NotAttempted;
     }
 
@@ -3284,6 +3371,8 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
                     QStringLiteral("The ANAN-G2 at %1 is already in use by another client "
                                    "and can't be shared.").arg(ip),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("The ANAN-G2 at %1 is in use by another client.").arg(ip));
                 return AnanProbeResult::Answered;
             }
 
@@ -3292,7 +3381,7 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
             setManualMessage(
                 QStringLiteral("Found an ANAN-G2 at %1 — connecting.").arg(ip), false);
             clearPendingIcomCredentials();
-            emit connectRequested(info);
+            finishManualProbe(info);
             return AnanProbeResult::Answered;
         }
     }
@@ -3315,6 +3404,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
+        reportStartupProbeFailure(
+            QStringLiteral("The saved source path for this radio is unavailable."));
         return;
     }
 
@@ -3332,6 +3423,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                                "address and try Advanced only if your VPN exposes multiple adapters.")
                     .arg(trimmedIp),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("No radio responded at %1.").arg(trimmedIp));
         }
     });
 
@@ -3440,12 +3533,12 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                 // A staged Icom credential belongs to the attempt it was staged for.
                 clearPendingIcomCredentials();
                 m_manualConnectPending = false;
-                emit connectRequested(info);
+                finishManualProbe(info);
             } else {
                 setManualMessage(
                     QStringLiteral("Found a radio at %1 and saved the path for later.")
                         .arg(trimmedIp));
-                emit routedRadioFound(info);
+                finishManualProbe(info, /*routedOnly=*/true);
             }
         };
 
@@ -3489,6 +3582,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
+        reportStartupProbeFailure(
+            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString()));
     });
 }
 

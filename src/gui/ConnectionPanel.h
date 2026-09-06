@@ -127,6 +127,10 @@ signals:
     void retryDiscoveryRequested();
     void networkDiagnosticsRequested();
     void smartLinkLoginRequested(const QString& email, const QString& password);
+    // A startup auto-connect gave up before it could reach the radio. Carries
+    // the operator-facing reason, which would otherwise be stranded on the
+    // manual page (see reportStartupProbeFailure).
+    void startupConnectUnavailable(const QString& reason);
 
 private slots:
     void onConnectionModeClicked(int id);
@@ -202,6 +206,13 @@ private:
     };
     AnanProbeResult probeAnan(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
+    // Reports early startup credential/configuration or directed-probe failures.
+    // Session authentication failures and broadcast discovery are separate paths.
+    // Interactive/automation attempts are silent once the startup probe ends.
+    void reportStartupProbeFailure(const QString& reason);
+    void handleHl2ProbeResult(Hl2ProbeResult probe, const QString& ip);
+    void finishManualProbe(const RadioInfo& info, bool routedOnly = false);
+    friend struct ConnectionPanelStartupTestAccess;
     void resetManualConnectButton();
     // Re-activate the body layout after a page change. The overlap this used to
     // guard against — the Advanced section expanding, or the result line
@@ -333,6 +344,12 @@ private:
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
     bool         m_manualConnectPending{false};
+    // Set for the duration of a startup probe (probeRadio's restoreSavedFamily
+    // call), which is the one probe with no operator watching the manual page.
+    // Ends on failure, dispatch to the session layer, a proven connection,
+    // or an operator route edit/manual connect; an async credential re-entry
+    // alone is still part of the same probe.
+    bool         m_startupProbe{false};
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry
 

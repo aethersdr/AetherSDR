@@ -2578,6 +2578,23 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    // A startup auto-connect that gives up must hand the window back. The
+    // no-saved-radio popup above is suppressed whenever LastConnectedRadioSerial
+    // is set, so without this a saved radio that cannot be reached leaves the
+    // "Looking for your radio…" overlay up forever with no offered way into the
+    // connection dialog — the operator has to know the Settings menu item exists.
+    connect(m_connPanel, &ConnectionPanel::startupConnectUnavailable,
+            this, [this](const QString& reason) {
+        if (m_userDisconnected || m_radioModel.isConnected()) {
+            return;
+        }
+        setPanadapterConnectionAnimation(false);
+        m_connPanel->setStatusText(reason);
+        // show, not toggle: toggleConnectionDialog() would hide a dialog the
+        // operator had already opened while the probe was still in flight.
+        showConnectionDialog();
+    });
+
     // Probe saved routed radio on startup
     {
         auto& s = AppSettings::instance();

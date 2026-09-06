@@ -3880,6 +3880,26 @@ add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# A startup auto-connect that gives up must reopen the connection dialog rather
+# than leave the "Looking for your radio…" overlay up with no way back.
+#
+# Socket-free: inject the directed-probe outcome; never start radio discovery,
+# open a transport, or consult the operator's keychain.
+add_executable(startup_autoconnect_lockout_test
+    tests/startup_autoconnect_lockout_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(startup_autoconnect_lockout_test PRIVATE src tests)
+target_link_libraries(startup_autoconnect_lockout_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(startup_autoconnect_lockout_test PROPERTIES AUTOMOC ON)
+add_test(NAME startup_autoconnect_lockout_test COMMAND startup_autoconnect_lockout_test)
+set_tests_properties(startup_autoconnect_lockout_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FramelessResizer's clampManualResize()/windowOwnsChain() pure-logic
 # helpers (#4827/#4829 review). offscreen never exercises the real manual
 # resize path end-to-end (see FramelessResizer.h), so this is coverage for
@@ -4482,6 +4502,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    startup_autoconnect_lockout_test
     hl2_gain_restore_test
     icom_identity_test
     icom_control_profile_test
