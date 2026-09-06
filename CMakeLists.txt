@@ -1059,6 +1059,7 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/MeterApplet.cpp
