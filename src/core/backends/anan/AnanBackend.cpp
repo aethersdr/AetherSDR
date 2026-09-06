@@ -1,8 +1,16 @@
 #include "core/backends/anan/AnanBackend.h"
+#include "core/backends/anan/AnanDroopCalibrator.h"
+#include "core/backends/anan/AnanSettings.h"
+#include "core/AppSettings.h"
+#include "core/RadioSettingsScope.h"
 
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QTimer>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <array>
 #include <cmath>
@@ -164,7 +172,9 @@ AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
         // unlike Hl2Backend's own two call sites, there is no second place
         // this needs to be re-derived from. Bounds match
         // capabilities().sampleRatesHz's own endpoints (48-1536 ksps).
-        emit panBandwidthLimitsChanged(kPanId, 48'000.0 / 1.0e6, 1'536'000.0 / 1.0e6);
+        emit panBandwidthLimitsChanged(kPanId,
+                                      kDdc0RatesKsps.front() * 1000.0 / 1.0e6,
+                                      kDdc0RatesKsps.back() * 1000.0 / 1.0e6);
         if (wasRateChange) {
             // Audio was muted in beginRateChange(), BEFORE this session's
             // session even started -- see that function's comment for why
@@ -277,7 +287,8 @@ RadioCapabilities AnanBackend::capabilities() const
     c.model = QStringLiteral("ANAN-G2");
     c.maxSlices = 1;
     c.maxPanadapters = 1;
-    c.sampleRatesHz = {48000, 96000, 192000, 384000, 768000, 1536000};
+    for (const int ksps : kDdc0RatesKsps)
+        c.sampleRatesHz.append(ksps * 1000);
     // Not reported -- no verified G2 tuning range (RFC: "I have not fetched
     // the Apache Labs G2 manual"). RadioCapabilities.h's own convention:
     // both zero means "not reported", not a guess.
@@ -297,8 +308,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.persistsMemories = false;    // default; stated explicitly
     c.clientSettingsDomains = {};  // no applyRestoredState()/currentOperatingState() yet
-    c.extensionNamespaces = {};    // no "anan" extension VERBS yet -- see below,
-                                    // this is about invokeExtension(), not this map
+    c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 CIC droop,
+                                    // corrected client-side via AnanDroopCalibrator
+    c.extensionNamespaces = {QStringLiteral("anan")};  // "droop.apply" -- see invokeExtension()
     // Genuinely discovered, not hardcoded (working plan Step 2's "Capabilities
     // from discovery" item) -- P2Client::discoveryInfoReceived() parses THIS
     // session's own Discovery reply opportunistically as it arrives (P2Client's
@@ -339,6 +351,29 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_discoveredBoardId = 0;
     m_discoveredFirmwareVer = 0;
     m_discoveredNumDdc = 0;
+
+    // Per-radio identity for RadioSettingsScope (droop calibration -- see
+    // invokeExtension()'s "droop.apply" handler). Set BEFORE the seed load
+    // just below, and before anything else in this function needs it,
+    // matching Hl2Backend's own m_radioSerial assignment ordering.
+    m_radioSerial = request.serial;
+    if (m_dsp) {
+        // Forget the PREVIOUS radio's tables before seeding this one's. The
+        // seed below only inserts, and m_dsp is constructed once for the
+        // lifetime of this backend -- so without this, connecting a second,
+        // uncalibrated G2 in the same session renders it through the first
+        // one's per-bin corrections. See
+        // AnanRxDsp::clearDroopCorrectionTables().
+        QMetaObject::invokeMethod(m_dsp, "clearDroopCorrectionTables",
+                                  Qt::QueuedConnection);
+        const auto tables = AnanDroopCalibrator::loadTables(
+            RadioSettingsScope(QStringLiteral("anan"), m_radioSerial));
+        for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
+            QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable", Qt::QueuedConnection,
+                Q_ARG(int, it.key()),
+                Q_ARG(std::vector<float>, std::vector<float>(it.value().begin(), it.value().end())));
+        }
+    }
 
     m_pendingParams.host = request.host;
     m_pendingParams.ddc0RateKsps =
@@ -534,6 +569,19 @@ void AnanBackend::disconnectRadio()
     // ever clear it.
     if (m_dsp)
         QMetaObject::invokeMethod(m_dsp, "setAudioMuted", Qt::QueuedConnection, Q_ARG(bool, false));
+    // The droop tables are per-RADIO and m_dsp outlives any one connection,
+    // so they go with the radio they were measured on. Clearing here (as well
+    // as before connectRadio()'s seed) means a disconnected session cannot
+    // leave a stale correction armed for whatever connects next, by any path.
+    // The bypass flag is cleared too: a disconnect mid-sweep stops the
+    // calibrator (RadioModel's own connectionStateChanged handler) but its
+    // finishSweep() cannot reach a backend that is already gone.
+    if (m_dsp) {
+        QMetaObject::invokeMethod(m_dsp, "clearDroopCorrectionTables",
+                                  Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionBypassed",
+                                  Qt::QueuedConnection, Q_ARG(bool, false));
+    }
     // linkDown() (constructor-wired) sets m_connected = false and emits
     // disconnected() once P2Client::stop() actually runs.
 }
@@ -657,12 +705,11 @@ int AnanBackend::nearestDdc0RateKsps(int requestedKsps) noexcept
     // under ratio distance -- the equivalent equidistant point is
     // 96*sqrt(2) =~ 135.76 ksps, not an integer any real zoom request lands
     // on -- so no tie-break is needed here, matching the HL2 version exactly.
-    static constexpr std::array<int, 6> kRatesKsps = {48, 96, 192, 384, 768, 1536};
     if (requestedKsps <= 0)
-        return kRatesKsps.front();
-    int best = kRatesKsps.front();
+        return kDdc0RatesKsps.front();
+    int best = kDdc0RatesKsps.front();
     double bestDistance = std::numeric_limits<double>::infinity();
-    for (const int r : kRatesKsps) {
+    for (const int r : kDdc0RatesKsps) {
         const double distance = std::abs(std::log(static_cast<double>(requestedKsps) / r));
         if (distance < bestDistance) {
             bestDistance = distance;
@@ -747,6 +794,13 @@ void AnanBackend::beginRateChange(int newRateKsps)
     // build to another thread alone would do nothing if the old
     // stop-before-build ordering were kept, since the session would still
     // sit torn down for however long the build takes either way.
+    // Remember what is ACTUALLY running before overwriting it. On the
+    // failure path below, the old channel and old session keep running at
+    // this rate (finishRateChange()'s own comment) while these two fields
+    // would otherwise keep describing a rate that never landed -- and
+    // emitPanState() reports from m_pendingDspConfig, so every consumer of
+    // pan bandwidth would be told the change succeeded.
+    m_preRateChangeKsps = m_pendingParams.ddc0RateKsps;
     m_pendingParams.ddc0RateKsps = newRateKsps;
     m_pendingDspConfig.inputSampleRateHz = newRateKsps * 1000;
     // Refresh from CURRENT live operator state, not connectRadio()'s
@@ -798,6 +852,17 @@ void AnanBackend::finishRateChange(quint64 generation, bool ok, const QString& e
         return;   // superseded by a newer rate change/connect/disconnect
 
     if (!ok) {
+        // Roll the reported rate back to the one still running BEFORE
+        // emitting pan state. AnanDroopCalibrator infers "the rate landed"
+        // from pan bandwidth reaching its target; told the failed rate had
+        // landed, it would measure the OLD rate's spectrum into the NEW
+        // rate's correction table and persist it -- one rate's droop curve
+        // applied to another rate's bins, which is exactly the cross-rate
+        // corruption anan_rxdsp_handedness_test's Group 6 exists to prevent.
+        if (m_preRateChangeKsps > 0) {
+            m_pendingParams.ddc0RateKsps = m_preRateChangeKsps;
+            m_pendingDspConfig.inputSampleRateHz = m_preRateChangeKsps * 1000;
+        }
         emit connectionError(error);
         // Safe to clear m_rateChanging immediately here, unlike
         // startP2ClientSession()'s own failure branch below: the OLD
@@ -876,18 +941,101 @@ void AnanBackend::setKeying(bool key)
                  "(canTransmit=false) -- the engine TX guard should have refused this");
 }
 
+QString AnanBackend::persistDroopTables(const QMap<int, anan::DroopCorrectionTable>& tables)
+{
+    if (tables.isEmpty())
+        return QStringLiteral("the request carried no valid correction table");
+    // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope falls
+    // back exact-radio -> family-wide on read, so a row written with no
+    // identity would be silently adopted by every ANAN that has none of its
+    // own -- the same guard Hl2Backend::applyFreqCalPpb() uses. This is the
+    // one thing saveTables() cannot judge for itself: a family-wide scope is
+    // perfectly VALID, just not what a per-radio calibration wants.
+    if (m_radioSerial.isEmpty()) {
+        return QStringLiteral("no radio identity yet -- the correction is live "
+                              "for this session only");
+    }
+    return AnanDroopCalibrator::saveTables(
+        RadioSettingsScope(QStringLiteral("anan"), m_radioSerial), tables);
+}
+
 void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
-    Q_UNUSED(ns);
-    Q_UNUSED(verb);
-    Q_UNUSED(arg);
-    // No extension namespaces advertised (capabilities().extensionNamespaces
-    // is empty) -- matches FlexBackend/Hl2Backend's own precedent for a
-    // namespace with no encode path yet: fail the specific request rather
-    // than hang a caller waiting for a reply that will never come.
+    if (ns == QLatin1String("anan")) {
+        // Droop-correction calibration. Completes LOCALLY -- like Hl2Backend's
+        // freqcal.set, there is no device round trip to await: the tables are
+        // host-side data pushed straight to AnanRxDsp, and persistence + live
+        // application happen in exactly this one place, never duplicated
+        // between AnanDroopCalibrator's own caller (a UI tab or the
+        // `droopcal` bridge verb) and this handler.
+        // Suspends/restores droop correction for the duration of a sweep, so
+        // the calibrator measures the radio rather than its own corrected
+        // output -- see AnanRxDsp::setDroopCorrectionBypassed(). Routed
+        // through this seam, not called on m_dsp directly, because m_dsp
+        // lives on another thread and the calibrator has no handle on it.
+        if (verb == QLatin1String("droop.bypass")) {
+            if (m_dsp) {
+                QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionBypassed",
+                    Qt::QueuedConnection, Q_ARG(bool, arg.toBool()));
+            }
+            if (requestId != 0)
+                emit extensionResult(requestId, true);
+            return;
+        }
+
+        if (verb == QLatin1String("droop.apply")) {
+            const QVariantMap byRate = arg.toMap();
+
+            // Validate EVERYTHING before touching either the DSP or the
+            // store, so a half-malformed request cannot leave the live tables
+            // and the persisted ones disagreeing about which rates are good.
+            QMap<int, DroopCorrectionTable> accepted;
+            for (auto it = byRate.constBegin(); it != byRate.constEnd(); ++it) {
+                bool okRate = false;
+                const int rateKsps = it.key().toInt(&okRate);
+                const QVariantList list = it.value().toList();
+                if (!okRate || list.size() != kDroopCorrectionFftSize)
+                    continue;   // malformed entry -- skip, do not corrupt the rest
+                DroopCorrectionTable table{};
+                for (int i = 0; i < list.size(); ++i)
+                    table[static_cast<std::size_t>(i)] = list[i].toFloat();
+                accepted.insert(rateKsps, table);
+            }
+
+            for (auto it = accepted.constBegin(); it != accepted.constEnd(); ++it) {
+                if (m_dsp) {
+                    QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable",
+                        Qt::QueuedConnection, Q_ARG(int, it.key()),
+                        Q_ARG(std::vector<float>,
+                              std::vector<float>(it.value().begin(), it.value().end())));
+                }
+            }
+
+            const QString failure = persistDroopTables(accepted);
+            if (!failure.isEmpty()) {
+                // AGENTS.md / PR #4621: a mutation that silently does not
+                // persist while the UI repaints from the store is the worst
+                // failure shape. Loud here, AND reported back -- the dialog
+                // used to print "live and saved" unconditionally.
+                qWarning("AnanBackend: droop calibration not saved -- %s",
+                         qUtf8Printable(failure));
+                if (requestId != 0)
+                    emit extensionError(requestId, failure);
+                return;
+            }
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("applied"), accepted.size()},
+                    {QStringLiteral("persisted"), true}});
+            }
+            return;
+        }
+    }
+    // No other ANAN extension verbs; honor the async contract without hanging.
     if (requestId != 0)
-        emit extensionError(requestId, QStringLiteral("ANAN: no extension namespaces implemented"));
+        emit extensionError(requestId, QStringLiteral("ANAN: unknown extension verb '%1.%2'")
+                                           .arg(ns, verb));
 }
 
 void AnanBackend::emitSliceState()

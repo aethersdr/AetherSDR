@@ -908,7 +908,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         tr("DDC0 sample rate (ksps) -- also the starting width of the panadapter span.\n"
            "Higher rates use more of the radio's Ethernet link."));
     AetherSDR::applyComboStyle(m_manualAnanRateCombo, comboExtraRules);
-    for (const int ksps : {48, 96, 192, 384, 768, 1536})
+    for (const int ksps : anan::kDdc0RatesKsps)
         m_manualAnanRateCombo->addItem(tr("%1 ksps").arg(ksps), ksps);
     {
         const int idx = m_manualAnanRateCombo->findData(anan::AnanSettings::ddc0RateKsps());

@@ -1511,6 +1511,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
     c.hostFrequencyCalibration = true;
+    // Not yet measured/calibrated for this radio -- see
+    // RadioCapabilities::hostDroopCalibration's own comment on why "false"
+    // here is not a claim the HL2's DDC has no droop, only that nothing has
+    // characterised or corrected one.
+    c.hostDroopCalibration = false;
     // Declared because invokeExtension() now implements it (freqcal.get / .set /
     // .set_live). This field is the handshake a client pre-checks before issuing
     // an extension call, so leaving it empty while the verbs work would report

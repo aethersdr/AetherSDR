@@ -324,6 +324,17 @@ struct RadioCapabilities {
     // varies is whether correcting it is the client's job.
     bool hostFrequencyCalibration = false;
 
+    // The client corrects a REAL DDC0 CIC/decimation droop on this radio's
+    // own panadapter samples (AnanDroopCorrection.h) because nothing in the
+    // wire protocol characterises or corrects it on-radio. True only for the
+    // ANAN-G2 today. Gates the Droop Correction settings tab and the
+    // `droopcal` bridge verb, mirroring hostFrequencyCalibration above.
+    //
+    // NOT "does this radio have a droop" — the physics is per-model, not
+    // per-family-policy the way frequency correction is. What varies is
+    // whether the client has measured and can correct it.
+    bool hostDroopCalibration = false;
+
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
     // The radio exposes an authoritative, client-settable dial lock. This is

@@ -3232,6 +3232,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doFreqCal(a.action, a.value);
             });
 
+        add("droopcal", {},
+            "droopcal [status|start|stop|apply] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDroopCal(a.action, a.value);
+            });
+
         add("targettune", {},
             "targettune <mhz> — absolute tune through band-stack preselection",
             parseValueOnly,
@@ -7910,6 +7917,95 @@ QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& va
     }
 
     return err(QStringLiteral("freqcal: unknown action '%1' (get|set|from_vfo|reset)")
+                   .arg(action));
+}
+
+QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& value)
+{
+    Q_UNUSED(value);
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (!m_radioModel->backendCapabilities().hostDroopCalibration) {
+        return err(QStringLiteral("droopcal: this radio has no measured DDC0 droop to correct"));
+    }
+
+    AnanDroopCalibrator& cal = m_radioModel->droopCalibrator();
+    const QString verb = action.isEmpty() ? QStringLiteral("status") : action.toLower();
+
+    // Direct, synchronous read of the LIVE calibrator -- unlike freqcal's
+    // state (which only exists inside the backend, reached through
+    // RadioSettingsScope/loadPpb), this object is directly reachable, so no
+    // invokeBackendExtension round trip is needed just to report status.
+    auto report = [&cal] {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("running"), cal.isRunning()},
+            {QStringLiteral("rateIndex"), cal.rateIndex()},
+            {QStringLiteral("totalRates"), cal.totalRates()},
+            {QStringLiteral("hasResult"), cal.hasResult()},
+        };
+    };
+
+    if (verb == QLatin1String("status"))
+        return report();
+
+    if (verb == QLatin1String("start")) {
+        // Same refusal freqcal's mutating verbs make: a write (here, the
+        // eventual Apply) with no radio identity would land on the
+        // family-wide default row and be inherited by every other radio of
+        // this family.
+        if (m_radioModel->settingsScope().radioId().isEmpty()) {
+            return err(QStringLiteral("droopcal: no radio identity yet — connect the radio "
+                                      "before calibrating"));
+        }
+        // BEFORE the call, not after. start() is a documented no-op while a
+        // sweep is running, so the isRunning() re-check below would pass on
+        // the FIRST sweep still running and answer ok:true as though a second
+        // had begun -- a script would then read the first sweep's progress as
+        // its own.
+        if (cal.isRunning()) {
+            return err(QStringLiteral("droopcal: a sweep is already running -- stop it "
+                                      "before starting another"));
+        }
+        cal.start();
+        // start() refuses (no active panadapter) by emitting error() and
+        // returning, leaving the phase Idle. Reporting ok:true with
+        // running:false there makes the refusal invisible to automation --
+        // the #5263 loud-drop shape: a script would sit polling `status` for
+        // a sweep that was never going to begin.
+        if (!cal.isRunning()) {
+            return err(QStringLiteral("droopcal: sweep did not start -- no active "
+                                      "panadapter to sweep"));
+        }
+        return report();
+    }
+    if (verb == QLatin1String("stop")) {
+        cal.stop();
+        return report();
+    }
+    if (verb == QLatin1String("apply")) {
+        // applyResult() completes synchronously (AnanBackend's droop.apply
+        // handler has no device round trip), reporting EVERY refusal -- a
+        // sweep still running, nothing measured yet, no radio connected, a
+        // write the settings store declined, a stored row with a newer schema
+        // -- through error(). Capturing it here is what keeps `droopcal
+        // apply` from answering ok:true for a correction that was never
+        // saved. That claim only became true when applyResult()'s own
+        // preconditions stopped returning silently; the guard belongs there
+        // rather than duplicated here, so the dialog's Apply button is
+        // covered by the same fix.
+        QString failure;
+        const QMetaObject::Connection conn =
+            QObject::connect(&cal, &AnanDroopCalibrator::error, &cal,
+                             [&failure](const QString& reason) { failure = reason; });
+        cal.applyResult();
+        QObject::disconnect(conn);
+        if (!failure.isEmpty())
+            return err(QStringLiteral("droopcal: %1").arg(failure));
+        return report();
+    }
+
+    return err(QStringLiteral("droopcal: unknown action '%1' (status|start|stop|apply)")
                    .arg(action));
 }
 

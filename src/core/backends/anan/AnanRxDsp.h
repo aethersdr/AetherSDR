@@ -9,8 +9,12 @@
 #include <numbers>
 #include <vector>
 
+#include "core/backends/anan/AnanDroopCorrection.h"
+#include "core/backends/anan/P2Protocol.h"   // kDdc0RatesKsps
 #include "core/backends/anan/AnanSpectrum.h"
 #include "core/dsp/WdspChannel.h"
+
+#include <QMap>
 
 namespace AetherSDR::anan {
 
@@ -89,6 +93,14 @@ public:
         std::unique_ptr<WdspChannel> channel;
         std::unique_ptr<AnanSpectrum> spectrum;
         std::size_t outputBlockSize = 0;
+        // The DDC0 rate buildChannel() actually built this channel for.
+        // installChannel() copies it into m_config.inputSampleRateHz on
+        // swap -- the only place that field is updated for a live rate
+        // change, since buildChannel() runs off this object's own thread and
+        // cannot touch m_config directly. Without this, droopTableForRate()
+        // keeps reading the connect-time rate forever after the first zoom,
+        // applying one rate's correction curve to a different rate's data.
+        int inputSampleRateHz = 0;
         std::string error;   // set iff channel == nullptr
     };
 
@@ -151,6 +163,49 @@ public:
     // throttling downstream -- the reasoning is WDSP/FFT-cost arithmetic,
     // not anything ANAN-specific, and transfers unchanged.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
+
+    // Installs the measured per-bin dB correction for ONE DDC0 rate (see
+    // AnanDroopCorrection.h). Ignored -- no change, no crash -- if `table`
+    // is not exactly kDroopCorrectionFftSize long or rateKsps is not one of
+    // the six valid ANAN-G2 DDC0 rates: a caller passing a stale or
+    // malformed table must never silently misalign bin k against the wrong
+    // correction. Callers: AnanBackend seeds this from persisted per-radio
+    // settings at connect, and AnanDroopCalibrator pushes freshly measured
+    // tables live once a sweep completes. std::vector<float>, not
+    // DroopCorrectionTable, because qRegisterMetaType<std::vector<float>>
+    // is already registered (constructor, for spectrumReady/audioReady) --
+    // reusing it avoids adding a second metatype for the same threading
+    // need.
+    Q_INVOKABLE void setDroopCorrectionTable(int rateKsps, const std::vector<float>& table);
+
+    // Suspends droop correction WITHOUT discarding the measured tables, so
+    // AnanDroopCalibrator can measure the radio instead of measuring its own
+    // output. The sweep taps the same spectrumReady bins the panadapter
+    // paints; with correction live, the second sweep an operator runs sees an
+    // already-flattened curve, computes a near-zero table from it, and Apply
+    // persists that over the good one.
+    //
+    // A bypass FLAG rather than "push kDroopCorrectionZero for each rate":
+    // pushing a zero-valued table through setDroopCorrectionTable() stores a
+    // COPY, so droopTableForRate() no longer returns the kDroopCorrectionZero
+    // object itself and processIqBlock()'s `&droopTable != &kDroopCorrectionZero`
+    // identity test still reads true -- the synthetic 12 dB edge fade would
+    // stay on and be measured as if it were hardware droop. Routing the
+    // bypass through droopTableForRate() keeps both suppressions on the one
+    // switch they were always meant to share. It is also non-destructive: an
+    // abort, a disconnect, or a crash mid-sweep cannot lose a calibration
+    // that was only ever hidden, never overwritten.
+    Q_INVOKABLE void setDroopCorrectionBypassed(bool bypassed);
+    [[nodiscard]] bool droopCorrectionBypassed() const noexcept { return m_droopBypassed; }
+
+    // Forgets every measured table. This object is constructed ONCE and
+    // survives disconnect/reconnect, while the tables are per-RADIO -- so
+    // without this, calibrated G2 #1 -> disconnect -> G2 #2 renders #2's
+    // spectrum through #1's per-bin corrections (plus the edge fade on top),
+    // with the Droop tab showing nothing, since it reads the calibrator's
+    // measuredTables() and those are empty. AnanBackend calls this on
+    // disconnect and again before seeding a fresh connect's tables.
+    Q_INVOKABLE void clearDroopCorrectionTables();
 
     // Exposes the active channel for testing installChannel()'s reapply
     // behaviour (mode/filter/AGC/shift surviving a rebuild swap) without a
@@ -275,6 +330,18 @@ private:
     DcBlocker m_dcBlockL, m_dcBlockR;
     std::vector<float> m_stereo;                    // interleaved audio out
     std::vector<float> m_bins;                      // spectrum scratch
+
+    // Live droop-correction tables, keyed by DDC0 rate in ksps -- see
+    // setDroopCorrectionTable(). Survives a rate-change rebuild untouched:
+    // installRebuiltChannel() swaps m_channel/m_spectrum, not this object,
+    // and the correction is applied to m_bins after the FFT, independent of
+    // which WdspChannel produced the IQ that fed it.
+    QMap<int, DroopCorrectionTable> m_droopTables;
+    // See setDroopCorrectionBypassed(). Deliberately NOT cleared by
+    // clearDroopCorrectionTables(): "am I mid-sweep" is a property of the
+    // sweep, not of which tables happen to be loaded.
+    bool m_droopBypassed = false;
+    [[nodiscard]] const DroopCorrectionTable& droopTableForRate(int rateKsps) const noexcept;
 };
 
 }  // namespace AetherSDR::anan

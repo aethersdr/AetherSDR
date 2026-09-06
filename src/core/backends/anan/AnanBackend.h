@@ -4,6 +4,7 @@
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/P2Client.h"
 
+#include <QMap>
 #include <QString>
 #include <QThread>
 #include <QTimer>
@@ -140,6 +141,15 @@ private:
     // see its own definition comment for the retry-window fix folded in
     // here too.
     void finishRateChange(quint64 generation, bool ok, const QString& error);
+
+    // Identity guard for the droop-calibration write, in front of
+    // AnanDroopCalibrator::saveTables() (which owns the merge, the schema
+    // guard and the codec). Returns an empty string on success, or the
+    // operator-facing reason it did not persist -- never void: the caller
+    // reports the outcome to the dialog and the bridge, which both used to
+    // claim success regardless.
+    [[nodiscard]] QString persistDroopTables(
+        const QMap<int, anan::DroopCorrectionTable>& tables);
     // If a zoom request arrived while a previous one was still in flight
     // (m_pendingBandwidthKsps != 0), starts it now. Called from every path
     // that clears m_rateChanging -- linkUp success and both finishDspSetup()
@@ -259,6 +269,25 @@ private:
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;
     static const QString kPanId;
+
+    // This radio's identity for per-radio settings (RadioSettingsScope,
+    // "anan" family) -- the droop-calibration table, currently the only
+    // per-radio ANAN state. Set from RadioConnectRequest::serial (populated
+    // by ConnectionPanel from AnanDiscovery::macToSerial()) at the top of
+    // connectRadio(), matching Hl2Backend's own m_radioSerial precedent.
+    // Empty before the first connect. RadioSettingsScope::isValid() only
+    // requires a non-empty FAMILY, not radioId, so a still-empty serial does
+    // not make reads/writes fail -- it silently targets the family-wide
+    // default row instead of one specific radio's, which is why droopcal's
+    // `start` action guards on settingsScope().radioId().isEmpty()
+    // explicitly, matching freqcal's own guard, rather than trusting isValid().
+    QString m_radioSerial;
+
+    // The DDC0 rate actually running, captured at the top of
+    // beginRateChange() before the pending fields are overwritten, so
+    // finishRateChange()'s failure path can put them back. 0 until the first
+    // rate change. See beginRateChange()'s own comment.
+    int m_preRateChangeKsps = 0;
 };
 
 }  // namespace AetherSDR::anan

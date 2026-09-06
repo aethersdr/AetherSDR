@@ -1912,7 +1912,14 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
 
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
+    , m_droopCalibrator(this)
 {
+    // A radio disconnecting mid-sweep must not leave the calibrator polling
+    // a panadapter/rate that no longer exists -- nothing else guards this.
+    connect(this, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (!connected)
+            m_droopCalibrator.stop();
+    });
     // Register the typed seam-delta payloads so IRadioBackend's normalized
     // signals survive a queued connection. Today decode*Status runs synchronously
     // on this thread (AutoConnection → DirectConnection, no metatype needed), but

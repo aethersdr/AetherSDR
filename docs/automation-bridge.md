@@ -3886,7 +3886,7 @@ receiver capacity. It never enables transmit and remains available without
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 72 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 73 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3924,6 +3924,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
+| `droopcal` | — | droopcal [status\|start\|stop\|apply] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
