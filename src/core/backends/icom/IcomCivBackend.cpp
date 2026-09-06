@@ -549,10 +549,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasRadioSideWaterfallAutoBlack = false;
     const MemoryProfile* memory = m_model && profileFor(*m_model).memory
         ? &*profileFor(*m_model).memory : nullptr;
-    c.persistsMemories = memory != nullptr;
+    // The AetherSDR memory model is always the shared client database for
+    // Icom. A model-specific codec only adds an explicit radio-to-database
+    // Sync source; it does not hand ownership of the working store to the
+    // radio.
+    c.persistsMemories = false;
     c.canWriteMemories = false;
     c.canApplyMemories = false;
-    c.canRefreshMemories = c.persistsMemories;
+    c.canRefreshMemories = memory != nullptr;
     if (memory) {
         c.memoryGroupColumnTitle = QString::fromLatin1(memory->groupColumnTitle.data(),
             static_cast<qsizetype>(memory->groupColumnTitle.size()));
@@ -813,6 +817,11 @@ int IcomCivBackend::activeTxBandwidthItem() const
 void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
     disconnectRadio();
+
+    // The stable import identity arrives in the authenticated RS-BA1
+    // capabilities record. An endpoint is deliberately not used here: DHCP,
+    // mDNS and NAT changes must not turn one radio into a second import source.
+    m_memoryImportSource.clear();
 
     IcomSession::Params p;
     p.host = QHostAddress(request.host);
@@ -1214,16 +1223,30 @@ void IcomCivBackend::refreshMemories(const QString& groupName)
         return;
     }
     const MemoryProfile& memory = *profileFor(*m_model).memory;
+    if (m_memoryImportSource.isEmpty()) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: RS-BA1 supplied no stable radio identity";
+        emit configurationWarning(
+            QStringLiteral("This radio did not provide a stable RS-BA1 identity, so its "
+                           "memories cannot be synced safely."));
+        return;
+    }
     int selectedGroup = -1;
     if (!groupName.isEmpty() && memory.firstGroup >= 0) {
         for (int group = memory.firstGroup; group <= memory.lastGroup; ++group) {
-            if (groupName == QString::fromStdString(memoryGroupName(memory.dialect, group))) {
+            if (groupName.trimmed().compare(
+                    QString::fromStdString(memoryGroupName(memory.dialect, group)),
+                    Qt::CaseInsensitive) == 0) {
                 selectedGroup = group;
                 break;
             }
         }
     }
     if (memory.requiresGroupSelection && selectedGroup < memory.firstGroup) {
+        qCWarning(lcIcomCiv)
+            << "memory sync refused: invalid group selection" << groupName;
+        emit configurationWarning(
+            QStringLiteral("Choose a valid Icom memory group before syncing."));
         return;
     }
     m_memoryRefreshActive = true;
@@ -1483,6 +1506,13 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
     m_deviceName = deviceName.trimmed();
+    const std::string stableRadioId = radioIdHex(m_session->radioId());
+    if (stableRadioId.empty()) {
+        m_memoryImportSource.clear();
+    } else {
+        m_memoryImportSource = QStringLiteral("icom:%1").arg(
+            QString::fromStdString(stableRadioId));
+    }
     m_connected = true;
     m_connectedAtMs = nowMs();
     m_lastIncident.clear();
@@ -2717,18 +2747,31 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (index < 0) {
                 return;
             }
-            if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
-                m_memoryRefreshReplies.insert(index);
-                emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
-                if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
-                    finishMemoryRefresh(true);
+            // Publish the delta before completion: the model must have the last
+            // row (including an empty-channel removal) before it saves the bank.
+            const auto publishMemory = [this, index](const MemoryDelta& delta) {
+                emit memoryChanged(delta);
+                if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
+                    m_memoryRefreshReplies.insert(index);
+                    emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
+                    if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
+                        finishMemoryRefresh(true);
+                    }
                 }
-            }
+            };
             MemoryDelta delta;
             delta.index = index;
+            delta.importSource = m_memoryImportSource;
+            delta.importKey = QStringLiteral("%1:%2")
+                .arg(memory->group)
+                .arg(memory->channel);
+            delta.owner = m_model
+                ? QString::fromLatin1(m_model->name.data(),
+                                      static_cast<qsizetype>(m_model->name.size()))
+                : QStringLiteral("Icom");
             if (!memory->occupied) {
                 delta.removed = true;
-                emit memoryChanged(delta);
+                publishMemory(delta);
                 return;
             }
 
@@ -2769,7 +2812,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 delta.toneMode = QStringLiteral("off");
                 break;
             }
-            emit memoryChanged(delta);
+            publishMemory(delta);
             return;
         }
         // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its

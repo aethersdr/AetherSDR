@@ -579,16 +579,17 @@ public:
 
     // ── Memory command routing ──────────────────────────────────────────────
     //
-    // Answer a `memory …` command from the local bank or the cached read-only
-    // radio view. Returns the sequence number sendCmd() would have returned
+    // Answer a `memory …` command from the local bank or a native writable
+    // radio. Returns the sequence number sendCmd() would have returned
     // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
     // writable/native radio backend must take its normal path.
     // (spelled out rather than the ResponseCallback alias — that is declared
     // further down this class.)
     std::optional<quint32> tryMemoryCommand(
         const QString& command, const RadioConnection::ResponseCallback& cb);
-    // Settle which store owns the memory cache for the session being started:
-    // the local bank, or the radio's own slots.
+    // Settle which store owns the memory cache for the session being started.
+    // Read-only radio snapshots are ingested into the local bank; only a native
+    // writable store takes exclusive ownership.
     void syncMemoryStoreForSession();
     // Push the loaded bank into m_memories, emitting per-slot memoryChanged so
     // the browse panel and the panadapter memory-spot feed populate exactly as
@@ -646,14 +647,13 @@ public:
     const QMap<int, MemoryEntry>& memories() const { return m_memories; }
     void handleMemoryStatus(int index, const QMap<QString, QString>& kvs);
 
-    // True when memory channels live in a file on THIS host rather than in the
-    // radio — the HL2/Kiwi/demo case, and the disconnected case. Driven by
-    // RadioCapabilities::persistsMemories, so a new backend gets the local bank
-    // by default rather than writing channels into a radio that drops them.
+    // True when the working memory model lives in the database on THIS host —
+    // including every Icom (radio sync is an ingestion path), HL2/Kiwi/demo,
+    // and the disconnected case. Only a native writable radio store opts out.
     bool usesLocalMemoryBank() const;
-    // True when the active store accepts create/edit/remove. A radio-backed
-    // read-only snapshot (initial Icom support) returns false while the
-    // existing host bank and Flex radio return true.
+    // True when the active working store accepts create/edit/remove. Icom uses
+    // the host bank even though its radio-side source is read-only; Flex writes
+    // its own native store.
     bool memoriesWritable() const;
     bool memoriesRefreshable() const;
     void refreshMemories(const QString& group = QString());
@@ -1390,6 +1390,7 @@ private:
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
     void applyMemoryChanges(const MemoryDelta& delta);
+    void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
     void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
     void scheduleDStarRuntimeConfiguration();
@@ -1988,6 +1989,8 @@ private:
     // memories.json that reappears on every later disconnect. Cleared only when
     // the session really ends. See usesLocalMemoryBank().
     bool        m_sessionRadioOwnsMemories{false};
+    bool        m_memoryRefreshActive{false};
+    int         m_memoryImportFailures{0};
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};

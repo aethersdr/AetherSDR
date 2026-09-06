@@ -265,11 +265,11 @@ struct RadioCapabilities {
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
 
-    // Whether the radio-backed memory store accepts mutations and native
-    // recalls. These are deliberately separate from persistsMemories: an
-    // initial backend may prove that it can enumerate radio-owned channels
-    // before it is safe to overwrite them, and may expose those channels as
-    // tune presets without putting the radio into its vendor Memory mode.
+    // Whether the active memory store accepts mutations/native recalls, and
+    // whether the radio can be read as an explicit import source. Refresh is
+    // deliberately independent of persistsMemories: Icom keeps AetherSDR's
+    // shared client database as the working store while model-specific codecs
+    // ingest snapshots from the radio into it.
     bool canWriteMemories = false;
     bool canApplyMemories = false;
     bool canRefreshMemories = false;

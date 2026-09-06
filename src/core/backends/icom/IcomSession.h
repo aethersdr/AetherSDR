@@ -80,6 +80,7 @@ public:
 
     [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
     [[nodiscard]] QString deviceName() const { return m_deviceName; }
+    [[nodiscard]] const RadioId& radioId() const noexcept { return m_radioId; }
     [[nodiscard]] std::uint8_t civAddress() const noexcept { return m_params.civAddress; }
 
     // RETARGET the session at a different CI-V address, mid-session.

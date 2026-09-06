@@ -3688,6 +3688,18 @@ target_include_directories(local_memory_bank_test PRIVATE src)
 target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
 add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
 
+# Socket-free injection of backend memory deltas; no radio connection or peer.
+add_executable(memory_import_test tests/memory_import_test.cpp)
+target_include_directories(memory_import_test PRIVATE src tests)
+target_link_libraries(memory_import_test PRIVATE aethercore Qt6::Core)
+add_test(NAME memory_import_test COMMAND memory_import_test)
+
+# Pure policy assertions extracted from the retired broad capability target.
+add_executable(memory_filter_policy_test tests/memory_filter_policy_test.cpp)
+target_include_directories(memory_filter_policy_test PRIVATE src)
+target_link_libraries(memory_filter_policy_test PRIVATE Qt6::Core)
+add_test(NAME memory_filter_policy_test COMMAND memory_filter_policy_test)
+
 add_executable(memory_csv_compat_test
     tests/memory_csv_compat_test.cpp
     src/core/MemoryCsvCompat.cpp
@@ -4409,6 +4421,7 @@ set(AETHER_SETTINGS_CONSUMERS
     meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
+    memory_import_test
     transmit_model_apd_test
     help_dialog_test
     flex_control_dialog_size_test

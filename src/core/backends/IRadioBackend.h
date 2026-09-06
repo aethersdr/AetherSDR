@@ -911,6 +911,8 @@ signals:
     void memoryChanged(const MemoryDelta& delta);
     void memoryRefreshStarted(int total);
     void memoryRefreshProgress(int completed, int total);
+    // All deltas for this sweep precede completion. This reports radio reads;
+    // RadioModel combines it with import/save results for its UI-facing signal.
     void memoryRefreshFinished(bool success, int completed, int total);
 
     // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The
