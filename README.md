@@ -89,6 +89,8 @@ is a supported family yet, and FlexRadio remains the supported target:
   one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
   — an unrecognised model gets no scope and no transmit rather than optimistic
   defaults.
+- **RTL-SDR** — **experimental, receive-only**. Discovers supported USB dongles
+  through `librtlsdr` and provides one panadapter and one host-demodulated slice.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -143,14 +145,14 @@ below the install commands.
 # Arch / CachyOS / Manjaro
 sudo pacman -S qt6-base qt6-multimedia qt6-websockets qt6-serialport \
   qt6-shadertools cmake ninja pkgconf autoconf automake libtool \
-  fftw portaudio hidapi qtkeychain-qt6
+  fftw rtl-sdr portaudio hidapi qtkeychain-qt6
 
 # Debian Trixie / Ubuntu 25.10+ / Linux Mint 23+
 # (Ubuntu 24.04's Qt is 6.4.2 — below the floor; see the note above.)
 sudo apt install qt6-base-dev qt6-base-private-dev qt6-multimedia-dev \
   qt6-websockets-dev qt6-serialport-dev qt6-shader-baker qt6-shadertools-dev \
   cmake ninja-build pkg-config autoconf automake libtool \
-  libfftw3-dev portaudio19-dev libhidapi-dev qtkeychain-qt6-dev \
+  libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev qtkeychain-qt6-dev \
   libxkbcommon-dev libopengl0 \
   gstreamer1.0-pulseaudio gstreamer1.0-plugins-base
 
@@ -158,11 +160,11 @@ sudo apt install qt6-base-dev qt6-base-private-dev qt6-multimedia-dev \
 sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel \
   qt6-qtwebsockets-devel qt6-qtserialport-devel qt6-qtshadertools-devel \
   cmake ninja-build autoconf automake libtool \
-  fftw3-devel portaudio-devel hidapi-devel qtkeychain-qt6-devel
+  fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel qtkeychain-qt6-devel
 
 # macOS (Homebrew) — everything EXCEPT Qt and qtkeychain; see the note below
 brew install ninja cmake pkgconf autoconf automake libtool \
-  fftw portaudio hidapi
+  fftw librtlsdr portaudio hidapi
 ```
 
 > **macOS note — Qt and qtkeychain do not come from Homebrew.** Homebrew's `qt`
@@ -182,7 +184,7 @@ brew install ninja cmake pkgconf autoconf automake libtool \
 >
 > `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
 > there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
-> path for fftw, portaudio and hidapi.
+> path for fftw, librtlsdr, portaudio and hidapi.
 >
 > Homebrew's `qtkeychain` is left out for a related reason: the formula depends
 > on `qtbase`, so installing it pulls a second Qt in behind your back. Build it
@@ -211,6 +213,7 @@ brew install ninja cmake pkgconf autoconf automake libtool \
 | qt6-websockets-dev | TCI server, FreeDV Reporter spots |
 | qt6-serialport-dev | FlexControl, serial PTT/CW, MIDI controllers |
 | libfftw3-dev | NR2 spectral noise reduction |
+| librtlsdr-dev | RTL-SDR USB receiver backend (optional) |
 | portaudio19-dev | PortAudio audio backend |
 | libhidapi-dev | USB HID encoders (RC-28, PowerMate, FlexControl) |
 | qtkeychain-qt6-dev | SmartLink credential persistence |

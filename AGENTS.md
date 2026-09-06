@@ -205,6 +205,10 @@ include DFNR; it is a manual prereq only for local dev builds. NR still
 works without it — RN2 (RNNoise) is bundled and always built, needing no
 setup.
 
+**RNNoise architecture check.** The `third_party/rnnoise/src/x86` sources and
+include directory belong only in x86 build graphs. After configuring any ARM
+build, `rg 'rnnoise/src/x86' <build-dir>/build.ninja` must find no matches.
+
 Full dependency list is in `README.md` — don't duplicate it here.
 
 ### Adding a test — declare it in `tests/tests.cmake`, not `CMakeLists.txt`
@@ -230,6 +234,23 @@ this at the point of use.
 
 A test that touches `AppSettings` also needs its target name in the
 `AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
+
+**Do not add a `ctest -R` step for it to `.github/workflows/ci.yml`.** The
+per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of
+tests kept on the macOS and Windows jobs because the claim each pins is about
+that platform's toolchain (Apple Metal, MSVC portability); the Linux job runs
+no tests at all, and the list does not grow. Every test declared in
+`tests.cmake` that the default configure builds runs unfiltered in two places
+from the moment it is declared: on every push to `main` (`full-suite.yml`,
+minutes after the merge) and again weekly under the sanitizers
+(`sanitizers.yml`). That is where a new test runs. (A test behind a
+default-OFF option runs in neither unless that lane passes the option; say so
+in the PR.) `tools/check_ci_test_gate.py` runs in `Static checks` and fails
+the PR if a `-R` pattern in a pull-request workflow resolves to a name the
+frozen list does not carry. Removing a test from the gate is fine:
+run the script with `--update` and commit the shorter list. The script only
+ever shrinks the list; growing it is a hand edit to the maintainer-owned
+file, with the reason in the PR body. See "Gate integrity" below.
 
 Every unconditional `add_executable(<name>_test …)` must have a matching
 `add_test`, or carry a `# not registered: <reason>` marker the registration
@@ -260,15 +281,18 @@ Decide the layer before writing the test (#5232):
 firmware enters the default graph.** A fake radio proves the client agrees
 with our model of the radio, not with the radio; the model freezes while
 firmware moves, so the test fails on correct changes or stays green on real
-divergence (#5232). Three legacy exceptions remain in
+divergence (#5232). Four legacy exceptions remain in
 the default graph, all tracked for socket-free extraction in #5254:
 `vkamp_connection_test` (fake VKAMP amplifier), `hl2_receiver_count_restart_test`
-(fake Metis radio), and `gui_client_registration_recovery_test` (fake FLEX-6700
-handshake peer). Mining a retired fake peer's frame tables as
+(fake Metis radio), `gui_client_registration_recovery_test` (fake FLEX-6700
+handshake peer), and `thumbdv_queue_test` (a pty-backed fake DV3000 dongle —
+not a socket, which is why it went unenumerated; #5405 review). Mining a retired fake peer's frame tables as
 *input data* for injected-transport tests is encouraged; running the fake as
-a live socket peer is not. Loopback mocks of documented HTTP APIs
-(`asr_remote_backend_test`) are a different trade — that contract is
-versioned and published; radio firmware behavior is not.
+a live socket peer is not. Loopback mocks of documented HTTP APIs are a
+different trade — that contract is versioned and published; radio firmware
+behavior is not. (The example that used to sit here, `asr_remote_backend_test`,
+was one of eight removed for intermittency; see the note at the end of this
+section.)
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under
@@ -362,25 +386,37 @@ contributors with existing GPG workflows.
 
 ### Gate integrity
 
+- The per-PR gate in `ci.yml` is frozen (see "Adding a test" above). A test
+  does not join it. If a maintainer decides one must — the claim it pins is
+  about a platform toolchain the weekly Linux lane cannot exercise — the
+  name goes into `.github/ci-test-gate.txt` by hand, in the same PR, with
+  the reason in the PR body; the step comment in `ci.yml` says what it
+  guards. `--update` will not add a name.
 - Every `ctest` invocation in a workflow carries `--no-tests=error`: a `-R`
   filter that matches nothing exits 0, so a deregistered or renamed test
   silently shrinks the gate while the job stays green — #5232 demonstrated
-  this live. (#5232 swept the flag across all filtered PR-gate steps; the
-  unfiltered sanitizer sweep remains tracked in #5254.)
-- An enumerated gate additionally pins its selection count — the Icom gate
-  asserts `Total Tests: 5` (#5232). `--no-tests=error` only catches a regex
-  matching zero; a regex matching 3 of 5 still exits 0, and the pinned count
-  is what catches that. Prefer the count check wherever a gate enumerates.
+  this live. The unfiltered sanitizer sweep carries it too, so an empty
+  test tree fails rather than passing vacuously.
+- Erosion inside a pattern is caught two ways, and they cover different
+  halves. The frozen list catches it in the SOURCE: the checker requires
+  the names a PR workflow selects to EQUAL the list, so a renamed or
+  deregistered `add_test` fails `Static checks` on the missing name. It
+  cannot catch erosion at CONFIGURE time — it reads `tests.cmake` as text
+  and does not evaluate the conditions around an `add_test`, so a test
+  that stops being registered on a platform leaves the text unchanged and
+  the list still matching. That is what the `Total Tests: N` pin on a
+  multi-name step is for, and why the ThumbDV step still carries one
+  (#5232, #5405 review). A single-name anchored step needs no pin:
+  `--no-tests=error` already distinguishes one from zero.
 - Deregistering or renaming a test requires grepping `.github/workflows/`
-  for its name in the same PR. The gate regexes are part of the test's
-  surface.
-- A test joins a PR gate with a comment saying what it guards and what it
-  costs — the existing per-target justifications are the model. Keep timing
-  claims honest or omit them.
-- A flaky gate test gets an issue naming the root cause and, if unresolved,
-  quarantine off the gate — never empty retrigger commits, which cost every
-  contributor and record nothing. (For `icom_backend_test` the root cause
-  was the socket layer; #5254 is the fix, quarantine the interim.)
+  for its name in the same PR, and running `--update` if it was on the
+  frozen list. The gate regexes are part of the test's surface.
+- The weekly lane's sticky failure issues (`[sanitizer] … weekly run
+  failure`) carry ctest's own failed-test list first, then the sanitizer
+  blocks. A test failing there on a plain assertion is a regression on
+  `main` with no PR that went red for it; treat it as one.
+- A flaky test gets an issue naming the root cause — never empty retrigger
+  commits, which cost every contributor and record nothing.
 
 ---
 
@@ -422,7 +458,7 @@ The accepted RFC at
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
-`IRadioBackend` (`src/core/backends/`) now has **four** implementors,
+`IRadioBackend` (`src/core/backends/`) now has **six** implementors,
 selected at connect time by a `family` string through `makeBackend()`:
 
 | Family | Backend | Notes |
@@ -431,9 +467,27 @@ selected at connect time by a `family` string through `makeBackend()`:
 | `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
 | `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
+| `anan` | `AnanBackend` (`src/core/backends/anan/`) | ANAN-G2 receive support over openHPSDR Ethernet Protocol 2; raw-IQ RX DSP runs in-client and TX remains absent by construction |
+| `rtl` | `RtlSdrBackend` (`src/core/backends/rtl/`) | RTL-SDR USB receive backend; raw-IQ RX DSP runs in-client and the backend is RX-only by construction |
 
-The versioned protocol (step 3+) has not landed — UI code still consumes
-models directly, and that remains correct.
+Step 3 is in progress: the normative v1 envelope contract, bounded codec,
+observe-only local handshake/capability service, and a QtWidgets-free
+`aetherd` skeleton have landed. The typed observe-only `server`,
+`radioSession`, `slice`, and `panadapter` resources now publish through
+`RadioResourceAdapter`; `resource.get` plus atomic snapshot/event
+`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
+coalescing/session resync, and an independent local-socket hard disconnect cap
+are live over the current-user local transport.
+Sessions now require explicit trusted authorization; the local transport grants
+observe permission, and reads/subscriptions enforce it. The revocation hook
+discards pending observations and terminates local delivery; no wire or daemon
+path invokes it yet. Credential verification/provisioning and control/transmit
+grants are not implemented yet.
+Meters, read-only transmit state, authenticated non-TX control, and the desktop
+adapter have not landed; UI code still consumes models directly, and that
+remains correct. New resource fields belong in the adapter and the versioned
+catalogue, never in a transport or via QObject reflection. No protocol TX
+method is advertised before the step-4 arbiter exists.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
@@ -450,8 +504,9 @@ duplicate to Qt. The same shape exists on the spectrum side.
 
 | Target | Contents | May link |
 |---|---|---|
-| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. **Never `gui/`; QtWidgets only via the tracked-legacy files below, shrinking to zero** |
+| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Gui/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it is a burndown target. **Never `gui/` or QtWidgets**; the remaining EB2 warnings are source-location debt compiled only by the desktop target |
 | `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
+| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + direct Qt Core/Network links. It currently inherits the engine's public/private runtime surface, including Qt Concurrent, Gui, Multimedia, SerialPort, WebSockets, DBus, and qtkeychain when those optional dependencies are enabled. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it and narrowing the other transitive edges are burndown targets. **Never QtWidgets** |
 
 The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 `static-checks.yml`, `--strict`) by three ratchets:
@@ -460,10 +515,11 @@ The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 - **EB2** — no `core/`/`models/` file may use QtWidgets (a shrinking
   tracked-legacy set warns, new usage errors).
 - **EB3** — no file **above the radio seam** (all of `src/gui/`,
-  `src/core/`, `src/models/` **except** the backend tree
-  `src/core/backends/`) may include a **vendor header** — the
-  family-specific wire classes the RFC keeps behind `IRadioBackend`
-  (SmartSDR/FlexLib + KiwiSDR; the headers tagged `vendor(...)` in
+  `src/core/`, `src/models/`, plus the root app-shell files `src/main.cpp`
+  and `src/MacStartupAbortGuard.{h,cpp}`, **except** the backend tree
+  `src/core/backends/`) may include a **vendor header** — any radio-family-
+  specific wire class the RFC keeps behind `IRadioBackend` (currently Flex,
+  Kiwi, HL2, Sim, Icom, ANAN, and RTL; the headers tagged `vendor(...)` in
   `docs/architecture/aetherd-touchpoint-tags.json`). Only `vendor(...)` is
   EB3-gated: a standalone *accessory* device's own transport (the 4O3A
   antenna switch, the Tgxl/Pgxl direct sockets) is `peripheral(...)`, a
@@ -511,7 +567,11 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker.
+  editing the checker. The only permitted rebaseline is an intentional
+  vocabulary-classification change: every newly tracked include must be proven
+  to predate that classification against the merge base, the evidence must be
+  documented, and a maintainer must explicitly review the rebaseline. The
+  expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -523,9 +583,10 @@ you:
 - **Removing coupling (the goal).** When you convert a file's radio access
   to the seam and drop a vendor include, **remove that stem from the
   file's row** in `KNOWN_VENDOR_INCLUDE_BASELINE` (delete the row when it
-  empties). The set only shrinks — never add a stem or a row to make a
-  build pass. If EB3 blocks you and the include is genuinely unavoidable,
-  that's a design conversation for a maintainer, not a baseline edit.
+  empties). Outside the documented vocabulary-classification carveout above,
+  the set only shrinks — never add a stem or a row to make a build pass. If EB3
+  blocks you and the include is genuinely unavoidable, that's a design
+  conversation for a maintainer, not a baseline edit.
 - **`src/gui/**` is in the CI trigger** for `static-checks.yml` now
   (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
   still caught.

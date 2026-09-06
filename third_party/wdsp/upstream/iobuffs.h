@@ -92,6 +92,6 @@ void fexchange0 (int channel, double* in, double* out, int* error);
 PORT	// separate I/Q buffers
 extern void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *Qout, int* error);
 
-extern void dexchange (int channel, double* in, double* out);
+extern int dexchange (int channel, double* in, double* out);	// AetherSDR patch 4: non-zero means "run cleared, unwind"; upstream called _endthread() here
 
 #endif

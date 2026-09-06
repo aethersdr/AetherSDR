@@ -1,5 +1,5 @@
 #include "RxApplet.h"
-#include "core/CtcssTones.h"
+#include "gui/CtcssToneLabel.h"
 
 #include "gui/FilterStepMath.h"
 #include "gui/FmTonePresentation.h"
@@ -280,16 +280,6 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
     if (mode.startsWith("FDV"))          return digSettings;  // FreeDV digital voice
     return ssbSettings;  // fallback for unknown modes
 }
-
-// ── Standard CTCSS tone table (EIA/TIA-603) ──────────────────────────────────
-
-// The tone table moved to core/CtcssTones.h so the automation bridge's
-// `slice tone` verb validates against the same set this dropdown offers
-// (#5102). Aliased rather than renamed at every use site.
-using CTCSSTone = AetherSDR::CtcssTone;
-static constexpr auto& CTCSS_TONES = AetherSDR::kCtcssTones;
-static constexpr int CTCSS_COUNT =
-    static_cast<int>(AetherSDR::kCtcssToneCount);
 
 // Small checkable button used throughout the applet.
 static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
@@ -732,15 +722,9 @@ void RxApplet::buildUI()
         // CTCSS tone value dropdown
         {
             m_toneValueCmb = new GuardedComboBox;
-            for (int i = 0; i < CTCSS_COUNT; ++i) {
-                const auto& t = CTCSS_TONES[i];
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                const QString label = t.code > 0
-                    ? QString("%1 %2 %3").arg(t.code).arg(t.designation).arg(frequency)
-                    : frequency;
-                m_toneValueCmb->addItem(label, frequency);
-            }
-            AetherSDR::applyComboStyle(m_toneValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_toneValueCmb);
+            AetherSDR::applyComboStyle(
+                m_toneValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_toneValueCmb->setEnabled(false);  // enabled only when CTCSS TX
             m_fmLayout->addWidget(m_toneValueCmb);
 
@@ -752,16 +736,10 @@ void RxApplet::buildUI()
             });
 
             m_toneRxValueCmb = new GuardedComboBox;
-            for (int i = 0; i < CTCSS_COUNT; ++i) {
-                const auto& t = CTCSS_TONES[i];
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                const QString label = t.code > 0
-                    ? QString("%1 %2 %3").arg(t.code).arg(t.designation).arg(frequency)
-                    : frequency;
-                m_toneRxValueCmb->addItem(label, frequency);
-            }
+            AetherSDR::populateCtcssToneCombo(m_toneRxValueCmb);
             m_toneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
-            AetherSDR::applyComboStyle(m_toneRxValueCmb);
+            AetherSDR::applyComboStyle(
+                m_toneRxValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_toneRxValueCmb->setVisible(false);
             m_fmLayout->addWidget(m_toneRxValueCmb);
             connect(m_toneRxValueCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1954,17 +1932,10 @@ void RxApplet::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < CTCSS_COUNT; ++i) {
-        const CTCSSTone& tone = CTCSS_TONES[i];
-        const QString frequency = QString::number(tone.frequency, 'f', 1);
-        const QString toneLabel = tone.code > 0
-            ? QString("%1 %2 %3").arg(tone.code).arg(tone.designation).arg(frequency)
-            : frequency;
-        m_toneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, toneLabel));
-        m_toneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, toneLabel));
-    }
+    configureCtcssToneComboLabels(
+        m_toneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_toneRxValueCmb, presentation, FmToneRole::Rx);
     const QString sliceMode = m_slice ? m_slice->mode() : QString();
     const bool modeEligible = sliceMode == QLatin1String("FM")
         || sliceMode == QLatin1String("NFM") || sliceMode == QLatin1String("DFM");
@@ -2819,7 +2790,7 @@ void RxApplet::updateFilterButtons()
     static constexpr int kMaxRxFilters = 6;
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -2852,6 +2823,16 @@ void RxApplet::updateFilterButtons()
             m_filterCustomHi = loadedHi;
             rebuildFilterButtons();
         }
+    }
+
+    if (hasCompleteRxFilterPresets(m_radioFilterControl, m_filterBtns.size())) {
+        for (int i = 0; i < m_filterBtns.size(); ++i) {
+            QSignalBlocker blocker(m_filterBtns[i]);
+            m_filterBtns[i]->setChecked(
+                m_radioFilterControl.presets.at(i).id
+                == m_radioFilterControl.selectedPresetId);
+        }
+        return;
     }
 
     const int width = m_slice->filterHigh() - m_slice->filterLow();
@@ -2903,7 +2884,7 @@ void RxApplet::updateModeSettings(const QString& mode)
     m_filterWidths.clear();
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -2991,6 +2972,28 @@ void RxApplet::setRadioFilterWidths(const QList<int>& widthsHz)
     rebuildFilterButtons();
 }
 
+void RxApplet::setRadioFilterControl(const RxFilterControl& control)
+{
+    if (control == m_radioFilterControl) {
+        return;
+    }
+    m_radioFilterControl = control;
+    if (!control.presets.isEmpty()) {
+        QVector<int> widths;
+        widths.reserve(control.presets.size());
+        for (const RxFilterPreset& preset : control.presets) {
+            widths.append(preset.widthHz);
+        }
+        m_radioFilterWidths = widths;
+    }
+    if (m_filterPassband) {
+        m_filterPassband->setWidthRange(control.minimumWidthHz,
+                                        control.maximumWidthHz,
+                                        control.widthStepHz);
+    }
+    rebuildFilterButtons();
+}
+
 void RxApplet::rebuildFilterButtons()
 {
     // Remove old buttons
@@ -3006,12 +3009,33 @@ void RxApplet::rebuildFilterButtons()
     const bool customisable = m_radioFilterWidths.isEmpty();
     for (int i = 0; i < widths.size(); ++i) {
         const int w = widths[i];
-        auto* btn = mkToggle(formatStepLabel(w));
+        const bool stablePresets =
+            hasCompleteRxFilterPresets(m_radioFilterControl, widths.size());
+        const RxFilterPreset preset = stablePresets
+            ? m_radioFilterControl.presets.at(i) : RxFilterPreset{};
+        auto* btn = mkToggle(stablePresets ? preset.label : formatStepLabel(w));
+        if (stablePresets) {
+            btn->setToolTip(QStringLiteral("%1: %2 receive bandwidth")
+                                .arg(preset.label, formatStepLabel(preset.widthHz)));
+            btn->setAccessibleName(QStringLiteral("Receive filter %1")
+                                       .arg(preset.label));
+        }
         btn->setStyleSheet(kButtonBase() + kBlueActive());
-        connect(btn, &QPushButton::clicked, this, [this, i, customisable](bool) {
-            if (!m_slice) return;
+        connect(btn, &QPushButton::clicked, this,
+                [this, i, customisable, stablePresets, preset](bool) {
+            if (!m_slice) {
+                return;
+            }
+            if (stablePresets) {
+                if (m_radioModel) {
+                    m_radioModel->selectRadioFilterPreset(m_slice->sliceId(), preset.id);
+                }
+                return;
+            }
             const QVector<int>& live = effectiveFilterWidths();
-            if (i >= live.size()) return;
+            if (i >= live.size()) {
+                return;
+            }
             if (customisable && m_filterCustomLo[i] != INT_MIN) {
                 m_slice->setFilterWidth(m_filterCustomLo[i], m_filterCustomHi[i]);
             } else {
