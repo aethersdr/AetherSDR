@@ -138,6 +138,8 @@ class AppletPanel;
 class BandPlanManager;
 class NetworkDiagnosticsHistory;
 class MemoryHistoryRing;
+class CpuHistoryRing;
+class UiTickLagMeter;
 class WhatsNewDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
@@ -1046,6 +1048,12 @@ private:
     // trend chart that forgot everything on Close would not be a trend.
     // Filled only while the dialog is open (sampling follows visibility).
     std::unique_ptr<MemoryHistoryRing> m_memoryHistory;
+    // The Overview tab's CPU history, owned here for the same reason.
+    std::unique_ptr<CpuHistoryRing> m_cpuHistory;
+    // GUI event-loop tick lag, fed by the perf-heartbeat timer's slot and read
+    // by the Runtime Monitor's Overview tab. Lives for the whole window because
+    // the heartbeat does; the dialog resets it when it starts reading.
+    std::unique_ptr<UiTickLagMeter> m_uiTickLagMeter;
     QsoRecorder*      m_qsoRecorder{nullptr};
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new

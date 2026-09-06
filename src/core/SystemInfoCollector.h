@@ -8,6 +8,8 @@
 #include <QString>
 #include <QVector>
 
+#include <optional>
+
 class QTimer;
 
 namespace AetherSDR {
@@ -26,6 +28,28 @@ struct MemorySample {
     quint64 peakResidentBytes{0};
     quint64 privateBytes{0};
     quint64 virtualBytes{0};
+};
+
+// One process-level CPU reading per tick for the Overview tab (#2554).
+// processPercentOfCapacity comes from the kernel's whole-process CPU counter
+// (SystemInfo::processCpuUsecs) over the measured interval — NOT from summing
+// the per-thread samples sampleReady carries: a thread that exits between two
+// snapshots is on neither list and its time would vanish from the sum (#5427
+// review). The per-thread fields (busiest*, busyThreads) still come from the
+// same samples the table gets, since "which thread" is their whole point.
+// busyThreads holds every thread with a non-zero share of a core this tick:
+// exact, and compact (most of the process's threads are idle on most ticks),
+// which is what lets the Overview's history ring keep an hour of them and
+// choose its Top Threads chart's members over the whole window rather than
+// the newest tick.
+struct CpuSample {
+    qint64  wallMs{0};                       // QDateTime::currentMSecsSinceEpoch() at capture
+    int     coreCount{0};                    // QThread::idealThreadCount() — the footer's divisor
+    double  processPercentOfCapacity{0.0};   // 0..100 of the whole machine (whole-process counter)
+    quint64 busiestTid{0};
+    QString busiestName;                     // empty when the busiest thread has no name
+    double  busiestPercentOfCore{0.0};       // 0..100 of one core
+    QVector<ThreadCpuSample> busyThreads;    // cpuPercentOfCore > 0 only
 };
 
 // Samples per-thread CPU (and, since the Memory tab, process memory) on a
@@ -92,11 +116,17 @@ signals:
     // to the GUI thread like sampleReady.
     void memorySampleReady(const AetherSDR::MemorySample& sample);
 
+    // The Overview tab's reading, emitted right after sampleReady on every tick
+    // that has an interval to report — so a consumer listening to both sees
+    // the table and the cards agree about "now". Queued like the others.
+    void cpuSampleReady(const AetherSDR::CpuSample& sample);
+
 private:
     void sampleOnce();
 
     QTimer* m_timer{nullptr};
-    QVector<ThreadTimes> m_previous;   // last raw snapshot, for the delta
+    QVector<ThreadTimes> m_previous;   // last raw snapshot, for the per-thread deltas
+    std::optional<quint64> m_previousProcessCpuUsecs;   // whole-process counter at the last snapshot
     QElapsedTimer m_sinceLastSample;
     double m_previousBusiestPercent{0.0};   // the latch behind thresholdExceeded
 };
@@ -104,3 +134,4 @@ private:
 }  // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::MemorySample)
+Q_DECLARE_METATYPE(AetherSDR::CpuSample)
