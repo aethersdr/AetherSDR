@@ -1226,6 +1226,12 @@ signals:
     // EVERY drop; the UI's one-shot-per-session throttling is the consumer's
     // job, so logs and any non-UI consumers can observe each occurrence.
     void commandDropped(const QString& command);
+    // Emitted when an automatic antenna tuner (ATU) tune process fails to find
+    // a match or fails and bypasses. Carries the warning title, detail message,
+    // and target panadapter ID.
+    void atuTuneWarningRequested(const QString& title,
+                                 const QString& detail,
+                                 const QString& panId);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);

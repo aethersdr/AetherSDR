@@ -2272,6 +2272,11 @@ RadioModel::RadioModel(QObject* parent)
             QStringLiteral("local-ptt:%1:%2").arg(panId, message),
             panId);
     });
+    connect(&m_transmitModel, &TransmitModel::atuTuneFailed,
+            this, [this](ATUStatus /*status*/, const QString& message) {
+        const QString panId = txSlice() ? txSlice()->panId() : QString();
+        emit atuTuneWarningRequested(tr("ATU Tune Failed"), message, panId);
+    });
 
     // The TX passband reaches a host-modulating backend through the seam, not
     // through the Flex verb next to it. Operator intent only — see the signal's

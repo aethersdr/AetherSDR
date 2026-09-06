@@ -7056,6 +7056,23 @@ void SpectrumWidget::showTxFilterNotification(const QString& title,
     upsertOverlayMessage(std::move(overlay));
 }
 
+void SpectrumWidget::showAtuNotification(const QString& title,
+                                         const QString& detail,
+                                         int durationMs)
+{
+    if (title.trimmed().isEmpty() && detail.trimmed().isEmpty()) {
+        return;
+    }
+    PanadapterOverlayMessage overlay;
+    overlay.id = QStringLiteral("atu.tune-failed");
+    overlay.title = title;
+    overlay.detail = detail;
+    overlay.timeoutMs = qMax(1, durationMs);
+    overlay.dismissible = true;
+    overlay.tone = PanadapterOverlayMessageTone::Warning;
+    upsertOverlayMessage(std::move(overlay));
+}
+
 void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRect)
 {
     if (!m_connectionAnimationVisible || !m_connectionAnimationClock.isValid()) {

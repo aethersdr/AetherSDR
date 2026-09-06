@@ -405,5 +405,66 @@ int main(int argc, char** argv)
                  && quindar.phase() == ClientQuindarTone::Phase::Idle,
                  "WSPR PTT bypasses Quindar signaling");
 
+    // ── ATU tune failure and user abort tests ──
+    {
+        TransmitModel atuTx;
+        QList<QPair<ATUStatus, QString>> failures;
+        QObject::connect(&atuTx, &TransmitModel::atuTuneFailed,
+                         [&failures](ATUStatus s, const QString& msg) {
+                             failures.append(qMakePair(s, msg));
+                         });
+
+        // 1. InProgress -> FailBypass emits atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.size() == 1
+                     && failures.first().first == ATUStatus::FailBypass
+                     && !failures.first().second.isEmpty(),
+                     "InProgress -> FailBypass emits atuTuneFailed");
+
+        // 2. InProgress -> Fail emits atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL"); }));
+        ok &= expect(failures.size() == 1
+                     && failures.first().first == ATUStatus::Fail
+                     && !failures.first().second.isEmpty(),
+                     "InProgress -> Fail emits atuTuneFailed");
+
+        // 3. InProgress -> Successful does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL"); }));
+        ok &= expect(failures.isEmpty(),
+                     "InProgress -> Successful does not emit atuTuneFailed");
+
+        // 4. InProgress -> OK does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_OK"); }));
+        ok &= expect(failures.isEmpty(),
+                     "InProgress -> OK does not emit atuTuneFailed");
+
+        // 5. User aborts via atuBypass() while in progress -> FailBypass/Aborted does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        atuTx.atuBypass();
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.isEmpty(),
+                     "User-aborted tune does not emit atuTuneFailed on FailBypass");
+
+        // 6. Direct FailBypass on connect without prior InProgress does NOT emit atuTuneFailed
+        TransmitModel freshTx;
+        failures.clear();
+        QObject::connect(&freshTx, &TransmitModel::atuTuneFailed,
+                         [&failures](ATUStatus s, const QString& msg) {
+                             failures.append(qMakePair(s, msg));
+                         });
+        freshTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.isEmpty(),
+                     "Initial status FailBypass without InProgress does not emit atuTuneFailed");
+    }
+
     return ok ? 0 : 1;
 }

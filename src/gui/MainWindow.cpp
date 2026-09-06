@@ -1425,6 +1425,31 @@ MainWindow::MainWindow(QWidget* parent)
                 }
                 statusBar()->showMessage(title + QStringLiteral(" - ") + detail, 8000);
             });
+    connect(&m_radioModel, &RadioModel::atuTuneWarningRequested,
+            this, [this](const QString& title, const QString& detail,
+                         const QString& panId) {
+                if (!panId.trimmed().isEmpty() && m_panStack) {
+                    if (SpectrumWidget* sw = m_panStack->spectrum(panId.trimmed())) {
+                        sw->showAtuNotification(title, detail, 5000);
+                        return;
+                    }
+                }
+                SliceModel* target = nullptr;
+                for (auto* s : m_radioModel.slices()) {
+                    if (s && s->isTxSlice()) {
+                        target = s;
+                        break;
+                    }
+                }
+                if (!target)
+                    target = activeSlice();
+
+                if (auto* sw = spectrumForSlice(target)) {
+                    sw->showAtuNotification(title, detail, 5000);
+                } else if (statusBar()) {
+                    statusBar()->showMessage(title + QStringLiteral(" - ") + detail, 5000);
+                }
+            });
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
