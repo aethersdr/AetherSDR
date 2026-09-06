@@ -4975,6 +4975,24 @@ void MainWindow::buildUI()
     setActivePanApplet(m_panStack->addPanadapter("default"));
     splitter->addWidget(m_panStack);
 
+    // A panadapter created AFTER the initial connect (Add Panadapter, layout
+    // switch, band-recall) never goes through onConnectionStateChanged()'s
+    // loop over allApplets() -- it comes up with QPushButton's default
+    // enabled state, silently reopening the exact no-op-click gap
+    // setBandSegmentZoomAvailable() exists to close, until the next
+    // connect/disconnect happens to re-sync it. panAdded fires once per
+    // applet "however it was created" (see its own comment on
+    // PanadapterStack::panAdded), so this is the one place that reliably
+    // catches every creation path.
+    connect(m_panStack, &PanadapterStack::panAdded, this, [this](const QString& panId) {
+        auto* applet = m_panStack->panadapter(panId);
+        if (!applet || !applet->spectrumWidget()) {
+            return;
+        }
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+    });
+
     // Band stack panel signal wiring
     auto* bsPanel = m_panStack->bandStackPanel();
 
@@ -6015,16 +6033,25 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Keyed off RadioCapabilities::hasDdcPanEdgeRolloff (see its own
-    // comment), not a family-name check -- a future DDC-based backend gets
-    // this automatically instead of needing its own family string added
-    // here. Re-evaluate on every connect and disconnect, since
-    // backendCapabilities() only knows the CURRENTLY connected radio.
+    // Band/segment zoom only ever works on Flex (see SpectrumWidget::
+    // setBandSegmentZoomAvailable()'s own comment) -- usesFlexCommandPlane()
+    // is a direct family() == "flex" check (RadioModel.h), not merely "some
+    // connection object exists": SimBackend/demo mode owns a RadioConnection
+    // too but isn't Flex and doesn't understand band_zoom=/segment_zoom=, so
+    // the plain hasCommandPlane() this used before was one indirection looser
+    // than the actual question being asked. Edge taper is keyed off
+    // RadioCapabilities::hasDdcPanEdgeRolloff instead (see its own comment)
+    // -- a future DDC-based backend gets that automatically instead of
+    // needing its own family string added here. Re-evaluate both on every
+    // connect and disconnect, since usesFlexCommandPlane()/
+    // backendCapabilities() only know the CURRENTLY connected radio.
     if (m_panStack) {
+        const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
+                applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
             }
         }
