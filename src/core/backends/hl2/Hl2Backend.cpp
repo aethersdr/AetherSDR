@@ -337,6 +337,18 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         setKeying(false);
     });
 
+    m_ioBoardTrailingPushTimer = new QTimer(this);
+    m_ioBoardTrailingPushTimer->setSingleShot(true);
+    connect(m_ioBoardTrailingPushTimer, &QTimer::timeout, this, [this] {
+        if (!m_metis) {
+            return;
+        }
+        m_lastIoBoardTxFreqHz = m_pendingIoBoardTxFreqHz;
+        m_ioBoardPushClock.restart();
+        QMetaObject::invokeMethod(m_metis, "pushIoBoardTxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(quint64, m_pendingIoBoardTxFreqHz));
+    });
+
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
     // rather than one per receiver, because the demux has already happened at
     // the wire: blocks[i] is DDC i. Fanning out here keeps the sample path a
@@ -1586,6 +1598,14 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // (a hand-built connect request with no identity) yields the family-wide
     // row, which is empty by default — i.e. uncalibrated, not someone else's.
     m_radioSerial = request.serial;
+    // Reset so this session always pushes at least once to the I/O Board,
+    // even to the same frequency the previous session last pushed.
+    m_lastIoBoardTxFreqHz = 0;
+    m_ioBoardPushClock.invalidate();
+    m_pendingIoBoardTxFreqHz = 0;
+    if (m_ioBoardTrailingPushTimer) {
+        m_ioBoardTrailingPushTimer->stop();
+    }
     m_freqCalPpb = Hl2FreqCal::loadPpb(
         RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
     m_freqCalScale = Hl2FreqCal::scaleForPpb(m_freqCalPpb);
@@ -2142,6 +2162,12 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
     QMetaObject::invokeMethod(m_metis, "setResetOnDisconnect", Qt::QueuedConnection,
         Q_ARG(bool, Hl2MiscOptionsSettings::resetOnDisconnect(hl2SettingsScope())));
+    // I/O Board startup reset — the accessory's own README recommendation:
+    // "When your SDR program starts, write 1 to REG_CONTROL to set all
+    // registers back to zero," so stale data from a previous session or a
+    // different SDR program isn't acted on before the first real
+    // TX-frequency push (setTxFrequency(), above) arrives.
+    QMetaObject::invokeMethod(m_metis, "resetIoBoardRegisters", Qt::QueuedConnection);
 
     emit dspSetupFinished();
 
@@ -3398,6 +3424,40 @@ void Hl2Backend::setTxFrequency(double hz)
     // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
         Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+
+    // I/O Board TX-frequency push (the accessory's own README: "the only
+    // required SDR modification is sending the transmit frequency" — it
+    // computes everything band-dependent, including a XieGu-style
+    // band-voltage output for an external amp, from this value alone).
+    // Rate-limited to match the reference client's own documented
+    // convention (Quisk): at most once per 500 ms, only when the value
+    // actually changed, so a pan drag does not flood the I2C bus. The TRUE
+    // (uncalibrated-scale) frequency is what an external amp cares about
+    // for band data — not the register-command value ncoCommandHz() above
+    // derives, which is only ever off by a calibration's few Hz.
+    //
+    // Leading-edge only would drop the LAST frequency of a tuning gesture
+    // that stops inside the 500 ms window — exactly the failure this push
+    // exists to prevent (amp left on the wrong band). So a change that
+    // arrives while the window is still closed is remembered and re-armed
+    // on a trailing single-shot timer for when the window reopens; any
+    // further change before it fires just re-arms it with the newer value.
+    const auto hzInt = static_cast<quint64>(hz + 0.5);
+    if (hzInt != m_lastIoBoardTxFreqHz) {
+        const qint64 elapsed = m_ioBoardPushClock.isValid() ? m_ioBoardPushClock.elapsed() : 500;
+        if (elapsed >= 500) {
+            m_lastIoBoardTxFreqHz = hzInt;
+            m_ioBoardPushClock.restart();
+            if (m_ioBoardTrailingPushTimer) {
+                m_ioBoardTrailingPushTimer->stop();
+            }
+            QMetaObject::invokeMethod(m_metis, "pushIoBoardTxFrequencyHz", Qt::QueuedConnection,
+                Q_ARG(quint64, hzInt));
+        } else if (m_ioBoardTrailingPushTimer) {
+            m_pendingIoBoardTxFreqHz = hzInt;
+            m_ioBoardTrailingPushTimer->start(static_cast<int>(500 - elapsed));
+        }
+    }
 }
 
 std::uint32_t Hl2Backend::ncoCommandHz(double trueHz) const noexcept
@@ -4069,9 +4129,21 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                         {QStringLiteral("tx"), static_cast<int>(it->txMask)},
                     };
                 }
+                // The byte actually being driven right now (applyBandFilter()'s
+                // last commanded value), for the "Hardware Pin State" display —
+                // distinct from the manual TABLE above, which is what WOULD be
+                // sent for a given band, not necessarily what IS being sent this
+                // instant (automatic mode ignores the table entirely; even in
+                // manual mode the spanned/keyed override can pick a different
+                // band's entry than the one on screen). 0x7F+ (the unset
+                // sentinel before the first applyBandFilter() call) reports as
+                // 0 — every relay released — rather than a nonsense byte.
+                const int activeOc = (m_ocFilterByte >= 0 && m_ocFilterByte <= 0x7F)
+                                         ? m_ocFilterByte : 0;
                 emit extensionResult(requestId, QVariantMap{
                     {QStringLiteral("manualEnabled"), Hl2FilterBoardSettings::manualEnabled(hl2SettingsScope())},
                     {QStringLiteral("bands"), bands},
+                    {QStringLiteral("activeOcByte"), activeOc},
                 });
             }
             return;

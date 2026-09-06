@@ -291,6 +291,20 @@ private:
     // ioboard.i2cRead/i2cWrite is answered under, or 0 when nothing is
     // outstanding. GUI-thread only, like every other invokeExtension state.
     quint64 m_pendingI2cRequestId = 0;
+    // I/O Board TX-frequency push: the last value actually pushed (0 before
+    // the first push after a connect) and the rate-limit clock — see
+    // setTxFrequency(). Reset on every connectRadio() so a fresh session
+    // always pushes at least once, even to the same frequency the last
+    // session ended on.
+    quint64 m_lastIoBoardTxFreqHz = 0;
+    QElapsedTimer m_ioBoardPushClock;
+    // Trailing flush for the above: a change arriving while the 500 ms window
+    // is still closed is remembered here and re-armed on this single-shot
+    // timer for whenever the window reopens, so the LAST frequency of a
+    // tuning gesture is never silently dropped just because the operator
+    // stopped tuning before the window closed on its own. See setTxFrequency().
+    quint64 m_pendingIoBoardTxFreqHz = 0;
+    QTimer* m_ioBoardTrailingPushTimer = nullptr;
     // Identity of the connected radio (its MAC, from the connect request), so
     // the calibration loads and stores per radio rather than globally: it
     // describes one physical crystal. Empty until connectRadio().

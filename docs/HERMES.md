@@ -954,13 +954,13 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| 13 | RQST/ACK state machine | O §5 | Gate for everything below. Single outstanding request, echo-matched, no transaction id. **Do not model as RPC** | M |
+| ~~13~~ | ~~RQST/ACK state machine~~ **DONE (scoped)** — issue #9/#11 | O §5 | Single outstanding request, echo-matched on RADDR, no transaction id, `kI2cTimeoutMs` timeout — exactly this shape (`MetisClient::sendI2cRead`/`sendI2cWrite`, `decodeI2cResponse`). Built for the I/O Board's generic I2C panel only; items 14-18 below still need their own register-specific wiring on top of it, this only gates them, it doesn't finish them | M |
 | 14 | ADC overload bit + clip counter | O §6, A2 §A3 | The *correct* driver for gain decisions — audio level in one slice says nothing about what saturates a converter seeing 0–38.4 MHz | S |
 | 15 | Discovery-reply telemetry (temp, power, PTT, clip) | O §1 | Pollable **without a stream** — cheapest first increment, and a diagnostic when the stream is broken | S |
 | 16 | Pair WDSP `RXA_ADC_PK` with the hardware clip indicator | A3 §7 | Post-DDC slice vs pre-DDC full spectrum. They disagree by design; A3 calls this the most useful diagnostic pairing on the HL2 | S |
 | 17 | TX IQ FIFO depth + servo | O §6, A1 §B3 | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift | M |
 | 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
-| ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
+| ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency by default (`Hl2Backend::applyBandFilter`); issue #12 added an opt-in manual per-band/per-direction override (`Hl2FilterBoard.h`, the "Filter Board" settings page) on top of it, seeded from and falling back to the same automatic table. PA bias and the config EEPROM are untouched and still want the RQST/ACK path (now built — item 13) | — |
 | 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
 | 22 | Hardware-managed T/R LNA gain (`0x0e[15]`) | A2 §A2 | Quisk uses it; lower latency than any host round trip; PureSignal needs an unclipped feedback path | S |

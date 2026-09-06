@@ -4,6 +4,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <vector>
@@ -453,6 +454,89 @@ struct I2cResult {
     std::uint8_t data = 0;  // the returned byte (DATA[7:0]) when matched && !error
 };
 I2cResult decodeI2cResponse(const Ep6Response& r) noexcept;
+
+// A FIFO of I2C jobs that lets at most one be "in flight" at a time — the
+// real HPSDR RQST/ACK mechanism has no transaction id, matched purely by
+// arrival order, so the wire tolerates exactly one outstanding I2C request
+// (oracle §5). Pure state machine: no Qt, no socket, no timer — MetisClient
+// owns the timeout timer and the actual send, and only asks this class WHEN
+// it's allowed to send the next one. Socket-free by design so the scheduling
+// behaviour is a deterministic CTest rather than something only a live fake
+// radio could exercise (see tests/tests.cmake's note on the retired
+// fake-radio fixtures: "deterministic assertions... extracted into
+// socket-free tests").
+class I2cJobQueue {
+public:
+    void enqueue(const Cc& job) { m_queue.push_back(job); }
+
+    // The job to send now, and marks one job in flight — or nullopt if
+    // something is already in flight (awaiting its ACK or timeout) or there
+    // is nothing queued.
+    std::optional<Cc> dispatchNext() noexcept
+    {
+        if (m_awaiting || m_queue.empty())
+            return std::nullopt;
+        const Cc job = m_queue.front();
+        m_queue.pop_front();
+        m_awaiting = true;
+        return job;
+    }
+
+    // The in-flight job is done — answered (ack) or given up on (timeout).
+    // Either way, dispatchNext() may now send the next one.
+    void complete() noexcept { m_awaiting = false; }
+
+    [[nodiscard]] bool awaiting() const noexcept { return m_awaiting; }
+    [[nodiscard]] bool empty() const noexcept { return m_queue.empty(); }
+    [[nodiscard]] std::size_t size() const noexcept { return m_queue.size(); }
+
+private:
+    std::deque<Cc> m_queue;
+    bool m_awaiting = false;
+};
+
+// ---- N2ADR/KP4RX I/O Board accessory: fixed I2C address and registers ----
+//
+// Ground truth: https://github.com/W5TSU/HL2IOBoard_KP4RX (i2c_registers.h,
+// README "Table of I2C Registers"), the operator's own hardware — unlike
+// kAddrI2cBus1/2 above, this address and these five registers are a specific
+// device's documented contract, not a tier-3 guess. The board's Pico
+// microcontroller listens at this fixed address on the HL2's I2C BUS 2
+// (I2cBus::Bus2) regardless of which SDR client is talking to it — confirmed
+// against a real Thetis<->HL2 packet capture on this exact board (a working
+// register-0 read of device 0x41 came back C0=0xFA, i.e. bus 2; the identical
+// request on bus 1 got no reply). The Pico's OWN schematic labels its I2C
+// peripheral pins "I2C1", which is a different thing entirely from which of
+// the HL2's two bus selectors the board is wired to — don't conflate them.
+inline constexpr std::uint8_t kIoBoardI2cAddress = 0x1D;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte4 = 0;  // most significant byte
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte3 = 1;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte2 = 2;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte1 = 3;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte0 = 4;  // least significant; writing this triggers the Pico's update
+inline constexpr std::uint8_t kIoBoardRegControl     = 5;  // write 1 to reset all registers to zero
+// Pin-status reads (RadioSetupDialog's I/O Board pin-state poll). Register 6
+// (REG_INPUT_PINS) is CONFIRMED against the same Thetis<->HL2 capture as the
+// bus-2 finding above: Thetis polls this exact register for live input-pin
+// status. Register 169 (REG_OUT_PINS) is the board firmware's own documented
+// value but has NOT been confirmed against a capture or real hardware read —
+// treat it as tier-2, not tier-3, until it is.
+inline constexpr std::uint8_t kIoBoardRegInputPins  = 6;    // confirmed via packet capture
+inline constexpr std::uint8_t kIoBoardRegOutputPins = 169;  // per firmware docs, unverified against hardware
+
+// Splits `hz` into the I/O Board's 5-byte big-endian TX-frequency registers,
+// as five ready-to-send I2C write requests — in the WRITE ORDER the board's
+// firmware requires: BYTE4..BYTE1 first (order among these four does not
+// matter), BYTE0 LAST. The board computes everything band-related from this
+// alone (per-amplifier band-voltage output, antenna/filter selection); "the
+// only required SDR modification is sending the transmit frequency" per the
+// firmware's own README. Values above the 5-byte range (2^40-1) are clamped.
+std::array<Cc, 5> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
+
+// The documented startup reset: write 1 to REG_CONTROL to clear stale
+// register data (e.g. a leftover band code from a previous session or a
+// different SDR program) before the first real TX-frequency push arrives.
+Cc ccIoBoardReset() noexcept;
 
 // Everything the classic response cycle carries. Fields are std::optional
 // because each RADDR carries only part of it, so "not seen yet" stays

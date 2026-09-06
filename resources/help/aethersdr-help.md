@@ -430,6 +430,9 @@ SpotHub brings spot sources together in one place so you can compare cluster inf
 - `Filters`: filter behavior and low-latency digital choices
 - `XVTR`: transverter definitions and management
 - `USB Cables`: CAT, BCD, bit, and passthrough cable definitions
+- `Hermes Lite 2` (HL2 only): ADC dither/randomization, reset-on-disconnect, TX latency, PTT hang, and swap audio channels
+- `I/O Board` (HL2 only): pin-state display and a raw I2C bus/address/register read/write panel for the separate I/O Board accessory
+- `Filter Board` (HL2 only): the J16 filter-relay board — automatic band switching by default, with an opt-in manual per-band/per-direction override
 - `Serial`: serial port behavior, pin assignments, and FlexControl tuning knob setup when serial support is built in
 
 This dialog affects radio-wide behavior more often than slice-local behavior, so change settings carefully and intentionally.

@@ -273,12 +273,27 @@ public:
     Q_INVOKABLE void setTxTestTone(double offsetHz, double amplitude);
     [[nodiscard]] bool txTestToneEnabled() const noexcept { return m_toneAmp > 0.0; }
 
-    // I/O Board accessory: raw I2C read/write (ticket #11). One outstanding
-    // request at a time — a second call before i2cResponseReceived() fires
-    // for the first is queued behind it via m_oneShot, same as any other
-    // one-shot bank, so requests cannot race each other's replies.
+    // I/O Board accessory: raw I2C read/write (ticket #11) and the
+    // automatic N2ADR/KP4RX I/O Board TX-frequency push. All four funnel
+    // through ONE internal queue (m_i2cJobs) rather than straight onto
+    // m_oneShot, because the underlying RQST/ACK protocol tolerates exactly
+    // one outstanding I2C transaction at a time — no transaction id, matched
+    // purely by arrival order — so a manual panel call and an automatic push
+    // landing close together must never be allowed to race the same
+    // unmarked ACK. See dispatchNextI2cJob().
     Q_INVOKABLE void sendI2cRead(int bus, int deviceAddress, int control);
     Q_INVOKABLE void sendI2cWrite(int bus, int deviceAddress, int control, int data);
+    // Pushes the 5-byte TX frequency to the I/O Board (ccIoBoardTxFrequency)
+    // so it can drive whatever band-dependent hardware it's wired to (a
+    // XieGu-style band-voltage output for an external amp, antenna
+    // selection, etc.) — see MetisProtocol.h's kIoBoard* constants. `hz`
+    // is the TRUE (uncalibrated-scale) transmit frequency.
+    Q_INVOKABLE void pushIoBoardTxFrequencyHz(quint64 hz);
+    // The I/O Board's documented startup reset (ccIoBoardReset): write 1 to
+    // REG_CONTROL so stale register data from a previous session or a
+    // different SDR program can't be acted on before the first real
+    // TX-frequency push arrives.
+    Q_INVOKABLE void resetIoBoardRegisters();
 
 signals:
     void linkUp();                                                  // first EP6 seen
@@ -338,6 +353,12 @@ private:
     // samples (Q pinned to zero) until one does.
     void sendPrimingBurst(int countPerBank);
 
+    // Sends the front of m_i2cJobs if nothing is currently awaiting an ACK.
+    // Called after every enqueue and after every completion (ack or
+    // timeout), so the queue drains itself one transaction at a time — see
+    // the class-level note on sendI2cRead()/pushIoBoardTxFrequencyHz().
+    void dispatchNextI2cJob();
+
     // EP2 cadence follows the frame geometry, not the EP6 arrival rate: the
     // radio consumes one EP2 frame per kTxSamplesPerPacket samples, so at 48 kHz
     // that is 126/48000 s = 2625 us. Driving it from a wall clock (rather than
@@ -392,11 +413,16 @@ private:
     Cc m_ccTxLatencyPttHang = ccTxLatencyPttHang(20, 12);  // reference-client defaults
     Cc m_ccResetOnDisconnect = ccResetOnDisconnect(false);
 
-    // I/O Board I2C request/reply (ticket #11). A request is pending from the
-    // moment sendI2cRead()/sendI2cWrite() queues it until either a matching
-    // ACK arrives (onReadyRead's telemetry decode) or the timeout fires —
-    // whichever is first; the other outcome is then ignored.
-    bool    m_i2cRequestPending = false;
+    // I/O Board I2C request/reply (ticket #11) and the automatic
+    // TX-frequency push, sharing one queue because the wire only tolerates
+    // one outstanding transaction (see sendI2cRead()'s class-level note).
+    // The scheduling itself — at most one in flight, FIFO order — is the
+    // pure, socket-free I2cJobQueue; this class only owns the timer and the
+    // actual send. In flight from the moment dispatchNextI2cJob() actually
+    // sends the front job until either a matching ACK arrives (onReadyRead's
+    // telemetry decode) or the timeout fires — whichever is first — at which
+    // point dispatchNextI2cJob() sends the next one.
+    I2cJobQueue m_i2cJobs;
     QTimer* m_i2cTimeoutTimer = nullptr;
     static constexpr int kI2cTimeoutMs = 500;
 

@@ -67,7 +67,9 @@ All four tables exist from v1 so the file format is stable. `radio_settings`
 holds one **versioned JSON document per feature per scope** (Constitution
 Principle V) and is live: the HL2 `OperatingState` document (universal fields
 plus per-band drive/LNA maps in domain-gated extension sub-objects), the
-`Identity` nickname document, and `BandStack` (#4621); and the shared memory bank
+`Identity` nickname document, `BandStack` (#4621), the HL2 `HermesLiteOptions`
+and `FilterBoard` documents (#9 — misc radio options and the manual J16
+relay-board override, respectively); and the shared memory bank
 at `(local, '', MemoryBank)` (#4623 — deliberately ONE shared document
 preserving #4590's cross-radio channel list; nigelfenton's review supplied the
 stronger justification: the bank engages on exactly the radios whose identity

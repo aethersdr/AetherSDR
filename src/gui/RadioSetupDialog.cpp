@@ -154,6 +154,18 @@ static const QString kCheckBoxIndicator =
     "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
     "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
 
+// kCheckBoxIndicator's separate :checked and :disabled rules don't combine —
+// on a widget that's BOTH (a read-only, always-disabled indicator checkbox,
+// as opposed to every other checkbox in this dialog which is interactive),
+// the later :disabled rule wins the cascade on every property they both set,
+// so checked and unchecked render identically. Rather than touch the shared
+// constant every interactive checkbox relies on (where this combination
+// never arises), read-only indicator rows use this variant instead, which
+// adds the missing combined rule.
+static const QString kCheckBoxIndicatorReadOnly = kCheckBoxIndicator + QStringLiteral(
+    "QCheckBox::indicator:disabled:checked { "
+    "border: 2px solid {{color.accent}}; background: {{color.background.2}}; }");
+
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
 
@@ -9389,7 +9401,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
         "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "color: {{color.text.primary}}; font-size: 11px; padding: 2px; }";
 
-    // ---- pin states: read-only, populated by the Read Pins buttons below ----
+    // ---- pin states: read-only, populated by the 1 Hz auto-poll below ----
     auto* pinGroup = new QGroupBox(QStringLiteral("I/O Board Pin States"));
     pinGroup->setStyleSheet(kGroupStyle);
     auto* pinLayout = new QGridLayout(pinGroup);
@@ -9404,7 +9416,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
         for (int i = 0; i < count; ++i) {
             auto* cb = new QCheckBox;
             cb->setEnabled(false);   // reflects the last read; never operator-set directly
-            theme.applyStyleSheet(cb, kCheckBoxIndicator);
+            theme.applyStyleSheet(cb, kCheckBoxIndicatorReadOnly);
             cb->setAccessibleName(QStringLiteral("%1 pin %2").arg(label).arg(i + 1));
             grid->addWidget(cb, row, i + 1);
             out.append(cb);
@@ -9432,7 +9444,13 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
 
     auto* bus1Radio = new QRadioButton(QStringLiteral("I2C 1"));
     auto* bus2Radio = new QRadioButton(QStringLiteral("I2C 2"));
-    bus1Radio->setChecked(true);
+    // Defaults to bus 2: confirmed (packet capture against a real Thetis
+    // session) that the N2ADR/KP4RX I/O Board answers on the HL2's I2C bus 2,
+    // not bus 1 — despite the board's own Pico schematic labeling its I2C
+    // peripheral pins "I2C1", which describes the Pico's own hardware, not
+    // which HL2 bus selector it's wired to. A different accessory on a
+    // different bus is still one click away.
+    bus2Radio->setChecked(true);
     auto* busGroup = new QButtonGroup(page);
     busGroup->addButton(bus1Radio, 1);
     busGroup->addButton(bus2Radio, 2);
@@ -9456,6 +9474,12 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     auto* addressSpin = makeLabeledSpin(QStringLiteral("I2C Address"), 2, 0x7F);
     auto* controlSpin = makeLabeledSpin(QStringLiteral("Reg/Control"), 3);
     auto* writeDataSpin = makeLabeledSpin(QStringLiteral("Write Data"), 4);
+    // Defaults to the I/O Board's own fixed address and a register worth
+    // checking first (0x08 = REG_FAULT — zero for no fault, confirming the
+    // board's alive without touching anything). Still just a starting
+    // point for arbitrary exploration, not a restriction.
+    addressSpin->setValue(hl2::kIoBoardI2cAddress);
+    controlSpin->setValue(0x08);
 
     auto* resultLabel = new QLabel(QStringLiteral("—"));
     resultLabel->setStyleSheet(kValueStyle);
@@ -9475,28 +9499,16 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     i2cGrid->addWidget(readBtn, 2, 2);
     i2cGrid->addWidget(writeBtn, 2, 3);
 
-    auto* readInputPinsBtn = new QPushButton(QStringLiteral("Read Input Pins"));
-    auto* readOutputPinsBtn = new QPushButton(QStringLiteral("Read Output Pins"));
-    for (auto* btn : {readInputPinsBtn, readOutputPinsBtn}) {
-        theme.applyStyleSheet(btn, readBtn->styleSheet());
-        btn->setToolTip(QStringLiteral(
-            "Reads a pin-state register at the address above into the "
-            "pin-state row. Register number is a best guess from the "
-            "reference implementation's register-enum NAMING alone "
-            "(REG_IN_PINS/REG_OUT_PINS) — no usage of it was found to "
-            "confirm against, so treat the result with suspicion until "
-            "verified on real hardware."));
-    }
-    i2cGrid->addWidget(readInputPinsBtn, 6, 0);
-    i2cGrid->addWidget(readOutputPinsBtn, 6, 1);
-
     // ---- wiring ----
+    // Gates only the GENERIC bus/address/register read/write controls —
+    // arbitrary access to whatever else is on the bus, still opt-in. The
+    // pin-state row below is read-only and always live regardless of this
+    // checkbox; see the poll timer further down.
     auto setEnabled = [=](bool on) {
         for (QWidget* w : {static_cast<QWidget*>(bus1Radio), static_cast<QWidget*>(bus2Radio),
                           static_cast<QWidget*>(addressSpin), static_cast<QWidget*>(controlSpin),
                           static_cast<QWidget*>(writeDataSpin), static_cast<QWidget*>(readBtn),
-                          static_cast<QWidget*>(writeBtn), static_cast<QWidget*>(readInputPinsBtn),
-                          static_cast<QWidget*>(readOutputPinsBtn)}) {
+                          static_cast<QWidget*>(writeBtn)}) {
             w->setEnabled(on);
         }
     };
@@ -9559,28 +9571,69 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
                 {QStringLiteral("data"), writeDataSpin->value()},
             }));
     });
-    // REG_IN_PINS = 168 / REG_OUT_PINS = 169, per the reference
-    // implementation's register-enum NAMING alone (Thetis IoBoardHl2.cs) —
-    // see the buttons' tooltip for why that's a guess, not a verified fact.
-    connect(readInputPinsBtn, &QPushButton::clicked, this,
-            [this, busGroup, addressSpin, nextRequestId, pendingKind] {
+    // kIoBoardRegInputPins: confirmed against a real Thetis<->HL2 packet
+    // capture — Thetis's own live pin-status display polls exactly this
+    // register repeatedly, on I2C bus 2, device 0x1D. kIoBoardRegOutputPins
+    // is still the reference implementation's register-enum naming alone
+    // (no capture evidence either way for it) — see its own comment in
+    // MetisProtocol.h.
+    //
+    // Always live, independent of "Enable I2C control" — that checkbox gates
+    // the GENERIC arbitrary-address panel only; the pin row is read-only and
+    // targets this one known board, so there is nothing it could do that an
+    // operator needs to opt into. Hardcodes bus 2 / kIoBoardI2cAddress
+    // (confirmed values — see the constant's own comment) rather than
+    // reading busGroup/addressSpin, so retyping some other address into the
+    // manual panel for an unrelated diagnostic can never disturb this.
+    auto triggerReadInputPins = [this, nextRequestId, pendingKind] {
         *pendingKind = QStringLiteral("pin-in");
         m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
             (*nextRequestId)++, QVariant(QVariantMap{
-                {QStringLiteral("bus"), busGroup->checkedId()},
-                {QStringLiteral("address"), addressSpin->value()},
-                {QStringLiteral("control"), 168},
+                {QStringLiteral("bus"), 2},
+                {QStringLiteral("address"), hl2::kIoBoardI2cAddress},
+                {QStringLiteral("control"), hl2::kIoBoardRegInputPins},
             }));
-    });
-    connect(readOutputPinsBtn, &QPushButton::clicked, this,
-            [this, busGroup, addressSpin, nextRequestId, pendingKind] {
+    };
+    auto triggerReadOutputPins = [this, nextRequestId, pendingKind] {
         *pendingKind = QStringLiteral("pin-out");
         m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
             (*nextRequestId)++, QVariant(QVariantMap{
-                {QStringLiteral("bus"), busGroup->checkedId()},
-                {QStringLiteral("address"), addressSpin->value()},
-                {QStringLiteral("control"), 169},
+                {QStringLiteral("bus"), 2},
+                {QStringLiteral("address"), hl2::kIoBoardI2cAddress},
+                {QStringLiteral("control"), hl2::kIoBoardRegOutputPins},
             }));
+    };
+
+    // Alternate input/output polls once a second. Alternating (never both
+    // queued in the same tick) is deliberate — only one I2C job's result is
+    // ever "current" via pendingKind, so firing both before the first's
+    // reply landed would let the second call's pendingKind write win and
+    // misroute the first reply to the wrong row. Hl2Backend's
+    // single-outstanding-request gate refuses a poll tick that lands while a
+    // manual Read/Write is still in flight; the next tick simply tries again
+    // a second later, so a manual click is never starved.
+    auto pollNextIsInput = std::make_shared<bool>(true);
+    auto* pinPollTimer = new QTimer(page);
+    pinPollTimer->setInterval(1000);
+    connect(pinPollTimer, &QTimer::timeout, this,
+            [triggerReadInputPins, triggerReadOutputPins, pollNextIsInput] {
+        if (*pollNextIsInput)
+            triggerReadInputPins();
+        else
+            triggerReadOutputPins();
+        *pollNextIsInput = !*pollNextIsInput;
+    });
+    // Gated by "Enable I2C control" after all — polling this board is
+    // harmless, but showing live status for hardware the operator hasn't
+    // said they have attached was more surprising than helpful.
+    connect(enableCheck, &QCheckBox::toggled, this,
+            [pinPollTimer, triggerReadInputPins](bool on) {
+        if (on) {
+            triggerReadInputPins();   // immediate first read, not a 1 s wait
+            pinPollTimer->start();
+        } else {
+            pinPollTimer->stop();
+        }
     });
 
     vbox->addWidget(pinGroup);
@@ -9729,6 +9782,58 @@ QWidget* RadioSetupDialog::buildFilterBoardTab()
     });
 
     vbox->addWidget(table, 1);
+
+    // ---- Hardware Pin State: what's actually being driven right now ----
+    // Distinct from the manual table above, which is what WOULD be sent for
+    // a given band — automatic mode ignores the table entirely, and even
+    // manual mode's spanned/keyed override (Hl2Backend::applyBandFilter) can
+    // pick a different band's entry than whatever the operator is looking
+    // at. This reflects the reference client's own "Hardware Pin State" row.
+    // No I2C read needed — AetherSDR is the one driving this byte, so it's
+    // already known locally; polling here is just reading our own state
+    // through the seam, not a wire round trip.
+    auto* hwStateGroup = new QGroupBox(QStringLiteral("Hardware Pin State"));
+    hwStateGroup->setStyleSheet(kGroupStyle);
+    auto* hwStateLayout = new QHBoxLayout(hwStateGroup);
+    QVector<QCheckBox*> hwPins;
+    for (int pin = 1; pin <= 7; ++pin) {
+        auto* lbl = new QLabel(QString::number(pin));
+        lbl->setStyleSheet(kLabelStyle);
+        hwStateLayout->addWidget(lbl);
+        auto* cb = new QCheckBox;
+        cb->setEnabled(false);   // reflects live state; never operator-set directly
+        theme.applyStyleSheet(cb, kCheckBoxIndicatorReadOnly);
+        cb->setAccessibleName(QStringLiteral("J16 pin %1 hardware state").arg(pin));
+        hwStateLayout->addWidget(cb);
+        hwPins.append(cb);
+    }
+    hwStateLayout->addStretch();
+
+    auto hwNextRequestId = std::make_shared<quint64>(1);
+    if (IRadioBackend* backend = m_model->backend()) {
+        connect(backend, &IRadioBackend::extensionResult, this,
+                [hwPins](quint64, const QVariant& result) {
+            const QVariantMap m = result.toMap();
+            // Filters out replies to this page's OTHER extension calls
+            // (filterboard.setBand, .restoreDefaults) sharing this signal.
+            if (!m.contains(QStringLiteral("activeOcByte")))
+                return;
+            const int oc = m.value(QStringLiteral("activeOcByte")).toInt();
+            for (int i = 0; i < hwPins.size(); ++i)
+                hwPins[i]->setChecked((oc & (1 << i)) != 0);
+        });
+    }
+    auto* hwPollTimer = new QTimer(page);
+    hwPollTimer->setInterval(500);
+    connect(hwPollTimer, &QTimer::timeout, this, [this, hwNextRequestId] {
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("filterboard.get"),
+            (*hwNextRequestId)++, QVariant());
+    });
+    m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("filterboard.get"),
+        (*hwNextRequestId)++, QVariant());   // immediate first read, not a 500 ms wait
+    hwPollTimer->start();
+
+    vbox->addWidget(hwStateGroup);
     return page;
 }
 

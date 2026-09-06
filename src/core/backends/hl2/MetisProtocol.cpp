@@ -269,6 +269,30 @@ I2cResult decodeI2cResponse(const Ep6Response& r) noexcept
     return out;
 }
 
+std::array<Cc, 5> ccIoBoardTxFrequency(std::uint64_t hz) noexcept
+{
+    constexpr std::uint64_t kMax40Bit = (std::uint64_t{1} << 40) - 1;
+    if (hz > kMax40Bit)
+        hz = kMax40Bit;
+    const auto byteAt = [hz](int shift) {
+        return static_cast<std::uint8_t>((hz >> shift) & 0xFF);
+    };
+    // BYTE0 last: the firmware's i2c_slave_handler() only recomputes the
+    // band on BYTE0, so sending it first would trigger on stale upper bytes.
+    return {
+        ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegTxFreqByte4, byteAt(32)),
+        ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegTxFreqByte3, byteAt(24)),
+        ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegTxFreqByte2, byteAt(16)),
+        ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegTxFreqByte1, byteAt(8)),
+        ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegTxFreqByte0, byteAt(0)),
+    };
+}
+
+Cc ccIoBoardReset() noexcept
+{
+    return ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegControl, 0x01);
+}
+
 void Hl2Telemetry::apply(const Ep6Response& r) noexcept
 {
     ptt = r.ptt;
