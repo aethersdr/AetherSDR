@@ -1,0 +1,47 @@
+name = "kiwi-directory-mirror"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Both hostnames are served by this one Worker; it routes on Host. Custom
+# domains create and manage their own DNS records in the aethersdr.com zone.
+[[routes]]
+pattern = "cdn.aethersdr.com"
+custom_domain = true
+
+[[routes]]
+pattern = "kiwi-status.aethersdr.com"
+custom_domain = true
+
+# Hourly, on the hour. Best-effort on the free plan - the status page treats
+# 2.5 missed polls as "nothing is running".
+[triggers]
+crons = ["0 * * * *"]
+
+[[kv_namespaces]]
+binding = "KIWI"
+id = "64e9e1692480449eba36b671e92a829d"
+
+[vars]
+KIWI_SOURCE_URL = "https://files.kiwisdr.com/public/"
+KIWI_CDN_HOST = "cdn.aethersdr.com"
+KIWI_STATUS_HOST = "kiwi-status.aethersdr.com"
+KIWI_USER_AGENT = "AetherSDR-directory-mirror/1.0 (+https://kiwi-status.aethersdr.com)"
+
+# A poll returning fewer than this fraction of the last published count parks
+# the mirror on the old list and asks for a person. The origin has served
+# truncated pages before, and publishing one erases the directory for everyone.
+KIWI_MIN_ENTRIES_FRACTION = "0.5"
+
+# What we advertise to clients in status.json. Deliberately looser than the
+# operator alarm, so we hear about staleness before clients act on it.
+KIWI_STALE_AFTER_MINUTES = "360"
+
+# The origin's auth transport (KIWI_AUTH_MODE, KIWI_AUTH_NAME) and the secret
+# itself (KIWI_SECRET) are all Worker secrets, set with `wrangler secret put`.
+# Not because the transport is a credential — it is not, and knowing it grants
+# nobody access — but because this repository is public and the arrangement with
+# the KiwiSDR maintainer is not. There is no upside to publishing it.
+#
+# The Worker refuses to poll unless all three are set; there is deliberately no
+# default, because a default in public source would tell readers the wrong thing
+# just as loudly as the real value would tell them the right one.

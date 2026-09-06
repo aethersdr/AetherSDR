@@ -362,6 +362,28 @@ public:
     // Set panadapter bandwidth zoom limits (MHz). Called per-radio model.
     void setBandwidthLimits(double minMhz, double maxMhz) { m_minBwMhz = minMhz; m_maxBwMhz = maxMhz; }
 
+    // Fade the outer edges of the spectrum trace and waterfall to the
+    // background color -- purely cosmetic, drawn into m_overlayStatic (the
+    // layer already composited on top of the FFT trace/waterfall each
+    // frame), NOT a crop of the bin data and NOT a change to the reported
+    // bandwidth. An earlier attempt hid the DDC's always-present edge
+    // roll-off by dropping bins in the BACKEND and under-reporting the
+    // bandwidth to match -- that coupling was the actual bug (#zoom-out
+    // regression): the widget's own zoom math used the under-reported value
+    // as its baseline and a zoom-out request could no longer cross into
+    // "closer to the next rate up." Doing the fade here instead means the
+    // bandwidth and bin count this widget's zoom math sees are always the
+    // real ones; only the PIXELS at the margin are dimmed. Called per-radio
+    // model -- only a DDC-based backend like ANAN has this roll-off;
+    // Flex/HL2/Icom/Kiwi don't.
+    void setPanEdgeTaperEnabled(bool enabled)
+    {
+        if (m_edgeTaperEnabled == enabled)
+            return;
+        m_edgeTaperEnabled = enabled;
+        markOverlayDirty();
+    }
+
     // Set the per-mode filter limits (Hz). Called when mode changes.
     void setFilterLimits(int minHz, int maxHz) { m_filterMinHz = minHz; m_filterMaxHz = maxHz; }
 
@@ -1974,6 +1996,9 @@ private:
     QPushButton* m_zoomBandBtn{nullptr};
     QPushButton* m_zoomOutBtn{nullptr};
     QPushButton* m_zoomInBtn{nullptr};
+
+    // See setPanEdgeTaperEnabled()'s own comment.
+    bool m_edgeTaperEnabled{false};
     bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM

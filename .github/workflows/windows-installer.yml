@@ -17,9 +17,39 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    outputs:
+      publish-flight: ${{ steps.store-plan.outputs.publishFlight }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # Resolve publication intent before building or authenticating. A manual
+      # tag dispatch is still manual: it cannot attach public release assets
+      # or stage a production Store draft.
+      - name: Plan Store build
+        id: store-plan
+        env:
+          STORE_REQUESTED_FLIGHT: ${{ inputs.publish_store_flight }}
+          STORE_EVENT: ${{ github.event_name }}
+          STORE_REF: ${{ github.ref }}
+          STORE_REPOSITORY: ${{ github.repository }}
+          STORE_RUN_NUMBER: ${{ github.run_number }}
+          AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
+          AETHERSDR_STORE_FLIGHT_ID: ${{ secrets.AETHERSDR_STORE_FLIGHT_ID }}
+        run: |
+          $plan = & .\packaging\windows\get-store-build-plan.ps1 `
+            -EventName $env:STORE_EVENT -Ref $env:STORE_REF `
+            -Repository $env:STORE_REPOSITORY -RunNumber $env:STORE_RUN_NUMBER `
+            -RequestFlight ($env:STORE_REQUESTED_FLIGHT -eq 'true') `
+            -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -FlightId $env:AETHERSDR_STORE_FLIGHT_ID
+          foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight')) {
+            "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          }
+          "AETHERSDR_MSIX_VERSION=$($plan.msixVersion)" >> $env:GITHUB_ENV
+          Write-Host "Store package version: $($plan.msixVersion)"
+
+      - name: Check Store packaging policy
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_store_policy_test.ps1
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
@@ -350,28 +380,6 @@ jobs:
       # established portable-zip + Inno installer delivery path that real
       # users depend on.  When MSIX matures we can promote it back into
       # the hard-required artifact set.
-      - name: Set manual Store flight MSIX version
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_store_flight
-        run: |
-          $match = Select-String -Path CMakeLists.txt -Pattern '^\s*project\(AetherSDR\s+VERSION\s+([0-9]+(?:\.[0-9]+){1,3})' | Select-Object -First 1
-          if (-not $match) {
-            throw "Could not read the AetherSDR version from CMakeLists.txt."
-          }
-          $parts = @($match.Matches[0].Groups[1].Value.Split('.'))
-          while ($parts.Count -lt 3) {
-            $parts += '0'
-          }
-          $runNumber = [int]"${{ github.run_number }}"
-          if ($runNumber -lt 1 -or $runNumber -gt 65535) {
-            throw "GitHub run number $runNumber cannot be used as an MSIX version component (1..65535)."
-          }
-          # Keep the source version's first three components. The workflow run
-          # number makes each manually requested flight package newer without
-          # changing release metadata or creating a public tag.
-          $flightVersion = "$($parts[0]).$($parts[1]).$($parts[2]).$runNumber"
-          "AETHERSDR_MSIX_VERSION=$flightVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Manual Store flight MSIX version: $flightVersion"
-
       - name: Create MSIX package
         continue-on-error: true
         env:
@@ -390,7 +398,8 @@ jobs:
       # The staging step above is a hard gate: it verifies every deployed Qt
       # DLL/plugin has its same-named PDB before removing symbols from deploy/.
       # Re-check the high-value symbols independently so a packaging refactor
-      # cannot silently shrink the Store symbol surface.
+      # cannot silently shrink the Store symbol surface. Keep this list in sync
+      # with check-symbol-package.ps1's default RequiredPdbs list.
       - name: Verify required debug symbols present
         run: |
           $required = @("AetherSDR.pdb", "Qt6Core.pdb", "Qt6Gui.pdb", "Qt6Multimedia.pdb", "Qt6Network.pdb", "Qt6Widgets.pdb", "qwindows.pdb", "windowsmediaplugin.pdb")
@@ -436,8 +445,8 @@ jobs:
           retention-days: 90
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        if: steps.store-plan.outputs.releaseArtifacts == 'true'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           # .msixupload is the Partner Center upload artifact (manual Store
           # submission for now — see docs/WINDOWS-STORE-MSIX.md). It's a
@@ -457,9 +466,8 @@ jobs:
       # Automated Microsoft Store submission (weekly release cycle).
       #
       # Runs ONLY on a v* tag push, and ONLY when the AETHERSDR_STORE_PRODUCT_ID
-      # repository VARIABLE is set. PRs, branch workflow_dispatch runs, and forks
-      # never touch Partner Center because (a) the tag-ref guard, (b) the
-      # product-Id guard, and (c) forks have no access to the repo secrets.
+      # repository VARIABLE is set. The plan rejects manual tag dispatches and
+      # forks for this path; manual flight requests have their own job below.
       #
       # The submission is staged as a DRAFT (publish-store.ps1 passes
       # --noCommit): the package uploads to Partner Center but certification is
@@ -471,13 +479,13 @@ jobs:
       # docs/WINDOWS-STORE-MSIX.md.
       # ----------------------------------------------------------------------
       - name: Setup Microsoft Store Developer CLI
-        if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
+        if: steps.store-plan.outputs.productionDraft == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
         with:
           version: v0.4.1
 
       - name: Stage Microsoft Store submission (draft)
-        if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
+        if: steps.store-plan.outputs.productionDraft == 'true'
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
@@ -500,10 +508,7 @@ jobs:
   publish-store-flight:
     name: Fully submit developer Store flight
     needs: build-windows
-    if: >-
-      github.repository == 'aethersdr/AetherSDR' &&
-      github.event_name == 'workflow_dispatch' &&
-      inputs.publish_store_flight
+    if: needs.build-windows.outputs.publish-flight == 'true'
     runs-on: windows-latest
     permissions:
       contents: read

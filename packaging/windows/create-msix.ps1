@@ -315,6 +315,9 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProjectVersion
 }
 $msixVersion = Convert-ToMsixVersion $Version
+if ($CreateUpload -and ([version]$msixVersion).Revision -ne 0) {
+    throw "Microsoft Store reserves the fourth version component; -CreateUpload requires a version ending in .0. Pass -Version explicitly for CalVer hotfix builds."
+}
 
 $resolvedDeployDir = Resolve-InputPath $DeployDir
 $resolvedPackageRoot = Resolve-InputPath $PackageRoot

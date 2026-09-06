@@ -80,16 +80,27 @@ int main(int argc, char** argv)
 
     const auto icomNotice = experimentalRadioDescriptor(QStringLiteral("icom"));
     const auto hl2Notice = experimentalRadioDescriptor(QStringLiteral("hl2"));
+    const auto ananNotice = experimentalRadioDescriptor(QStringLiteral("anan"));
     check(icomNotice && icomNotice->displayName == QStringLiteral("Icom"),
           "Icom is identified as an experimental radio family");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
           "Hermes-Lite 2 is identified as an experimental radio family");
+    check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),
+          "ANAN-G2 is identified as an experimental radio family");
     check(!experimentalRadioDescriptor(QStringLiteral("flex")),
           "Flex is not marked as an experimental radio family");
     check(icomNotice
-              && experimentalRadioNoticeText(icomNotice->displayName)
+              && experimentalRadioNoticeText(icomNotice->displayName, /*transmitAvailable=*/true)
                      .contains(QStringLiteral("Help \u2192 File an Issue")),
           "the experimental notice points operators to the issue-reporting workflow");
+    check(icomNotice
+              && experimentalRadioNoticeText(icomNotice->displayName, /*transmitAvailable=*/true)
+                     .contains(QStringLiteral("receive and transmit functions are available")),
+          "a transmit-capable family's notice does not claim receive-only");
+    check(ananNotice
+              && experimentalRadioNoticeText(ananNotice->displayName, /*transmitAvailable=*/false)
+                     .contains(QStringLiteral("receive-only")),
+          "a receive-only family's notice does not falsely claim transmit support");
 
     // ---- the factory selects it ------------------------------------------
     model.connectToRadio(infoFor(QStringLiteral("icom")));
@@ -448,6 +459,14 @@ int main(int argc, char** argv)
               && icom::speechProcessorRawLevel(2, 1) == 153
               && icom::speechProcessorRawLevel(2, 2) == 229,
           "sibling Icom processor presets retain raw 76/153/229 encoding");
+    std::vector<std::uint8_t> tunerModels;
+    for (const icom::IcomModel& model : icom::knownModels()) {
+        if (icom::profileFor(model).supports(icom::IcomFeature::AntennaTuner)) {
+            tunerModels.push_back(model.civAddress);
+        }
+    }
+    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0x8E, 0x94, 0xB6},
+          "each evidenced internal/external-tuner model opts into tuner control");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
@@ -644,6 +663,11 @@ int main(int argc, char** argv)
     {
         const icom::IcomModel* ic705 = icom::modelForName("IC-705");
         check(ic705 != nullptr, "the IC-705 is in the table");
+        check(icom::profileFor(*ic705).supports(icom::IcomFeature::GpsPosition),
+              "the IC-705 alone declares its verified CI-V GPS position surface");
+        check(icom::profileFor(*ic705).supports(
+                  icom::IcomFeature::GpsTimeConfiguration),
+              "the IC-705 alone declares its verified NTP/GPS clock settings");
         const QStringList bands = parseDeclaredBands(
             QString::fromUtf8(ic705->bands.data(),
                               static_cast<int>(ic705->bands.size())));
@@ -674,6 +698,10 @@ int main(int argc, char** argv)
         check(icom::bandsFor(*ic705).empty(),
               "the IC-705 has no discontinuous native-band range override, so "
               "its declared buttons keep canonical labels");
+        check(!icom::profileFor(*ic9700).supports(icom::IcomFeature::GpsPosition)
+                  && !icom::profileFor(*ic9700).supports(
+                      icom::IcomFeature::GpsTimeConfiguration),
+              "another Icom does not inherit IC-705 GPS commands by profile position");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))

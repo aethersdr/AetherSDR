@@ -48,6 +48,8 @@ enum class Encoding : std::uint8_t {
     Bcd4,        // four BCD digits (a scope span, a SET-menu item)
     Bcd6,        // six BCD digits (repeater offset / CTCSS frequency)
     Dtcs,        // polarity byte + three displayed BCD code digits
+    Ascii,       // bounded ASCII text after the command-specific address
+    GpsPosition, // latitude/longitude plus optional altitude/course/speed/UTC
 };
 
 // Which model the value belongs to once it is across the seam. Says where to

@@ -292,11 +292,14 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveOnlyModes = {};
     caps.hasRadioDialLock = false;
     caps.hasTuner = false;
+    caps.hasTunerMemories = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
+    caps.hasAudioPeakingFilter = false;
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
+    caps.hasDdcPanEdgeRolloff = false;   // synthetic scene, no real receive chain
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
@@ -335,6 +338,9 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMinWidthHz = 0.0;
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
+    caps.hasGpsSatelliteTelemetry = false;
+    caps.hasGpsFrequencyReference = false;
+    caps.hasGpsTimeConfiguration = false;
     caps.hasGpsHardware = false;
     caps.gpsHardwareRequiresPresence = false;
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail

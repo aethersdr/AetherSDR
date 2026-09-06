@@ -1,6 +1,6 @@
 #include "VfoWidget.h"
 #include "FmTonePresentation.h"
-#include "core/CtcssTones.h"
+#include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
@@ -460,8 +460,19 @@ static const QString kModeBtn =
     "QPushButton:checked { background: #0070c0; color: #ffffff; border: 1px solid #0090e0; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
 
+// Shared :disabled rule: a stylesheet colour beats the disabled palette, so
+// a label in a disabled row stays bright unless the sheet says otherwise.
+// #5e6e7c is ~0.45 of makeOptLabel()'s #c8d8e8 over the flag background (a
+// lighter step, ~0.65, from kLabelStyle's #8aa8c0). Used by kLabelStyle and
+// by makeOptLabel() below. Note the rule only bites a label whose row is
+// disabled as a container: today that is the APF level row while APF is off
+// (#4658); rows that disable just their slider (SQL) keep a bright label.
+static const QString kDisabledLabelRule =
+    "QLabel:disabled { color: #5e6e7c; }";
+
 static const QString kLabelStyle =
-    "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
+    "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }"
+    + kDisabledLabelRule;
 
 // Meter-view selector buttons.  Unselected look matches the DSP NR/NB/ANF
 // toggles exactly (kDspToggle base + hover); the selected/checked look matches
@@ -1272,11 +1283,10 @@ void VfoWidget::buildUI()
         auto* lbl = new QLabel(text);
         // :disabled dims the label when its row is disabled — a render()-compatible
         // replacement for the old QGraphicsOpacityEffect (which QWidget::render()
-        // can't rasterize, so it blanked these rows in GPU flag sprites). #5e6e7c is
-        // ~0.45 of the normal text over the flag background.
+        // can't rasterize, so it blanked these rows in GPU flag sprites).
         lbl->setStyleSheet("QLabel { background: transparent; border: none; "
                            "color: #c8d8e8; font-size: 12px; }"
-                           "QLabel:disabled { color: #5e6e7c; }");
+                           + kDisabledLabelRule);
         return lbl;
     };
 
@@ -2055,7 +2065,7 @@ void VfoWidget::buildTabContent()
             apfVb->addWidget(lbl);
             m_apfSlider = new GuardedSlider(Qt::Horizontal);
             m_apfSlider->setAccessibleName("APF bandwidth");
-            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
+            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth. Enabled when APF is on in the DSP grid.");
             m_apfSlider->setRange(0, 100);
             m_apfSlider->setValue(50);
             applyPrimarySliderStyle(m_apfSlider);
@@ -2322,25 +2332,21 @@ void VfoWidget::buildTabContent()
             // Tone value — from core/CtcssTones.h, the same table the RX
             // applet's dropdown and the automation bridge's `slice tone`
             // validation use. This list used to be a third hand-typed copy of
-            // the same 41 doubles; the values agreed, which is exactly how a
+            // the same 50 doubles; the values agreed, which is exactly how a
             // copy survives long enough to stop agreeing.
             m_fmToneValueCmb = new GuardedComboBox;
             m_fmToneValueCmb->setAccessibleName("FM tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
-                m_fmToneValueCmb->addItem(QString::number(t.frequency, 'f', 1),
-                                           QString::number(t.frequency, 'f', 1));
-            }
-            AetherSDR::applyComboStyle(m_fmToneValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_fmToneValueCmb);
+            AetherSDR::applyComboStyle(
+                m_fmToneValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
 
             m_fmToneRxValueCmb = new GuardedComboBox;
             m_fmToneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
-            for (const AetherSDR::CtcssTone& t : AetherSDR::kCtcssTones) {
-                const QString frequency = QString::number(t.frequency, 'f', 1);
-                m_fmToneRxValueCmb->addItem(frequency, frequency);
-            }
-            AetherSDR::applyComboStyle(m_fmToneRxValueCmb);
+            AetherSDR::populateCtcssToneCombo(m_fmToneRxValueCmb);
+            AetherSDR::applyComboStyle(
+                m_fmToneRxValueCmb, AetherSDR::ctcssToneComboStyleRules());
             m_fmToneRxValueCmb->setVisible(false);
             m_fmToneRxContainer = new QWidget;
             auto* toneRxRow = new QHBoxLayout(m_fmToneRxContainer);
@@ -3320,6 +3326,25 @@ void VfoWidget::setRadioFilterWidths(const QList<int>& widthsHz)
     if (!m_slice)
         return;   // updateModeTab() reads the field when the slice arrives
     updateModeTab();
+}
+
+void VfoWidget::setRadioFilterControl(const RxFilterControl& control)
+{
+    if (control == m_radioFilterControl) {
+        return;
+    }
+    m_radioFilterControl = control;
+    if (!control.presets.isEmpty()) {
+        QVector<int> widths;
+        widths.reserve(control.presets.size());
+        for (const RxFilterPreset& preset : control.presets) {
+            widths.append(preset.widthHz);
+        }
+        m_radioFilterWidths = widths;
+    }
+    if (m_slice) {
+        updateModeTab();
+    }
 }
 
 void VfoWidget::setHasManualNotch(bool has)
@@ -5421,7 +5446,7 @@ void VfoWidget::updateModeTab()
     m_filterWidths.clear();
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -5550,12 +5575,31 @@ void VfoWidget::rebuildFilterButtons()
 
     for (int i = 0; i < m_filterWidths.size(); ++i) {
         const int w = m_filterWidths[i];
-        auto* btn = new QPushButton(formatFilterLabel(w));
+        const bool stablePresets =
+            hasCompleteRxFilterPresets(m_radioFilterControl, m_filterWidths.size());
+        const RxFilterPreset preset = stablePresets
+            ? m_radioFilterControl.presets.at(i) : RxFilterPreset{};
+        auto* btn = new QPushButton(stablePresets ? preset.label : formatFilterLabel(w));
+        if (stablePresets) {
+            btn->setToolTip(QStringLiteral("%1: %2 receive bandwidth")
+                                .arg(preset.label, formatFilterLabel(preset.widthHz)));
+            btn->setAccessibleName(QStringLiteral("Receive filter %1")
+                                       .arg(preset.label));
+        }
         btn->setCheckable(true);
         btn->setFixedHeight(26);
         btn->setStyleSheet(kModeBtn);
-        connect(btn, &QPushButton::clicked, this, [this, i](bool) {
-            if (!m_slice) return;
+        connect(btn, &QPushButton::clicked, this,
+                [this, i, stablePresets, preset](bool) {
+            if (!m_slice) {
+                return;
+            }
+            if (stablePresets) {
+                if (m_radioModel) {
+                    m_radioModel->selectRadioFilterPreset(m_slice->sliceId(), preset.id);
+                }
+                return;
+            }
             if (m_filterCustomLo[i] != INT_MIN) {
                 // Custom edges from right-click → "Set Custom Edges..."
                 m_slice->setFilterWidth(m_filterCustomLo[i], m_filterCustomHi[i]);
@@ -5756,7 +5800,7 @@ void VfoWidget::updateFilterHighlight()
     // Format mirrors updateModeTab(): "width" or "lo:hi" entries (#2259).
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -5788,6 +5832,16 @@ void VfoWidget::updateFilterHighlight()
             m_filterCustomHi = loadedHi;
             rebuildFilterButtons();
         }
+    }
+
+    if (hasCompleteRxFilterPresets(m_radioFilterControl, m_filterBtns.size())) {
+        for (int i = 0; i < m_filterBtns.size(); ++i) {
+            QSignalBlocker blocker(m_filterBtns[i]);
+            m_filterBtns[i]->setChecked(
+                m_radioFilterControl.presets.at(i).id
+                == m_radioFilterControl.selectedPresetId);
+        }
+        return;
     }
 
     const int width = m_slice->filterHigh() - m_slice->filterLow();
@@ -6285,13 +6339,10 @@ void VfoWidget::configureFmToneControls()
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
-    for (int i = 0; i < m_fmToneValueCmb->count(); ++i) {
-        const QString frequency = m_fmToneValueCmb->itemData(i).toString();
-        m_fmToneValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Tx, frequency));
-        m_fmToneRxValueCmb->setItemText(
-            i, fmToneDisplayLabel(presentation, FmToneRole::Rx, frequency));
-    }
+    configureCtcssToneComboLabels(
+        m_fmToneValueCmb, presentation, FmToneRole::Tx);
+    configureCtcssToneComboLabels(
+        m_fmToneRxValueCmb, presentation, FmToneRole::Rx);
     const bool modeEligible = m_slice && hasFmToneControls(m_slice->mode());
     const QString selected = m_slice
         ? m_slice->fmToneMode() : m_fmToneModeCmb->currentData().toString();

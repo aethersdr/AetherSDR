@@ -11,8 +11,8 @@
     By default it stages a DRAFT submission (`--noCommit`): the package is
     uploaded to Partner Center but certification is NOT started. A maintainer
     reviews the pending submission in Partner Center and clicks "Submit to
-    Store" to begin certification. Pass -Commit to skip the draft gate and send
-    the submission straight to certification (each tag goes live on approval).
+    Store" to begin certification. Pass -Commit to send a flight straight to
+    certification; production also requires -CommitProduction explicitly.
     Pass -FlightId to target an existing Partner Center package flight. The
     package identity and ProductId remain those of the production app; the
     flight controls the restricted audience.
@@ -51,7 +51,11 @@
 
 .PARAMETER Commit
     Send the submission straight to certification instead of staging a draft.
-    Drops the `--noCommit` safety gate.
+    Drops the `--noCommit` safety gate. Production also requires -CommitProduction.
+
+.PARAMETER CommitProduction
+    Explicit second opt-in for -Commit without a flight. Cannot be used with a
+    flight or without -Commit; ordinary tag builds pass neither switch.
 #>
 
 [CmdletBinding()]
@@ -62,13 +66,24 @@ param(
     [string]$SearchDir = ".",
     [ValidateRange(100, 100000)]
     [long]$UploadTimeoutSeconds = 300,
-    [switch]$Commit
+    [switch]$Commit,
+    [switch]$CommitProduction
 )
 
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($ProductId)) {
     throw "ProductId is required. Set AETHERSDR_STORE_PRODUCT_ID or pass -ProductId."
+}
+
+# Validate intent before looking for artifacts or calling the Store CLI. In
+# particular, a dropped/blank flight argument must never commit production.
+$hasFlight = -not [string]::IsNullOrWhiteSpace($FlightId)
+if ($CommitProduction -and (-not $Commit -or $hasFlight)) {
+    throw "-CommitProduction requires -Commit and must not be combined with -FlightId."
+}
+if ($Commit -and -not $hasFlight -and -not $CommitProduction) {
+    throw "-Commit without -FlightId would certify PRODUCTION. Pass -CommitProduction to explicitly authorize it."
 }
 
 $uploads = @(Get-ChildItem -LiteralPath $SearchDir -Filter $UploadGlob -File -ErrorAction SilentlyContinue |
