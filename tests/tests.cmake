@@ -3147,6 +3147,12 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
 
+    # Socket-owning test: our own TCI server is the subject, so this is inside
+    # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
+    # via TciServer::start(0)) on 127.0.0.1 and connects QWebSocket clients to
+    # it in-process — no fixed port, no external peer, no fake radio firmware.
+    # Each case that binds fails fast when it cannot, rather than consuming the
+    # test timeout.
     add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
     target_include_directories(tci_server_review_test PRIVATE src tests)
     target_link_libraries(tci_server_review_test PRIVATE

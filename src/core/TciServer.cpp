@@ -235,8 +235,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 // manage.
                 m_channelTrx.clear();
                 m_tciDaxSlices.clear();
-                m_tciIqChannels.clear();
-                m_pendingIqRemovals.clear();
+                // The radio's streams and pan bindings died with the
+                // connection; only the logical subscriptions survive, and
+                // reconcileIqStreams() re-arms them when slices return.
+                resetIqStreamBookkeeping();
                 m_trxMap.clear();  // #4567: slices die with the connection
                 m_lastDdsCenterHz.clear();
                 m_routingState.reset();
@@ -432,8 +434,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // the just-created stream as soon as that status arrives.
         connect(&m_model->daxIqModel(), &DaxIqModel::streamChanged,
                 this, [this](int channel) {
+            // A status for this channel settles any create we had outstanding,
+            // whether it succeeded or not, so a later iq_start can re-arm.
+            m_iqCreateInFlight.remove(channel);
             if (!m_pendingIqRemovals.contains(channel)
-                || iqReceiverInUse(channel - 1)) {
+                || iqChannelInUse(channel)) {
                 return;
             }
             const DaxIqModel::IqStream& stream = m_model->daxIqModel().stream(channel);
@@ -557,6 +562,9 @@ void TciServer::stop()
 
     // Server shutdown bypasses onClientDisconnected(), so release every IQ
     // stream TCI created before throwing away the per-client subscriptions.
+    // TciApplet stops and restarts this same object (enable toggle, port
+    // change) rather than re-constructing it, so any bookkeeping left here
+    // outlives the session that made it.
     releaseAllIqStreams();
 
     for (auto& cs : m_clients) {
@@ -774,6 +782,9 @@ void TciServer::onNewConnection()
         // if no focus change has been observed yet, in which case the
         // protocol falls back to scanning.
         protocol->setActiveSlice(m_activeTrx, m_activeLetter);
+        // The IQ rate is shared across clients; a client joining after another
+        // has moved it must not be told the 48000 default in its init burst.
+        protocol->setIqSampleRate(m_iqSampleRate);
 
         ClientState cs;
         cs.socket = ws;
@@ -827,6 +838,9 @@ void TciServer::onClientDisconnected()
             }
             // Drop every receiver this client subscribed, independently. The
             // stream survives when another client still consumes that receiver.
+            // Clearing the set BEFORE the release loop is load-bearing: it is
+            // what stops iqChannelInUse() from seeing the departing client and
+            // refusing to release the channel it was the last consumer of.
             const QSet<int> iqReceivers = m_clients[i].iqReceivers;
             m_clients[i].iqReceivers.clear();
             for (int trx : iqReceivers) {
@@ -1242,8 +1256,12 @@ void TciServer::onTextMessage(const QString& msg)
             const QString value = colonIdx2 >= 0
                 ? trimmed.mid(colonIdx2 + 1).section(QLatin1Char(','), 0, 0).trimmed()
                 : QString();
+            // A GET and a rejected SET both report the rate actually in force
+            // on a live stream, not the last value TCI was asked for — a
+            // skimmer that reads back its own unapplied request learns nothing.
             if (value.isEmpty()) {
-                replyText(ws, QStringLiteral("iq_samplerate:%1;").arg(m_iqSampleRate));
+                replyText(ws, QStringLiteral("iq_samplerate:%1;")
+                                  .arg(achievedIqSampleRate()));
                 continue;
             }
             bool ok = false;
@@ -1252,24 +1270,31 @@ void TciServer::onTextMessage(const QString& msg)
                 && (rate == 24000 || rate == 48000
                     || rate == 96000 || rate == 192000);
             if (!supported) {
-                replyText(ws, QStringLiteral("iq_samplerate:%1;").arg(m_iqSampleRate));
+                replyText(ws, QStringLiteral("iq_samplerate:%1;")
+                                  .arg(achievedIqSampleRate()));
                 continue;
             }
             m_iqSampleRate = rate;
-            QSet<int> activeReceivers;
-            for (const ClientState& cs : std::as_const(m_clients)) {
-                activeReceivers.unite(cs.iqReceivers);
-            }
-            for (int trx : activeReceivers) {
-                if (m_model) {
-                    m_model->daxIqModel().setSampleRate(trx + 1, rate);
+            if (m_model) {
+                for (int channel : std::as_const(m_tciIqChannels)) {
+                    m_model->daxIqModel().setSampleRate(channel, rate);
                 }
             }
+            // Keep every client's init burst honest: a client connecting after
+            // this SET must be told the rate in force, not the 48000 default.
+            for (ClientState& cs : m_clients) {
+                if (cs.protocol) {
+                    cs.protocol->setIqSampleRate(rate);
+                }
+            }
+            // #3913: the requester and every peer each get exactly one copy.
+            // Routed through sendClientText() so the peer sends stay in the
+            // outbound accounting and the `TCI tx→client:` diagnostic log.
             const QString response = QStringLiteral("iq_samplerate:%1;").arg(rate);
             replyText(ws, response);
             for (ClientState& cs : m_clients) {
                 if (cs.socket != ws) {
-                    cs.socket->sendTextMessage(response);
+                    sendClientText(cs.socket, response);
                 }
             }
             continue;
@@ -1283,16 +1308,27 @@ void TciServer::onTextMessage(const QString& msg)
             const int trx = trimmed.mid(colonIdx2 + 1)
                                 .section(QLatin1Char(','), 0, 0)
                                 .trimmed().toInt(&ok);
-            if (!ok || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS
-                || !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+            if (!ok || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS) {
+                // Nothing addressable to answer — there is no receiver here.
                 qCWarning(lcCat) << "TCI: refusing IQ start for unknown receiver"
                                  << trimmed.mid(colonIdx2 + 1).left(32);
                 continue;
             }
-            startIqForClient(client, trx);
+            // A refusal ANSWERS. #3913 established that a skimmer (CW Skimmer /
+            // SDC) blocks on the confirmation, so silence hangs it — and a
+            // client that raced the trx map at connect has no way to learn it
+            // should retry. `iq_stop:<trx>;` is the truthful state echo.
+            if (!startIqForClient(client, trx)) {
+                qCWarning(lcCat) << "TCI: IQ start refused for client"
+                                 << ws->peerAddress().toString()
+                                 << "trx=" << trx;
+                replyText(ws, QStringLiteral("iq_stop:%1;").arg(trx));
+                continue;
+            }
             qCInfo(lcCat) << "TCI: IQ started for client"
                           << ws->peerAddress().toString()
-                          << "trx=" << trx;
+                          << "trx=" << trx
+                          << "channel=" << iqChannelForTrx(trx);
             replyText(ws, QStringLiteral("iq_start:%1;").arg(trx));
             emit clientsChanged();
             continue;
@@ -3744,13 +3780,21 @@ void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
 
 void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
 {
-    // Check if any client wants IQ for this channel
-    bool anyIq = false;
-    int trx = channel - 1;  // DAX IQ channel 1 → TRX 0
+    // Which receivers does this channel feed? Normally one (receiver n ↔ channel
+    // n+1), but two receivers whose slices share a panadapter share its channel
+    // — and see the same spectrum, so both are served from this one payload,
+    // each with its own receiver index in the frame header. Sorted so the send
+    // order is reproducible rather than QSet hash order.
+    QList<int> receivers;
     for (const auto& cs : m_clients) {
-        if (cs.iqReceivers.contains(trx)) { anyIq = true; break; }
+        for (int trx : cs.iqReceivers) {
+            if (iqChannelForTrx(trx) == channel && !receivers.contains(trx)) {
+                receivers.append(trx);
+            }
+        }
     }
-    if (!anyIq) return;
+    if (receivers.isEmpty()) return;
+    std::sort(receivers.begin(), receivers.end());
 
     // dax_iq payloads are LITTLE-endian float32 (the radio reports
     // payload_endian=little for this stream type, unlike pan/wf/meter/audio
@@ -3767,34 +3811,50 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
 
     // Build TCI IQ binary frame (type=0, channels=2 for I/Q pair)
     const int iqFrames = numFloats / 2;  // I/Q pairs
-    QByteArray frame = buildAudioFrame(trx, 0 /*IQ*/, sampleRate, 2,
-                                       reinterpret_cast<const float*>(swapped.constData()),
-                                       iqFrames);
-
-    for (auto& cs : m_clients) {
-        if (cs.iqReceivers.contains(trx))
-            cs.socket->sendBinaryMessage(frame);
+    for (int trx : std::as_const(receivers)) {
+        const QByteArray frame = buildAudioFrame(
+            trx, 0 /*IQ*/, sampleRate, 2,
+            reinterpret_cast<const float*>(swapped.constData()), iqFrames);
+        for (auto& cs : m_clients) {
+            if (cs.iqReceivers.contains(trx))
+                cs.socket->sendBinaryMessage(frame);
+        }
     }
 }
 
-bool TciServer::iqReceiverInUse(int trx, const QWebSocket* except) const
+int TciServer::iqChannelForTrx(int trx) const
+{
+    SliceModel* slice = sliceForTrx(trx);
+    if (!slice || slice->panId().isEmpty()) {
+        return 0;
+    }
+    return m_iqPanChannel.value(slice->panId(), 0);
+}
+
+bool TciServer::iqChannelInUse(int channel) const
 {
     for (const ClientState& cs : m_clients) {
-        if (cs.socket != except && cs.iqReceivers.contains(trx)) {
-            return true;
+        for (int trx : cs.iqReceivers) {
+            if (iqChannelForTrx(trx) == channel) {
+                return true;
+            }
         }
     }
     return false;
 }
 
-void TciServer::startIqForClient(ClientState& client, int trx)
+bool TciServer::startIqForClient(ClientState& client, int trx)
 {
+    // Subscribe only once the physical stream is actually armed. Recording the
+    // subscription first and answering `iq_start:` unconditionally told a
+    // skimmer it had a receiver when the create, the pan bind, or the DAX
+    // capability check had in fact refused — and a client cannot retry what it
+    // was told worked.
+    if (!ensureIqStream(trx)) {
+        return false;
+    }
     client.iqReceivers.insert(trx);
-    m_pendingIqRemovals.remove(trx + 1);
-    // IQ_START is idempotent, but it is also a useful re-arm after a radio or
-    // pan-side stream disappeared without a matching IQ_STOP. Always reconcile
-    // the physical stream instead of treating a duplicate SET as a no-op.
-    ensureIqStream(trx);
+    return true;
 }
 
 void TciServer::stopIqForClient(ClientState& client, int trx)
@@ -3805,53 +3865,132 @@ void TciServer::stopIqForClient(ClientState& client, int trx)
     releaseIqStreamIfUnused(trx);
 }
 
-void TciServer::ensureIqStream(int trx)
+bool TciServer::ensureIqStream(int trx)
 {
     if (!m_model || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS
-        || !m_trxMap.trxHasLiveSlice(m_model, trx)
-        || !m_model->backendCapabilities().hasDaxStreams) {
-        return;
+        || !m_model->backendCapabilities().hasDaxStreams
+        || !m_trxMap.trxHasLiveSlice(m_model, trx)) {
+        return false;
     }
 
     SliceModel* slice = sliceForTrx(trx);
-    if (!slice) {
-        return;
+    if (!slice || slice->panId().isEmpty()) {
+        return false;
     }
-    const int channel = trx + 1;
+    const QString panId = slice->panId();
     DaxIqModel& iq = m_model->daxIqModel();
-    iq.setSampleRate(channel, m_iqSampleRate);
-    if (!iq.stream(channel).exists && !m_tciIqChannels.contains(channel)) {
-        m_tciIqChannels.insert(channel);
-        iq.createStream(channel);
+
+    // A DAX IQ stream is inert until a pan owns its channel, and a pan owns
+    // exactly one. If this receiver's pan already carries a TCI channel, share
+    // it — re-binding would only steal it from the receiver that has it.
+    const int shared = m_iqPanChannel.value(panId, 0);
+    if (shared != 0) {
+        m_pendingIqRemovals.remove(shared);
+        iq.setSampleRate(shared, m_iqSampleRate);
+        if (!iq.stream(shared).exists && !m_iqCreateInFlight.contains(shared)) {
+            m_iqCreateInFlight.insert(shared);
+            iq.createStream(shared);
+        }
+        return true;
     }
 
-    // A DAX IQ stream is inert until a pan owns its channel. Bind the stable
-    // receiver's current pan, preserving #3913's dds == IQ-center contract.
-    if (!slice->panId().isEmpty()) {
-        m_model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
-                                 .arg(slice->panId()).arg(channel));
+    // Otherwise this receiver takes its documented channel, trx+1 (#3913).
+    const int channel = trx + 1;
+
+    // Never borrow. A channel that exists but TCI did not create belongs to the
+    // DAX IQ applet; binding it here would move the operator's pan off it (the
+    // radio pushes daxiq_channel=0 to the displaced pan) and force our rate
+    // onto their consumer, with nothing restoring either.
+    if (iq.stream(channel).exists && !m_tciIqChannels.contains(channel)) {
+        qCWarning(lcCat) << "TCI: refusing IQ start for trx" << trx
+                         << "— DAX IQ channel" << channel
+                         << "belongs to the DAX IQ applet";
+        return false;
     }
+
+    // The receiver's slice moved pans. Unbind the stale pan before re-pointing
+    // the channel, so a pan is never left routed at a channel nothing reads.
+    const QString stalePan = m_iqPanChannel.key(channel, QString());
+    if (!stalePan.isEmpty() && stalePan != panId) {
+        m_model->sendCommand(
+            QStringLiteral("display pan set %1 daxiq_channel=0").arg(stalePan));
+        m_iqPanChannel.remove(stalePan);
+    }
+
+    // #3977 makes RadioModel::sendCommand() DROP a `display pan set` for a pan
+    // the radio has said another client owns (the #3951 signature). Test that
+    // condition here rather than reading sendCommand()'s bool: that return also
+    // folds in transport state, so treating it as the answer would report a
+    // receiver unarmed merely because the command was queued. This is the case
+    // the contract is about — without it TCI creates the stream, the bind is
+    // silently dropped, and the skimmer is told it started.
+    if (PanadapterModel* pan = m_model->panadapter(panId);
+        pan && !pan->ownedByClient(m_model->ourClientHandle())) {
+        qCWarning(lcCat) << "TCI: refusing IQ start for trx" << trx
+                         << "— pan" << panId << "is owned by another client";
+        return false;
+    }
+    m_model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
+                             .arg(panId).arg(channel));
+
+    m_iqPanChannel.insert(panId, channel);
+    m_tciIqChannels.insert(channel);
+    m_pendingIqRemovals.remove(channel);
+    iq.setSampleRate(channel, m_iqSampleRate);
+    if (!iq.stream(channel).exists && !m_iqCreateInFlight.contains(channel)) {
+        m_iqCreateInFlight.insert(channel);
+        iq.createStream(channel);
+    }
+    return true;
 }
 
 void TciServer::releaseIqStreamIfUnused(int trx)
 {
-    if (!m_model || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS
-        || iqReceiverInUse(trx)) {
+    if (!m_model || trx < 0 || trx >= DaxIqModel::NUM_CHANNELS) {
         return;
     }
-    const int channel = trx + 1;
-    if (!m_tciIqChannels.contains(channel)) {
-        return;  // borrowed from the DAX IQ applet / another local consumer
+    const int channel = iqChannelForTrx(trx);
+    if (channel == 0 || iqChannelInUse(channel)) {
+        return;  // another subscribed receiver shares this pan's channel
+    }
+    releaseIqChannel(channel);
+}
+
+void TciServer::releaseIqChannel(int channel)
+{
+    if (!m_model || !m_tciIqChannels.contains(channel)) {
+        return;  // not ours to remove
+    }
+    // Release the pan binding as well as the stream. Leaving it set ends a
+    // session with a panadapter routed at a channel nothing reads, which then
+    // blocks the DAX IQ applet from using that pan.
+    const QString panId = m_iqPanChannel.key(channel, QString());
+    if (!panId.isEmpty()) {
+        m_model->sendCommand(
+            QStringLiteral("display pan set %1 daxiq_channel=0").arg(panId));
+        m_iqPanChannel.remove(panId);
     }
     if (!m_model->daxIqModel().stream(channel).exists) {
+        // iq_stop won the race against the create status; DaxIqModel cannot
+        // remove an id it has not learned. The streamChanged reaper finishes.
         m_pendingIqRemovals.insert(channel);
         return;
     }
     m_model->daxIqModel().removeStream(channel);
     m_tciIqChannels.remove(channel);
+    m_iqCreateInFlight.remove(channel);
     m_pendingIqRemovals.remove(channel);
 }
 
+// The DaxIqModel mutations below are called DIRECTLY, not via
+// QMetaObject::invokeMethod(..., Qt::QueuedConnection) as the single-stream
+// code they replace did. That deferral was not needed for thread safety —
+// TciServer is constructed on the GUI thread alongside RadioModel
+// (MainWindow_Session.cpp) — and dropping it is deliberate, so that
+// ensureIqStream() can report whether the receiver was actually armed. The
+// consequence to keep in mind when editing: the streamChanged reaper can now
+// run reentrantly inside onTextMessage()/onClientDisconnected(). It only reads
+// m_clients, never mutates it, which is what makes that safe.
 void TciServer::reconcileIqStreams()
 {
     QSet<int> receivers;
@@ -3866,19 +4005,43 @@ void TciServer::reconcileIqStreams()
 void TciServer::releaseAllIqStreams()
 {
     if (!m_model) {
-        m_tciIqChannels.clear();
-        m_pendingIqRemovals.clear();
+        resetIqStreamBookkeeping();
         return;
     }
-    const QSet<int> ownedChannels = m_tciIqChannels;
-    for (int channel : ownedChannels) {
-        if (m_model->daxIqModel().stream(channel).exists) {
-            m_model->daxIqModel().removeStream(channel);
-            m_tciIqChannels.remove(channel);
-        } else {
-            m_pendingIqRemovals.insert(channel);
+    const QSet<int> owned = m_tciIqChannels;
+    for (int channel : owned) {
+        releaseIqChannel(channel);
+    }
+    // Keep exactly the ownership entries the reaper still needs; drop the rest.
+    // The same TciServer object is stopped and restarted by TciApplet (enable
+    // toggle, port change), so a claim left behind here outlives the session
+    // that made it.
+    m_iqCreateInFlight.clear();
+    m_iqPanChannel.clear();
+    m_tciIqChannels.intersect(m_pendingIqRemovals);
+}
+
+void TciServer::resetIqStreamBookkeeping()
+{
+    m_tciIqChannels.clear();
+    m_iqCreateInFlight.clear();
+    m_pendingIqRemovals.clear();
+    m_iqPanChannel.clear();
+}
+
+int TciServer::achievedIqSampleRate() const
+{
+    if (m_model) {
+        QList<int> channels(m_tciIqChannels.cbegin(), m_tciIqChannels.cend());
+        std::sort(channels.begin(), channels.end());
+        for (int channel : std::as_const(channels)) {
+            const DaxIqModel::IqStream& stream = m_model->daxIqModel().stream(channel);
+            if (stream.exists) {
+                return stream.sampleRate;
+            }
         }
     }
+    return m_iqSampleRate;  // nothing up yet: the rate that will be applied
 }
 
 // ── Waterfall row → TCI binary spectrum frames (type=4) ──────────────────────
