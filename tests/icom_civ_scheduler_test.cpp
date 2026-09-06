@@ -234,6 +234,150 @@ int main()
               "a fresh PTT poll outranks background work aged for five seconds");
     }
 
+    // A whole aged reconciliation burst must not drain ahead of TX meters.
+    // Keep anti-starvation for controls, but interleave the two bands even
+    // when PTT polls arrive between them.
+    {
+        IcomCivScheduler scheduler;
+        for (int i = 0; i < 24; ++i) {
+            scheduler.enqueue(read("background." + std::to_string(i), 0x16,
+                                   static_cast<std::uint8_t>(i), Priority::Control), 0);
+        }
+        for (int i = 0; i < 6; ++i) {
+            scheduler.enqueue(read("meter." + std::to_string(i), 0x15,
+                                   static_cast<std::uint8_t>(i), Priority::ActiveMeter), 2000);
+        }
+        int meters = 0;
+        int controls = 0;
+        int consecutiveControls = 0;
+        for (int i = 0; i < 15 && meters < 6; ++i) {
+            const int now = 2000 + i * IcomCivScheduler::kSlotMs;
+            if (i % 5 == 1) {
+                scheduler.enqueue(read("ptt", 0x1C, 0, Priority::Ptt), now);
+            }
+            const auto next = scheduler.takeNext(now);
+            check(next.has_value(), "meter burst fixture makes progress");
+            if (!next) {
+                break;
+            }
+            if (next->priority == Priority::Control) {
+                ++controls;
+                ++consecutiveControls;
+                check(consecutiveControls <= 1,
+                      "at most one aged background request runs between ready meters");
+            } else if (next->priority == Priority::ActiveMeter) {
+                ++meters;
+                consecutiveControls = 0;
+            } else {
+                check(next->priority == Priority::Ptt, "PTT remains ahead of both bands");
+            }
+            check(scheduler.observe(ok(), now + 5) == IcomCivScheduler::Observation::Accepted,
+                  "injected reply frees each burst slot");
+        }
+        check(meters == 6, "six TX meters drain within 375 ms despite 24 aged controls");
+        check(controls > 0 && controls <= 6, "background reconciliation still progresses under meter load");
+        const auto remainingControl = scheduler.takeNext(2400);
+        check(remainingControl && remainingControl->priority == Priority::Control,
+              "background work continues when no meter is ready");
+        (void)scheduler.reset();
+        scheduler.enqueue(read("background", 0x16, 0, Priority::Control), 0);
+        scheduler.enqueue(read("meter", 0x15, 0, Priority::ActiveMeter), 2000);
+        const auto afterReset = scheduler.takeNext(2000);
+        check(afterReset && afterReset->priority == Priority::Control,
+              "reset clears the interleave state for a new session");
+    }
+
+    // At a slower (50 ms) dispatch cadence, simple alternation still leaves
+    // tail meters behind an excessive number of background transactions.
+    {
+        IcomCivScheduler scheduler;
+        for (int i = 0; i < 20; ++i) {
+            scheduler.enqueue(read("background." + std::to_string(i), 0x16,
+                                   static_cast<std::uint8_t>(i), Priority::Control), 0);
+        }
+        for (int i = 0; i < 6; ++i) {
+            scheduler.enqueue(read("meter." + std::to_string(i), 0x15,
+                                   static_cast<std::uint8_t>(i), Priority::ActiveMeter), 2000);
+        }
+        int meters = 0;
+        for (int i = 0; i < 7; ++i) {
+            const int now = 2000 + i * 50;
+            const auto next = scheduler.takeNext(now);
+            check(next.has_value(), "slow cadence fixture dispatches");
+            if (!next) {
+                break;
+            }
+            if (now >= 2100) {
+                check(next->priority == Priority::ActiveMeter,
+                      "overdue meters suppress further background aging");
+            }
+            if (next->priority == Priority::ActiveMeter) {
+                ++meters;
+            }
+            check(scheduler.observe(ok(), now + 15) == IcomCivScheduler::Observation::Accepted,
+                  "injected reply frees each slow-cadence slot");
+        }
+        check(meters == 6, "slow cadence drains six meters by 300 ms");
+    }
+
+    // Yielding to overdue meters is a DELAY, NOT A HOLD.
+    //
+    // The two fixtures above enqueue a finite meter set, so the overdue
+    // condition necessarily clears once those meters drain and background work
+    // necessarily resumes. Production does not stop: MeterPoller re-arms each
+    // meter from the ANSWER, so on a link slower than the meter demand there is
+    // always a ready meter past its budget, the overdue condition never clears
+    // on its own, and a floor conditioned on it alone starves control
+    // reconciliation and the startup snapshot for the whole session rather than
+    // deferring them. Hold the meters permanently overdue and assert that
+    // background work still reaches the radio at the ceiling's rate.
+    {
+        IcomCivScheduler scheduler;
+        for (int i = 0; i < 40; ++i) {
+            scheduler.enqueue(read("background." + std::to_string(i), 0x16,
+                                   static_cast<std::uint8_t>(i), Priority::Control), 0);
+        }
+        int meters = 0;
+        int controls = 0;
+        long lastControlMs = -1;
+        long maxControlGapMs = 0;
+        // A meter is always queued and always past kMeterQueueBudgetMs: each
+        // one is enqueued a full budget in the past, exactly as a replenishing
+        // poller presents them.
+        for (int now = 2000; now <= 12000; now += 50) {
+            scheduler.enqueue(read("meter." + std::to_string(now), 0x15,
+                                   static_cast<std::uint8_t>(now % 8), Priority::ActiveMeter),
+                              now - IcomCivScheduler::kMeterQueueBudgetMs);
+            const auto next = scheduler.takeNext(now);
+            if (!next) {
+                continue;
+            }
+            if (next->priority == Priority::ActiveMeter) {
+                ++meters;
+            } else if (next->priority == Priority::Control) {
+                ++controls;
+                if (lastControlMs >= 0) {
+                    maxControlGapMs = std::max(maxControlGapMs,
+                                               static_cast<long>(now) - lastControlMs);
+                }
+                lastControlMs = now;
+            }
+            check(scheduler.observe(ok(), now + 5) == IcomCivScheduler::Observation::Accepted,
+                  "injected reply frees each sustained-load slot");
+        }
+        check(meters > 0, "meters still dominate the sustained-load stream");
+        check(controls > 0,
+              "background work is not held off indefinitely by permanently overdue meters");
+        // The ceiling is the contract: background work waits for it, and no
+        // longer. Allow one dispatch slot of slack on either side.
+        check(maxControlGapMs > 0
+                  && maxControlGapMs <= IcomCivScheduler::kBackgroundStarvationCeilingMs
+                         + IcomCivScheduler::kSlotMs * 2,
+              "each background dispatch lands within the starvation ceiling");
+        check(controls * 4 < meters,
+              "the admitted background rate stays well below the meter rate");
+    }
+
     // Two DIFFERENT registers share the coarse "mode" semantic key on purpose,
     // so a mode write supersedes an in-flight read of either. Coalescing must
     // not inherit that: sendConnectReadBurst queues 04 and 26 together because

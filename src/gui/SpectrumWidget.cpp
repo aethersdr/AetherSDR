@@ -2188,9 +2188,9 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         // (theme-style-guide.md section 4; Ozy311, #5166 review) -- and the
         // reason both bundled themes carry the same value is that the alpha
         // IS the mechanism here, so there is nothing theme-relative left to
-        // vary. QSS rgba() rather than 8-digit hex because Qt reads #AARRGGBB
-        // while CSS/QSS reads #RRGGBBAA (see tools/audit_colours.py's note on
-        // exactly that ambiguity); rgba() has one reading in both.
+        // vary. Tokens store canonical ARGB so the Theme Editor can read and
+        // reset them; ThemeManager converts translucent token values to rgba()
+        // when resolving this QSS template.
         "QPushButton:disabled { background: {{color.spectrum.zoomButton.disabled.background}};"
         " border-color: {{color.spectrum.zoomButton.disabled.border}};"
         " color: {{color.spectrum.zoomButton.disabled.text}}; }";

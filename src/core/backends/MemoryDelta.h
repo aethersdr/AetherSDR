@@ -21,6 +21,8 @@ struct MemoryDelta {
     std::optional<QString> group;
     std::optional<QString> owner;
     std::optional<QString> channel;
+    std::optional<QString> importSource;
+    std::optional<QString> importKey;
     std::optional<QString> name;
     std::optional<QString> mode;
     std::optional<QString> offsetDir;   // wire key "repeater"

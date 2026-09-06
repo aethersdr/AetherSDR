@@ -93,9 +93,15 @@
             "peakHold": "#c08020",
             "average":  "{color.gray.100}",
             "grid":     "#d0d8e0",
-            "zoomButton.disabled.background": "rgba(15,15,26,90)",
-            "zoomButton.disabled.border":     "rgba(48,64,80,90)",
-            "zoomButton.disabled.text":       "rgba(144,160,176,140)"
+            "zoomButton.disabled.background": "#5a0f0f1a",
+            "zoomButton.disabled.border":     "#5a304050",
+            "zoomButton.disabled.text":       "#8c90a0b0"
+          },
+          "spe.lcd": {
+            "background": "#102010",
+            "foreground": "#d6f5d6",
+            "dim":        "#3a553a",
+            "bezel":      "#222822"
           },
           "waterfall.colormap": {
             "default": {

@@ -88,6 +88,18 @@ PhoneApplet::PhoneApplet(QWidget* parent)
     setVisible(false);
 }
 
+void PhoneApplet::setAmCarrierAvailable(bool available)
+{
+    m_amCarrierRow->setEnabled(available);
+    m_amCarrierRow->setToolTip(available ? QString() : tr("AM carrier level is unavailable on this radio"));
+}
+
+void PhoneApplet::setVoxDelayAvailable(bool available)
+{
+    m_voxDelayRow->setEnabled(available);
+    m_voxDelayRow->setToolTip(available ? QString() : tr("VOX delay is unavailable on this radio"));
+}
+
 void PhoneApplet::buildUI()
 {
     auto* outer = new QVBoxLayout(this);
@@ -102,6 +114,7 @@ void PhoneApplet::buildUI()
     // ── AM Carrier row ───────────────────────────────────────────────────
     {
         auto* rowW = new QWidget;
+        m_amCarrierRow = rowW;
         rowW->setFixedHeight(24);
         auto* row = new QHBoxLayout(rowW);
         row->setContentsMargins(0, 0, 0, 0);
@@ -109,7 +122,7 @@ void PhoneApplet::buildUI()
 
         auto* lbl = new QLabel("AM\nCarrier:");
         lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         lbl->setFixedWidth(52);
         row->addWidget(lbl);
         row->addSpacing(10);
@@ -121,7 +134,7 @@ void PhoneApplet::buildUI()
         m_amCarrierSlider->setAccessibleDescription("AM carrier power level, 0 to 100 percent");
         applyPrimarySliderStyle(m_amCarrierSlider);
         connect(m_amCarrierSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_updatingFromModel && m_model) m_model->setAmCarrierLevel(v);
+            if (!m_updatingFromModel && m_model && m_amCarrierRow->isEnabled()) m_model->setAmCarrierLevel(v);
             m_amCarrierLabel->setText(QString::number(v));
         });
         row->addWidget(m_amCarrierSlider, 1);
@@ -129,7 +142,7 @@ void PhoneApplet::buildUI()
         m_amCarrierLabel = new QLabel("48");
         m_amCarrierLabel->setFixedWidth(26);
         m_amCarrierLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_amCarrierLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_amCarrierLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         row->addWidget(m_amCarrierLabel);
 
         vbox->addWidget(rowW);
@@ -170,7 +183,7 @@ void PhoneApplet::buildUI()
         m_voxLevelLabel = new QLabel("50");
         m_voxLevelLabel->setFixedWidth(26);
         m_voxLevelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxLevelLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxLevelLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         row->addWidget(m_voxLevelLabel);
 
         vbox->addWidget(rowW);
@@ -179,6 +192,7 @@ void PhoneApplet::buildUI()
     // ── VOX delay row ────────────────────────────────────────────────────
     {
         auto* rowW = new QWidget;
+        m_voxDelayRow = rowW;
         rowW->setFixedHeight(24);
         auto* row = new QHBoxLayout(rowW);
         row->setContentsMargins(0, 0, 0, 0);
@@ -186,7 +200,7 @@ void PhoneApplet::buildUI()
 
         auto* lbl = new QLabel("Delay:");
         lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         lbl->setFixedWidth(52);
         row->addWidget(lbl);
         row->addSpacing(10);
@@ -197,7 +211,7 @@ void PhoneApplet::buildUI()
         m_voxDelaySlider->setAccessibleDescription("VOX hang time before returning to receive");
         applyPrimarySliderStyle(m_voxDelaySlider);
         connect(m_voxDelaySlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_updatingFromModel && m_model) m_model->setVoxDelay(v);
+            if (!m_updatingFromModel && m_model && m_voxDelayRow->isEnabled()) m_model->setVoxDelay(v);
             m_voxDelayLabel->setText(QString::number(v));
         });
         row->addWidget(m_voxDelaySlider, 1);
@@ -205,7 +219,7 @@ void PhoneApplet::buildUI()
         m_voxDelayLabel = new QLabel("50");
         m_voxDelayLabel->setFixedWidth(26);
         m_voxDelayLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxDelayLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxDelayLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         row->addWidget(m_voxDelayLabel);
 
         vbox->addWidget(rowW);
@@ -252,7 +266,7 @@ void PhoneApplet::buildUI()
         m_dexpLabel = new QLabel("0");
         m_dexpLabel->setFixedWidth(26);
         m_dexpLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_dexpLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_dexpLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         row->addWidget(m_dexpLabel);
 
         vbox->addWidget(rowW);
@@ -274,7 +288,7 @@ void PhoneApplet::buildUI()
 
         auto* lowLbl = new QLabel("Low Cut");
         lowLbl->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lowLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lowLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         lowCol->addWidget(lowLbl);
 
         auto* lowRow = new QHBoxLayout;
@@ -389,7 +403,7 @@ void PhoneApplet::buildUI()
 
         auto* highLbl = new QLabel("High Cut");
         highLbl->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(highLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(highLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
         highCol->addWidget(highLbl);
 
         auto* highRow = new QHBoxLayout;

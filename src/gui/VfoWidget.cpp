@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "AgcModeAvailability.h"
 #include "FmTonePresentation.h"
 #include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
@@ -1808,7 +1809,7 @@ void VfoWidget::buildTabContent()
             }
         });
         connect(m_agcCmb, &QComboBox::currentTextChanged, this, [this](const QString& text) {
-            if (!m_updatingFromModel && m_slice) {
+            if (!m_updatingFromModel && m_slice && currentAgcModeAvailable(m_agcCmb)) {
                 QString mode = text.toLower();
                 if (mode == "off") mode = "off";
                 else if (mode == "slow") mode = "slow";
@@ -1823,7 +1824,7 @@ void VfoWidget::buildTabContent()
             m_agcTSlider->setToolTip(agcOff
                 ? QString("AGC Off Level: %1 dB").arg(v)
                 : QString("AGC Threshold: %1 dB").arg(v));
-            if (!m_updatingFromModel && m_slice) {
+            if (!m_updatingFromModel && m_slice && m_agcTSlider->isEnabled()) {
                 if (agcOff) m_slice->setAgcOffLevel(v);
                 else m_slice->setAgcThreshold(v);
             }
@@ -2433,13 +2434,14 @@ void VfoWidget::buildTabContent()
             m_fmOffsetSpin->setSuffix(" MHz");
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_fmOffsetSpin, "QDoubleSpinBox { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; padding: 1px 2px; }"
+                "QDoubleSpinBox:disabled { color: {{color.text.disabled}}; }"
                 "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }");
             offRow->addWidget(m_fmOffsetSpin, 1);
             m_fmLayout->addLayout(offRow);
 
             connect(m_fmOffsetSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                     this, [this](double val) {
-                if (m_fmOffsetSpin->signalsBlocked()) return;
+                if (m_fmOffsetSpin->signalsBlocked() || !m_fmOffsetSpin->isEnabled()) return;
                 if (!m_slice) return;
                 m_slice->setFmRepeaterOffsetFreq(val);
                 m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
@@ -2451,7 +2453,7 @@ void VfoWidget::buildTabContent()
             dirRow->setSpacing(2);
 
             auto applyDir = [this](const QString& dir) {
-                if (!m_slice) return;
+                if (!m_slice || !m_fmOffsetSpin->isEnabled()) return;
                 m_slice->setRepeaterOffsetDir(dir);
                 m_slice->setTxOffsetFreq(SliceModel::txOffsetForDirection(
                     dir, m_slice->fmRepeaterOffsetFreq()));
@@ -2464,6 +2466,9 @@ void VfoWidget::buildTabContent()
             m_fmOffsetDown->setAccessibleName("Repeater offset down");
             m_fmOffsetDown->setCheckable(true);
             m_fmOffsetDown->setStyleSheet(kDirBtn);
+            ThemeManager::instance().applyStyleSheet(m_fmOffsetDown, m_fmOffsetDown->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_fmOffsetDown, &QPushButton::clicked, this, [applyDir] { applyDir("down"); });
             dirRow->addWidget(m_fmOffsetDown);
 
@@ -2472,6 +2477,9 @@ void VfoWidget::buildTabContent()
             m_fmSimplexBtn->setCheckable(true);
             m_fmSimplexBtn->setChecked(true);
             m_fmSimplexBtn->setStyleSheet(kDirBtn);
+            ThemeManager::instance().applyStyleSheet(m_fmSimplexBtn, m_fmSimplexBtn->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_fmSimplexBtn, &QPushButton::clicked, this, [applyDir] { applyDir("simplex"); });
             dirRow->addWidget(m_fmSimplexBtn);
 
@@ -2479,6 +2487,9 @@ void VfoWidget::buildTabContent()
             m_fmOffsetUp->setAccessibleName("Repeater offset up");
             m_fmOffsetUp->setCheckable(true);
             m_fmOffsetUp->setStyleSheet(kDirBtn);
+            ThemeManager::instance().applyStyleSheet(m_fmOffsetUp, m_fmOffsetUp->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_fmOffsetUp, &QPushButton::clicked, this, [applyDir] { applyDir("up"); });
             dirRow->addWidget(m_fmOffsetUp);
 
@@ -4521,7 +4532,10 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
         //   and gates weak FSK signals (#2504)
         // CW: radio locks squelch on at fixed level, rejects changes
-        bool sqlDisabled = isDig || isCw || isRtty;
+        const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
+            && m_radioModel->backendCapabilities().hasModeIndependentSquelch
+            && !(m_slice && m_slice->externalReceiveReplacementActive());
+        bool sqlDisabled = !allModeSquelch && (isDig || isCw || isRtty);
         m_sqlBtn->setEnabled(!sqlDisabled);
         m_sqlSlider->setEnabled(!sqlDisabled);
         if (sqlDisabled && m_slice) {
@@ -5146,8 +5160,11 @@ void VfoWidget::syncFromSlice()
     m_fmContainer->setVisible(isFm);
     m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
-    m_sqlBtn->setEnabled(!isDig && !isCw);
-    m_sqlSlider->setEnabled(!isDig && !isCw);
+    const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
+        && m_radioModel->backendCapabilities().hasModeIndependentSquelch
+        && !(m_slice && m_slice->externalReceiveReplacementActive());
+    m_sqlBtn->setEnabled(allModeSquelch || (!isDig && !isCw));
+    m_sqlSlider->setEnabled(allModeSquelch || (!isDig && !isCw));
     if (isFm) {
         QSignalBlocker b1(m_fmToneModeCmb), b2(m_fmToneValueCmb), b3(m_fmOffsetSpin),
             toneRxBlocker(m_fmToneRxValueCmb), dtcsBlocker(m_fmDtcsCodeCmb),
@@ -5536,6 +5553,14 @@ void VfoWidget::updateAgcSliderFromSlice()
 {
     if (!m_slice || !m_agcTSlider || !m_agcValueLbl) return;
 
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    const bool available = !connected || m_slice->externalReceiveReplacementActive()
+        || m_radioModel->backendCapabilities().hasAgcThreshold;
+    m_agcTSlider->setEnabled(available);
+    m_agcValueLbl->setEnabled(available);
+    const RadioCapabilities caps = connected && !m_slice->externalReceiveReplacementActive()
+        ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    setAgcModeAvailability(m_agcCmb, caps.agcModes);
     const bool agcOff = (m_slice->receiveAgcMode() == "off");
     const int minimum = agcOff ? 0 : agcThresholdMinimum();
     const int maximum = agcOff ? 100 : agcThresholdMaximum();
@@ -5547,8 +5572,9 @@ void VfoWidget::updateAgcSliderFromSlice()
     QSignalBlocker blocker(m_agcTSlider);
     m_agcTSlider->setRange(minimum, maximum);
     m_agcTSlider->setValue(value);
-    m_agcTSlider->setToolTip(agcOff
-        ? QString("AGC Off Level: %1 dB").arg(value)
+    m_agcTSlider->setToolTip(!available
+        ? tr("AGC threshold and off level are unavailable on this radio")
+        : agcOff ? QString("AGC Off Level: %1 dB").arg(value)
         : QString("AGC Threshold: %1 dB").arg(value));
     m_agcTSlider->setAccessibleName(agcOff ? "AGC off level" : "AGC threshold");
     m_agcValueLbl->setText(QString::number(value));
@@ -6312,6 +6338,8 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
                 [this](bool, const RadioCapabilities&) {
             configureRepeaterReverseControl();
             configureFmToneControls();
+            updateAgcSliderFromSlice();
+            syncFromSlice();
         });
         connect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged, this,
                 [this](bool on) {
@@ -6324,6 +6352,7 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     updateAntennaButtons();
     configureRepeaterReverseControl();
     configureFmToneControls();
+    updateAgcSliderFromSlice();
 }
 
 void VfoWidget::configureFmToneControls()
@@ -6337,6 +6366,19 @@ void VfoWidget::configureFmToneControls()
     const bool connected = m_radioModel && m_radioModel->isConnected();
     const RadioCapabilities caps = connected
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    const bool repeaterAvailable = !connected || caps.hasFmRepeaterOffset;
+    if (m_fmOffsetSpin) {
+        m_fmOffsetSpin->setEnabled(repeaterAvailable);
+    }
+    if (m_fmOffsetDown) {
+        m_fmOffsetDown->setEnabled(repeaterAvailable);
+    }
+    if (m_fmSimplexBtn) {
+        m_fmSimplexBtn->setEnabled(repeaterAvailable);
+    }
+    if (m_fmOffsetUp) {
+        m_fmOffsetUp->setEnabled(repeaterAvailable);
+    }
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
     configureCtcssToneComboLabels(

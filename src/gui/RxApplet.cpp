@@ -1,4 +1,5 @@
 #include "RxApplet.h"
+#include "AgcModeAvailability.h"
 #include "gui/CtcssToneLabel.h"
 
 #include "gui/FilterStepMath.h"
@@ -806,13 +807,14 @@ void RxApplet::buildUI()
             m_offsetSpin->setSuffix(" Mhz");
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_offsetSpin, "QDoubleSpinBox { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; padding: 1px 2px; }"
+                "QDoubleSpinBox:disabled { color: {{color.text.disabled}}; }"
                 "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }");
             row->addWidget(m_offsetSpin, 1);
             m_fmLayout->addLayout(row);
 
             connect(m_offsetSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                     this, [this](double val) {
-                if (m_offsetSpin->signalsBlocked()) return;
+                if (m_offsetSpin->signalsBlocked() || !m_offsetSpin->isEnabled()) return;
                 if (m_slice) {
                     m_slice->setFmRepeaterOffsetFreq(val);
                     // Recompute tx_offset_freq based on current direction
@@ -828,6 +830,9 @@ void RxApplet::buildUI()
 
             m_offsetDown = mkToggle(QString::fromUtf8("\xe2\x88\x92")); // −
             m_offsetDown->setStyleSheet(kButtonBase() + kBlueActive());
+            ThemeManager::instance().applyStyleSheet(m_offsetDown, m_offsetDown->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_offsetDown, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("down");
             });
@@ -835,6 +840,9 @@ void RxApplet::buildUI()
 
             m_simplexBtn = mkToggle("Simplex");
             m_simplexBtn->setStyleSheet(kButtonBase() + kBlueActive());
+            ThemeManager::instance().applyStyleSheet(m_simplexBtn, m_simplexBtn->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             m_simplexBtn->setChecked(true);
             connect(m_simplexBtn, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("simplex");
@@ -843,6 +851,9 @@ void RxApplet::buildUI()
 
             m_offsetUp = mkToggle("+");
             m_offsetUp->setStyleSheet(kButtonBase() + kBlueActive());
+            ThemeManager::instance().applyStyleSheet(m_offsetUp, m_offsetUp->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_offsetUp, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("up");
             });
@@ -1027,7 +1038,9 @@ void RxApplet::buildUI()
         m_agcCombo->setFixedWidth(52);
         AetherSDR::applyComboStyle(m_agcCombo);
         connect(m_agcCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
-            if (m_slice) m_slice->setAgcMode(m_agcCombo->itemData(idx).toString());
+            if (m_slice && currentAgcModeAvailable(m_agcCombo)) {
+                m_slice->setAgcMode(m_agcCombo->itemData(idx).toString());
+            }
         });
         agcRow->addWidget(m_agcCombo);
 
@@ -1060,7 +1073,7 @@ void RxApplet::buildUI()
         });
 
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (m_slice) {
+            if (m_slice && m_agcTSlider->isEnabled()) {
                 if (m_slice->receiveAgcMode() == "off") {
                     m_agcTSlider->setToolTip(
                         QString("AGC Off Level: %1 dB\nRight-click to calibrate against the noise floor").arg(v));
@@ -1881,6 +1894,10 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 [this](bool, const RadioCapabilities&) {
             configureRepeaterReverseControl();
             configureFmToneControls();
+            syncAgcSliderFromSlice();
+            if (m_slice) {
+                updateModeSettings(m_slice->mode());
+            }
         });
         connect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged, this,
                 [this](bool on) {
@@ -1918,6 +1935,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     updateAntennaButtons();
     configureRepeaterReverseControl();
     configureFmToneControls();
+    syncAgcSliderFromSlice();
 }
 
 void RxApplet::configureFmToneControls()
@@ -1930,6 +1948,19 @@ void RxApplet::configureFmToneControls()
     const bool connected = m_radioModel && m_radioModel->isConnected();
     const RadioCapabilities caps = connected
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    const bool repeaterAvailable = !connected || caps.hasFmRepeaterOffset;
+    if (m_offsetSpin) {
+        m_offsetSpin->setEnabled(repeaterAvailable);
+    }
+    if (m_offsetDown) {
+        m_offsetDown->setEnabled(repeaterAvailable);
+    }
+    if (m_simplexBtn) {
+        m_simplexBtn->setEnabled(repeaterAvailable);
+    }
+    if (m_offsetUp) {
+        m_offsetUp->setEnabled(repeaterAvailable);
+    }
     const FmTonePresentation presentation = connected
         ? caps.fmTonePresentation : FmTonePresentation::Legacy;
     configureCtcssToneComboLabels(
@@ -2932,7 +2963,10 @@ void RxApplet::updateModeSettings(const QString& mode)
     // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
     //   and gates weak FSK signals (#2504)
     // CW: radio locks squelch on at fixed level, rejects changes
-    bool sqlDisabled = (mode == "DIGU" || mode == "DIGL" || mode == "NT"
+    const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
+        && m_radioModel->backendCapabilities().hasModeIndependentSquelch
+        && !(m_slice && m_slice->externalReceiveReplacementActive());
+    bool sqlDisabled = !allModeSquelch && (mode == "DIGU" || mode == "DIGL" || mode == "NT"
                         || mode == "RTTY"
                         || isCwMode(mode));
     m_sqlBtn->setEnabled(!sqlDisabled);
@@ -3243,6 +3277,13 @@ void RxApplet::syncAgcSliderFromSlice()
         return;
     }
 
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    const bool available = !connected || m_slice->externalReceiveReplacementActive()
+        || m_radioModel->backendCapabilities().hasAgcThreshold;
+    m_agcTSlider->setEnabled(available);
+    const RadioCapabilities caps = connected && !m_slice->externalReceiveReplacementActive()
+        ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    setAgcModeAvailability(m_agcCombo, caps.agcModes);
     const bool agcOff = m_slice->receiveAgcMode() == QStringLiteral("off");
     const int minimum = agcOff ? 0 : agcThresholdMinimum();
     const int maximum = agcOff ? 100 : agcThresholdMaximum();
@@ -3254,8 +3295,9 @@ void RxApplet::syncAgcSliderFromSlice()
     QSignalBlocker b(m_agcTSlider);
     m_agcTSlider->setRange(minimum, maximum);
     m_agcTSlider->setValue(value);
-    m_agcTSlider->setToolTip(agcOff
-        ? QStringLiteral("AGC Off Level: %1 dB").arg(value)
+    m_agcTSlider->setToolTip(!available
+        ? tr("AGC threshold and off level are unavailable on this radio")
+        : agcOff ? QStringLiteral("AGC Off Level: %1 dB").arg(value)
         : QStringLiteral("AGC Threshold: %1 dB").arg(value));
 }
 
@@ -3270,7 +3312,7 @@ void RxApplet::updateOffsetDirButtons()
 
 void RxApplet::applyOffsetDir(const QString& dir)
 {
-    if (!m_slice) return;
+    if (!m_slice || !m_offsetSpin->isEnabled()) return;
     m_slice->setRepeaterOffsetDir(dir);
 
     // Compute and apply tx_offset_freq

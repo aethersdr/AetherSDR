@@ -219,6 +219,11 @@ struct RadioCapabilities {
     // its proven CTCSS/DTCS registers without changing another radio family's
     // controls. fmToneModes is the authoritative per-model mode vocabulary.
     // Hidden is the safe default; established backends opt into Legacy.
+    // Existing backends retain their offset controls; model-profile backends
+    // explicitly decline this when their protocol has no repeater duplex verb.
+    bool hasFmRepeaterOffset = true;
+    // Some audio-tone tune implementations cannot key a CW carrier.
+    bool hasCwTune = true;
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
     QList<int> fmDtcsCodes;
@@ -265,11 +270,11 @@ struct RadioCapabilities {
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
 
-    // Whether the radio-backed memory store accepts mutations and native
-    // recalls. These are deliberately separate from persistsMemories: an
-    // initial backend may prove that it can enumerate radio-owned channels
-    // before it is safe to overwrite them, and may expose those channels as
-    // tune presets without putting the radio into its vendor Memory mode.
+    // Whether the active memory store accepts mutations/native recalls, and
+    // whether the radio can be read as an explicit import source. Refresh is
+    // deliberately independent of persistsMemories: Icom keeps AetherSDR's
+    // shared client database as the working store while model-specific codecs
+    // ingest snapshots from the radio into it.
     bool canWriteMemories = false;
     bool canApplyMemories = false;
     bool canRefreshMemories = false;
@@ -485,6 +490,23 @@ struct RadioCapabilities {
     // False hides the complete row rather than leaving an optimistic control
     // with no authoritative command path.
     bool hasDownwardExpander = false;
+    // Compression amount in physical dB; preserve the existing Flex face by default.
+    float compressionMaximumDb = 25.0f;
+    QString alcMeterUnit{QStringLiteral("dBFS")};
+
+    // Independent controls require an implemented command or host DSP path.
+    // AGC mode selection alone does not imply a writable threshold/off level.
+    bool hasAgcThreshold = false;
+    // Modes the implemented selector can honor. A native OFF time-constant
+    // editor is a different contract from selecting a fast/medium/slow bank.
+    QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
+                         QStringLiteral("med"), QStringLiteral("fast")};
+    // The radio accepts manual SQL in CW/data modes and owns its persistence.
+    // False preserves the existing mode-specific client squelch policy.
+    bool hasModeIndependentSquelch = false;
+    bool hasAmCarrierLevel = false;
+    bool hasVoxDelay = false;
+
 
     // Transmit audio reaches this backend through IRadioBackend::submitTxAudio
     // rather than through a Flex DAX/VITA-49 stream.
@@ -505,6 +527,21 @@ struct RadioCapabilities {
     // to create a DAX stream and failed with "this radio has no command plane",
     // which is the same mistake read from the other end.
     bool takesTxAudioOverSeam = false;
+
+    // The backend publishes IRadioBackend::transmitChanged / keyingStateConfirmed
+    // from the RADIO'S OWN PTT readback, and a setKeying() command is intent
+    // only — it never moves the published keyed state by itself. A consumer
+    // that must not act before the transmitter is really keyed (a modem
+    // releasing sample zero, TCI's key confirmation) waits for
+    // RadioModel::radioTransmittingChanged / radioTransmitConfirmed instead of
+    // trusting the command edge, and RadioModel does not synthesise a
+    // command-edge fallback for such a backend.
+    //
+    // False for a backend with no readback plane (HL2), where the command edge
+    // is the only edge there is. Also false for Flex: its interlock status is
+    // decoded by RadioModel directly, not published through this seam.
+    // Icom: ✅ (decoded CI-V `1C 00`).
+    bool hasRadioPttReadback = false;
 
     // The RX filter widths this radio can actually reach, in Hz. EMPTY means
     // "continuous, or unknown" and the UI keeps its own configurable list.
@@ -664,6 +701,14 @@ struct RadioCapabilities {
     // Flex CWX has a progress counter, stored F-key macros, live typing and
     // per-word speed changes; the verified Icom CI-V command 17 path has none
     // of those and accepts one documented 30-character message at a time.
+    // Physical CW controls, independent of whether a text keyer is present.
+    // Defaults preserve the continuous controls used by existing backends.
+    int cwSpeedMinWpm = 5;
+    int cwSpeedMaxWpm = 100;
+    int cwPitchMinHz = 100;
+    int cwPitchMaxHz = 6000;
+    int cwPitchStepHz = 10;
+
     QString cwTextKeyerName{QStringLiteral("CWX")};
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;

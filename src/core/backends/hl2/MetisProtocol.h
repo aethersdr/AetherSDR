@@ -327,6 +327,96 @@ Cc ccTxFreq(std::uint32_t hz) noexcept;
 // Defaulted OFF so that enabling the power amplifier is always something a
 // caller did on purpose.
 Cc ccTxDrive(int level, bool paEnable = false) noexcept;
+
+// ---- Direct I2C writes (companion devices on the external bus) ----
+//
+// EASY TO CONFUSE WITH THE FILTER BOARD ABOVE, and the difference matters. The
+// J16 open-collector byte is INDIRECT: we set config bits and the gateware
+// turns them into an I2C write for us. This is the DIRECT path — a C&C bank
+// that names the bus, the chip and the register itself.
+//
+// The HL2 exposes its two I2C buses as C&C addresses 0x3c (I2C1, internal:
+// Versa clock, AD9866) and 0x3d (I2C2, the external companion-board bus).
+// Verified against the gateware RTL, whose own init sequences build the
+// identical payload shape (gateware/rtl/i2c.v):
+//
+//     icmd_addr       = 6'h3c;
+//     icmd_data_upper = {8'h06, 1'b1, 7'h6a};   // cookie, stop, chip address
+//
+// DATA layout, from that same RTL (cmd_data[31:16] is the upper half, and
+// icmd_reg_val = cmd_data[15:0] is the register/value pair):
+//
+//     C1 = DATA[31:24]   cookie: 0x06 to write, 0x07 to read
+//     C2 = DATA[23]      stop at end;  DATA[22:16] the 7-bit chip address
+//     C3 = DATA[15:8]    register or control number inside the chip
+//     C4 = DATA[7:0]     the data byte (write only)
+//
+// The gateware emits {C3, C4} as a two-byte I2C write, which is what an
+// ordinary register-then-value slave expects. ONE-BYTE WRITES ONLY — there is
+// no burst mode, so an N-byte value costs N C&C banks.
+//
+// RQST (C0[7]) IS DELIBERATELY LEFT CLEAR. The wiki calls it optional for a
+// write, and setting it makes the radio answer with an ACK response — which
+// Hl2Telemetry::apply() dispatches on RADDR *without* consulting the ACK flag.
+// Today an I2C reply (RADDR 0x3c/0x3d) lands harmlessly in its `default:`, but
+// a write that provokes no reply at all cannot perturb the telemetry decoder
+// under any future edit to that switch. This path stays write-only.
+inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
+inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
+inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
+inline constexpr std::uint8_t kI2cStopAtEnd   = 0x80;  // C2 bit 7
+
+// ---- Hermes-Lite 2 IO Board (N2ADR), I2C2 chip 0x1D ----
+//
+// A Raspberry Pi Pico that switches amplifiers, antenna relays and transverters
+// from the TRANSMIT frequency. The gateware tells it nothing: it is a plain
+// I2C slave, and the host is the only party that knows where the operator is
+// tuned. Without these writes the board powers up and does nothing that
+// follows the band.
+//
+// Registers 0..4 hold the transmit frequency in Hz, MOST significant byte
+// first. Writing register 4 (the LSB) COMMITS the value — the firmware
+// assembles all five from its own register file at that instant:
+//
+//     case REG_TX_FREQ_BYTE0:
+//         new_tx_freq = (uint64_t)data
+//             | (uint64_t)Registers[REG_TX_FREQ_BYTE1] << 8
+//             | ... | (uint64_t)Registers[REG_TX_FREQ_BYTE4] << 32;
+//         new_tx_fcode = hertz2fcode(new_tx_freq);
+//
+// (HL2IOBoard/n2adr_lib/i2c_slave_handler.c). Two consequences: the LSB must be
+// sent LAST, and all five bytes must be sent even though the top one is always
+// zero on HF — the board keeps the others in its register file, so an omitted
+// byte silently contributes a stale value from the previous commit.
+inline constexpr std::uint8_t kIoBoardI2cAddr      = 0x1D;
+inline constexpr std::uint8_t kIoBoardRegTxFreqMsb = 0;   // DATA bits 39:32
+inline constexpr std::uint8_t kIoBoardRegTxFreqLsb = 4;   // DATA bits  7:0, COMMITS
+
+// One single-byte I2C write on the external companion bus (I2C2, addr 0x3d).
+// `chip` is the device's 7-bit address; the stop bit is always set, as the
+// wiki advises for forward compatibility.
+Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
+
+// The five C&C banks that write `hz` into the IO board's transmit-frequency
+// registers, ALREADY IN THE ORDER THEY MUST BE SENT: most significant byte
+// first, LSB last because that write is what commits the value.
+//
+// Returned as a batch rather than written one call at a time so the ordering
+// constraint lives here, next to the firmware quotation that explains it,
+// instead of in a loop at each call site that could be reversed by someone who
+// reasonably assumed little-endian.
+inline constexpr std::size_t kIoBoardTxFreqBanks = 5;
+// These three constants are NOT independent: one loop below indexes registers
+// with a shift of 8 * (kIoBoardRegTxFreqLsb - reg). Raise the bank count
+// without moving the LSB register and the last iteration subtracts past zero in
+// unsigned arithmetic — an 8 * 255 shift, undefined, putting a garbage byte on
+// a wire that moves an amplifier's band relay. Tie them together so that edit
+// fails to compile rather than reaching hardware.
+static_assert(kIoBoardTxFreqBanks
+                  == static_cast<std::size_t>(kIoBoardRegTxFreqLsb
+                                              - kIoBoardRegTxFreqMsb + 1),
+              "IO board frequency bank count must span Msb..Lsb exactly");
+std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
 // Set MOX (C0 bit 0) on a C&C bank. Keying is per-FRAME, so this is applied to
 // whichever bank is being sent rather than to one dedicated register.
 inline Cc withMox(Cc cc, bool keyed) noexcept
@@ -387,9 +477,23 @@ struct Hl2Telemetry {
     std::optional<int>  firmwareVersion;
     std::optional<bool> adcOverload;
     std::optional<bool> txInhibited;      // register bit is ACTIVE LOW; decoded here
-    std::optional<int>  txFifoCount;
-    std::optional<bool> txFifoUnderflow;
-    std::optional<bool> txFifoOverflow;
+
+    // TX IQ FIFO status: DATA[15:8] of RADDR 0, the gateware's `dsiq_status`.
+    // Settled against the gateware at 883a338; see apply() for the layout and
+    // for what the old txFifoCount/txFifoUnderflow/txFifoOverflow got wrong.
+    //
+    // Coarse occupancy: the TOP 7 bits of the read-side fill level, 0..127
+    // (fifos.v:101, `rd_count <= rd_tlength[(rdbits-1):(rdbits-7)]`). NOT a
+    // sample count, and deliberately not converted to one — the words-to-
+    // samples mapping is an inference this layer has not established. #17's
+    // pacing servo needs that conversion; nothing else does.
+    std::optional<int>  txFifoFillMsbs;
+    // ONE flag for TWO faults: the FIFO ran empty (`rd_tvalidn`) OR its writes
+    // were blocked because it filled (`~allow_push`) — fifos.v:105-106. The
+    // gateware does not distinguish them, so neither do we. A consumer that
+    // wants to say which one happened cannot get it from this word, and must
+    // say "TX pacing fault" rather than pick a side.
+    std::optional<bool> txFifoRecovery;
     std::optional<int>  temperatureRaw;
     std::optional<int>  forwardPowerRaw;
     std::optional<int>  reversePowerRaw;
