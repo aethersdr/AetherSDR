@@ -1475,6 +1475,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // this radio has — but stated rather than defaulted, per the struct's
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
+    c.hasAudioPeakingFilter = false;
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;
@@ -1548,6 +1549,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.notchMinWidthHz = Hl2RxDsp::kMinNotchWidthHz;
     c.notchMaxWidthHz = 6000.0;
     c.hasGpsLocation = false;           // no GNSS receiver on the board
+    c.hasGpsSatelliteTelemetry = false;
+    c.hasGpsFrequencyReference = false;
+    c.hasGpsTimeConfiguration = false;
     c.hasGpsHardware = false;
     c.gpsHardwareRequiresPresence = false;
     // The HL2 declares PATEMP but no "+13.8A": PA temperature is a real reading

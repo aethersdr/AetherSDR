@@ -254,6 +254,8 @@ public:
 
     // GPS data
     QString gpsStatus()    const { return m_gpsStatus; }
+    bool    gpsPositionValid() const { return m_gpsPositionValid; }
+    QString gpsSource()    const { return m_gpsSource; }
     int     gpsTracked()   const { return m_gpsTracked; }
     int     gpsVisible()   const { return m_gpsVisible; }
     QString gpsGrid()      const { return m_gpsGrid; }
@@ -261,10 +263,19 @@ public:
     QString gpsLat()       const { return m_gpsLat; }
     QString gpsLon()       const { return m_gpsLon; }
     QString gpsTime()      const { return m_gpsTime; }
+    QString gpsDate()      const { return m_gpsDate; }
     QString gpsSpeed()     const { return m_gpsSpeed; }
     QString gpsTrack()     const { return m_gpsTrack; }
     QString gpsFreqError() const { return m_gpsFreqError; }
     QString gpsNtpServerAddress() const;
+    bool gpsNtpEnabled() const { return m_gpsNtpEnabled; }
+    QString gpsNtpServer() const { return m_gpsNtpServer; }
+    bool gpsTimeCorrectionEnabled() const { return m_gpsTimeCorrectionEnabled; }
+    QString gpsNtpSyncStatus() const { return m_gpsNtpSyncStatus; }
+    void setGpsNtpEnabled(bool on);
+    void setGpsNtpServer(const QString& address);
+    void setGpsTimeCorrectionEnabled(bool on);
+    void requestGpsNtpSync();
 
     // Max slices reported by radio
     int maxSlices() const {
@@ -357,11 +368,16 @@ public:
     // Flex the moment it disconnects would be a regression rather than an
     // honesty gain.
     //
+    // hasAudioPeakingFilter() is the same permissive shape: APF already
+    // ships on the DSP tab, and hiding the P/CW CW-face row on a Flex
+    // unplug would blink a control the operator still has.
+    //
     // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
     // new button; a permissive default would show it on every radio in
     // the window before a backend reports, including the Flexes that
     // notch with TNFs instead and will never claim it.
     bool hasLmsNoiseFilters() const;
+    bool hasAudioPeakingFilter() const;
     bool hasManualNotch() const;
     // Whether THIS HOST blanks impulse noise in the radio's IQ
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
@@ -372,6 +388,8 @@ public:
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
     QList<int> radioFilterWidthsHz() const;
+    RxFilterControl radioFilterControl() const;
+    void selectRadioFilterPreset(int sliceId, int presetId);
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.
@@ -500,7 +518,9 @@ public:
     // 6000-series radios without turning the family-level capability into a
     // per-unit presence claim.
     bool hasGpsHardware() const {
-        return m_model.contains("8400") || m_model.contains("8600")
+        const RadioCapabilities caps = backendCapabilities();
+        return (isConnected() && caps.hasGpsLocation && !caps.hasGpsFrequencyReference)
+               || m_model.contains("8400") || m_model.contains("8600")
                || m_model.startsWith("AU-")
                || m_gpsdoPresent
                || (!m_gpsStatus.isEmpty()
@@ -1151,6 +1171,10 @@ signals:
                           const QString& grid, const QString& altitude,
                           const QString& lat, const QString& lon,
                           const QString& utcTime);
+    // Radio-authoritative NTP and GPS clock settings changed after CI-V
+    // read-back. No arguments keeps consumers coupled to normalized model
+    // getters rather than an Icom-specific payload.
+    void gpsTimeSettingsChanged();
     // Emitted when the station callsign becomes known or changes (from the
     // radio "info"/status feed). Lets features like the PSK Reporter map pick
     // up a late-arriving or edited callsign without a reconnect.
@@ -1600,6 +1624,19 @@ public:
     {
         onStatusReceived(object, kvs);
     }
+    // Drive the reconnect/reclaim portion of the normalized backend seam
+    // without a synthetic radio peer. The socket-free resource test uses these
+    // to prove that a reclaimed non-Flex slice is republished.
+    void stageSessionModelsForReconnectForTest()
+    {
+        stageSessionModelsForReconnect();
+    }
+    void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
+    {
+        if (m_backend) {
+            emit m_backend->sliceChanged(sliceId, delta);
+        }
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
@@ -1784,6 +1821,8 @@ private:
 
     // GPS state
     QString m_gpsStatus;           // "Locked", "Present", "Not Present"
+    bool    m_gpsPositionValid{false};
+    QString m_gpsSource;
     int     m_gpsTracked{0};
     int     m_gpsVisible{0};
     QString m_gpsGrid;
@@ -1791,9 +1830,14 @@ private:
     QString m_gpsLat;
     QString m_gpsLon;
     QString m_gpsTime;
+    QString m_gpsDate;
     QString m_gpsSpeed;
     QString m_gpsTrack;
     QString m_gpsFreqError;
+    bool    m_gpsNtpEnabled{false};
+    QString m_gpsNtpServer;
+    bool    m_gpsTimeCorrectionEnabled{false};
+    QString m_gpsNtpSyncStatus;
     QString m_automationGpsNtpServerAddress;
 
     // Per-band TX settings (from "transmit band" and "interlock band" status)

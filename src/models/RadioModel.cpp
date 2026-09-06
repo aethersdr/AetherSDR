@@ -570,6 +570,42 @@ void RadioModel::notePcAudioEnabled(bool on)
                                QStringLiteral("audio.pc.state"), 0, on);
 }
 
+void RadioModel::setGpsNtpEnabled(bool on)
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.ntp.enabled"), 0, on);
+}
+
+void RadioModel::setGpsNtpServer(const QString& address)
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.ntp.server"), 0, address);
+}
+
+void RadioModel::setGpsTimeCorrectionEnabled(bool on)
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.time-correction"), 0, on);
+}
+
+void RadioModel::requestGpsNtpSync()
+{
+    if (!m_backend || !backendCapabilities().hasGpsTimeConfiguration) {
+        return;
+    }
+    m_backend->invokeExtension(backendCapabilities().family,
+                               QStringLiteral("gps.ntp.sync"), 0, {});
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {
@@ -1253,6 +1289,11 @@ void RadioModel::setupBackend(const QString& family)
                 s->applyChanges(mapped);
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
                 refreshTxPowerLimit();
+                // Reclaim deliberately does not emit sliceAdded: the UI already
+                // owns this object. Notify non-UI observers through the existing
+                // occupancy edge so adapters that detached on disconnect can
+                // reattach and republish it.
+                emit slotOccupancyChanged(sliceId);
                 // Reuse the same SliceModel so every UI subscriber — including
                 // RX Controls — stays attached. A sliceAdded here would build a
                 // duplicate VFO for an object the UI already owns.
@@ -3893,6 +3934,14 @@ bool RadioModel::hasLmsNoiseFilters() const
     return backendCapabilities().hasLmsNoiseFilters;
 }
 
+bool RadioModel::hasAudioPeakingFilter() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasAudioPeakingFilter;
+}
+
 bool RadioModel::hasManualNotch() const
 {
     // NOT permissive — see the header. A button nothing has claimed stays off.
@@ -3919,6 +3968,29 @@ QList<int> RadioModel::radioFilterWidthsHz() const
         return {};
     }
     return backendCapabilities().rxFilterWidthsHz;
+}
+
+RxFilterControl RadioModel::radioFilterControl() const
+{
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    return backendCapabilities().rxFilterControl;
+}
+
+void RadioModel::selectRadioFilterPreset(int sliceId, int presetId)
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    const RxFilterControl control = backendCapabilities().rxFilterControl;
+    const bool declared = std::any_of(
+        control.presets.cbegin(), control.presets.cend(),
+        [presetId](const RxFilterPreset& preset) { return preset.id == presetId; });
+    if (!declared) {
+        return;
+    }
+    m_backend->setSliceFilterPreset(sliceId, presetId);
 }
 
 bool RadioModel::hasRadioSideWaterfallAutoBlack() const
@@ -7051,6 +7123,8 @@ void RadioModel::onDisconnected()
     m_gpsdoPresent = false;
     m_tcxoPresent = false;
     m_gpsStatus.clear();
+    m_gpsPositionValid = false;
+    m_gpsSource.clear();
     m_gpsTracked = 0;
     m_gpsVisible = 0;
     m_gpsGrid.clear();
@@ -7058,14 +7132,20 @@ void RadioModel::onDisconnected()
     m_gpsLat.clear();
     m_gpsLon.clear();
     m_gpsTime.clear();
+    m_gpsDate.clear();
     m_gpsSpeed.clear();
     m_gpsTrack.clear();
     m_gpsFreqError.clear();
+    m_gpsNtpEnabled = false;
+    m_gpsNtpServer.clear();
+    m_gpsTimeCorrectionEnabled = false;
+    m_gpsNtpSyncStatus.clear();
     m_automationGpsNtpServerAddress.clear();
     emit oscillatorChanged();
     emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
                           m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
                           m_gpsTime);
+    emit gpsTimeSettingsChanged();
     // Cleared beside m_version rather than relying on the next connect to
     // reassign it: this block's contract is that everything here is re-derived
     // from the new radio's status, and a path that reaches a Flex without
@@ -10003,11 +10083,14 @@ void RadioModel::onStatusReceived(const QString& object,
     static const QRegularExpression atuRe(R"(^atu\s+(\S+)$)");
     if (object.startsWith("atu")) {
         const auto m = atuRe.match(object);
-        if (m.hasMatch() && m_tunerModel.handle().isEmpty())
-            m_tunerModel.setHandle(m.captured(1));
         if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);   // radio's own ATU → TransmitModel
-        if (m_tunerModel.isPresent() && m_flexBackend)
-            m_flexBackend->decodeTunerStatus(m_tunerModel.handle(), kvs);  // external TGXL → TunerModel (#4092/#4198)
+        QString tunerHandle = m_tunerModel.handle();
+        if (m.hasMatch() && tunerHandle.isEmpty()) {
+            tunerHandle = m.captured(1);
+        }
+        if ((!tunerHandle.isEmpty() || m_tunerModel.isPresent()) && m_flexBackend) {
+            m_flexBackend->decodeTunerStatus(tunerHandle, kvs);  // external TGXL → TunerModel (#4092/#4198)
+        }
         return;
     }
 
@@ -10076,16 +10159,23 @@ void RadioModel::onStatusReceived(const QString& object,
 
             // Route TunerGeniusXL to TunerModel
             if (model == "TunerGeniusXL" || handle == m_tunerModel.handle()) {
-                // Always update handle — first status may arrive with 0x00000000
-                // before the real handle is assigned
-                if (handle != "0x00000000" && handle != m_tunerModel.handle()) {
-                    m_tunerModel.setHandle(handle);
-                    m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
-                } else if (m_tunerModel.handle().isEmpty()) {
-                    m_tunerModel.setHandle(handle);
+                // Decode identity and state as one delta so first presence
+                // observers cannot read default operate/bypass values.
+                if (handle != "0x00000000"
+                    && handle != m_tunerModel.handle()) {
                     m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
                 }
-                if (m_flexBackend) m_flexBackend->decodeTunerStatus(m_tunerModel.handle(), kvs);   // #4092/#4198
+                if (m_flexBackend) {
+                    m_flexBackend->decodeTunerStatus(handle, kvs);   // #4092/#4198
+                } else if (!handle.isEmpty()
+                           && handle != QLatin1String("0x00000000")) {
+                    // Captured status replay in demo/sim has no Flex decoder.
+                    // Preserve the old backend-neutral identity path without
+                    // teaching RadioModel to decode SmartSDR tuner fields.
+                    TunerDelta identity;
+                    identity.handle = handle;
+                    m_tunerModel.applyChanges(identity);
+                }
             }
             // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
             // tuner branch: a TGXL status is already routed above and would only
@@ -10855,6 +10945,8 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     // Apply the present fields (absent keys keep their prior value) and always
     // re-emit — the old handler emitted unconditionally on every GPS status.
     if (d.status)    m_gpsStatus    = *d.status;
+    if (d.positionValid) m_gpsPositionValid = *d.positionValid;
+    if (d.source)    m_gpsSource    = *d.source;
     if (d.tracked)   m_gpsTracked   = *d.tracked;
     if (d.visible)   m_gpsVisible   = *d.visible;
     if (d.grid)      m_gpsGrid      = *d.grid;
@@ -10862,13 +10954,33 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     if (d.lat)       m_gpsLat       = *d.lat;
     if (d.lon)       m_gpsLon       = *d.lon;
     if (d.time)      m_gpsTime      = *d.time;
+    if (d.date)      m_gpsDate      = *d.date;
     if (d.speed)     m_gpsSpeed     = *d.speed;
     if (d.track)     m_gpsTrack     = *d.track;
     if (d.freqError) m_gpsFreqError = *d.freqError;
+    const bool timeSettingsChanged = d.ntpEnabled.has_value() || d.ntpServer.has_value()
+        || d.gpsTimeCorrectionEnabled.has_value() || d.ntpSyncStatus.has_value();
+    if (d.ntpEnabled) m_gpsNtpEnabled = *d.ntpEnabled;
+    if (d.ntpServer) m_gpsNtpServer = *d.ntpServer;
+    if (d.gpsTimeCorrectionEnabled) {
+        m_gpsTimeCorrectionEnabled = *d.gpsTimeCorrectionEnabled;
+    }
+    if (d.ntpSyncStatus) m_gpsNtpSyncStatus = *d.ntpSyncStatus;
 
-    emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
-                           m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
-                           m_gpsTime);
+    // A clock-settings read-back carries no telemetry; emitting the report
+    // signal for it would restart the dashboard's report-age clock and
+    // re-run every GPS consumer for a hostname that did not move.
+    const bool telemetryChanged = d.status || d.positionValid || d.source
+        || d.tracked || d.visible || d.grid || d.altitude || d.lat || d.lon
+        || d.time || d.date || d.speed || d.track || d.freqError;
+    if (telemetryChanged || !timeSettingsChanged) {
+        emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
+                              m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
+                              m_gpsTime);
+    }
+    if (timeSettingsChanged) {
+        emit gpsTimeSettingsChanged();
+    }
 }
 
 void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs)

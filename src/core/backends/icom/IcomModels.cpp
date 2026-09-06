@@ -1,5 +1,7 @@
 #include "core/backends/icom/IcomModels.h"
 
+#include "core/backends/icom/CivCodec.h"   // setting::kNtp* — one source for the SET items
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -241,7 +243,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 15> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 17> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -267,6 +269,10 @@ constexpr std::array<FeatureEvidence, 15> kIc705Evidence{{
     {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, 16 50"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
+    {IcomFeature::GpsPosition, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-705 CI-V Reference Guide 2020, 23 00/01; live position proof 2026-08-21"},
+    {IcomFeature::GpsTimeConfiguration, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-705 CI-V Reference Guide 2020, SET 0167-0169 and 1A 07/08; live NTP proof 2026-08-21"},
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, command 1A 00 memory-channel records"},
     {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
@@ -604,6 +610,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
+        .gps = GpsProfile{setting::kNtpEnabled, setting::kNtpServer,
+                          setting::kGpsTimeCorrect, true},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{
@@ -712,6 +720,8 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
     case IcomFeature::DialLock:            return "dial-lock";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
+    case IcomFeature::GpsPosition:         return "gps-position";
+    case IcomFeature::GpsTimeConfiguration: return "gps-time-configuration";
     case IcomFeature::MemoryChannels:      return "memory-channels";
     case IcomFeature::AntennaTuner:        return "antenna-tuner";
     }

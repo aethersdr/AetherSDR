@@ -346,6 +346,8 @@ enum class IcomFeature : std::uint8_t {
     TxFrequencyCheck,
     DialLock,
     CivDataRestart,
+    GpsPosition,
+    GpsTimeConfiguration,
     MemoryChannels,
     AntennaTuner,
 };
@@ -402,6 +404,17 @@ struct CwTextKeyerProfile {
 struct RxAntennaProfile {
     bool selectable = false;
     bool readbackAvailable = false;
+};
+
+// Model-specific GPS and clock command shape. SET-menu item numbers are not
+// stable across Icom models, so they belong in the profile rather than in an
+// IC-705 address branch at the call site. Feature evidence independently gates
+// position and clock support: a future radio may implement only one half.
+struct GpsProfile {
+    int ntpEnabledItem = -1;
+    int ntpServerItem = -1;
+    int timeCorrectItem = -1;
+    bool hasNtpAccess = false;
 };
 
 struct MeterCalibrationProfile {
@@ -467,6 +480,7 @@ struct IcomModelProfile {
     std::optional<FmRepeaterProfile> fmRepeater;
     std::optional<CwTextKeyerProfile> cwTextKeyer;
     std::optional<RxAntennaProfile> rxAntenna;
+    std::optional<GpsProfile> gps;
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;

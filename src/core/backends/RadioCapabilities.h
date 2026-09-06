@@ -26,6 +26,37 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+// A stable, radio-owned receive-filter preset. `id` is the identity used on
+// the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
+// that preset and must never be used as its identity.
+struct RxFilterPreset {
+    int id = 0;
+    QString label;
+    int widthHz = 0;
+
+    bool operator==(const RxFilterPreset&) const = default;
+};
+
+struct RxFilterControl {
+    QList<RxFilterPreset> presets;
+    int selectedPresetId = 0;
+    int minimumWidthHz = 0;
+    int maximumWidthHz = 0;
+    int widthStepHz = 0;
+
+    bool operator==(const RxFilterControl&) const = default;
+};
+
+// A capability update reaches the two legacy/new presentation setters one at
+// a time. Treat the preset metadata as usable only when it describes every
+// width in the current presentation list; this keeps a disconnect or mode
+// transition from indexing stale FIL metadata against a newly rebuilt list.
+[[nodiscard]] inline bool hasCompleteRxFilterPresets(const RxFilterControl& control,
+                                                      qsizetype widthCount)
+{
+    return !control.presets.isEmpty() && control.presets.size() == widthCount;
+}
+
 enum class FmTonePresentation {
     Legacy,
     Hidden,
@@ -332,6 +363,19 @@ struct RadioCapabilities {
     // radio with LMS filters says true and gets the same three buttons.
     bool hasLmsNoiseFilters = false;
 
+    // The radio runs a CW audio peaking filter in its own firmware, reached
+    // by a command-plane verb (Flex: `slice set <n> apf=` / `apf_level=`).
+    //
+    // A FOURTH tier under hasRadioSideDsp, and the same split that produced
+    // hasLmsNoiseFilters: an Icom runs NR/NB/notch in firmware and therefore
+    // declares hasRadioSideDsp, but it has no APF register. Gating the
+    // always-visible P/CW CW-face row on hasRadioSideDsp would light a
+    // control whose only effect is a Flex verb — HERMES §17 again.
+    //
+    // Named for the CONCEPT, not the vendor. A future radio with an audio
+    // peaking filter says true and gets the same row.
+    bool hasAudioPeakingFilter = false;
+
     // THIS HOST runs an impulse noise blanker on the radio's IQ, so the NB
     // control is real even on a radio whose own firmware has no DSP.
     //
@@ -488,6 +532,11 @@ struct RadioCapabilities {
     // advertise the real, discrete set rather than let a continuous-looking
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
+
+    // Stable preset identity and continuous-width limits for radios where a
+    // preset selects a mutable hardware slot. Empty preserves the legacy
+    // width-only button contract above (Flex/HL2/ANAN/Sim).
+    RxFilterControl rxFilterControl;
 
     // Whether the radio implements the independent TX low/high cutoff controls
     // presented by PhoneApplet. False hides the complete control row rather
@@ -697,11 +746,22 @@ struct RadioCapabilities {
     // rather than for the dashboard it happens to drive today.
     bool hasGpsLocation = false;
 
+    // Optional detail planes within the location dashboard. Keeping them
+    // separate prevents a radio that reports coordinates from being presented
+    // as a GPSDO or as a source of satellite-count telemetry.
+    bool hasGpsSatelliteTelemetry = false;
+    bool hasGpsFrequencyReference = false;
+
+    // The radio owns configurable GPS/NTP clock settings and reports their
+    // read-back state. This is an NTP CLIENT capability; hasNtpServer in the
+    // legacy Flex model table describes the distinct server role.
+    bool hasGpsTimeConfiguration = false;
     // The radio contains GPS/GNSS hardware and therefore has a meaningful GPS
     // setup surface. This is deliberately separate from hasGpsLocation: an
-    // IC-705 has an internal GPS receiver, but CI-V does not expose its live
-    // position/time data to this client. The hardware page is still truthful;
-    // a live station-location readout is not.
+    // IC-705 has an internal GPS receiver (this flag drives its Radio Setup
+    // page) and also reports live position/time through 23 00 (hasGpsLocation
+    // drives the dashboard). A future model may truthfully declare only the
+    // hardware half, so the two claims stay independent.
     bool hasGpsHardware = false;
     bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 

@@ -3328,6 +3328,25 @@ void VfoWidget::setRadioFilterWidths(const QList<int>& widthsHz)
     updateModeTab();
 }
 
+void VfoWidget::setRadioFilterControl(const RxFilterControl& control)
+{
+    if (control == m_radioFilterControl) {
+        return;
+    }
+    m_radioFilterControl = control;
+    if (!control.presets.isEmpty()) {
+        QVector<int> widths;
+        widths.reserve(control.presets.size());
+        for (const RxFilterPreset& preset : control.presets) {
+            widths.append(preset.widthHz);
+        }
+        m_radioFilterWidths = widths;
+    }
+    if (m_slice) {
+        updateModeTab();
+    }
+}
+
 void VfoWidget::setHasManualNotch(bool has)
 {
     if (m_hasManualNotch == has)
@@ -5427,7 +5446,7 @@ void VfoWidget::updateModeTab()
     m_filterWidths.clear();
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -5556,12 +5575,31 @@ void VfoWidget::rebuildFilterButtons()
 
     for (int i = 0; i < m_filterWidths.size(); ++i) {
         const int w = m_filterWidths[i];
-        auto* btn = new QPushButton(formatFilterLabel(w));
+        const bool stablePresets =
+            hasCompleteRxFilterPresets(m_radioFilterControl, m_filterWidths.size());
+        const RxFilterPreset preset = stablePresets
+            ? m_radioFilterControl.presets.at(i) : RxFilterPreset{};
+        auto* btn = new QPushButton(stablePresets ? preset.label : formatFilterLabel(w));
+        if (stablePresets) {
+            btn->setToolTip(QStringLiteral("%1: %2 receive bandwidth")
+                                .arg(preset.label, formatFilterLabel(preset.widthHz)));
+            btn->setAccessibleName(QStringLiteral("Receive filter %1")
+                                       .arg(preset.label));
+        }
         btn->setCheckable(true);
         btn->setFixedHeight(26);
         btn->setStyleSheet(kModeBtn);
-        connect(btn, &QPushButton::clicked, this, [this, i](bool) {
-            if (!m_slice) return;
+        connect(btn, &QPushButton::clicked, this,
+                [this, i, stablePresets, preset](bool) {
+            if (!m_slice) {
+                return;
+            }
+            if (stablePresets) {
+                if (m_radioModel) {
+                    m_radioModel->selectRadioFilterPreset(m_slice->sliceId(), preset.id);
+                }
+                return;
+            }
             if (m_filterCustomLo[i] != INT_MIN) {
                 // Custom edges from right-click → "Set Custom Edges..."
                 m_slice->setFilterWidth(m_filterCustomLo[i], m_filterCustomHi[i]);
@@ -5762,7 +5800,7 @@ void VfoWidget::updateFilterHighlight()
     // Format mirrors updateModeTab(): "width" or "lo:hi" entries (#2259).
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -5794,6 +5832,16 @@ void VfoWidget::updateFilterHighlight()
             m_filterCustomHi = loadedHi;
             rebuildFilterButtons();
         }
+    }
+
+    if (hasCompleteRxFilterPresets(m_radioFilterControl, m_filterBtns.size())) {
+        for (int i = 0; i < m_filterBtns.size(); ++i) {
+            QSignalBlocker blocker(m_filterBtns[i]);
+            m_filterBtns[i]->setChecked(
+                m_radioFilterControl.presets.at(i).id
+                == m_radioFilterControl.selectedPresetId);
+        }
+        return;
     }
 
     const int width = m_slice->filterHigh() - m_slice->filterLow();

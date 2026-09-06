@@ -474,6 +474,55 @@ constexpr std::array kSpecs = {
                 "txFilterLowEdgesHz, so the UI and the backend decline together.",
                 IcomFeature::TxBandwidth},
 
+    // ---- GPS position and radio clock -----------------------------------
+    ControlSpec{"gps.position", 0x23, 0x00, true, "GPS position and UTC",
+                Plane::Radio, Encoding::GpsPosition, Wiring::DecodeOnly,
+                0, 0, "coordinates", 0, 0,
+                "", "gpsLocationDialog", true,
+                "Latitude/longitude are converted locally to Maidenhead grid. The "
+                "frame may also carry altitude, course, speed and complete UTC; it "
+                "does not carry an explicit lock bit or satellite telemetry.",
+                IcomFeature::GpsPosition},
+    ControlSpec{"gps.source", 0x23, 0x01, true, "GPS source",
+                Plane::Radio, Encoding::Enum, Wiring::DecodeOnly,
+                0, 3, "enum", 0, 3,
+                "", "gpsLocationDialog", true,
+                "00 off, 01 internal GPS, 03 manual position.",
+                IcomFeature::GpsPosition},
+    ControlSpec{"gps.ntp.enabled", 0x1A, 0x05, true, "NTP client enable",
+                Plane::Radio, Encoding::Bcd4, Wiring::Both,
+                0, 1, "on/off", 0, 1,
+                "invokeExtension icom/gps.ntp.enabled", "gpsNtpEnabled", true,
+                "MODEL-SPECIFIC SET item 0167 on IC-705; written only on operator "
+                "intent and confirmed by readback.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.ntp.server", 0x1A, 0x05, true, "NTP server address",
+                Plane::Radio, Encoding::Ascii, Wiring::Both,
+                1, 64, "characters", 1, 64,
+                "invokeExtension icom/gps.ntp.server", "gpsNtpServer", true,
+                "MODEL-SPECIFIC SET item 0168 on IC-705; the radio reports a "
+                "fixed-width NUL-padded field.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.time.correct", 0x1A, 0x05, true, "GPS Time Correct",
+                Plane::Radio, Encoding::Bcd4, Wiring::Both,
+                0, 1, "on/off", 0, 1,
+                "invokeExtension icom/gps.time-correction", "gpsTimeCorrection", true,
+                "MODEL-SPECIFIC SET item 0169 on IC-705; radio-authoritative and "
+                "confirmed by readback.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.ntp.access", 0x1A, 0x07, true, "NTP access now",
+                Plane::Radio, Encoding::OnOff, Wiring::SendOnly,
+                0, 1, "trigger", 0, 1,
+                "invokeExtension icom/gps.ntp.sync", "gpsNtpSyncNow", false,
+                "01 asks the radio to access its configured NTP server now.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.ntp.result", 0x1A, 0x08, true, "NTP access result",
+                Plane::Radio, Encoding::Enum, Wiring::DecodeOnly,
+                0, 2, "enum", 0, 2,
+                "", "gpsNtpSyncStatus", true,
+                "00 not accessed/accessing, 01 succeeded, 02 failed.",
+                IcomFeature::GpsTimeConfiguration},
+
     // ---- Identity / power ------------------------------------------------
     ControlSpec{"id", 0x19, 0x00, true, "Transceiver ID",
                 Plane::Radio, Encoding::None, Wiring::Both,
@@ -520,6 +569,8 @@ std::string_view encodingName(Encoding e)
     case Encoding::Bcd4:       return "bcd4";
     case Encoding::Bcd6:       return "bcd6";
     case Encoding::Dtcs:       return "dtcs";
+    case Encoding::Ascii:      return "ascii";
+    case Encoding::GpsPosition: return "gps-position";
     }
     return "?";
 }

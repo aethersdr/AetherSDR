@@ -265,7 +265,10 @@ caps.hasTunerMemories       = false;           // 1C 01 has no Flex-style memory
 caps.hasSupplyVoltageTelemetry =
     hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
-caps.hasGpsLocation         = false;           // GPS exists, protocol won't carry it
+caps.hasGpsLocation         = true;            // IC-705: 23 00 position/time
+caps.hasGpsSatelliteTelemetry = false;         // no count, SNR, or lock flag
+caps.hasGpsFrequencyReference = false;         // position GPS, not a GPSDO
+caps.hasGpsTimeConfiguration = true;           // NTP + GPS clock settings
 caps.hasProfiles            = false;
 caps.hasWaveforms           = false;
 caps.hasMultiClientSessions = false;
@@ -301,6 +304,19 @@ backend reads state at connect; it does not push a restored state.
 (no 148–430 receive on some regional variants). The seam has no gap
 representation, so the honest thing is the outer envelope plus a rejected-tune
 path that reports what the radio actually did.
+
+**The GPS claims are intentionally split.** The IC-705's model-specific guide
+defines `23 00` for latitude, longitude, altitude, course, speed, and a complete
+UTC timestamp; AetherSDR derives the Maidenhead grid locally. It does not define
+a satellite count, fix type, SNR, or explicit lock bit, so the UI says
+"Position reported" rather than manufacturing "Locked" from valid coordinates.
+The GPS feed also does not discipline the RF reference.
+
+The same guide defines NTP Function (`1A 05 0167`), NTP Server Address (`0168`),
+GPS Time Correct (`0169`), NTP access (`1A 07`), and its result (`1A 08`). These
+are radio-persisted settings: connect and polling only read them. A write occurs
+only from an explicit dashboard action and is followed by read-back before the
+normalized model publishes the value.
 
 ---
 

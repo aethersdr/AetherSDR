@@ -22,6 +22,7 @@
 #include "core/backends/icom/IcomMemoryCodec.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
+#include "core/backends/icom/IcomNtpAccess.h"
 #include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
 
@@ -77,6 +78,7 @@ public:
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
+    void setSliceFilterPreset(int sliceId, int presetId) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz,
@@ -203,6 +205,9 @@ private:
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
     void publishScopeDbmRange();
+    void startNtpAccess(qint64 now);
+    void publishNtpAccessResult(std::uint8_t result);
+    [[nodiscard]] bool expireNtpAccess(qint64 now);
     // The neutral mode string for whatever CivMode the radio is in, or an
     // empty string for a mode with no neutral equivalent (D-STAR).
     // Everything that reports a mode to the models needs this.
@@ -538,6 +543,12 @@ private:
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
     std::optional<bool> m_radioDialLocked;
+    // IC-705 GPS state. Source is 00 off, 01 internal receiver, 03 manual;
+    // -1 means the radio has not answered yet. NTP access is a short-lived
+    // operation polled until the radio reports success or failure.
+    int     m_gpsSource = -1;
+    bool    m_gpsPositionValid = false;
+    IcomNtpAccess m_ntpAccess;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //

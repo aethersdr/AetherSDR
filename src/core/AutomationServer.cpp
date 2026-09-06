@@ -1250,7 +1250,7 @@ QImage grabWidget(QWidget* w)
 QString sliceActionList()
 {
     return QStringLiteral(
-        "add|remove|select|tx|mode|filter|agc|dsp|tone|offset|diversity|"
+        "add|remove|select|tx|mode|filter|filterpreset|agc|dsp|tone|offset|diversity|"
         "centerlock|link|txant|rxant|rxsource|fixture|clearfixture");
 }
 
@@ -1673,8 +1673,16 @@ QWidget* primaryTopLevelWindow()
 
 // linkedTo: peer slice id when this slice is a Slice Link member, else -1
 // (supplied by the GUI's peer query — the link is client-side state).
-QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo)
+QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
+                          const RxFilterControl& filterControl)
 {
+    QString filterPreset;
+    for (const RxFilterPreset& preset : filterControl.presets) {
+        if (preset.id == filterControl.selectedPresetId) {
+            filterPreset = preset.label;
+            break;
+        }
+    }
     return QJsonObject{
         {QStringLiteral("sliceId"),    s->sliceId()},
         {QStringLiteral("letter"),     s->letter()},
@@ -1683,6 +1691,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo)
         {QStringLiteral("mode"),       s->mode()},
         {QStringLiteral("filterLow"),  s->filterLow()},
         {QStringLiteral("filterHigh"), s->filterHigh()},
+        {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
+        {QStringLiteral("filterPreset"), filterPreset},
         {QStringLiteral("active"),     s->isActive()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
@@ -1851,6 +1861,11 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("available"), r->hasGpsHardware()
              || !r->gpsStatus().isEmpty()},
         {QStringLiteral("status"), r->gpsStatus()},
+        // Backend-normalized validity and source (GpsDelta::positionValid /
+        // source), so a scenario can assert "usable fix" without parsing
+        // family-specific status prose.
+        {QStringLiteral("positionValid"), r->gpsPositionValid()},
+        {QStringLiteral("source"), r->gpsSource()},
         {QStringLiteral("tracked"), r->gpsTracked()},
         {QStringLiteral("visible"), r->gpsVisible()},
         {QStringLiteral("grid"), r->gpsGrid()},
@@ -1858,10 +1873,18 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("latitude"), r->gpsLat()},
         {QStringLiteral("longitude"), r->gpsLon()},
         {QStringLiteral("utcTime"), r->gpsTime()},
+        {QStringLiteral("utcDate"), r->gpsDate()},
         {QStringLiteral("speed"), r->gpsSpeed()},
         {QStringLiteral("course"), r->gpsTrack()},
         {QStringLiteral("frequencyError"), r->gpsFreqError()},
         {QStringLiteral("ntpServerAddress"), r->gpsNtpServerAddress()},
+        // Radio-owned NTP *client* configuration (hasGpsTimeConfiguration;
+        // IC-705 SET 0167-0169 and 1A 08), distinct from the Flex-hosted NTP
+        // server address above.
+        {QStringLiteral("ntpClientEnabled"), r->gpsNtpEnabled()},
+        {QStringLiteral("ntpClientServer"), r->gpsNtpServer()},
+        {QStringLiteral("gpsTimeCorrection"), r->gpsTimeCorrectionEnabled()},
+        {QStringLiteral("ntpSyncStatus"), r->gpsNtpSyncStatus()},
         {QStringLiteral("referenceSetting"), r->oscSetting()},
         {QStringLiteral("referenceActual"), r->oscState()},
         {QStringLiteral("referenceLocked"), r->oscLocked()},
@@ -5693,7 +5716,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices())
-            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s)));
+            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl()));
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slices"), arr}};
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
@@ -5772,7 +5795,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         }
         if (!s)
             return err(QStringLiteral("no slice for selector '") + selector + QStringLiteral("'"));
-        data = sliceSnapshot(s, sliceLinkPeerOf(s));
+        data = sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl());
     } else if (model == QLatin1String("pan")) {
         const PanadapterModel* p = nullptr;
         if (selector.isEmpty() || selector == QLatin1String("active"))
@@ -6032,7 +6055,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
             QPointer<QObject> guard(conn->asQObject());
             QPointer<AutomationServer> self(this);
-            QTimer::singleShot(0, qApp, [guard, self, conn, selectedSerial] {
+            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial] {
                 if (!guard) {
                     return;
                 }
@@ -6062,7 +6085,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
                 QPointer<QObject> guard(conn->asQObject());
                 QPointer<AutomationServer> self(this);
-                QTimer::singleShot(0, qApp, [guard, self, conn, serial] {
+                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial] {
                     if (!guard) {
                         return;
                     }
@@ -6170,7 +6193,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
         QPointer<QObject> guard(conn->asQObject());
         QPointer<AutomationServer> self(this);
-        QTimer::singleShot(0, qApp, [guard, self, conn, target, family] {
+        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family] {
             if (!guard) {
                 return;
             }
@@ -6217,7 +6240,7 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
     const bool wasVisible = conn && conn->automationDialogVisible();
     QPointer<QObject> guardedHost = host;
     QPointer<QObject> guard(conn ? conn->asQObject() : nullptr);
-    QTimer::singleShot(0, qApp, [guardedHost, guard, conn, show] {
+    QTimer::singleShot(0, QCoreApplication::instance(), [guardedHost, guard, conn, show] {
         if (guardedHost) {
             const char* method = show ? "showConnectionDialog" : "hideConnectionDialog";
             if (QMetaObject::invokeMethod(guardedHost, method, Qt::DirectConnection)) {
@@ -6255,7 +6278,7 @@ QJsonObject AutomationServer::doDisconnect()
 
     QPointer<QObject> guard(conn->asQObject());
     QPointer<AutomationServer> self(this);
-    QTimer::singleShot(0, qApp, [guard, self, conn] {
+    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn] {
         if (!guard) {
             return;
         }
@@ -7171,6 +7194,46 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("filterLow"), s->filterLow()},
                            {QStringLiteral("filterHigh"), s->filterHigh()}};
     }
+    if (action == QLatin1String("filterpreset")) {
+        QString requested = arg.trimmed().toUpper();
+        if (requested.startsWith(QLatin1String("FIL"))) {
+            requested.remove(0, 3);
+        }
+        bool okPreset = false;
+        const int presetId = requested.toInt(&okPreset);
+        const RxFilterControl control = radio->radioFilterControl();
+        const auto preset = std::find_if(
+            control.presets.cbegin(), control.presets.cend(),
+            [presetId](const RxFilterPreset& candidate) {
+                return candidate.id == presetId;
+            });
+        if (!okPreset || preset == control.presets.cend()) {
+            return err(QStringLiteral(
+                "slice filterpreset requires a radio-advertised preset (e.g. FIL1)"));
+        }
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) {
+                s = candidate;
+                break;
+            }
+        }
+        if (!s && !radio->slices().isEmpty()) {
+            s = radio->slices().first();
+        }
+        if (!s) {
+            return err(QStringLiteral("no slice available to select a filter preset on"));
+        }
+
+        radio->selectRadioFilterPreset(s->sliceId(), presetId);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("filterpreset")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("presetId"), presetId},
+                           {QStringLiteral("preset"), preset->label},
+                           {QStringLiteral("requested"), true}};
+    }
     if (action == QLatin1String("agc")) {
         // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC
         // through the same operator setters the RX applet uses, so the change
@@ -7530,6 +7593,10 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
     }
 
     delta.status = QStringLiteral("Locked");
+    // The dashboard, APRS beacon and clock agreement gate on the normalized
+    // validity flag, not on the "Locked" prose, so the fixture must carry it.
+    delta.positionValid = true;
+    delta.source = QStringLiteral("GPSDO");
     delta.time = QDateTime::currentDateTimeUtc().time()
                      .toString(QStringLiteral("HH:mm:ss'Z'"));
     delta.speed = QStringLiteral("0 kts");
