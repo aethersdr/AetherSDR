@@ -51,17 +51,58 @@ int main(int argc, char** argv)
     {
         AmpModel amp;
         QSignalSpy presence(&amp, &AmpModel::presenceChanged);
-        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "192.168.1.50", false));
+        QSignalSpy state(&amp, &AmpModel::stateChanged);
+        bool operateAtPresence = false;
+        bool stateWasDeferred = false;
+        QObject::connect(&amp, &AmpModel::presenceChanged, &amp,
+                         [&amp, &state, &operateAtPresence, &stateWasDeferred](bool present) {
+            if (present) {
+                operateAtPresence = amp.operate();
+                stateWasDeferred = state.count() == 0;
+            }
+        });
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "192.168.1.50", true));
         CHECK(amp.present());
         CHECK(amp.handle() == "0x1000");
         CHECK(amp.ip() == "192.168.1.50");
         CHECK(amp.modelName() == "PowerGeniusXL");
-        CHECK(!amp.operate());
+        CHECK(amp.operate() && operateAtPresence && stateWasDeferred);
         CHECK(presence.count() == 1 && presence.takeFirst().at(0).toBool() == true);
+        CHECK(state.count() == 1);
         // A second detect does not re-latch ip/model or re-emit presence.
         amp.applyChanges(detected("0x1000", "PowerGeniusXL", "10.0.0.9", true));
         CHECK(amp.ip() == "192.168.1.50");            // unchanged
         CHECK(presence.count() == 0);
+    }
+
+    // ---- unidentified detection cannot adopt a model-less TGXL handle ----
+    {
+        AmpModel amp;
+        bool operateAtPresence = false;
+        QObject::connect(&amp, &AmpModel::presenceChanged, &amp,
+                         [&amp, &operateAtPresence](bool present) {
+            if (present) {
+                operateAtPresence = amp.operate();
+            }
+        });
+        // FlexBackend normalizes the SmartSDR placeholder to an empty handle.
+        amp.applyChanges(detected(QString(), "PowerGeniusXL",
+                                  "192.168.1.50", true));
+        CHECK(amp.present() && amp.handle().isEmpty());
+        CHECK(amp.operate() && operateAtPresence);
+
+        QSignalSpy state(&amp, &AmpModel::stateChanged);
+        QSignalSpy telemetry(&amp, &AmpModel::telemetryUpdated);
+        amp.applyChanges(update("0x2000", false, {{"state", "STANDBY"}}));
+        CHECK(amp.handle().isEmpty());
+        CHECK(amp.operate() && state.count() == 0 && telemetry.count() == 0);
+
+        // A later model-bearing PGXL status safely establishes identity and
+        // applies its state; model-less updates can only match after that.
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", QString(), false,
+                                  {{"state", "STANDBY"}}));
+        CHECK(amp.handle() == "0x1000");
+        CHECK(!amp.operate() && state.count() == 1 && telemetry.count() == 1);
     }
 
     // ---- a delta with no detectedModel + unknown handle is a no-op (TGXL case) ----

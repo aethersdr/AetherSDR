@@ -272,6 +272,7 @@ RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
     c.family = QStringLiteral("anan");
+    c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
     c.maxSlices = 1;
@@ -286,9 +287,12 @@ RadioCapabilities AnanBackend::capabilities() const
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = true;        // client-side WDSP, like the HL2
     c.takesTxAudioOverSeam = true; // moot while canTransmit is false
+    c.hasRadioPttReadback = false; // no PTT at all, so no readback either
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
+    c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface
     c.hasAmplifier = false;
     c.hasRadioSideDsp = false;     // DSP is engine-side (AnanRxDsp), not firmware
+    c.hasAudioPeakingFilter = false; // no firmware APF verb on this path
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.persistsMemories = false;    // default; stated explicitly

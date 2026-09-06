@@ -1,7 +1,9 @@
 #include "SystemInfoCollector.h"
 
+#include "MemoryTelemetry.h"
 #include "ThreadName.h"
 
+#include <QDateTime>
 #include <QMetaType>
 #include <QTimer>
 
@@ -14,6 +16,7 @@ SystemInfoCollector::SystemInfoCollector(QObject* parent)
     // the payload type has to be registered or the emit is silently dropped
     // with a runtime warning rather than failing to compile.
     qRegisterMetaType<QVector<AetherSDR::ThreadCpuSample>>("QVector<AetherSDR::ThreadCpuSample>");
+    qRegisterMetaType<AetherSDR::MemorySample>("AetherSDR::MemorySample");
 }
 
 void SystemInfoCollector::init()
@@ -53,8 +56,35 @@ void SystemInfoCollector::shutdown()
     m_previousBusiestPercent = 0.0;
 }
 
+namespace {
+
+MemorySample memorySampleNow()
+{
+    // One task_info / /proc read / GetProcessMemoryInfo per tick — the same
+    // call the automation bridge's memory profile makes, cheap enough for
+    // 1.5 s and taken here, off the GUI thread, for the same reason the thread
+    // table is.
+    const ProcessMemorySnapshot snapshot = ProcessMemorySnapshot::capture();
+    MemorySample sample;
+    sample.wallMs = QDateTime::currentMSecsSinceEpoch();
+    sample.valid = snapshot.valid;
+    sample.residentMetric = snapshot.residentMetric;
+    sample.residentBytes = snapshot.residentBytes;
+    sample.peakResidentBytes = snapshot.peakResidentBytes;
+    sample.privateBytes = snapshot.privateBytes;
+    sample.virtualBytes = snapshot.virtualBytes;
+    return sample;
+}
+
+}  // namespace
+
 void SystemInfoCollector::sampleOnce()
 {
+    // Before the thread enumeration and its early return: a memory reading
+    // does not depend on the thread table, so a platform whose enumeration
+    // fails still gets a Memory tab.
+    emit memorySampleReady(memorySampleNow());
+
     const QVector<ThreadTimes> current = SystemInfo::enumerateThreads();
     if (current.isEmpty()) {
         return;  // enumeration failed; publishing an empty table would read as "no threads"

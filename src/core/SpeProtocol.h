@@ -55,9 +55,9 @@ enum class Key : quint8 {
     BandDown   = 0x02,
     BandUp     = 0x03,
     Antenna    = 0x04,
-    LMinus     = 0x05,  // manual ATU inductance — not exposed in v1 (KTerm territory)
+    LMinus     = 0x05,  // manual ATU inductance — floating LCD presentation only
     LPlus      = 0x06,
-    CMinus     = 0x07,  // manual ATU capacitance — not exposed in v1
+    CMinus     = 0x07,  // manual ATU capacitance — floating LCD presentation only
     CPlus      = 0x08,
     Tune       = 0x09,
     SwitchOff  = 0x0A,  // powers the amplifier down
@@ -109,6 +109,11 @@ struct Frame {
 class FrameParser {
 public:
     void setFrameCallback(std::function<void(const Frame&)> cb) { m_onFrame = std::move(cb); }
+    // Raw LCD display frames (see the Lcd namespace below) use a different
+    // header shape than ACK/Status — the parser recognises them by their
+    // payload-length + type-marker bytes and hands the complete raw frame
+    // here instead of misreading the length field as a CNT byte.
+    void setDisplayCallback(std::function<void(const QByteArray&)> cb) { m_onDisplay = std::move(cb); }
     void feed(const QByteArray& bytes);
     void reset() { m_buf.clear(); }
 
@@ -120,6 +125,7 @@ private:
 
     QByteArray m_buf;
     std::function<void(const Frame&)> m_onFrame;
+    std::function<void(const QByteArray&)> m_onDisplay;
 };
 
 // ── Status string decode (spec §5) ───────────────────────────────────────
@@ -169,6 +175,50 @@ QString alarmText(QChar code);
 
 QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
 
+// ── Remote LCD display (KTerm-style frame, request code 0x80) ────────────
+// The spec's foreword promises "a perfect copy of the display ... in less
+// than 400 bytes" but documents none of it; this decode is carried from
+// the contributing author's field-proven v2 control application against a
+// real 1.5K-FA. Host sends the standard keystroke-style packet with code
+// 0x80; the amplifier answers a display frame:
+//   AA AA AA | 6A 01 (payload length, LE) | 95 FE |
+//   2-byte inverted flag word | 320 character bytes (8 rows x 40 cols) |
+//   40 attribute bytes (one per column, bit N = inverse video on row N) |
+//   2-byte little-endian payload checksum
+// = 371 bytes total. The 362-byte payload starts at the flag word and runs
+// through the attributes; the character data starts at offset 9. These
+// offsets and the checksum shape are pinned to a captured real frame in
+// spe_protocol_test. Character bytes map to the
+// amplifier's own font ROM: 0x00 -> blank, 0x01..0x7E and 0x80..0xDF pass
+// through, everything else blanks.
+namespace Lcd {
+
+constexpr int kRows = 8;
+constexpr int kCols = 40;
+constexpr quint8 kRequestCode = 0x80;
+constexpr int kPayloadOffset = 7;     // sync + length + 95 FE type marker
+constexpr int kPayloadLength = 362;   // flags + characters + attributes
+constexpr int kFlagLength = 2;
+constexpr int kDataOffset = kPayloadOffset + kFlagLength;
+constexpr int kAttributeOffset = kDataOffset + kRows * kCols;
+constexpr int kChecksumOffset = kPayloadOffset + kPayloadLength;
+constexpr int kFrameLength = kChecksumOffset + 2;
+
+QByteArray buildRequest();
+
+// One decoded display refresh: font-ROM indices plus the per-cell
+// inverse-video attribute. Plain aggregate so it can cross a queued signal.
+struct Frame {
+    quint8 chars[kRows][kCols] = {};
+    bool   inverse[kRows][kCols] = {};
+};
+
+// Decodes one complete, checksum-valid logical display frame (header
+// included). Returns nullopt for a wrong header, length, checksum, or size.
+std::optional<Frame> decode(const QByteArray& raw);
+
+}  // namespace Lcd
+
 // ── Remote power-ON (RFC 2217 Telnet COM-port control) ───────────────────
 
 // The Expert powers ON via a pulse on a hardware line of its serial
@@ -202,10 +252,9 @@ QByteArray buildSetControl(quint8 ctrl);
 enum class OptionReply { None, Accepted, Refused };
 
 // Scans a raw inbound chunk for that answer, returning the last one present.
-// Read-only: the negotiation bytes stay in the stream for FrameParser, whose
-// sync-run resync steps over them. A false positive would need the literal
-// sequence FF FD 2C inside a Status payload, which is ASCII CSV and cannot
-// contain 0xFF.
+// Doubled IAC bytes (FF FF) are escaped binary data, not a negotiation verb.
+// SpeConnection only scans while an explicit WILL request is outstanding, so
+// an unescaped raw-mode LCD payload cannot mutate the cached result later.
 OptionReply scanComPortOptionReply(const QByteArray& bytes);
 
 }  // namespace Rfc2217
@@ -261,3 +310,4 @@ GaugeRange levelGaugeRange(const ModelSpec& spec, QChar level);
 }  // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::Spe::Status)
+Q_DECLARE_METATYPE(AetherSDR::Spe::Lcd::Frame)

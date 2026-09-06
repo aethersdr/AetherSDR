@@ -1,4 +1,5 @@
 #include "MemoryDialog.h"
+#include "MemoryFilterPolicy.h"
 #include "MemoryCommands.h"
 #include "core/MemoryCsvCompat.h"
 #include "core/MemoryFieldValues.h"
@@ -405,17 +406,13 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
             QStringList groups;
             for (const auto& m : m_model->memories()) {
                 const QString g = m.group.trimmed();
-                if (!g.isEmpty() && !groups.contains(g))
-                    groups << g;
+                appendMemoryFilterName(groups, g);
             }
-            for (const QString& p : m_model->globalProfiles())
-                if (!p.isEmpty() && !groups.contains(p))
-                    groups << p;
-            for (const QString& p : m_model->transmitModel().profileList())
-                if (!p.isEmpty() && !groups.contains(p))
-                    groups << p;
-            groups.sort(Qt::CaseInsensitive);
-            return groups;
+            const RadioCapabilities capabilities = m_model->backendCapabilities();
+            return memoryFilterSpec(capabilities, groups,
+                                    m_model->globalProfiles(),
+                                    m_model->transmitModel().profileList(),
+                                    m_model->usesLocalMemoryBank()).names;
         }, true, Validator::None, this));
     m_table->setItemDelegateForColumn(4, new MemoryFieldDelegate(
         staticList(MemoryFields::modes()), false, Validator::None, this));
@@ -743,6 +740,9 @@ void MemoryDialog::populateTable()
     m_table->setRowCount(0);
     const auto& memories = m_model->memories();
     const RadioCapabilities capabilities = m_model->backendCapabilities();
+    // Radio sync folds rows into the shared writable AetherSDR bank. Once
+    // imported they use the same durable schema and recall path as manual/CSV
+    // rows, rather than replacing the dialog with a transient radio-only view.
     const bool usesNativeMemorySchema = capabilities.family == QLatin1String("icom")
         && capabilities.persistsMemories;
     for (int column = 0; column < COLUMNS.size(); ++column) {
@@ -1449,36 +1449,17 @@ void MemoryDialog::rebuildFilterCombo()
     // "All" shows every memory regardless of group
     m_filterCombo->addItem("All Memories", QString());
 
-    const RadioCapabilities capabilities = m_model->backendCapabilities();
-    const bool usesNativeMemorySchema = capabilities.family == QLatin1String("icom")
-        && capabilities.persistsMemories;
-    m_filterLabel->setText(usesNativeMemorySchema ? QStringLiteral("Group:")
-                                                  : QStringLiteral("Profile:"));
-    QStringList filterNames;
-    if (usesNativeMemorySchema) {
-        filterNames = capabilities.memoryGroups;
-        for (const MemoryEntry& memory : m_model->memories()) {
-            const QString group = memory.group.trimmed();
-            if (!group.isEmpty()
-                && !filterNames.contains(group, Qt::CaseInsensitive)) {
-                filterNames.append(group);
-            }
-        }
-    } else {
-        for (const QString& profile : m_model->globalProfiles()) {
-            if (!filterNames.contains(profile)) {
-                filterNames.append(profile);
-            }
-        }
-        for (const QString& profile : m_model->transmitModel().profileList()) {
-            if (!filterNames.contains(profile)) {
-                filterNames.append(profile);
-            }
-        }
+    QStringList storedGroups;
+    for (const MemoryEntry& memory : m_model->memories()) {
+        appendMemoryFilterName(storedGroups, memory.group);
     }
-    filterNames.sort(Qt::CaseInsensitive);
+    const RadioCapabilities capabilities = m_model->backendCapabilities();
+    const MemoryFilterSpec filterSpec = memoryFilterSpec(
+        capabilities, storedGroups, m_model->globalProfiles(),
+        m_model->transmitModel().profileList(), m_model->usesLocalMemoryBank());
+    m_filterLabel->setText(filterSpec.label);
 
-    for (const QString& name : filterNames) {
+    for (const QString& name : filterSpec.names) {
         m_filterCombo->addItem(name, name);
     }
 
@@ -1510,13 +1491,17 @@ void MemoryDialog::updateSelectionActions()
     }
     if (m_selectBtn) {
         bool recallable = false;
+        bool needsConnection = false;
         if (selectedCount == 1) {
             const int index = *selectedMemoryIndices().constBegin();
             const auto memory = m_model->memories().constFind(index);
             recallable = memory != m_model->memories().constEnd() && memory->recallable;
+            needsConnection = recallable && memory->nativeFilter > 0 && !m_model->isConnected();
         }
-        m_selectBtn->setEnabled(selectedCount == 1 && recallable);
-        m_selectBtn->setToolTip(selectedCount == 1 && !recallable
+        m_selectBtn->setEnabled(selectedCount == 1 && recallable && !needsConnection);
+        m_selectBtn->setToolTip(needsConnection
+            ? "Connect to a radio before recalling a synced native memory."
+            : selectedCount == 1 && !recallable
             ? "Split, reverse-split, DV, and DD memories are display-only."
             : (selectedCount == 1 ? QString()
                                   : "Tune is available when exactly one memory is highlighted."));
@@ -1549,8 +1534,8 @@ void MemoryDialog::updateSelectionActions()
     if (m_syncBtn) {
         const bool refreshable = m_model->memoriesRefreshable();
         const RadioCapabilities capabilities = m_model->backendCapabilities();
-        const bool hasRequiredGroup = !capabilities.memoryRefreshRequiresGroup
-            || !m_filterCombo->currentData().toString().isEmpty();
+        const bool hasRequiredGroup = memoryRefreshSelectionValid(
+            capabilities, m_filterCombo->currentData().toString());
         m_syncBtn->setVisible(refreshable);
         m_syncBtn->setEnabled(refreshable && hasRequiredGroup && !m_syncInProgress);
         m_syncBtn->setToolTip(hasRequiredGroup

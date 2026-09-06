@@ -384,6 +384,27 @@ public:
         markOverlayDirty();
     }
 
+    // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
+    // when disabled. Both send FlexLib wire text (band_zoom=/segment_zoom=,
+    // see togglePanZoomModeForPan()) that only a Flex radio's command plane
+    // ever answers -- on every other backend the click was a silent no-op,
+    // with nothing on screen saying so. Called per-radio model, same as
+    // setBandwidthLimits() above.
+    void setBandSegmentZoomAvailable(bool available)
+    {
+        const QString tip = available
+            ? QString()
+            : tr("Band/segment zoom is available on FlexRadio only.");
+        if (m_zoomBandBtn) {
+            m_zoomBandBtn->setEnabled(available);
+            m_zoomBandBtn->setToolTip(tip);
+        }
+        if (m_zoomSegBtn) {
+            m_zoomSegBtn->setEnabled(available);
+            m_zoomSegBtn->setToolTip(tip);
+        }
+    }
+
     // Set the per-mode filter limits (Hz). Called when mode changes.
     void setFilterLimits(int minHz, int maxHz) { m_filterMinHz = minHz; m_filterMaxHz = maxHz; }
 

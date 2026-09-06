@@ -278,6 +278,20 @@ public:
             s_accessibilityFactoryInstalled = true;
             QAccessible::installFactory(scrollableLabelAccessibleFactory);
         }
+        // Evict a STALE cached interface. QAccessible caches one interface per
+        // object for its lifetime, and on Qt 6.8.3 (the shipped Qt) the widget
+        // machinery queries this label before setEditable() runs — so the
+        // cache already holds QLabel's StaticText interface, the factory
+        // above is never consulted for this object again, and every screen
+        // reader announces an editable readout as plain text. Measured, not
+        // theorised: role 41 (StaticText) before eviction, 43 (Button) after,
+        // in the CI container; newer Qt builds happen not to query early,
+        // which is how this passed locally and shipped (#5064, #4896).
+        if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(this)) {
+            if (cached->role() != QAccessible::Button) {
+                QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
+            }
+        }
     }
     bool isEditable() const { return m_editable; }
     int  editMinimum() const { return m_min; }
