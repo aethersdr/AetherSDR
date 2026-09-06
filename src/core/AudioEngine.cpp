@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "core/backends/RadioCapabilities.h"
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
@@ -9447,6 +9448,27 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
                 src, pcm.size() / (2 * static_cast<int>(sizeof(float)))));
     } else {
         m_radeRxBuffer.append(pcm);
+    }
+}
+
+void AudioEngine::applyBackendAudioCapabilities(
+    bool connected, const RadioCapabilities& caps, bool pcAudioEnabled,
+    const QHostAddress& address)
+{
+    const bool wasSeamAudio = m_hostModulation;
+    const bool seamAudio = connected && caps.takesTxAudioOverSeam && caps.canTransmit;
+    setHostModulation(seamAudio);
+    if (seamAudio && pcAudioEnabled) {
+        if (!isTxStreaming()) {
+            startTxStream(address, 4991);
+        }
+        if (caps.hostModulates && !isRxStreaming()) {
+            startRxStream();
+        }
+    } else if ((wasSeamAudio || seamAudio) && isTxStreaming()) {
+        // Capability withdrawal must close capture even though canTransmit is
+        // now false. Flex-owned streams retain their own lifecycle.
+        stopTxStream();
     }
 }
 

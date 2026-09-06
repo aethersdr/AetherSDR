@@ -470,6 +470,15 @@ std::string parseCapabilitiesName(std::span<const std::uint8_t> pkt)
     return fixedString(pkt, 0x52, 32);
 }
 
+std::uint8_t parseCapabilitiesCivAddress(std::span<const std::uint8_t> pkt)
+{
+    // wfview packettypes.h radio_cap_packet: civ is at absolute 0x94
+    // (0x42-byte envelope + record offset 0x52). Name is at absolute 0x52.
+    if (!startsWith(pkt, kLenCapabilities, 0xa8)) { return 0; }
+    const std::uint8_t address = pkt[0x94];
+    return address > 0 && address < 0xE0 ? address : 0;
+}
+
 StatusKind parseStatus(std::span<const std::uint8_t> pkt)
 {
     if (!startsWith(pkt, kLenStatus, 0x50))

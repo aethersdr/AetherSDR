@@ -93,7 +93,7 @@ CivFrame pttReadback(std::uint8_t from, bool keyed)
 
 void testCommandIsIntentAndReadbackIsState()
 {
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    const IcomModel* ic705 = modelForId(0xA4);
     check(ic705 != nullptr, "PTT authority fixture resolves the IC-705");
     if (!ic705) {
         return;
@@ -196,7 +196,7 @@ void testCommandIsIntentAndReadbackIsState()
 
 void testClientUnkeyClearsDerivedForwardPower()
 {
-    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* ic9700 = modelForId(0xA2);
     check(ic9700 != nullptr, "derived-power fixture resolves the IC-9700");
     if (!ic9700) {
         return;

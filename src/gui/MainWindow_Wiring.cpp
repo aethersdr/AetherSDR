@@ -18,6 +18,9 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QStatusBar>
 
 #include "AetherDspWidget.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -88,6 +91,33 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::wireStatusBarMessages()
+{
+    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
+    const int stationIndex = layout->indexOf(m_stationNickLabel);
+    connect(statusBar(), &QStatusBar::messageChanged, this,
+            [this, layout, stationIndex](const QString& message) {
+        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
+            // Only the existing Connect control is permanent while a message
+            // is shown. Making the full-width bar permanent hides Qt's text.
+            layout->removeWidget(m_stationNickLabel);
+            statusBar()->addPermanentWidget(m_stationNickLabel);
+            m_stationNickLabel->show();
+            // addPermanentWidget reformats the bar and can re-show normal
+            // children; explicitly leave Qt's temporary-message area clear.
+            m_statusBarContainer->hide();
+        } else if (message.isEmpty()
+                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
+            statusBar()->removeWidget(m_stationNickLabel);
+            layout->insertWidget(stationIndex, m_stationNickLabel);
+            m_stationNickLabel->show();
+            m_statusBarContainer->show();
+            updateStatusBarMinimumWidth();
+        }
+    });
+}
+
 
 namespace {
 
