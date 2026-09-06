@@ -148,6 +148,24 @@ int main(int argc, char** argv)
         check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == 5,
               "operator changes still reach the production snapshot after a pin");
     }
+    // The same write, but of the PINNED VALUE ITSELF, on the start band. A
+    // write that does not MOVE the gain is still the operator choosing that
+    // value for this band, so it has to end the pin and record the band exactly
+    // as a moving write does. setPanRfGain's equality early return used to sit
+    // above both, so this operator got neither. (#5402 review nit 3.)
+    {
+        GainSession session(rememberedGain(), 20);
+        check(session.liveGain() == 20 && bandGain(session.backend.currentOperatingState(),
+                                                   QStringLiteral("20m")) == -12,
+              "same-value case starts pinned at +20 with 20m still stored as -12");
+        session.backend.setPanRfGain(session.panId, 20);
+        check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == 20,
+              "an operator write of the pinned value itself records the band");
+        session.backend.setSliceFrequency(0, 7'074'000.0);
+        session.backend.setSliceFrequency(0, 14'074'000.0);
+        check(session.liveGain() == 20,
+              "the confirmed value survives a band round trip instead of reverting to -12");
+    }
     // Cross-family compatibility at the exact display-restore seam. No Flex or
     // Icom backend is instantiated or changed; their current domain is empty.
     for (const QString& family : {QStringLiteral("flex"), QStringLiteral("icom"),
