@@ -53,11 +53,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - Durable memory ownership and synchronized recall are restored (#5328).
 - RX filter preset identity, skirt mapping and recall are corrected (#5363).
 - Background polling no longer starves TX meters (#5435).
-- Native control handling and meter precision improve (#5436).
 - Finite AX.25 transmit audio is preserved over RS-BA1 (#5311).
 - IC-705 GPS location and NTP controls are added (#5146).
 - Unavailable tuner controls are dimmed (#5292).
 - IC-705 power gauges use the appropriate QRP scale (#5369).
+
+#### Native controls and meters (#5436)
+
+A broad IC-7300MK2 control cleanup makes the UI follow the radio's supported settings, ranges and native readback. Model-specific mappings remain separate so these corrections do not impose MK2 behavior on other Icom radios.
+
+- **TX bandwidth:** correct the high/low cutoff encoding and decoding, including the 300 Hz and 500 Hz low-cut selections. On the MK2, the native `0x30` value correctly represents 100–2900 Hz. IC-705 and MK2 retain their own setting addresses and cutoff tables.
+- **CW speed:** use the MK2's supported 6–48 WPM range. When capabilities change, the slider and numeric editor reconcile together without sending an unintended radio command.
+- **CW pitch:** follow the MK2's 5 Hz steps so button presses and radio readback agree instead of displaying unsupported intermediate values.
+- **Squelch:** keep the threshold usable in CW and data modes, preserving the radio's value across mode changes rather than treating squelch as a voice-only control.
+- **Unsupported controls:** disable AGC threshold, AGC Off, AM carrier and VOX delay where the backend cannot implement them. Selecting an unavailable AGC mode is refused instead of silently substituting another mode.
+- **Repeater controls:** disable unsupported MK2 offset magnitude and direction controls, and refuse unsupported commands and polling. XFC remains available.
+- **Tune in CW/CW-R:** refuse Tune before changing power, generating a tone or requesting PTT. Stop remains available if a tune operation is already active.
+- **Radio readback:** periodically reconcile CW speed, CW pitch, squelch and TX bandwidth, allowing the client to adopt radio-side changes and restored settings.
+- **Meter precision and scales:** preserve fractional power readings and present native ALC and compression scales. Fractional watts retain the radio's reporting resolution; they do not imply greater measurement accuracy. ALC continues to follow the active slice, and changing meter units clears incompatible animation state while normal unkey decay is retained.
+- **Automation and accessibility:** expose the existing RF gain slider by name and consistently reject disabled or unreachable combo-box selections. RF gain's protocol and range are unchanged.
+- **Meter diagnostics:** add bounded, read-only observation windows for delivery age and native peaks, including multiple samples arriving within the same millisecond.
 
 ### Hermes-Lite 2 reliability and diagnostics
 
