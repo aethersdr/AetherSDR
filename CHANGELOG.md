@@ -8,6 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.9.5] — 2026-09-06
+
+### Fork
+
+- **Hermes Lite 2 misc options, I/O Board, and Filter Board settings.**
+  Three new HL2-only settings pages under Controllers & Hardware: ADC
+  dither/randomization and TX latency/PTT-hang/reset-on-disconnect
+  options; a raw I2C read/write panel with a live pin-status display for
+  the N2ADR/KP4RX I/O Board accessory, including an automatic
+  TX-frequency push so the board can drive band-dependent hardware (an
+  external amp's band-voltage line, antenna/filter selection) with no
+  manual setting; and a manual override of the J16 open-collector filter
+  relays per band/direction, with a "Hardware Pin State" display of
+  AetherSDR's own commanded J16 byte.
+- Fixed against real hardware: the I/O Board is wired to HL2 I2C bus 2,
+  not bus 1, and its pin-status register is 6, not 168 — both found via
+  direct packet-capture comparison against a working reference-client
+  session. A Qt stylesheet bug that made a disabled+checked checkbox
+  look identical to disabled+unchecked (masking the pin-status fix) is
+  also fixed. The automatic TX-frequency push now flushes the final
+  frequency of a tuning gesture that stops inside its 500 ms throttle
+  window, instead of leaving the board on a stale value.
+
 ## [v26.9.4] — 2026-09-04
 
 ### RTL-SDR and ANAN-G2 receive backends · LP-100A wattmeter · aetherd Stage 3 control protocol · HL2 span-change freeze fixed
