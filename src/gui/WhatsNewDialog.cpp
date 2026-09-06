@@ -35,6 +35,9 @@ namespace {
 constexpr auto kReleaseApiBase =
     "https://api.github.com/repos/aethersdr/AetherSDR/releases/tags/%1";
 
+constexpr auto kReleaseApiLatest =
+    "https://api.github.com/repos/aethersdr/AetherSDR/releases/latest";
+
 QString normalizedTag(const QString& version)
 {
     QString tag = version.trimmed();
@@ -210,9 +213,11 @@ WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
                                const QString& currentVersion,
                                QWidget* parent,
                                bool showUpgrade,
-                               bool currentVersionOnly)
+                               bool currentVersionOnly,
+                               bool useLatestRelease)
     : PersistentDialog("What's New - AetherSDR", "WhatsNewDialogGeometry", parent)
     , m_currentVersion(currentVersion)
+    , m_useLatestRelease(useLatestRelease)
 {
     theme::setContainer(this, QStringLiteral("dialog/whatsNew"));
     setAttribute(Qt::WA_DeleteOnClose);
@@ -221,8 +226,12 @@ WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
 
 WhatsNewDialog* WhatsNewDialog::showAll(QWidget* parent)
 {
+    // Help -> What's New: show the newest published release, not the release
+    // tagged for this exact build.  The running version often has no dedicated
+    // GitHub release (dev builds, point releases, release lag), and the
+    // per-tag API lookup would 404.
     auto* dlg = new WhatsNewDialog("", QCoreApplication::applicationVersion(), parent,
-                                   false, true);
+                                   false, true, true);
     dlg->show();
     return dlg;
 }
@@ -254,6 +263,7 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
     layout->addWidget(header);
 
     m_statusLabel = new QLabel;
+    m_statusLabel->setObjectName("whatsNewStatusLabel");
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setContentsMargins(18, 0, 18, 8);
@@ -339,10 +349,14 @@ void WhatsNewDialog::fetchLiveReleaseNotes()
     if (!m_browser)
         return;
 
-    const QString tagName = releaseTag();
-    setStatusText(QString("Loading detailed release notes from GitHub for %1...").arg(tagName));
+    const QString endpoint = m_useLatestRelease
+        ? QString::fromLatin1(kReleaseApiLatest)
+        : releaseApiUrl(releaseTag());
+    setStatusText(m_useLatestRelease
+        ? QStringLiteral("Loading the latest AetherSDR release notes from GitHub...")
+        : QString("Loading detailed release notes from GitHub for %1...").arg(releaseTag()));
 
-    QNetworkRequest request{QUrl(releaseApiUrl(tagName))};
+    QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
     request.setRawHeader("Accept", "application/vnd.github+json");
     request.setTransferTimeout(15000);
@@ -387,7 +401,9 @@ void WhatsNewDialog::showLoadingState()
     if (!m_browser)
         return;
 
-    setStatusText(QString("Loading release notes for %1...").arg(releaseTag()));
+    setStatusText(m_useLatestRelease
+        ? QStringLiteral("Loading the latest AetherSDR release notes...")
+        : QString("Loading release notes for %1...").arg(releaseTag()));
     m_browser->setHtml(
         "<div style='color:#8aa8c0; font-family:sans-serif; font-size:13px; "
         "padding:40px; text-align:center;'>Loading release notes from GitHub...</div>");
@@ -398,7 +414,9 @@ void WhatsNewDialog::showReleaseLoadError(const QString& message)
     if (!m_browser)
         return;
 
-    setStatusText(QString("Could not load release notes for %1").arg(releaseTag()));
+    setStatusText(m_useLatestRelease
+        ? QStringLiteral("Could not load the latest AetherSDR release notes")
+        : QString("Could not load release notes for %1").arg(releaseTag()));
     m_browser->setHtml(QString(
         "<div style='color:#c8d8e8; font-family:sans-serif; font-size:13px; "
         "padding:32px; line-height:1.45;'>"

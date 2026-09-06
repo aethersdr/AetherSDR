@@ -3889,6 +3889,31 @@ target_link_libraries(help_dialog_test PRIVATE
 )
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 
+# WhatsNewDialog release-notes targeting (Help -> What's New 404 regression).
+# Needs QApplication + Widgets + Network; the dialog fires a network request in
+# its constructor but the test never spins the event loop, so nothing leaves
+# the machine. Offscreen.
+add_executable(whats_new_dialog_test
+    tests/whats_new_dialog_test.cpp
+    src/gui/WhatsNewDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(whats_new_dialog_test PRIVATE src tests)
+target_link_libraries(whats_new_dialog_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network
+)
+set_target_properties(whats_new_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME whats_new_dialog_test COMMAND whats_new_dialog_test)
+set_tests_properties(whats_new_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FreeDV Reporter status-message row (#4231). Guarded like the dialog
 # itself — FreeDvReporterDialog only exists when WebSockets are available.
 # Dialog-side only: the test never reaches qso.freedv.org.
@@ -4542,6 +4567,7 @@ set(AETHER_SETTINGS_CONSUMERS
     memory_import_test
     transmit_model_apd_test
     help_dialog_test
+    whats_new_dialog_test
     flex_control_dialog_size_test
     pan_layout_dialog_size_test
     transmit_model_test
