@@ -1845,6 +1845,11 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("callsign"),     r->callsign()},
         {QStringLiteral("nickname"),     r->nickname()},
         {QStringLiteral("connected"),    r->isConnected()},
+        // The third value beside the bool, NOT a replacement for it: "idle",
+        // "connecting" or "connected". A caller that issued `connect ip` and
+        // reads `connected: false` cannot otherwise tell a connect that is
+        // working from one that is not happening (#5413 item 3).
+        {QStringLiteral("connectState"), r->connectState()},
         {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
         {QStringLiteral("txPower"),      r->txPower()},

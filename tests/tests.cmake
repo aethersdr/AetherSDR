@@ -4080,6 +4080,27 @@ add_executable(host_voice_chain_policy_test
 )
 target_include_directories(host_voice_chain_policy_test PRIVATE src)
 add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
+add_executable(connect_state_policy_test
+    tests/connect_state_policy_test.cpp
+)
+target_include_directories(connect_state_policy_test PRIVATE src)
+add_test(NAME connect_state_policy_test COMMAND connect_state_policy_test)
+
+# The same field, through RadioModel and radioSnapshot rather than through the
+# policy header — a pure test cannot prove the model feeds the policy the right
+# lifecycle (#5416 review).
+#
+# Socket-free: inject attempt state through the model's existing test access,
+# exercise its real cancellation/error handlers, and call the bridge dispatcher
+# directly. No connectToRadio, transport, listener, discovery, or radio peer.
+add_executable(connect_state_model_test
+    tests/connect_state_model_test.cpp
+)
+target_include_directories(connect_state_model_test PRIVATE src tests)
+target_link_libraries(connect_state_model_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME connect_state_model_test COMMAND connect_state_model_test)
 add_executable(hl2_overload_policy_test
     tests/hl2_overload_policy_test.cpp
 )
@@ -4547,6 +4568,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_drag_at_test
     automation_tx_watchdog_test
     automation_rn2_probe_test
+    connect_state_model_test
     automation_dsp_backend_readback_test
     tci_automation_test
 )

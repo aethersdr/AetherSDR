@@ -8,6 +8,7 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
+#include "models/ConnectStatePolicy.h"
 #include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
 #include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
@@ -2645,6 +2646,19 @@ QString RadioModel::digitalVoiceWaveformHealthName() const
 QString RadioModel::digitalVoiceWaveformHealthDetail() const
 {
     return DigitalVoiceWaveformProcess::instance().healthDetail();
+}
+
+QString RadioModel::connectState() const
+{
+    // The bool stays exactly as it was — existing scripts read `connected` and
+    // must not change meaning. This is the third value beside it.
+    //
+    // Derived from THE ATTEMPT, not from the DSP sub-phase. m_connectAttemptActive
+    // already spans the whole thing #5413 asks about: set at the request edge in
+    // connectToRadio(), cleared when the attempt lands, fails, or is abandoned.
+    // See connectStateFor() for what a DSP-only flag got wrong here.
+    return QString::fromLatin1(AetherSDR::connectStateName(
+        AetherSDR::connectStateFor(isConnected(), m_connectAttemptActive)));
 }
 
 bool RadioModel::isConnected() const

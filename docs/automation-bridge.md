@@ -708,8 +708,9 @@ connects).
 
 ```json
 → {"cmd":"get","model":"radio"}
-← {"ok":true,"model":"radio","radio":{"connected":true,"model":"FLEX-8400M",
-   "transmitting":false,"txPower":0,"sliceCount":1,"panCount":1, …}}
+← {"ok":true,"model":"radio","radio":{"connected":true,"connectState":"connected",
+   "model":"FLEX-8400M","transmitting":false,"txPower":0,"sliceCount":1,
+   "panCount":1, …}}
 
 → {"cmd":"get","model":"slice","selector":"active","property":"frequency"}
 ← {"ok":true,"model":"slice","property":"frequency","value":3.6}
@@ -719,7 +720,7 @@ connects).
 |---|---|---|
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
-| `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
+| `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate) |
 | `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
@@ -2272,14 +2273,38 @@ at all), so a caller that wants strictness compares it against `"family"` and de
 itself, while a caller working around a wrong discovery entry still gets through. The
 mismatch is also logged.
 
+<a id="connectstate"></a>
+**`radio.connectState`** — `"idle"`, `"connecting"` or `"connected"`. The
+`connected` bool is unchanged and existing scripts need no edit; this is a third
+value beside it, because the bool cannot express the middle state. A caller that
+issues `connect ip` and then reads `connected: false` gets the same answer
+whether the connect is still working or nothing is happening at all, which is
+the whole of #5413 item 3.
+
+It is derived from the same model lifecycle as `connect wait`'s `phase`
+below — set when RadioModel starts a connection attempt (for example, in
+`connectToRadio()`), cleared when it lands, fails or is abandoned. `connected` wins whenever the link is up,
+whatever order the underlying edges arrive in.
+
+The field describes the model's current attempt, not every part of an accepted
+connect command: address probing before `connectToRadio()` may still report
+`idle`. Retry backoff after a failed attempt also reports `idle`; the flag is
+re-armed when the retry starts. An `idle` reading therefore does not by itself
+prove that the deferred command has failed or that no retry is scheduled.
+
+This is the polling form of what `connect wait` blocks for: use `wait` when you
+can hold a request open, and `assert_state` / `wait_for` on
+`radio.connectState` when you cannot.
+
 `connect wait <timeout_ms>` holds that request's response until the radio
 connects, the connect fails, or the timeout expires — the preferred unattended
 "request then assert" flow.
 
 A reply that is not `connected` carries `"phase"`: `"connecting"` means an
-attempt is still in flight and waiting again is the right move, `"idle"` means
-nothing is pending and another wait will time out identically. **This matters on
-the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+attempt is still in flight and waiting again is the right move; `"idle"` means
+no model attempt is currently active, including the probing and retry-backoff
+windows described above. **This matters on the HL2**, which queues a connect
+behind its DSP open and re-drives it later, so
 a wait can legitimately expire on a connect that then succeeds. A connect that
 fails outright returns immediately with the backend's own message instead of
 running out the clock.

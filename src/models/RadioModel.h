@@ -166,6 +166,12 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // "idle" / "connecting" / "connected" — the bridge's third value, so a
+    // caller can tell a connect that is working from one that is not happening
+    // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
+    // isConnected() and isConnectAttemptInFlight() below — one lifecycle, not
+    // a second one owned by this field.
+    QString connectState() const;
     // True from the moment a connect is requested until it lands, fails, or is
     // abandoned. isConnected() alone cannot express "still working": it is
     // false both before an attempt starts and while one is in flight, which is
