@@ -82,6 +82,13 @@ struct IcomCivBackendTestAccess {
         backend.m_connected = true;
         backend.m_session = std::make_unique<IcomSession>();
         backend.m_session->setCivAddress(model.civAddress);
+        // Routine polling waits for a VERIFIED CI-V identity (#5164), so a
+        // fixture that only sets m_model would see onLinkTick() return before
+        // queueing anything. A real session reaches this state by way of a
+        // 19 00 reply, which is what these two fields record; the table's
+        // civAddress is that model's factory-default address and model ID.
+        backend.m_civReported = model.civAddress;
+        backend.m_civModelId = model.civAddress;
     }
 
     static QString lastOutboundCiv(const IcomCivBackend& backend)

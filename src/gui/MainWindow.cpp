@@ -3650,7 +3650,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
+        || !statusBar()->currentMessage().isEmpty()) {
         return;
     }
 
@@ -5853,6 +5854,7 @@ void MainWindow::buildUI()
     hbox->addWidget(timeStack);
 
     statusBar()->addWidget(m_statusBarContainer, 1);
+    wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 
@@ -6459,7 +6461,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));

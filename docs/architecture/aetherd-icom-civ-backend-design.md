@@ -464,7 +464,7 @@ pins all of this without a socket.
 
 | group | interval | condition |
 |---|---:|---|
-| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| PTT fallback | 250 ms | connected with an identified CI-V destination; Transceive is only a hint |
 | S meter | 100 ms | RX and visible |
 | power, SWR, ALC, compression | 200 ms | TX and visible |
 | PA current | 500 ms | TX and visible |
@@ -1458,3 +1458,90 @@ of a black panadapter.
 5. **Re-run this sweep against the IC-7300MK2** when one is available. The
    sweeper is model-agnostic and the JSON diffs cleanly, which is the cheapest
    possible way to establish a second model's capability set.
+
+## CI-V identity and custom Network Radio Names (#5164)
+
+Every connection begins with conservative unknown-model capabilities. The
+RS-BA1 Network Radio Name is presentation text only, including names that
+happen to match another supported model. CI-V `19 00` selects the profile from
+its one-byte model-ID payload; the reply envelope's source address selects the
+command destination. These values are independent when the operator changes
+the CI-V address. This follows wfview's `funcTransceiverId` model-ID decode and
+`determineRigCaps` adoption of `incomingCIVAddr` as the destination.
+
+Auto broadcasts identity queries; a manually pinned address receives directed
+queries and rejects other responders. Identification makes at most five attempts
+one second apart, stopping on a valid model-ID reply, conflict, or disconnect.
+A generic FB/FA reply or controller echo cannot complete identification. Meter,
+PTT, and control polling wait until the destination is identified. Exhaustion
+reports a configuration warning and keeps capabilities conservative; it never
+starts a read burst at an unverified seed address or promotes a nickname to a
+hardware profile. A valid late identity restarts the snapshot with the correct
+model vocabulary and publishes capabilities, modes, antenna choices, front-end
+controls, meters, and scope geometry. Repeated identical replies are inert.
+Conflicting identities abort native CW at the previously selected destination
+before withdrawing transmit capability until reconnect. A pinned selection
+that hears only another responder reports both addresses once, without changing
+the selection or accepting that responder's identity.
+
+The current model table recognizes these hexadecimal `19 00` payloads. These
+are model IDs, even though their values match factory CI-V addresses; changing
+the operating address does not change the ID. Recognition alone does not imply
+that every feature or network path has live-hardware validation.
+
+| Model | Model-ID payload |
+|---|---|
+| IC-705 | `A4` |
+| IC-9700 | `A2` |
+| IC-7610 | `98` |
+| IC-7850 / IC-7851 (`IC-785x` profile) | `8E` |
+| IC-7300 | `94` |
+| IC-7300MK2 | `B6` |
+| IC-905 | `AC` |
+
+Sources: the existing `IcomModels.cpp` model table and its Icom/wfview provenance;
+Icom's per-model CI-V guides define `19 00` as the transceiver-ID read. The
+IC-7300MK2 `B6` payload and destination were also confirmed by a receive-only
+connection for this change. For example, `FE FE E0 50 19 00 A4 FD` identifies an
+IC-705 whose operating address is `50`, regardless of its Network Radio Name.
+
+
+### Optional standby wake (#5349, superseding #5360)
+
+The connection panel exposes **Wake Icom on connect**, default off and persisted in
+the existing Icom JSON settings document. An awake identity completes normally
+without sending power commands. Only exhausted identity discovery with explicit
+opt-in requests wake via the namespaced extension channel. Auto obtains the
+wake destination from the capabilities record (absolute byte 0x94), not the
+editable network name or the default settings seed. Pinned addresses remain
+explicit overrides. This network metadata authorizes a destination only;
+`19 00` remains the authority for the model and capabilities. An advertised factory destination for IC-705, IC-7300MK2 or IC-9700 can select
+its wake framing without claiming model identity. An unidentified custom
+address requires an explicit model selection: select the model in Connect by IP
+(the network-advertised custom destination is retained), or use `civ wake` with
+both model ID and address. A missing/unsupported framing hint refuses visibly;
+it never silently gives a custom-address IC-9700 the standard E0 frame.
+
+RadioModel owns one wake operation: one `18 01`, intentional session release,
+a short initial allowance, then one fresh network session with wake disabled.
+IC-705 and IC-7300MK2 start after one second and send per-second identity probes
+until ready; IC-9700 retains the contributed ten-second delay.
+The ordinary repeating reconnect timer is not armed during this operation.
+Wire identity must arrive within 20 seconds after reconnect starts (and match
+a model when one was explicitly selected);
+failure terminates the attempt. Generation checks invalidate delayed work on
+operator disconnect, radio changes, success and failure. No power-off is sent
+on disconnect or exit, and no wake request or transient model claim is persisted.
+
+Credit: W5JWP (@w5jwp) established the IC-9700 native-LAN wake sequence and
+standby/readiness distinction in #5360. Its 150 additional FE bytes, E1 controller
+address and 10-second delay are retained as contributed hardware evidence, not
+as the guide's serial baud-rate requirements. The official IC-9700 guide lists
+approximately 119 FE bytes at 115200 baud. IC-705 documents `18 01` from
+Standby/Shutdown; IC-7300MK2 documents baud-dependent fill specifically for its
+REMOTE jack. Both models have explicit profiles that send the standard E0-controller
+`18 01` frame over the existing RS-BA1 serial envelope, without the IC-9700's
+extra FE prefix. Their one-second initial allowance is client policy, not a guide timing.
+These profiles implement the documented command; live network wake remains to
+be checked on each model. Network control must remain reachable in standby;
+an offline WLAN interface cannot receive CI-V wake.

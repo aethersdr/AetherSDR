@@ -3486,7 +3486,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]|session|scheduler|incident> — CI-V "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|session|scheduler|incident> — CI-V "
             "inject, frame trace, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
@@ -8180,6 +8180,21 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
         return err(QStringLiteral("no backend available"));
 
     const QString a = action.trimmed().toLower();
+    if (a == QLatin1String("wake")) {
+        if (m_readOnly) { return err(QStringLiteral("Wake is unavailable in read-only mode")); }
+        const QStringList fields = arg.simplified().split(QLatin1Char(' '));
+        bool modelOk = false;
+        bool addressOk = false;
+        const int model = fields.value(0).toInt(&modelOk, 16);
+        const int address = fields.value(1).toInt(&addressOk, 16);
+        if (fields.size() != 2 || !modelOk || !addressOk) {
+            return err(QStringLiteral("civ wake requires model ID and radio address in hex"));
+        }
+        QString error;
+        if (!m_radioModel->wakeIcomRadio(model, address, &error)) { return err(error); }
+        return QJsonObject{{QStringLiteral("ok"), true},
+            {QStringLiteral("status"), QStringLiteral("wake requested; identity not yet verified")}};
+    }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("session")
                         && a != QLatin1String("incident")

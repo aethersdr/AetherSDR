@@ -631,6 +631,13 @@ target_link_libraries(icom_power_derivation_test PRIVATE
     aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_power_derivation_test COMMAND icom_power_derivation_test)
 
+# Socket-free CI-V identity and late TX-audio lifecycle. IcomSession is never
+# started; literal replies enter the existing injected frame-handler seam.
+add_executable(icom_identity_test tests/icom_identity_test.cpp)
+target_include_directories(icom_identity_test PRIVATE src)
+target_link_libraries(icom_identity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_identity_test COMMAND icom_identity_test)
+
 # Socket-free coverage for the Icom PTT seam contract (#5311): setKeying() is
 # intent, the decoded 1C 00 readback is state, a contradicting readback after
 # an unkey is republished, the key-on window is bounded, and the TX-audio gate
@@ -4054,6 +4061,11 @@ add_executable(host_voice_chain_policy_test
 )
 target_include_directories(host_voice_chain_policy_test PRIVATE src)
 add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
+add_executable(hl2_dsp_setup_policy_test
+    tests/hl2_dsp_setup_policy_test.cpp
+)
+target_include_directories(hl2_dsp_setup_policy_test PRIVATE src)
+add_test(NAME hl2_dsp_setup_policy_test COMMAND hl2_dsp_setup_policy_test)
 add_executable(hl2_tx_level_policy_test
     tests/hl2_tx_level_policy_test.cpp
 )
@@ -4402,6 +4414,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
+    icom_identity_test
     icom_control_profile_test
     control_resource_service_test
     aetherd_discovery_startup_test

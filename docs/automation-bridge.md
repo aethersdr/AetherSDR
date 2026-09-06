@@ -3343,6 +3343,39 @@ hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
 should only be enabled briefly when these structured diagnostics are
 insufficient.
 
+The `icom.profile.show` extension distinguishes `modelId` (the `19 00` payload)
+from `civAddress` (the current command destination). A custom address can differ
+from the model ID; Network Radio Name does not select either value.
+
+**`civ wake <model-id-hex> <address-hex>`** explicitly requests one wake and one
+bounded reconnect on the current Icom network session. Supported selections are
+IC-705 (`civ wake a4 a4`), IC-7300MK2 (`civ wake b6 b6`), and IC-9700
+(`civ wake a2 a2`); the second argument may instead be its custom radio address. The model selection authorizes framing only; CI-V still
+establishes identity and capabilities after reconnect. The response acknowledges
+the request, not radio readiness. No power-off command is exposed. Read-only
+mode refuses this action. Disconnect or another connection selection cancels it.
+
+The connection panel's **Wake Icom on connect** checkbox persists in the `Icom`
+settings document (`wakeOnConnect`, default false). It requests wake only after
+identity discovery exhausts. Auto uses the CI-V destination advertised by the
+RS-BA1 radio, independently of its editable network name. A custom destination
+is respected. An unidentified custom address requires an explicit model in
+Connect by IP or `civ wake`; otherwise wake refuses with guidance instead of
+guessing standard framing for an IC-9700. Supported factory destinations from
+the network record may select a framing hint. Model identity and transmit
+capabilities still come only from the subsequent `19 00` reply.
+Connection advice/progress uses the connection panel while it is open;
+mid-session advice uses the status bar. Temporary messages keep the existing
+Connect control visible and restore its normal position when the message clears.
+The post-wake reconnect disables another wake and expires after 20 seconds;
+IC-705 and IC-7300MK2 reconnect after one second and probe identity each second
+until it arrives; IC-9700 retains its measured ten-second pre-reconnect delay. Radio configuration
+settings are not modified. IC-705 and IC-7300MK2 use their documented `18 01`
+command with standard framing; IC-9700 retains its measured extra FE prefix and
+E1 controller. Live network wake for the first two still requires hardware
+validation. Network control must remain reachable: an offline Wi-Fi interface
+cannot receive a wake command.
+
 ### `controls`
 
 The CI-V control and meter registry, joined against what is actually wired.
@@ -3865,7 +3898,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |

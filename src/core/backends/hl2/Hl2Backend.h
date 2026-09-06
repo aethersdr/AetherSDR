@@ -198,6 +198,8 @@ private:
     // the note above buildReceivers() and docs/HERMES.md §20.8). The sequence stays
     // serial on the I/O thread; only the GUI thread stopped waiting for it.
     void beginDspSetup();
+    void armDspSetupWatchdog();
+    void onDspSetupWatchdog();
 
     // Everything the async build needs to carry across event-loop turns (the
     // wire params, the RX and TX configs, and which connect it belongs to). A
@@ -210,6 +212,10 @@ private:
     void finishDspSetup(const DspSetupResult& result);
 
     std::unique_ptr<PendingConnect> m_pendingConnect;
+    // Watches the window between beginDspSetup() returning and finishDspSetup()
+    // being posted back — the one stretch of the connect that no other timer
+    // covers, because MetisClient's watchdog is armed after it (#5413).
+    QTimer* m_dspSetupWatchdog = nullptr;
     // A connect that arrived while m_pendingConnect was still building. Held
     // rather than served inline — see the guard at the top of connectRadio().
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;

@@ -17,9 +17,11 @@ using namespace AetherSDR;
 
 namespace AetherSDR::icom {
 struct IcomCivBackendTestAccess {
-    static void prepare(IcomCivBackend& backend, std::uint8_t address = 0xB6)
+    static void prepare(IcomCivBackend& backend, std::uint8_t modelId = 0xB6)
     {
-        backend.m_model = modelForCivAddress(address);
+        // The fixture selects a model by its CI-V 19 00 model ID, which for
+        // every table entry equals that model's factory-default bus address.
+        backend.m_model = modelForId(modelId);
         // Never start the session: command construction only, no sockets.
         backend.m_session = std::make_unique<IcomSession>();
     }

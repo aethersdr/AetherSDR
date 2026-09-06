@@ -79,15 +79,16 @@ public:
     Q_INVOKABLE void stop();
 
     [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
+    [[nodiscard]] std::uint8_t advertisedCivAddress() const noexcept { return m_advertisedCivAddress; }
     [[nodiscard]] QString deviceName() const { return m_deviceName; }
     [[nodiscard]] const RadioId& radioId() const noexcept { return m_radioId; }
     [[nodiscard]] std::uint8_t civAddress() const noexcept { return m_params.civAddress; }
 
     // RETARGET the session at a different CI-V address, mid-session.
     //
-    // The address the session opened with is a SEED — from the operator's pick,
-    // or from the model the RS-BA1 handshake named — and the radio's own
-    // 0x19 0x00 reply is what corrects it. Without a setter the correction had
+    // The address the session opened with is a seed from settings. The source
+    // address of the radio's 19 00 reply corrects it independently of the model
+    // ID carried in the payload. Without a setter the correction had
     // nowhere to land: Params::civAddress is baked at start() and read through a
     // const getter, so an IC-9700 seeded at the IC-705's 0xA4 went on being
     // addressed at 0xA4 for the whole session and answered nothing.
@@ -174,6 +175,8 @@ private:
     // Auth state. A grant may replace the auth ID, but only after its header
     // IDs prove it belongs to this control session.
     AuthId m_authId{};
+    friend struct IcomCivBackendTestAccess;
+    std::uint8_t m_advertisedCivAddress = 0;
     RadioId m_radioId{};
     QString m_radioName;
     QString m_deviceName;
