@@ -927,7 +927,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 4 | Pipeline reset `0x39[7:4]=0x8` after an NCO move | A2 §B2 | Decimation state smears a transient across band-scale jumps — which `a1cbe154` made routine | XS |
 | 5 | Normalize by `2^23-1`, not `2^23` | A1 §A2 | dBFS parity with piHPSDR. Numerically trivial, but parity is the point | XS |
 | 6 | `RXASetNC` / `RXASetMP` after `OpenChannel` | A3 §7 | Selectivity vs latency; matters to CW operators. We silently take defaults | XS |
-| 6a | Rate-limit the ADC-overload warning | §15.7 | Edge-gated, but the value chatters: **~133 warnings/second** on MW, which flushes the log ring and hides everything else | XS |
+| ~~6a~~ | ~~Rate-limit the ADC-overload warning~~ **DONE** | §15.7 | The edge gate stays and a 10 s rate limit sits behind it, carrying the count of transitions the window swallowed. Note the severity here was already overstated when this row was written — see §15.7 | — |
 
 ### Tier 2 — correctness gaps
 
@@ -1751,11 +1751,26 @@ value the assertion depends on, even when it looks like a constant.
 
 ### 15.7 Noticed, not fixed
 
-- **ADC overload chatter.** On the MW broadcast band with the default +20 dB LNA
-  the overload flag dithers, and the warning in `publishTelemetry` — although
-  edge-gated — fires **~133 times/second**, flushing the log ring. The gate is on
-  the value changing, but the value genuinely chatters. It also buries every
-  other log line, which is how it obstructed the diagnosis in §15.5.
+- **ADC overload chatter — fixed, and the figure below was already stale.** On
+  the MW broadcast band with the default +20 dB LNA the overload flag dithers,
+  and the warning in `publishTelemetry` — although edge-gated — was measured at
+  **~133 times/second**, flushing the log ring and burying every other line,
+  which is how it obstructed the diagnosis in §15.5. The gate is on the value
+  changing; the value genuinely chatters.
+
+  **That rate has not been reachable since #4449.** `MetisClient` coalesces
+  `telemetryUpdated` to 10 Hz (`kTelemetryMinIntervalMs`), with no
+  change-bypass, so `publishTelemetry` cannot run faster than 10 Hz however hard
+  the comparator chatters — which capped this at ~10/s and ended the
+  ring-flushing without anyone recording that it had. **Kept rather than
+  rewritten**, because a symptom that stops being reproducible for a reason
+  nobody wrote down is worth more as a corrected entry than as a deleted one.
+
+  The remainder — one message repeating up to ten times a second for as long as
+  the band stays strong — is fixed: the edge gate stays and a 10 s rate limit
+  sits behind it, reporting the count of transitions the window swallowed.
+  That count is transitions *seen*, at the 10 Hz telemetry cadence, not
+  comparator edges, which are sampled far below their true rate and always were.
 - **The HL2 LNA gain is only settable at connect time** (`lnaGainDb` param).
   There is no seam verb for RF gain, so an operator on a strong band cannot back
   it off without reconnecting. This is why the overload above could not simply be
