@@ -159,7 +159,10 @@ embedders need not provide a discovery source. No new wire method is added.
   - `serial`: nonempty, at most 128 UTF-16 code units.
   - `name`, `model`, `nickname`, `version`: display observations, each at most
     128 UTF-16 code units; empty means unavailable. Native discovery's existing
-    client-owned nickname behavior is retained for families that use it.
+    client-owned nickname behavior is retained for families that use it. Which
+    of these a family populates differs — a Flex publishes an empty `name`, and
+    the simulator an empty `nickname` — so a client renders the first nonempty
+    of `nickname`, `name`, `model`, and falls back to `serial`.
   - `transport`: `lan`, `usb`, or `sim`.
   - `address`, `port`: numeric IP address (at most 64 code units) and port
     1–65535 for LAN; empty address and zero port for USB/simulator.
@@ -187,7 +190,12 @@ Only `--discover-local` initializes the daemon's `AppSettings` store, before
 model/discovery consumers are constructed, so client-owned HL2/ANAN Identity
 nicknames remain available. This uses the normal settings load, migration,
 recovery and read-only protections; it does not create discovery entries from
-saved configuration. Passive and simulator-only startup do not load the store.
+saved configuration. The flag is not inert against the store, though: the
+daemon and the desktop share one store, so on a machine where the desktop has
+never run, `--discover-local` is what creates `AetherSDR.db` and claims the
+one-shot legacy migration. The store is loaded only after the daemon owns its
+local endpoint, so a daemon that fails to listen never touches it. Passive and
+simulator-only startup do not load the store at all.
 
 One adapter/source instance has one lifecycle. `start()` is idempotent;
 `stop()` is terminal, clears observations and ignores late callbacks. Disposal

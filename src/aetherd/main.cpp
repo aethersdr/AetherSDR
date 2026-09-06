@@ -40,6 +40,16 @@ int main(int argc, char* argv[])
     parser.addOption(controlOption);
     parser.process(app);
 
+    AetherSDR::control::LocalControlServer server(
+        nullptr, {}, nullptr, parser.isSet(controlOption));
+    if (!server.listen(parser.value(socketOption))) {
+        QTextStream(stderr) << "aetherd: cannot listen on local socket '"
+                            << parser.value(socketOption) << "'\n";
+        return 1;
+    }
+    // Claim the endpoint before settings or model construction: even the
+    // AppSettings singleton constructor can create directories/migrate paths.
+    // Native settings must then load before RadioModel snapshots its settings.
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
@@ -48,23 +58,20 @@ int main(int argc, char* argv[])
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
     if (parser.isSet(controlOption)) {
         connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
-        if (!connectionTarget) {
+        if (!connectionTarget || !server.bindConnectionTarget(connectionTarget.get())) {
             QTextStream(stderr) << "aetherd: cannot initialize connection control\n";
             return 1;
         }
     }
-    AetherSDR::control::LocalControlServer server(
-        nullptr, {}, connectionTarget.get(), parser.isSet(controlOption));
     AetherSDR::control::RadioCatalogue catalogue(
         std::move(discoverySource), &server.resourceStore());
     [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
         &radioSession.radioModel(), &server.resourceStore(),
         QStringLiteral("radio-1"), nullptr, connectionTarget.get());
-    if (!server.listen(parser.value(socketOption))) {
-        QTextStream(stderr) << "aetherd: cannot listen on local socket '"
-                            << parser.value(socketOption) << "'\n";
-        return 1;
-    }
     catalogue.start();
-    return app.exec();
+    const int result = app.exec();
+    // The server was constructed first; stop delivery before target/model
+    // teardown rather than relying on reverse local-variable destruction.
+    server.close();
+    return result;
 }

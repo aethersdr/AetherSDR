@@ -24,6 +24,10 @@ public:
     explicit ControlService(ControlResourceStore* resources,
                             RadioConnectionTarget* connectionTarget = nullptr);
 
+    // Trusted startup only: bind once, on the owning thread, before dispatch.
+    // This lets the daemon claim its endpoint before constructing any models.
+    [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
+
     [[nodiscard]] ServiceReply handle(
         const QByteArray& bytes, ControlSession* session) const;
 
@@ -40,6 +44,8 @@ private:
 
     ControlResourceStore* m_resources{nullptr};
     QPointer<RadioConnectionTarget> m_connectionTarget;
+    bool m_targetBound{false};
+    mutable bool m_dispatchStarted{false};
 };
 
 } // namespace AetherSDR::control

@@ -3,10 +3,14 @@
 #include <QCryptographicHash>
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QLoggingCategory>
 
 #include <utility>
 
 namespace AetherSDR::control {
+
+Q_LOGGING_CATEGORY(lcRadioCatalogue, "aether.control.catalogue")
+
 namespace {
 
 const ResourceAddress kCatalogue{QStringLiteral("radioCatalogue"), {}, {}};
@@ -52,7 +56,15 @@ RadioCatalogue::RadioCatalogue(std::unique_ptr<RadioDiscoverySource> source,
                                ControlResourceStore* resources, QObject* parent)
     : QObject(parent), m_source(std::move(source)), m_resources(resources)
 {
-    Q_ASSERT(m_source && m_resources && m_source->thread() == thread());
+    Q_ASSERT(m_source && m_resources);
+    // Reported in release builds too, the same way ControlSession refuses an
+    // off-thread transport binding: a Q_ASSERT vanishes in exactly the build
+    // where an embedder's off-thread source would drive start()/stop() across
+    // a thread boundary unnoticed.
+    if (m_source->thread() != thread()) {
+        qCWarning(lcRadioCatalogue)
+            << "Discovery source must live on the catalogue's owning thread";
+    }
     connect(m_source.get(), &RadioDiscoverySource::radioChanged, this, &RadioCatalogue::upsert);
     connect(m_source.get(), &RadioDiscoverySource::radioLost, this, &RadioCatalogue::remove);
     publish();
@@ -98,12 +110,31 @@ void RadioCatalogue::upsert(const DiscoveredRadio& radio)
     if ((!lan && radio.transport != QStringLiteral("usb") && radio.transport != QStringLiteral("sim"))
         || (lan && (QHostAddress(radio.address).isNull() || radio.port == 0))
         || (!lan && (!radio.address.isEmpty() || radio.port != 0))) {
+        // Every other reject above is a bounds violation on attacker-reachable
+        // text; this one is the shape a native adapter regression takes, and it
+        // is otherwise invisible — the family simply stops appearing, which
+        // reads exactly like "no radio on the LAN". Warn once per family, and
+        // log no serial or address: `family` is the only field validated above.
+        if (!m_endpointWarnings.contains(radio.family)
+            && m_endpointWarnings.size() < kMaxEntries) {
+            m_endpointWarnings.insert(radio.family);
+            qCWarning(lcRadioCatalogue).nospace()
+                << "Discarding " << radio.family
+                << " discovery observation: transport '" << radio.transport
+                << "' with port " << radio.port
+                << (radio.address.isEmpty() ? " and no address" : " and an address");
+        }
         return;
     }
     const QString key = identityKey(radio.family, radio.serial);
     if (!m_entries.contains(key) && m_entries.size() >= kMaxEntries) {
-        m_limited = true;
-        publish();
+        // Republishing an already-limited catalogue rebuilds the whole entry
+        // array for a value the store then deduplicates, once per dropped
+        // announcement. Disclose the first drop, then stay quiet.
+        if (!m_limited) {
+            m_limited = true;
+            publish();
+        }
         return;
     }
     const QString id = QString::fromLatin1(

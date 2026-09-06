@@ -36,6 +36,8 @@ public:
     ~LocalControlServer() override;
 
     [[nodiscard]] bool listen(const QString& name);
+    // Startup-only binding; never changes grants or replaces a lost target.
+    [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }

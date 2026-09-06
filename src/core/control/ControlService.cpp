@@ -113,9 +113,24 @@ DiscoveredRadio catalogueRadio(const QJsonObject& entry)
 
 ControlService::ControlService(ControlResourceStore* resources,
                                RadioConnectionTarget* connectionTarget)
-    : m_resources(resources), m_connectionTarget(connectionTarget)
+    : m_resources(resources), m_connectionTarget(connectionTarget),
+      m_targetBound(connectionTarget != nullptr)
 {
     Q_ASSERT(m_resources);
+}
+
+bool ControlService::bindConnectionTarget(RadioConnectionTarget* target)
+{
+    if (m_resources->thread() != QThread::currentThread()
+        || !target || target->thread() != QThread::currentThread()) {
+        return false;
+    }
+    if (m_targetBound || m_dispatchStarted) {
+        return false;
+    }
+    m_connectionTarget = target;
+    m_targetBound = true;
+    return true;
 }
 
 ServiceReply ControlService::handle(
@@ -127,6 +142,7 @@ ServiceReply ControlService::handle(
         return failure({}, {QStringLiteral("engine.failed"),
                             QStringLiteral("service owning thread required"), {}, false}, true);
     }
+    m_dispatchStarted = true;
     if (session->isRevoked()) {
         return failure({},
                        {QStringLiteral("auth.invalid"),

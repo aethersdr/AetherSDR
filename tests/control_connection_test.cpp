@@ -113,6 +113,39 @@ struct Fixture {
     }
 };
 
+void startupBinding()
+{
+    ControlResourceStore store;
+    ControlService service(&store);
+    Target target;
+    check(!service.bindConnectionTarget(nullptr), "null startup target is refused");
+    bool foreignAccepted = true;
+    std::unique_ptr<QThread> worker(QThread::create([&] {
+        foreignAccepted = service.bindConnectionTarget(&target);
+    }));
+    worker->start();
+    worker->wait();
+    check(!foreignAccepted, "startup binding requires the owning thread");
+    check(service.bindConnectionTarget(&target), "first startup binding succeeds");
+    check(!service.bindConnectionTarget(&target), "startup binding is one-shot");
+
+    ControlSession controller(&store, 4096, SessionAuthorization::Controller);
+    check(hello(service, controller).contains(QStringLiteral("result")),
+          "startup-bound service negotiates normally");
+    check(!service.bindConnectionTarget(&target), "negotiated service cannot be rebound");
+
+    ControlService dispatched(&store);
+    ControlSession malformed(&store, 4096, SessionAuthorization::Observer);
+    (void)dispatched.handle(QByteArrayLiteral("{"), &malformed);
+    check(!dispatched.bindConnectionTarget(&target),
+          "even malformed first dispatch permanently closes startup binding");
+
+    std::unique_ptr<Target> temporary = std::make_unique<Target>();
+    ControlService lost(&store, temporary.get());
+    temporary.reset();
+    check(!lost.bindConnectionTarget(&target), "target destruction does not reopen binding");
+}
+
 void authorization()
 {
     Fixture f;
@@ -317,6 +350,7 @@ void requestBudget()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    startupBinding();
     authorization();
     validationAndLifecycle();
     limitsAndLifetime();

@@ -1,4 +1,4 @@
-#include "core/discovery/RadioDiscoverySource.h"
+#include "core/backends/LocalRadioDiscoveryMapping.h"
 
 #include "core/RadioDiscovery.h"
 #include "core/RtlSdrDiscovery.h"
@@ -82,20 +82,7 @@ private:
             if (!m_running) {
                 return;
             }
-            DiscoveredRadio radio;
-            radio.family = family;
-            radio.serial = info.serial;
-            radio.name = info.name;
-            radio.model = info.model;
-            radio.nickname = info.nickname;
-            radio.version = info.version;
-            radio.transport = transport;
-            if (transport == QStringLiteral("lan")) {
-                radio.address = info.address.toString();
-                radio.port = info.port;
-            }
-            radio.inUse = info.inUse;
-            emit radioChanged(radio);
+            emit radioChanged(discovery::normalize(info, family, transport));
         };
         connect(source, &Source::radioDiscovered, this, changed);
         connect(source, &Source::radioUpdated, this, changed);

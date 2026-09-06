@@ -117,7 +117,8 @@ target_link_libraries(control_resource_service_test PRIVATE
     aethercore Qt6::Core)
 add_test(NAME control_resource_service_test COMMAND control_resource_service_test)
 
-# Socket-free catalogue/protocol tests: injected normalized discovery signals.
+# Socket-free catalogue/protocol tests: injected normalized discovery signals,
+# plus the native RadioInfo -> DiscoveredRadio projection table-tested per family.
 # QtNetwork is used only for QHostAddress validation, never a socket or peer.
 add_executable(radio_catalogue_test
     src/core/control/RadioConnectionTarget.h
@@ -161,11 +162,15 @@ add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
 # Socket-free daemon startup policy: a fresh child process reads isolated saved
 # nicknames through native static helpers; no discovery source is started with
 # local=true and no socket, USB scan or synthetic firmware peer is used.
+# Also launches the real daemon with an invalid logical endpoint name, which
+# must fail before binding a socket or constructing model/settings consumers.
 add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
 target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
 target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(aetherd_discovery_startup_test PRIVATE aethercore Qt6::Core)
-add_test(NAME aetherd_discovery_startup_test COMMAND aetherd_discovery_startup_test)
+add_dependencies(aetherd_discovery_startup_test aetherd)
+add_test(NAME aetherd_discovery_startup_test
+    COMMAND aetherd_discovery_startup_test $<TARGET_FILE:aetherd>)
 
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
@@ -3556,6 +3561,7 @@ if(UNIX)
     target_link_libraries(async_log_writer_test PRIVATE pthread)
 endif()
 set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
+add_test(NAME async_log_writer_test COMMAND async_log_writer_test)
 
 # Support & Diagnostics category toggle must enable Info alongside Debug
 # (#4419): most categories declare a QtWarningMsg threshold, and the filter
@@ -3589,6 +3595,7 @@ if(UNIX)
     target_link_libraries(issue_report_test PRIVATE pthread)
 endif()
 set_target_properties(issue_report_test PROPERTIES AUTOMOC ON)
+add_test(NAME issue_report_test COMMAND issue_report_test)
 
 add_executable(perf_telemetry_test
     tests/perf_telemetry_test.cpp

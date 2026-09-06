@@ -10,6 +10,7 @@
 #include <QLocalSocket>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QThread>
 #include <QTimer>
 
 #ifdef Q_OS_UNIX
@@ -67,6 +68,13 @@ LocalControlServer::LocalControlServer(QObject* parent, Limits limits,
 LocalControlServer::~LocalControlServer()
 {
     close();
+}
+
+bool LocalControlServer::bindConnectionTarget(RadioConnectionTarget* target)
+{
+    return thread() == QThread::currentThread() && m_clients.empty()
+        && m_localAuthorization == SessionAuthorization::ObserverController
+        && m_service.bindConnectionTarget(target);
 }
 
 bool LocalControlServer::listen(const QString& name)

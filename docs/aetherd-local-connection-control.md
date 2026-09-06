@@ -16,7 +16,11 @@ both, or neither; none can carry transmit.
 This flag does not discover or connect radios. The existing `--discover-local`
 and `--discover-sim` flags retain their independent meanings. Native discovery
 loads settings before model construction; passive and simulator-only startup
-do not. Icom manual setup, SmartLink and external directories remain excluded.
+do not load the store. Model construction can still initialize settings paths.
+The daemon binds its endpoint before either step, then binds the connection
+target once before request dispatch. A failed listen never constructs models
+or touches settings. Icom manual setup, SmartLink and external directories
+remain excluded.
 
 ## Methods
 
