@@ -1,44 +1,22 @@
-// `radio.connectState`, through the MODEL and the BRIDGE — not through the
-// policy header (#5416 review).
+// radio.connectState through the production model mapping and bridge snapshot.
+// The policy-only test cannot catch RadioModel feeding the policy a constant
+// false or a DSP-only input instead of the attempt lifecycle (#5416 review).
 //
-// The policy in ConnectStatePolicy.h is pure and covered by
-// connect_state_policy_test. That test cannot fail for the defect that mattered:
-// the reviewer mutated RadioModel's production wiring so the input was never
-// set, and every policy check stayed green. A pure function's test proves the
-// decision, never that the caller feeds it the right lifecycle.
-//
-// So this one asserts the mapping RadioModel actually performs, and that its
-// answer reaches `radioSnapshot()`. The scenario is the whole point of the
-// field (#5413 item 3): after `connectToRadio()` and before any link,
-// `connected` is false — exactly as it is when nothing is happening at all —
-// and only `connectState` separates the two.
-//
-// WHAT THIS OPENS, stated exactly rather than as "socket-free". The bridge half
-// really is: the line dispatcher is called directly through the existing test
-// friend, so no QLocalServer is created and nothing binds. The model half is
-// not. connectToRadio() builds the family's backend, and that backend opens an
-// outbound TCP connection — the first draft of this file pointed it at
-// 127.0.0.1:4992 and the log showed it dialling, which on a developer's machine
-// could have reached a real SmartSDR listener.
-//
-// So the target is 192.0.2.1, TEST-NET-1 (RFC 5737), which is reserved for
-// documentation and is not routable. The connect attempt cannot reach anything,
-// on this machine or off it. Nothing is bound, no discovery runs, no radio is
-// contacted, and nothing here can key a transmitter.
-//
-// The attempt flag is set synchronously inside connectToRadio(), before any of
-// that I/O could succeed, which is why an unreachable target is enough.
-
+// Inject the attempt input through RadioModel's existing private-state test
+// friendship, remove its unused backend, and read the real getters/dispatcher.
+// Cancellation and failure use the production handlers. No connectToRadio(),
+// network address, socket, listener, discovery, radio peer, or event-loop pump.
+// This covers the mapping and end edges; it does not claim to exercise the
+// request-edge assignment inside connectToRadio().
 #include "TestSettingsProfile.h"
-// AutomationServer holds QPointers to these; the complete types are needed for
-// its members to instantiate, as in the sibling automation tests.
+// AutomationServer's QPointer members require these complete types, even
+// though this test neither constructs an audio engine nor a recorder.
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
-#include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -46,8 +24,6 @@
 
 namespace AetherSDR {
 
-// handleLine() is private; the header already befriends this name for the
-// sibling automation tests.
 class AutomationServerTestAccess
 {
 public:
@@ -57,100 +33,96 @@ public:
     }
 };
 
-}  // namespace AetherSDR
+// Existing RadioModel test friendship, also used by icom_identity_test.
+struct RadioModelWakeTestAccess
+{
+    static void removeTransport(RadioModel& radio)
+    {
+        radio.teardownBackend();
+    }
+    static void beginAttempt(RadioModel& radio)
+    {
+        radio.m_connectAttemptActive = true;
+    }
+    static void failAttempt(RadioModel& radio)
+    {
+        radio.onConnectionError(QStringLiteral("injected connect failure"));
+    }
+    static bool hasTransportOrRetry(const RadioModel& radio)
+    {
+        return radio.m_backend || radio.m_connection || radio.m_wanConn
+            || radio.m_reconnectTimer.isActive();
+    }
+};
+
+} // namespace AetherSDR
 
 using namespace AetherSDR;
 
 namespace {
+int failures = 0;
 
-int g_failures = 0;
-
-void check(bool ok, const char* what)
+void check(bool ok, const char* message)
 {
-    std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", what);
+    std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", message);
     if (!ok) {
-        ++g_failures;
+        ++failures;
     }
 }
-
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("aether-connect-state-model-test"));
-
-    qputenv("AETHER_AUTOMATION", "1");
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "cannot create isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
-
-    check(profile.isValid(), "isolated settings profile is available");
-
-    AudioEngine engine;
     RadioModel radio;
+    RadioModelWakeTestAccess::removeTransport(radio);
     AutomationServer server;
-    server.setAudioEngine(&engine);
     server.setRadioModel(&radio);
 
-    // What the wire says, read the way a client reads it.
     const auto fromBridge = [&server] {
         const QJsonObject request{{QStringLiteral("cmd"), QStringLiteral("get")},
-                                  {QStringLiteral("model"), QStringLiteral("radio")}};
+                                 {QStringLiteral("model"), QStringLiteral("radio")}};
         const QJsonObject reply = AutomationServerTestAccess::handleLine(
             server, QJsonDocument(request).toJson(QJsonDocument::Compact));
-        return reply.value(QStringLiteral("radio"))
-            .toObject()
-            .value(QStringLiteral("connectState"))
-            .toString();
+        check(reply.value(QStringLiteral("ok")).toBool(), "bridge accepts direct radio get");
+        return reply.value(QStringLiteral("radio")).toObject();
+    };
+    const auto expectState = [&](const char* expected, bool attempt) {
+        check(!radio.isConnected(), "no live connection is created");
+        check(radio.isConnectAttemptInFlight() == attempt, "attempt input has expected state");
+        check(radio.connectState() == QLatin1String(expected), "model maps the attempt state");
+        const QJsonObject snapshot = fromBridge();
+        check(snapshot.contains(QStringLiteral("connected"))
+                  && !snapshot.value(QStringLiteral("connected")).toBool(),
+              "bridge preserves the existing disconnected bool");
+        check(snapshot.value(QStringLiteral("connectState")).toString() == QLatin1String(expected),
+              "bridge exposes the model's connect state");
+        check(!RadioModelWakeTestAccess::hasTransportOrRetry(radio),
+              "no backend, connection or reconnect timer exists");
     };
 
-    // ---- Nothing happening ------------------------------------------------
-    check(!radio.isConnected() && !radio.isConnectAttemptInFlight(),
-          "a fresh model has no link and no attempt");
-    check(radio.connectState() == QLatin1String("idle"),
-          "and reports idle");
-    check(fromBridge() == QLatin1String("idle"),
-          "the bridge snapshot carries the field — it exists on the wire");
+    expectState("idle", false);
 
-    // ---- THE WINDOW THE FIELD EXISTS FOR ----------------------------------
-    //
-    // `connected` is false here and false above. Nothing else in the snapshot
-    // separates a connect that is working from one that is not happening, which
-    // is the whole of #5413 item 3.
-    {
-        RadioInfo info;
-        info.family = QStringLiteral("sim");
-        info.name = QStringLiteral("Demo");
-        info.serial = QStringLiteral("SIM-0001");
-        info.address = QHostAddress(QStringLiteral("192.0.2.1"));   // TEST-NET-1
-        radio.connectToRadio(info);
+    // Model state injection reaches the actual production mapping. In
+    // particular, an attempt remains connecting without a DSP phase or link.
+    RadioModelWakeTestAccess::beginAttempt(radio);
+    expectState("connecting", true);
 
-        check(radio.isConnectAttemptInFlight(),
-              "connectToRadio() marks the attempt at the request edge (#4912)");
-        check(radio.connectState() == QLatin1String("connecting"),
-              "an attempt in flight reads connecting, NOT idle");
-        check(fromBridge() == QLatin1String("connecting"),
-              "and connecting is what the bridge reports");
-    }
+    radio.disconnectFromRadio();
+    expectState("idle", false);
 
-    // ---- Cancellation returns to idle, immediately -------------------------
-    //
-    // The inverted edge the review found in the first version: a DSP-only flag
-    // could stay true after the operator had left, because the build it tracked
-    // cannot be cancelled and the reset it relied on was not guaranteed to run.
-    // The attempt flag is cleared by disconnectFromRadio() itself.
-    {
-        radio.disconnectFromRadio();
-        check(!radio.isConnectAttemptInFlight(),
-              "abandoning the connect clears the attempt");
-        check(radio.connectState() == QLatin1String("idle"),
-              "and the state returns to idle rather than sticking at connecting");
-        check(fromBridge() == QLatin1String("idle"),
-              "the bridge agrees — no stale connecting for a session nobody is in");
-    }
+    // A failed attempt also ends without a link. Calling its production error
+    // handler catches a lost clear; an empty endpoint cannot schedule a retry.
+    RadioModelWakeTestAccess::beginAttempt(radio);
+    expectState("connecting", true);
+    RadioModelWakeTestAccess::failAttempt(radio);
+    expectState("idle", false);
 
-    if (g_failures == 0) {
-        std::printf("\nALL PASS\n");
-        return 0;
-    }
-    std::printf("\nFAILURES PRESENT\n");
-    return 1;
+    std::printf("\n%s\n", failures == 0 ? "ALL PASS" : "FAILURES PRESENT");
+    return failures == 0 ? 0 : 1;
 }

@@ -11,8 +11,8 @@
 // The first version of this field read a DSP-only flag, and mutating the
 // production wiring to leave that flag false left every check below green. The
 // production mapping — RadioModel::connectState() and the bridge snapshot — is
-// covered in tests/automation_connect_wait_phase_test.cpp instead, beside the
-// #4912 lifecycle it now derives from.
+// covered in tests/connect_state_model_test.cpp through injected model state
+// and the production cancellation/error handlers.
 
 #include "models/ConnectStatePolicy.h"
 

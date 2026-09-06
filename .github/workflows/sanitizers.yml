@@ -67,7 +67,7 @@ jobs:
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
             runtime_env: |
-              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1:suppressions=${{ github.workspace }}/tests/sanitizers/tsan.supp
+              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1
 
     steps:
       # The job's `container:` is pulled by the runner BEFORE any step runs, so
@@ -177,6 +177,50 @@ jobs:
           done <<'EOF'
           ${{ matrix.sanitizer.runtime_env }}
           EOF
+
+          # The suppressions path is appended HERE, not carried in the matrix's
+          # runtime_env, and both halves of that matter.
+          #
+          # `${{ github.workspace }}` evaluates to the EMPTY STRING when the
+          # matrix is expanded, so the option arrived as
+          # `suppressions=/tests/sanitizers/tsan.supp` — a path at the
+          # filesystem root. TSan refuses to start when it cannot read the file,
+          # so 337 of 344 tests "failed" in 6.14 s with no sanitizer report of
+          # any kind (run 33889703248). It failed loudly, which is the one good
+          # thing about it, but the lane measured nothing.
+          #
+          # $GITHUB_WORKSPACE (the environment variable) IS correct inside the
+          # container, but runtime_env is delivered through a QUOTED heredoc so
+          # nothing inside it expands — hence a separate line here, after the
+          # export loop, where the shell can see it.
+          if [ "${{ matrix.sanitizer.id }}" = "tsan" ]; then
+            supp="$GITHUB_WORKSPACE/tests/sanitizers/tsan.supp"
+            # Fail on a bad path rather than trusting TSan to notice. TSan does
+            # notice today, but a path that exists and is WRONG would silently
+            # suppress nothing, and a suppression file that is quietly not
+            # loaded is the same class of lie this lane exists to stop.
+            if [ ! -r "$supp" ]; then
+              echo "::error::TSan suppressions file not readable at $supp"
+              # Do NOT bare-exit. This step is continue-on-error, so an exit
+              # here does not end the job — it skips `tee sanitizer.log` and the
+              # outputs.exit write. The report chain then runs anyway ('' is
+              # != '0'), against a log that does not exist; the extract step's
+              # `sed` exits 2 under the default `bash -e`, and that takes the
+              # artifact upload AND the tracking issue with it. Red job, no
+              # artifact, nothing to read — strictly worse than the failure this
+              # guard replaces, which at least filed #5420. Leave the chain
+              # something to report (#5421 review).
+              {
+                echo "TSan suppressions file not readable at $supp"
+                echo "The lane did NOT run: the sanitizer runtime refuses to"
+                echo "start without it, so no result in this run is meaningful."
+              } > sanitizer.log
+              echo "exit=1" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            export TSAN_OPTIONS="${TSAN_OPTIONS}:suppressions=$supp"
+            echo "TSAN_OPTIONS=$TSAN_OPTIONS"
+          fi
           ec=0
           ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee sanitizer.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"

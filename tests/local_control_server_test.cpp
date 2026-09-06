@@ -21,6 +21,7 @@
 #include <functional>
 
 using AetherSDR::control::LocalControlServer;
+using AetherSDR::control::ControlSession;
 using AetherSDR::control::ProtocolLimits;
 
 namespace {
@@ -152,16 +153,27 @@ bool runProtocolTest()
     if (!check(!sessionId.isEmpty(), "hello must create a sessionId")
         || !check(grants.size() == 1 && contains(grants, QStringLiteral("observe")),
                   "server must grant observe only")
-        || !check(capabilities.size() == 1
-                      && contains(capabilities, QStringLiteral("server.read")),
-                  "server must advertise server.read only")
+        || !check(capabilities.size() == 7
+                      && contains(capabilities, QStringLiteral("server.read"))
+                      && contains(capabilities, QStringLiteral("radioSession.read"))
+                      && contains(capabilities, QStringLiteral("slice.read"))
+                      && contains(capabilities, QStringLiteral("panadapter.read"))
+                      && contains(capabilities, QStringLiteral("resource.get"))
+                      && contains(capabilities, QStringLiteral("resource.subscribe"))
+                      && contains(capabilities, QStringLiteral("resource.unsubscribe")),
+                  "server must advertise the implemented read-resource surface")
         || !check(!contains(capabilities, QStringLiteral("transmit"))
                       && !contains(capabilities, QStringLiteral("control")),
                   "server must not advertise control or transmit")
-        || !check(limits.size() == 1
-                      && limits.value(QStringLiteral("maxMessageBytes")).toInteger()
-                          == ProtocolLimits::kMaxMessageBytes,
-                  "server must advertise only its currently enforced protocol limit")) {
+        || !check(limits.value(QStringLiteral("maxMessageBytes")).toInteger()
+                          == ProtocolLimits::kMaxMessageBytes
+                      && limits.value(QStringLiteral("maxSubscriptions")).toInteger()
+                          == ControlSession::kMaxSubscriptions
+                      && limits.value(QStringLiteral("maxSelectorsPerSubscription")).toInteger()
+                          == 64
+                      && limits.value(QStringLiteral("maxQueuedOutputBytes")).toInteger()
+                          == LocalControlServer::kMaxQueuedOutputBytes,
+                  "server must advertise its enforced resource limits")) {
         return false;
     }
 
@@ -174,6 +186,54 @@ bool runProtocolTest()
     });
     if (!check(capabilityReply.value(QStringLiteral("result")).isObject(),
                "capabilities.get must succeed for the negotiated session")) {
+        return false;
+    }
+
+    const QJsonObject serverResource{{QStringLiteral("type"),
+                                      QStringLiteral("server")}};
+    const QJsonObject resourceReply = exchange(&socket, {
+        {QStringLiteral("v"), 1},
+        {QStringLiteral("id"), QStringLiteral("resource-1")},
+        {QStringLiteral("sessionId"), sessionId},
+        {QStringLiteral("method"), QStringLiteral("resource.get")},
+        {QStringLiteral("params"), QJsonObject{
+             {QStringLiteral("resource"), serverResource}}}
+    });
+    if (!check(resourceReply.value(QStringLiteral("result")).toObject()
+                   .value(QStringLiteral("value")).toObject()
+                   .value(QStringLiteral("localTransport")).toString()
+                   == QStringLiteral("listening"),
+               "resource.get must cross the local transport")) {
+        return false;
+    }
+
+    const QJsonObject subscribeReply = exchange(&socket, {
+        {QStringLiteral("v"), 1},
+        {QStringLiteral("id"), QStringLiteral("subscribe-1")},
+        {QStringLiteral("sessionId"), sessionId},
+        {QStringLiteral("method"), QStringLiteral("resource.subscribe")},
+        {QStringLiteral("params"), QJsonObject{
+             {QStringLiteral("resources"), QJsonArray{serverResource}}}}
+    });
+    const QJsonObject subscribeResult =
+        subscribeReply.value(QStringLiteral("result")).toObject();
+    if (!check(subscribeResult.value(QStringLiteral("resources")).toArray().size() == 1,
+               "resource.subscribe must return its atomic baseline")) {
+        return false;
+    }
+    const AetherSDR::control::ResourceAddress serverAddress{
+        QStringLiteral("server"), {}, {}};
+    QJsonObject updatedServer = server.resourceStore().get(serverAddress)->value;
+    updatedServer.insert(QStringLiteral("health"), QStringLiteral("test-update"));
+    server.resourceStore().upsert(serverAddress, updatedServer);
+    const QJsonObject event = readResponse(&socket);
+    if (!check(event.value(QStringLiteral("event")).toString()
+                   == QStringLiteral("resource.changed")
+                   && event.value(QStringLiteral("sequence")).toInteger() == 1
+                   && event.value(QStringLiteral("value")).toObject()
+                          .value(QStringLiteral("health")).toString()
+                          == QStringLiteral("test-update"),
+               "resource changes must be delivered asynchronously over the local transport")) {
         return false;
     }
 

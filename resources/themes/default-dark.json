@@ -93,6 +93,12 @@
             "average":  "{color.gray.400}",
             "grid":     "{color.gray.850}"
           },
+          "spe.lcd": {
+            "background": "#102010",
+            "foreground": "#d6f5d6",
+            "dim":        "#3a553a",
+            "bezel":      "#222822"
+          },
           "waterfall.colormap": {
             "default": {
               "type": "linear-gradient",

@@ -32,6 +32,7 @@
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "RfGainRestore.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
@@ -750,93 +751,27 @@ void MainWindow::wireRadioModel()
         if (!connected)
             failSafeMomentaryKeyingToRx("radio-disconnect");
     });
-    // Local microphone capture for a backend that MODULATES ON THE HOST.
-    //
-    // Capture is otherwise started only from the Flex DAX signals
-    // (txAudioStreamReady / remoteTxStreamReady, gated on mic_selection=PC),
-    // none of which a Hermes-Lite 2 ever emits. The consequence was subtle: no
-    // capture meant no txFinalMonitorPcmReady, and since the TONE generator is
-    // injected INSIDE that callback, neither the microphone NOR the test tone
-    // produced anything — the radio keyed and transmitted silence, with the
-    // radio's own forward-power counts reading 0 to prove it.
-    //
-    // startTxStream also opens the Flex-side network sender, but that stays
-    // inert here: the Opus encoder and the VITA-49 send are gated on a stream id
-    // this backend never sets, so what actually runs is capture plus the client
-    // TX DSP chain, which is exactly what submitTxAudio needs.
-    connect(&m_radioModel, &RadioModel::connectionStateChanged,
-            this, [this](bool connected) {
-        // Capability, not a family-name test: a backend host-modulates only if
-        // it says so AND is actually allowed to transmit. An RX-only (or
-        // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
-        const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        // TWO DIFFERENT QUESTIONS, and they were one flag until an Icom proved
-        // they are not. `hostModulates` is "does the HOST run the modulator";
-        // takesTxAudioOverSeam is "does transmit audio leave through the seam".
-        // An Icom answers no to the first and YES to the second — its own
-        // firmware modulates, from PCM this computer captures and ships.
-        //
-        // Everything below is about the AUDIO, so all of it keys off the
-        // second. Gating it on the first meant an Icom captured nothing,
-        // processed nothing and emitted nothing: the radio keyed and put no
-        // modulation on the air.
-        const bool seamTxAudio = caps.takesTxAudioOverSeam && caps.canTransmit;
-        m_audio->setHostModulation(seamTxAudio && connected);
-        // PC audio is not optional on a host-modulating backend: all audio, both
-        // directions, lives on this computer. Turning it off would leave the
-        // operator deaf and mute with nothing to explain it.
-        const bool pcAudioRequired = seamTxAudio && caps.hostModulates;
-        const bool pcAudioEnabled = pcAudioRequired
-            || AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-        if (m_titleBar) {
-            m_titleBar->setPcAudioLocked(connected && pcAudioRequired);
-        }
-        if (connected && seamTxAudio && pcAudioEnabled) {
-            if (!m_audio->isTxStreaming())
-                audioStartTx(m_radioModel.radioAddress(), 4991);
-            // RX must be started imperatively, exactly like TX. Locking the
-            // button calls setPcAudioEnabled(), which is signal-blocked, so no
-            // pcAudioToggled() fires and the toggle handler never opens the
-            // sink. The two setting-gated start paths (onConnected /
-            // profile-load) are skipped when a stale PcAudioEnabled=False is
-            // persisted, and the locked button can no longer be clicked to
-            // recover -- leaving the sink Stopped with the button showing ON.
-            // Persist the setting too, so those paths agree on the next launch.
-            if (pcAudioRequired) {
-                AppSettings::instance().setValue("PcAudioEnabled", "True");
-                AppSettings::instance().save();
-                audioStartRx();
-            }
-        } else if (seamTxAudio && m_audio->isTxStreaming()) {
-            audioStopTx();
-        }
-        // TELL THE BACKEND, DO NOT COMMAND IT. `pcAudioEnabled` comes from a
-        // client-persisted key; DATA OFF MOD is a SET-menu item the RADIO
-        // persists and recalls itself. Writing one from the other on the
-        // connect edge is the two-sources-of-truth fight Constitution III
-        // exists to prevent -- an operator who set DATA OFF MOD to USB for
-        // their rig interface would find it silently rewritten every session,
-        // with no dialog and no undo. Publishing the state instead lets the
-        // backend ADVISE on a mismatch (checkModInput) while the radio stays
-        // authoritative; only an operator click writes (setPcAudioEnabled).
-        if (connected) {
-            m_radioModel.notePcAudioEnabled(pcAudioEnabled);
-        }
-    });
+    // RadioModel publishes this on connect, disconnect, and late identity.
+    // A Network Radio Name must not decide whether the TX audio route starts.
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, &MainWindow::applyTxAudioCapabilities);
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
     // Radio configuration advice: shown, but it does NOT touch the session.
     // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
-    // 15 s rather than the usual 4: this one names a four-level menu path the
-    // operator has to walk on the radio's front panel while reading it.
+    // Advice belongs in the panel while it is open. Mid-session warnings need
+    // the visible status bar; its Connect control survives temporary messages.
     connect(&m_radioModel, &RadioModel::configurationWarning,
             this, [this](const QString& message) {
         qCWarning(lcProtocol).noquote() << "radio configuration:" << message;
-        statusBar()->showMessage(message, 15000);
+        if (m_connPanel->isVisible()) {
+            m_connPanel->setStatusText(message);
+        } else {
+            statusBar()->showMessage(message, 15000);
+        }
     });
-    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
-            this, [this](const QString& message) {
+    const auto showTerminalConnectionFailure = [this](const QString& message) {
         // A rejected GUI registration is terminal for this attempt. Keep the
         // reason visible, suppress both LAN and WAN automatic reconnect loops,
         // and let the operator retry normally after freeing a radio slot.
@@ -851,9 +786,20 @@ void MainWindow::wireRadioModel()
             reconnectDialog->close();
             reconnectDialog->deleteLater();
         }
-    });
+    };
+    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
+            this, showTerminalConnectionFailure);
+    connect(&m_radioModel, &RadioModel::radioWakeFailed,
+            this, showTerminalConnectionFailure);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
             this, &MainWindow::onWanCertFingerprintMismatch);
+    connect(&m_radioModel, &RadioModel::radioWakeProgress, this,
+            [this](const QString& message, bool active) {
+        m_connPanel->setStatusText(message);
+        m_connStatusLabel->setText(active ? tr("Connecting") : message);
+        setPanadapterConnectionAnimation(active, message);
+
+    });
     connect(&m_radioModel, &RadioModel::forcedDisconnectRequested,
             this, [this] {
         const bool wasWan = m_radioModel.isWan();
@@ -1386,7 +1332,7 @@ void MainWindow::wireRadioModel()
         m_appletPanel->meterApplet()->setTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
-            m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
+            m_appletPanel->phoneCwApplet()->resetAlc();
         }
         if (tx) {
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
@@ -1722,19 +1668,15 @@ void MainWindow::wirePanLifecycle()
             const bool clientOwnsRfGain =
                 m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
                     RadioCapabilities::ClientSettingsDomain::RfGain);
-            // Flex deliberately declares no client-owned RF-gain domain: the
-            // radio persists and reports its pan gain. Sim likewise regenerates
-            // its scene. Only a backend that explicitly delegates this domain
-            // (currently HL2) may receive a saved client replay.
-            const bool restoreSavedRfGain = clientOwnsRfGain && haveSavedRfGain;
             PanadapterModel* activePan = m_radioModel.activePanadapter();
-            const int rfGain = restoreSavedRfGain
-                ? s.value(rfGainKey).toInt()
-                : (activePan ? activePan->rfGain() : 0);
             m_radioModel.setPanWnb(wnbOn);
             m_radioModel.setPanWnbLevel(wnbLevel);
-            if (restoreSavedRfGain)
-                m_radioModel.setPanRfGain(rfGain);
+            const int rfGain = restoreLegacyRfGain(
+                m_radioModel.backendCapabilities().family, clientOwnsRfGain,
+                haveSavedRfGain ? std::optional<int>(s.value(rfGainKey).toInt())
+                               : std::nullopt,
+                activePan ? activePan->rfGain() : 0,
+                [this](int gain) { m_radioModel.setPanRfGain(gain); });
             sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
@@ -2794,6 +2736,33 @@ void MainWindow::setAutomationReadOnly(bool readOnly)
     // immediately — no restart needed to arm or lift the gate.
     if (m_automation)
         m_automation->setReadOnly(readOnly);
+}
+
+void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps)
+{
+    const bool pcAudioRequired = caps.takesTxAudioOverSeam
+        && caps.canTransmit && caps.hostModulates;
+    auto& settings = AppSettings::instance();
+    const bool savedPcAudio = settings.value("PcAudioEnabled", "True").toString() == "True";
+    const bool pcAudioEnabled = pcAudioRequired || savedPcAudio;
+    if (m_titleBar) {
+        m_titleBar->setPcAudioLocked(connected && pcAudioRequired);
+    }
+    if (connected && pcAudioRequired && !savedPcAudio) {
+        settings.setValue("PcAudioEnabled", "True");
+        settings.save();
+    }
+    // Evaluate stream state on the audio thread, after any preceding update.
+    // Repeated capabilities must not enqueue duplicate capture starts.
+    AudioEngine* audio = m_audio;
+    const QHostAddress address = m_radioModel.radioAddress();
+    QMetaObject::invokeMethod(audio, [audio, connected, caps, pcAudioEnabled, address] {
+        audio->applyBackendAudioCapabilities(connected, caps, pcAudioEnabled, address);
+    });
+    if (connected) {
+        // Observation only: never restore a client setting into DATA OFF MOD.
+        m_radioModel.notePcAudioEnabled(pcAudioEnabled);
+    }
 }
 
 } // namespace AetherSDR

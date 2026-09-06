@@ -26,7 +26,10 @@
 // gated on the radio.
 
 #include "gui/PhoneCwApplet.h"
+#include "gui/AgcModeAvailability.h"
+#include "gui/HGauge.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QApplication>
 #include <QLineEdit>
@@ -63,7 +66,18 @@ public:
 
 int main(int argc, char** argv)
 {
+    qputenv("AETHER_AUTOMATION", "1");
     QApplication app(argc, argv);
+
+    QComboBox agc;
+    agc.addItems({"Off", "Slow", "Med", "Fast"});
+    AetherSDR::setAgcModeAvailability(&agc, {"slow", "med", "fast"});
+    check("unsupported AGC Off is disabled", !AetherSDR::currentAgcModeAvailable(&agc));
+    agc.setCurrentIndex(3);
+    check("implemented AGC Fast remains available", AetherSDR::currentAgcModeAvailable(&agc));
+    AetherSDR::setAgcModeAvailability(&agc, {"off", "slow", "med", "fast"});
+    agc.setCurrentIndex(0);
+    check("next capable session restores AGC Off", AetherSDR::currentAgcModeAvailable(&agc));
 
     PhoneCwApplet applet;
     ProbeSlice sliceA(0);
@@ -77,6 +91,101 @@ int main(int argc, char** argv)
     if (!apfBtn || !apfSlider || !apfRow) {
         return 1;   // nothing below can run
     }
+
+    QWidget* compression = nullptr;
+    QWidget* alcPhone = nullptr;
+    QWidget* alcCw = nullptr;
+    for (QWidget* widget : applet.findChildren<QWidget*>()) {
+        if (widget->accessibleName() == "Compression gauge") {
+            compression = widget;
+        }
+        if (widget->accessibleName() == "ALC gauge (Phone)") {
+            alcPhone = widget;
+        }
+        if (widget->accessibleName() == "ALC gauge (CW)") {
+            alcCw = widget;
+        }
+    }
+    check("meter widgets are discoverable", compression && alcPhone && alcCw);
+    if (!compression || !alcPhone || !alcCw) {
+        return 1;
+    }
+    applet.setCompressionMaximumDb(30.0f);
+    applet.updateCompression(30.0f);
+    check("30dB compression reaches the complete gauge range",
+          compression->property("gaugeMin").toFloat() == -30.0f
+              && compression->property("gaugeValue").toFloat() == -30.0f);
+    applet.setCompressionMaximumDb(25.0f);
+    applet.updateCompression(30.0f);
+    check("Flex compression face restores its25dB bound",
+          compression->property("gaugeMin").toFloat() == -25.0f
+              && compression->property("gaugeValue").toFloat() == -25.0f);
+    applet.setAlcMeterUnit("Percent");
+    applet.updateAlc(37.5f);
+    for (QWidget* gauge : {alcPhone, alcCw}) {
+        check("ALC mirrors display native percent with fractional precision",
+              gauge->property("gaugeMin").toFloat() == 0.0f
+                  && gauge->property("gaugeMax").toFloat() == 100.0f
+                  && gauge->property("gaugeValue").toFloat() == 37.5f
+                  && gauge->property("gaugeUnit").toString() == "%");
+    }
+    auto* animatedAlc = static_cast<AetherSDR::HGauge*>(alcPhone);
+    animatedAlc->setValueImmediate(37.5f);
+    applet.resetAlc();
+    check("unkey retains the established ALC decay instead of snapping",
+          animatedAlc->filledFraction() > 0.0f);
+    check("percent ALC resets to0at unkey", alcPhone->property("gaugeValue").toFloat() == 0.0f);
+    applet.setAlcMeterUnit("dBFS");
+    applet.updateAlc(-8.5f);
+    check("Flex/HL2 session restores native dBFS scale and value",
+          alcPhone->property("gaugeMin").toFloat() == -20.0f
+              && alcPhone->property("gaugeMax").toFloat() == 0.0f
+              && alcPhone->property("gaugeValue").toFloat() == -8.5f
+              && alcPhone->property("gaugeUnit").toString() == "dBFS");
+
+    // Capability changes clamp the editor without sending unsolicited writes.
+    AetherSDR::TransmitModel tx;
+    applet.setTransmitModel(&tx);
+    QSignalSpy cwCommands(&tx, &AetherSDR::TransmitModel::commandReady);
+    QSlider* speed = nullptr;
+    QLineEdit* pitch = nullptr;
+    QLineEdit* speedText = nullptr;
+    for (QSlider* slider : applet.findChildren<QSlider*>()) {
+        if (slider->accessibleName() == QStringLiteral("CW speed")) {
+            speed = slider;
+        }
+    }
+    for (QLineEdit* editor : applet.findChildren<QLineEdit*>()) {
+        if (editor->accessibleName() == QStringLiteral("CW speed value")) {
+            speedText = editor;
+        }
+        if (editor->accessibleName() == QStringLiteral("CW pitch frequency")) {
+            pitch = editor;
+        }
+    }
+    check("CW controls are accessible", speed && pitch && speedText);
+    if (!speed || !pitch || !speedText) {
+        return 1;
+    }
+    speed->setValue(60);
+    cwCommands.clear();
+    applet.setCwControlLimits(6, 48, 300, 900, 5);
+    check("capability clamp reconciles speed slider and text",
+          speed->value() == 48 && speedText->text() == QStringLiteral("48"));
+    check("Icom CW speed endpoints", speed->minimum() == 6 && speed->maximum() == 48);
+    check("changing CW capabilities emits no command", cwCommands.isEmpty());
+    pitch->setText(QStringLiteral("950"));
+    QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
+    check("pitch text commits at the radio maximum", tx.cwPitch() == 900);
+    pitch->setText(QStringLiteral("250"));
+    QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
+    check("pitch text commits at the radio minimum", tx.cwPitch() == 300);
+    applet.setCwControlLimits(5, 100, 100, 6000, 10);
+    check("subsequent Flex session restores CW speed endpoints",
+          speed->minimum() == 5 && speed->maximum() == 100);
+    pitch->setText(QStringLiteral("1500"));
+    QMetaObject::invokeMethod(pitch, "editingFinished", Qt::DirectConnection);
+    check("subsequent Flex session restores pitch range", tx.cwPitch() == 1500);
 
     // ── §1  Unbound, then bound ─────────────────────────────────────────────
     std::printf("\nSection 1 — binding\n");
