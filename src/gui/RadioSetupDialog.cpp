@@ -9296,13 +9296,13 @@ QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
+    auto& theme = AetherSDR::ThemeManager::instance();
     auto* group = new QGroupBox("Hermes Lite 2 Options");
-    group->setStyleSheet(kGroupStyle);
+    theme.applyStyleSheet(group, kGroupStyle);
     auto* grid = new QGridLayout(group);
     grid->setHorizontalSpacing(16);
     grid->setVerticalSpacing(10);
 
-    auto& theme = AetherSDR::ThemeManager::instance();
     auto makeCheck = [&theme](const QString& text, const QString& accessibleDesc) {
         auto* cb = new QCheckBox(text);
         theme.applyStyleSheet(cb,
@@ -9353,7 +9353,7 @@ QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
     grid->addWidget(swapCheck, 3, 0);
 
     auto* latencyLabel = new QLabel(QStringLiteral("TX Latency"));
-    latencyLabel->setStyleSheet(kLabelStyle);
+    theme.applyStyleSheet(latencyLabel, kLabelStyle);
     grid->addWidget(latencyLabel, 0, 1);
     auto* latencySpin = new QSpinBox;
     latencySpin->setRange(0, Hl2MiscOptionsSettings::kTxLatencyMax);
@@ -9366,7 +9366,7 @@ QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
     grid->addWidget(latencySpin, 0, 2);
 
     auto* hangLabel = new QLabel(QStringLiteral("PTT Hang"));
-    hangLabel->setStyleSheet(kLabelStyle);
+    theme.applyStyleSheet(hangLabel, kLabelStyle);
     grid->addWidget(hangLabel, 1, 1);
     auto* hangSpin = new QSpinBox;
     hangSpin->setRange(0, Hl2MiscOptionsSettings::kPttHangMax);
@@ -9402,7 +9402,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
 
     // ---- pin states: read-only, populated by the 1 Hz auto-poll below ----
     auto* pinGroup = new QGroupBox(QStringLiteral("I/O Board Pin States"));
-    pinGroup->setStyleSheet(kGroupStyle);
+    theme.applyStyleSheet(pinGroup, kGroupStyle);
     auto* pinLayout = new QGridLayout(pinGroup);
     pinLayout->setHorizontalSpacing(6);
 
@@ -9410,7 +9410,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     auto makeReadOnlyRow = [&theme](QGridLayout* grid, int row, const QString& label,
                                     int count, QVector<QCheckBox*>& out) {
         auto* lbl = new QLabel(label);
-        lbl->setStyleSheet(kLabelStyle);
+        theme.applyStyleSheet(lbl, kLabelStyle);
         grid->addWidget(lbl, row, 0);
         for (int i = 0; i < count; ++i) {
             auto* cb = new QCheckBox;
@@ -9426,7 +9426,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
 
     // ---- generic I2C control ----
     auto* i2cGroup = new QGroupBox(QStringLiteral("I2C Control"));
-    i2cGroup->setStyleSheet(kGroupStyle);
+    theme.applyStyleSheet(i2cGroup, kGroupStyle);
     auto* i2cGrid = new QGridLayout(i2cGroup);
     i2cGrid->setHorizontalSpacing(10);
     i2cGrid->setVerticalSpacing(8);
@@ -9458,7 +9458,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
 
     auto makeLabeledSpin = [&](const QString& text, int row, int max = 0xFF) {
         auto* lbl = new QLabel(text);
-        lbl->setStyleSheet(kLabelStyle);
+        theme.applyStyleSheet(lbl, kLabelStyle);
         i2cGrid->addWidget(lbl, row, 0);
         auto* spin = new QSpinBox;
         spin->setRange(0, max);
@@ -9484,7 +9484,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     controlSpin->setValue(0x08);
 
     auto* resultLabel = new QLabel(QStringLiteral("—"));
-    resultLabel->setStyleSheet(kValueStyle);
+    theme.applyStyleSheet(resultLabel, kValueStyle);
     resultLabel->setAccessibleName(QStringLiteral("I2C result"));
     i2cGrid->addWidget(new QLabel(QStringLiteral("Result")), 5, 0);
     i2cGrid->addWidget(resultLabel, 5, 1);
@@ -9792,12 +9792,12 @@ QWidget* RadioSetupDialog::buildFilterBoardTab()
     // already known locally; polling here is just reading our own state
     // through the seam, not a wire round trip.
     auto* hwStateGroup = new QGroupBox(QStringLiteral("Hardware Pin State"));
-    hwStateGroup->setStyleSheet(kGroupStyle);
+    theme.applyStyleSheet(hwStateGroup, kGroupStyle);
     auto* hwStateLayout = new QHBoxLayout(hwStateGroup);
     QVector<QCheckBox*> hwPins;
     for (int pin = 1; pin <= 7; ++pin) {
         auto* lbl = new QLabel(QString::number(pin));
-        lbl->setStyleSheet(kLabelStyle);
+        theme.applyStyleSheet(lbl, kLabelStyle);
         hwStateLayout->addWidget(lbl);
         auto* cb = new QCheckBox;
         cb->setEnabled(false);   // reflects live state; never operator-set directly
