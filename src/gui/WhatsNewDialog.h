@@ -24,13 +24,18 @@ public:
     // If lastSeen is empty (first install), uses a welcome heading.
     // currentVersionOnly is used by Help -> What's New so it is not treated
     // as a first-run welcome.
+    // useLatestRelease fetches the repo's newest published release instead of
+    // the release tagged for currentVersion — used by Help -> What's New, where
+    // the running build's exact version may not have a published GitHub release
+    // yet (dev builds, point releases, release lag) and the tag lookup 404s.
     explicit WhatsNewDialog(const QString& lastSeenVersion,
                             const QString& currentVersion,
                             QWidget* parent = nullptr,
                             bool showUpgrade = false,
-                            bool currentVersionOnly = false);
+                            bool currentVersionOnly = false,
+                            bool useLatestRelease = false);
 
-    // Show all entries for the current version (for Help menu).
+    // Show the newest published release notes (for Help menu).
     static WhatsNewDialog* showAll(QWidget* parent);
 
 private:
@@ -51,6 +56,7 @@ private:
     QString m_currentVersion;
     QString m_lastFindText;
     bool m_isWelcome{false};
+    bool m_useLatestRelease{false};
 
     QPointer<QTextBrowser> m_browser;
     QPointer<QLabel> m_statusLabel;
