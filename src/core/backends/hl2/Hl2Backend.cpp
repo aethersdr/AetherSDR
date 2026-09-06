@@ -8,6 +8,7 @@
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -52,6 +53,14 @@ struct Hl2Backend::PendingConnect {
     // m_connectGeneration; a build whose generation is stale on completion
     // tears itself down instead of starting a wire nobody asked for.
     quint64 generation = 0;
+    // How long this phase has been running. Belongs to the connect rather than
+    // to the backend so a superseded build cannot report the new one's elapsed.
+    QElapsedTimer clock;
+    // Set when the phase watchdog has already released the caller with a
+    // dspSetupFinished(). The build is still running and finishDspSetup() will
+    // reach its stale branch later; this stops that branch emitting a second
+    // end-of-phase edge for one connect.
+    bool finishSignalled = false;
 };
 
 // What the I/O thread carries back. Parallel arrays indexed by DDC rather than
@@ -2002,6 +2011,13 @@ void Hl2Backend::beginDspSetup()
     }
 
     emit dspSetupProgress(tr("Preparing the receive chain…"), 0, total);
+    // MIRRORED TO THE LOG, because dspSetupProgress has exactly one consumer in
+    // the tree and it is MainWindow — so the phase is visible to an operator
+    // watching a dialog and invisible to everyone else, which is why a headless
+    // run showed nothing between here and the wire. (#5413.)
+    qCInfo(lcHl2) << "HL2 DSP setup: opening" << total << "receive chain(s)";
+    m_pendingConnect->clock.start();
+    armDspSetupWatchdog();
 
     const Hl2TxDsp::Config tc = m_pendingConnect->tc;
     Hl2TxDsp* txDsp = m_txDsp;
@@ -2066,10 +2082,92 @@ void Hl2Backend::beginDspSetup()
     }, Qt::QueuedConnection);
 }
 
+void Hl2Backend::armDspSetupWatchdog()
+{
+    if (!m_dspSetupWatchdog) {
+        m_dspSetupWatchdog = new QTimer(this);
+        m_dspSetupWatchdog->setSingleShot(true);
+        connect(m_dspSetupWatchdog, &QTimer::timeout, this,
+                &Hl2Backend::onDspSetupWatchdog);
+    }
+    m_dspSetupWatchdog->start(
+        static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(0)));
+}
+
+void Hl2Backend::onDspSetupWatchdog()
+{
+    if (!m_pendingConnect) {
+        return;               // finished between the fire and this slot
+    }
+    const qint64 elapsed = m_pendingConnect->clock.elapsed();
+    switch (AetherSDR::hl2::dspSetupAction(elapsed)) {
+    case AetherSDR::hl2::DspSetupAction::None:
+        // Fired early (a timer can). Look again at the point that matters.
+        m_dspSetupWatchdog->start(
+            static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(elapsed)));
+        return;
+    case AetherSDR::hl2::DspSetupAction::Warn:
+        // NOT a failure. A machine's first WDSP open measures its FFT plans
+        // rather than loading them and is legitimately slow (#5052) — 98 s on a
+        // quiet machine, 188 s under load — so this says so and keeps waiting;
+        // the alternative is failing a connect that is working. It repeats,
+        // because the wait it is reporting can be minutes long.
+        qCWarning(lcHl2) << "HL2 DSP setup: still opening after" << elapsed
+                         << "ms — a first open on this machine can be slow;"
+                         << "will fail at"
+                         << AetherSDR::hl2::kDspSetupFailMs / 1000 << "s";
+        m_dspSetupWatchdog->start(
+            static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(elapsed)));
+        return;
+    case AetherSDR::hl2::DspSetupAction::Fail:
+        break;
+    }
+
+    qCWarning(lcHl2) << "HL2 DSP setup: gave up after" << elapsed << "ms";
+
+    // INVALIDATE, DO NOT TEAR DOWN. The I/O thread may be inside configure() on
+    // these very chains — WDSP's OpenChannel does not return early, so the build
+    // cannot be cancelled — and freeing them from this thread would be a
+    // use-after-free. So do exactly what disconnectRadio() does: bump the
+    // generation and LEAVE m_pendingConnect SET. The build runs to completion,
+    // finishDspSetup() takes its stale branch, and that branch is what releases
+    // the chains and re-drives anything queued behind them.
+    //
+    // Resetting pending here instead would disable the very mechanism this
+    // comment relies on: finishDspSetup() would return at its
+    // `if (!m_pendingConnect)` guard, tearDownReceivers() would never run, and
+    // every timed-out connect would leak its WDSP channels out of the 32-slot
+    // pool. Worse, connectRadio() queues behind an in-flight build only while
+    // m_pendingConnect is set, so a retry after this error would call
+    // buildReceivers() on the chains the I/O thread is still opening — a
+    // use-after-free reached by the ordinary "connect failed, try again"
+    // gesture. (#5413 triage; #5415 review.)
+    ++m_connectGeneration;
+    // Before the emits, not after: a connectionError handler can re-enter this
+    // object, and the stale branch must see this flag whatever it does.
+    m_pendingConnect->finishSignalled = true;
+    emit connectionError(
+        tr("Hermes-Lite 2: the DSP setup did not finish within %1 seconds")
+            .arg(AetherSDR::hl2::kDspSetupFailMs / 1000));
+    // So a caller waiting on the phase is released rather than left hanging on
+    // a signal that now never comes. The build is still running; the flag above
+    // keeps the stale branch from emitting this a second time.
+    emit dspSetupFinished();
+}
+
 void Hl2Backend::finishDspSetup(const DspSetupResult& result)
 {
-    if (!m_pendingConnect)
+    // Stopped on EVERY exit below, including the two early returns — a timer
+    // left running past the phase it measures would fail a connect that had
+    // already succeeded.
+    if (m_dspSetupWatchdog) {
+        m_dspSetupWatchdog->stop();
+    }
+    if (!m_pendingConnect) {
         return;
+    }
+    qCInfo(lcHl2) << "HL2 DSP setup: chains open after"
+                  << m_pendingConnect->clock.elapsed() << "ms";
     // A disconnect, or a second connect, arrived while the chains were opening.
     // The wire was never started, so there is nothing to stop — but the chains
     // ARE open, and leaving them open would leak WDSP channels out of the
@@ -2077,11 +2175,16 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     if (m_pendingConnect->generation != m_connectGeneration) {
         qCInfo(lcHl2) << "HL2: connect superseded while the DSP was opening —"
                       << "releasing the chains it built";
+        // Read before the reset: the phase watchdog may already have ended the
+        // phase for a caller that could not wait for this moment.
+        const bool alreadyFinished = m_pendingConnect->finishSignalled;
         m_pendingConnect.reset();
         // Safe to block inside here: the build has finished, so the I/O thread
         // is back at its event loop and publishIoDsps() returns promptly.
         tearDownReceivers();
-        emit dspSetupFinished();
+        if (!alreadyFinished) {
+            emit dspSetupFinished();
+        }
         // A connect that arrived mid-build has been waiting for exactly this.
         if (m_queuedConnect) {
             const RadioConnectRequest queued = *m_queuedConnect;
@@ -2208,6 +2311,11 @@ void Hl2Backend::disconnectRadio()
     // cancelled — WDSP's OpenChannel does not return early — so it runs to
     // completion on the I/O thread and finishDspSetup() releases what it built.
     ++m_connectGeneration;
+    // The phase watchdog goes with it: the operator has left, so a later fire
+    // would report a failure for a connect nobody is waiting on.
+    if (m_dspSetupWatchdog) {
+        m_dspSetupWatchdog->stop();
+    }
     // And a connect PARKED BEHIND that build is stale for the same reason: the
     // operator has since asked to be disconnected. Leaving it here made
     // finishDspSetup()'s supersede branch re-drive it — a second full build
