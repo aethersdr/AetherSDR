@@ -3043,18 +3043,40 @@ void Hl2Backend::setPanRfGain(const QString& panId, int gainDb)
     if (ddcForPan(panId) < 0)
         return;
     const int clamped = qBound(kLnaGainMinDb, gainDb, kLnaGainMaxDb);
-    if (clamped == m_lnaGainDb)
-        return;
-    applyLnaGainDb(clamped);
-    qCInfo(lcHl2) << "HL2 LNA gain:" << m_lnaGainDb << "dB (requested" << gainDb << ")";
+
+    // ONLY the register write is redundant when the value has not moved. The
+    // equality check used to return above everything below it, which made an
+    // operator who set exactly the value already live invisible to the band
+    // memory — and the one value guaranteed to be already live is the one a
+    // connect param pinned. 20 m stored at -12, connect with lnaGainDb=20, and
+    // the operator still on 20 m deliberately setting 20 ended no pin and
+    // recorded no band, so the snapshot kept persisting -12. (#5402 review.)
+    const bool moved = (clamped != m_lnaGainDb);
+    if (moved) {
+        applyLnaGainDb(clamped);
+        qCInfo(lcHl2) << "HL2 LNA gain:" << m_lnaGainDb << "dB (requested" << gainDb << ")";
+    }
 
     // The operator's gain belongs to the band they set it on (RFC #4603 PR 3).
     // This is also what ends a session pin: the value is now the operator's
     // own choice for this band, so the band memory is theirs to overwrite.
+    // Choosing the value the session was pinned to is still choosing it.
+    const bool endedPin = m_lnaSessionPin;
     m_lnaSessionPin = false;
-    if (!m_currentBandKey.isEmpty())
-        m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
-    notifyOperatingStateChanged();
+    bool recordedBand = false;
+    if (!m_currentBandKey.isEmpty()) {
+        const auto stored = m_lnaDbByBand.constFind(m_currentBandKey);
+        if (stored == m_lnaDbByBand.constEnd() || *stored != m_lnaGainDb) {
+            m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
+            recordedBand = true;
+        }
+    }
+    // A slider that moved nothing, ended no pin and changed no stored entry has
+    // nothing to persist; notifying anyway would schedule a debounced store for
+    // a no-op. Any of the three actually changing still notifies as before.
+    if (moved || endedPin || recordedBand) {
+        notifyOperatingStateChanged();
+    }
 }
 
 void Hl2Backend::applyPanBandwidth(double hz)
