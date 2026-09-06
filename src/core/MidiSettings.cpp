@@ -485,7 +485,7 @@ QString MidiSettings::settingsFilePath() const
            + "/AetherSDR/midi.settings";
 }
 
-QString MidiSettings::profileDir() const
+QString MidiSettings::profileDir()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
            + "/AetherSDR/midi";
@@ -599,15 +599,30 @@ QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
     return result;
 }
 
-void MidiSettings::writeBindingsToXml(const QString& filePath,
-                                       const QVector<MidiBinding>& bindings)
+bool MidiSettings::writeBindingsToXml(const QString& filePath,
+                                      const QVector<MidiBinding>& bindings)
 {
     QDir().mkpath(QFileInfo(filePath).absolutePath());
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    // QSaveFile writes beside the target and renames over it on commit(), so
+    // a failure (unwritable store, full disk) leaves the previous profile
+    // intact instead of a truncated file — the outcome the caller then
+    // reports is true of the disk (Principle XIV). commit() flushes and
+    // returns false on a write error; hasError() covers a failure the stream
+    // writer saw earlier in the document. (#5077)
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
 
-    QXmlStreamWriter xml(&file);
-    writeProfileDocument(xml, bindings);
+    // Writer scoped so the document is complete before commit() — same shape
+    // as exportProfile(), so it doesn't rest on the writer's destructor order.
+    {
+        QXmlStreamWriter xml(&file);
+        writeProfileDocument(xml, bindings);
+        if (xml.hasError()) {
+            file.cancelWriting();
+            return false;
+        }
+    }
+    return file.commit();
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────
@@ -656,13 +671,29 @@ QStringList MidiSettings::availableProfiles() const
     return result;
 }
 
-void MidiSettings::saveProfile(const QString& name,
+bool MidiSettings::profileExists(const QString& name)
+{
+    if (!isValidProfileName(name)) {
+        return false;
+    }
+    return QFile::exists(profileDir() + "/" + name + ".xml");
+}
+
+bool MidiSettings::saveProfile(const QString& name,
                                 const QVector<MidiBinding>& bindings)
 {
     if (!isValidProfileName(name)) {
-        return;
+        return false;
     }
-    writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
+    // Refused for the same reason exportProfile() refuses it: an empty set
+    // serializes to a childless <MidiProfile/> that loadProfile() reports as
+    // empty-or-missing, so "saved" would be untrue of what comes back — and
+    // Clear All → Save would otherwise replace a profile with nothing.
+    // importProfile() already guards this before it gets here. (#5077)
+    if (bindings.isEmpty()) {
+        return false;
+    }
+    return writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
 }
 
 QVector<MidiBinding> MidiSettings::loadProfile(const QString& name) const
@@ -793,11 +824,9 @@ MidiImportResult MidiSettings::importProfile(
     for (int n = 2; taken(unique); ++n)
         unique = name + QStringLiteral(" (%1)").arg(n);
 
-    saveProfile(unique, bindings);
-
-    // The write path returns void, so prove the store took it before
-    // reporting success.
-    if (loadProfile(unique).size() != bindings.size()) {
+    // The write reports failure itself (#5077); the read-back additionally
+    // proves the stored document carries every binding before reporting success.
+    if (!saveProfile(unique, bindings) || loadProfile(unique).size() != bindings.size()) {
         result.errors << QStringLiteral("Couldn't write the profile into %1.")
                              .arg(QDir::toNativeSeparators(profileDir()));
         result.importedCount = 0;

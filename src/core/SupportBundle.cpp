@@ -3,6 +3,8 @@
 #include "SettingsSanitizer.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
+#include "SystemInventory.h"
+#include "GpuSelector.h"
 #include "ZipArchive.h"
 #include "models/RadioModel.h"
 
@@ -68,7 +70,10 @@ SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
         QSysInfo::prettyProductName(),
         QSysInfo::kernelVersion(),
         QSysInfo::currentCpuArchitecture(),
-        QString::fromLatin1(__DATE__)
+        QString::fromLatin1(__DATE__),
+        SystemInventory::cpuSummary(),
+        SystemInventory::ramSummary(),
+        GpuSelector::appliedSummary()
     };
 }
 
@@ -120,19 +125,13 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
         }
     }
 
-    // 2. System info JSON
+    // 2. System info JSON — field set defined (and regression-pinned) via
+    // systemInfoJson() in the header.
     {
-        auto sys = collectSystemInfo();
-        QJsonObject obj;
-        obj["aetherVersion"] = sys.aetherVersion;
-        obj["qtVersion"]     = sys.qtVersion;
-        obj["os"]            = sys.osName;
-        obj["kernel"]        = sys.kernelVersion;
-        obj["cpu"]           = sys.cpuArch;
-        obj["buildDate"]     = sys.buildDate;
         QFile f(tmp + "/system-info.json");
         if (f.open(QIODevice::WriteOnly))
-            f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+            f.write(QJsonDocument(systemInfoJson(collectSystemInfo()))
+                        .toJson(QJsonDocument::Indented));
     }
 
     // 3. Radio info JSON
@@ -247,7 +246,9 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
     body += QString("App: AetherSDR v%1\n").arg(sys.aetherVersion);
     body += QString("Qt: %1\n").arg(sys.qtVersion);
     body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
-    body += QString("CPU: %1\n").arg(sys.cpuArch);
+    body += QString("CPU: %1\n").arg(sys.cpu);
+    body += QString("RAM: %1\n").arg(sys.ram);
+    body += QString("GPU: %1\n").arg(sys.gpu);
     body += QString("Build: %1\n").arg(sys.buildDate);
 
     if (radio.connected) {

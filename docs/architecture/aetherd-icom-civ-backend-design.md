@@ -1,5 +1,9 @@
 # Icom CI-V Backend — Design Note
 
+Model-specific command capability and evidence are defined in
+[`icom-capability-profiles.md`](icom-capability-profiles.md), implementing the
+profile foundation from RFC issue #4984 without widening `IRadioBackend`.
+
 Bring-up plan for `IcomCivBackend`, an `IRadioBackend` implementor for Icom
 networked radios. First targets: **IC-705 over WiFi** and **IC-7300MK2 over
 Ethernet**.
@@ -9,6 +13,60 @@ primary sources under `~/oracles/icom/sources/`. This note does not restate the
 wire format; it covers what AetherSDR has to build and in what order.
 
 Companion to `aetherd-hl2-backend-design.md`, and deliberately shaped like it.
+
+---
+
+## 0. Current bring-up status (2026-08-21)
+
+The backend is no longer a phase-1 sketch. It is an operating CI-V/RS-BA1
+implementation, but its evidence is deliberately recorded at three different
+levels: a model-specific guide can prove a command exists, automated fake-radio
+tests can prove AetherSDR sends and adopts the right frames, and only a live
+radio can prove the operator experience.
+
+| Model | Current evidence | Boundary |
+|---|---|---|
+| **IC-705 (`A4`)** | Model profile checked against its CI-V guide; live RX, scope, TX, FT8/WSPR, controls and meters. The FM repeater/TONE controls, local-memory recall and momentary XFC path in this increment were all exercised successfully by the operator on 2026-08-21. | Primary fully brought-up model. Regional tuning gaps still cannot be represented by the seam's single min/max range. |
+| **IC-7300MK2 (`B6`)** | Model profile checked against its own CI-V guide; live Ethernet RX/scope, control surface, meters, ATU, WSPR, PC Audio routing and CW decoder. Its guide attests the basic repeater and XFC families. | The basic tone/offset/XFC surface is profile-enabled from guide evidence but has not had the IC-705 operator workflow repeated on this model. |
+| **IC-9700 (`A2`)** | Live RS-BA1 scope geometry and `26 00` VFO/mode replies have been observed. Its profile records official-guide plus PR #5149 live-wire evidence for the basic/extended repeater and XFC command families. | This increment's selected-receiver UX still needs an IC-9700 operator pass; AetherSDR does not yet independently model MAIN and SUB repeater state. |
+| **Other/unknown Icom** | Identity may be discovered, and conservative common controls can be read. | Fail closed: absent profile facets mean no repeater reads/writes or XFC capability, with no fallback by CI-V address. |
+
+### FM repeater and XFC state contract
+
+The controls added in this increment use the model-neutral slice/radio seam; no
+GUI code knows a CI-V byte. The mapping is:
+
+| Operator state | CI-V | Convergence |
+|---|---|---|
+| Repeater TONE off/on | `16 42 00/01` | Read at connect, adopted from replies/front-panel traffic, and written only from operator intent. |
+| Repeater tone frequency | `1B 00` + three BCD bytes | Read at connect and adopted as one-decimal-hertz radio state. This is the TONE frequency; `16 43` TSQL remains separate and unmapped. |
+| Duplex simplex/down/up | `0F 10/11/12` | Read at connect and reflected as simplex, `-`, or `+`. |
+| Repeater offset magnitude | read `0C`, write `0D`, 100 Hz units | Kept unsigned on the wire; the duplex direction determines the signed TX offset shown by the slice model. |
+| Transmit-frequency check | `1C 02 00/01` | Gated by the active model's `TxFrequencyCheck` evidence and FM repeater facet. XFC is momentary: press sends ON; release, window deactivation, control hide, and disconnect send OFF. A 250 ms readback poll catches front-panel changes without requiring CI-V Transceive. |
+
+The IC-705 and IC-9700 additionally activate the extended snapshot (`16 5D`,
+`1B 01`, `1B 02`, and `1C 03`) through their model-specific
+`FmRepeaterExtendedReadback` facets. Both official CI-V guides define the same
+access-mode values and DTCS code/polarity register; IC-9700 also has preserved
+live-wire evidence. `16 5D`, receive CTCSS, and DTCS code/polarity are
+normalized into `SliceModel`; the shared FM applet and VFO consume the model
+profile's access-mode and DTCS-code capabilities without a radio-name check.
+Operator DTCS intent writes `1B 02`, while only the radio's confirmation
+updates model and diagnostic state. The IC-7300MK2 keeps its existing narrower
+activated path, and memory write vocabulary remains outside this phase. The
+sanitized IC-9700 source trace and exact field provenance live in
+`docs/data/icom-ic9700-fm-repeater-{evidence.json,live-trace.txt}`.
+
+The radio remains authoritative. Connect performs a snapshot of all four FM
+repeater fields plus XFC where supported; replies update the models without
+being reflected back as commands. Local-memory recall is an explicit operator
+intent, so it writes tone enable/frequency, duplex direction and offset, then
+the normal CI-V readback path converges the UX. The full recall sequence was
+confirmed on a live IC-705, including TONE off/on and duplex `+`, `-`, and
+simplex/off.
+
+XFC is intentionally not stored in a memory. It describes a held front-panel
+action, not an operating-state setting that should survive release or recall.
 
 ---
 
@@ -116,8 +174,19 @@ comment, not a silent drop.
 feature.** `1C 01` is the *antenna tuner* status (`00`=OFF, `01`=ON, `02`=Tune) —
 it starts an ATU matching cycle, not a tune carrier. AetherSDR's `setTune(on,
 tunePowerPercent)` means "raise a steady carrier at the operator's tune power",
-which on an Icom is composed rather than commanded: save the mode, set RTTY or
-CW, apply the tune power via `14 0A`, key with `1C 00`, and restore on release.
+which on an Icom is composed rather than commanded: preserve the operator's
+mode, save and apply the temporary tune power via `14 0A`, queue a 1.5 kHz PCM
+carrier into the RS-BA1 audio stream, key with `1C 00`, and restore the power on
+release. The carrier is generated by a backend-owned 20 ms timer at the radio's
+48 kHz rate. It does not borrow microphone-capture callbacks: PC Audio can be
+disabled without turning TUNE into a keyed transmitter carrying silence. While
+TUNE owns the stream, ordinary `submitTxAudio` callbacks are ignored so two
+producers cannot overrun the bounded transmit queue.
+
+The radio's modulation-source selection still applies. In a data mode the
+model-specific `DATA MOD` source must be WLAN on IC-705 or LAN on IC-7300MK2;
+the backend reads and reports that radio-owned setting rather than silently
+overwriting it.
 
 Those are two genuinely different operations and they must not be conflated —
 `1C 01 02` belongs on the tuner extension path (`TunerModel`'s autotune intent),
@@ -143,9 +212,10 @@ something unexpected on one with an AH-705.
 
 CI-V transceive does not announce every front-panel change. The backend rotates
 read requests for RF/power/mic/MON/VOX/notch/preamp/attenuator/tuner state on
-the link timer. These are state observations, never a reason to replay a saved
-client value: both Icom models declare an empty `clientSettingsDomains`, so the
-radio remains authoritative across reconnects.
+the link timer. Tuner reads are omitted for profiles without an evidenced tuner
+command path, including the IC-9700. These are state observations, never a
+reason to replay a saved client value: supported Icom profiles declare an empty
+`clientSettingsDomains`, so the radio remains authoritative across reconnects.
 
 The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
 `12 00` with no data reads the selection, but the live B6 radio returned only a
@@ -190,10 +260,15 @@ caps.canTransmit            = true;
 caps.txPowerMaxWatts        = 10.0;
 caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
-caps.hasTuner               = false;           // no INTERNAL ATU; see note
-caps.hasSupplyVoltageTelemetry = true;         // 15 15 Vd
+caps.hasTuner               = profile.supports(IcomFeature::AntennaTuner); // exact-model evidence
+caps.hasTunerMemories       = false;           // 1C 01 has no Flex-style memory API
+caps.hasSupplyVoltageTelemetry =
+    hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
-caps.hasGpsLocation         = false;           // GPS exists, protocol won't carry it
+caps.hasGpsLocation         = true;            // IC-705: 23 00 position/time
+caps.hasGpsSatelliteTelemetry = false;         // no count, SNR, or lock flag
+caps.hasGpsFrequencyReference = false;         // position GPS, not a GPSDO
+caps.hasGpsTimeConfiguration = true;           // NTP + GPS clock settings
 caps.hasProfiles            = false;
 caps.hasWaveforms           = false;
 caps.hasMultiClientSessions = false;
@@ -203,12 +278,15 @@ caps.canReboot              = false;           // see note
 caps.clientSettingsDomains  = {};              // radio remembers its own state
 ```
 
-**`hasTuner = false` is a judgement call, not a fact.** The IC-705 has no
-internal ATU, but `1C 01` controls an *external* AH-705 — and there is no command
-to detect whether one is attached. So the capability is unanswerable from the
-radio. False is the safer default (no tuner UI on a radio that probably has
-none); an operator with an AH-705 is better served by an explicit setting than by
-a control that appears unconditionally and silently fails.
+**`hasTuner` is exact-model command capability, not an attachment detector.**
+The IC-705 opts in because `1C 01` controls its supported external AH-705 path,
+even though attachment cannot be queried. The IC-7300MK2 opts in for its
+documented tuner path. The IC-9700 and unprofiled models fail closed: the
+backend omits tuner reads and writes. The shared Transmit applet remains stable
+across radios by keeping ATU and its indicators visible but dimming them to the
+unavailable state when this capability is false. Icom does not publish
+`hasTunerMemories`: MEM, its indicator, and memory-only menu actions remain
+visible but unavailable rather than inheriting Flex's separate memory API.
 
 **`canReboot = false` despite `18 00` / `18 01` existing.** Those turn the
 transceiver off and on — but over WiFi, powering off drops the WLAN interface,
@@ -226,6 +304,19 @@ backend reads state at connect; it does not push a restored state.
 (no 148–430 receive on some regional variants). The seam has no gap
 representation, so the honest thing is the outer envelope plus a rejected-tune
 path that reports what the radio actually did.
+
+**The GPS claims are intentionally split.** The IC-705's model-specific guide
+defines `23 00` for latitude, longitude, altitude, course, speed, and a complete
+UTC timestamp; AetherSDR derives the Maidenhead grid locally. It does not define
+a satellite count, fix type, SNR, or explicit lock bit, so the UI says
+"Position reported" rather than manufacturing "Locked" from valid coordinates.
+The GPS feed also does not discipline the RF reference.
+
+The same guide defines NTP Function (`1A 05 0167`), NTP Server Address (`0168`),
+GPS Time Correct (`0169`), NTP access (`1A 07`), and its result (`1A 08`). These
+are radio-persisted settings: connect and polling only read them. A write occurs
+only from an explicit dashboard action and is followed by read-back before the
+normalized model publishes the value.
 
 ---
 
@@ -284,6 +375,41 @@ of the older entry, so work that aged all the way to `Ptt` would be dispatched
 *ahead* of the keyed-state poll rather than merely tying with it. Stopping one
 band short still beats fresh meter traffic on that tie — which is all
 anti-starvation needs — while leaving PTT an edge no amount of waiting erodes.
+Only one background request may take that meter-band turn before a ready
+meter runs. After any background dispatch, aging is capped at `Control`
+until an actual `ActiveMeter` dispatch. PTT/operator/emergency requests do
+not reset this alternation. This prevents a whole aged reconciliation burst
+from draining ahead of fresh TX power/SWR reads. Additionally, once a ready
+meter has spent 100 ms in the queue, background aging is capped at `Control`
+as well, which protects freshness when dispatches are slower than the
+nominal slot.
+
+Both caps are DELAYS, NOT HOLDS, and the difference is the whole design.
+`MeterPoller` re-arms each meter from the ANSWER, so on any link whose round
+trip is slower than the meter demand there is always a ready meter past its
+budget: an overdue-meter cap with no ceiling never lifts, and background work
+stops for the session rather than being deferred. Measured on the production
+scheduler and poller with an injected clock, that cost every `Control`
+reconciliation read from 75 ms round trip upward, and left the startup
+snapshot unable to complete at all at 150 ms — on receive, with no
+transmission involved. So the cap lifts for exactly one request once
+`kBackgroundStarvationCeilingMs` (1500 ms) has passed with no background
+dispatch; that dispatch re-arms both caps, making the admission single-shot
+and the background rate a ceiling rather than a share of the link.
+
+1500 ms is where the two pressures stop trading against each other. Over the
+same 60 s sustained-TX measurement, worst-case forward-power age is 620/710/
+1190 ms at 63/75/100 ms round trip — identical to an unbounded hold at 63 and
+75 ms — while control reconciliation still lands roughly 39-45 times a minute
+instead of never. A larger ceiling buys no further freshness; the ages
+plateau and only background progress is lost. The residual cost is startup on
+a slow link: the connect snapshot converges in 46 s at 150 ms round trip
+against 13 s with no overdue-meter cap at all — slower, but it converges,
+where an uncapped hold never finished it.
+
+Note what this bounds and what it does not: interference by background
+requests, not radio reply time. A lost in-flight reply can still consume the
+350 ms timeout.
 
 Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
 retired before a later read is sent, or that ACK can be mistaken for the read's
@@ -314,9 +440,31 @@ operator they are still on the air. RFC #4983 states the rule directly
 transition guard") and Constitution VI requires every path that can transmit to
 fail closed. Radio truth wins again as soon as the bounded window expires.
 
+The command edge is therefore **intent only**. `setKeying(true)` neither moves
+the backend's keyed state nor publishes `transmitChanged`; only a decoded
+`1C 00 01` reply does that. A waveform client such as AetherModem waits for the
+radio-confirmed edge before releasing sample zero, with a bounded timeout. This
+is load-bearing for short AX.25 frames: the earlier optimistic edge let their
+entire preamble run while an IC-705 was still completing its CI-V PTT transition.
+The backend advertises this contract as `RadioCapabilities::hasRadioPttReadback`;
+`RadioModel` then does not synthesise the command-edge fallback it still uses
+for a backend with no status plane.
+
+Three things are deliberately **not** deferred to the readback, because none of
+them is a claim about the air. The transmit-audio admission gate
+(`txAudioGateOpen`) follows the commanded intent inside its 1 s confirmation
+window and radio truth outside it — gating on the readback alone would head-clip
+every voice, DAX and TCI over by a CI-V round trip and leave the TUNE carrier
+silent until the radio answered. A client unkey still zeroes the derived IC-9700
+forward-power estimate immediately. And a readback that **contradicts** a
+pending unkey (the radio still keyed) is republished even though the backend's
+own keyed flag did not change, so the model's optimistic RX presentation is
+corrected rather than left lying (Constitution VI). `icom_ptt_authority_test`
+pins all of this without a socket.
+
 | group | interval | condition |
 |---|---:|---|
-| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| PTT fallback | 250 ms | connected with an identified CI-V destination; Transceive is only a hint |
 | S meter | 100 ms | RX and visible |
 | power, SWR, ALC, compression | 200 ms | TX and visible |
 | PA current | 500 ms | TX and visible |
@@ -324,7 +472,8 @@ fail closed. Radio truth wins again as soon as the bounded window expires.
 | overflow | 500 ms | RX and visible |
 | NR, NB, auto/manual notch state | 1000 ms | connected |
 | frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
-| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, RIT/XIT | 3000 ms | connected |
+| tuner | 3000 ms | connected and exact profile declares tuner control |
 
 #### State convergence is snapshot + transceive + polling
 
@@ -453,10 +602,13 @@ load-bearing**:
 | Channel duplication | `TciServer` divides by `2 * sizeof(float)` and sees half the frames it has. |
 
 Both failures are **silent** — audio flows, meters move, the session is healthy.
-That is why `icom_backend_test` asserts the ratio (4800 mono samples in at 48 kHz
-→ ~2400 stereo frames out at 24 kHz) rather than merely asserting that audio
-arrived, and why it also asserts the *negative*: a passthrough would emit ~4800
-frames, so the test fails a backend that skipped the conversion.
+The retired `icom_backend_test` fake-radio fixture asserted the ratio (4800 mono
+samples in at 48 kHz → ~2400 stereo frames out at 24 kHz) rather than merely
+asserting that audio arrived. The resampler half stays covered by the retained
+`tx_mic_channel_normalizer_test`; the backend-level negative passthrough
+assertion (a backend that skips the conversion emits ~4800 frames) awaits a
+socket-free injected replacement (#5254) — live validation cannot prove that
+non-event.
 
 `Resampler::processMonoToStereo` does both halves in one call. It is stateful
 (r8brain), so the instance is built once at connect — a fresh one per callback
@@ -607,9 +759,29 @@ captures from our own radio.
 ## 9. Explicitly out of scope for phase 1
 
 - **IQ.** It does not exist on this radio. Not deferred — absent.
-- **Memory channels.** The radio stores 99 in 100 groups (`1A 00`) and the decode
-  is large and fiddly. Ship `persistsMemories = false` (client-side bank) and
-  revisit.
+- **Writing radio memory channels.** All Icom radios use AetherSDR's shared,
+  writable memory database as the working model. For IC-705, IC-7300MK2, and
+  IC-9700, **Sync Memories** reads the model-specific ordinary-channel records
+  with `1A 00` and ingests occupied channels into that database; Tune then
+  recalls the durable database row like a manual or CSV-imported memory.
+  Imported rows are keyed by the 16-byte radio GUID from the authenticated
+  RS-BA1 capabilities record plus the native group/channel, so DHCP, mDNS and
+  NAT endpoint changes cannot duplicate a radio's channel set. Repeat Sync
+  refreshes tuning fields while preserving the name, owner and group assigned
+  at first import or edited locally. Clearing a native channel removes its
+  matching imported row. Split/RPS/DV/DD records remain display-only.
+  Existing experimental imports with incorrect recallability need one explicit
+  Sync: they did not retain enough split metadata for a safe load-time repair.
+  Loading an existing bank never rewrites it. Ordinary local memories remain
+  schema 1; saves containing native recall fields use schema 2 so an older
+  writer cannot erase recallability, DTCS state or provenance. Downgrading
+  after such a save requires a compatible build or a pre-Sync settings backup.
+  Reads are button-only; IC-705 requires a selected native group so a click queues 100
+  requests rather than scanning its 10,000-address space. Flex global/TX
+  profiles are not valid Icom group selectors. Writing or deleting the radio's
+  own channels, plus scan-edge, call, and satellite memories, remain deferred.
+  Other Icom models still use the same client-side database, but expose no Sync
+  action until their published record layout is implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.
@@ -655,6 +827,33 @@ MK2, which is a different radio from the one the rest of this targets.
 
 Not built, deliberately. Each is recorded here with what it needs so the
 decision is not re-litigated from scratch.
+
+### Complete the IC-9700 bring-up
+
+The IC-9700 is not an unknown radio: its network session, 475-bin scope geometry
+and `26 00` VFO/mode reply have been observed live, its three disjoint RF decks
+and PA ceilings are modeled, and its profile carries official-guide plus PR
+#5149 live-wire evidence for the repeater and XFC command families. That does
+not make the remaining selected-receiver UX and transmit bring-up complete.
+
+The next bench pass should, in order:
+
+1. repeat this increment's complete TONE enable/frequency,
+   duplex `+`/`-`/simplex, offset and held-XFC operator workflow from both
+   AetherSDR and the front panel;
+2. recall a local memory and confirm the final radio state, not only the UX;
+3. establish whether CI-V addresses repeater state per selected receiver or can
+   independently name MAIN and SUB, then keep the current selected-receiver
+   model or add a neutral receiver selector from evidence;
+4. verify the model-specific mode/filter, preamp/attenuator and meter tables
+   against the guide and hardware; and
+5. run the ordinary transmit safety sweep separately on 144, 430 and 1200 MHz,
+   with the correct dummy-load path and per-band power ceiling.
+
+Do not infer dual-receiver ownership from `maxSlices = 2`. The radio can receive
+on MAIN and SUB simultaneously; the current backend publishes a selected-radio
+state surface, and converting that into two independently authoritative slices
+is a separate seam and routing decision.
 
 ### Read the radio's UDP ports over CI-V (IC-7300MK2 and later)
 
@@ -721,13 +920,19 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Seven constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, `1C 02`
-XFC, `27 1E` scope fixed edges. Not all of them should be wired: the notch width
+**Five constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 57` manual-notch width, and
+`27 1E` scope fixed edges. Not all of them should be wired: the notch width
 is deliberately left to the operator's own choice, and the fixed edges are three
 saved presets per band that a pan drag must never overwrite. CW pitch is the one
 that costs something today — it decides where a CW filter sits, so the passband
 drawn in CW assumes the radio's default rather than reading it.
+
+`1C 02` XFC is no longer in that list for profiles that attest it. The IC-705,
+IC-7300MK2 and IC-9700 profiles expose it as a momentary transmit-frequency
+check, so both repeater-control surfaces send ON while held and OFF on release,
+follow radio readback, and poll the state when CI-V Transceive does not announce
+a front-panel edge.
 
 **RIT and XIT are send-only.** `21 00/01/02` are written and never read, so the
 controls open at our defaults rather than the radio's. Unlike the above this is
@@ -774,6 +979,29 @@ whatever buffer it is handed into 1364-byte pieces in a loop; the famous pair is
 just what a 1920-byte frame becomes. kappanhang hardcodes the same two offsets.
 Either way the invariant is the frame's **duration**, and the byte count follows
 from the rate and the sample width.
+
+The transmit queue is clocked at **one 20 ms frame pair per 20 ms**, drained by
+elapsed time: a late or coalesced timer tick sends the frames it owes (at most
+three per tick), so backlog cannot ratchet, while an on-time tick sends exactly
+one. A producer may front-load audio to absorb GUI scheduling jitter, and that
+queue depth never turns into a wire burst — but neither can it grow without
+bound, which is what "exactly one per tick" did: a Qt timer only ever fires
+late, so producer and consumer ran at equal rate with no recovery until the
+packetizer's 250 ms cap shed the oldest audio mid-over. That pump clocks every
+Icom transmission, voice included. At scheduled packet completion the backend
+reports what is **actually** still queued — the padded host queue at wire cadence
+plus the negotiated 300 ms radio buffer — and AetherModem holds PTT for that plus
+its ordinary tail; an operator/manual unkey remains immediate and never takes
+that delay.
+
+Finite modem audio has an additional completion barrier. The engine posts it
+behind the final PCM block, and `IcomCivBackend` then drains the 24-to-48 kHz
+resampler before AetherModem starts the unkey timer. r8brain's prewarm removes
+its no-output startup interval, not its linear-phase group delay; without the
+drain, a captured packet kept roughly 70 ms of silence at its front and lost
+roughly 70 ms from its end — enough to remove AX.25 FCS plus postamble. The
+drained samples are queued while PTT is still radio-confirmed, and the remaining
+partial 20 ms transport frame is padded with codec-correct silence.
 
 **THE RATE CANNOT MOVE ON ITS OWN.** `kAudioFrameBytes` was the constant 1920,
 which is 20 ms only at 48 kHz s16. Lowering the rate to 16 kHz while leaving it
@@ -891,7 +1119,7 @@ screen; certification has to inspect the consumer, not stop at the seam.
 | `15 11` | Po, 0=0% / 143=50% / 213=100% | ✅ | `TX:FWDPWR` **Watts** | **working** — model-specific curve; visible only while keyed |
 | `15 12` | SWR, 0=1.0 / 48=1.5 / 80=2.0 / 120=3.0 | ✅ | `TX:SWR` SWR | **working** — transmit-only; clears on unkey |
 | `15 13` | ALC, 0=min / 120=max | ✅ | `TX:ALC` **Percent** | **working** — consumer honours Percent |
-| `15 14` | COMP, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | contract correct; reads 0 while PROC is unmapped |
+| `15 14` | COMP meter, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | working while transmitting; independent of the `16 44` / `14 0E` compressor controls |
 | `15 15` | Vd, 0=0 V / 75=5 V / 241=16 V | ✅ | `RAD:+13.8A` Volts | **working** |
 | `15 16` | Id, 0=0 A / 121=2 A / 241=4 A | ✅ | `RAD:PACURRENT` Amps | published, no consumer |
 
@@ -909,14 +1137,15 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 22` | Noise blanker | ✅ | ✗ constant only |
 | `16 40` | Noise reduction | ✅ | ✗ constant only |
 | `16 41` | Auto notch | ✅ | ✗ constant only |
-| `16 43` | Tone squelch | ✗ | ✗ |
-| `16 44` | **Speech compressor (PROC)** | ✅ | ✗ **not wired — the PROC state disagrees with the radio** |
+| `16 42` | Repeater tone (TONE) | ✅ | ✅ live-verified on IC-705; connect readback + front-panel adoption |
+| `16 43` | Tone squelch (TSQL) | ✗ | ✗ — separate from the mapped repeater TONE control |
+| `16 44` | **Speech compressor enable** | ✅ | ✅ via `setSpeechProcessor`; connect readback and confirmation adopt radio state |
 | `16 45` | Monitor | ✅ | ✗ constant only |
 | `16 46` | VOX | ✅ | ✗ constant only |
 | `16 47` | BK-IN OFF/SEMI/FULL | ✗ | ✗ **CW break-in unreachable** |
 | `16 48` | Manual notch | ✅ | ✗ constant only |
 | `16 4F` | Twin peak filter (RTTY) | ✗ | ✗ |
-| `16 50` | Dial lock | ✅ | ✗ constant only |
+| `16 50` | Dial lock | ✅ | ✅ IC-705/IC-7300MK2/IC-9700 profile-gated read/write + polling |
 | `16 56` | DSP IF filter SHARP/SOFT | ✗ | ✗ |
 | `16 57` | Manual notch width W/M/N | ✗ | ✗ |
 | `16 58` | SSB TX bandwidth W/M/N | ✗ | ✗ |
@@ -929,9 +1158,12 @@ mic gain `0B`, key speed `0C`, COMP level `0E`, NB level `12`, monitor `15`.
 Unmapped: notch position `0D`, break-in delay `0F`, VOX gain `16`, anti-VOX
 gain `17`.
 
-**`14 0E` is the missing half of PROC.** AetherSDR's processor control is a Flex
-shape — OFF / NOR / DX / DX+ — and on an Icom that is two commands, not one:
-`16 44` for the on/off and `14 0E` (0000–0255 ⇒ 0–10) for which of the three.
+**`14 0E` is the missing half of speech compression.** The enable and level are
+two commands on Icom, not one. Legacy profiles retain the shared PROC preset
+surface; a model profile may expose an evidenced continuous COMP level:
+`16 44` controls on/off and `14 0E` (0000–0255 ⇒ 0–10) is the level register.
+Legacy profiles map that register to the three shared PROC presets; the IC-9700
+profile maps it bidirectionally to the continuous 0–100 COMP percentage.
 
 ### C.4 RIT / XIT (`21 xx`) — entirely unmapped
 
@@ -1025,13 +1257,16 @@ their own right (CERTIFICATION.md §1.29):
 | | ANF | ✅ **verified** — `16 41 01` |
 | | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control and off is zero |
 | | manual notch | ✅ `setSliceManualNotch` (`16 48` + `14 0D`); state is polled |
+| | FM repeater TONE + frequency | ✅ **live-verified on IC-705** — `16 42` + `1B 00`; radio readback owns the control |
+| | FM duplex + offset | ✅ **live-verified on IC-705** — `0F 10/11/12` + `0C`/`0D`; local-memory recall verified for `+`, `-`, and simplex/off |
+| | REV / XFC | ✅ momentary XFC via `1C 02` when the active model profile attests it; live-verified on IC-705, guide-attested on IC-7300MK2, and guide + PR #5149 live-wire verified on IC-9700 |
 | | AF gain / mute / pan | ❌ seam verbs exist, backend does not implement |
 | **TX Controls** | MOX / PTT | ✅ `setKeying` |
 | | TUNE | ✅ `setTune` |
 | | RF power | ✅ `setTxPower` |
 | | power / SWR gauges | ✅ (units fixed; unverified on hardware) |
 | | TX filter | ❌ `setTxFilter` not implemented (`16 58` unmapped) |
-| **Phone / CW** | PROC enable + NOR/DX/DX+ | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
+| **Phone / CW** | profile-shaped PROC/COMP enable + level | ✅ `setSpeechProcessor` (`16 44` + `14 0E`) |
 | | ALC / Compression gauges | ✅ (ALC scale fixed; unverified) |
 | | Level gauge | ⛔ hidden — this radio publishes no mic meter |
 | | mic source | ✅ collapsed to PC by capability |
@@ -1041,8 +1276,8 @@ their own right (CERTIFICATION.md §1.29):
 | | CW speed / pitch / break-in | ❌ no seam verb (`14 0C`, `14 09` mapped; `16 47` unmapped) |
 | **Status bar** | voltage | ✅ `RAD:+13.8A` |
 | | temperature / current | IC-705: no temperature; IC-7300MK2: `Id` from `15 16` while transmitting |
-| | radio name / model | ✅ from the handshake + `19 00` |
-| | hostname / alias | ⚠️ shows the connect address; the radio's own name is in the capabilities packet and unused |
+| | radio nickname / model | ✅ **verified on IC-705** — Network Radio Name from the RS-BA1 handshake; canonical model from `19 00` |
+| | network hostname | ⚠️ shows the connect address; no separate host alias is published |
 
 ### D.3 One control, two registers
 
@@ -1070,21 +1305,25 @@ CERTIFICATION.md §1.31 because it generalises to any fanned-out control.
 4. **AGC threshold** is accepted and discarded; the radio has no threshold
    register. Better to advertise it as unavailable than keep a live slider that
    does nothing.
-5. **The radio's own name** arrives in the capabilities packet and is unused;
-   the status bar shows the connect address instead.
 
 **Implemented and NOT proven on hardware** — the distinction this appendix
 exists to keep visible:
 
-6. **The TUNE carrier.** Synthesised, built, never keyed into a tuner.
-7. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
+5. **The backend-owned TUNE cadence.** Synthesised and built, with fresh
+   IC-705 and IC-7300MK2 hardware revalidation pending; it never invokes the
+   antenna tuner command.
+6. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
    IC-7300MK2; an IC-705 UI/effect pass is still outstanding.
-8. **The three filter buttons**, on screen with the applet open.
-9. **Connect-time state adoption**, beyond confirming the values arrive: whether
+7. **The three filter buttons**, on screen with the applet open.
+8. **Connect-time state adoption**, beyond confirming the values arrive: whether
    each one lands on the control an operator is looking at is a separate
    question, and it is the §1.27 gap in a different costume.
-10. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
-    register and was not.
+9. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
+   register and was not.
+10. **IC-9700 selected-receiver repeater/XFC UX.** The shared command families
+    have official and live-wire evidence through PR #5149; this increment's
+    basic control surface and MAIN/SUB ownership still need a complete operator
+    pass on that radio.
 
 **Open defects**
 
@@ -1219,3 +1458,90 @@ of a black panadapter.
 5. **Re-run this sweep against the IC-7300MK2** when one is available. The
    sweeper is model-agnostic and the JSON diffs cleanly, which is the cheapest
    possible way to establish a second model's capability set.
+
+## CI-V identity and custom Network Radio Names (#5164)
+
+Every connection begins with conservative unknown-model capabilities. The
+RS-BA1 Network Radio Name is presentation text only, including names that
+happen to match another supported model. CI-V `19 00` selects the profile from
+its one-byte model-ID payload; the reply envelope's source address selects the
+command destination. These values are independent when the operator changes
+the CI-V address. This follows wfview's `funcTransceiverId` model-ID decode and
+`determineRigCaps` adoption of `incomingCIVAddr` as the destination.
+
+Auto broadcasts identity queries; a manually pinned address receives directed
+queries and rejects other responders. Identification makes at most five attempts
+one second apart, stopping on a valid model-ID reply, conflict, or disconnect.
+A generic FB/FA reply or controller echo cannot complete identification. Meter,
+PTT, and control polling wait until the destination is identified. Exhaustion
+reports a configuration warning and keeps capabilities conservative; it never
+starts a read burst at an unverified seed address or promotes a nickname to a
+hardware profile. A valid late identity restarts the snapshot with the correct
+model vocabulary and publishes capabilities, modes, antenna choices, front-end
+controls, meters, and scope geometry. Repeated identical replies are inert.
+Conflicting identities abort native CW at the previously selected destination
+before withdrawing transmit capability until reconnect. A pinned selection
+that hears only another responder reports both addresses once, without changing
+the selection or accepting that responder's identity.
+
+The current model table recognizes these hexadecimal `19 00` payloads. These
+are model IDs, even though their values match factory CI-V addresses; changing
+the operating address does not change the ID. Recognition alone does not imply
+that every feature or network path has live-hardware validation.
+
+| Model | Model-ID payload |
+|---|---|
+| IC-705 | `A4` |
+| IC-9700 | `A2` |
+| IC-7610 | `98` |
+| IC-7850 / IC-7851 (`IC-785x` profile) | `8E` |
+| IC-7300 | `94` |
+| IC-7300MK2 | `B6` |
+| IC-905 | `AC` |
+
+Sources: the existing `IcomModels.cpp` model table and its Icom/wfview provenance;
+Icom's per-model CI-V guides define `19 00` as the transceiver-ID read. The
+IC-7300MK2 `B6` payload and destination were also confirmed by a receive-only
+connection for this change. For example, `FE FE E0 50 19 00 A4 FD` identifies an
+IC-705 whose operating address is `50`, regardless of its Network Radio Name.
+
+
+### Optional standby wake (#5349, superseding #5360)
+
+The connection panel exposes **Wake Icom on connect**, default off and persisted in
+the existing Icom JSON settings document. An awake identity completes normally
+without sending power commands. Only exhausted identity discovery with explicit
+opt-in requests wake via the namespaced extension channel. Auto obtains the
+wake destination from the capabilities record (absolute byte 0x94), not the
+editable network name or the default settings seed. Pinned addresses remain
+explicit overrides. This network metadata authorizes a destination only;
+`19 00` remains the authority for the model and capabilities. An advertised factory destination for IC-705, IC-7300MK2 or IC-9700 can select
+its wake framing without claiming model identity. An unidentified custom
+address requires an explicit model selection: select the model in Connect by IP
+(the network-advertised custom destination is retained), or use `civ wake` with
+both model ID and address. A missing/unsupported framing hint refuses visibly;
+it never silently gives a custom-address IC-9700 the standard E0 frame.
+
+RadioModel owns one wake operation: one `18 01`, intentional session release,
+a short initial allowance, then one fresh network session with wake disabled.
+IC-705 and IC-7300MK2 start after one second and send per-second identity probes
+until ready; IC-9700 retains the contributed ten-second delay.
+The ordinary repeating reconnect timer is not armed during this operation.
+Wire identity must arrive within 20 seconds after reconnect starts (and match
+a model when one was explicitly selected);
+failure terminates the attempt. Generation checks invalidate delayed work on
+operator disconnect, radio changes, success and failure. No power-off is sent
+on disconnect or exit, and no wake request or transient model claim is persisted.
+
+Credit: W5JWP (@w5jwp) established the IC-9700 native-LAN wake sequence and
+standby/readiness distinction in #5360. Its 150 additional FE bytes, E1 controller
+address and 10-second delay are retained as contributed hardware evidence, not
+as the guide's serial baud-rate requirements. The official IC-9700 guide lists
+approximately 119 FE bytes at 115200 baud. IC-705 documents `18 01` from
+Standby/Shutdown; IC-7300MK2 documents baud-dependent fill specifically for its
+REMOTE jack. Both models have explicit profiles that send the standard E0-controller
+`18 01` frame over the existing RS-BA1 serial envelope, without the IC-9700's
+extra FE prefix. Their one-second initial allowance is client policy, not a guide timing.
+These profiles implement the documented command; live network wake remains to
+be checked on each model. Network control must remain reachable in standby;
+an offline WLAN interface cannot receive CI-V wake.

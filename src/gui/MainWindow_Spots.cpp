@@ -137,10 +137,16 @@ void MainWindow::wireSpotSubsystem()
                               << "radio has no radio-side CW keyer";
             return;
         }
+        const QString rejection = m_radioModel.cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcMqtt) << "cw/transmit ignored:" << rejection;
+            return;
+        }
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
-        const bool changeWpm = (wpm >= 5 && wpm <= 100);
+        const bool changeWpm = (wpm >= m_radioModel.cwTextMinWpm()
+                                && wpm <= m_radioModel.cwTextMaxWpm());
         const bool changeHz  = (hz >= 100 && hz <= 6000);
         if (!m_cwxTransmitting) {
             m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;
@@ -432,7 +438,8 @@ void MainWindow::wireSpotSubsystem()
         if (isDuplicateSpot(spot)) return;
         const int lifetimeSec = spotLifetimeSeconds(spot, source);
         const QString spotColor = spotColorForSource(spot, source);
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(spot, source, spotColor, lifetimeSec);
             return;
         }
@@ -462,7 +469,8 @@ void MainWindow::wireSpotSubsystem()
     spotCmdTimer->start(1000);
     connect(spotCmdTimer, &QTimer::timeout, this, [this] {
         if (m_spotCmdBatch.isEmpty() || !m_radioModel.isConnected()) return;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             m_spotCmdBatch.clear();
             return;
         }
@@ -707,7 +715,8 @@ void MainWindow::wireSpotSubsystem()
             cmd += " comment=" + QString(colored.comment).replace(' ', QChar(0x7f));
         if (!colored.color.isEmpty())
             cmd += " color=" + colored.color;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(colored, "WSJT-X", colored.color,
                                   spotLifetimeSeconds(colored, "WSJT-X"));
             return;

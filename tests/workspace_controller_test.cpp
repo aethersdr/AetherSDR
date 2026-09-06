@@ -42,9 +42,11 @@
 #include <iostream>
 
 using AetherSDR::AppSettings;
+using AetherSDR::CanvasItem;
 using AetherSDR::ContainerManager;
 using AetherSDR::ContainerWidget;
 using AetherSDR::NormRect;
+using AetherSDR::Workspace;
 using AetherSDR::WorkspaceCanvas;
 using AetherSDR::WorkspaceController;
 using AetherSDR::WorkspaceDocument;
@@ -542,9 +544,149 @@ int main(int argc, char** argv)
                    && canvas.layout().zOf(QStringLiteral("pan:1"))
                           < canvas.layout().zOf(QStringLiteral("applet:TX")));
 
+        // A layout-selector change while canvas mode owns the pans must
+        // replace the stale stored pan rectangles, not merely rearrange the
+        // hidden legacy splitter. It changes only active-main live pans:
+        // applets and extra surfaces remain the operator arranged them.
+        auto* panD2 = new QWidget(&panOwner);
+        auto* panE2 = new QWidget(&panOwner);
+        pans.insert(QStringLiteral("0x40000010"), panD2);
+        pans.insert(QStringLiteral("0x40000011"), panE2);
+        ctl.onPanAdded(QStringLiteral("0x40000010"));
+        ctl.onPanAdded(QStringLiteral("0x40000011"));
+        const QString pan0 = ctl.panItemIdFor(QStringLiteral("0x40000000"));
+        const QString pan1 = ctl.panItemIdFor(QStringLiteral("0x40000002"));
+        const QString pan2 = ctl.panItemIdFor(QStringLiteral("0x40000010"));
+        const QString pan3 = ctl.panItemIdFor(QStringLiteral("0x40000011"));
+        const QString preservedSurface =
+            ctl.addCanvasWindow(QStringLiteral("Pan layout preservation"));
+        const NormRect appletBefore = canvas.itemRect(QStringLiteral("applet:RX"));
+        canvas.setItemRect(pan0, NormRect{0.30, 0.30, 0.60, 0.60});
+        canvas.setItemRect(pan1, NormRect{0.30, 0.30, 0.60, 0.60});
+        canvas.setItemRect(pan2, NormRect{0.30, 0.30, 0.60, 0.60});
+        canvas.setItemRect(pan3, NormRect{0.30, 0.30, 0.60, 0.60});
+        ctl.commitPlacement();
+
+        AppSettings::instance().setValue(QStringLiteral("Applet_RX"), QStringLiteral("True"));
+        AppSettings::instance().setValue(QStringLiteral("Applet_TX"), QStringLiteral("True"));
+        AppSettings::instance().setValue(QStringLiteral("AppletPanelVisible"),
+                                         QStringLiteral("True"));
+        AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
+                                         QStringLiteral("False"));
+        AppSettings::instance().setValue(QStringLiteral("PanadapterLayout"),
+                                         QStringLiteral("4v"));
+        AppSettings::instance().save();
+        report("canvas pan layout accepts canonical 4v",
+               ctl.applyPanLayout(QStringLiteral("4v")));
+        const double classicPanWidth = 1.0 - AetherSDR::kClassicAppletColumnWidth;
+        report("4v replaces stale pan rectangles with canonical cells",
+               nearly(canvas.itemRect(pan0).x, 0.0)
+                   && nearly(canvas.itemRect(pan0).y, 0.0)
+                   && nearly(canvas.itemRect(pan0).w, classicPanWidth)
+                   && nearly(canvas.itemRect(pan0).h, 0.25)
+                   && nearly(canvas.itemRect(pan1).y, 0.25)
+                   && nearly(canvas.itemRect(pan2).y, 0.50)
+                   && nearly(canvas.itemRect(pan3).y, 0.75));
+        report("canvas pan layout preserves applet and extra surface",
+               canvas.itemRect(QStringLiteral("applet:RX")) == appletBefore
+                   && !preservedSurface.isEmpty()
+                   && storedDocument().contains(preservedSurface));
+
+        // A lower-slot pop-out stays untouched and does not leave a blank
+        // canonical cell between the active main-surface pans.
+        floatingPans.insert(QStringLiteral("0x40000002"));
+        ctl.onPanFloated(QStringLiteral("0x40000002"));
+        report("floating pan is outside active-main layout membership",
+               !ctl.activeMainPanIdsForLayout().contains(
+                   QStringLiteral("0x40000002")));
+        AppSettings::instance().setValue(QStringLiteral("PanadapterLayout"),
+                                         QStringLiteral("3v"));
+        AppSettings::instance().save();
+        report("floating lower slot does not consume a canvas layout cell",
+               ctl.applyPanLayout(QStringLiteral("3v"))
+                   && !canvas.contains(pan1)
+                   && nearly(canvas.itemRect(pan0).y, 0.0)
+                   && nearly(canvas.itemRect(pan2).y, 1.0 / 3.0)
+                   && nearly(canvas.itemRect(pan3).y, 2.0 / 3.0));
+        floatingPans.remove(QStringLiteral("0x40000002"));
+        ctl.onPanDocked(QStringLiteral("0x40000002"));
+
+        AppSettings::instance().setValue(QStringLiteral("PanadapterLayout"),
+                                         QStringLiteral("2x2"));
+        AppSettings::instance().save();
+        report("2x2 maps live pan slots in Classic order",
+               ctl.applyPanLayout(QStringLiteral("2x2"))
+                   && nearly(canvas.itemRect(pan0).x, 0.0)
+                   && nearly(canvas.itemRect(pan0).y, 0.0)
+                   && nearly(canvas.itemRect(pan0).w, classicPanWidth / 2.0)
+                   && nearly(canvas.itemRect(pan0).h, 0.5)
+                   && nearly(canvas.itemRect(pan1).x, classicPanWidth / 2.0)
+                   && nearly(canvas.itemRect(pan1).y, 0.0)
+                   && nearly(canvas.itemRect(pan2).x, 0.0)
+                   && nearly(canvas.itemRect(pan2).y, 0.5)
+                   && nearly(canvas.itemRect(pan3).x, classicPanWidth / 2.0)
+                   && nearly(canvas.itemRect(pan3).y, 0.5));
+        WorkspaceDocument persisted;
+        const bool parsedStored = WorkspaceDocument::fromStoredJson(
+            storedDocument().toUtf8(), &persisted);
+        const Workspace* persistedWs = parsedStored
+            ? persisted.workspace(persisted.activeWorkspace) : nullptr;
+        const WorkspaceSurface* persistedMain = persistedWs
+            ? persistedWs->surface(WorkspaceSurface::kMainId) : nullptr;
+        const CanvasItem* persistedPan3 = nullptr;
+        if (persistedMain) {
+            for (const CanvasItem& item : persistedMain->items) {
+                if (item.id == pan3) {
+                    persistedPan3 = &item;
+                    break;
+                }
+            }
+        }
+        report("2x2 canonical geometry reached stored workspace JSON",
+               persistedPan3 && nearly(persistedPan3->rect.x, classicPanWidth / 2.0)
+                   && nearly(persistedPan3->rect.y, 0.5)
+                   && nearly(persistedPan3->rect.w, classicPanWidth / 2.0)
+                   && nearly(persistedPan3->rect.h, 0.5));
+
+        // A shrink can remove a pan whose radio id sorts last even though its
+        // stable canvas slot is in the middle. Re-apply after that actual
+        // removal: surviving non-contiguous slots must fill all 3v cells.
+        ctl.onPanRekeyed(QStringLiteral("0x40000010"),
+                         QStringLiteral("0xf0000010"));
+        pans.insert(QStringLiteral("0xf0000010"),
+                    pans.take(QStringLiteral("0x40000010")));
+        ctl.onPanRemoved(QStringLiteral("0xf0000010"));
+        pans.remove(QStringLiteral("0xf0000010"));
+        report("post-rekey shrink reflows the actual surviving slots",
+               ctl.applyPanLayout(QStringLiteral("3v"))
+                   && nearly(canvas.itemRect(pan0).y, 0.0)
+                   && nearly(canvas.itemRect(pan1).y, 1.0 / 3.0)
+                   && nearly(canvas.itemRect(pan3).y, 2.0 / 3.0));
+
+        // Restore a fourth live pan for the surrounding lifecycle cleanup;
+        // the freed stable slot is reused rather than minting a fifth item.
+        auto* replacementPanD2 = new QWidget(&panOwner);
+        pans.insert(QStringLiteral("0x40000012"), replacementPanD2);
+        ctl.onPanAdded(QStringLiteral("0x40000012"));
+        report("replacement pan reuses the removed stable slot",
+               ctl.panItemIdFor(QStringLiteral("0x40000012")) == pan2);
+        const QString beforeInvalid = storedDocument();
+        report("invalid canvas pan layout is a no-op",
+               !ctl.applyPanLayout(QStringLiteral("not-a-layout"))
+                   && storedDocument() == beforeInvalid);
+        ctl.removeCanvasWindow(preservedSurface);
+        ctl.onPanRemoved(QStringLiteral("0x40000012"));
+        ctl.onPanRemoved(QStringLiteral("0x40000011"));
+        pans.remove(QStringLiteral("0x40000012"));
+        pans.remove(QStringLiteral("0x40000011"));
+
         ctl.onPanRemoved(QStringLiteral("0x40000002"));
         pans.remove(QStringLiteral("0x40000002"));
         ctl.disable();
+        const QString beforeDisabled = storedDocument();
+        report("disabled canvas pan layout is a no-op",
+               !ctl.applyPanLayout(QStringLiteral("4v"))
+                   && storedDocument() == beforeDisabled);
     }
 
     // ── Phase 6: workspaces — CRUD, full-recall switching, bindings ──────
@@ -1048,6 +1190,16 @@ int main(int argc, char** argv)
                        && livePan->parentWidget() == wins.value(sid));
             report("...pans stay below applets on the new surface",
                    wins.value(sid)->layout().zOf(panItem) == 0);
+
+            const NormRect extraPanBefore{0.11, 0.22, 0.33, 0.44};
+            wins.value(sid)->setItemRect(panItem, extraPanBefore);
+            ctl.commitPlacement();
+            report("extra-surface pan is outside active-main layout membership",
+                   !ctl.activeMainPanIdsForLayout().contains(
+                       QStringLiteral("0x40000000")));
+            report("pan layout leaves extra-surface geometry untouched",
+                   ctl.applyPanLayout(QStringLiteral("4v"))
+                       && wins.value(sid)->itemRect(panItem) == extraPanBefore);
 
             // A rect edit on the window canvas persists like any other.
             wins.value(sid)->setItemRect("applet:RX",

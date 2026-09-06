@@ -4,11 +4,14 @@
 #include <QVector>
 #include <QTimer>
 
+#include "core/backends/RadioCapabilities.h"
+
 class ScrollableLabel;
 namespace AetherSDR { class FilterPassbandWidget; }
 
 class QButtonGroup;
 class QHBoxLayout;
+class QVBoxLayout;
 class QGridLayout;
 class QPushButton;
 class QSlider;
@@ -181,6 +184,7 @@ public:
     // An EMPTY list restores the operator's own configurable set, so this is
     // reversible on disconnect rather than a one-way edit of their settings.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
 private:
     // The list actually in force: the radio's when it declared one, else the
     // operator's configurable set. Every site that indexes filter buttons must
@@ -252,6 +256,7 @@ private:
     // so the settings-driven list is not overwritten — reconnecting to a radio
     // with continuous filters must give the operator their own list back.
     QVector<int>            m_radioFilterWidths;
+    RxFilterControl         m_radioFilterControl;
     // Parallel "custom edges" — INT_MIN sentinel = use mode rules. (#2259)
     QVector<int>            m_filterCustomLo;
     QVector<int>            m_filterCustomHi;
@@ -262,13 +267,19 @@ private:
 
     // FM duplex/repeater controls (shown only in FM/NFM/DFM modes)
     QWidget*        m_fmContainer{nullptr};
+    QVBoxLayout*    m_fmLayout{nullptr};
     QComboBox*      m_toneModeCmb{nullptr};
     QComboBox*      m_toneValueCmb{nullptr};
+    QComboBox*      m_toneRxValueCmb{nullptr};
+    QComboBox*      m_dtcsCodeCmb{nullptr};
+    QComboBox*      m_dtcsPolarityCmb{nullptr};
+    QWidget*        m_dtcsContainer{nullptr};
     QDoubleSpinBox* m_offsetSpin{nullptr};
     QPushButton*    m_offsetDown{nullptr};
     QPushButton*    m_simplexBtn{nullptr};
     QPushButton*    m_offsetUp{nullptr};
     QPushButton*    m_revBtn{nullptr};
+    bool            m_xfcHeldByThisControl{false};
 
     // Containers for show/hide on mode change
     QWidget*     m_agcContainer{nullptr};
@@ -315,6 +326,10 @@ private:
     int agcThresholdMinimum() const;
     int agcThresholdMaximum() const;
     void syncAgcSliderFromSlice();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void configureFmToneControls();
+    void releaseTransmitFrequencyCheck();
 
 
     // RIT

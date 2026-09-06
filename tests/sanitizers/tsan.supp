@@ -1,0 +1,69 @@
+# ThreadSanitizer suppressions for the weekly sanitizer lane
+# (.github/workflows/sanitizers.yml, TSAN_OPTIONS=suppressions=<this file>).
+#
+# ONE consumer: the TSan matrix entry, which since #5411 S6 runs on
+# ghcr.io/aethersdr/aethersdr-ci:tsan — an image whose Qt (qtbase and the four
+# modules we link) is itself built with -sanitize thread. That is why this file
+# is SHORT. The Qt entries it used to carry were justified by "the lane links a
+# stock prebuilt Qt and none of it is instrumented"; S6 makes that false, and
+# keeping them would have suppressed exactly the reports the multi-hour image
+# build exists to produce (#5411 review). They are listed in DO-NOT-ADD below
+# so the reasoning is not rediscovered.
+#
+# What is left is what is still genuinely outside our instrumentation. Each
+# entry names a frame inside an uninstrumented library, never one of ours, and
+# carries its caveat. Read it before widening anything.
+#
+# If the instrumented Qt produces a new noise class, TRIAGE it — a stack, an
+# issue, and a narrow anchored entry with a caveat. Do not reach for
+# called_from_lib on a library we deliberately instrumented.
+
+# libpulse: the original #3462 finding (June 2026), triaged as pa_mutex_lock
+# on an uninstrumented mutex. The tsan image does not rebuild PulseAudio, so
+# this one is unchanged by S6. Blinds nothing of ours: no AetherSDR code runs
+# inside libpulsecommon.
+called_from_lib:libpulsecommon
+
+# WDSP's io ring buffer (third_party/wdsp/upstream/iobuffs.c). Visible only
+# now that the C sources are instrumented: fexchange2()/upslew2() write the
+# next block into the r1 ring on the caller's thread while wdspmain()'s
+# dexchange() memcpy reads the previous one; the write→read edge is the
+# Sem_BuffReady semaphore, but slot REUSE (reader done → writer overwrites)
+# has no synchronization at all — upstream relies on the ring being deep
+# enough that the writer never laps the reader. That is a by-construction
+# ordering TSan cannot prove, in upstream's real-time path, and a handoff
+# there is a DSP change, not a teardown fix.
+#
+# WRITER SIDE ONLY, deliberately. A `race:` entry matches ANY frame in EITHER
+# access's stack, so naming the writer alone still suppresses the whole
+# writer-vs-dexchange slot-reuse report — while leaving the reader side free to
+# report on its own. That matters because dexchange() is also what memcpys the
+# r1/r2 base pointers that destroy_iobuffs() frees, so `race:^dexchange$` would
+# have blinded the teardown use-after-free that patch 4 fixes: a regression of
+# our own fix would have been swallowed by our own suppression (#5411 review).
+# CAVEAT: a ring too shallow for the configured rates would be a real overrun
+# and would hide behind this line; the audible symptom is the tell.
+race:^upslew2$
+race:^fexchange2$
+
+# ── DO NOT ADD — rejected in #5275 and #5411 review, each would blind the lane ─
+# Every entry below matches a frame that OUR code executes inside, so a real
+# race whose access sits in a queued slot body — the sendCmd and audio-atomics
+# paths this lane exists to guard — would be swallowed with the false
+# positive. The glib cluster is handled by QT_NO_GLIB=1 in the workflow env
+# instead of a suppression, with zero debt. The Qt entries below were REMOVED
+# by #5411: they predate S6's instrumented Qt and now negate it.
+#   race:^dexchange$              <- reader side; hides patch 4's own UAF class
+#   called_from_lib:libQt6Gui.so.6
+#   race:QMetaCallEvent
+#   race:QCoreApplicationPrivate::sendPostedEvents
+#   race:QMetaType::create
+#   race:QMetaType::destroy       <- matches any frame; swallows our destructors
+#   race:qobjectdefs_impl.h
+#   race:QtPrivate::FunctorCall
+#   race:QtPrivate::QCallableObject
+#   race:QObject::event
+#   called_from_lib:libQt6Core.so.6
+#   called_from_lib:libglib
+#   race:CloseHandle
+#   race:wdspmain

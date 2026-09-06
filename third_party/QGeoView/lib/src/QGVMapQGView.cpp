@@ -50,6 +50,7 @@ QGVMapQGView::QGVMapQGView(QGVMap* geoMap)
     mScale = 1.0;
     mAzimuth = 0.0;
     mHorizontalWrapEnabled = false;
+    mVerticalBoundsEnabled = false;
     mMouseActions = QGV::MouseAction::All;
     mViewRect = viewport()->rect();
     mState = QGV::MapState::Idle;
@@ -140,6 +141,22 @@ bool QGVMapQGView::horizontalWrapEnabled() const
     return mHorizontalWrapEnabled;
 }
 
+void QGVMapQGView::setVerticalBoundsEnabled(bool enabled)
+{
+    if (mVerticalBoundsEnabled == enabled) {
+        return;
+    }
+    mVerticalBoundsEnabled = enabled;
+    if (enabled) {
+        cameraMove(viewRect().center());
+    }
+}
+
+bool QGVMapQGView::verticalBoundsEnabled() const
+{
+    return mVerticalBoundsEnabled;
+}
+
 void QGVMapQGView::cleanState()
 {
     changeState(QGV::MapState::Idle);
@@ -187,7 +204,9 @@ void QGVMapQGView::cameraScale(double scale)
     mScale = newScale;
     if (mHorizontalWrapEnabled) {
         updateHorizontalWrapSceneRect(oldCenter);
-        QGraphicsView::centerOn(oldCenter);
+    }
+    if (mHorizontalWrapEnabled || mVerticalBoundsEnabled) {
+        QGraphicsView::centerOn(constrainedCameraCenter(oldCenter));
     }
     applyCameraUpdate(oldState);
     qgvDebug() << "cameraScale" << scale;
@@ -211,7 +230,7 @@ void QGVMapQGView::cameraMove(const QPointF& projPos)
 {
     const QGVCameraState oldState = getCamera();
     const QPointF oldCenter = viewRect().center();
-    const QPointF target = projPos;
+    const QPointF target = constrainedCameraCenter(projPos);
     if (mHorizontalWrapEnabled) {
         // Keep x continuous instead of snapping the camera back into the base
         // world at the dateline. Tiles and overlays follow the current world
@@ -223,6 +242,26 @@ void QGVMapQGView::cameraMove(const QPointF& projPos)
         applyCameraUpdate(oldState);
         qgvDebug() << "cameraMove" << target;
     }
+}
+
+QPointF QGVMapQGView::constrainedCameraCenter(const QPointF& projPos) const
+{
+    if (!mVerticalBoundsEnabled) {
+        return projPos;
+    }
+
+    const QRectF world = mGeoMap->getProjection()->boundaryProjRect();
+    const double halfViewHeight = viewRect().height() * 0.5;
+    const double minY = world.top() + halfViewHeight;
+    const double maxY = world.bottom() - halfViewHeight;
+
+    QPointF result = projPos;
+    // Scale limits normally keep the viewport shorter than the world. The
+    // midpoint fallback also makes the constraint safe during construction
+    // and resize transitions where that invariant may briefly be false.
+    result.setY(minY <= maxY ? qBound(minY, projPos.y(), maxY)
+                             : world.center().y());
+    return result;
 }
 
 void QGVMapQGView::updateHorizontalWrapSceneRect(const QPointF& center)
@@ -695,7 +734,9 @@ void QGVMapQGView::resizeEvent(QResizeEvent* event)
     mViewRect = viewport()->rect();
     if (mHorizontalWrapEnabled) {
         updateHorizontalWrapSceneRect(oldCenter);
-        QGraphicsView::centerOn(oldCenter);
+    }
+    if (mHorizontalWrapEnabled || mVerticalBoundsEnabled) {
+        QGraphicsView::centerOn(constrainedCameraCenter(oldCenter));
     }
     mGeoMap->anchoreWidgets();
     applyCameraUpdate(oldState);

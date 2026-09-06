@@ -498,7 +498,7 @@ QString TciProtocol::generateInitBurst()
     burst += QStringLiteral("audio_stream_channels:2;");
     burst += QStringLiteral("audio_stream_samples:2048;");
     burst += QStringLiteral("tx_stream_audio_buffering:50;");
-    burst += QStringLiteral("iq_samplerate:48000;");
+    burst += QStringLiteral("iq_samplerate:%1;").arg(m_iqSampleRate);
 
     // START is a bidirectional device-state notification and belongs in the
     // state dump, not after it: WSJT-X's TCITransceiver gates its
@@ -567,9 +567,12 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "spot")             return cmdSpot(args);
     if (name == "spot_delete")      return cmdSpotDelete(args);
     if (name == "spot_clear")       return cmdSpotClear();
-    if (name == "iq_start")         return cmdIqStart(args);
-    if (name == "iq_stop")          return cmdIqStop(args);
-    if (name == "iq_samplerate")    return cmdIqSampleRate(args, args.size() >= 1 && !args[0].isEmpty());
+    // iq_start / iq_stop / iq_samplerate are handled entirely in
+    // TciServer::onTextMessage, which owns the shared DAX IQ stream lifecycle
+    // (per-receiver subscription sets, pan↔channel binding, refcounting across
+    // clients). The single-stream implementations that used to live here were
+    // removed rather than left unreachable: two implementations of one
+    // lifecycle, one of them wrong, is how the wrong one comes back.
     if (name == "keyer")            return cmdKeyer(args);
     if (name == "cw_keyer_speed")   return cmdCwKeyerSpeed(args, isSet);
     if (name == "cw_macros_delay")  return cmdCwMacrosDelay(args, isSet);
@@ -1122,10 +1125,11 @@ QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool /*isSet*/)
     if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
-    if (wpm < 5 || wpm > 100) return {};
-    QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) {
+        return {};
+    }
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("cw_macros_speed:%1;").arg(wpm);
@@ -1138,8 +1142,7 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
     // cw_msg:text — send CW macro text
     QString text = args.join(',');  // rejoin in case text had commas
     if (text.isEmpty()) return {};
-    QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         // Capability check runs HERE, on the model's thread, not in the caller:
         // this method is driven by the TCI client socket and RadioModel state is
         // not ours to read from it.
@@ -1148,7 +1151,12 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
                                 "CW keyer";
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        const QString rejection = model->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcCat) << "TCI: cw_msg ignored:" << rejection;
+            return;
+        }
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1617,19 +1625,65 @@ QString TciProtocol::cmdSpotClear()
 
 // ── CW macros ──────────────────────────────────────────────────────────────
 
+// See the contract on cwMacrosTextFromArgs() in TciProtocol.h for why numeric
+// first arguments fail closed while non-numeric ones retain compatibility.
+QString TciProtocol::cwMacrosTextFromArgs(const QStringList& args, int trxCount)
+{
+    if (args.isEmpty()) {
+        return {};
+    }
+    if (trxCount < 1) {
+        trxCount = 1;
+    }
+
+    // A base-10 integer in the receiver slot is always an address. If it no
+    // longer names a live advertised receiver, fail closed rather than
+    // reinterpreting it as text and putting the stale index on the air.
+    //
+    // args.join(',') on the TAIL, not on everything: the join is what lets a
+    // message legitimately CONTAIN commas (`cw_macros:0,CQ,CQ` keys "CQ,CQ"),
+    // which is why the original code joined at all. Only the index was wrong.
+    int trx = 0;
+    if (argToInt(args, 0, trx)) {
+        if (trx < 0 || trx >= trxCount) {
+            return {};
+        }
+        return args.mid(1).join(',');
+    }
+    return args.join(',');
+}
+
 QString TciProtocol::cmdCwMacros(const QStringList& args)
 {
-    if (!m_model || args.isEmpty()) return {};
-    QString text = args.join(',');
-    if (text.isEmpty()) return {};
-    QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    if (!m_model || args.isEmpty()) {
+        return {};
+    }
+
+    // TciServer and RadioModel share the GUI thread. Resolve against the
+    // receiver map now, while handling the command, so slice churn cannot
+    // change how the same wire message is interpreted one event-loop turn
+    // later. Only validated text crosses the queued boundary.
+    const int trxCount = m_trxMap ? m_trxMap->trxCount(m_model)
+                                  : static_cast<int>(m_model->slices().size());
+    const QString text = cwMacrosTextFromArgs(args, trxCount);
+    if (text.isEmpty()) {
+        qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 empty text or "
+                            "invalid receiver index";
+        return {};
+    }
+
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         if (!model->hasRadioSideCwKeyer()) {
             qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 radio has no "
                                 "radio-side CW keyer";
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        const QString rejection = model->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcCat) << "TCI: cw_macros ignored:" << rejection;
+            return;
+        }
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1638,107 +1692,12 @@ QString TciProtocol::cmdCwMacrosStop()
 {
     if (!m_model) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model]() {
-        if (!model->hasRadioSideCwKeyer()) return;
-        model->sendCmdPublic("cwx clear", nullptr);
-    }, Qt::QueuedConnection);
-    return {};
-}
-
-// ── IQ streaming ───────────────────────────────────────────────────────────
-
-QString TciProtocol::cmdIqStart(const QStringList& args)
-{
-    if (!m_model || args.isEmpty()) return {};
-    // Bound the index BEFORE the arithmetic: argToInt accepts INT_MAX (it
-    // parses cleanly — it is "99999999999" that clears ok), and `trx + 1`
-    // would then be signed overflow, i.e. UB reachable from any TCI client on
-    // the one PR whose whole subject is boundary validation. Checking the
-    // index rather than the result also subsumes the old channel range test.
-    //
-    // No observable behaviour changes: DaxIqModel::createStream() already
-    // rejects an out-of-range channel, so this is strictly about keeping the
-    // arithmetic defined for the weekly UBSan job. There is deliberately no
-    // test asserting the rejection — there would be nothing to observe — only
-    // a positive control that an in-range index still creates its stream.
-    int trx = 0;
-    if (!argToInt(args, 0, trx)) return {};
-    if (trx < 0 || trx > 3) return {};       // DAX IQ channels are 1-4
-    const int channel = trx + 1;  // TRX 0 → DAX IQ channel 1
-    // Creating the dax_iq stream is not enough to make IQ flow: on FlexRadio
-    // `daxiq_channel` is a Panadapter property, so the radio streams nothing
-    // (or a stale pan's IQ) until a panadapter is routed to this channel with
-    // `display pan set <panId> daxiq_channel=N`. The GUI does this from the
-    // spectrum overlay menu, but a TCI skimmer client (SDC / CW Skimmer) has no
-    // such hook — so bind the requested TRX's pan here. Mirrors the only other
-    // non-GUI IQ consumer, WfmDemodulator, and centers the stream on the same
-    // pan whose center is reported to the client via dds: (#3910/#3913).
-    const SliceModel* s = sliceForTrx(trx);
-    const QString panId = s ? s->panId() : QString();
-    QMetaObject::invokeMethod(m_model, [model = m_model, channel, panId]() {
-        model->daxIqModel().createStream(channel);
-        if (!panId.isEmpty())
-            model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
-                                   .arg(panId).arg(channel));
-    }, Qt::QueuedConnection);
-    return {};
-}
-
-QString TciProtocol::cmdIqStop(const QStringList& args)
-{
-    if (!m_model || args.isEmpty()) return {};
-    // Bounded before the addition, same as cmdIqStart above.
-    int trx = 0;
-    if (!argToInt(args, 0, trx)) return {};
-    if (trx < 0 || trx > 3) return {};       // DAX IQ channels are 1-4
-    const int channel = trx + 1;
-    QMetaObject::invokeMethod(m_model, [model = m_model, channel]() {
-        model->daxIqModel().removeStream(channel);
-    }, Qt::QueuedConnection);
-    return {};
-}
-
-QString TciProtocol::cmdIqSampleRate(const QStringList& args, bool isSet)
-{
-    if (!isSet) {
-        if (m_model) {
-            int rate = m_model->daxIqModel().stream(1).sampleRate;
-            return QStringLiteral("iq_samplerate:%1;").arg(rate);
+        if (!model->hasRadioSideCwKeyer()) {
+            return;
         }
-        return QStringLiteral("iq_samplerate:48000;");
-    }
-
-    if (args.isEmpty()) return {};
-    // Deliberately NOT the drop-on-unparseable posture the rest of this file
-    // uses: an unparseable rate joins the unsupported-rate branch below rather
-    // than returning {}. #3913 made this command reply to a rejection on
-    // purpose, because a skimmer (CW Skimmer / SDC) blocks waiting for the
-    // confirmation and silence would hang it. Rejecting is still rejecting —
-    // it just says so out loud, which is strictly better than dropping here.
-    int rate = 0;
-    const bool rateParsed = argToInt(args, 0, rate);
-    if (!rateParsed
-        || (rate != 24000 && rate != 48000 && rate != 96000 && rate != 192000)) {
-        // Reject without hanging the requester: report the rate that remains
-        // in force. No pending notification is set because other clients saw
-        // no state change (#3913 review).
-        const int currentRate = m_model
-            ? m_model->daxIqModel().stream(1).sampleRate
-            : 48000;
-        return QStringLiteral("iq_samplerate:%1;").arg(currentRate);
-    }
-    if (m_model) {
-        QMetaObject::invokeMethod(m_model, [model = m_model, rate]() {
-            model->daxIqModel().setSampleRate(1, rate);
-        }, Qt::QueuedConnection);
-    }
-    // Echo the achieved rate to BOTH the requester and other clients. The
-    // server is authoritative for the rate (it clamps/rejects above), so a
-    // skimmer (CW Skimmer / SDC) blocks waiting for this confirmation. The
-    // dispatcher sends the return value to the requesting socket and the
-    // pendingNotification to all *other* sockets, so each client gets exactly
-    // one copy — without the return, the requester got no reply at all. (#3910)
-    m_pendingNotification = QStringLiteral("iq_samplerate:%1;").arg(rate);
-    return QStringLiteral("iq_samplerate:%1;").arg(rate);
+        model->cwxModel().clearBuffer();
+    }, Qt::QueuedConnection);
+    return {};
 }
 
 // ── CW keyer (straight key via TCI) ────────────────────────────────────────
@@ -1767,10 +1726,9 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool /*isSet*/)
     if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
-    if (wpm < 5 || wpm > 100) return {};
-    QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) return {};
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("cw_keyer_speed:%1;").arg(wpm);
     return {};

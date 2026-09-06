@@ -3,6 +3,7 @@
 #include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/SystemInfo.h"
 #include "core/SettingsBootstrap.h"
 #include "core/SettingsCredentialPolicy.h"
 #include "core/SettingsDatabase.h"
@@ -14,6 +15,7 @@
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
+#include "core/SystemInventory.h"
 #include "core/MacMicPermission.h"
 #include "core/AutomationServer.h"
 
@@ -401,6 +403,17 @@ int main(int argc, char* argv[])
 #endif
     QApplication app(argc, argv);
 
+    // Name the GUI thread. Qt names the threads it starts, propagating
+    // QThread::objectName() in QThreadPrivate::start(), but the main thread was
+    // never started that way — so it is the one thread with no name, in the
+    // System Info table (#2554) and in Instruments, perf and ps alike. It is
+    // also usually the busiest, which made "busiest: (unnamed)" the first thing
+    // the Threads tab reported. On Linux only the Qt half applies: there the
+    // main thread is the thread-group leader, whose kernel name is the process
+    // name, so it was never unnamed and renaming it would rename the process
+    // for ps and pgrep (ThreadName.cpp).
+    AetherSDR::SystemInfo::setCurrentThreadName("AetherSDR-GUI");
+
 #ifdef Q_OS_MAC
     if (!startupAbortGuard.disarm()) {
         std::fputs("AetherSDR startup error: could not restore the SIGABRT "
@@ -693,6 +706,16 @@ int main(int argc, char* argv[])
 
     // Load per-module logging toggles (must be after AppSettings::load)
     AetherSDR::LogManager::instance().loadSettings();
+
+    // Hardware/capability inventory (#4986): after loadSettings() so the
+    // aether.sysinfo filter rules are live, and before the main window exists
+    // so no ggml code can have run yet (Copy Assist is built lazily on first
+    // panel open — on a CPU below the speech engine's ISA baseline, entering
+    // ggml is the crash this block diagnoses). Flushed explicitly so the block
+    // is on disk before anything else in startup runs, rather than on the
+    // async writer's next periodic flush.
+    AetherSDR::SystemInventory::logSystemInventory();
+    AetherSDR::LogManager::instance().flushLog();
 
     qDebug() << "Starting AetherSDR" << app.applicationVersion();
 

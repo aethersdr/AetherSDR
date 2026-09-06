@@ -35,6 +35,7 @@ Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtWarningMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcRender,     "aether.render",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
 Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
@@ -94,6 +95,7 @@ LogManager::LogManager()
         {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
         {"aether.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
         {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
+        {"aether.render",     "Render",       "Render pipeline: RHI/GPU path selection and fallback, paint stalls, texture upload churn"},
         {"aether.propforecast", "Propagation",  "Solar and propagation forecast updates"},
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
@@ -134,6 +136,7 @@ LogManager::LogManager()
         {"aether.icom.pan",     "Icom Scope",    "Icom spectrum scope: sweep frames, division reassembly, bounds"},
         {"aether.icom.link",    "Icom Link",     "Icom backend link state: connect/disconnect, model resolution, capability publication"},
         {"aether.icom.cred",    "Icom Credentials", "Icom credential storage and retrieval (no secret values are logged)"},
+        {"aether.sysinfo",    "System Info",  "Startup hardware/capability inventory: OS, CPU model + SIMD features, RAM, and the speech-engine ISA baseline check (#4986). A few lines once per launch"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
@@ -399,7 +402,7 @@ void LogManager::loadSettings()
     // Default Discovery, Commands, and Status to on
     static const QStringList defaultOn = {
         "aether.discovery", "aether.connection", "aether.protocol",
-        "aether.audio.summary", "aether.kiwisdr"
+        "aether.audio.summary", "aether.kiwisdr", "aether.sysinfo"
     };
     for (auto& c : m_categories) {
         QString def = defaultOn.contains(c.id) ? "True" : "False";

@@ -82,3 +82,17 @@ this list current when updating the snapshot.
     and keeps the projected point beneath the pinch centroid fixed. Both the
     view and viewport delivery paths are covered because `QGraphicsView`
     input targeting differs by platform.
+
+11. **`lib/src/QGVMapQGView.cpp` — optional vertical camera bounds.**
+    `setVerticalBoundsEnabled()` constrains the camera centre so the viewport
+    cannot move beyond the projection's north or south edge during pan, zoom,
+    or resize. It is off by default, preserving upstream behavior for callers
+    that do not opt in; AetherSDR enables it for the PSK Reporter map.
+
+12. **`lib/src/QGVLayerTiles.cpp` — coalesced tile-set bookkeeping during
+    camera gestures.** Existing tile graphics continue to follow the view
+    transform immediately, while the comparatively expensive active-tile-set
+    rebuild waits until camera input has been idle for 100 ms. Unlike patch 8,
+    this applies with or without horizontal wrapping. A continuous slow pan
+    can therefore defer newly required tile loads until the gesture pauses;
+    this is deliberate so tile scene churn does not stall map interaction.

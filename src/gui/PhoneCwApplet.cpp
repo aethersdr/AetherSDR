@@ -3,11 +3,15 @@
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "ComboStyle.h"
 #include "HGauge.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
 
+#include <cmath>
 #include <QPushButton>
+#include <QAccessible>
+#include <QStyle>
 #include <QLabel>
 #include <QLineEdit>
 #include <QIntValidator>
@@ -74,6 +78,7 @@ static const QString kGreenActive =
 static constexpr const char* kButtonBase =
     "QPushButton { background: #1a3a5a; border: 1px solid #205070; "
     "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; }"
+    "QPushButton[continuousCompressor=\"true\"] { font-size: 11px; font-weight: normal; }"
     "QPushButton:hover { background: #204060; }";
 
 static const QString kStepBtnStyle =
@@ -93,6 +98,7 @@ static constexpr const char* kInsetEditStyle =
     "QLineEdit:focus { border: 1px solid #00b4d8; }";
 
 static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+static constexpr float kLevelGaugeFloorDbfs = -40.0f;
 
 // Mouse-over readout formatter for the ALC gauges — one decimal of dBFS so a
 // transmitting operator can read the exact SSB-peak level off the bar rather
@@ -178,13 +184,29 @@ void PhoneCwApplet::setSelectableMicInputs(bool selectable)
                          "Its own input selection is made on the radio."));
 }
 
-void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
+void PhoneCwApplet::setMicLevelMeterState(MicMeterSessionState session,
+                                          bool available)
 {
-    if (m_micLevelMeterAvailable == available)
-        return;   // idempotent: this rides capabilitiesChanged, which repeats
+    const bool stateChanged = session != m_micLevelMeterSession
+                              || available != m_micLevelMeterAvailable;
+    m_micLevelMeterSession = session;
     m_micLevelMeterAvailable = available;
-    if (m_levelGauge)
-        m_levelGauge->setVisible(available);
+    if (!m_levelGauge) {
+        return;
+    }
+
+    const bool connected = session == MicMeterSessionState::Connected;
+
+    // A meter reading belongs to one radio session. MeterModel::clear()
+    // resets its cached values on disconnect but emits no mic-meter update, so
+    // explicitly discard the prior radio's fill and peak at the lifecycle
+    // boundary. An unsupported connected radio gets the same reset before the
+    // gauge is hidden. Reset only on a state edge: repeated capability
+    // publications while disconnected must not erase live PC-mic telemetry.
+    if (stateChanged && (!connected || !available)) {
+        resetLevelMeter();
+    }
+    m_levelGauge->setVisible(!connected || available);
 }
 
 void PhoneCwApplet::setDaxVisible(bool visible)
@@ -206,9 +228,11 @@ void PhoneCwApplet::buildPhonePanel()
     vbox->setSpacing(2);
 
     // ── Level gauge (mic peak, dBFS: -40 to +10) ────────────────────────
-    m_levelGauge = new HGauge(-40.0f, 10.0f, 0.0f, "Level", "dB",
+    m_levelGauge = new HGauge(kLevelGaugeFloorDbfs, 10.0f, 0.0f, "Level", "dB",
         {{-40, "-40dB"}, {-30, "-30"}, {-20, "-20"}, {-10, "-10"}, {0, "0"}, {5, "+5"}, {10, "+10"}},
         nullptr, -10.0f);
+    m_levelGauge->setObjectName(QStringLiteral("phoneMicLevelGauge"));
+    resetLevelMeter();
     m_levelGauge->setAccessibleName("Microphone level gauge");
     m_levelGauge->setAccessibleDescription("Microphone input level in dBFS");
     // Mouse-over readout: exact mic peak in dB. (#3936)
@@ -233,7 +257,7 @@ void PhoneCwApplet::buildPhonePanel()
     vbox->addWidget(m_compGauge);
 
     // ── ALC gauge (post-SW-ALC SSB-peak, dBFS) ──────────────────────────
-    // Mirrored in m_cwPanel; both gauges read from MeterModel::swAlcChanged
+    // Mirrored in m_cwPanel; both gauges read from MeterModel::alcValueChanged
     // so SSB operators watching mic gain see the same indicator CW
     // operators use to verify clean keying envelope shape.
     m_alcGaugePhone = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
@@ -356,19 +380,19 @@ void PhoneCwApplet::buildPhonePanel()
 
         auto* labelsRow = new QHBoxLayout;
         labelsRow->setContentsMargins(0, 0, 0, 0);
-        auto* norLbl = new QLabel("NOR");
-        auto* dxLbl = new QLabel("DX");
-        auto* dxPlusLbl = new QLabel("DX+");
+        m_procLowLabel = new QLabel("NOR");
+        m_procMidLabel = new QLabel("DX");
+        m_procHighLabel = new QLabel("DX+");
         const QString tickLabelStyle = "QLabel { color: #c8d8e8; font-size: 8px; }";
-        norLbl->setStyleSheet(tickLabelStyle);
-        dxLbl->setStyleSheet(tickLabelStyle);
-        dxPlusLbl->setStyleSheet(tickLabelStyle);
-        norLbl->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
-        dxLbl->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
-        dxPlusLbl->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-        labelsRow->addWidget(norLbl);
-        labelsRow->addWidget(dxLbl);
-        labelsRow->addWidget(dxPlusLbl);
+        m_procLowLabel->setStyleSheet(tickLabelStyle);
+        m_procMidLabel->setStyleSheet(tickLabelStyle);
+        m_procHighLabel->setStyleSheet(tickLabelStyle);
+        m_procLowLabel->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
+        m_procMidLabel->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
+        m_procHighLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
+        labelsRow->addWidget(m_procLowLabel);
+        labelsRow->addWidget(m_procMidLabel);
+        labelsRow->addWidget(m_procHighLabel);
         procVbox->addLayout(labelsRow);
 
         m_procSlider = new GuardedSlider(Qt::Horizontal);
@@ -400,8 +424,7 @@ void PhoneCwApplet::buildPhonePanel()
 
         connect(m_procSlider, &QSlider::valueChanged, this, [this](int pos) {
             if (!m_updatingFromModel && m_model) {
-                static constexpr int kLevels[] = {0, 1, 2};
-                m_model->setSpeechProcessorLevel(kLevels[qBound(0, pos, 2)]);
+                m_model->setSpeechProcessorLevel(pos);
             }
         });
 
@@ -455,7 +478,91 @@ void PhoneCwApplet::buildPhonePanel()
     }
 }
 
+void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int maximum)
+{
+    maximum = qBound(2, maximum, 100);
+    const bool continuousCompressor = maximum > 2;
+    const QString accessibleName = continuousCompressor
+        ? tr("Speech compressor") : tr("Speech processor");
+    m_procBtn->setText(label.isEmpty()
+                           ? (continuousCompressor ? QStringLiteral("COMP")
+                                                   : QStringLiteral("PROC"))
+                           : label);
+    // The four bold glyphs are ambiguous at the legacy button's 48 px width
+    // on macOS (the final P renders like F). Give only the continuous IC-9700
+    // presentation enough room and a clearer weight; preserve every legacy
+    // backend's established PROC geometry and typography exactly.
+    m_procBtn->setFixedWidth(continuousCompressor ? 54 : 48);
+    m_procBtn->setProperty("continuousCompressor", continuousCompressor);
+    m_procBtn->style()->unpolish(m_procBtn);
+    m_procBtn->style()->polish(m_procBtn);
+    if (m_procBtn->accessibleName() != accessibleName) {
+        m_procBtn->setAccessibleName(accessibleName);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_procBtn, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    const QString buttonDescription = continuousCompressor
+        ? tr("Toggle the radio speech compressor")
+        : tr("Toggle speech processor for compression");
+    if (m_procBtn->accessibleDescription() != buttonDescription) {
+        m_procBtn->setAccessibleDescription(buttonDescription);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_procBtn, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    const QSignalBlocker blocker(m_procSlider);
+    m_procSlider->setRange(0, maximum);
+    m_procSlider->setPageStep(maximum == 2 ? 1 : 10);
+    m_procSlider->setTickInterval(maximum == 2 ? 1 : 10);
+    m_procLowLabel->setText(maximum == 2 ? QStringLiteral("NOR") : QStringLiteral("0"));
+    m_procMidLabel->setText(maximum == 2 ? QStringLiteral("DX") : QStringLiteral("50"));
+    m_procHighLabel->setText(maximum == 2 ? QStringLiteral("DX+") : QStringLiteral("100"));
+    const QString sliderDescription = maximum == 2
+        ? tr("Speech processor level: Normal, DX, or DX+")
+        : tr("Speech compressor level from 0 to 100 percent");
+    if (m_procSlider->accessibleDescription() != sliderDescription) {
+        m_procSlider->setAccessibleDescription(sliderDescription);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_procSlider, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    if (m_model) {
+        m_procSlider->setValue(m_model->speechProcessorLevel());
+    }
+}
+
 // ── CW sub-panel ─────────────────────────────────────────────────────────────
+
+void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
+                                      int maxPitchHz, int pitchStepHz)
+{
+    if (minWpm > maxWpm || minPitchHz > maxPitchHz || pitchStepHz < 1) {
+        return;
+    }
+    // Changing sessions must not turn a range clamp into a radio command.
+    const QSignalBlocker blocker(m_speedSlider);
+    m_speedSlider->setRange(minWpm, maxWpm);
+    auto* speedValidator = qobject_cast<QIntValidator*>(
+        const_cast<QValidator*>(m_speedEdit->validator()));
+    speedValidator->setRange(minWpm, maxWpm);
+    if (!m_speedEdit->hasFocus() || !m_speedEdit->hasAcceptableInput()) {
+        m_speedEdit->setText(QString::number(m_speedSlider->value()));
+    }
+    m_speedEdit->setAccessibleDescription(
+        tr("CW keying speed in words per minute, %1 to %2").arg(minWpm).arg(maxWpm));
+    m_pitchMinHz = minPitchHz;
+    m_pitchMaxHz = maxPitchHz;
+    m_pitchStepHz = pitchStepHz;
+    auto* pitchValidator = qobject_cast<QIntValidator*>(
+        const_cast<QValidator*>(m_pitchEdit->validator()));
+    pitchValidator->setRange(minPitchHz, maxPitchHz);
+    m_pitchEdit->setAccessibleDescription(
+        tr("CW sidetone pitch in Hz, %1 to %2").arg(minPitchHz).arg(maxPitchHz));
+}
 
 void PhoneCwApplet::buildCwPanel()
 {
@@ -466,8 +573,8 @@ void PhoneCwApplet::buildCwPanel()
 
     // ── ALC gauge (post-SW-ALC SSB-peak, dBFS) ──────────────────────────
     // Mirrors the Phone-panel ALC gauge — both read from the same
-    // MeterModel::swAlcChanged source.  Range covers normal operating
-    // window (-20…0 dBFS); excessive ALC pins at 0.
+    // MeterModel::alcValueChanged source.  Range covers normal operating
+    // window by default (-20…0 dBFS); capabilities select native percent.
     m_alcGaugeCw = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugeCw->setFillFromRight(true);  // empty at -20, fills leftward toward 0
@@ -506,7 +613,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_delaySlider, 1);
 
         m_delayEdit = new QLineEdit("500");
-        m_delayEdit->setStyleSheet(kInsetEditStyle);
         m_delayEdit->setFixedWidth(kValueW);
         m_delayEdit->setAlignment(Qt::AlignCenter);
         m_delayEdit->setValidator(new QIntValidator(0, 2000, m_delayEdit));
@@ -549,7 +655,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_speedSlider, 1);
 
         m_speedEdit = new QLineEdit("20");
-        m_speedEdit->setStyleSheet(kInsetEditStyle);
         m_speedEdit->setFixedWidth(kValueW);
         m_speedEdit->setAlignment(Qt::AlignCenter);
         m_speedEdit->setValidator(new QIntValidator(5, 100, m_speedEdit));
@@ -564,7 +669,7 @@ void PhoneCwApplet::buildCwPanel()
                 m_model->setCwSpeed(v);
         });
         connect(m_speedEdit, &QLineEdit::editingFinished, this, [this]() {
-            int v = qBound(5, m_speedEdit->text().toInt(), 100);
+            int v = qBound(m_speedSlider->minimum(), m_speedEdit->text().toInt(), m_speedSlider->maximum());
             m_speedEdit->setText(QString::number(v));
             m_speedSlider->setValue(v);
         });
@@ -583,7 +688,6 @@ void PhoneCwApplet::buildCwPanel()
         m_sidetoneBtn->setFixedWidth(kLeftColW);
         m_sidetoneBtn->setAccessibleName("CW sidetone");
         m_sidetoneBtn->setAccessibleDescription("Toggle CW sidetone monitor");
-        m_sidetoneBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_sidetoneBtn);
 
         row->addSpacing(kGap);
@@ -596,7 +700,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_sidetoneSlider, 1);
 
         m_sidetoneEdit = new QLineEdit("50");
-        m_sidetoneEdit->setStyleSheet(kInsetEditStyle);
         m_sidetoneEdit->setFixedWidth(kValueW);
         m_sidetoneEdit->setAlignment(Qt::AlignCenter);
         m_sidetoneEdit->setValidator(new QIntValidator(0, 100, m_sidetoneEdit));
@@ -670,7 +773,6 @@ void PhoneCwApplet::buildCwPanel()
         m_breakinBtn->setFixedHeight(22);
         m_breakinBtn->setAccessibleName("CW break-in");
         m_breakinBtn->setAccessibleDescription("Toggle full break-in QSK mode");
-        m_breakinBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_breakinBtn);
 
         m_iambicBtn = new QPushButton("Iambic");
@@ -717,24 +819,24 @@ void PhoneCwApplet::buildCwPanel()
                 m_model->setCwIambic(on);
         });
 
-        // Pitch steps by 10 Hz (matching SmartSDR).
+        // Pitch steps and bounds follow the connected radio capabilities.
         // Read current value from the edit so rapid clicks accumulate
         // correctly without waiting for the radio roundtrip.
         connect(m_pitchDown, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
-            int hz = qBound(100, m_pitchEdit->text().toInt() - 10, 6000);
+            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt() - m_pitchStepHz, m_pitchMaxHz);
             m_model->setCwPitch(hz);
             m_pitchEdit->setText(QString::number(hz));
         });
         connect(m_pitchUp, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
-            int hz = qBound(100, m_pitchEdit->text().toInt() + 10, 6000);
+            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt() + m_pitchStepHz, m_pitchMaxHz);
             m_model->setCwPitch(hz);
             m_pitchEdit->setText(QString::number(hz));
         });
         connect(m_pitchEdit, &QLineEdit::editingFinished, this, [this]() {
             if (!m_model) return;
-            int hz = qBound(100, m_pitchEdit->text().toInt(), 6000);
+            int hz = qBound(m_pitchMinHz, m_pitchEdit->text().toInt(), m_pitchMaxHz);
             m_pitchEdit->setText(QString::number(hz));
             m_model->setCwPitch(hz);
         });
@@ -742,6 +844,98 @@ void PhoneCwApplet::buildCwPanel()
         vbox->addLayout(row);
     }
 
+    // ── APF: toggle button + level slider + inset value ─────────────────
+    // The audio peaking filter was reachable only from the slice flag's DSP
+    // tab, which is two clicks away and closes on focus loss.  CW operators
+    // ride it constantly, so it belongs on the always-visible CW face next to
+    // the other keying controls (#4879).  Same SliceModel as the DSP-tab pair,
+    // so the two surfaces mirror each other with no bridging.
+    {
+        // The row lives in its own container so the capability gate can hide it
+        // whole — see setHasAudioPeakingFilter().
+        m_apfRow = new QWidget;
+        m_apfRow->setObjectName(QStringLiteral("cwApfRow"));
+        auto* row = new QHBoxLayout(m_apfRow);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+
+        m_apfBtn = new QPushButton("APF");
+        m_apfBtn->setCheckable(true);
+        m_apfBtn->setFixedHeight(22);
+        m_apfBtn->setFixedWidth(kLeftColW);
+        // A stable id for the automation bridge, which addresses controls by
+        // objectName before accessible name — see the note on makeDsp() in
+        // VfoWidget.cpp.  The DSP-tab twin is "dspAPFBtn".
+        m_apfBtn->setObjectName(QStringLiteral("cwApfBtn"));
+        m_apfBtn->setAccessibleName("CW audio peaking filter");
+        m_apfBtn->setAccessibleDescription(
+            "Toggle the CW audio peaking filter on the active slice");
+        m_apfBtn->setToolTip("CW audio peaking filter — narrows the audio "
+                             "passband around the CW pitch frequency to improve S/N.");
+        row->addWidget(m_apfBtn);
+
+        row->addSpacing(kGap);
+
+        m_apfSlider = new GuardedSlider(Qt::Horizontal);
+        m_apfSlider->setObjectName(QStringLiteral("cwApfSlider"));
+        m_apfSlider->setRange(0, 100);
+        m_apfSlider->setValue(50);
+        m_apfSlider->setAccessibleName("APF bandwidth");
+        m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
+        m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the "
+                                "peak for better CW selectivity. Enabled when APF is on.");
+        applyPrimarySliderStyle(m_apfSlider);
+        row->addWidget(m_apfSlider, 1);
+
+        m_apfEdit = new QLineEdit("50");
+        m_apfEdit->setFixedWidth(kValueW);
+        m_apfEdit->setAlignment(Qt::AlignCenter);
+        m_apfEdit->setValidator(new QIntValidator(0, 100, m_apfEdit));
+        m_apfEdit->setAccessibleName("APF bandwidth value");
+        m_apfEdit->setAccessibleDescription("CW audio peaking filter bandwidth, 0 to 100");
+        row->addWidget(m_apfEdit);
+
+        // m_hasAudioPeakingFilter is checked on the OUTBOUND edge too, not
+        // just in the sync. Hiding and disabling the row stops a person
+        // driving it, but the automation bridge and any programmatic
+        // setChecked() still reach the signal — and a verb this radio's
+        // firmware cannot execute must not leave the client on any path.
+        connect(m_apfBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
+                m_slice->setApf(on);
+        });
+        connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_apfEdit->hasFocus())
+                m_apfEdit->setText(QString::number(v));
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
+                m_slice->setApfLevel(v);
+        });
+        connect(m_apfEdit, &QLineEdit::editingFinished, this, [this]() {
+            const int v = qBound(0, m_apfEdit->text().toInt(), 100);
+            m_apfEdit->setText(QString::number(v));
+            m_apfSlider->setValue(v);
+        });
+
+        vbox->addWidget(m_apfRow);
+    }
+
+    // ── One setStyleSheet() site per style, for the whole CW face ────────
+    // tools/audit_colours.py ratchets on setStyleSheet() CALL SITES rather than
+    // on colours, so every control added here used to cost the PR that added it
+    // two sites against its base. Styling the widgets together costs one apiece
+    // for the panel — and the next control is free.
+    //
+    // m_iambicBtn and the two pan labels are deliberately left alone: they use
+    // kBlueActive and kDimLabelStyle, and folding one-offs in here would trade
+    // a site for a conditional.
+    for (QPushButton* btn : {m_sidetoneBtn, m_breakinBtn, m_apfBtn})
+        btn->setStyleSheet(QString(kButtonBase) + kGreenActive);
+    for (QLineEdit* edit : {m_delayEdit, m_speedEdit, m_sidetoneEdit, m_apfEdit})
+        edit->setStyleSheet(kInsetEditStyle);
+
+    // No slice is bound until AppletPanel::setSlice runs, so start the row
+    // inert rather than showing controls that would silently go nowhere.
+    syncApfFromSlice();
 }
 
 // ── Mode switching ───────────────────────────────────────────────────────────
@@ -822,6 +1016,77 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
     syncCwFromModel();
 }
 
+// ── Slice binding ────────────────────────────────────────────────────────────
+
+void PhoneCwApplet::setSlice(SliceModel* slice)
+{
+    // Disconnect before re-binding.  This is the whole slice→applet edge, and
+    // the applet owns every connection on it, so a blanket disconnect is exact.
+    if (m_slice)
+        disconnect(m_slice, nullptr, this, nullptr);
+
+    m_slice = slice;
+
+    if (m_slice) {
+        connect(m_slice, &SliceModel::modeChanged,
+                this, &PhoneCwApplet::setMode);
+        // Radio-side echo drives the UI; the button below only requests
+        // (Principle II).  Both edges land here, so an APF change made from
+        // the DSP tab, another Multi-Flex client, or the front panel shows up
+        // on this face too.
+        connect(m_slice, &SliceModel::apfChanged,
+                this, &PhoneCwApplet::syncApfFromSlice);
+        connect(m_slice, &SliceModel::apfLevelChanged,
+                this, &PhoneCwApplet::syncApfFromSlice);
+        setMode(m_slice->mode());
+    }
+
+    syncApfFromSlice();
+}
+
+void PhoneCwApplet::setHasAudioPeakingFilter(bool has)
+{
+    // APF's ONLY effect is `slice set <n> apf=`. That is a Flex firmware verb,
+    // not "any radio-side DSP" — Icom declares hasRadioSideDsp for NR/NB/notch
+    // and has no APF register, which is why this row is behind
+    // hasAudioPeakingFilter rather than hasRadioSideDsp (HERMES §17).
+    //
+    // Rides capabilitiesChanged, which repeats on every edge, so bail on no-op.
+    if (m_hasAudioPeakingFilter == has)
+        return;
+    m_hasAudioPeakingFilter = has;
+    syncApfFromSlice();
+}
+
+void PhoneCwApplet::syncApfFromSlice()
+{
+    if (!m_apfBtn) return;
+
+    // Hidden, not merely disabled, on a radio with no audio peaking filter —
+    // matching VfoWidget::applyRadioSideDspVisibility(), which hides rather
+    // than greys the DSP grid's buttons. A disabled control still claims the
+    // feature exists here and is simply unavailable right now, which is the
+    // wrong thing to tell someone on an Icom.
+    if (m_apfRow)
+        m_apfRow->setVisible(m_hasAudioPeakingFilter);
+
+    const bool bound = m_hasAudioPeakingFilter && !m_slice.isNull();
+    const bool on    = bound && m_slice->apfOn();
+    const int  level = bound ? m_slice->apfLevel() : 50;
+
+    m_updatingFromModel = true;
+    m_apfBtn->setEnabled(bound);
+    m_apfBtn->setChecked(on);
+    // The level row follows the filter's engagement, radio echo included — a
+    // slider that talks to a disengaged filter reads as "APF is broken" (#4658).
+    m_apfSlider->setEnabled(bound && on);
+    m_apfEdit->setEnabled(bound && on);
+    m_apfSlider->setValue(level);
+    if (!m_apfEdit->hasFocus())
+        m_apfEdit->setText(QString::number(level));
+    m_updatingFromModel = false;
+}
+
 // ── Phone sync ───────────────────────────────────────────────────────────────
 
 void PhoneCwApplet::syncPhoneFromModel()
@@ -856,7 +1121,7 @@ void PhoneCwApplet::syncPhoneFromModel()
 
     {
         int level = m_model->speechProcessorLevel();
-        int pos = qBound(0, level, 2);
+        int pos = qBound(m_procSlider->minimum(), level, m_procSlider->maximum());
         m_procSlider->setValue(pos);
     }
 
@@ -951,19 +1216,88 @@ void PhoneCwApplet::applyLevelMeterReceiveGate()
     }
 }
 
+void PhoneCwApplet::resetLevelMeter()
+{
+    m_levelGauge->setValueImmediate(kLevelGaugeFloorDbfs);
+    m_levelGauge->clearPeak();
+}
+
+void PhoneCwApplet::setCompressionMaximumDb(float maximum)
+{
+    if (!std::isfinite(maximum) || maximum <= 0.0f || maximum == m_compressionMaximumDb) {
+        return;
+    }
+    m_compressionMaximumDb = maximum;
+    QVector<HGauge::Tick> ticks;
+    for (float value = maximum; value > 0.0f; value -= 5.0f) {
+        ticks.append({-value, value == maximum
+            ? QStringLiteral("-%1dB").arg(value) : QString::number(-value)});
+    }
+    ticks.append({0.0f, QStringLiteral("0")});
+    m_compGauge->setRange(-maximum, 0.0f, 1.0f, ticks);
+}
+
 void PhoneCwApplet::updateCompression(float compPeak)
 {
-    // MeterModel exposes COMPPEAK as a positive 0..25 dB compression amount.
-    // The P/CW gauge face is reversed: 0 = none, -25 = full.
-    const float compressionDb = qBound(0.0f, compPeak, 25.0f);
+    // MeterModel exposes a positive physical amount; the face fills in reverse.
+    const float compressionDb = qBound(0.0f, compPeak, m_compressionMaximumDb);
     m_compGauge->setValue(-compressionDb);
+}
+
+void PhoneCwApplet::setAlcMeterUnit(const QString& unit)
+{
+    if (unit == m_alcMeterUnit) {
+        return;
+    }
+    if (unit != QLatin1String("Percent") && unit != QLatin1String("dBFS")) {
+        return;
+    }
+    m_alcMeterUnit = unit;
+    const bool percent = unit == QLatin1String("Percent");
+    const QVector<HGauge::Tick> ticks = percent
+        ? QVector<HGauge::Tick>{{0, "0"}, {25, "25"}, {50, "50"}, {75, "75"}, {100, "100"}}
+        : QVector<HGauge::Tick>{{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}};
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (!gauge) {
+            continue;
+        }
+        gauge->setUnit(percent ? QStringLiteral("%") : QStringLiteral("dBFS"));
+        gauge->setRange(percent ? 0.0f : -20.0f, percent ? 100.0f : 0.0f,
+                        percent ? 85.0f : -3.0f, ticks);
+        gauge->setAccessibleDescription(percent
+            ? tr("Automatic level control — radio-reported percent")
+            : tr("Automatic level control — post-software-ALC SSB peak (dBFS)"));
+        gauge->setHoverValueFormatter(percent
+            ? std::function<QString(float)>([](float value) {
+                return QStringLiteral("%1 %").arg(QString::number(value, 'f', 1));
+              }) : alcHoverFormatter());
+    }
+    // A unit change invalidates the old animation coordinates immediately.
+    const float floor = percent ? 0.0f : kAlcGaugeFloorDbfs;
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (gauge) {
+            gauge->setValueImmediate(floor);
+            gauge->clearPeak();
+        }
+    }
+}
+
+void PhoneCwApplet::resetAlc()
+{
+    const float floor = m_alcMeterUnit == QLatin1String("Percent") ? 0.0f : -20.0f;
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (gauge) {
+            gauge->setValue(floor);
+            gauge->clearPeak();
+        }
+    }
 }
 
 void PhoneCwApplet::updateAlc(float alc)
 {
-    // Single source (MeterModel::swAlcChanged) → both panel mirrors.
-    // HGauge clamps to its construction range, so values outside [-20, 0]
-    // pin at the appropriate end.
+    // Single source (MeterModel::alcValueChanged) → both panel mirrors.
+    // HGauge clamps to the capability-selected native range: percent for
+    // Icom and the existing dBFS range for host ALC.
     if (m_alcGaugePhone) m_alcGaugePhone->setValue(alc);
     if (m_alcGaugeCw)    m_alcGaugeCw->setValue(alc);
 }

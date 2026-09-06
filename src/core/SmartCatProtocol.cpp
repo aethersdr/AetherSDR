@@ -983,7 +983,9 @@ QString SmartCatProtocol::cmdKS(const QString& arg)
         return "KS" + fmt3(tx.cwSpeed()) + ";";
     bool ok;
     int wpm = arg.toInt(&ok);
-    if (!ok || wpm < 5 || wpm > 100) return "?;";
+    if (!ok || wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) {
+        return "?;";
+    }
     tx.setCwSpeed(wpm);
     return {};
 }
@@ -1015,13 +1017,21 @@ QString SmartCatProtocol::cmdKY(const QString& arg)
     // while every set went nowhere. Direct read on the CAT thread, the same
     // posture as the cwxActive() read this replaces.
     if (!m_model->hasRadioSideCwKeyer()) return "?;";
-    if (arg.isEmpty())
+    if (arg.isEmpty()) {
+        if (!m_model->hasCwTextProgress()) {
+            return "?;";
+        }
         return QString("KY%1;").arg(m_model->cwxActive() ? 1 : 0);
+    }
     if (arg.size() < 2) return "?;";
     // arg[0] is the fixed P1 space; text starts at arg[1], max 24 chars
     const QString text = arg.mid(1).left(24);
-    if (!text.isEmpty())
+    if (!m_model->cwTextValidationError(text).isEmpty()) {
+        return "?;";
+    }
+    if (!text.isEmpty()) {
         m_model->cwxModel().send(text);
+    }
     return {};
 }
 

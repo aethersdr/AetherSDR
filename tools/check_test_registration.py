@@ -35,6 +35,12 @@ CANONICAL = Path("tests/tests.cmake")
 # Strip # comments before scanning: the root file's tombstone comment names the
 # very patterns below, on purpose, so that a grep for them lands on the sign that
 # says where they went.
+# CMake bracket comments (#[=[ ... ]=]) span lines and are now a load-bearing
+# idiom in tests.cmake (retired fixture declarations live inside them). Strip
+# them FIRST: the line-comment regex below only eats the opener's own line, so
+# without this pass a bracket-commented add_executable/add_test elsewhere would
+# be reported as a live stray declaration.
+BRACKET_COMMENT = re.compile(r"#\[(=*)\[.*?\]\1\]", re.S)
 COMMENT = re.compile(r"#[^\n]*")
 
 TEST_TARGET = re.compile(r"^\s*add_executable\s*\(\s*([A-Za-z0-9_-]+_test)\b", re.M)
@@ -81,7 +87,8 @@ def main() -> int:
         # not cover either, since that one scans only the root listfile.
         if rel.parent == Path("tests") and rel.name.startswith(("run_", "verify_")):
             continue
-        code = COMMENT.sub("", path.read_text(encoding="utf-8", errors="replace"))
+        code = COMMENT.sub(
+            "", BRACKET_COMMENT.sub("", path.read_text(encoding="utf-8", errors="replace")))
         for match in TEST_TARGET.finditer(code):
             line = code[:match.start()].count("\n") + 1
             strays.append((rel, line, f"add_executable({match.group(1)} ...)"))

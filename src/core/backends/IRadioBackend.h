@@ -33,6 +33,23 @@ struct RadioConnectRequest {
     QVariantMap params;     // family-specific extras (namespaced by the backend)
 };
 
+// Complete radio-owned memory state applied after the common frequency/mode
+// fields. Keeping this as one value object prevents positional call sites from
+// silently swapping the independent TX/RX tone and DTCS fields.
+struct MemoryRecallDetails {
+    int sliceId = -1;
+    int filterPreset = 0;
+    bool dataMode = false;
+    QString direction;
+    double offsetHz = 0.0;
+    QString toneMode;
+    double txToneHz = 0.0;
+    double rxToneHz = 0.0;
+    int dtcsCode = 23;
+    bool dtcsTxReverse = false;
+    bool dtcsRxReverse = false;
+};
+
 // The radio-facing seam of the engine (aetherd RFC §5.5). Everything that
 // speaks a vendor wire protocol lives *behind* this interface, inside
 // libaethercore; RadioModel and the (future) protocol see only this. The
@@ -112,6 +129,16 @@ public:
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
+    // Select a stable radio-owned RX filter preset. The passband setter above
+    // remains exclusively a resize/reposition intent; keeping the two verbs
+    // distinct prevents a width that happens to equal a preset from changing
+    // slots. Empty RadioCapabilities::rxFilterControl.presets means callers
+    // never invoke this default no-op.
+    virtual void setSliceFilterPreset(int sliceId, int presetId)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(presetId);
+    }
     // Receive AGC. mode is the neutral vocabulary the slice model uses —
     // "off" / "slow" / "med" / "fast"; thresholdDb is the operator's 0..100
     // AGC-threshold value. A backend whose hardware owns the AGC translates
@@ -221,6 +248,7 @@ public:
         Q_UNUSED(sliceId);
         Q_UNUSED(antenna);
     }
+    virtual void setRadioDialLock(bool locked) { Q_UNUSED(locked); }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -432,11 +460,27 @@ public:
     // TransmitModel, so this seam would be a second, redundant opinion.
     virtual void setCwPitch(int hz) { Q_UNUSED(hz); }
 
-    // The speech processor, as the operator sees it: an enable plus one of
-    // three presets (0 = NOR, 1 = DX, 2 = DX+).
+    // Radio-resident text keyer. Unlike setCwKeying(), this hands printable
+    // text to a keyer in the radio; it is the neutral seam used by CWX, CAT,
+    // MIDI/controller macros and the automation bridge.
+    // Empty return means accepted for delivery. A non-empty string is an
+    // operator-facing rejection reason; callers must not report success when
+    // the backend could not preserve the requested text.
+    virtual QString sendCwText(const QString& text)
+    {
+        Q_UNUSED(text);
+        return QStringLiteral("radio has no text keyer");
+    }
+    virtual void abortCwText() {}
+    virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
+    virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
+
+    // The speech processor, as the operator sees it: an enable plus a
+    // normalized level. RadioCapabilities publishes whether the presentation
+    // is Flex's three presets (0..2) or an evidenced continuous range.
     //
     // That shape is FlexRadio's, and it is not universal. On a radio with its
-    // own compressor the two halves are SEPARATE registers — the IC-705 wants
+    // own compressor the two halves are SEPARATE registers — an Icom wants
     // 16 44 for the enable and 14 0E for how hard — so a backend receives both
     // together and decides how to spend them. Default no-op: Flex takes this as
     // text from TransmitModel, and a host-modulating backend runs its own
@@ -526,6 +570,66 @@ public:
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
 
+    // FM repeater controls.  These are separate radio registers on an Icom
+    // (tone enable, tone frequency, duplex direction and duplex magnitude),
+    // while a Flex carries the same neutral values in slice status.  Keeping
+    // the four intents explicit lets a backend update only the register the
+    // operator touched; the grouped helper is for memory recall, where all four
+    // must be re-applied after the frequency change in a deterministic order.
+    virtual void setSliceFmToneMode(int sliceId, const QString& mode)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(mode);
+    }
+    virtual void setSliceFmToneValue(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
+    virtual void setSliceFmToneRxValue(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
+    virtual void setSliceFmDtcs(int sliceId, int code, bool txReverse,
+                                bool rxReverse)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(code); Q_UNUSED(txReverse); Q_UNUSED(rxReverse);
+    }
+    virtual void setSliceRepeaterOffsetDir(int sliceId, const QString& direction)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(direction);
+    }
+    virtual void setSliceFmRepeaterOffset(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
+    virtual void setSliceFmRepeater(int sliceId, const QString& direction,
+                                    double offsetHz, const QString& toneMode,
+                                    double toneHz)
+    {
+        // The IC-705 can clear repeater tone after a frequency change.  Memory
+        // recall calls this only after tuning, and enables the tone last.
+        setSliceFmRepeaterOffset(sliceId, offsetHz);
+        setSliceRepeaterOffsetDir(sliceId, direction);
+        setSliceFmToneValue(sliceId, toneHz);
+        setSliceFmToneMode(sliceId, toneMode);
+    }
+    virtual bool applyMemoryRecallDetails(const MemoryRecallDetails& details)
+    {
+        Q_UNUSED(details.filterPreset); Q_UNUSED(details.dataMode);
+        Q_UNUSED(details.rxToneHz); Q_UNUSED(details.dtcsCode);
+        Q_UNUSED(details.dtcsTxReverse); Q_UNUSED(details.dtcsRxReverse);
+        setSliceFmRepeater(details.sliceId, details.direction, details.offsetHz,
+                           details.toneMode, details.txToneHz);
+        return true;
+    }
+
+    // Request a fresh snapshot from a radio-owned memory store. Backends that
+    // only push changes, or whose memories live on the host, leave this a no-op.
+    virtual void refreshMemories(const QString& group) { Q_UNUSED(group); }
+
+    // Momentary receive-on-transmit-frequency state (Icom XFC). This is
+    // radio-wide selected-VFO state, not a memory/slice parameter.
+    virtual void setTransmitFrequencyCheck(bool on) { Q_UNUSED(on); }
+
     virtual void setRitEnabled(bool on) { Q_UNUSED(on); }
     virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
     virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
@@ -605,6 +709,17 @@ public:
         Q_UNUSED(clientLeveled);
     }
 
+    // Finish a finite processed-audio stream before its caller starts the PTT
+    // drain timer. Stateful converters may emit delayed tail samples here;
+    // streaming/no-op backends have nothing to do.
+    //
+    // Returns how many milliseconds of already-submitted audio are still to be
+    // PLAYED after this call returns — everything queued on the host plus
+    // whatever the radio buffers before its modulator — so the caller can hold
+    // PTT for exactly that long rather than a compile-time worst case. Zero
+    // means "nothing is buffered on your behalf; unkey when you like".
+    virtual int finishTxAudio() { return 0; }
+
     // ---- diagnostics ----
     //
     // A snapshot of whatever health/status registers this backend can report:
@@ -636,6 +751,28 @@ public:
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
+
+    // WHAT THE DSP IS ACTUALLY CONFIGURED WITH, as opposed to what the model
+    // says it asked for.
+    //
+    // The recurring failure on a new backend is model/DSP divergence: a control
+    // moves, the model records it, and nothing reaches the DSP. That reads as
+    // "the control does nothing", which is the hardest symptom to act on
+    // because it is indistinguishable from the operator having misunderstood
+    // the control. `get_state` answers from the MODEL and so cannot see it.
+    //
+    // Each entry describes ONE chain and must carry a `chain` key naming which
+    // — a backend may run more than one, and they need not share a vocabulary.
+    // A Hermes-Lite 2 runs WDSP on receive and a hand-written phasing modulator
+    // on transmit, whose config is a different struct entirely; reporting both
+    // under one shape would mean inventing a union that describes neither. A
+    // reader keys off `chain` rather than guessing from which fields are
+    // present.
+    //
+    // Empty by default: a backend that cannot answer must report nothing rather
+    // than zeros, for the same reason healthSnapshot() distinguishes "0" from
+    // "we never heard".
+    virtual QVariantList dspChains() const { return {}; }
 
     // The state of the TRANSPORT carrying this radio's streams, as opposed to
     // the state of the radio itself (which is healthSnapshot's job).
@@ -719,6 +856,12 @@ signals:
 
     void capabilitiesChanged();
 
+    // Radio-authoritative state for the momentary transmit-frequency monitor.
+    void transmitFrequencyCheckChanged(bool on);
+    // Radio-authoritative global dial-lock state. RadioModel fans this out to
+    // every slice because a radio-global control must not look per-slice.
+    void radioDialLockChanged(bool locked);
+
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,
     // not when traffic arrives — the tick has to keep coming after the radio
     // goes quiet, because "nothing arrived this second" is the observation the
@@ -753,6 +896,11 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    // An explicit radio readback confirmed the keyed state. This is distinct
+    // from transmitChanged because optimistic state may already equal the
+    // answer and therefore produce no delta. Backends without a separate
+    // command/readback plane need not emit it.
+    void keyingStateConfirmed(bool keyed);
 
     // Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode
     // split, #4094). Typed + present-only; the backend translates the SmartSDR
@@ -783,6 +931,11 @@ signals:
     // RadioModel applies it to MemoryEntry (text sanitisation is a model
     // concern) or drops the slot when delta.removed is set.
     void memoryChanged(const MemoryDelta& delta);
+    void memoryRefreshStarted(int total);
+    void memoryRefreshProgress(int completed, int total);
+    // All deltas for this sweep precede completion. This reports radio reads;
+    // RadioModel combines it with import/save results for its UI-facing signal.
+    void memoryRefreshFinished(bool success, int completed, int total);
 
     // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The
     // backend parses the vendor "profile <type> …" status (list/current + the

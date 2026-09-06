@@ -13,8 +13,12 @@ protocol bytes flow either way), plus a Peripherals settings row.
 Status/telemetry decode with model identification, Operate/Standby toggle,
 power-level cycle, TUNE, switch-off, the band/antenna/input keys, and remote
 power-ON (§4 — the one feature that needs the proxy in RFC 2217 telnet mode).
-No menu navigation (arrows/SET/DISPLAY), no manual L/C ATU stepping, no
-CAT-configuration mirror.
+The applet has two presentations (§10): the compact rail layout, and a
+floating window that adds a **live mirror of the amplifier's own LCD**
+(§11) plus the remaining front-panel keys (BAND±, SET, L±/C±) — menu
+navigation is deliberately available ONLY next to that mirror, never
+blind. No CAT-configuration mirror, no firmware operations (KTerm
+territory, spec §1).
 
 ---
 
@@ -124,9 +128,13 @@ GUI refreshes readouts at 10 Hz anyway, and the reference application's
 Network mode expects a ser2net proxy in **raw or telnet** mode — unlike the
 ACOM (raw-only), both are supported and telnet is verified on real
 hardware: the validation station's ser2net runs `accepter: telnet`. The
-parser's sync-run resync shrugs off telnet negotiation, and the rare status
-frame whose checksum byte is 0xFF (which telnet IAC-escapes) is dropped and
-re-polled 100 ms later — harmless in a polled protocol. Remote power-ON (§4)
+parser's sync-run resync shrugs off telnet negotiation. LCD frames are
+checksum-validated after accepting either byte-exact raw data or telnet's
+doubled-IAC representation, so a glyph/attribute byte of 0xFF cannot corrupt
+the mirror. The rare Status frame whose checksum byte is 0xFF is still dropped
+and re-polled 100 ms later — harmless in a polled protocol. RFC 2217 replies
+are scanned only while an explicit negotiation is pending, and an escaped
+`FF FF FE 2C` payload cannot be mistaken for `IAC DONT 2C`. Remote power-ON (§4)
 is the one feature that needs more than telnet framing: it drives the proxy's
 control lines via RFC 2217, so that port must be
 `accepter: telnet(rfc2217=true),<port>`. Everything else — polling,
@@ -152,9 +160,8 @@ transcribed in `SpeProtocol.cpp`).
 | TUNE | Yes | Explicit, user-initiated click — transmit-on-intent (Principle VI) is satisfied by it being a deliberate button, exactly like the amp's own front-panel key. The amp itself refuses to tune without drive ("Tuning with no power" warning). |
 | ANTENNA, INPUT | Yes | One-keystroke conveniences the status display fully reflects on the next poll. |
 | ◄/► arrow keys (▼/▲ buttons) | Yes | On the Expert these adjust the requested drive power from the radio over CAT — an operating-time control, not menu navigation. |
-| BAND± | No | The amp follows the radio's band via CAT/RF sensing on its own; a manual band override from a radio-control app invites disagreement between the two. Deferred, not rejected. |
+| BAND±, SET, L±/C± (FRONT PANEL group) | Floating only | Originally excluded because blind menu navigation without the amp's display is a foot-gun. The floating presentation's live LCD mirror (§11) removes the "blind": the operator navigates the amplifier's own menu while watching the amplifier's own screen, exactly as at the front panel. The compact rail keeps them hidden — the original reasoning still applies where the mirror is absent. DISPLAY stays unexposed (it only cycles the physical panel's pages). |
 | Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
-| SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
 | Remote power-ON (ON button) | Yes | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network `SpeConnection::powerOn()` drives the proxy's DTR/RTS lines via **RFC 2217** COM-port-control (needs `accepter: telnet(rfc2217=true),<port>` — the Peripherals row's tooltip carries the reference `ser2net.yaml`); on a local COM port it drives the lines directly. The pulse sequence (DTR on 100 ms, DTR off + RTS on 1000 ms, DTR on + RTS off) is carried verbatim from the field-proven reference application, so **RTS carries the 1 s power pulse** and the sequence ends with RTS low. The ON button is the one control that stays enabled while the amp is silent — that is its entire purpose. Because a proxy that is not in RFC 2217 mode silently discards the SET-CONTROL frames, `powerOn()` reads the peer's answer to `WILL COM-PORT-OPTION` and reports what it actually agreed to — `DO`, `DONT`, or no answer at all (raw mode) — instead of claiming the pulse landed. The pulse itself is always sent: sending into a proxy that ignores COM-port control is harmless, so the gate is on the *reporting*, not on the attempt. |
 | Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
 
@@ -277,3 +284,65 @@ no entry — the manifest tracks `core/`/`models/` headers, not `gui/` files.
 - Whether the ACK for a keystroke should drive optimistic UI updates.
   v1 deliberately waits for the next status poll (≤300 ms) instead —
   radio-authoritative live state (Principle II) applied to a peripheral.
+
+---
+
+## 10. Two presentations: rail and window
+
+`SpeApplet::setFloating()` (driven by the container's `dockModeChanged`,
+same pattern as the PWR cross-needle) switches between:
+
+- **Docked** — the compact rail layout, unchanged from v1.
+- **Floating** — roomier margins and type scale, taller gauges, a
+  fixed-size status pill (left at the default size policy it inflated
+  into a block when the window handed the header row real height —
+  hardware-observed), content top-anchored via a trailing stretch, and
+  two additions the rail has no room for: the LCD mirror (§11) and the
+  FRONT PANEL key group (BAND±, SET, L±/C±). Every mode-dependent style
+  is a ThemeManager template, so theme changes re-resolve both
+  presentations.
+
+The presentation switch also gates the LCD polling
+(`SpeApplet::lcdPollingWanted` → `SpeConnection::setLcdPolling`): docked,
+the display is neither shown nor requested.
+
+## 11. The LCD mirror
+
+The spec's foreword advertises remote display copies ("a perfect copy of
+the display ... in less than 400 bytes") and documents nothing about
+them. The working mechanism — carried from the contributing author's v2
+control application and re-validated against the real 1.5K-FA (see
+`THIRD_PARTY_LICENSES` for the provenance chain, which ends at the
+MIT-licensed expert-amp-server project) — is:
+
+- **Request**: the standard keystroke-style packet with code `0x80`,
+  polled at 600 ms (the field-proven cadence; the frame is ~5x a Status
+  reply, and the mirror is for eyes, not telemetry).
+- **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
+  ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
+  columns, row-major) + 40 attribute bytes (one per column, bit N =
+  inverse video on row N) + a 2-byte little-endian checksum over the
+  362-byte payload — 371 bytes total. Character data starts at offset 9.
+  The layout and checksum are pinned to a captured real Expert 1.3K-FA
+  response reproduced in `spe_protocol_test`.
+- **Parsing**: `Spe::FrameParser` recognises the display header before
+  the CNT plausibility check would reject `0x6A` as an implausible
+  count, accepts raw or telnet-IAC-escaped bytes, validates the checksum,
+  and hands the logical frame to a dedicated callback. Display replies
+  do not count as Status liveness: telemetry and its command gate still
+  go stale if Status stops while the LCD continues (§6).
+- **Rendering**: `SpeLcdWidget` maps character bytes into the
+  amplifier's own 256-glyph 6x8 font ROM (`SpeLcdFontRom.inc`,
+  mechanically generated), applies the inverse-video attributes, renders
+  at native 240x64 and integer-scales for crisp pixels. The glass keeps
+  the hardware's green-on-dark palette regardless of theme — it depicts
+  a physical display, the same rule the analog meter faces follow
+  (colours as numeric QColor components; the colour ratchet stays +0).
+
+With the mirror on screen, the FRONT PANEL keys stop being blind — the
+operator navigates the amplifier's menu watching the amplifier's screen,
+which is what unlocked the §4 ruling change. Those keys remain disabled
+until the first checksum-valid display arrives and are disabled again after
+two missed 600 ms refreshes. Every acknowledged keystroke requests an
+immediate display refresh and resets the periodic cadence, so a fast menu
+sequence does not have to wait a full polling interval to show its result.

@@ -249,7 +249,11 @@ void RigctlProtocol::removeCreatedTxSlice()
     if (id < 0 || !m_model) return;
     auto* model = m_model;
     QMetaObject::invokeMethod(model, [model, id]{
-        if (model->slice(id))
+        // hasCommandPlane: defense in depth — the created-slice id is only
+        // ever set from a successful Flex `slice create` callback, but the
+        // remove must not become a logged drop if that invariant ever bends
+        // (M0, #5263).
+        if (model->slice(id) && model->hasCommandPlane())
             model->sendCommand(QStringLiteral("slice remove %1").arg(id));
     }, Qt::QueuedConnection);
 }
@@ -1722,7 +1726,12 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
     // went out. RIG_ENAVAIL is the file's established answer for a control this
     // radio does not have. Direct read, on the CAT thread — the same posture as
     // the isConnected() checks above; only the MUTATION needs the queued hop.
-    if (!m_model->hasRadioSideCwKeyer()) return rprt(-11);
+    if (!m_model->hasRadioSideCwKeyer()) {
+        return rprt(-11);
+    }
+    if (!m_model->cwTextValidationError(text).isEmpty()) {
+        return rprt(-1);
+    }
     // Route through CwxModel so the local sidetone keyer (driven by
     // CwxModel::transmissionRequested) fires alongside the radio command.
     // Going through sendCmdPublic directly would silently bypass the
@@ -1753,10 +1762,11 @@ QString RigctlProtocol::cmdSetKeySpeed(const QString& arg)
     if (!m_model) return rprt(-1);
     bool ok = false;
     int wpm = arg.toInt(&ok);
-    if (!ok || wpm < 5 || wpm > 100) return rprt(-1);
-    QString cmd = QString("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (!ok || wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) {
+        return rprt(-1);
+    }
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
     return rprt(0);
 }

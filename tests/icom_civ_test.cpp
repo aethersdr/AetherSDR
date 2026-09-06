@@ -5,7 +5,9 @@
 // Pure protocol: no sockets, no Qt, no hardware.
 
 #include "core/backends/icom/CivCodec.h"
+#include "core/DtcsCodes.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -139,6 +141,221 @@ static void testBcd()
     check(decodeBcdByte(0x11) == 11, "and decodes back");
 }
 
+static void testFmRepeaterCommands()
+{
+    check(bytesAre(cmdReadRepeaterOffsetDirection(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x0F, 0xFD}),
+          "repeater direction read frame");
+    check(bytesAre(cmdSetRepeaterOffsetDirection(kIc705,
+                                                  RepeaterOffsetDirection::Down),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x0F, 0x11, 0xFD}),
+          "DUP- writes direction 0x11");
+    check(decodeRepeaterOffsetDirection(std::array<std::uint8_t, 1>{0x12})
+              == RepeaterOffsetDirection::Up,
+          "DUP+ direction decodes");
+    check(!decodeRepeaterOffsetDirection(std::array<std::uint8_t, 1>{0x13}),
+          "unknown repeater direction is rejected");
+
+    check(bytesAre(cmdSetRepeaterOffset(kIc705, 600'000),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x0D, 0x00, 0x60, 0x00, 0xFD}),
+          "600 kHz offset is little-endian BCD in 100 Hz units");
+    check(decodeRepeaterOffsetHz(std::array<std::uint8_t, 3>{0x00, 0x60, 0x00})
+              == 600'000,
+          "repeater offset decodes to Hz");
+    check(!decodeRepeaterOffsetHz(std::array<std::uint8_t, 3>{0x00, 0x6A, 0x00}),
+          "non-BCD repeater offset is rejected");
+
+    check(bytesAre(cmdReadRepeaterTone(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1B, 0x00, 0xFD}),
+          "repeater tone read frame");
+    check(bytesAre(cmdSetRepeaterTone(kIc705, 88.5),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1B, 0x00, 0x00, 0x08, 0x85, 0xFD}),
+          "88.5 Hz CTCSS is big-endian BCD in tenths");
+    check(std::abs(decodeRepeaterToneHz(
+                       std::array<std::uint8_t, 3>{0x00, 0x10, 0x00})
+                       .value_or(0.0) - 100.0) < 0.001,
+          "100.0 Hz CTCSS decodes");
+    check(!decodeRepeaterToneHz(std::array<std::uint8_t, 3>{0x01, 0x10, 0x00}),
+          "invalid repeater tone prefix is rejected");
+    check(bytesAre(cmdReadRepeaterAccess(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x16, 0x5D, 0xFD}),
+          "IC-9700 extended access read is 16 5D");
+    check(decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x08}) == 0x08,
+           "documented mixed DTCS/TSQL access value decodes");
+    check(!decodeRepeaterAccess(std::array<std::uint8_t, 1>{0x04}),
+           "reserved repeater access value is rejected");
+    const std::array<std::pair<std::uint8_t, std::string_view>, 8> accessModes{{
+        {0x00, "off"},
+        {0x01, "ctcss_tx"},
+        {0x02, "ctcss_rx"},
+        {0x03, "dtcs_txrx"},
+        {0x06, "dtcs_tx"},
+        {0x07, "ctcss_tx_dtcs_rx"},
+        {0x08, "dtcs_tx_ctcss_rx"},
+        {0x09, "ctcss_txrx"},
+    }};
+    for (const auto& [wireValue, expectedMode] : accessModes) {
+        check(repeaterAccessModeName(wireValue) == expectedMode,
+              "every documented 16 5D value keeps its radio-authoritative meaning");
+        check(repeaterAccessModeValue(expectedMode) == wireValue,
+              "every selectable repeater access mode round-trips to its wire value");
+    }
+    check(repeaterAccessModeName(0x04).empty(),
+          "reserved 16 5D value has no normalized state token");
+    check(!repeaterAccessModeValue("future_dtcs_mode"),
+          "unknown repeater access intent fails closed");
+    check(bytesAre(cmdReadRepeaterToneRegister(0xA2, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01, 0xFD}),
+          "IC-9700 RX CTCSS read is 1B 01");
+    check(bytesAre(cmdSetRepeaterToneRegister(
+                       0xA2, repeaterTone::kRxCtcss, 885),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x01,
+                    0x00, 0x08, 0x85, 0xFD}),
+          "IC-9700 RX CTCSS write uses the extended 1B 01 register");
+    check(bytesAre(cmdSetRepeaterToneRegister(
+                       0xA2, repeaterTone::kDtcs, 23, true, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x02,
+                    0x10, 0x00, 0x23, 0xFD}),
+          "IC-9700 DTCS write preserves code and independent polarity");
+    for (const std::uint8_t registerId : {
+             repeaterTone::kTxCtcss, repeaterTone::kRxCtcss, repeaterTone::kDtcs}) {
+        const auto write = parseFrame(cmdSetRepeaterToneRegister(
+            0xA2, registerId, registerId == repeaterTone::kDtcs ? 23 : 885));
+        const auto confirmation = write
+            ? repeaterToneConfirmationForWrite(0xA2, *write) : std::nullopt;
+        check(confirmation
+                  && *confirmation == cmdReadRepeaterToneRegister(0xA2, registerId),
+              "every repeater tone write receives its matching radio readback");
+    }
+    const auto dtcs = decodeRepeaterToneRegister(
+        std::array<std::uint8_t, 3>{0x11, 0x00, 0x23});
+    check(dtcs && dtcs->value == 23 && dtcs->txReverse && dtcs->rxReverse,
+          "DTCS code and independent polarity bits decode");
+    check(bytesAre(cmdSetDtcsTone(0xA2, 23, true, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1B, 0x02,
+                    0x10, 0x00, 0x23, 0xFD}),
+          "IC-9700 DTCS write preserves the leading zero and TX polarity");
+    check(cmdSetDtcsTone(0xA2, 1000, false, false).empty(),
+          "out-of-range DTCS code is refused before frame construction");
+    check(cmdSetDtcsTone(0xA2, 123, false, false).empty()
+              && cmdSetDtcsTone(0xA2, 888, false, false).empty(),
+          "non-standard and non-octal DTCS intent is refused by the encoder");
+    check(AetherSDR::kDtcsCodes.size() == 104
+              && AetherSDR::isCanonicalDtcsCode(23)
+              && AetherSDR::isCanonicalDtcsCode(754)
+              && !AetherSDR::isCanonicalDtcsCode(123),
+          "DTCS UI and backend share the standard 104-code vocabulary");
+    check(!decodeRepeaterToneRegister(
+              std::array<std::uint8_t, 3>{0x02, 0x00, 0x23}),
+          "reserved DTCS polarity bits are rejected");
+    check(!decodeRepeaterToneRegister(
+              std::array<std::uint8_t, 3>{0x00, 0x0A, 0x23}),
+          "non-BCD extended tone data is rejected");
+    const std::array<std::uint8_t, 5> txFrequency{
+        0x00, 0x56, 0x42, 0x48, 0x04};
+    check(decodeFreqExact(txFrequency, kFreqBytes) == 448'425'600ULL,
+          "IC-9700 transmit-frequency readback decodes at exact arity");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 4>{0x00, 0x56, 0x42, 0x48}, kFreqBytes),
+          "truncated transmit-frequency readback is rejected");
+    check(!decodeFreqExact(
+              std::array<std::uint8_t, 6>{0x00, 0x56, 0x42, 0x48, 0x04, 0x00},
+              kFreqBytes),
+          "oversized transmit-frequency readback is rejected");
+    check(bytesAre(cmdSetRepeaterAccess(kIc705, 0x09),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x16, 0x5D, 0x09, 0xFD}),
+          "CTCSS TX/RX access selector write frame");
+    check(bytesAre(cmdReadRepeaterToneRegister(
+                       kIc705, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x1B, 0x01, 0xFD}),
+          "receive CTCSS tone read frame");
+    check(bytesAre(cmdSetCtcssTone(kIc705, repeaterTone::kRxCtcss, 103.5),
+                   {0xFE, 0xFE, kIc705, kControllerAddress,
+                    0x1B, 0x01, 0x00, 0x10, 0x35, 0xFD}),
+          "receive CTCSS tone write frame");
+}
+
+static void testGps()
+{
+    // Official IC-705 CI-V pp. 21/25 layout:
+    // N 34 13.464, W 118 03.534, 1742.5 m, 275 deg, 42.7 km/h,
+    // 2026-08-21 12:34:56 UTC.
+    const std::array<std::uint8_t, 27> wire{
+        0x34, 0x13, 0x46, 0x40, 0x01,
+        0x01, 0x18, 0x03, 0x53, 0x40, 0x00,
+        0x01, 0x74, 0x25, 0x00,
+        0x02, 0x75,
+        0x00, 0x04, 0x27,
+        0x20, 0x26, 0x08, 0x21, 0x12, 0x34, 0x56,
+    };
+    const auto position = decodeGpsPosition(wire);
+    check(position.has_value(), "IC-705 GPS position decodes");
+    check(position && std::abs(position->latitude - 34.2244) < 0.000001,
+          "latitude dd mm.mmm and north flag decode");
+    check(position && std::abs(position->longitude - -118.0589) < 0.000001,
+          "longitude ddd mm.mmm and west flag decode");
+    check(position && position->altitudeMetres
+              && std::abs(*position->altitudeMetres - 1742.5) < 0.01,
+          "signed tenth-metre altitude decodes");
+    check(position && position->courseDegrees.value_or(-1) == 275,
+          "course decodes in one-degree steps");
+    check(position && position->speedKmh
+              && std::abs(*position->speedKmh - 42.7) < 0.01,
+          "speed decodes in tenth-km/h steps");
+    check(position && position->utcIso8601.value_or("") == "2026-08-21T12:34:56Z",
+          "full GPS UTC date and time decode");
+
+    auto southEast = wire;
+    southEast[4] = 0x00;   // south
+    southEast[10] = 0x01;  // east
+    const auto opposite = decodeGpsPosition(southEast);
+    check(opposite && opposite->latitude < 0.0 && opposite->longitude > 0.0,
+          "hemisphere flags preserve the official asymmetric encoding");
+
+    std::array<std::uint8_t, 27> noSignal{};
+    noSignal.fill(0xff);
+    check(!decodeGpsPosition(noSignal), "all-FF no-signal GPS report is rejected");
+    auto malformed = wire;
+    malformed[3] |= 0x01;  // low nibble is documented fixed zero
+    check(!decodeGpsPosition(malformed), "fixed GPS nibbles are validated");
+    auto impossibleDate = wire;
+    impossibleDate[22] = 0x02;
+    impossibleDate[23] = 0x30;
+    const auto noInvalidUtc = decodeGpsPosition(impossibleDate);
+    check(noInvalidUtc && !noInvalidUtc->utcIso8601,
+          "an impossible calendar date is not published as UTC");
+    auto beyondPole = wire;
+    beyondPole[0] = 0x90;
+    beyondPole[1] = 0x00;
+    beyondPole[2] = 0x00;
+    beyondPole[3] = 0x10;
+    check(!decodeGpsPosition(beyondPole),
+          "90 degrees plus non-zero minutes is rejected");
+    std::vector<std::uint8_t> wrongLength(wire.begin(), wire.end());
+    wrongLength.push_back(0x00);
+    check(!decodeGpsPosition(wrongLength),
+          "the fixed IC-705 position payload rejects trailing bytes");
+
+    check(bytesAre(cmdReadGpsPosition(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x23, 0x00, 0xFD}),
+          "GPS position read frame");
+    check(bytesAre(cmdReadGpsSource(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x23, 0x01, 0xFD}),
+          "GPS source read frame");
+    check(bytesAre(cmdNtpAccess(kIc705, true),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x07, 0x01, 0xFD}),
+          "NTP sync-now frame");
+    check(bytesAre(cmdReadNtpAccessResult(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x08, 0xFD}),
+          "NTP access-result read frame");
+
+    const std::array<std::uint8_t, 8> server{'t', 'i', 'm', 'e', '.', 'n', 'i', 's'};
+    check(bytesAre(cmdWriteSettingData(kIc705, setting::kNtpServer, server),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x05, 0x01, 0x68,
+                    't', 'i', 'm', 'e', '.', 'n', 'i', 's', 0xFD}),
+          "NTP server address write uses the documented variable ASCII payload");
+}
+
 static void testReassembler()
 {
     CivReassembler r;
@@ -226,6 +443,7 @@ static void testModes()
 
     check(modeToNeutral(CivMode::Usb, false) == "USB", "reverse USB");
     check(modeToNeutral(CivMode::Usb, true) == "DIGU", "reverse DIGU");
+    check(modeToNeutral(CivMode::Cw, false) == "CW", "normal CW is reported as CW");
     // The round trip has to survive too. Returning plain "FM" for a radio in
     // FM-D made the UI show FM, and the next mode write then sent FM with the
     // flag CLEAR — silently taking the radio out of data mode and back onto the
@@ -279,6 +497,24 @@ static void testModes()
     // three identical buttons, two of which read as broken.
     check(filterWidthsForMode("WFM").size() == 1, "WFM publishes its single filter once");
 
+    // BUTTON IDENTITY IS THE FIL SLOT, NOT ITS MUTABLE WIDTH. Customising the
+    // selected slot must update its tooltip/passband content without sorting
+    // it into another button position or changing its label.
+    const std::vector<FilterPresetState> usbCustom =
+        filterPresetsForMode("USB", 2, 2700);
+    check((usbCustom == std::vector<FilterPresetState>{{1, 3000}, {2, 2700}, {3, 1800}}),
+          "a custom USB FIL2 width keeps FIL1/FIL2/FIL3 in radio order");
+    const std::vector<FilterPresetState> amCustom =
+        filterPresetsForMode("AM", 1, 10000);
+    check((amCustom == std::vector<FilterPresetState>{{1, 10000}, {2, 6000}, {3, 3000}}),
+          "a custom AM FIL1 width stays FIL1 instead of becoming a 10K button");
+    const std::vector<FilterPresetState> cwCustom =
+        filterPresetsForMode("CW", 3, 700);
+    check((cwCustom == std::vector<FilterPresetState>{{1, 1200}, {2, 500}, {3, 700}}),
+          "a custom CW FIL3 width stays FIL3 even when wider than FIL2");
+    check(filterPresetsForMode("WFM").size() == 1,
+          "a fixed WFM filter publishes one stable slot");
+
     // A sideband passband sits off the carrier and carries its sideband in the
     // sign; AM and its relatives straddle it.
     {
@@ -298,12 +534,137 @@ static void testModes()
         const auto [lo, hi] = passbandForModeAndFilter("SAM", 2);
         check(hi - lo == 6000, "SAM FIL2 is 6 kHz wide, not the 3 kHz SSB fallback");
     }
+
+    // CLICKING ANY FIL BUTTON RECALLS ITS FACTORY SHAPE. These are the exact
+    // edges setSliceFilterPreset feeds back through the width + centred-PBT
+    // writer, including when the requested slot is already selected. Cover all
+    // three identities and every mode family exercised by the live sweep.
+    const auto checkRecall = [](const std::string& mode, int presetId,
+                                int expectedLow, int expectedHigh) {
+        bool dataMode = false;
+        const std::optional<CivMode> wireMode = modeFromNeutral(mode, dataMode);
+        check(wireMode.has_value(), "recall mode maps to CI-V");
+        if (!wireMode) {
+            return;
+        }
+        const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
+            kIc705, mode, *wireMode, dataMode, presetId, true);
+        check(plan.has_value(), "FIL recall plan exists");
+        if (!plan) {
+            return;
+        }
+        const std::string recallName = mode + " FIL" + std::to_string(presetId);
+        check(plan->lowHz == expectedLow && plan->highHz == expectedHigh,
+              (recallName + " recalls its factory width and centred passband").c_str());
+        check(plan->pbtCode == kPbtCentreCode,
+              (recallName + " recall centres Twin PBT").c_str());
+        check(plan->commands.size() == 4,
+              (recallName
+               + " recall selects, resets width, and centres both PBTs").c_str());
+        if (plan->commands.size() != 4) {
+            return;
+        }
+        check(plan->commands[0]
+                  == cmdSetVfoMode(kIc705, *wireMode, dataMode, presetId),
+              "recall selects the requested FIL identity first");
+        const std::optional<std::uint8_t> widthCode =
+            filterWidthCodeFor(mode, expectedHigh - expectedLow);
+        check(widthCode.has_value(), "factory recall width has a CI-V code");
+        if (!widthCode) {
+            return;
+        }
+        check(plan->commands[1] == cmdSetFilterWidth(kIc705, *widthCode),
+              "recall writes the factory filter width");
+        check(plan->commands[2]
+                  == cmdSetLevel(kIc705, level::kPbtInner, kPbtCentreCode),
+              "recall centres inner PBT");
+        check(plan->commands[3]
+                  == cmdSetLevel(kIc705, level::kPbtOuter, kPbtCentreCode),
+              "recall centres outer PBT");
+    };
+    checkRecall("USB", 1, 0, 3000);
+    checkRecall("USB", 2, 300, 2700);
+    checkRecall("USB", 3, 600, 2400);
+    checkRecall("LSB", 1, -3000, 0);
+    checkRecall("LSB", 2, -2700, -300);
+    checkRecall("LSB", 3, -2400, -600);
+    checkRecall("AM", 1, -4500, 4500);
+    checkRecall("AM", 2, -3000, 3000);
+    checkRecall("AM", 3, -1500, 1500);
+    checkRecall("CW", 1, -600, 600);
+    checkRecall("CW", 2, -250, 250);
+    checkRecall("CW", 3, -125, 125);
+
+    // Fixed-width modes still own selectable FIL identities. They must emit
+    // only the mode/slot command, never an IF-width or Twin-PBT write.
+    struct FixedRecallCase {
+        const char* mode;
+        CivMode wireMode;
+        bool dataMode;
+        int slots;
+    };
+    for (const FixedRecallCase& test : {
+             FixedRecallCase{"FM", CivMode::Fm, false, 3},
+             FixedRecallCase{"NFM", CivMode::Fm, false, 3},
+             FixedRecallCase{"DFM", CivMode::Fm, true, 3},
+             FixedRecallCase{"WFM", CivMode::Wfm, false, 1},
+             FixedRecallCase{"DV", CivMode::Dv, false, 3},
+             FixedRecallCase{"DSTAR", CivMode::Dv, false, 3}}) {
+        for (bool useVfoMode : {false, true}) {
+            for (int presetId = 1; presetId <= test.slots; ++presetId) {
+                const auto plan = filterPresetRecallPlan(
+                    kIc705, test.mode, test.wireMode, test.dataMode,
+                    presetId, useVfoMode);
+                check(plan.has_value(), "fixed-mode FIL selection has a plan");
+                if (!plan) {
+                    continue;
+                }
+                const auto select = useVfoMode
+                    ? cmdSetVfoMode(kIc705, test.wireMode, test.dataMode, presetId)
+                    : cmdSetMode(kIc705, test.wireMode, presetId);
+                check(plan->commands == std::vector<std::vector<std::uint8_t>>{select},
+                      "fixed-mode recall sends only the requested slot selection");
+                check(plan->widthHz == 0,
+                      "fixed-mode recall does not claim a programmable IF width");
+                const auto [low, high] = passbandForModeAndFilter(test.mode, presetId);
+                check(plan->lowHz == low && plan->highHz == high,
+                      "fixed-mode recall retains the selected slot's display edges");
+            }
+        }
+    }
+    check(!filterPresetRecallPlan(kIc705, "FM", CivMode::Fm, false, 0, true),
+          "fixed-mode recall rejects undeclared slot zero");
+    check(!filterPresetRecallPlan(kIc705, "WFM", CivMode::Wfm, false, 2, true),
+          "WFM recall rejects a second slot");
 }
 
 static void testCommands()
 {
+    check(bytesAre(cmdPowerOn(0xA4), {0xFE, 0xFE, 0xA4, 0xE0, 0x18, 0x01, 0xFD}),
+          "Power ON uses the guide's literal 18 01 encoding");
+    check(bytesAre(cmdPowerOn(0xB6), {0xFE, 0xFE, 0xB6, 0xE0, 0x18, 0x01, 0xFD}),
+          "IC-7300MK2 standard network power-on frame");
+    const std::vector<std::uint8_t> wake = cmdPowerOn(0x50, 150, 0xE1);
+    check(wake.size() == 157
+              && std::all_of(wake.begin(), wake.begin() + 152,
+                             [](std::uint8_t byte) { return byte == 0xFE; })
+              && std::vector<std::uint8_t>(wake.begin() + 152, wake.end())
+                    == std::vector<std::uint8_t>{0x50, 0xE1, 0x18, 0x01, 0xFD},
+          "contributed native IC-9700 wake framing preserves destination and E1 source");
     check(bytesAre(cmdSetPtt(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0x01, 0xFD}),
           "PTT on is 1C 00 01");
+    check(bytesAre(cmdSetTransmitFrequencyCheck(kIc705, true),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x02, 0x01, 0xFD}),
+          "IC-705 XFC press is 1C 02 01");
+    check(bytesAre(cmdSetTransmitFrequencyCheck(0xA2, false),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x02, 0x00, 0xFD}),
+          "IC-9700 XFC release uses the model address and 1C 02 00");
+    check(bytesAre(cmdReadTransmitFrequencyCheck(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x02, 0xFD}),
+          "IC-9700 XFC read is 1C 02 with no payload");
+    check(bytesAre(cmdReadTransmitFrequency(0xA2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1C, 0x03, 0xFD}),
+          "IC-9700 transmit-frequency read is 1C 03");
     check(bytesAre(cmdReadMeter(kIc705, meter::kSMeter),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x02, 0xFD}),
           "S-meter read is 15 02");
@@ -315,6 +676,16 @@ static void testCommands()
     check(bytesAre(cmdSetLevel(kIc705, level::kRfPower, 255),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x02, 0x55, 0xFD}),
           "RF power 100% is 14 0A 0255");
+    check(bytesAre(cmdSendCwMessage(kIc705, "CQ TEST"),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x17, 0x43, 0x51, 0x20,
+                    0x54, 0x45, 0x53, 0x54, 0xFD}),
+          "CW text is command 17 followed by ASCII");
+    check(bytesAre(cmdAbortCwMessage(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x17, 0xFF, 0xFD}),
+          "CW abort is 17 FF");
+    check(bytesAre(cmdSetFunction(kIc705, func::kBreakIn, 1),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x16, 0x47, 0x01, 0xFD}),
+          "semi break-in is 16 47 01");
     check(bytesAre(cmdSetTuner(kIc705, 0x02),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x01, 0x02, 0xFD}),
           "ATU start is 1C 01 02");
@@ -369,6 +740,13 @@ static void testCommands()
     check(bytesAre(cmdWriteSetting(0xB6, 84, 0x00),
                    {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x00, 0xFD}),
           "IC-7300MK2 PC Audio off restores MIC without touching DATA MOD 0085");
+    check(bytesAre(cmdReadSetting(0xA2, 114),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14, 0xFD}),
+          "IC-9700 LAN MOD level read is SET 0114");
+    check(bytesAre(cmdWriteSettingLevel(0xA2, 114, 26),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x05, 0x01, 0x14,
+                    0x00, 0x26, 0xFD}),
+          "IC-9700 LAN MOD 10% writes the documented two-byte 0026 level");
 }
 
 // DATA mode — command 26.
@@ -476,21 +854,187 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The eleven that carry subcommands: 12 14 15 16 18 19 1A 1C 21 26 27. A
+    // The thirteen that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 23 26 27. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 11, "exactly eleven CI-V commands are sub-addressed");
+    check(subAddressed == 13, "exactly thirteen CI-V commands are sub-addressed");
+}
+
+// ---------------------------------------------------------------------------
+// IF filter width (1A 03), Twin PBT, and the TX passband decomposition
+// ---------------------------------------------------------------------------
+
+static void testFilterWidth()
+{
+    // THE CODE TABLES, from the IC-705 and IC-7300MK2 guides (identical).
+    check(filterWidthHzFromCode("USB", 0) == 50, "SSB code 0 is 50 Hz");
+    check(filterWidthHzFromCode("USB", 9) == 500, "SSB code 9 is 500 Hz");
+    // THE OFF-BY-ONE wfview has: its decoder branches on `code <= 10` and
+    // returns 550 Hz here. Code 10 is the first entry of the 100 Hz table.
+    check(filterWidthHzFromCode("USB", 10) == 600, "SSB code 10 is 600 Hz, not 550");
+    check(filterWidthHzFromCode("USB", 40) == 3600, "SSB tops out at 3.6 kHz");
+    check(!filterWidthHzFromCode("USB", 41), "SSB code 41 is out of range");
+
+    check(filterWidthHzFromCode("CW", 40) == 3600, "CW shares the SSB table");
+    check(filterWidthHzFromCode("RTTY", 31) == 2700, "RTTY tops out at 2.7 kHz");
+    check(!filterWidthHzFromCode("RTTY", 32), "RTTY has no code 32");
+    check(filterWidthHzFromCode("AM", 0) == 200, "AM code 0 is 200 Hz");
+    check(filterWidthHzFromCode("AM", 49) == 10000, "AM tops out at 10 kHz");
+    check(!filterWidthHzFromCode("AM", 50), "AM has no code 50");
+
+    // NO SETTABLE WIDTH in FM and friends — three fixed slots and no command.
+    check(!filterWidthHzFromCode("FM", 10), "FM has no width code table");
+    check(!filterWidthHzFromCode("WFM", 0), "WFM has no width code table");
+    check(!filterWidthCodeFor("FM", 10000), "FM refuses a width request");
+    check(filterWidthLimitsFor("FM").maxHz == 0, "FM advertises no width range");
+    check(filterWidthLimitsFor("USB").maxHz == 3600, "SSB range tops at 3.6 kHz");
+    check(filterWidthLimitsFor("AM").maxHz == 10000, "AM range tops at 10 kHz");
+    check(filterWidthLimitsFor("RTTY").maxHz == 2700, "RTTY range tops at 2.7 kHz");
+
+    // ROUND TRIP: every code the table defines must survive Hz and come back.
+    for (int code = 0; code <= 49; ++code) {
+        for (const char* mode : {"USB", "CW", "RTTY", "AM"}) {
+            const auto hz = filterWidthHzFromCode(mode, static_cast<std::uint8_t>(code));
+            if (!hz)
+                continue;
+            const auto back = filterWidthCodeFor(mode, *hz);
+            check(back && *back == code, "width code survives a round trip");
+        }
+    }
+
+    // THE GAP. 550 Hz is not a width this radio has; a request there must land
+    // on a real neighbour rather than encode something the table cannot decode.
+    const auto gap = filterWidthCodeFor("USB", 550);
+    check(gap.has_value(), "a width in the 500-600 gap still encodes");
+    const auto gapHz = filterWidthHzFromCode("USB", *gap);
+    check(gapHz && (*gapHz == 500 || *gapHz == 600), "and lands on a real width");
+
+    // Requests past the ends CLAMP to the ends rather than wrapping.
+    const auto tooWide = filterWidthCodeFor("USB", 99999);
+    check(tooWide && filterWidthHzFromCode("USB", *tooWide) == 3600, "over-wide clamps to 3.6 kHz");
+    const auto rttyWide = filterWidthCodeFor("RTTY", 3600);
+    check(rttyWide && filterWidthHzFromCode("RTTY", *rttyWide) == 2700,
+          "RTTY clamps to its own 2.7 kHz ceiling, not SSB's");
+
+    // ON THE WIRE the code is BCD, so code 40 is 0x40 and not 0x28. Sending the
+    // binary value reaches a different, valid width and the radio accepts it.
+    check(bytesAre(cmdSetFilterWidth(kIc705, 40),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x03, 0x40, 0xFD}),
+          "width code 40 goes out as BCD 0x40");
+    check(bytesAre(cmdSetFilterWidth(kIc705, 49),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x03, 0x49, 0xFD}),
+          "width code 49 goes out as BCD 0x49");
+    check(bytesAre(cmdReadFilterWidth(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x03, 0xFD}),
+          "the width read carries no payload");
+}
+
+static void testTwinPbt()
+{
+    // Centre is centre, whatever the width.
+    check(pbtShiftHz(kPbtCentreCode, 2400) == 0, "code 128 is no shift");
+    check(pbtCodeForShiftHz(0, 2400) == kPbtCentreCode, "no shift is code 128");
+
+    // SCALED BY THE WIDTH: full deflection is one whole filter width, so the
+    // same code means very different Hz in a wide and a narrow filter.
+    check(pbtShiftHz(255, 2400) == 2400, "full clockwise is one width up");
+    check(pbtShiftHz(255, 250) == 250, "the same code is 250 Hz in a narrow filter");
+    check(pbtShiftHz(1, 2400) == -2400, "full anticlockwise is one width down");
+
+    // A zero width must not divide by itself.
+    check(pbtShiftHz(200, 0) == 0, "no width means no shift");
+    check(pbtCodeForShiftHz(500, 0) == kPbtCentreCode, "no width means centre");
+
+    // Codes clamp rather than wrapping through the far end of the passband.
+    check(pbtCodeForShiftHz(99999, 2400) == 255, "an over-large shift clamps high");
+    check(pbtCodeForShiftHz(-99999, 2400) == 0, "an over-large negative clamps low");
+
+    // TOGETHER SLIDES. Both PBTs at the same code move the window and keep it
+    // the same width — which is the decomposition setSliceFilter relies on.
+    const int code = pbtCodeForShiftHz(300, 2400);
+    const auto slid = passbandFromWidthAndPbt(1500, 2400, code, code);
+    check(slid.highHz - slid.lowHz == 2400, "a matched pair keeps the width");
+    check(std::abs((slid.lowHz + slid.highHz) / 2 - 1800) <= 20,
+          "a matched pair moves the centre by the shift");
+
+    // APART NARROWS, from the inside, which is the only asymmetric response an
+    // Icom can produce and the reason width alone cannot describe one.
+    const auto narrowed = passbandFromWidthAndPbt(1500, 2400,
+                                                  pbtCodeForShiftHz(-300, 2400),
+                                                  pbtCodeForShiftHz(300, 2400));
+    check(narrowed.highHz - narrowed.lowHz < 2400, "a split pair narrows the passband");
+    check(std::abs((narrowed.lowHz + narrowed.highHz) / 2 - 1500) <= 20,
+          "and a symmetric split leaves the centre alone");
+
+    // Centred, unshifted, an SSB passband sits where the radio puts it: around
+    // 1500 Hz, NOT with its low edge pinned at 300.
+    const auto ssb = passbandFromWidthAndPbt(passbandCentreHz("USB", 2400), 2400,
+                                             kPbtCentreCode, kPbtCentreCode);
+    check(ssb.lowHz == 300 && ssb.highHz == 2700, "2.4 kHz USB is 300..2700");
+    const auto narrowSsb = passbandFromWidthAndPbt(passbandCentreHz("USB", 1800), 1800,
+                                                   kPbtCentreCode, kPbtCentreCode);
+    check(narrowSsb.lowHz == 600 && narrowSsb.highHz == 2400,
+          "1.8 kHz USB narrows SYMMETRICALLY to 600..2400, not 300..2100");
+
+    // LSB mirrors, sign carrying the sideband.
+    const auto lsb = passbandFromWidthAndPbt(passbandCentreHz("LSB", 2400), 2400,
+                                             kPbtCentreCode, kPbtCentreCode);
+    check(lsb.lowHz == -2700 && lsb.highHz == -300, "2.4 kHz LSB mirrors to -2700..-300");
+
+    // CW is centred on the tone, and AetherSDR's CW slice frequency IS the tone.
+    check(passbandCentreHz("CW", 500) == 0, "CW has no carrier offset");
+    check(passbandCentreHz("AM", 6000) == 0, "AM straddles the carrier");
+    check(passbandCentreHz("RTTY", 500) == -400,
+          "RTTY keeps the conservative 150 Hz carrier-side edge until SET 0050 is read");
+    const auto cw = passbandFromWidthAndPbt(0, 500, kPbtCentreCode, kPbtCentreCode);
+    check(cw.lowHz == -250 && cw.highHz == 250, "500 Hz CW is +/-250 about the tone");
+}
+
+static void testNetworkSettingDecoding()
+{
+    const std::array<std::uint8_t, 8> address{
+        0x01, 0x92, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    const auto decoded = decodeNetworkAddress(address);
+    check(decoded && *decoded == std::array<std::uint8_t, 4>{192, 168, 1, 42},
+          "SET-menu BCD network address decodes four decimal octets");
+    const auto mask = subnetMaskFromBcdPrefix(0x24);
+    check(mask && *mask == std::array<std::uint8_t, 4>{255, 255, 255, 0},
+          "SET-menu /24 prefix decodes to 255.255.255.0");
+
+    const std::array<std::uint8_t, 8> outOfRange{
+        0x02, 0x99, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    const std::array<std::uint8_t, 8> malformedBcd{
+        0x01, 0x9a, 0x01, 0x68, 0x00, 0x01, 0x00, 0x42};
+    check(!decodeNetworkAddress(outOfRange),
+          "SET-menu network octets above 255 are rejected");
+    check(!decodeNetworkAddress(malformedBcd),
+          "SET-menu network values with non-BCD nibbles are rejected");
+    check(!subnetMaskFromBcdPrefix(0x00) && !subnetMaskFromBcdPrefix(0x31),
+          "SET-menu subnet prefixes outside the documented /1-/30 range are rejected");
+    const std::array<std::uint8_t, 9> networkName{
+        'S', 'h', 'a', 'c', 'k', 'R', 'a', 'd', 'i'};
+    const auto decodedName = decodeNetworkName(networkName);
+    check(decodedName && *decodedName == "ShackRadi",
+          "SET-menu Network Name decodes bounded printable ASCII");
+    const std::array<std::uint8_t, 2> invalidName{'A', 0x1f};
+    check(!decodeNetworkName(invalidName),
+          "SET-menu Network Name rejects control characters");
 }
 
 int main()
 {
+    testFilterWidth();
+    testTwinPbt();
     testFraming();
     testBcd();
+    testFmRepeaterCommands();
+    testGps();
     testReassembler();
     testModes();
     testCommands();
     testDataMode();
     testSubcommandPredicate();
+    testNetworkSettingDecoding();
 
     if (g_failures == 0)
         std::printf("icom_civ_test: all checks passed\n");
