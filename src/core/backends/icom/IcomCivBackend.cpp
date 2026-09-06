@@ -873,6 +873,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_civReported = 0;
     m_civModelId = 0;
     m_civAmbiguous = false;
+    m_civUnexpectedResponderWarned = false;
     m_civDetectAttempts = 0;
     m_waitingForWake = request.params.value(QStringLiteral("icom.waitingForWake")).toBool();
     m_wakeOnConnect = request.params.value(QStringLiteral("icom.wakeOnConnect")).toBool();
@@ -1009,6 +1010,7 @@ void IcomCivBackend::disconnectRadio()
     m_civReported = 0;
     m_civModelId = 0;
     m_civAmbiguous = false;
+    m_civUnexpectedResponderWarned = false;
     m_civDetectAttempts = 0;
     m_scopeStarted = false;
     m_tuning = false;
@@ -1327,6 +1329,14 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
         m_civAmbiguous = true;
         terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                            SchedulerWaiterOutcome::Cancelled);
+        // Native CW may still be queued in the radio even when PTT reads RX.
+        // Send a response-free abort before withdrawing its keyer capability;
+        // Clear/ESC can no longer route to that keyer after publication below.
+        if (capabilities().hasRadioSideCwKeyer) {
+            queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
+                                       "cw.message");
+            pumpCiv(nowMs());
+        }
         // Release the destination previously selected by this session before
         // withdrawing its profile. Do not redirect an unkey to the seed address.
         if (m_keyed || m_tuning || m_pendingPttIntent.value_or(false)) {
@@ -1746,11 +1756,21 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
     // Reject invalid/foreign ID replies before they can retire a scheduler
     // transaction. Model ID and source need not match on a customized bus.
-    if (frame.cmd == cmd::kReadId
-        && (!parseModelIdReply(frame)
-            || (m_civAddressPinned && m_session
-                && frame.from != m_session->civAddress()))) {
-        return;
+    if (frame.cmd == cmd::kReadId) {
+        if (!parseModelIdReply(frame)) {
+            return;
+        }
+        if (m_civAddressPinned && m_session && frame.from != m_session->civAddress()) {
+            if (m_civReported == 0 && !m_civUnexpectedResponderWarned) {
+                m_civUnexpectedResponderWarned = true;
+                emit configurationWarning(QStringLiteral(
+                    "A CI-V device answered at %1, but the selected address %2 has not "
+                    "identified. Check the selected CI-V address; it has not been changed.")
+                    .arg(QString::number(frame.from, 16).toUpper(),
+                         QString::number(m_session->civAddress(), 16).toUpper()));
+            }
+            return;
+        }
     }
     const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
         && frame.cmd == cmd::kReadFreq
@@ -5919,16 +5939,24 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             emit extensionError(requestId, QStringLiteral("Release transmit before waking the radio."));
             return;
         }
-        // Unknown model is normal in standby. Standard 18 01 does not require
-        // a capability profile. Retain the IC-9700 framing hint for its default
-        // advertised destination, without publishing a model or enforcing it on
-        // the later identity reply. An explicit model also handles custom 9700s.
-        const PowerOnProfile standard{};
-        const IcomModel* framing = selected;
-        if (!framing && address == 0xA2 && m_session->advertisedCivAddress() == 0xA2) {
-            framing = modelForId(0xA2);
+        // A saved address or editable nickname is not a model hint. Prefer
+        // verified identity, then an explicit model. For an unidentified Auto
+        // connection, only a supported factory destination advertised by this
+        // network session selects framing (never capabilities). At an unknown
+        // custom address there is no way to distinguish standard framing from
+        // the IC-9700's measured FE/E1 sequence: explain instead of guessing.
+        const IcomModel* framing = m_civReported ? m_model : selected;
+        if (!framing && address == m_session->advertisedCivAddress()) {
+            framing = modelForId(static_cast<std::uint8_t>(address));
         }
-        const PowerOnProfile& power = framing ? *profileFor(*framing).powerOn : standard;
+        if (!framing || !profileFor(*framing).powerOn) {
+            emit extensionError(requestId, QStringLiteral(
+                "Cannot choose wake framing for this CI-V address. Select the Icom "
+                "model in Connect by IP and retry, or use an explicit model and "
+                "address with civ wake. The network name cannot identify the model."));
+            return;
+        }
+        const PowerOnProfile& power = *profileFor(*framing).powerOn;
         for (QTimer* timer : {m_meterTimer, m_linkTimer, m_civDetectTimer}) {
             if (timer) { timer->stop(); }
         }

@@ -1479,7 +1479,10 @@ starts a read burst at an unverified seed address or promotes a nickname to a
 hardware profile. A valid late identity restarts the snapshot with the correct
 model vocabulary and publishes capabilities, modes, antenna choices, front-end
 controls, meters, and scope geometry. Repeated identical replies are inert.
-Conflicting identities withdraw transmit capability until reconnect.
+Conflicting identities abort native CW at the previously selected destination
+before withdrawing transmit capability until reconnect. A pinned selection
+that hears only another responder reports both addresses once, without changing
+the selection or accepting that responder's identity.
 
 The current model table recognizes these hexadecimal `19 00` payloads. These
 are model IDs, even though their values match factory CI-V addresses; changing
@@ -1505,17 +1508,19 @@ IC-705 whose operating address is `50`, regardless of its Network Radio Name.
 
 ### Optional standby wake (#5349, superseding #5360)
 
-The connection panel exposes **Wake on connect**, default off and persisted in
+The connection panel exposes **Wake Icom on connect**, default off and persisted in
 the existing Icom JSON settings document. An awake identity completes normally
 without sending power commands. Only exhausted identity discovery with explicit
 opt-in requests wake via the namespaced extension channel. Auto obtains the
 wake destination from the capabilities record (absolute byte 0x94), not the
 editable network name or the default settings seed. Pinned addresses remain
 explicit overrides. This network metadata authorizes a destination only;
-`19 00` remains the authority for the model and capabilities. Standard framing
-works without a model selection. The default advertised A2 destination selects
-the legacy IC-9700 framing hint without claiming model identity; an explicit
-IC-9700 selection also supports that model at custom addresses.
+`19 00` remains the authority for the model and capabilities. An advertised factory destination for IC-705, IC-7300MK2 or IC-9700 can select
+its wake framing without claiming model identity. An unidentified custom
+address requires an explicit model selection: select the model in Connect by IP
+(the network-advertised custom destination is retained), or use `civ wake` with
+both model ID and address. A missing/unsupported framing hint refuses visibly;
+it never silently gives a custom-address IC-9700 the standard E0 frame.
 
 RadioModel owns one wake operation: one `18 01`, intentional session release,
 a short initial allowance, then one fresh network session with wake disabled.

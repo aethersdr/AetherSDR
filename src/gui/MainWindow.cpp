@@ -3650,7 +3650,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
+        || !statusBar()->currentMessage().isEmpty()) {
         return;
     }
 
@@ -5852,7 +5853,8 @@ void MainWindow::buildUI()
     timeVbox->addWidget(m_gpsTimeLabel);
     hbox->addWidget(timeStack);
 
-    statusBar()->addPermanentWidget(m_statusBarContainer, 1);
+    statusBar()->addWidget(m_statusBarContainer, 1);
+    wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 

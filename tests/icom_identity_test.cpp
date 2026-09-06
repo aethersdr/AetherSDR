@@ -4,6 +4,7 @@
 #include "core/backends/icom/IcomSession.h"
 #include "core/AudioEngine.h"
 #include "models/RadioModel.h"
+#include "models/CwxModel.h"
 #include "core/backends/icom/IcomSettings.h"
 
 #include <QCoreApplication>
@@ -185,8 +186,16 @@ int main(int argc, char** argv)
     check(antennas.contains(QStringLiteral("RX-ANT")),
           "late IC-7300MK2 identity publishes its antenna choices");
 
+    int foreignWarnings = 0;
+    const QMetaObject::Connection foreignWarning = QObject::connect(
+        &backend, &IRadioBackend::configurationWarning, [&](const QString& message) {
+            if (message.contains("A4") && message.contains("50")) { ++foreignWarnings; }
+        });
     IcomCivBackendTestAccess::connect(backend, "IC-705", 0x50, true);
     IcomCivBackendTestAccess::inject(backend, "fefee0a41900a4fd");
+    IcomCivBackendTestAccess::inject(backend, "fefee0a41900a4fd");
+    check(foreignWarnings == 1, "unidentified pinned address names the other responder once");
+    QObject::disconnect(foreignWarning);
     check(!backend.capabilities().canTransmit, "pinned selection ignores another responder");
     IcomCivBackendTestAccess::inject(backend, "fefee0501900b6fd");
     check(backend.capabilities().model == QStringLiteral("IC-7300MK2"),
@@ -318,6 +327,34 @@ int main(int argc, char** argv)
     check(!IcomCivBackendTestAccess::retrying(backend),
           "post-wake probing stops immediately when the radio answers identity");
     backend.disconnectRadio();
+    // Native CW must be cancelled before capability withdrawal, even without
+    // a keyed readback. Observe before disconnect (which sends its own abort).
+    for (const bool conflict : {false, true}) {
+        RadioModel radio;
+        IcomCivBackend& cwBackend = RadioModelWakeTestAccess::prepare(radio);
+        IcomCivBackendTestAccess::connect(cwBackend, "CW radio");
+        IcomCivBackendTestAccess::inject(cwBackend, "fefee0501900a4fd");
+        radio.cwxModel().send(QStringLiteral("TEST"));
+        waitMs(450);
+        check(IcomCivBackendTestAccess::outbound(cwBackend).contains(
+                  QStringLiteral("fe fe 50 e0 17 54 45 53 54 fd")),
+              "CW fixture dispatches native text before testing cancellation");
+        IcomCivBackendTestAccess::inject(cwBackend, "fefee050fbfd");
+        if (conflict) {
+            IcomCivBackendTestAccess::inject(cwBackend, "fefee0511900a4fd");
+            check(IcomCivBackendTestAccess::outbound(cwBackend).contains(
+                      QStringLiteral("fe fe 50 e0 17 ff fd")),
+                  "identity withdrawal immediately aborts CW at the selected destination");
+        }
+        radio.cwxModel().clearBuffer();
+        check(IcomCivBackendTestAccess::outbound(cwBackend).contains(
+                  QStringLiteral("fe fe 50 e0 17 ff fd")),
+              "native CW abort survives identity withdrawal or subsequent Clear");
+        check(!IcomCivBackendTestAccess::outbound(cwBackend).contains(
+                  QStringLiteral("fe fe 51 e0 17 ff fd")),
+              "CW abort never targets the conflicting responder");
+        radio.disconnectFromRadio();
+    }
     // The real model and backend, with an UNSTARTED session: neither wake
     // nor teardown opens a socket. Cancel every reconnect before its delay.
     {
@@ -348,6 +385,12 @@ int main(int argc, char** argv)
                   && !radio.wakeIcomRadio(0xA2, 0xE0, &error)
                   && !radio.wakeIcomRadio(0x1A2, 0xA2, &error),
               "broadcast, controller and out-of-range model selections refuse wake");
+        IcomCivBackendTestAccess::advertise(wakeBackend, 0xB0);
+        const QStringList beforeUnknownWake = IcomCivBackendTestAccess::outbound(wakeBackend);
+        check(!radio.wakeIcomRadio(0, 0xB0, &error)
+                  && error.contains("Select the Icom model")
+                  && IcomCivBackendTestAccess::outbound(wakeBackend) == beforeUnknownWake,
+              "unidentified custom-address wake refuses visibly instead of sending standard framing");
         check(radio.wakeIcomRadio(0xA2, 0x50, &error),
               "explicit IC-9700 wake accepts an independently chosen address");
         QStringList frames = IcomCivBackendTestAccess::outbound(wakeBackend);
@@ -392,6 +435,14 @@ int main(int argc, char** argv)
         check(!radio.radioWakeActive() && radio.isConnected(),
               "matching wire identity completes wake and invalidates its deadline");
         radio.disconnectFromRadio();
+        IcomCivBackendTestAccess::connect(wakeBackend, "Custom name");
+        check(radio.wakeIcomRadio(0xA2, 0x50, &error), "mismatch fixture starts an explicit wake");
+        IcomCivBackendTestAccess::connect(wakeBackend, "Custom name", 0x50, true);
+        IcomCivBackendTestAccess::inject(wakeBackend, "fefee0501900a4fd");
+        waitMs(20);
+        check(!radio.radioWakeActive() && !radio.isConnected()
+                  && !RadioModelWakeTestAccess::retrying(radio),
+              "a mismatched post-wake identity terminates without automatic retry");
         // Independent literal fixtures for the two standard-frame profiles.
         // These exercise model selection, encoding, and post-wake identity;
         // the injected session never starts a socket or contacts firmware.

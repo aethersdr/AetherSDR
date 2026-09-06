@@ -1150,15 +1150,15 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     });
     root->addWidget(m_autoConnectCheck);
 
-    auto* wakeOnConnect = new QCheckBox(tr("Wake on connect"), this);
+    auto* wakeOnConnect = new QCheckBox(tr("Wake Icom on connect"), this);
     wakeOnConnect->setObjectName(QStringLiteral("connectionWakeOnConnect"));
-    wakeOnConnect->setAccessibleName(tr("Wake on connect"));
+    wakeOnConnect->setAccessibleName(tr("Wake Icom on connect"));
     wakeOnConnect->setAccessibleDescription(tr(
         "If Icom identity does not answer, wake the selected supported model once. "
         "Supports IC-705, IC-7300MK2 and IC-9700, including automatic detection."));
     wakeOnConnect->setToolTip(tr(
         "Wake a supported Icom from standby only if it does not answer identification. "
-        "Uses the connected Icom network radio; no model selection is needed. "
+        "For a custom CI-V address, select the model in Connect by IP. "
         "Does not put the radio to sleep on disconnect."));
     wakeOnConnect->setChecked(IcomSettings::wakeOnConnect());
     AetherSDR::ThemeManager::instance().applyStyleSheet(wakeOnConnect, lowBandwidthCheckStyle);

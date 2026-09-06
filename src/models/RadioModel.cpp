@@ -1208,6 +1208,8 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] {
         publishCapabilities(isConnected());
+        // All currently supported wake profiles transmit. If an RX-only Icom
+        // profile is added, readiness must use an explicit identity signal.
         if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
             const bool matches = m_radioWakeModel.isEmpty()
                 || m_backend->capabilities().model == m_radioWakeModel;
@@ -3862,7 +3864,9 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
     bool sent = false;
     QVariantMap result;
     QString failure = tr("Wake is unavailable for this backend.");
-    // The extension replies synchronously. The reserved local ID is scoped to
+    // This Icom-only extension currently replies inline; unlike the general
+    // asynchronous extension contract, this call depends on that behavior.
+    // The reserved local ID is scoped to
     // these connections and cannot consume another caller's asynchronous reply.
     constexpr quint64 requestId = std::numeric_limits<quint64>::max();
     const QMetaObject::Connection ok = connect(m_backend.get(), &IRadioBackend::extensionResult,
@@ -7434,6 +7438,7 @@ void RadioModel::onDisconnected()
 
 void RadioModel::onConnectionError(const QString& msg)
 {
+    qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
     if (m_radioWakeActive) {
         const quint64 generation = m_radioWakeGeneration;
         QTimer::singleShot(0, this, [this, generation, msg] {
@@ -7443,7 +7448,6 @@ void RadioModel::onConnectionError(const QString& msg)
         });
         return;
     }
-    qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
     // The attempt ended (#4912). If the reconnect below arms, its own lambda
     // re-arms the flag when it actually re-drives the connect — so the window
     // between the failure and the retry reads as idle, which is what it is.

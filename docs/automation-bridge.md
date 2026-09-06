@@ -3355,14 +3355,18 @@ establishes identity and capabilities after reconnect. The response acknowledges
 the request, not radio readiness. No power-off command is exposed. Read-only
 mode refuses this action. Disconnect or another connection selection cancels it.
 
-The connection panel's **Wake on connect** checkbox persists in the `Icom`
+The connection panel's **Wake Icom on connect** checkbox persists in the `Icom`
 settings document (`wakeOnConnect`, default false). It requests wake only after
 identity discovery exhausts. Auto uses the CI-V destination advertised by the
 RS-BA1 radio, independently of its editable network name. A custom destination
-is respected. No model selection is required for standard wake; model identity
-and transmit capabilities still come only from the subsequent `19 00` reply.
-Connection advice/progress stays in the connection panel, and status-bar
-controls remain visible during temporary messages.
+is respected. An unidentified custom address requires an explicit model in
+Connect by IP or `civ wake`; otherwise wake refuses with guidance instead of
+guessing standard framing for an IC-9700. Supported factory destinations from
+the network record may select a framing hint. Model identity and transmit
+capabilities still come only from the subsequent `19 00` reply.
+Connection advice/progress uses the connection panel while it is open;
+mid-session advice uses the status bar. Temporary messages keep the existing
+Connect control visible and restore its normal position when the message clears.
 The post-wake reconnect disables another wake and expires after 20 seconds;
 IC-705 and IC-7300MK2 reconnect after one second and probe identity each second
 until it arrives; IC-9700 retains its measured ten-second pre-reconnect delay. Radio configuration

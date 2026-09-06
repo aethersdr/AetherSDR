@@ -350,6 +350,7 @@ private:
     // Icom's own RS-BA1 server the second responder may be a rotator or an amp,
     // and picking either at random mis-decodes the rest of the session.
     bool m_civAmbiguous = false;
+    bool m_civUnexpectedResponderWarned = false;
     int m_civDetectAttempts = 0;
     bool m_wakeOnConnect = false;
     bool m_waitingForWake = false;
