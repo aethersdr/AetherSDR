@@ -83,6 +83,8 @@ Welcome to first-time contributors **@on8st**, **@randal007**, **@azchohfi**, **
 
 Thank you to **Microsoft** for their first commit and for helping us improve our publishing automation!
 
+Thank you to the **KiwiSDR team** for partnering with us to establish a mirror for Kiwi receivers!
+
 73, Pat KI6BCJ & Codex (AI dev partner)
 
 ## [v26.9.1] — 2026-08-29
