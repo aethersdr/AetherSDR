@@ -333,7 +333,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
-| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
+| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR), plus the backend's own DSP read-back. |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get gps`](#get) | GPS fix, location, satellite-count, time, course, and reference snapshot. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
@@ -719,7 +719,7 @@ connects).
 | `model` | `selector` | returns |
 |---|---|---|
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
-| `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
+| `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the radio-side DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate) |
 | `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
@@ -1206,6 +1206,9 @@ radio-side `nr`/`nb`/`anf` in `get slice`. There is no widget that exposes which
 of the six AudioEngine NR modules is active and how it's tuned, so this is the
 only non-screenshot way to assert it.
 
+The response also carries **`backend`** — what the *radio's* DSP is configured
+with, which is a different question from everything else here (#5401).
+
 ```json
 → {"cmd":"get","model":"dsp"}
 ← {"ok":true,"model":"dsp","dsp":{
@@ -1222,7 +1225,23 @@ only non-screenshot way to assert it.
      "nr4":{"reductionDb":10,"smoothing":0,"whitening":0,"maskingDepth":50,"suppression":50,"noiseMethod":0,"adaptiveNoise":true},
      "mnr":{"strength":1},
      "dfnr":{"attenLimitDb":100,"postFilterBeta":0},
-     "bnr":{"intensity":1}}}}
+     "bnr":{"intensity":1}},
+   "backend":{
+     "family":"hl2",
+     "chains":[
+       {"chain":"rx-wdsp","receiver":0,"level":"channel-config",
+        "inputRateHz":48000,"dspRateHz":48000,"outputRateHz":48000,
+        "inputBlockSize":512,"dspBlockSize":512,"outputBlockSize":512,
+        "filterLowHz":150,"filterHighHz":2850,
+        "agcMode":"fast","agcMaxGainDb":90,"agcSlopeDb":0,"agcFixedGainDb":10,
+        "wdspNotchCount":0,"appliedNoiseBlanker":false},
+       {"chain":"rx-wdsp","receiver":1,"level":"not-configured"},
+       {"chain":"hl2-tx","level":"dsp-config",
+        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
+        "filterLowHz":300,"filterHighHz":2700,
+        "alcEnabled":true,"alcTargetPeak":0.9,"alcMaxGainDb":20,
+        "alcAttackSec":0.005,"alcReleaseSec":0.25,"alcHoldBelowDbfs":-45,
+        "micGainLinear":1}]}}}
 ```
 
 - `active` — the name of the **one** enabled module (the modules are mutually
@@ -1234,7 +1253,53 @@ only non-screenshot way to assert it.
   persisted `bnr` intensity, merged with the AppSettings-persisted
   NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
   #3902 — no container, so it exposes only `intensity`.)
-- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`.
+- `backend` — **the radio-side DSP read-back**, and the one part of this
+  response that is not about the client. Everything above describes AetherDSP's
+  own chain in `AudioEngine`; this is what the DSP *on the radio* is configured
+  with. `family` is the connected backend's family (`"hl2"` above), and `chains`
+  is a list with one entry per DSP chain that backend runs. It exists because
+  the recurring defect on a new backend is model/DSP divergence — a control
+  moves, the model records it, nothing reaches the DSP, and the symptom is "the
+  control does nothing". Every other `get` model answers from the **model**, so
+  none of them can see it.
+- `backend.chains[].chain` — **which** chain the entry describes: on a
+  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (a hand-written phasing
+  modulator on transmit, whose config is a different struct entirely). A backend
+  may run more than one chain and they need not share a vocabulary, so key off
+  `chain` rather than guessing from which fields are present. `rx-wdsp` entries
+  also carry `receiver` — the **DDC index**, not a slice id.
+- `backend.chains[].level` — **how close to the DSP the values came from**.
+  "Read-back" is used loosely, and the difference decides what a mismatch
+  proves:
+  - `channel-config` — what the channel was **opened** with, after any clamping
+    or refusal. One level below the model and one above a query into WDSP
+    itself.
+  - `dsp-config` — the DSP's **own state**.
+  - `not-configured` — a chain that **exists with nothing behind it**. Reported
+    present-but-unconfigured rather than omitted, and deliberately **without**
+    the configuration fields, so there are no stale or default values to
+    mistake for a real setting: a receiver with no channel behind it, or a
+    transmit chain that has never been configured, refused its `configure()`, or
+    been torn down by a disconnect, is exactly the state worth seeing.
+- **`dsp-config` describes the DSP, not the wire.** It is not liveness and not
+  keying. Normal unkeying and transient link loss retain the applied
+  configuration and still report `dsp-config`; for link state read
+  [`connectState`](#connectstate) on `get radio`.
+- **`backend` is absent entirely when the gather is empty.** No backend
+  attached, a backend that does not implement the read-back, and a gather that
+  could not be made all produce **no `backend` key at all** — never an empty
+  object and never an empty `chains` list, because an empty object would read as
+  "we asked, and the answer is nothing". `get dsp backend` errors with
+  `unknown property 'backend' for dsp` in exactly the cases the bare form omits
+  it. **A caller must not read the absence as "this radio has no chains"** — it
+  means the question went unanswered, which is a different fact. Both directions
+  are pinned by `tests/automation_dsp_backend_readback_test.cpp`.
+- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`, and
+  `get dsp backend` returns the identical object the bare form reports. The
+  read-back is merged into the snapshot **before** the property branch for that
+  reason: `assert_state` and `wait_for` only ever issue property reads, so a
+  field reachable only from the bare form is a field no automation client can
+  assert on.
 
 ### `get wavestats`
 Per-scope paint/append counters from every `WaveformWidget` instance — the
