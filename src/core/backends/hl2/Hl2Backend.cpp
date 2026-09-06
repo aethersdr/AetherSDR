@@ -509,6 +509,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // connection error and stop the Metis client so it does not sit half-open
     // paying out C&C at a radio that will never answer.
     connect(m_metis, &MetisClient::connectFailed, this, [this](const QString& reason) {
+        invalidateTxDspConfiguration();
         // This handler runs on the MAIN thread (queued from the io thread), but
         // m_metis lives on the io thread — stop() touches its socket and timers,
         // so it must run THERE, not here. A direct call is the affinity bug the
@@ -1323,6 +1324,7 @@ void Hl2Backend::releaseReceiverDsps()
 
 void Hl2Backend::tearDownReceivers()
 {
+    invalidateTxDspConfiguration();
     releaseReceiverDsps();   // already withdrew every chain from the sample path
     m_rx.clear();
     publishIoDsps();         // and now the list is empty, not merely all-null
@@ -1641,6 +1643,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         qCInfo(lcHl2) << "HL2: connect requested while the DSP was still opening"
                       << "— queued behind it";
         ++m_connectGeneration;
+        invalidateTxDspConfiguration();
         m_queuedConnect = std::make_unique<RadioConnectRequest>(request);
         return;
     }
@@ -2166,6 +2169,7 @@ void Hl2Backend::onDspSetupWatchdog()
     // Before the emits, not after: a connectionError handler can re-enter this
     // object, and the stale branch must see this flag whatever it does.
     m_pendingConnect->finishSignalled = true;
+    invalidateTxDspConfiguration();
     emit connectionError(
         tr("Hermes-Lite 2: the DSP setup did not finish within %1 seconds")
             .arg(AetherSDR::hl2::kDspSetupFailMs / 1000));
@@ -2235,6 +2239,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
             // refusing the whole session over it would be a worse outcome than
             // the degradation. Trim to what opened and carry on.
             if (i == 0) {
+                invalidateTxDspConfiguration();
                 emit connectionError(
                     QStringLiteral("HL2 DSP: %1").arg(QString::fromStdString(err)));
                 emit dspSetupFinished();
@@ -2323,8 +2328,26 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // connected() has fired and RadioModel has finished staging the old session.
 }
 
+void Hl2Backend::invalidateTxDspConfiguration()
+{
+    if (!m_txDsp) {
+        return;
+    }
+    if (!m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_txDsp->thread()) {
+        m_txDsp->invalidateConfiguration();
+        return;
+    }
+    // Serializes after an in-flight configure and before any later read-back.
+    // Never wait here: a cancelled cold WDSP open can still take minutes.
+    QMetaObject::invokeMethod(m_txDsp, [dsp = m_txDsp] {
+        dsp->invalidateConfiguration();
+    }, Qt::QueuedConnection);
+}
+
 void Hl2Backend::disconnectRadio()
 {
+    invalidateTxDspConfiguration();
     // Invalidate any DSP build still in flight. Without this, a disconnect
     // during the opens would be followed by finishDspSetup() starting a wire
     // for a session the operator has already left. The build itself cannot be
@@ -4027,9 +4050,14 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
     }
 
     if (txDsp) {
-        const Hl2TxDsp::Config& t = txDsp->config();
         QVariantMap e;
         e[QStringLiteral("chain")] = QStringLiteral("hl2-tx");
+        if (!txDsp->isConfigured()) {
+            e[QStringLiteral("level")] = QStringLiteral("not-configured");
+            chains.append(e);
+            return chains;
+        }
+        const Hl2TxDsp::Config& t = txDsp->config();
         // Level 4 by construction: there is no WDSP channel on transmit,
         // so this struct is the modulator's state rather than a record of
         // what it was asked for.
@@ -4066,6 +4094,9 @@ QVariantList Hl2Backend::dspChains() const
     // object, which was the point of reading the DSP rather than the mirror.
     if (!m_txDsp || m_txDsp->thread() == QThread::currentThread()) {
         return gatherDspChains(m_ioDsps, m_txDsp);
+    }
+    if (!m_ioThread || !m_ioThread->isRunning()) {
+        return {};  // no event loop can answer a blocking invocation
     }
 
     QVariantList out;

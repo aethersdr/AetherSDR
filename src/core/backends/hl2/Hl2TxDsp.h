@@ -91,13 +91,18 @@ public:
     Q_INVOKABLE void setMicGain(double linear);
     [[nodiscard]] double micGain() const noexcept { return m_micGain; }
 
-    // The configuration this modulator is RUNNING, for the DSP read-back verb.
+    // Last applied configuration. Read-back consumers must check isConfigured()
+    // before publishing it: defaults/refused or abandoned setups are not live.
     //
     // Unlike the receive side there is no WDSP channel behind this, so there is
     // no lower level to query: Hl2TxDsp is a hand-written phasing modulator and
     // this struct IS its state. A read of it is therefore level 4 in the
     // read-back sense, not a weaker stand-in for one.
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
+    [[nodiscard]] bool isConfigured() const noexcept { return m_configured; }
+    // Read-back validity belongs to the session, unlike reset() on normal unkey.
+    // Called on the DSP's I/O thread; does not change the signal-processing state.
+    void invalidateConfiguration() noexcept { m_configured = false; }
     // Gain the ALC is currently applying, in dB. 0 means unity.
     [[nodiscard]] double alcGainDb() const noexcept;
 
@@ -168,6 +173,7 @@ private:
     static constexpr std::size_t kTaps = 255;
 
     Config m_config;
+    bool m_configured = false;
     double m_micGain = 1.0;
     int m_upsample = 2;
     double m_alcGain = 1.0;      // current ALC gain, carried across blocks

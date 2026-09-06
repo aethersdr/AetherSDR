@@ -11,16 +11,52 @@
 // only the request does. A read-back that returned its own input would pass a
 // test written the first way and be worthless.
 
+#include "TestSettingsProfile.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QVariantList>
 #include <QVariantMap>
 
 #include <cmath>
 #include <cstdio>
 #include <string>
+
+namespace AetherSDR::hl2 {
+
+// Seeds only the real modulator, on its owning thread. No connectRadio(),
+// discovery, WDSP RX opens, transport start or TX audio processing occurs.
+struct Hl2DspReadbackTestAccess {
+    static bool configure(Hl2Backend& backend, Qt::ConnectionType type = Qt::BlockingQueuedConnection)
+    {
+        return QMetaObject::invokeMethod(backend.m_txDsp, [&backend] {
+            backend.m_txDsp->configure(Hl2TxDsp::Config{});
+        }, type);
+    }
+    static void tearDown(Hl2Backend& backend) { backend.tearDownReceivers(); }
+    static void linkDown(Hl2Backend& backend)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, "linkDown", Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    }
+    static void linkUp(Hl2Backend& backend)
+    {
+        // The main-thread session startup handler stays queued and is removed
+        // at destruction. A wire transition alone does not reconfigure DSP.
+        QMetaObject::invokeMethod(backend.m_metis, "linkUp", Qt::BlockingQueuedConnection);
+    }
+    static void connectFailed(Hl2Backend& backend)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, "connectFailed", Qt::BlockingQueuedConnection,
+                                  Q_ARG(QString, QStringLiteral("injected failure")));
+        QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    }
+};
+
+}  // namespace AetherSDR::hl2
 
 using AetherSDR::hl2::Hl2Backend;
 using AetherSDR::hl2::Hl2TxDsp;
@@ -37,10 +73,20 @@ static bool near(double a, double b) { return std::abs(a - b) < 1e-9; }
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("hl2-dsp-readback-test"));
     QCoreApplication app(argc, argv);
+    check(profile.isValid(), "settings are isolated");
     std::printf("\n  DSP read-back — reports the DSP, not the request\n\n");
 
     Hl2TxDsp dsp;
+    const auto unconfigured = [](const QVariantList& chains) {
+        return chains.size() == 1
+            && chains.first().toMap() == QVariantMap{
+                {QStringLiteral("chain"), QStringLiteral("hl2-tx")},
+                {QStringLiteral("level"), QStringLiteral("not-configured")}};
+    };
+    check(!dsp.isConfigured() && unconfigured(Hl2Backend::gatherDspChains({}, &dsp)),
+          "a fresh modulator reports no configuration fields");
 
     // 1. What it was configured with is what it reports.
     Hl2TxDsp::Config a;
@@ -171,6 +217,59 @@ int main(int argc, char** argv)
                   && both.last().toMap().value(QStringLiteral("chain")).toString()
                          == QLatin1String("hl2-tx"),
               "with the TX chain last, after the receivers");
+    }
+
+    // Refusal invalidates read-back; ordinary unkey/reset does not.
+    check(dsp.isConfigured(), "successful configuration marks the chain valid");
+    dsp.reset();
+    check(dsp.isConfigured()
+              && !unconfigured(Hl2Backend::gatherDspChains({}, &dsp)),
+          "unkey reset preserves the configured chain");
+    Hl2TxDsp::Config invalid = a;
+    invalid.inputSampleRateHz = 0;
+    check(!dsp.configure(invalid, &err)
+              && unconfigured(Hl2Backend::gatherDspChains({}, &dsp)),
+          "invalid rates withdraw a previously valid configuration");
+    check(dsp.configure(a, &err), "a valid retry restores configuration");
+    invalid = a;
+    invalid.outputSampleRateHz = 48001;
+    check(!dsp.configure(invalid, &err)
+              && unconfigured(Hl2Backend::gatherDspChains({}, &dsp)),
+          "a refused non-integer ratio also withdraws configuration");
+    check(dsp.configure(a, &err), "configuration can be restored after refusal");
+    dsp.invalidateConfiguration();
+    check(unconfigured(Hl2Backend::gatherDspChains({}, &dsp)),
+          "session deactivation hides all previous-session values");
+
+    // Actual backend lifecycle, without ever starting a transport. Read-back
+    // crosses the same I/O queue as invalidation, so it also checks ordering.
+    {
+        using Access = AetherSDR::hl2::Hl2DspReadbackTestAccess;
+        Hl2Backend backend;
+        check(unconfigured(backend.dspChains()), "fresh backend reports TX not-configured");
+        check(Access::configure(backend) && !unconfigured(backend.dspChains()),
+              "backend reads its configured I/O-owned modulator");
+        backend.disconnectRadio();
+        check(unconfigured(backend.dspChains()), "disconnect withdraws the session config");
+        check(Access::configure(backend, Qt::QueuedConnection), "queue a new configuration");
+        backend.disconnectRadio();
+        check(unconfigured(backend.dspChains()),
+              "cancellation invalidation runs after a configuration already queued");
+        check(Access::configure(backend), "restore before receiver teardown");
+        Access::tearDown(backend);
+        check(unconfigured(backend.dspChains()), "receiver teardown withdraws TX read-back");
+        check(Access::configure(backend), "restore before injected link loss");
+        Access::linkDown(backend);
+        check(!unconfigured(backend.dspChains()),
+              "link loss preserves the applied configuration of retained DSP");
+        check(Access::configure(backend), "restore before injected connection failure");
+        Access::connectFailed(backend);
+        check(unconfigured(backend.dspChains()), "connection failure withdraws TX read-back");
+        check(Access::configure(backend), "restore before transient link loss");
+        Access::linkDown(backend);
+        check(!unconfigured(backend.dspChains()), "transient silence retains config");
+        Access::linkUp(backend);
+        check(!unconfigured(backend.dspChains()), "link resume preserves the same valid config");
     }
 
     if (g_failures == 0) {

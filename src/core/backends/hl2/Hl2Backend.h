@@ -163,6 +163,8 @@ signals:
     void dspSetupFinished();
 
 private:
+    friend struct Hl2DspReadbackTestAccess;
+    void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives
     // the radio going silent — which is the case the heartbeat has to detect.

@@ -551,7 +551,11 @@ sub-actions, so action-level drift is invisible to CI.
    struct) and its `level`, because "read-back" is used loosely and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
-   DSP's own state, `not-configured` is a receiver with nothing behind it.
+   DSP's own state, and `not-configured` marks an unavailable configuration.
+   An unconfigured or refused TX setup, or an explicitly cancelled/disconnected
+   session reports that level without stale/default configuration fields.
+   Normal unkeying and transient link loss retain the applied configuration:
+   `dsp-config` describes the DSP, not whether the wire is connected or keyed.
    Values come from `WdspChannel::config()` and `Hl2TxDsp`'s own struct, never
    from `Hl2Backend::Receiver` — a read-back that reported the request back
    would be certifying its own input, the rule

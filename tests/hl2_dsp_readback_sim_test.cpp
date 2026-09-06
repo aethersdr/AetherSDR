@@ -26,8 +26,6 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QUdpSocket>
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <span>
@@ -165,49 +163,6 @@ static Probe findSimulator(const QString& host, AetherSDR::hl2::DiscoveryReply* 
     }
     return answeredUnparseable ? Probe::Unreadable : Probe::NoReply;
 }
-
-// The IQ sample rate this test runs the receiver at, and therefore the span the
-// spectrum frames cover. Declared once because every expected-bin computation
-// derives from it.
-constexpr int kIqRateHz = 48000;
-
-// hpsdrsim's synthetic receive scene: two tones it generates itself into
-// toneItab/toneQtab, at offsets fixed relative to the ADC rather than the NCO,
-// present whether or not we are keyed.
-//
-// It builds them as I = sin(theta), Q = cos(theta) — so I + jQ = j*exp(-j*theta),
-// a NEGATIVE frequency on the wire, and a receive path that conjugates correctly
-// draws them ABOVE centre. That is the anchor: these tones reach the spectrum
-// without passing through the transmitter, so their side of centre pins the
-// RECEIVE end's handedness on its own. With it pinned, the transmit assertions
-// below can no longer be satisfied by a matched pair of errors.
-constexpr double kSceneToneLowHz = 800.0;
-constexpr double kSceneToneHighHz = 4000.0;
-
-// Bin of a baseband offset in the displayed spectrum, which is fftshifted (DC at
-// the centre bin) and in the analytic convention (above the carrier is above
-// centre). The ONE place that sign convention is written down.
-static int binForOffset(double offsetHz, int n)
-{
-    return n / 2 + static_cast<int>(
-        std::lround(offsetHz * n / static_cast<double>(kIqRateHz)));
-}
-
-// Strongest level within +/-halfWidth bins of centreBin. Offsets rarely land on
-// an exact bin — 800 Hz is 17.07 bins at this rate — so a bare lookup reads the
-// shoulder of the tone rather than its peak.
-static float peakNear(const std::vector<float>& spec, int centreBin, int halfWidth)
-{
-    const int n = static_cast<int>(spec.size());
-    const int lo = std::max(0, centreBin - halfWidth);
-    const int hi = std::min(n - 1, centreBin + halfWidth);
-    float best = -300.0f;
-    for (int i = lo; i <= hi; ++i) {
-        best = std::max(best, spec[static_cast<std::size_t>(i)]);
-    }
-    return best;
-}
-
 
 int main(int argc, char** argv)
 {
