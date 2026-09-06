@@ -677,12 +677,34 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   | `XDG_CONFIG_HOME` | the same locations on platforms that consult it |
   | **`HOME`** | everything resolved from `QDir::homePath()` — **and the WDSP wisdom cache** |
 
-  `WdspChannel::wisdomPath()` resolves to `$XDG_CACHE_HOME`, else
-  **`$HOME/.cache`**, then `/aethersdr/wdsp-fftw-wisdom`. It is imported before
-  the channels are built and exported after. A redirected `HOME` therefore
-  points it at a directory the operator's own cache is not in: **the first
-  isolated run is a cold open even on a machine that has connected a hundred
-  times.**
+  `WdspChannel::wisdomPath()` resolves to `$XDG_CACHE_HOME`, **else**
+  `$HOME/.cache`, then `/aethersdr/wdsp-fftw-wisdom` — and that `else` is not a
+  detail. It is imported before the channels are built and exported after.
+
+  **Where `XDG_CACHE_HOME` is exported, redirecting `HOME` moves the wisdom
+  cache NOWHERE.** `HOME` is never consulted, so the "isolated" run reads the
+  operator's real cache — and, because the export is unconditional in an app
+  process, **writes to it too**. That is the dangerous outcome, not the slow
+  one: the run is fast, looks correct, and quietly rewrites a file outside the
+  profile it was supposed to be confined to. `XDG_CACHE_HOME` is commonly
+  exported on Linux and rarely on macOS, which is exactly the kind of difference
+  that makes a harness behave one way on a developer's machine and another in
+  CI.
+
+  So the sentence to carry is conditional. Where `XDG_CACHE_HOME` is **unset**,
+  a redirected `HOME` does point the cache at a directory the operator's own is
+  not in, and the first isolated run is a cold open even on a machine that has
+  connected a hundred times. Where it is **set**, none of that happens and the
+  isolation is an illusion.
+
+  **VERIFY THE PATH THE PROCESS GOT, NOT THE ONE YOU ASKED FOR.** This is the
+  general form and it is worth more than the specific trap: a harness that
+  exports a variable and prints that it exported it has confirmed its own
+  intent, not the outcome. Read the environment of the running process —
+  `ps eww <pid>` on macOS, `/proc/<pid>/environ` on Linux — or log
+  `wisdomPath()` from inside the app and compare it against what you meant. A
+  request that is accepted, validated and reported as fine, then discarded
+  further down, produces exactly the same output as one that worked.
 
   **How often you pay that depends on your profile's lifetime, so be deliberate
   about it.** The recipe above exports a stable `$T=/tmp/aether-hl2-test` and
@@ -719,6 +741,12 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   # ABSOLUTE, and resolved BEFORE HOME is redirected.
   export AETHER_WDSP_WISDOM_DIR=/var/tmp/aethersdr-harness-wisdom
   ```
+
+  It is checked **first and unconditionally**, ahead of `XDG_CACHE_HOME`,
+  `LOCALAPPDATA` and `HOME`, so it is the only one of these that binds whatever
+  else the environment carries. That — not the convenience — is why it is the
+  fix: redirecting `HOME` is a guess about which branch of the resolution order
+  a machine will take.
 
   **Do not write `$HOME/...` here.** `HOME` is the variable this very recipe
   redirects, so a `$HOME`-relative path lands *inside* the temporary tree and is
