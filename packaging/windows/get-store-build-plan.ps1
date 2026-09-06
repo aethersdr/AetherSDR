@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$EventName,
     [Parameter(Mandatory = $true)][string]$Ref,
     [Parameter(Mandatory = $true)][string]$Repository,
-    [Parameter(Mandatory = $true)][ValidateRange(1, 65535)][long]$RunNumber,
+    [Parameter(Mandatory = $true)][long]$RunNumber,
     [bool]$RequestFlight = $false,
     [string]$ProductId,
     [string]$FlightId,
@@ -14,6 +14,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# This step runs on every Windows Installer run, so a bare range-validation
+# failure here would take the whole workflow down — portable ZIP and Inno
+# installer included — with a message that says nothing about why. Name the
+# cause and the fix instead: MSIX version components are 16-bit, so the shared
+# workflow run counter cannot exceed 65535.
+if ($RunNumber -lt 1 -or $RunNumber -gt 65535) {
+    throw ("RunNumber $RunNumber is outside the MSIX component range 1..65535. " +
+        "The Windows Installer run counter has passed Microsoft's 16-bit package " +
+        "version limit; see the Version discipline section of " +
+        "docs/WINDOWS-STORE-MSIX.md before changing or resetting the counter.")
+}
+
 $upstream = $Repository -eq 'aethersdr/AetherSDR'
 $release = $upstream -and $EventName -eq 'push' -and $Ref.StartsWith('refs/tags/v')
 $flight = $upstream -and $EventName -eq 'workflow_dispatch' -and $RequestFlight

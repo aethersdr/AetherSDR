@@ -48,8 +48,11 @@ jobs:
           "AETHERSDR_MSIX_VERSION=$($plan.msixVersion)" >> $env:GITHUB_ENV
           Write-Host "Store package version: $($plan.msixVersion)"
 
+      # pwsh, not Windows PowerShell: the suite is developed and verified on
+      # PowerShell 7, so run it on that same interpreter rather than making a
+      # release build the first 5.1 execution of it.
       - name: Check Store packaging policy
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_store_policy_test.ps1
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests\windows_store_policy_test.ps1
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
@@ -512,6 +515,13 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+
+    # Partner Center holds one in-progress submission per flight, so serialize
+    # dispatches rather than racing them. Never cancel in progress: an upload
+    # that has already started must be allowed to finish or be committed.
+    concurrency:
+      group: microsoft-store-flight
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

@@ -75,7 +75,7 @@ try {
     }
     foreach ($invalid in @(0, -1, 65536)) {
         $inputs.RunNumber = $invalid
-        Assert-Throws { & $planScript @inputs } 'RunNumber'
+        Assert-Throws { & $planScript @inputs } 'MSIX component range 1\.\.65535'
     }
     $inputs.RunNumber = 204
     Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION invalid)'

@@ -387,6 +387,13 @@ first draft because that draft has no API file-upload URL; the workflow must be
 allowed to create the first API-backed submission itself. This is a one-time
 flight setup concern, not part of the production submission path.
 
+Expect the first dispatch to be the first real exercise of the Store CLI's
+flight contract. The regression suite substitutes an in-process `msstore`
+command, so it proves which arguments `publish-store.ps1` assembles but not
+that the pinned CLI accepts `--flightId` on `publish`. A wrong option name
+fails the step loudly rather than publishing anywhere, but budget for it —
+along with credentials and certification — on the first attempt.
+
 The flight uses the shared MSIX sequence described under **Version discipline**
 above. This also changes production MSIX version numbers; production remains a
 draft and its certification requires maintainer action.
