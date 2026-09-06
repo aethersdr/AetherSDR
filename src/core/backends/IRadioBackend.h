@@ -752,6 +752,28 @@ public:
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
 
+    // WHAT THE DSP IS ACTUALLY CONFIGURED WITH, as opposed to what the model
+    // says it asked for.
+    //
+    // The recurring failure on a new backend is model/DSP divergence: a control
+    // moves, the model records it, and nothing reaches the DSP. That reads as
+    // "the control does nothing", which is the hardest symptom to act on
+    // because it is indistinguishable from the operator having misunderstood
+    // the control. `get_state` answers from the MODEL and so cannot see it.
+    //
+    // Each entry describes ONE chain and must carry a `chain` key naming which
+    // — a backend may run more than one, and they need not share a vocabulary.
+    // A Hermes-Lite 2 runs WDSP on receive and a hand-written phasing modulator
+    // on transmit, whose config is a different struct entirely; reporting both
+    // under one shape would mean inventing a union that describes neither. A
+    // reader keys off `chain` rather than guessing from which fields are
+    // present.
+    //
+    // Empty by default: a backend that cannot answer must report nothing rather
+    // than zeros, for the same reason healthSnapshot() distinguishes "0" from
+    // "we never heard".
+    virtual QVariantList dspChains() const { return {}; }
+
     // The state of the TRANSPORT carrying this radio's streams, as opposed to
     // the state of the radio itself (which is healthSnapshot's job).
     //

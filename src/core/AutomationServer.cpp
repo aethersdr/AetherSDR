@@ -4796,10 +4796,44 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             s.value("DfnrPostFilterBeta", "0.0").toFloat();
         tuning[QStringLiteral("dfnr")] = dfnr;
         data[QStringLiteral("tuning")] = tuning;
+        // The BACKEND's DSP, which is a different question from everything
+        // above. `data` describes the client-side chain in AudioEngine — NR2,
+        // NR4, DFNR and their tuning. What §8 asked for is what the RADIO's DSP
+        // is configured with, and the recurring defect is divergence between
+        // the two: a control moves, the model records it, nothing reaches the
+        // DSP, and the symptom is "the control does nothing".
+        //
+        // Every entry names its `chain`, because a backend may run more than one
+        // and they need not share a vocabulary — a Hermes-Lite 2 runs WDSP on
+        // receive and a hand-written phasing modulator on transmit. Each also
+        // names its `level`, because "read-back" is used loosely and the
+        // difference decides what a mismatch proves: `channel-config` is what
+        // the channel was opened with, `dsp-config` is the DSP's own state, and
+        // `not-configured` is a chain that exists with nothing behind it.
+        //
+        // MERGED BEFORE THE PROPERTY BRANCH BELOW, and that ordering is the
+        // contract rather than a detail. A field added after it reaches the
+        // full snapshot but answers "unknown property" to `property=backend` —
+        // and the property form is the only one assert_state and wait_for use,
+        // so a read-back added after the narrowing is one no automation client
+        // can assert on (#5401 review).
+        if (m_radioModel) {
+            if (IRadioBackend* backend = m_radioModel->backend()) {
+                const QVariantList chains = backend->dspChains();
+                if (!chains.isEmpty()) {
+                    data[QStringLiteral("backend")] = QJsonObject{
+                        {QStringLiteral("family"),
+                         m_radioModel->family()},
+                        {QStringLiteral("chains"),
+                         QJsonArray::fromVariantList(chains)}};
+                }
+            }
+        }
         if (!property.isEmpty()) {
-            if (!data.contains(property))
+            if (!data.contains(property)) {
                 return err(QStringLiteral("unknown property '") + property
                            + QStringLiteral("' for dsp"));
+            }
             return QJsonObject{{QStringLiteral("ok"), true},
                                {QStringLiteral("model"), model},
                                {QStringLiteral("property"), property},

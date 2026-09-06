@@ -9153,6 +9153,20 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
     });
 }
 
+void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
+                                   const QString& family)
+{
+    // THROUGH teardownBackend(), not over the top of the previous pointer.
+    // A bare `m_backend = std::move(...)` destroys the old backend while this
+    // model still holds the aliases and connections that were made for it, and
+    // the destructor's disconnect then runs against freed memory — which is
+    // exactly what a second call to this helper produced (SIGSEGV in
+    // QObject::disconnect at teardown, all checks having passed).
+    teardownBackend();
+    m_backend = std::move(backend);
+    m_family = family;
+}
+
 QString RadioModel::neutralPanIdStringForTest(int panIdx)
 {
     return neutralPanIdString(panIdx);

@@ -543,11 +543,23 @@ sub-actions, so action-level drift is invisible to CI.
 
 ### Still missing
 
-1. **Read back what the DSP was actually configured with.** The recurring
-   failure is model/DSP divergence (gaps 3, 5). `get_state` reports the *model*.
-   An agent needs `get_state model=dsp backend=...` exposing the live WDSP
-   config: in/dsp/out rates, block sizes, AGC mode + ceiling, filter edges.
-   **This one verb would have caught gaps 3, 4 and 5 immediately.**
+1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
+   `get_state model=dsp` now carries a `backend` object alongside the
+   client-side chain: `family`, and a `chains` list. Each entry names its
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive and a
+   hand-written phasing modulator on transmit, whose config is a different
+   struct) and its `level`, because "read-back" is used loosely and the
+   difference decides what a mismatch proves: `channel-config` is what
+   `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
+   DSP's own state, and `not-configured` marks an unavailable configuration.
+   An unconfigured or refused TX setup, or an explicitly cancelled/disconnected
+   session reports that level without stale/default configuration fields.
+   Normal unkeying and transient link loss retain the applied configuration:
+   `dsp-config` describes the DSP, not whether the wire is connected or keyed.
+   Values come from `WdspChannel::config()` and `Hl2TxDsp`'s own struct, never
+   from `Hl2Backend::Receiver` — a read-back that reported the request back
+   would be certifying its own input, the rule
+   `Hl2RxDsp::appliedNoiseBlankerEnabled()` already states.
 2. **A pitch/tone assertion primitive.** Every audio measurement this session
    was hand-rolled numpy over `capture_audio` JSON. A `capture_audio` mode
    returning dominant frequencies, peak/RMS, clipped-sample fraction and
