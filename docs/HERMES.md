@@ -658,12 +658,14 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
 - Launch the app as the **foreground process of a backgrounded shell**;
   launching it with `&` inside a foreground command gets it killed with the
   shell's process group.
-- First WDSP channel open costs **~19 s** generating FFTW wisdom; every later
-  open — any receiver, any sample rate — is **40–175 ms**. The planning cost is
+- An earlier first WDSP channel open took **~19 s** generating FFTW wisdom;
+  warm opens in that observation were **40–175 ms**. These are historical
+  observations, not a current cold-open estimate or a timeout budget; the later
+  bench observations below were substantially slower. The planning cost is
   not a bug and cannot be optimised away, but it is now paid **off the GUI
   thread** and reported in the connect animation; see §22.
 
-- **"Every later open" assumes the wisdom cache survives. Redirecting `HOME`
+- **Warm-open timings assume the wisdom cache survives. Redirecting `HOME`
   can move that cache too, depending on the other environment variables.**
   An isolated profile can therefore turn a warm open into a cold one.
 
@@ -717,8 +719,11 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   first open, and that is the case that reads as a hang. Which shape you have is not
   visible from the symptom, so decide it rather than discover it.
 
-  It is far worse than the ~19 s above. WDSP builds every FFT with
-  `FFTW_PATIENT`, 35 plans per channel. Two independent measurements, both on
+  The earlier ~19 s observation does not predict these runs, and the recorded
+  evidence does not establish why they differ. Do not infer a receiver-count
+  multiplier or a portable cold-open time from these separate observations.
+  WDSP builds every FFT with `FFTW_PATIENT`, 35 plans per channel.
+  Two independent measurements, both on
   this bench, changing only whether that cache was reachable:
 
   | what was measured | cache present | cache absent |
