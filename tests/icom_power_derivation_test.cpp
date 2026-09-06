@@ -192,6 +192,8 @@ void testIc9700DerivedForwardPowerAcrossBands()
         clientUnkeyReset |= args.at(0).toString() == QStringLiteral("TX:FWDPWR")
             && args.at(1).toDouble() == 0.0;
     }
+    // Zeroing a DERIVED wattage is not an on-air claim, so it does not wait
+    // for the radio's PTT readback the way the published keyed state does.
     check(clientUnkeyReset,
           "client-requested Icom unkey immediately clears derived forward power");
 

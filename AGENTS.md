@@ -288,9 +288,11 @@ the default graph, all tracked for socket-free extraction in #5254:
 handshake peer), and `thumbdv_queue_test` (a pty-backed fake DV3000 dongle —
 not a socket, which is why it went unenumerated; #5405 review). Mining a retired fake peer's frame tables as
 *input data* for injected-transport tests is encouraged; running the fake as
-a live socket peer is not. Loopback mocks of documented HTTP APIs
-(`asr_remote_backend_test`) are a different trade — that contract is
-versioned and published; radio firmware behavior is not.
+a live socket peer is not. Loopback mocks of documented HTTP APIs are a
+different trade — that contract is versioned and published; radio firmware
+behavior is not. (The example that used to sit here, `asr_remote_backend_test`,
+was one of eight removed for intermittency; see the note at the end of this
+section.)
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under
@@ -476,6 +478,19 @@ observe-only local handshake/capability service, and a QtWidgets-free
 `resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
 coalescing/session resync, and an independent local-socket hard disconnect cap
 are live over the current-user local transport.
+The headless daemon also owns a bounded, observe-only `radioCatalogue` through
+the normalized `RadioDiscoverySource` seam. Native discovery adapters stay under
+`src/core/backends/`; desktop discovery/autoconnect is unchanged. Discovery is
+passive by default: `--discover-local` opts into Flex/HL2/ANAN LAN discovery and
+available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata.
+Neither option connects a radio. Icom manual setup, SmartLink and external
+directories are excluded. Catalogue fields and lifecycle are specified in
+`docs/aetherd-control-resource-v1-catalogue.md`.
+Sessions now require explicit trusted authorization; the local transport grants
+observe permission, and reads/subscriptions enforce it. The revocation hook
+discards pending observations and terminates local delivery; no wire or daemon
+path invokes it yet. Credential verification/provisioning and control/transmit
+grants are not implemented yet.
 Meters, read-only transmit state, authenticated non-TX control, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned

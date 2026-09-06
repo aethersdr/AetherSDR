@@ -441,6 +441,23 @@ bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId)
     return true;
 }
 
+std::string radioIdHex(const RadioId& radioId)
+{
+    static constexpr char kHex[] = "0123456789abcdef";
+    if (std::all_of(radioId.begin(), radioId.end(),
+                    [](std::uint8_t byte) { return byte == 0; })) {
+        return {};
+    }
+
+    std::string encoded;
+    encoded.reserve(radioId.size() * 2);
+    for (const std::uint8_t byte : radioId) {
+        encoded.push_back(kHex[(byte >> 4) & 0x0f]);
+        encoded.push_back(kHex[byte & 0x0f]);
+    }
+    return encoded;
+}
+
 std::string parseCapabilitiesName(std::span<const std::uint8_t> pkt)
 {
     if (!startsWith(pkt, kLenCapabilities, 0xa8))

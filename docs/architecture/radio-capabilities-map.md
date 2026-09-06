@@ -44,6 +44,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `receiveOnlyModes` | — (empty) | — (empty) | — (empty) | `RadioModel::refuseKeyInReceiveOnlyMode` (MOX / TUNE / CW-key / `setTransmit`) | Modes the radio **demodulates but will not transmit in**, in the neutral vocabulary. Empty = transmits in everything it receives. Refusing here (not in the backend) is what rolls back `TransmitModel`'s optimistic MOX/TUNE state — a backend cannot reach `TransmitModel`, so a refusal made down there leaves the TX indicator lit and TUNE latched. Icom: `["WFM"]` on the IC-705, which receives 76–108 MHz broadcast and does not transmit there (#5040) |
 | `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock. **Not the same question as `takesTxAudioOverSeam`** — see below |
 | `takesTxAudioOverSeam` | ❌ | ✅ | ❌ | `MainWindow_Session` (capture, TX stream, PC-audio lock), `AudioEngine::setHostModulation`, `RadioModel::ensureDaxTxStream` | Whether transmit audio leaves through `submitTxAudio` rather than a DAX/VITA-49 stream. Icom: ✅ |
+| `hasRadioPttReadback` | ❌ | ❌ | ❌ | `RadioModel::publishCommandedBackendTransmitEdge`, `Ax25HfPacketDecodeDialog::beginTransmitWhenReady` | The backend's `transmitChanged` / `keyingStateConfirmed` carry the **radio's own** PTT readback and `setKeying()` is intent only. True suppresses RadioModel's command-edge fallback, and makes AetherModem wait for `radioTransmittingChanged` / `radioTransmitConfirmed` (or an already-keyed radio) before releasing sample zero. Flex: ❌ because its interlock edge is decoded inside RadioModel, not through the seam. Icom: ✅ (decoded CI-V `1C 00`, #5311) |
 | `hasSelectableMicInputs` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneCwApplet::setSelectableMicInputs` | The MIC/BAL/LINE/ACC/PC list. False collapses it to PC and adopts that into TransmitModel. Icom: ❌ (the radio picks its own input) |
 | `hasDownwardExpander` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneApplet::setDexpVisible`; `AutomationServer` transmit snapshot | The radio has an authoritative DEXP/downward-expander command and read-back path. False hides the complete row and omits `dexp`/`dexpLevel` from automation state. Icom: ❌ until a model profile evidences and implements that full path; the IC-9700 does not borrow Flex's compander surface |
 | `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` **and** `VfoWidget::setRadioFilterWidths` | The RX filter widths a radio can actually reach, **narrowest first**. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom publishes the selected slot's actual 1A 03 width plus factory defaults for the two unselected slots that CI-V cannot read, and republishes on mode, slot, or width changes. Both filter surfaces read it — the VFO grid did not, which is how the two disagreed about what the radio could do |
@@ -100,8 +101,8 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasPaCurrentTelemetry` | ❌ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Calibrated PA drain-current face in Radio Vitals, used only when PA-temperature telemetry is unavailable. Icom: ✅ only for the IC-9700 profile's documented 0–20 A Id calibration. Flex remains ❌ because its PACURRENT meter is known to clip below real full-power draw |
 | `hasMainFanTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Main Fan gauge in Radio Vitals. All current Icom models are ❌ because the backend does not publish fan-speed telemetry |
 | `hostFrequencyCalibration` | ❌ | ✅ | ❌ | `RadioSetupDialog` (Calibration page), `AutomationServer::doFreqCal` | Shows the Calibration page and enables the `freqcal` bridge verb. Means "**the client** owns the frequency-error correction", not "this radio has an error" — every radio does. Flex is ❌ because it calibrates itself (`radio set cal_freq` / `pll_start`), and that surface stays in the Frequency Offset group on the Receive page. HL2 is ✅ because its 76.8 MHz NCO scale is a `localparam` in the bitstream (`radio.v` M2) and no register in the HPSDR map accepts a correction — see `docs/architecture/hl2-frequency-calibration.md` |
-| `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | host-side memory bank vs radio-side slots — the bank's ONE shared document lives at `radio_settings (local, '', MemoryBank)` since RFC #4603 PR 6, covered by settings backup/export; legacy `memories.json` is a frozen import source. Icom is profile-gated for IC-705, IC-7300MK2, and IC-9700; unprofiled Icom models remain ❌. |
-| `canWriteMemories` | ✅ | ❌ | ❌ | `RadioModel::memoriesWritable`, memory dialog and panadapter memory panel | Separates radio ownership from mutation support. The initial Icom implementation is read-only, so Add, Import, inline edits, and Remove cannot leak vendor-incompatible memory commands. |
+| `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | selects the active working store: native radio slots or the host database. The bank's ONE shared document lives at `radio_settings (local, '', MemoryBank)` since RFC #4603 PR 6, covered by settings backup/export; legacy `memories.json` is a frozen import source. Icom is always ❌ because its working model is the host database; model-specific Sync support is declared independently by `canRefreshMemories`. |
+| `canWriteMemories` | ✅ | ❌ | ❌ | `RadioModel::memoriesWritable`, memory dialog and panadapter memory panel | Separates native ownership from mutation support. Icom's radio-side store stays read-only, while the shared AetherSDR database remains writable for Add, Import, inline edits, Remove, and Tune on every Icom model. |
 | `canApplyMemories` | ✅ | ❌ | ❌ | `RadioModel::tryMemoryCommand` | True means the backend accepts its native memory-apply command. Initial Icom support is ❌ and applies recallable cached fields through the existing neutral slice setters instead of entering vendor Memory mode; split/RPS/DV/DD records are display-only. |
 | `canRefreshMemories` | ❌ | ❌ | ❌ | Memory Channels dialog → `RadioModel::refreshMemories` | Explicit, button-only radio-memory snapshots. IC-7300MK2 reads 99 channels; IC-9700 reads all 297 or one selected band; IC-705 requires one selected group and reads only its 100 channels. No memory scan runs during connection. |
 | `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
@@ -109,6 +110,48 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
 | `notchMinWidthHz` / `notchMaxWidthHz` | 10 / 6000 | 50 / 6000 | 0 / 0 | `SpectrumWidget::setNotchCapabilities` | Clamps drag-resize and the width presets. HL2's floor is set by the RX filter length and WDSP **silently widens** anything narrower, so a UI offering less draws a notch narrower than the one being heard |
+
+### Control ranges and native meter units
+
+The shared RX/VFO/Phone/CW surfaces consume these declarations through
+`RadioModel::backendCapabilities()`, without inspecting a radio family:
+
+- `hasAgcThreshold`, `hasAmCarrierLevel`, and `hasVoxDelay` disable controls
+  whose setters have no native implementation. Icom reports false; Flex keeps
+  all three, and HL2/ANAN retain their host AGC threshold.
+- `agcModes` controls individual AGC choices. Icom exposes Slow/Med/Fast.
+  Off requires native CI-V time-constant editing, which is not implemented;
+  selecting it must not silently select Fast. Disabled choices are also
+  rejected by the automation bridge.
+- `cwSpeedMinWpm` / `cwSpeedMaxWpm` flow through
+  `MainWindow::applyCapabilitiesToUi` to `PhoneCwApplet::setCwControlLimits`
+  for the speed slider/editor bounds. `cwPitchMinHz` / `cwPitchMaxHz` and
+  `cwPitchStepHz` also set the pitch editor bounds and button increments.
+  Icom uses 6–48 WPM and 300–900 Hz; MK2 pitch steps/readback are 5 Hz.
+  Other backends retain their existing ranges.
+- `hasCwTune` disables MK2 audio-tone Tune in CW/CW-R, where it cannot
+  produce a carrier. RadioModel updates TransmitModel on TX-slice mode/selection
+  changes; both Tune starts are refused before side effects, and the UI keeps
+  Stop usable while already tuning. Other profiles retain their existing policy.
+- `hasModeIndependentSquelch` keeps MK2 squelch usable in CW/data. Other
+  profiles keep their existing mode rules.
+- `hasFmRepeaterOffset` dims offset magnitude and direction when absent.
+  MK2 has split operation, but not CI-V repeater commands 0C/0D or 0F 10–12;
+  its profile suppresses those reads and writes. IC-705/9700 retain them.
+  The independent transmit-frequency check remains available.
+- `alcMeterUnit` selects the native ALC gauge: Icom percent, otherwise the
+  existing dBFS scale. The legacy normalized `swAlc` signal remains for TCI;
+  GUI and automation consume native `alcValue`/`alcUnit` instead.
+- `compressionMaximumDb` is 30 dB for MK2 and retains 25 dB elsewhere. MK2
+  calibration uses its official raw 0/130/210 points for 0/15/30 dB.
+
+TX bandwidth still uses each model's own CI-V profile and radio readback.
+For both supported profiles (MK2 and IC-705), the high nibble indexes the high
+edge and the low nibble indexes the low edge. MK2 data TBW 100–2900 Hz is
+`1A 05 00 17 30`; the SET item is model-specific and must not be borrowed.
+The MK2 additionally polls CW pitch/speed, squelch and the active TBW item
+every three seconds. These reads reconcile front-panel changes independently
+of command confirmations; other model polling profiles are unchanged.
 
 ### RTL-SDR experimental profile
 
@@ -458,8 +501,15 @@ predicates the readouts ask before printing. See [`HERMES.md`](../HERMES.md)
 
 ## Tests
 
-[`tests/radio_capability_gating_test.cpp`](../../tests/radio_capability_gating_test.cpp)
-asserts each backend's declared flags, the relay firing on both edges, and the
-permissive-on-disconnect rule. Every assertion reads a **capability** — never
-`caps.family`, never a backend type. A test that asserted the family would pass
-just as happily against the anti-pattern the struct exists to prevent.
+[`tests/icom_control_profile_test.cpp`](../../tests/icom_control_profile_test.cpp)
+asserts the model-profile capabilities and the refusals they gate, and that the
+other backends keep the controls those refusals take away.
+[`tests/icom_ptt_authority_test.cpp`](../../tests/icom_ptt_authority_test.cpp)
+covers the keying-authority side. Every assertion reads a **capability** —
+never `caps.family`, never a backend type. A test that asserted the family
+would pass just as happily against the anti-pattern the struct exists to
+prevent.
+
+The wider per-backend declaration sweep lived in
+`tests/radio_capability_gating_test.cpp` until #5452 removed it for an
+ASan-flaky IC-9700 block; #5443 tracks recovering the rest of that coverage.

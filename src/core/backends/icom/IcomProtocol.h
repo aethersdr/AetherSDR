@@ -334,6 +334,10 @@ struct AuthReply {
 // Extract the radio identity from the 0xA8 capabilities packet.
 [[nodiscard]] bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId);
 
+// Stable, address-independent identity for one radio advertised by the RS-BA1
+// capabilities record. Empty means the record supplied no usable identity.
+[[nodiscard]] std::string radioIdHex(const RadioId& radioId);
+
 // The radio's own name ("IC-705") from the same packet. Parsed rather than
 // hardcoded: the stream request has to name the radio it wants, and a literal
 // there is exactly what stops this backend reaching an IC-9700 or an RS-BA1

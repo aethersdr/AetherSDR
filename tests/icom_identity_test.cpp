@@ -47,6 +47,11 @@ struct IcomCivBackendTestAccess {
     static bool ambiguous(const IcomCivBackend& b) { return b.m_civAmbiguous; }
     static void markKeyed(IcomCivBackend& b) { b.m_keyed = true; }
     static bool keyed(const IcomCivBackend& b) { return b.m_keyed; }
+    // #5311 made m_keyed RADIO state, moved only by a decoded 1C 00 readback.
+    // What the client controls — and what the ambiguity branch has to get
+    // right — is the unkey INTENT and the address it was sent to.
+    static bool unkeyIntended(const IcomCivBackend& b)
+    { return b.m_pendingPttIntent && !*b.m_pendingPttIntent; }
     static void advertise(IcomCivBackend& b, std::uint8_t address)
     { b.m_session->m_advertisedCivAddress = address; }
     static void enableWake(IcomCivBackend& b, uint modelId)
@@ -201,8 +206,13 @@ int main(int argc, char** argv)
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     IcomCivBackendTestAccess::markKeyed(backend);
     IcomCivBackendTestAccess::inject(backend, "fefee0511900a4fd");
-    check(!IcomCivBackendTestAccess::keyed(backend)
-              && IcomCivBackendTestAccess::address(backend) == 0x50,
+    // The unkey must LEAVE, and it must leave for the destination this session
+    // already selected — not the conflicting responder that just arrived.
+    // m_keyed itself stays radio-authoritative until the 1C 00 readback (#5311).
+    check(IcomCivBackendTestAccess::unkeyIntended(backend)
+              && IcomCivBackendTestAccess::address(backend) == 0x50
+              && IcomCivBackendTestAccess::outbound(backend).contains(
+                     QStringLiteral("fe fe 50 e0 1c 00 00 fd")),
           "ambiguity releases the previously selected destination without retargeting unkey");
     check(IcomCivBackendTestAccess::ambiguous(backend)
               && !backend.capabilities().canTransmit && !audio.hostModulation(),

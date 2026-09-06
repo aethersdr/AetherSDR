@@ -118,6 +118,12 @@ static void testPowerAndOthers()
     check(meterValue(MeterId::Swr, 200, 0) > 3.5, "a severe mismatch reads above 3.0");
 
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
+    check(near(meterValue(MeterId::Comp, 210, 0, MeterCalibration::Ic7300Mk2), 30.0),
+          "IC-7300MK2 COMP raw210 is30dB");
+    check(near(meterValue(MeterId::Comp, 170, 0, MeterCalibration::Ic7300Mk2), 22.5),
+          "IC-7300MK2 COMP interpolates its own upper segment");
+    check(near(meterValue(MeterId::Comp, 210, 0, MeterCalibration::Ic705), 25.5),
+          "IC-705 COMP calibration remains unchanged");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
     check(near(meterValue(MeterId::Vd, 13, 0, MeterCalibration::Ic7300Mk2), 10.0),

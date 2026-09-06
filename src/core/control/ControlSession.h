@@ -11,9 +11,19 @@
 #include <QObject>
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 namespace AetherSDR::control {
+
+// Supplied by trusted embedding/transport code, never decoded from hello.
+// The local endpoint supplies Observer after enforcing current-user access.
+// No control or transmit grant exists until its handlers and guards land.
+enum class SessionAuthorization {
+    Unauthenticated,
+    AuthenticatedWithoutGrants,
+    Observer,
+};
 
 // Per-client protocol state. Resource events are session-sequenced and held in
 // a bounded, coalescing queue until the transport drains them.
@@ -25,10 +35,28 @@ public:
 
     explicit ControlSession(ControlResourceStore* resources,
                             qint64 maxQueuedOutputBytes,
+                            SessionAuthorization authorization = SessionAuthorization::Unauthenticated,
                             QObject* parent = nullptr);
 
-    QString sessionId;
-    bool negotiated{false};
+    [[nodiscard]] const QString& sessionId() const { return m_sessionId; }
+    [[nodiscard]] bool isNegotiated() const { return !m_sessionId.isEmpty(); }
+    [[nodiscard]] bool isAuthenticated() const;
+    [[nodiscard]] bool canObserve() const;
+    [[nodiscard]] bool isRevoked() const { return m_revoked; }
+    // Terminal for this session. Clears subscriptions and queued frames before
+    // notifying the transport to abort its own output buffer. A new verified
+    // connection must construct a new session; hello cannot restore this one.
+    void revokeAuthorization();
+
+    // Bind once on the owning thread; neither endpoint may move threads afterward.
+    // Invalid/repeated binds log and leave the existing wiring unchanged.
+    // The transport context bounds callback
+    // lifetime; writeFrame accepts a complete frame and returns false on failure.
+    // abortTransport must synchronously discard transport-owned output. Keeping
+    // this wiring here lets socket-free tests exercise the production lifecycle.
+    void bindOutputTransport(QObject* transportContext,
+                             std::function<bool(const QByteArray&)> writeFrame,
+                             std::function<void()> abortTransport);
 
     [[nodiscard]] std::optional<ProtocolError> subscribe(
         const QList<ResourceSelector>& selectors, QJsonObject* result);
@@ -44,8 +72,13 @@ public:
 signals:
     void outputReady();
     void outputOverflow();
+    void authorizationRevoked();
 
 private:
+    friend class ControlService;
+    void completeNegotiation();
+    [[nodiscard]] std::optional<ProtocolError> observationError() const;
+
     struct PendingMessage {
         QString coalesceKey;
         std::optional<ResourceAddress> resource;
@@ -67,6 +100,10 @@ private:
     [[nodiscard]] static QByteArray encodeFrame(const QJsonObject& message);
 
     ControlResourceStore* m_resources{nullptr};
+    const SessionAuthorization m_authorization;
+    QString m_sessionId;
+    bool m_revoked{false};
+    bool m_outputTransportBound{false};
     qint64 m_maxQueuedOutputBytes{0};
     quint64 m_sequence{0};
     quint64 m_drainedSequence{0};

@@ -62,7 +62,10 @@ std::vector<std::uint8_t> ic705Record()
 
 std::vector<std::uint8_t> ic7300Record()
 {
-    std::vector<std::uint8_t> p(33, 0);
+    // The IC-7300MK2 guide documents both 4..17 blocks in every record and a
+    // separate SPLIT flag in byte 3. Live radio replies are consequently 47
+    // bytes even for ordinary non-split memories.
+    std::vector<std::uint8_t> p(47, 0);
     p[0] = 0x00; p[1] = 0x42; p[2] = 0x00;
     putFrequency(p, 3);
     p[8] = 0x05; p[9] = 0x02; p[10] = 0x11;
@@ -101,6 +104,19 @@ int main()
     check(m7300 && m7300->group == -1 && m7300->channel == 42
               && m7300->mode == "DFM" && m7300->toneMode == 1 && m7300->recallable,
           "IC-7300MK2 official compact memory layout decodes");
+    auto ic7300SplitRecord = ic7300Record();
+    ic7300SplitRecord[2] = 0x10;
+    const auto m7300Split = decodeMemory(
+        MemoryDialect::Ic7300Mk2, ic7300SplitRecord);
+    check(m7300Split && m7300Split->split && !m7300Split->recallable,
+          "IC-7300MK2 split memory remains display-only");
+
+    auto cwRecord = ic7300Record();
+    cwRecord[8] = 0x07;
+    cwRecord[10] = 0x00;
+    const auto cw = decodeMemory(MemoryDialect::Ic7300Mk2, cwRecord);
+    check(cw && cw->mode == "CWL" && cw->recallable && !cw->split,
+          "ordinary 47-byte CW-R memory is recallable on explicit sync");
 
     for (int toneMode = 0; toneMode <= 3; ++toneMode) {
         auto record = ic9700Record();
@@ -116,10 +132,10 @@ int main()
     auto reverseSplit = ic9700Record();
     reverseSplit[12] = 0x31;
     const auto rps = decodeMemory(MemoryDialect::Ic9700, reverseSplit);
-    check(rps && !rps->recallable, "IC-9700 RPS remains visible but cannot be recalled");
+    check(rps && !rps->recallable, "IC-9700 RPS remains display-only");
     const auto split = decodeMemory(MemoryDialect::Ic9700, ic9700Record(114));
     check(split && split->split && !split->recallable,
-          "split records remain visible but cannot discard their TX half on recall");
+          "split records remain display-only");
     auto dvRecord = ic705Record();
     dvRecord[10] = 0x17; dvRecord[11] = 0x00;
     const auto dv = decodeMemory(MemoryDialect::Ic705, dvRecord);

@@ -540,6 +540,7 @@ QJsonObject describeWidget(const QWidget* w)
         const QVariant gl = w->property("gaugeLabel");
         if (gl.isValid()) {
             o[QStringLiteral("gaugeLabel")] = gl.toString();
+            o[QStringLiteral("gaugeUnit")] = w->property("gaugeUnit").toString();
             o[QStringLiteral("gaugeValue")] = w->property("gaugeValue").toDouble();
             // gaugeFraction is the DERIVED state — the fill actually painted,
             // after ballistics. Every other field here is an INPUT, and the
@@ -2206,7 +2207,11 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C
         {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
-        {QStringLiteral("swAlc"),           m->swAlc()},              // dBFS post-ALC SSB peak
+        {QStringLiteral("alc"), QJsonObject{
+            {QStringLiteral("value"), m->alcUpdatedAtMs() > 0 ? QJsonValue(m->alcValue()) : QJsonValue()},
+            {QStringLiteral("unit"), m->alcUnit()},
+            {QStringLiteral("ageMs"), age(m->alcUpdatedAtMs())}}},
+        {QStringLiteral("swAlc"), m->swAlc()}, // Legacy normalized TCI value; see alc for physical units
         {QStringLiteral("hwAlc"),           m->hwAlc()},              // dBFS external HW-ALC
         {QStringLiteral("micPeak"),         m->micPeak()},            // dBFS
         {QStringLiteral("micLevel"),        m->micLevel()},           // dBFS
@@ -2406,6 +2411,12 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    if (m_meterWindowActive) {
+        sampleMeterWindow();
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+    }
     if (!m_server)
         return;
 
@@ -3116,6 +3127,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                                + getModelNames().join(QLatin1Char('|'))
                                + QLatin1Char(')'));
                 return s.doGet(a.model, a.selector, a.property);
+            });
+
+        add("meterwindow", {}, "meterwindow <start [duration_ms]|status|stop> — bounded meter ages and unrounded peaks; never keys TX",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doMeterWindow(a.action, a.value);
             });
 
         add("connect", {}, "connect <list|show|hide|local|ip|wait> [args]",
@@ -4361,7 +4378,20 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             done = true;
         }
     } else if (action == QLatin1String("setCurrentText")) {
-        if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
+        if (auto* cb = qobject_cast<QComboBox*>(w)) {
+            const int row = cb->findText(value);
+            if (row < 0 && !cb->isEditable()) {
+                return err(QStringLiteral("no combo item labeled '%1'").arg(value));
+            }
+            if (row >= 0) {
+                const QModelIndex index = cb->model()->index(row, cb->modelColumn(), cb->rootModelIndex());
+                if (!(cb->model()->flags(index) & Qt::ItemIsEnabled)) {
+                    return err(QStringLiteral("combo item is disabled"));
+                }
+            }
+            cb->setCurrentText(value);
+            done = true;
+        }
         else if (auto* tb = qobject_cast<QTabBar*>(w)) {
             // Select a tab by its label — the only way to reach deferred
             // setup-dialog tabs (built on first selection) from the bridge.
@@ -4407,7 +4437,19 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             done = true;
         }
     } else if (action == QLatin1String("setCurrentIndex")) {
-        if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentIndex(value.toInt()); done = true; }
+        if (auto* cb = qobject_cast<QComboBox*>(w)) {
+            bool valid = false;
+            const int row = value.toInt(&valid);
+            if (!valid || row < -1 || row >= cb->count()) {
+                return err(QStringLiteral("combo index is out of range"));
+            }
+            const QModelIndex index = cb->model()->index(row, cb->modelColumn(), cb->rootModelIndex());
+            if (row >= 0 && !(cb->model()->flags(index) & Qt::ItemIsEnabled)) {
+                return err(QStringLiteral("combo item is disabled"));
+            }
+            cb->setCurrentIndex(row);
+            done = true;
+        }
         else if (auto* tb = qobject_cast<QTabBar*>(w)) { tb->setCurrentIndex(value.toInt()); done = true; }
     } else if (action == QLatin1String("selectRow")) {
         // Select a whole row in an item view (QTableWidget / QTreeWidget /
@@ -4549,7 +4591,97 @@ void AutomationServer::setClockModel(AetherClockModel* model)
 
 void AutomationServer::setRadioModel(RadioModel* model)
 {
+    if (m_meterWindowActive) {
+        sampleMeterWindow();
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+    }
     m_radioModel = model;
+}
+
+QJsonObject AutomationServer::doMeterWindow(const QString& action, const QString& value)
+{
+    if (action == QLatin1String("start")) {
+        if (!m_radioModel || !m_radioModel->isConnected()) {
+            return err(QStringLiteral("meterwindow requires a connected radio"));
+        }
+        if (m_meterWindowActive) {
+            return err(QStringLiteral("meterwindow already active; stop it before restarting"));
+        }
+        bool valid = true;
+        const int durationMs = value.isEmpty() ? 5000 : value.toInt(&valid);
+        if (!valid || durationMs < 1 || durationMs > 60000) {
+            return err(QStringLiteral("meterwindow duration must be 1..60000 ms"));
+        }
+        m_meterWindow.start(QDateTime::currentMSecsSinceEpoch(), durationMs);
+        m_meterWindowStarted = true;
+        m_meterWindowActive = true;
+        if (!m_meterWindowTimer) {
+            m_meterWindowTimer = new QTimer(this);
+            m_meterWindowTimer->setInterval(20);
+            connect(m_meterWindowTimer, &QTimer::timeout, this, &AutomationServer::sampleMeterWindow);
+        }
+        m_meterWindowSamples = connect(&m_radioModel->meterModel(), &MeterModel::meterUpdated,
+            this, [this](int index, float value) {
+                if (!m_meterWindowActive || !m_radioModel) {
+                    return;
+                }
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                const MeterModel& model = m_radioModel->meterModel();
+                if (const MeterDef* def = model.meterDef(index)) {
+                    m_meterWindow.observe(*def, model.valueUpdatedAtMs(index), value, now);
+                }
+                if (m_meterWindow.expired(now)) {
+                    sampleMeterWindow();
+                }
+            });
+        sampleMeterWindow();
+        if (m_meterWindowActive) {
+            m_meterWindowTimer->start();
+        }
+    } else if (action == QLatin1String("status") || action == QLatin1String("stop")) {
+        if (!m_meterWindowStarted) {
+            return err(QStringLiteral("no meter observation window has been started"));
+        }
+        sampleMeterWindow();
+        if (action == QLatin1String("stop")) {
+            m_meterWindowActive = false;
+            m_meterWindowTimer->stop();
+            disconnect(m_meterWindowSamples);
+        }
+    } else {
+        return err(QStringLiteral("meterwindow requires start, status, or stop"));
+    }
+    QJsonObject result = m_meterWindow.snapshot();
+    result.insert(QStringLiteral("ok"), true);
+    result.insert(QStringLiteral("active"), m_meterWindowActive);
+    return result;
+}
+
+void AutomationServer::sampleMeterWindow()
+{
+    if (!m_meterWindowActive) {
+        return;
+    }
+    if (!m_radioModel) {
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+        return;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const MeterModel& model = m_radioModel->meterModel();
+    for (int index : model.definedIndices()) {
+        if (const MeterDef* def = model.meterDef(index)) {
+            m_meterWindow.observe(*def, model.valueUpdatedAtMs(index), model.value(index), now);
+        }
+    }
+    if (m_meterWindow.expired(now) || !m_radioModel->isConnected()) {
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+    }
 }
 
 void AutomationServer::setAudioEngine(AudioEngine* audio)
@@ -6641,6 +6773,9 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
         if (!m_txAllowed)
             return err(QStringLiteral("blocked: txtest keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        if (!tx.tuneAvailable()) {
+            return err(QStringLiteral("tune carrier is unavailable in the current radio mode"));
+        }
         tx.startTwoToneTune();
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
         m_txBridgeInitiated = true;   // the watchdog polices scripts, not people

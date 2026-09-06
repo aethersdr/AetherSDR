@@ -67,7 +67,7 @@ QJsonObject invoke(ControlService* service, ControlSession* session,
                         {QStringLiteral("method"), method},
                         {QStringLiteral("params"), params}};
     if (method != QStringLiteral("hello")) {
-        request.insert(QStringLiteral("sessionId"), session->sessionId);
+        request.insert(QStringLiteral("sessionId"), session->sessionId());
     }
     const QByteArray bytes = QJsonDocument(request).toJson(QJsonDocument::Compact);
     return service->handle(bytes, session).message;
@@ -79,8 +79,8 @@ bool negotiate(ControlService* service, ControlSession* session)
         service, session, QStringLiteral("hello"), QStringLiteral("hello"),
         {{QStringLiteral("versions"), QJsonArray{1}}});
     return reply.value(QStringLiteral("result")).toObject()
-        .value(QStringLiteral("sessionId")).toString() == session->sessionId
-        && session->negotiated;
+        .value(QStringLiteral("sessionId")).toString() == session->sessionId()
+        && session->isNegotiated();
 }
 
 QString errorCode(const QJsonObject& response)
@@ -162,8 +162,8 @@ bool testServiceSubscriptions()
     store.upsert(slice, {{QStringLiteral("frequencyHz"), 100}});
 
     ControlService service(&store);
-    ControlSession first(&store, 4096);
-    ControlSession second(&store, 4096);
+    ControlSession first(&store, 4096, SessionAuthorization::Observer);
+    ControlSession second(&store, 4096, SessionAuthorization::Observer);
     if (!check(negotiate(&service, &first) && negotiate(&service, &second),
                "both clients must negotiate independent sessions")) {
         return false;
@@ -284,7 +284,7 @@ bool testServiceSubscriptions()
         return false;
     }
 
-    ControlSession limited(&store, 4096);
+    ControlSession limited(&store, 4096, SessionAuthorization::Observer);
     if (!check(negotiate(&service, &limited),
                "subscription-limit client must negotiate")) {
         return false;
@@ -312,7 +312,7 @@ bool testSubscribeSequenceBoundary()
 {
     ControlResourceStore store;
     ControlService service(&store);
-    ControlSession session(&store, 4096);
+    ControlSession session(&store, 4096, SessionAuthorization::Observer);
     if (!check(negotiate(&service, &session),
                "sequence-boundary client must negotiate")) {
         return false;
@@ -358,7 +358,7 @@ bool testOverflowRequiresResync()
 {
     ControlResourceStore store;
     ControlService service(&store);
-    ControlSession session(&store, 360);
+    ControlSession session(&store, 360, SessionAuthorization::Observer);
     if (!check(negotiate(&service, &session), "overflow client must negotiate")) {
         return false;
     }
@@ -430,7 +430,7 @@ bool testWireFramingIsCanonical()
     // the single framing newline, and nothing else.
     ControlResourceStore store;
     ControlService service(&store);
-    ControlSession session(&store, 4096);
+    ControlSession session(&store, 4096, SessionAuthorization::Observer);
     if (!check(negotiate(&service, &session), "framing client must negotiate")) {
         return false;
     }
@@ -462,7 +462,7 @@ bool testWireFramingIsCanonical()
                      == QStringLiteral("resource.changed")
                      && message.value(QStringLiteral("sequence")).toInteger() == 1
                      && message.value(QStringLiteral("sessionId")).toString()
-                            == session.sessionId,
+                            == session.sessionId(),
                  "a frame must carry the session-sequenced event envelope");
 }
 
@@ -628,7 +628,7 @@ bool testSimBackendEndToEnd()
 {
     ControlResourceStore store;
     ControlService service(&store);
-    ControlSession client(&store, 1024 * 1024);
+    ControlSession client(&store, 1024 * 1024, SessionAuthorization::Observer);
     RadioModel radio;
     RadioResourceAdapter adapter(&radio, &store, QStringLiteral("radio-1"));
     if (!check(negotiate(&service, &client), "sim observer must negotiate")) {

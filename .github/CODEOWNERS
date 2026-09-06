@@ -56,7 +56,8 @@
 #         single-member team for no governance gain.
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
-# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust, @chibondking).
+# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T,
+#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton).
 #         AetherSDR source code and anything else not enumerated
 #         above (src/ — including the whole of MainWindow —
 #         third_party/, plugins/, hal-plugin/, resources/, packaging/,
