@@ -44,6 +44,8 @@ bring-up profile.
 | RF decks | Continuous envelope | Continuous envelope | Three discontinuous decks with 100/75/10 W ceilings |
 | FM repeater | Extended registers official-guide; basic tone/level/offset/XFC live-proved | Tone + TSQL, no DTCS claim | Extended registers official-guide + live-proved |
 | CI-V data restart | Not enabled | Not enabled | `0x04` data-start recovery, three attempts at 1 s; public implementation + physical watchdog evidence |
+| GPS position | `23 00/01`, official guide + live-proved | Not attested | Not attested |
+| GPS/NTP clock | SET `0167`-`0169` plus `1A 07/08`, official guide + live-proved | Not attested | Not attested |
 
 The FM row deliberately corrects the assumption in the original IC-9700 PR
 that the repeater family must be hidden on IC-705. The IC-705 guide documents
@@ -75,10 +77,10 @@ radio.
 
 The backend's read-only `profile.show` extension returns the active model, guide
 revision, SET-item differences, per-feature evidence, FM repeater access modes,
-RX-antenna readback behavior, and the scope-command facet. It contains no
-credentials. `controls map` is the currently public automation surface; routing
-the RFC's proposed `icom profile show` bridge spelling remains separate
-automation work so this foundation does not cross the radio seam.
+RX-antenna readback behavior, and the scope-command and GPS facets.
+It contains no credentials. `controls map` is the currently public automation
+surface; routing the RFC's proposed `icom profile show` bridge spelling remains
+separate automation work so this foundation does not cross the radio seam.
 
 ## Adding another Icom
 

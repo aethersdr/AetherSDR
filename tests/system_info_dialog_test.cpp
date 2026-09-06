@@ -18,9 +18,11 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QDir>
 #include <QFile>
 #include <QLocale>
@@ -62,9 +64,10 @@ int main(int argc, char** argv)
     auto* tabs = dialog.findChild<QTabWidget*>();
     report("it has a tab widget", tabs != nullptr);
     if (tabs != nullptr) {
-        report("it has exactly two tabs", tabs->count() == 2);
+        report("it has exactly three tabs", tabs->count() == 3);
         report("first tab is Threads", tabs->tabText(0) == QLatin1String("Threads"));
-        report("second tab is Logs", tabs->tabText(1) == QLatin1String("Logs"));
+        report("second tab is Memory", tabs->tabText(1) == QLatin1String("Memory"));
+        report("third tab is Logs", tabs->tabText(2) == QLatin1String("Logs"));
     }
 
     auto* table = dialog.findChild<QTableWidget*>();
@@ -477,6 +480,151 @@ int main(int argc, char** argv)
         tailing.hide();
         QCoreApplication::processEvents();
         LogManager::instance().shutdownLogging();
+    }
+
+    // ── Memory tab (#2554 acceptance criterion 4) ──────────────────────────
+    // applyMemorySample is a slot so the tab can be driven without a collector
+    // or a worker thread. Bytes are CONSTRUCTED (routing and formatting only).
+    {
+        qRegisterMetaType<AetherSDR::MemorySample>("AetherSDR::MemorySample");
+        SystemInfoDialog memoryDialog;
+
+        auto* range = memoryDialog.findChild<QComboBox*>(QStringLiteral("systemInfoTimeframe"));
+        report("the Memory tab has a timeframe selector", range != nullptr);
+        if (range != nullptr) {
+            report("it offers the issue's four timeframes", range->count() == 4);
+            report("it defaults to 5 minutes", range->currentData().toInt() == 5 * 60);
+        }
+
+        auto* resident = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
+        auto* peak     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryPeak"));
+        auto* priv     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryPrivate"));
+        auto* virt     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryVirtual"));
+        auto* summary  = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        report("the four readouts exist",
+               resident != nullptr && peak != nullptr && priv != nullptr && virt != nullptr);
+        report("readouts start as a dash, not as zero",
+               resident != nullptr && resident->text() == QStringLiteral("\u2014"));
+
+        const auto driveMemory = [&memoryDialog](const MemorySample& sample) {
+            return QMetaObject::invokeMethod(&memoryDialog, "applyMemorySample",
+                                             Qt::DirectConnection,
+                                             Q_ARG(AetherSDR::MemorySample, sample));
+        };
+        MemorySample first;
+        first.wallMs = 1'700'000'000'000;
+        first.valid = true;
+        first.residentMetric = QStringLiteral("physicalFootprint");
+        first.residentBytes = 200ull * 1024 * 1024;
+        first.peakResidentBytes = 210ull * 1024 * 1024;
+        first.privateBytes = 150ull * 1024 * 1024;
+        first.virtualBytes = 8000ull * 1024 * 1024;
+        report("a memory sample can be driven into the dialog", driveMemory(first));
+        if (resident != nullptr) {
+            report("resident reads in MB with one decimal",
+                   resident->text() == QStringLiteral("200.0 MB"));
+            report("peak, private and virtual read from their own fields",
+                   peak->text() == QStringLiteral("210.0 MB")
+                       && priv->text() == QStringLiteral("150.0 MB")
+                       && virt->text() == QStringLiteral("8000.0 MB"));
+        }
+        report("the summary names the platform's resident metric",
+               summary != nullptr && summary->text().contains(QLatin1String("physical footprint")));
+
+        MemorySample second = first;
+        second.wallMs += 1500;
+        second.residentBytes = 180ull * 1024 * 1024;   // a chart must move DOWN as well as up
+        report("a second sample is accepted", driveMemory(second));
+        report("the readouts follow the newest sample down",
+               resident != nullptr && resident->text() == QStringLiteral("180.0 MB"));
+        report("the summary counts both samples",
+               summary != nullptr && summary->text().contains(QLatin1String("2 samples")));
+
+        if (range != nullptr) {
+            range->setCurrentIndex(3);   // 1 hour
+            report("changing the timeframe re-slices without disturbing the readouts",
+                   range->currentData().toInt() == 60 * 60
+                       && resident->text() == QStringLiteral("180.0 MB"));
+        }
+
+        // Hide/show keeps the history: the ring is dialog-lifetime (see the
+        // header comment), unlike the CPU ring that Peak clears.
+        memoryDialog.show();
+        QCoreApplication::processEvents();
+        memoryDialog.hide();
+        QCoreApplication::processEvents();
+        // show() starts the real collector thread, so a slow runner (sanitizer
+        // lane) can land a third sample before hide(): "kept" means at least
+        // the two we drove, not exactly two.
+        const auto sampleCount = [](const QString& text) {
+            const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("(\\d+) samples")).match(text);
+            return m.hasMatch() ? m.captured(1).toInt() : -1;
+        };
+        report("hiding the dialog keeps the memory history",
+               summary != nullptr && sampleCount(summary->text()) >= 2);
+
+        // A field the platform never fills reads as a dash, not "0.0 MB". The
+        // shape is SOURCED: MemoryTelemetry.cpp's Windows branch fills resident,
+        // peak and private from GetProcessMemoryInfo and never assigns
+        // virtualBytes (read 2026-09-03); the byte values are CONSTRUCTED.
+        MemorySample windowsShaped = first;
+        windowsShaped.wallMs += 3000;
+        windowsShaped.residentMetric = QStringLiteral("workingSet");
+        windowsShaped.virtualBytes = 0;
+        report("a Windows-shaped sample is accepted", driveMemory(windowsShaped));
+        report("an unset field reads as a dash, the others as values",
+               virt != nullptr && virt->text() == QStringLiteral("\u2014")
+                   && resident->text() == QStringLiteral("200.0 MB"));
+        report("the summary names the working set",
+               summary != nullptr && summary->text().contains(QLatin1String("working set")));
+        report("a readout announces its value (docs/a11y.md live-value rule)",
+               resident->accessibleName() == QStringLiteral("Resident memory 200.0 MB")
+                   && virt->accessibleName() == QStringLiteral("Virtual address space \u2014"));
+
+        // An invalid sample — the Linux VmRSS-read-failed shape, where
+        // MemoryTelemetry.cpp still sets residentMetric — shows four dashes and
+        // a summary that names no metric. Values CONSTRUCTED (all zero).
+        MemorySample invalid;
+        invalid.wallMs = windowsShaped.wallMs + 1500;
+        invalid.valid = false;
+        invalid.residentMetric = QStringLiteral("vmRss");
+        report("an invalid sample is accepted", driveMemory(invalid));
+        report("an invalid sample reads as four dashes",
+               resident->text() == QStringLiteral("\u2014") && peak->text() == QStringLiteral("\u2014")
+                   && priv->text() == QStringLiteral("\u2014") && virt->text() == QStringLiteral("\u2014"));
+        report("an invalid sample's summary names no metric",
+               summary != nullptr && summary->text() == QStringLiteral("Process memory: not available on this platform"));
+    }
+
+    // The history outlives the dialog when MainWindow hands one in: the
+    // dialog is WA_DeleteOnClose, so Close would otherwise take the trend with
+    // it (found on the demo: "3 samples" after Close and reopen).
+    {
+        MemoryHistoryRing shared;
+        MemorySample s;
+        s.wallMs = 1'700'000'000'000;
+        s.valid = true;
+        s.residentMetric = QStringLiteral("vmRss");
+        s.residentBytes = 300ull * 1024 * 1024;
+        {
+            SystemInfoDialog first(&shared);
+            QMetaObject::invokeMethod(&first, "applyMemorySample", Qt::DirectConnection,
+                                      Q_ARG(AetherSDR::MemorySample, s));
+            s.wallMs += 1500;
+            QMetaObject::invokeMethod(&first, "applyMemorySample", Qt::DirectConnection,
+                                      Q_ARG(AetherSDR::MemorySample, s));
+            report("samples driven into the first dialog land in the shared ring", shared.size() == 2);
+        }   // first is destroyed here, as Close does
+        SystemInfoDialog second(&shared);
+        auto* summary2 = second.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        auto* resident2 = second.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
+        report("a reopened dialog shows the history it was handed, before any new sample",
+               summary2 != nullptr && summary2->text().contains(QLatin1String("2 samples"))
+                   && resident2 != nullptr && resident2->text() == QStringLiteral("300.0 MB"));
+        SystemInfoDialog own;
+        auto* summaryOwn = own.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        report("a dialog given no history starts with its own empty ring",
+               summaryOwn != nullptr && summaryOwn->text() == QStringLiteral("Sampling…"));
     }
 
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"

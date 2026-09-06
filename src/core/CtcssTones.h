@@ -8,10 +8,11 @@
 // downstream says no.
 //
 // The set is the one #5140 landed on main for the Icom backend: the Motorola
-// PL tones plus the EIA interstitials. An interstitial has no PL code or
-// designation, so it carries code 0 and an empty designation, and callers
-// that render a label fall back to the bare frequency for those (see
-// RxApplet). Hoisting it here rather than keeping a per-widget copy is the
+// PL tones plus the EIA interstitials. CISA AUXFOG Appendix G independently
+// confirms the Motorola WZ designation for 69.3 Hz. Entries outside the
+// original numbered sequence retain code 0; designation is independent, and
+// callers render a bare frequency only when that designation is empty.
+// Hoisting the table here rather than keeping a per-widget copy is the
 // point of this file: main now offers 50 tones in two dropdowns, and the
 // bridge has to accept exactly those.
 
@@ -27,7 +28,7 @@ struct CtcssTone {
 };
 
 inline constexpr CtcssTone kCtcssTones[] = {
-    { 1, "XZ", 67.0},  { 0, "", 69.3},    { 2, "XA", 71.9},  { 3, "WA", 74.4},
+    { 1, "XZ", 67.0},  { 0, "WZ", 69.3},  { 2, "XA", 71.9},  { 3, "WA", 74.4},
     { 4, "XB", 77.0},
     { 5, "WB", 79.7},  { 6, "YZ", 82.5},  { 7, "YA", 85.4},  { 8, "YB", 88.5},
     { 9, "ZZ", 91.5},  {10, "ZA", 94.8},  {11, "ZB", 97.4},  {12, "1Z",100.0},

@@ -95,6 +95,8 @@ int main(int argc, char** argv)
         check(!c.canTransmit, "canTransmit is false -- P2Client has no PTT capability");
         check(c.hostModulates, "hostModulates true -- client-side WDSP, like the HL2");
         check(!c.radioOwnsDbmScale, "client computes the dBm scale");
+        check(!c.hasTuner && !c.hasTunerMemories,
+              "ANAN explicitly declares tuner matching and tuner memories absent");
         check(c.hasDdcPanEdgeRolloff,
               "hasDdcPanEdgeRolloff true -- ANAN's DDC has a real edge roll-off");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,

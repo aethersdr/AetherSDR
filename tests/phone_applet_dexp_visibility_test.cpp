@@ -3,6 +3,9 @@
 
 #include "TestSettingsProfile.h"
 #include "gui/PhoneApplet.h"
+#include "models/TransmitModel.h"
+#include <QSlider>
+#include <QSignalSpy>
 
 #include <QApplication>
 #include <QFile>
@@ -50,6 +53,35 @@ int main(int argc, char** argv)
     applet.setDexpVisible(true);
     check(!dexpRow->isHidden(),
           "a supporting backend restores the existing DEXP row");
+
+    TransmitModel tx;
+    applet.setTransmitModel(&tx);
+    QSignalSpy commands(&tx, &TransmitModel::commandReady);
+    QSlider* carrier = nullptr;
+    QSlider* delay = nullptr;
+    for (QSlider* slider : applet.findChildren<QSlider*>()) {
+        if (slider->accessibleName() == QStringLiteral("AM carrier level")) {
+            carrier = slider;
+        } else if (slider->accessibleName() == QStringLiteral("VOX delay")) {
+            delay = slider;
+        }
+    }
+    check(carrier && delay, "AM carrier and VOX delay have accessible controls");
+    if (!carrier || !delay) {
+        return 1;
+    }
+    applet.setAmCarrierAvailable(false);
+    applet.setVoxDelayAvailable(false);
+    check(!carrier->isEnabled() && !delay->isEnabled(), "unsupported controls are disabled");
+    carrier->setValue(37);
+    delay->setValue(43);
+    check(commands.isEmpty(), "programmatic changes under gates emit no command");
+    applet.setAmCarrierAvailable(true);
+    applet.setVoxDelayAvailable(true);
+    check(carrier->isEnabled() && delay->isEnabled(), "capable session restores both controls");
+    carrier->setValue(38);
+    delay->setValue(44);
+    check(commands.count() == 2, "restored controls each emit their command");
 
     // Pin the production edge as well as the widget setter. This deliberately
     // reads the owning fan-out because this small target does not link the
