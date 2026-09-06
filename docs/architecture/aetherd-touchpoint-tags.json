@@ -1181,6 +1181,24 @@
   "split": "Core: bounded calibration math and persistence mechanics. HL2 extension: nominal clock, NCO correction semantics, zero-beat workflow and UI/automation verbs.",
   "confidence": "high"
  },
+ "core/backends/hl2/Hl2MiscOptionsSettings.h": {
+  "tag": "mixed(hl2)",
+  "note": "Radio-scoped settings-persistence mechanics (generic RadioSettingsScope read/write) fused with a few HL2-specific facts (ADC dither/random config bits, TX-latency/PTT-hang field widths). Same shape as Hl2FreqCal.",
+  "split": "Core: the RadioSettingsScope persistence mechanics. HL2 extension: the specific fields and their wire-register meaning.",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2FilterBoard.h": {
+  "tag": "mixed(hl2)",
+  "note": "A pure manual-override table (ManualFilterTable, manualFilterByte) fused with the N2ADR/KP4RX I/O Board's own ten-band J16 relay vocabulary — deliberately distinct from Hl2Bands.h's persistence-key bands, since this board groups differently.",
+  "split": "Core: the table type and its lookup/seed functions. HL2 extension: the fixed band list and J16 relay-byte semantics.",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2FilterBoardSettings.h": {
+  "tag": "mixed(hl2)",
+  "note": "Radio-scoped settings-persistence mechanics for the Filter Board manual-override table, fused with the same HL2-specific J16 vocabulary Hl2FilterBoard.h carries. Same shape as Hl2FreqCal.",
+  "split": "Core: the RadioSettingsScope persistence mechanics. HL2 extension: the manual-table schema and J16 relay meaning.",
+  "confidence": "high"
+ },
  "core/backends/icom/IcomCredentials.h": {
   "tag": "ui-support",
   "note": "OS-keychain and process-session storage for an Icom network password. Credential plumbing shared by connection UI and backend, never a control-protocol field or radio-state resource.",

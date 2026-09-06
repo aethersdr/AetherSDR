@@ -4,6 +4,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <vector>
@@ -218,6 +219,24 @@ inline constexpr std::uint8_t kC0AdcAssignOrTxGain = 0x1C;
 // watchdog enable at [27:24] and the master enable at [11:8].
 inline constexpr std::uint8_t kC0Sync = 0x72;
 
+// addr 0x17: TX latency + PTT hang. A dedicated register, never shared with
+// anything above — distinct from kC0Sync (addr 0x39) despite both being
+// "timing" controls; do not conflate the two. DATA[12:8] (C3[4:0]) is PTT
+// hang, DATA[6:0] (C4[6:0]) is TX latency. Sourced from the W5TSU fork of the
+// MI0BOT Hermes-Lite-2 Thetis fork (ChannelMaster/networkproto1.c, case 17,
+// "TX latency and PTT hang 0x17") — tier 3 on the source-precedence ladder;
+// not independently re-verified against the HL2 gateware RTL.
+inline constexpr std::uint8_t kC0TxLatencyPttHang = 0x2E;
+inline constexpr int kPttHangMax = 0x1F;     // 5-bit field
+inline constexpr int kTxLatencyMax = 0x7F;   // 7-bit field
+
+// addr 0x3A: reset-on-disconnect. DATA[0] (C4 bit 0), no other bits used.
+// A dedicated register — confirmed NOT the same as kC0Sync (addr 0x39, the
+// filter-pipeline reset that wedged a radio; see the warning above). Sourced
+// from the same Thetis fork (case 18, "Reset on disconnect 0x3a"), same
+// tier-3 caveat as kC0TxLatencyPttHang.
+inline constexpr std::uint8_t kC0ResetOnDisconnect = 0x74;
+
 // Config-register (C0=0x00) bit flags.
 //
 // NOTE: neither of these does anything on a Hermes-Lite 2. The HL2 gateware
@@ -230,6 +249,16 @@ inline constexpr std::uint8_t kConfigMercury = 0x40;  // C1 bit6: ADC-as-DDC-sou
                                                       // openHPSDR Hermes/Mercury. No-op on HL2.
 inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets this
                                                       // unconditionally. No-op on HL2.
+
+// C3 bits 3/4 of the config register: ADC dither and ADC randomization.
+// Same tier-3 sourcing and same not-yet-gateware-verified caveat as the two
+// registers above — reproduced from the Thetis fork's case 0 ("general
+// settings") rather than re-derived. Thetis's own UI labels these controls
+// "Band Volts" and "Disable PS Sync", neither of which describes what its
+// code actually does (SetADCDither / SetADCRandom); AetherSDR names them for
+// the real mechanism.
+inline constexpr std::uint8_t kConfigAdcDither = 0x08;  // C3 bit3
+inline constexpr std::uint8_t kConfigAdcRandom = 0x10;  // C3 bit4
 
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
@@ -286,18 +315,47 @@ std::uint8_t ocFilterByteForHz(double hz) noexcept;
 // Human-readable name of an open-collector filter selection, for logging.
 const char* ocFilterName(std::uint8_t oc) noexcept;
 
+// ---- I/O Board accessory: raw I2C request/reply (ticket #11) ----
+//
+// A SEPARATE I2C peripheral from the HL2 itself — unrelated to the J16
+// filter board above, which drives its I2C device by config-register bits
+// alone and reads nothing back. This is a genuine bidirectional transaction:
+// addr 0x3C (I2C bus 1) / 0x3D (I2C bus 2), RQST on the outgoing frame is C0
+// bit 7 — the SAME bit the incoming frame's ACK occupies (Ep6Response::ack
+// above) — and the radio's ACK-tagged reply echoes RADDR = 0x3C/0x3D in
+// C0[6:1], with 0x3F reserved to mean "transaction failed". Sourced from the
+// W5TSU fork of the MI0BOT Hermes-Lite-2 Thetis fork
+// (ChannelMaster/networkproto1.c, the I2C request-encode block around the
+// round-robin's I2C slot) — tier 3 on the source-precedence ladder; not
+// independently re-verified against the HL2 gateware RTL.
+inline constexpr std::uint8_t kAddrI2cBus1 = 0x3C;
+inline constexpr std::uint8_t kAddrI2cBus2 = 0x3D;
+inline constexpr int kI2cErrorRaddr = 0x3F;
+
+enum class I2cBus : std::uint8_t { Bus1 = 0, Bus2 = 1 };
+
 // A 5-byte Command & Control payload: C0 (register address) + C1..C4 (data).
 using Cc = std::array<std::uint8_t, 5>;
 
 // Config register: sample rate + receiver count + the J16 open-collector filter
-// byte. Also carries the Mercury and duplex bits for openHPSDR compatibility;
-// both are ignored by the HL2 gateware.
+// byte + ADC dither/randomization. Also carries the Mercury and duplex bits for
+// openHPSDR compatibility; both are ignored by the HL2 gateware.
 //
 // ocFilterByte is the value from ocFilterByteForHz(); only bits [6:0] are used
 // (they land in DATA[23:17]). Bit 7 is the RX-antenna bit and lives elsewhere in
 // the register, so it is masked off here rather than silently switching antennas
 // on a caller who passed a full I2C byte.
-Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone) noexcept;
+//
+// adcDither/adcRandom default false, so every existing caller keeps sending a
+// zero C3 exactly as before.
+Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone,
+            bool adcDither = false, bool adcRandom = false) noexcept;
+// TX latency (7-bit) + PTT hang (5-bit), packed into their own dedicated
+// register (kC0TxLatencyPttHang). Both clamped to their field width.
+Cc ccTxLatencyPttHang(int txLatency, int pttHang) noexcept;
+// Reset-on-disconnect flag, packed into its own dedicated register
+// (kC0ResetOnDisconnect) — distinct from kC0Sync, see the warning there.
+Cc ccResetOnDisconnect(bool enabled) noexcept;
 // NCO frequency in Hz (32-bit big-endian across C1..C4) for receiver `rxIndex`,
 // zero-based: RX1 is index 0 at register 0x02, up to RX7 at 0x08. Clamped to
 // that run — see the note in the .cpp about why RX8..RX12 are not reachable by
@@ -377,6 +435,108 @@ struct Ep6Response {
 // Decode the C&C bytes of one 512-byte EP6 frame. Returns nullopt if the frame
 // is not sync-framed.
 std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept;
+
+// One-shot I2C read/write REQUEST. `deviceAddress` is the 7-bit I2C device
+// address (values above 0x7F are shifted right by one, matching the
+// reference implementation's own handling of an 8-bit-shifted address);
+// `control` is the target register on that device. Sets the RQST bit so the
+// radio's ACK-tagged reply can be correlated back by decodeI2cResponse().
+Cc ccI2cRead(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control) noexcept;
+Cc ccI2cWrite(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control, std::uint8_t data) noexcept;
+
+// Result of decoding an ACK-tagged EP6 response as an I2C reply.
+struct I2cResult {
+    // This response answers an I2C bus 1/2 RQST — false for every other kind
+    // of ACK reply (an unrelated extension's RQST, or a classic free-running
+    // frame), so a caller polling telemetry cannot mistake one for the other.
+    bool matched = false;
+    bool error = false;     // the radio reported the 0x3F "no such transaction" sentinel
+    std::uint8_t data = 0;  // the returned byte (DATA[7:0]) when matched && !error
+};
+I2cResult decodeI2cResponse(const Ep6Response& r) noexcept;
+
+// A FIFO of I2C jobs that lets at most one be "in flight" at a time — the
+// real HPSDR RQST/ACK mechanism has no transaction id, matched purely by
+// arrival order, so the wire tolerates exactly one outstanding I2C request
+// (oracle §5). Pure state machine: no Qt, no socket, no timer — MetisClient
+// owns the timeout timer and the actual send, and only asks this class WHEN
+// it's allowed to send the next one. Socket-free by design so the scheduling
+// behaviour is a deterministic CTest rather than something only a live fake
+// radio could exercise (see tests/tests.cmake's note on the retired
+// fake-radio fixtures: "deterministic assertions... extracted into
+// socket-free tests").
+class I2cJobQueue {
+public:
+    void enqueue(const Cc& job) { m_queue.push_back(job); }
+
+    // The job to send now, and marks one job in flight — or nullopt if
+    // something is already in flight (awaiting its ACK or timeout) or there
+    // is nothing queued.
+    std::optional<Cc> dispatchNext() noexcept
+    {
+        if (m_awaiting || m_queue.empty())
+            return std::nullopt;
+        const Cc job = m_queue.front();
+        m_queue.pop_front();
+        m_awaiting = true;
+        return job;
+    }
+
+    // The in-flight job is done — answered (ack) or given up on (timeout).
+    // Either way, dispatchNext() may now send the next one.
+    void complete() noexcept { m_awaiting = false; }
+
+    [[nodiscard]] bool awaiting() const noexcept { return m_awaiting; }
+    [[nodiscard]] bool empty() const noexcept { return m_queue.empty(); }
+    [[nodiscard]] std::size_t size() const noexcept { return m_queue.size(); }
+
+private:
+    std::deque<Cc> m_queue;
+    bool m_awaiting = false;
+};
+
+// ---- N2ADR/KP4RX I/O Board accessory: fixed I2C address and registers ----
+//
+// Ground truth: https://github.com/W5TSU/HL2IOBoard_KP4RX (i2c_registers.h,
+// README "Table of I2C Registers"), the operator's own hardware — unlike
+// kAddrI2cBus1/2 above, this address and these five registers are a specific
+// device's documented contract, not a tier-3 guess. The board's Pico
+// microcontroller listens at this fixed address on the HL2's I2C BUS 2
+// (I2cBus::Bus2) regardless of which SDR client is talking to it — confirmed
+// against a real Thetis<->HL2 packet capture on this exact board (a working
+// register-0 read of device 0x41 came back C0=0xFA, i.e. bus 2; the identical
+// request on bus 1 got no reply). The Pico's OWN schematic labels its I2C
+// peripheral pins "I2C1", which is a different thing entirely from which of
+// the HL2's two bus selectors the board is wired to — don't conflate them.
+inline constexpr std::uint8_t kIoBoardI2cAddress = 0x1D;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte4 = 0;  // most significant byte
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte3 = 1;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte2 = 2;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte1 = 3;
+inline constexpr std::uint8_t kIoBoardRegTxFreqByte0 = 4;  // least significant; writing this triggers the Pico's update
+inline constexpr std::uint8_t kIoBoardRegControl     = 5;  // write 1 to reset all registers to zero
+// Pin-status reads (RadioSetupDialog's I/O Board pin-state poll). Register 6
+// (REG_INPUT_PINS) is CONFIRMED against the same Thetis<->HL2 capture as the
+// bus-2 finding above: Thetis polls this exact register for live input-pin
+// status. Register 169 (REG_OUT_PINS) is the board firmware's own documented
+// value but has NOT been confirmed against a capture or real hardware read —
+// treat it as tier-2, not tier-3, until it is.
+inline constexpr std::uint8_t kIoBoardRegInputPins  = 6;    // confirmed via packet capture
+inline constexpr std::uint8_t kIoBoardRegOutputPins = 169;  // per firmware docs, unverified against hardware
+
+// Splits `hz` into the I/O Board's 5-byte big-endian TX-frequency registers,
+// as five ready-to-send I2C write requests — in the WRITE ORDER the board's
+// firmware requires: BYTE4..BYTE1 first (order among these four does not
+// matter), BYTE0 LAST. The board computes everything band-related from this
+// alone (per-amplifier band-voltage output, antenna/filter selection); "the
+// only required SDR modification is sending the transmit frequency" per the
+// firmware's own README. Values above the 5-byte range (2^40-1) are clamped.
+std::array<Cc, 5> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
+
+// The documented startup reset: write 1 to REG_CONTROL to clear stale
+// register data (e.g. a leftover band code from a previous session or a
+// different SDR program) before the first real TX-frequency push arrives.
+Cc ccIoBoardReset() noexcept;
 
 // Everything the classic response cycle carries. Fields are std::optional
 // because each RADDR carries only part of it, so "not seen yet" stays

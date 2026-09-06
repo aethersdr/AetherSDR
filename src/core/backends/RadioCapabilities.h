@@ -701,6 +701,26 @@ struct RadioCapabilities {
     bool hasGpsHardware = false;
     bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
+    // The radio exposes the Hermes-Lite-specific misc options page (ADC
+    // dither/randomization, reset-on-disconnect, TX latency, PTT hang, swap
+    // audio channels). True only for the HL2 today; named for the settings
+    // surface rather than the family so a page-visibility check reads the
+    // capability, never a family string.
+    bool hasHermesLiteOptions = false;
+
+    // The radio has a companion J16 filter-relay board it can drive (seven
+    // open-collector outputs, kOc* in MetisProtocol.h). True unconditionally
+    // for the HL2: the writes are inert with nothing listening on the I2C bus
+    // when no board is attached, the same reasoning that already makes the
+    // automatic band-filter path safe to run unconditionally.
+    bool hasJ16FilterBoard = false;
+
+    // The radio can carry a separate I/O Board accessory (a distinct I2C
+    // peripheral from the HL2 itself, with its own register map) and expose
+    // raw I2C read/write to it. True unconditionally for the HL2, for the
+    // same "inert with nothing attached" reason as hasJ16FilterBoard.
+    bool hasIoBoardAccessory = false;
+
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile
     // fields here. Example: {"flex": {"multiFlex": true, "guiClientId": "…"}}.

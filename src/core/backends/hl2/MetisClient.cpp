@@ -87,7 +87,8 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     // At least one frequency bank ALWAYS exists, so the rotation length is
     // never zero and buildNextControlPacket() has something real to send from
     // the first call.
-    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte,
+                         m_params.adcDither, m_params.adcRandom);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
     m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
@@ -148,6 +149,17 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
             emit connectFailed(QStringLiteral(
                 "no IQ stream from the radio within %1 ms of start")
                     .arg(kConnectTimeoutMs));
+    });
+
+    m_i2cTimeoutTimer = new QTimer(this);
+    m_i2cTimeoutTimer->setSingleShot(true);
+    m_i2cTimeoutTimer->setInterval(kI2cTimeoutMs);
+    connect(m_i2cTimeoutTimer, &QTimer::timeout, this, [this] {
+        if (!m_i2cJobs.awaiting())
+            return;
+        m_i2cJobs.complete();
+        emit i2cResponseReceived(/*error=*/true, /*data=*/0);
+        dispatchNextI2cJob();
     });
 }
 
@@ -214,7 +226,8 @@ bool MetisClient::start(const Params& params)
     m_params = params;
     m_host = params.host;
     m_port = params.port;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
+                         m_params.adcDither, m_params.adcRandom);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
@@ -396,7 +409,8 @@ void MetisClient::setSampleRate(SampleRate rate)
     // register has to be carried through every rebuild of it; anything a
     // rebuild re-defaults gets silently dropped the next time an unrelated
     // control changes — a zoom would have released the band relays.
-    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte);
+    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte,
+                         m_params.adcDither, m_params.adcRandom);
 }
 
 void MetisClient::setReceiverCount(int count)
@@ -422,7 +436,8 @@ void MetisClient::setReceiverCount(int count)
 
     if (!m_running || !m_socket) {
         // Not streaming: just restate the banks. There is no layout to race.
-        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
+                             m_params.adcDither, m_params.adcRandom);
         m_ccRxFreq.assign(static_cast<std::size_t>(after),
                           ccRxFreq(0, m_params.rxFrequencyHz));
         for (int i = 0; i < after; ++i) {
@@ -442,7 +457,8 @@ void MetisClient::setReceiverCount(int count)
     // that could be decoded against the wrong layout.
     countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
 
-    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
+                         m_params.adcDither, m_params.adcRandom);
     m_ccRxFreq.clear();
     for (int i = 0; i < after; ++i) {
         const std::uint32_t hz = (static_cast<std::size_t>(i) < keptHz.size())
@@ -523,11 +539,81 @@ void MetisClient::setBandFilter(int ocFilterByte)
     if (oc == m_params.ocFilterByte)
         return;                       // relays already where they belong
     m_params.ocFilterByte = oc;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc);
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc,
+                         m_params.adcDither, m_params.adcRandom);
     // Ahead of the rotation: a band change moves the NCO and the filter in the
     // same gesture, and waiting for the round robin would leave the relays on
     // the old band for up to three EP2 frames.
     m_oneShot.push_back(m_ccConfig);
+}
+
+void MetisClient::setAdcDither(bool enabled)
+{
+    if (enabled == m_params.adcDither)
+        return;
+    m_params.adcDither = enabled;
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
+                          m_params.adcDither, m_params.adcRandom);
+    m_oneShot.push_back(m_ccConfig);
+}
+
+void MetisClient::setAdcRandom(bool enabled)
+{
+    if (enabled == m_params.adcRandom)
+        return;
+    m_params.adcRandom = enabled;
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
+                          m_params.adcDither, m_params.adcRandom);
+    m_oneShot.push_back(m_ccConfig);
+}
+
+void MetisClient::setTxLatencyPttHang(int txLatency, int pttHang)
+{
+    m_ccTxLatencyPttHang = ccTxLatencyPttHang(txLatency, pttHang);
+}
+
+void MetisClient::setResetOnDisconnect(bool enabled)
+{
+    m_ccResetOnDisconnect = ccResetOnDisconnect(enabled);
+}
+
+void MetisClient::sendI2cRead(int bus, int deviceAddress, int control)
+{
+    const auto b = (bus == 2) ? I2cBus::Bus2 : I2cBus::Bus1;   // bus param is 1-based (UI: "I2C 1"/"I2C 2")
+    m_i2cJobs.enqueue(ccI2cRead(b, static_cast<std::uint8_t>(deviceAddress),
+                                static_cast<std::uint8_t>(control)));
+    dispatchNextI2cJob();
+}
+
+void MetisClient::sendI2cWrite(int bus, int deviceAddress, int control, int data)
+{
+    const auto b = (bus == 2) ? I2cBus::Bus2 : I2cBus::Bus1;   // bus param is 1-based (UI: "I2C 1"/"I2C 2")
+    m_i2cJobs.enqueue(ccI2cWrite(b, static_cast<std::uint8_t>(deviceAddress),
+                                 static_cast<std::uint8_t>(control),
+                                 static_cast<std::uint8_t>(data)));
+    dispatchNextI2cJob();
+}
+
+void MetisClient::pushIoBoardTxFrequencyHz(quint64 hz)
+{
+    for (const Cc& frame : ccIoBoardTxFrequency(hz))
+        m_i2cJobs.enqueue(frame);
+    dispatchNextI2cJob();
+}
+
+void MetisClient::resetIoBoardRegisters()
+{
+    m_i2cJobs.enqueue(ccIoBoardReset());
+    dispatchNextI2cJob();
+}
+
+void MetisClient::dispatchNextI2cJob()
+{
+    const auto job = m_i2cJobs.dispatchNext();
+    if (!job)
+        return;
+    m_oneShot.push_back(*job);
+    m_i2cTimeoutTimer->start();
 }
 
 void MetisClient::requestPipelineReset()
@@ -658,24 +744,28 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         b = m_oneShot.front();
         m_oneShot.pop_front();
     } else {
-        // The rotation is every receiver's NCO, then gain, then ADC assignment:
-        // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
-        // once, for the same reason the config bank is — a radio that resets or
-        // reconnects mid-session must not be left with a stale NCO on the
-        // receivers nobody happens to be tuning.
+        // The rotation is every receiver's NCO, then gain, ADC assignment,
+        // TX latency/PTT hang, then reset-on-disconnect: numRx + 4 slots.
+        // Each bank is RE-ASSERTED rather than sent once, for the same reason
+        // the config bank is — a radio that resets or reconnects mid-session
+        // must not be left with stale values on any of them.
         //
-        // At 381 EP2 packets/s and four receivers that refreshes each bank ~64
+        // At 381 EP2 packets/s and four receivers that refreshes each bank ~40
         // times a second, which is well inside anything the operator can see.
         // `slotCount`, not `slots`: Qt #defines `slots` to nothing.
         const std::size_t nFreq = m_ccRxFreq.size();
-        const std::size_t slotCount = nFreq + 2;
+        const std::size_t slotCount = nFreq + 4;
         const std::size_t slot = m_roundRobin % slotCount;
         if (slot < nFreq)
             b = m_ccRxFreq[slot];
         else if (slot == nFreq)
             b = m_ccGain;
-        else
+        else if (slot == nFreq + 1)
             b = kCcAdc;
+        else if (slot == nFreq + 2)
+            b = m_ccTxLatencyPttHang;
+        else
+            b = m_ccResetOnDisconnect;
         ++m_roundRobin;
     }
     // MOX rides in C0 bit 0 of EVERY frame, so BOTH sub-frames carry it -- the
@@ -877,6 +967,14 @@ void MetisClient::onReadyRead()
             if (const auto resp = parseEp6Response(bytes.data() + fs)) {
                 m_telemetry.apply(*resp);
                 telemetryChanged = true;
+                if (m_i2cJobs.awaiting()) {
+                    if (const auto i2c = decodeI2cResponse(*resp); i2c.matched) {
+                        m_i2cJobs.complete();
+                        m_i2cTimeoutTimer->stop();
+                        emit i2cResponseReceived(i2c.error, i2c.data);
+                        dispatchNextI2cJob();
+                    }
+                }
             }
         }
         // Coalesce to ~10 Hz: telemetry free-runs continuously, so a frame

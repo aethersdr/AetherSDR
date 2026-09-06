@@ -16,7 +16,7 @@ I'm maintaining this fork for my own use. The purpose is to add more support for
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.9.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.9.5** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -85,11 +85,15 @@ earlier 4.x firmware works; v3.x is unsupported.
 FlexRadio and the Hermes-Lite 2 are supported targets; networked Icom is early.
 
 - **Hermes-Lite 2** — **supported**. Four independent receivers, SSB voice,
-  CW/RTTY/DFM decoding, AX.25 packet, band switching with hardware filters,
-  manual notch filters (low-latency by default, the deep filter only while a
-  notch is placed), a host-side impulse noise blanker, host frequency
-  calibration and per-radio state restore (AGC mode and threshold included).
-  HL2 ships raw IQ, so the client runs the whole tune/decimate/demodulate
+  CW/RTTY/DFM decoding, AX.25 packet, band switching with hardware filters
+  (automatic by default, with an opt-in manual per-band/per-direction override
+  on the Filter Board settings page), manual notch filters (low-latency by
+  default, the deep filter only while a notch is placed), a host-side impulse
+  noise blanker, host frequency calibration and per-radio state restore (AGC
+  mode and threshold included). Radio Setup also exposes the board's own misc
+  options (ADC dither/randomization, TX latency, PTT hang, reset-on-disconnect)
+  and a raw I2C read/write panel for the separate I/O Board accessory. HL2
+  ships raw IQ, so the client runs the whole tune/decimate/demodulate
   chain a Flex does on-radio; the panadapter has sample/average/peak detector
   modes and configurable averaging to match the Flex display. Promoted behind a
   hardware certification gate (ADR 0001). Two costs are on the record: a

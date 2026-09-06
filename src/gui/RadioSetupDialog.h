@@ -123,6 +123,13 @@ private:
     void     refreshApdSamplerCombo(const QString& txAnt);
     QWidget* buildUsbCablesTab();
     QWidget* buildPeripheralsTab();
+    // Hermes-Lite 2 settings (issue #9): misc radio options, the separate I/O
+    // Board accessory, and the J16 filter-board manual override. Each is
+    // gated on its own RadioCapabilities boolean rather than a family check —
+    // see updateRadioCapabilityVisibility().
+    QWidget* buildHermesLiteOptionsTab();
+    QWidget* buildIoBoardTab();
+    QWidget* buildFilterBoardTab();
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
     // (host, sha256 fingerprint, pinned date) with per-row Forget and a
@@ -246,6 +253,9 @@ private:
     // External APD page (visible only when the radio reports apd configurable=1)
     int                       m_apdPageIndex{-1};
     int                       m_calibrationPageIndex{-1};
+    int                       m_hermesLiteOptionsPageIndex{-1};
+    int                       m_ioBoardPageIndex{-1};
+    int                       m_filterBoardPageIndex{-1};
     // Re-seeds the Calibration page from the LIVE backend value. The page is
     // built once per process (buildDeferredTab erases the builder) and the
     // dialog is a showOrRaisePersistent singleton, so without this the spinbox

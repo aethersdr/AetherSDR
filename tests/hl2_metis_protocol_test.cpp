@@ -98,6 +98,47 @@ int main()
         check((c[0] & 0x01) == 0, "config C0 is even (MOX=0, cannot key)");
     }
 
+    // ---- config register: ADC dither / randomization (C3 bits 3/4) ----
+    {
+        check(ccConfig(SampleRate::R48k, 1)[3] == 0x00,
+              "dither/random default false -> C3 still zero (pre-existing callers unaffected)");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, true, false)[3] == 0x08,
+              "dither alone sets C3 bit3");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, false, true)[3] == 0x10,
+              "random alone sets C3 bit4");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, true, true)[3] == 0x18,
+              "dither+random set both C3 bits 3 and 4");
+        // The OC filter byte lives in C2 and must be unaffected by the new C3 args.
+        check(ccConfig(SampleRate::R48k, 1, kOcLpf160, true, true)[2]
+                  == ccConfig(SampleRate::R48k, 1, kOcLpf160)[2],
+              "dither/random do not disturb the OC filter byte in C2");
+    }
+
+    // ---- TX latency + PTT hang (register 0x17, C0=0x2E) ----
+    {
+        const Cc c = ccTxLatencyPttHang(20, 12);
+        check(c[0] == 0x2E, "tx-latency/ptt-hang C0 is register 0x17 (addr<<1)");
+        check(c[3] == 12, "C3 = PTT hang");
+        check(c[4] == 20, "C4 = TX latency");
+        check(ccTxLatencyPttHang(200, 100)[4] == kTxLatencyMax,
+              "TX latency clamps to its 7-bit field width (127)");
+        check(ccTxLatencyPttHang(20, 100)[3] == kPttHangMax,
+              "PTT hang clamps to its 5-bit field width (31)");
+        check((c[0] & 0x01) == 0, "tx-latency/ptt-hang C0 is even (MOX=0, cannot key)");
+    }
+
+    // ---- Reset on disconnect (register 0x3A, C0=0x74) ----
+    {
+        const Cc off = ccResetOnDisconnect(false);
+        const Cc on = ccResetOnDisconnect(true);
+        check(off[0] == 0x74, "reset-on-disconnect C0 is register 0x3A (addr<<1)");
+        check(on[0] == 0x74, "reset-on-disconnect C0 is the same register whichever way it's set");
+        check(off[0] != kC0Sync, "reset-on-disconnect is NOT the hazardous sync/reset register (0x39)");
+        check(off[4] == 0x00, "disabled encodes C4 = 0");
+        check(on[4] == 0x01, "enabled encodes C4 = 1");
+        check(off[1] == 0 && off[2] == 0 && off[3] == 0, "reset-on-disconnect C1..C3 are zero");
+    }
+
     // ---- J16 open-collector filter byte: DATA[23:17] == C2[7:1] ----
     //
     // The SHIFT is the whole point. DATA[16] is not part of the field, so an
@@ -572,6 +613,149 @@ int main()
         t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+    }
+
+    // ---- I/O Board: raw I2C request/reply (register 0x3C/0x3D) ----
+    {
+        const Cc readReq = ccI2cRead(I2cBus::Bus1, 0xD4, 0x0F);
+        check(readReq[0] == static_cast<std::uint8_t>((kAddrI2cBus1 << 1) | 0x80),
+              "I2C bus 1 read sets RQST (C0 bit 7) on the bus-1 register");
+        check(readReq[1] == 0x07, "I2C read is C1 = 0x07 (read + stop)");
+        check(readReq[2] == (0x80 | (0xD4 >> 1)),
+              "an 8-bit-shifted device address is normalized to 7 bits before C2");
+
+        const Cc writeReq = ccI2cWrite(I2cBus::Bus2, 0x50, 0x03, 0xAB);
+        check(writeReq[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
+              "I2C bus 2 write sets RQST on the bus-2 register, distinct from bus 1");
+        check(writeReq[1] == 0x06, "I2C write is C1 = 0x06 (write + stop)");
+        check(writeReq[2] == (0x80 | 0x50), "a 7-bit device address passes through unshifted");
+        check(writeReq[3] == 0x03, "C3 carries the target register");
+        check(writeReq[4] == 0xAB, "C4 carries the write data");
+
+        // A successful bus-1 reply: ACK, RADDR = kAddrI2cBus1, data byte in C4.
+        std::uint8_t frame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        frame[3] = static_cast<std::uint8_t>((kAddrI2cBus1 << 1) | 0x80);
+        frame[7] = 0x42;   // C4 = returned byte
+        const auto resp = parseEp6Response(frame);
+        check(resp.has_value() && resp->ack, "constructed ACK frame decodes as ack=true");
+        const auto decoded = decodeI2cResponse(*resp);
+        check(decoded.matched && !decoded.error && decoded.data == 0x42,
+              "a bus-1 ACK reply decodes to matched, no error, byte 0x42");
+
+        // The error sentinel (RADDR = 0x3F).
+        std::uint8_t errFrame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        errFrame[3] = static_cast<std::uint8_t>((kI2cErrorRaddr << 1) | 0x80);
+        const auto errResp = parseEp6Response(errFrame);
+        const auto errDecoded = decodeI2cResponse(*errResp);
+        check(errDecoded.matched && errDecoded.error,
+              "the 0x3F sentinel decodes to matched + error, never a silent success");
+
+        // A classic free-running frame (ack=false) is not an I2C reply at all.
+        std::uint8_t classic[8] = {0x7F, 0x7F, 0x7F, 0x00, 0, 0, 0, 0};
+        const auto classicResp = parseEp6Response(classic);
+        check(!decodeI2cResponse(*classicResp).matched,
+              "a classic (non-ACK) frame never decodes as an I2C reply");
+
+        // An ACK for some OTHER RQST (not I2C) must not be misread as one.
+        std::uint8_t otherFrame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        otherFrame[3] = static_cast<std::uint8_t>((0x00 << 1) | 0x80);  // some unrelated RADDR
+        const auto otherResp = parseEp6Response(otherFrame);
+        check(!decodeI2cResponse(*otherResp).matched,
+              "an ACK for an unrelated RADDR is not mistaken for an I2C reply");
+    }
+
+    // ---- N2ADR/KP4RX I/O Board: TX-frequency push + startup reset ----
+    {
+        // 14.250000 MHz = 14,250,000 Hz = 0x00_00_D9_70_10.
+        const auto frames = ccIoBoardTxFrequency(14'250'000);
+        for (const Cc& f : frames) {
+            check(f[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
+                  "every I/O Board register write is an RQST on I2C bus 2 (the board's own bus — "
+                  "confirmed against a real Thetis<->HL2 capture; NOT bus 1, despite the board's "
+                  "own Pico schematic labeling its I2C peripheral pins \"I2C1\")");
+            check(f[2] == (0x80 | kIoBoardI2cAddress),
+                  "every I/O Board register write targets the board's fixed I2C address (0x1D)");
+        }
+        check(frames[0][3] == kIoBoardRegTxFreqByte4, "frame 0 targets REG_TX_FREQ_BYTE4");
+        check(frames[1][3] == kIoBoardRegTxFreqByte3, "frame 1 targets REG_TX_FREQ_BYTE3");
+        check(frames[2][3] == kIoBoardRegTxFreqByte2, "frame 2 targets REG_TX_FREQ_BYTE2");
+        check(frames[3][3] == kIoBoardRegTxFreqByte1, "frame 3 targets REG_TX_FREQ_BYTE1");
+        check(frames[4][3] == kIoBoardRegTxFreqByte0, "frame 4 (LAST) targets REG_TX_FREQ_BYTE0 — triggers the update");
+
+        check(frames[0][4] == 0x00, "14.25 MHz byte4 (bits 39-32) is 0x00");
+        check(frames[1][4] == 0x00, "14.25 MHz byte3 (bits 31-24) is 0x00");
+        check(frames[2][4] == 0xD9, "14.25 MHz byte2 (bits 23-16) is 0xD9");
+        check(frames[3][4] == 0x70, "14.25 MHz byte1 (bits 15-8) is 0x70");
+        check(frames[4][4] == 0x10, "14.25 MHz byte0 (bits 7-0) is 0x10 (14,250,000 = 0xD97010)");
+
+        // Round trip against a value that exercises every byte.
+        const auto full = ccIoBoardTxFrequency(0x0102030405ULL);
+        check(full[0][4] == 0x01 && full[1][4] == 0x02 && full[2][4] == 0x03
+                  && full[3][4] == 0x04 && full[4][4] == 0x05,
+              "every byte of a 5-byte-spanning value round-trips to its own register");
+
+        // Clamped, not wrapped, past the 5-byte (40-bit) range.
+        const auto clamped = ccIoBoardTxFrequency(~0ULL);
+        check(clamped[0][4] == 0xFF && clamped[4][4] == 0xFF,
+              "a value above 2^40-1 clamps to the register's full range rather than wrapping");
+
+        const Cc reset = ccIoBoardReset();
+        check(reset[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
+              "the startup reset is also on I2C bus 2");
+        check(reset[2] == (0x80 | kIoBoardI2cAddress), "the startup reset targets the same fixed address");
+        check(reset[3] == kIoBoardRegControl, "the startup reset targets REG_CONTROL");
+        check(reset[4] == 0x01, "the startup reset writes 1 (per the firmware's documented reset convention)");
+    }
+
+    // ---- I2cJobQueue: MetisClient's I2C scheduling, pinned socket-free ----
+    //
+    // The real HPSDR I2C mechanism has no transaction id — the radio's ACK is
+    // matched purely by arrival order — so MetisClient must never have two
+    // requests in flight at once. This is the scheduling logic itself
+    // (dispatchNextI2cJob's gate), extracted out of MetisClient so it can be
+    // pinned here rather than only by a live fake-radio fixture (see
+    // tests/tests.cmake's note on the retired ones: "deterministic
+    // assertions... extracted into socket-free tests").
+    {
+        I2cJobQueue q;
+        check(q.empty() && !q.awaiting(), "a fresh queue starts empty and idle");
+        check(!q.dispatchNext().has_value(), "nothing to dispatch from an empty queue");
+
+        const Cc jobA = ccIoBoardReset();
+        const Cc jobB = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegInputPins);
+        const Cc jobC = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegOutputPins);
+        q.enqueue(jobA);
+        q.enqueue(jobB);
+        q.enqueue(jobC);
+        check(q.size() == 3, "three enqueued jobs are all held until dispatched");
+
+        // Only the FRONT job goes out, and the queue is marked awaiting —
+        // this is the one-outstanding-transaction gate itself.
+        const auto first = q.dispatchNext();
+        check(first.has_value() && (*first)[3] == jobA[3], "the first dispatch is job A, in FIFO order");
+        check(q.awaiting(), "dispatching marks the queue as awaiting a reply");
+        check(q.size() == 2, "the dispatched job left the queue");
+        check(!q.dispatchNext().has_value(),
+              "a second dispatch is refused while one is still outstanding — "
+              "never two I2C requests on the wire at once");
+
+        // The outstanding job completes (an ACK, or the timeout — this class
+        // does not care which): the next one may now go.
+        q.complete();
+        check(!q.awaiting(), "completing clears the in-flight flag");
+        const auto second = q.dispatchNext();
+        check(second.has_value() && (*second)[3] == jobB[3], "the second dispatch is job B, still FIFO order");
+
+        // A timeout (no ACK ever arrived) completes it exactly the same way
+        // a real ACK would — the queue does not distinguish, and must not
+        // wedge either way.
+        q.complete();
+        const auto third = q.dispatchNext();
+        check(third.has_value() && (*third)[3] == jobC[3], "the third dispatch is job C — a timeout unblocks the queue");
+        check(q.empty(), "all three jobs have now left the queue");
+
+        q.complete();
+        check(!q.dispatchNext().has_value(), "an empty, idle queue has nothing left to dispatch");
     }
 
     // ---- SWR ----

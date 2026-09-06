@@ -18,6 +18,9 @@
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
+#include "core/backends/hl2/Hl2MiscOptionsSettings.h"
+#include "core/backends/hl2/Hl2FilterBoard.h"
+#include "core/backends/hl2/Hl2FilterBoardSettings.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -334,6 +337,18 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         setKeying(false);
     });
 
+    m_ioBoardTrailingPushTimer = new QTimer(this);
+    m_ioBoardTrailingPushTimer->setSingleShot(true);
+    connect(m_ioBoardTrailingPushTimer, &QTimer::timeout, this, [this] {
+        if (!m_metis) {
+            return;
+        }
+        m_lastIoBoardTxFreqHz = m_pendingIoBoardTxFreqHz;
+        m_ioBoardPushClock.restart();
+        QMetaObject::invokeMethod(m_metis, "pushIoBoardTxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(quint64, m_pendingIoBoardTxFreqHz));
+    });
+
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
     // rather than one per receiver, because the demux has already happened at
     // the wire: blocks[i] is DDC i. Fanning out here keeps the sample path a
@@ -469,6 +484,20 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 
     connect(m_metis, &MetisClient::telemetryUpdated, this,
             [this](const Hl2Telemetry& t) { publishTelemetry(t); });
+    // I/O Board raw I2C (ticket #11): one outstanding request at a time
+    // (MetisClient enforces the same), so the requestId it was issued under
+    // is all this needs to remember to route the reply back to its caller.
+    connect(m_metis, &MetisClient::i2cResponseReceived, this,
+            [this](bool error, int data) {
+        if (m_pendingI2cRequestId == 0)
+            return;
+        const quint64 id = m_pendingI2cRequestId;
+        m_pendingI2cRequestId = 0;
+        emit extensionResult(id, QVariantMap{
+            {QStringLiteral("error"), error},
+            {QStringLiteral("data"), error ? QVariant() : QVariant(data)},
+        });
+    });
     // Mirror the drop counter onto this thread so healthSnapshot() can read it
     // without touching an object that lives on the I/O thread.
     connect(m_metis, &MetisClient::dropsUpdated, this,
@@ -1424,6 +1453,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasSelectableMicInputs = false;
     c.hasDownwardExpander = false;
 
+    // Unconditional, like the other HL2 hardware-presence flags above: each
+    // control is inert with nothing attached/listening, so there is no
+    // "do you have this board" precondition to check first.
+    c.hasHermesLiteOptions = true;
+    c.hasJ16FilterBoard = true;
+    c.hasIoBoardAccessory = true;
+
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
     // The host modulator implements a continuous transmit passband.
@@ -1562,6 +1598,14 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // (a hand-built connect request with no identity) yields the family-wide
     // row, which is empty by default — i.e. uncalibrated, not someone else's.
     m_radioSerial = request.serial;
+    // Reset so this session always pushes at least once to the I/O Board,
+    // even to the same frequency the previous session last pushed.
+    m_lastIoBoardTxFreqHz = 0;
+    m_ioBoardPushClock.invalidate();
+    m_pendingIoBoardTxFreqHz = 0;
+    if (m_ioBoardTrailingPushTimer) {
+        m_ioBoardTrailingPushTimer->stop();
+    }
     m_freqCalPpb = Hl2FreqCal::loadPpb(
         RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
     m_freqCalScale = Hl2FreqCal::scaleForPpb(m_freqCalPpb);
@@ -1692,6 +1736,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // function keeps startFreqHz in the true-RF domain.
     mp.rxFrequencyHz = ncoCommandHz(startFreqHz);
     mp.lnaGainDb = m_lnaGainDb;
+    mp.adcDither = Hl2MiscOptionsSettings::adcDither(hl2SettingsScope());
+    mp.adcRandom = Hl2MiscOptionsSettings::adcRandom(hl2SettingsScope());
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
     if (m_boardMaxRx <= 0) {
@@ -2107,6 +2153,22 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // UI yet, so anything higher would be an un-commanded power level chosen by
     // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+
+    // Registers with no room elsewhere in this function's per-receiver setup:
+    // pushed once here, then re-asserted by MetisClient's own round robin for
+    // the life of the session.
+    QMetaObject::invokeMethod(m_metis, "setTxLatencyPttHang", Qt::QueuedConnection,
+        Q_ARG(int, Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())),
+        Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
+    QMetaObject::invokeMethod(m_metis, "setResetOnDisconnect", Qt::QueuedConnection,
+        Q_ARG(bool, Hl2MiscOptionsSettings::resetOnDisconnect(hl2SettingsScope())));
+    // I/O Board startup reset — the accessory's own README recommendation:
+    // "When your SDR program starts, write 1 to REG_CONTROL to set all
+    // registers back to zero," so stale data from a previous session or a
+    // different SDR program isn't acted on before the first real
+    // TX-frequency push (setTxFrequency(), above) arrives.
+    QMetaObject::invokeMethod(m_metis, "resetIoBoardRegisters", Qt::QueuedConnection);
+
     emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
@@ -3362,6 +3424,40 @@ void Hl2Backend::setTxFrequency(double hz)
     // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
         Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+
+    // I/O Board TX-frequency push (the accessory's own README: "the only
+    // required SDR modification is sending the transmit frequency" — it
+    // computes everything band-dependent, including a XieGu-style
+    // band-voltage output for an external amp, from this value alone).
+    // Rate-limited to match the reference client's own documented
+    // convention (Quisk): at most once per 500 ms, only when the value
+    // actually changed, so a pan drag does not flood the I2C bus. The TRUE
+    // (uncalibrated-scale) frequency is what an external amp cares about
+    // for band data — not the register-command value ncoCommandHz() above
+    // derives, which is only ever off by a calibration's few Hz.
+    //
+    // Leading-edge only would drop the LAST frequency of a tuning gesture
+    // that stops inside the 500 ms window — exactly the failure this push
+    // exists to prevent (amp left on the wrong band). So a change that
+    // arrives while the window is still closed is remembered and re-armed
+    // on a trailing single-shot timer for when the window reopens; any
+    // further change before it fires just re-arms it with the newer value.
+    const auto hzInt = static_cast<quint64>(hz + 0.5);
+    if (hzInt != m_lastIoBoardTxFreqHz) {
+        const qint64 elapsed = m_ioBoardPushClock.isValid() ? m_ioBoardPushClock.elapsed() : 500;
+        if (elapsed >= 500) {
+            m_lastIoBoardTxFreqHz = hzInt;
+            m_ioBoardPushClock.restart();
+            if (m_ioBoardTrailingPushTimer) {
+                m_ioBoardTrailingPushTimer->stop();
+            }
+            QMetaObject::invokeMethod(m_metis, "pushIoBoardTxFrequencyHz", Qt::QueuedConnection,
+                Q_ARG(quint64, hzInt));
+        } else if (m_ioBoardTrailingPushTimer) {
+            m_pendingIoBoardTxFreqHz = hzInt;
+            m_ioBoardTrailingPushTimer->start(static_cast<int>(500 - elapsed));
+        }
+    }
 }
 
 std::uint32_t Hl2Backend::ncoCommandHz(double trueHz) const noexcept
@@ -3828,6 +3924,26 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
+RadioSettingsScope Hl2Backend::hl2SettingsScope() const
+{
+    return RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial);
+}
+
+bool Hl2Backend::hl2SettingsScopeForWrite(RadioSettingsScope& outScope) const
+{
+    // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope
+    // falls back exact-radio -> family-wide on read, so a row written with no
+    // identity is silently adopted by every HL2 that has none of its own —
+    // the same contamination applyFreqCalPpb() already guards against.
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting a settings change —"
+                         << "no radio identity yet; applying for this session only";
+        return false;
+    }
+    outScope = hl2SettingsScope();
+    return true;
+}
+
 void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                                  const QVariant& arg)
 {
@@ -3860,6 +3976,218 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("effectiveClockHz"),
                      Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
                     {QStringLiteral("scale"), m_freqCalScale},
+                });
+            }
+            return;
+        }
+        // "Hermes Lite 2" misc-options page (ticket #10). Each setter persists
+        // to Hl2MiscOptionsSettings (the source of truth the page reads on
+        // open) and, if a session is live, re-pushes to the wire immediately
+        // rather than waiting for the operator to reconnect.
+        if (verb == QLatin1String("options.setAdcDither")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setAdcDither(scope, on);
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setAdcDither", Qt::QueuedConnection, Q_ARG(bool, on));
+            return;
+        }
+        if (verb == QLatin1String("options.setAdcRandom")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setAdcRandom(scope, on);
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setAdcRandom", Qt::QueuedConnection, Q_ARG(bool, on));
+            return;
+        }
+        if (verb == QLatin1String("options.setResetOnDisconnect")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setResetOnDisconnect(scope, on);
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setResetOnDisconnect", Qt::QueuedConnection, Q_ARG(bool, on));
+            return;
+        }
+        if (verb == QLatin1String("options.setTxLatency")) {
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setTxLatency(scope, arg.toInt());
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setTxLatencyPttHang", Qt::QueuedConnection,
+                    Q_ARG(int, Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())),
+                    Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
+            return;
+        }
+        if (verb == QLatin1String("options.setPttHang")) {
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setPttHang(scope, arg.toInt());
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setTxLatencyPttHang", Qt::QueuedConnection,
+                    Q_ARG(int, Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())),
+                    Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
+            return;
+        }
+        if (verb == QLatin1String("options.setSwapAudioChannels")) {
+            // No wire push: this backend's transmit audio slot is always zero
+            // (ep2WriteTxIq's EADDR-reuse invariant), so there is nothing on
+            // the wire to re-push. See Hl2MiscOptionsSettings.h.
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setSwapAudioChannels(scope, arg.toBool());
+            return;
+        }
+        // "I/O Board" page (ticket #11): raw I2C read/write. Gated on a live
+        // session — an I2C transaction has nowhere to go without one — and on
+        // no OTHER request already pending, so a stale reply can never be
+        // misrouted to whichever caller happens to ask next.
+        if (verb == QLatin1String("ioboard.i2cRead")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            const QVariantMap m = arg.toMap();
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, m.value(QStringLiteral("bus")).toInt()),
+                Q_ARG(int, m.value(QStringLiteral("address")).toInt()),
+                Q_ARG(int, m.value(QStringLiteral("control")).toInt()));
+            return;
+        }
+        if (verb == QLatin1String("ioboard.i2cWrite")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            const QVariantMap m = arg.toMap();
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cWrite", Qt::QueuedConnection,
+                Q_ARG(int, m.value(QStringLiteral("bus")).toInt()),
+                Q_ARG(int, m.value(QStringLiteral("address")).toInt()),
+                Q_ARG(int, m.value(QStringLiteral("control")).toInt()),
+                Q_ARG(int, m.value(QStringLiteral("data")).toInt()));
+            return;
+        }
+        // The I/O Board's own pin-status poll (RadioSetupDialog's 1Hz
+        // auto-poll row): no bus/address/register args, unlike the generic
+        // i2cRead above — this ONE known device's bus/address/register are
+        // this backend's own knowledge (MetisProtocol.h's kIoBoard*
+        // constants), not something the GUI layer should hold directly
+        // (RadioSetupDialog.cpp stays below the vendor-header seam; see
+        // tools/check_engine_boundary.py's EB3).
+        if (verb == QLatin1String("ioboard.readInputPins")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, 2), Q_ARG(int, hl2::kIoBoardI2cAddress),
+                Q_ARG(int, hl2::kIoBoardRegInputPins));
+            return;
+        }
+        if (verb == QLatin1String("ioboard.readOutputPins")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, 2), Q_ARG(int, hl2::kIoBoardI2cAddress),
+                Q_ARG(int, hl2::kIoBoardRegOutputPins));
+            return;
+        }
+
+        // "Filter Board" page (ticket #12): manual J16 relay override.
+        if (verb == QLatin1String("filterboard.setManualEnabled")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope)) {
+                // Enabling with nothing stored yet would apply an EMPTY table —
+                // every relay released — while the page's grid shows the seeded
+                // defaults it was built from: the wire and the display would
+                // disagree the moment this switch flips. Seed-and-store first so
+                // what gets applied always matches what the operator is looking
+                // at (#9's HERMES-§17 caution: a control must never show one
+                // state while the wire holds another).
+                if (on && Hl2FilterBoardSettings::table(scope).isEmpty())
+                    Hl2FilterBoardSettings::setTable(scope, hl2::seedManualFilterTableFromAutomatic());
+                Hl2FilterBoardSettings::setManualEnabled(scope, on);
+            }
+            applyBandFilter("filter board: manual mode toggled");
+            return;
+        }
+        if (verb == QLatin1String("filterboard.setBand")) {
+            // {band, rx, tx} — one band's independent RX/TX masks.
+            const QVariantMap m = arg.toMap();
+            const QString band = m.value(QStringLiteral("band")).toString();
+            RadioSettingsScope scope;
+            if (!band.isEmpty() && hl2SettingsScopeForWrite(scope)) {
+                hl2::ManualFilterTable table = Hl2FilterBoardSettings::table(scope);
+                table[band] = hl2::ManualFilterBand{
+                    static_cast<std::uint8_t>(m.value(QStringLiteral("rx")).toInt() & 0x7F),
+                    static_cast<std::uint8_t>(m.value(QStringLiteral("tx")).toInt() & 0x7F)};
+                Hl2FilterBoardSettings::setTable(scope, table);
+                applyBandFilter("filter board: manual band edited");
+            }
+            return;
+        }
+        if (verb == QLatin1String("filterboard.restoreDefaults")) {
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2FilterBoardSettings::setTable(scope, hl2::seedManualFilterTableFromAutomatic());
+            applyBandFilter("filter board: restored N2ADR defaults");
+            if (requestId != 0)
+                emit extensionResult(requestId, QVariant(true));
+            return;
+        }
+        if (verb == QLatin1String("filterboard.get")) {
+            if (requestId != 0) {
+                hl2::ManualFilterTable table = Hl2FilterBoardSettings::table(hl2SettingsScope());
+                if (table.isEmpty())
+                    table = hl2::seedManualFilterTableFromAutomatic();
+                QVariantMap bands;
+                for (auto it = table.constBegin(); it != table.constEnd(); ++it) {
+                    bands[it.key()] = QVariantMap{
+                        {QStringLiteral("rx"), static_cast<int>(it->rxMask)},
+                        {QStringLiteral("tx"), static_cast<int>(it->txMask)},
+                    };
+                }
+                // The byte actually being driven right now (applyBandFilter()'s
+                // last commanded value), for the "Hardware Pin State" display —
+                // distinct from the manual TABLE above, which is what WOULD be
+                // sent for a given band, not necessarily what IS being sent this
+                // instant (automatic mode ignores the table entirely; even in
+                // manual mode the spanned/keyed override can pick a different
+                // band's entry than the one on screen). 0x7F+ (the unset
+                // sentinel before the first applyBandFilter() call) reports as
+                // 0 — every relay released — rather than a nonsense byte.
+                const int activeOc = (m_ocFilterByte >= 0 && m_ocFilterByte <= 0x7F)
+                                         ? m_ocFilterByte : 0;
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("manualEnabled"), Hl2FilterBoardSettings::manualEnabled(hl2SettingsScope())},
+                    {QStringLiteral("bands"), bands},
+                    {QStringLiteral("activeOcByte"), activeOc},
+                });
+            }
+            return;
+        }
+        if (verb == QLatin1String("options.get")) {
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("adcDither"), Hl2MiscOptionsSettings::adcDither(hl2SettingsScope())},
+                    {QStringLiteral("adcRandom"), Hl2MiscOptionsSettings::adcRandom(hl2SettingsScope())},
+                    {QStringLiteral("resetOnDisconnect"), Hl2MiscOptionsSettings::resetOnDisconnect(hl2SettingsScope())},
+                    {QStringLiteral("txLatency"), Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())},
+                    {QStringLiteral("pttHang"), Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())},
+                    {QStringLiteral("swapAudioChannels"), Hl2MiscOptionsSettings::swapAudioChannels(hl2SettingsScope())},
                 });
             }
             return;
@@ -5135,10 +5463,31 @@ void Hl2Backend::applyBandFilter(const char* reason)
     //
     // TRANSMIT is not affected by the bypass decision, because transmit is what
     // the low-pass is legally there for. See the TX-receiver override below.
+    //
+    // MANUAL OVERRIDE (ticket #12): when the operator has opted into it, every
+    // lookup below goes through the manual per-band/per-direction table
+    // instead of ocFilterByteForHz() — same call shape, same bypass/override
+    // policy, just a different source for "what filter does this frequency
+    // want". Automatic stays the unconditional default; nothing here runs
+    // unless Hl2FilterBoardSettings::manualEnabled() is true.
+    const bool manual = Hl2FilterBoardSettings::manualEnabled(hl2SettingsScope());
+    const hl2::ManualFilterTable manualTable = manual ? Hl2FilterBoardSettings::table(hl2SettingsScope())
+                                                       : hl2::ManualFilterTable{};
+    auto ocByteFor = [manual, &manualTable](double hz, hl2::FilterDirection dir) -> std::uint8_t {
+        // bandKeyForHz() is Hl2Bands.h's TX-drive/LNA-memory vocabulary, NOT
+        // the Filter Board's own (kFilterBoardBands in Hl2FilterBoard.h) —
+        // this works today only because the ten HF band keys both tables use
+        // happen to agree. If either table's edges or key set ever diverges
+        // from the other, this lookup needs its own frequency-to-band-key
+        // function instead of borrowing this one.
+        return manual ? hl2::manualFilterByte(manualTable, hl2::bandKeyForHz(hz), dir)
+                       : ocFilterByteForHz(hz);
+    };
+
     int oc = -1;
     bool spanned = false;
     for (std::size_t i = 0; i < m_rx.size(); ++i) {
-        const int want = static_cast<int>(ocFilterByteForHz(m_rx[i].sliceFreqHz));
+        const int want = static_cast<int>(ocByteFor(m_rx[i].sliceFreqHz, hl2::FilterDirection::Receive));
         if (oc < 0)
             oc = want;
         else if (want != oc)
@@ -5154,7 +5503,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
         // receive-side convenience justifies that.
         if (m_keyed || m_tuning) {
             const Receiver* txRx = rx(m_txDdc);
-            oc = txRx ? static_cast<int>(ocFilterByteForHz(txRx->sliceFreqHz))
+            oc = txRx ? static_cast<int>(ocByteFor(txRx->sliceFreqHz, hl2::FilterDirection::Transmit))
                       : static_cast<int>(kOcNone);
         } else {
             oc = static_cast<int>(kOcNone);
