@@ -271,7 +271,7 @@
  },
  "core/KiwiPublicDirectory.h": {
   "tag": "vendor(kiwi)",
-  "note": "Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
+  "note": "Fetches/parses AetherSDR's kiwi.json mirror of the kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
   "split": "",
   "confidence": "high"
  },

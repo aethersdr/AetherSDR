@@ -2,16 +2,24 @@
 
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLoggingCategory>
+#include <QPointer>
+#include <QThread>
+#include <QUuid>
 
 #include <utility>
 
 namespace AetherSDR::control {
 
+Q_LOGGING_CATEGORY(lcControlSession, "aether.control.session")
+
 ControlSession::ControlSession(ControlResourceStore* resources,
                                qint64 maxQueuedOutputBytes,
+                               SessionAuthorization authorization,
                                QObject* parent)
     : QObject(parent),
       m_resources(resources),
+      m_authorization(authorization),
       m_maxQueuedOutputBytes(maxQueuedOutputBytes)
 {
     Q_ASSERT(m_resources);
@@ -21,9 +29,107 @@ ControlSession::ControlSession(ControlResourceStore* resources,
             this, &ControlSession::onResourceRemoved);
 }
 
+bool ControlSession::isAuthenticated() const
+{
+    return !m_revoked
+        && (m_authorization == SessionAuthorization::Observer
+            || m_authorization == SessionAuthorization::AuthenticatedWithoutGrants);
+}
+
+bool ControlSession::canObserve() const
+{
+    return isAuthenticated() && isNegotiated()
+        && m_authorization == SessionAuthorization::Observer;
+}
+
+void ControlSession::completeNegotiation()
+{
+    Q_ASSERT(isAuthenticated() && !isNegotiated());
+    m_sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+std::optional<ProtocolError> ControlSession::observationError() const
+{
+    if (m_revoked) {
+        return ProtocolError{QStringLiteral("auth.invalid"),
+                             QStringLiteral("session authorization was revoked"), {}, false};
+    }
+    if (!isAuthenticated()) {
+        return ProtocolError{QStringLiteral("auth.required"),
+                             QStringLiteral("authenticated transport context required"), {}, false};
+    }
+    if (!isNegotiated()) {
+        return ProtocolError{QStringLiteral("session.invalid"),
+                             QStringLiteral("session has not negotiated"), {}, false};
+    }
+    if (!canObserve()) {
+        return ProtocolError{QStringLiteral("auth.grant_denied"),
+                             QStringLiteral("observe grant required"), {}, false};
+    }
+    return std::nullopt;
+}
+
+void ControlSession::revokeAuthorization()
+{
+    if (m_revoked) {
+        return;
+    }
+    m_revoked = true;
+    m_subscriptions.clear();
+    m_selectorsByType.clear();
+    m_pending.clear();
+    m_pendingBytes = 0;
+    emit authorizationRevoked();
+}
+
+void ControlSession::bindOutputTransport(
+    QObject* transportContext,
+    std::function<bool(const QByteArray&)> writeFrame,
+    std::function<void()> abortTransport)
+{
+    // Reject invalid bindings in release builds too. In particular, never
+    // compensate for mismatched affinity by aborting a socket on another thread.
+    if (QThread::currentThread() != thread()
+        || !transportContext || transportContext->thread() != thread()) {
+        qCWarning(lcControlSession) << "Output transport must bind on the session's owning thread";
+        return;
+    }
+    if (!writeFrame || !abortTransport || m_outputTransportBound) {
+        qCWarning(lcControlSession) << "Output transport requires callbacks and may only bind once";
+        return;
+    }
+    m_outputTransportBound = true;
+    const QPointer<ControlSession> session(this);
+    const QPointer<QObject> transport(transportContext);
+    connect(this, &ControlSession::outputReady, transportContext,
+            [session, transport, writeFrame = std::move(writeFrame)] {
+                if (!session) {
+                    return;
+                }
+                const QList<QByteArray> frames = session->takePendingFrames();
+                for (const QByteArray& frame : frames) {
+                    // A write can revoke the session or destroy either endpoint.
+                    if (!session || !transport || !session->canObserve() || !writeFrame(frame)) {
+                        return;
+                    }
+                }
+            }, Qt::QueuedConnection);
+    connect(this, &ControlSession::outputOverflow,
+            transportContext, abortTransport, Qt::QueuedConnection);
+    // Same owning thread: do not defer the abort behind an already queued flush.
+    connect(this, &ControlSession::authorizationRevoked,
+            transportContext, abortTransport);
+    if (isRevoked()) {
+        abortTransport();
+    }
+}
+
 std::optional<ProtocolError> ControlSession::subscribe(
     const QList<ResourceSelector>& selectors, QJsonObject* result)
 {
+    if (const std::optional<ProtocolError> error = observationError()) {
+        return error;
+    }
     if (!result || selectors.isEmpty()) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
                              QStringLiteral("resources must be a non-empty array"), {}, false};
@@ -58,6 +164,9 @@ std::optional<ProtocolError> ControlSession::subscribe(
 std::optional<ProtocolError> ControlSession::unsubscribe(
     const QString& subscriptionId, QJsonObject* result)
 {
+    if (const std::optional<ProtocolError> error = observationError()) {
+        return error;
+    }
     if (!result || subscriptionId.isEmpty()) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
                              QStringLiteral("subscription must be a non-empty string"),
@@ -82,6 +191,13 @@ std::optional<ProtocolError> ControlSession::unsubscribe(
 
 QList<QByteArray> ControlSession::takePendingFrames()
 {
+    if (!canObserve()) {
+        // Defence in depth: authorization is immutable and revocation already
+        // clears this queue. Do not retain charged bytes if that invariant changes.
+        m_pending.clear();
+        m_pendingBytes = 0;
+        return {};
+    }
     QList<QByteArray> frames;
     frames.reserve(m_pending.size());
     for (const PendingMessage& pending : std::as_const(m_pending)) {
@@ -107,6 +223,11 @@ void ControlSession::rebuildSelectorIndex()
 
 bool ControlSession::observes(const ResourceAddress& address) const
 {
+    // Defence in depth: denied sessions cannot subscribe, and revocation clears
+    // the selector index. No supported state currently relies on this guard alone.
+    if (!canObserve()) {
+        return false;
+    }
     const auto bucket = m_selectorsByType.constFind(address.type);
     if (bucket == m_selectorsByType.constEnd()) {
         return false;
@@ -140,7 +261,7 @@ void ControlSession::enqueueResourceEvent(
     quint64 revision, const QJsonObject& value)
 {
     QJsonObject message{{QStringLiteral("v"), 1},
-                        {QStringLiteral("sessionId"), sessionId},
+                        {QStringLiteral("sessionId"), m_sessionId},
                         {QStringLiteral("event"), event},
                         {QStringLiteral("sequence"), static_cast<qint64>(++m_sequence)},
                         {QStringLiteral("resource"), address.toJson()},
@@ -195,7 +316,7 @@ void ControlSession::requireResync()
     m_pendingBytes = 0;
 
     const QJsonObject message{{QStringLiteral("v"), 1},
-                              {QStringLiteral("sessionId"), sessionId},
+                              {QStringLiteral("sessionId"), m_sessionId},
                               {QStringLiteral("event"), QStringLiteral("resource.resyncRequired")},
                               {QStringLiteral("sequence"), static_cast<qint64>(++m_sequence)},
                               {QStringLiteral("subscriptionsInvalidated"), true}};

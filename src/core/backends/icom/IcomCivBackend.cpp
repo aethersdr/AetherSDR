@@ -485,17 +485,36 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // 1A 03 reports only the SELECTED slot's actual width. Replace that slot's
     // factory value once the reply is current, while retaining the documented
     // defaults for the two unselected slots that the protocol cannot expose.
-    if (m_model->hasScope || m_model->isKnown())
-        {
+    if (m_model->hasScope || m_model->isKnown()) {
         // std::vector<int> from the codec (which stays Qt-free) into the
         // QList the capability struct carries.
-        auto widths = filterWidthsForMode(currentLadderMode().toStdString());
+        std::vector<int> widths = filterWidthsForMode(currentLadderMode().toStdString());
         if (widths.size() == 3 && passbandWidthIsCurrent() && m_ifWidthHz > 0
             && m_filter >= 1 && m_filter <= 3) {
             widths[static_cast<std::size_t>(3 - m_filter)] = m_ifWidthHz;
             std::sort(widths.begin(), widths.end());
         }
         c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
+
+        // FIL1/FIL2/FIL3 are identities, not widths. The selected slot's
+        // width is mutable through 1A 03, so publish the identity separately
+        // and keep it in radio order even when its content changes. Width-only
+        // consumers retain the legacy narrow-to-wide list above.
+        const FilterWidthLimits limits =
+            filterWidthLimitsFor(currentLadderMode().toStdString());
+        c.rxFilterControl.minimumWidthHz = limits.minHz;
+        c.rxFilterControl.maximumWidthHz = limits.maxHz;
+        c.rxFilterControl.widthStepHz = limits.minHz == 200 ? 200 : 50;
+        c.rxFilterControl.selectedPresetId = m_filter;
+        const int selectedWidth = passbandWidthIsCurrent() ? m_ifWidthHz : 0;
+        const std::vector<FilterPresetState> presets = filterPresetsForMode(
+            currentLadderMode().toStdString(), m_filter, selectedWidth);
+        for (const FilterPresetState& preset : presets) {
+            c.rxFilterControl.presets.append(RxFilterPreset{
+                preset.id,
+                QStringLiteral("FIL%1").arg(preset.id),
+                preset.widthHz});
+        }
     }
 
     // THE TRANSMIT PASSBAND IS A SHORT LIST, NOT A SLIDER. Published so the
@@ -1208,7 +1227,9 @@ void IcomCivBackend::refreshMemories(const QString& groupName)
     int selectedGroup = -1;
     if (!groupName.isEmpty() && memory.firstGroup >= 0) {
         for (int group = memory.firstGroup; group <= memory.lastGroup; ++group) {
-            if (groupName == QString::fromStdString(memoryGroupName(memory.dialect, group))) {
+            if (groupName.trimmed().compare(
+                    QString::fromStdString(memoryGroupName(memory.dialect, group)),
+                    Qt::CaseInsensitive) == 0) {
                 selectedGroup = group;
                 break;
             }
@@ -2719,13 +2740,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             if (index < 0) {
                 return;
             }
-            if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
-                m_memoryRefreshReplies.insert(index);
-                emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
-                if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
-                    finishMemoryRefresh(true);
+            // Publish the delta before completion: the model must have the last
+            // row (including an empty-channel removal) before it saves the bank.
+            const auto publishMemory = [this, index](const MemoryDelta& delta) {
+                emit memoryChanged(delta);
+                if (m_memoryRefreshActive && !m_memoryRefreshReplies.contains(index)) {
+                    m_memoryRefreshReplies.insert(index);
+                    emit memoryRefreshProgress(m_memoryRefreshReplies.size(), m_memoryRefreshTotal);
+                    if (m_memoryRefreshReplies.size() == m_memoryRefreshTotal) {
+                        finishMemoryRefresh(true);
+                    }
                 }
-            }
+            };
             MemoryDelta delta;
             delta.index = index;
             delta.importSource = m_memoryImportSource;
@@ -2738,7 +2764,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 : QStringLiteral("Icom");
             if (!memory->occupied) {
                 delta.removed = true;
-                emit memoryChanged(delta);
+                publishMemory(delta);
                 return;
             }
 
@@ -2779,7 +2805,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                 delta.toneMode = QStringLiteral("off");
                 break;
             }
-            emit memoryChanged(delta);
+            publishMemory(delta);
             return;
         }
         // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its
@@ -4014,69 +4040,11 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     const std::string ladder = currentLadderMode().toStdString();
     const int width = std::abs(highHz - lowHz);
 
-    // ── Which control did the operator actually touch? ────────────────────
-    //
-    // ONE SEAM VERB, TWO RADIO CONTROLS, and conflating them is how an Icom
-    // ends up with three filter buttons that all select the same width.
-    //
-    //   * The FILTER BUTTONS emit one of the three widths this backend
-    //     published as rxFilterWidthsHz. On the radio that is a SLOT change —
-    //     FIL1/FIL2/FIL3 — and it must stay one, because the slots are the
-    //     operator's own three presets and clicking through them must not
-    //     redefine them.
-    //   * DRAGGING A PASSBAND EDGE emits anything at all. On the radio that is
-    //     a WIDTH change (1A 03) on the slot already selected, plus a PBT shift
-    //     if the window also moved — exactly what turning the radio's own
-    //     FILTER and PBT knobs does.
-    //
-    // An exact factory-ladder match is therefore read as a button press. A drag
-    // that lands on one is inherently ambiguous at this seam; preserve the
-    // operator's stored preset instead of silently redefining it.
-    const auto ladderWidths = filterWidthsForMode(ladder);
-    const bool isSlotPick = std::find(ladderWidths.begin(), ladderWidths.end(), width)
-                            != ladderWidths.end();
     const FilterWidthLimits limits = filterWidthLimitsFor(ladder);
 
-    // FM, DV and WFM have no settable width at all, so the slot IS the only
-    // filter control the radio offers there and every request has to be a slot
-    // pick. Sending 1A 03 in FM writes a width into whichever mode the radio
-    // last had one for.
-    if (isSlotPick || limits.maxHz <= 0) {
-        // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
-        // every AM width on FIL1 and every CW width on FIL3 — three buttons and
-        // one filter, in both directions.
-        const int filter = filterForWidthHz(ladder, width);
-        m_filter = filter;
-        // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06
-        // carries mode and slot with no DATA byte, and writing it is what
-        // clears DATA on the radio — so a filter change sent as 06 took an
-        // operator running FT8 in USB-D back to plain USB and their transmit
-        // audio back to the microphone, from a button that says nothing about
-        // the mode. 26 restates DATA with the new slot in the same frame.
-        //
-        // m_dataMode here is the RADIO's reported state, not a guess: it is
-        // read at connect, re-read after every front-panel mode change, and
-        // confirmed after every mode write, so this re-asserts what the radio
-        // said (Constitution II) rather than pushing a client belief over it.
-        if (profileFor(*m_model).supports(IcomFeature::VfoMode))
-            sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
-        else
-            sendUserCommand(cmdSetMode(addr, m_mode, filter));
-
-        // THE NEW SLOT'S WIDTH IS A DIFFERENT NUMBER and only the radio knows
-        // it. Drop the width we hold for the old slot so the fallback ladder
-        // draws the window until 1A 03 answers, rather than leaving the
-        // previous slot's Hz on screen under a new slot's label.
-        m_ifWidthHz = 0;
-        // A write is intent; the radio's own reply is state. sendUserCommand
-        // schedules the mode readback itself (confirmationFor maps 26 -> read
-        // 26, 06 -> read 04), and that reply's handler asks for the width and
-        // PBT of whatever slot the radio actually landed on.
-        SliceDelta d;
-        const auto [low, high] = passbandForModeAndFilter(ladder, filter);
-        d.filterLow  = low;
-        d.filterHigh = high;
-        emit sliceChanged(sliceId(), d);
+    // FM, DV and WFM have no settable width. Their FIL selection travels
+    // through setSliceFilterPreset(); a skirt edit has no radio command.
+    if (limits.maxHz <= 0) {
         return;
     }
 
@@ -4129,6 +4097,42 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     SliceDelta d;
     d.filterLow  = edges.lowHz;
     d.filterHigh = edges.highHz;
+    emit sliceChanged(sliceId(), d);
+}
+
+void IcomCivBackend::setSliceFilterPreset(int, int presetId)
+{
+    const std::string ladder = currentLadderMode().toStdString();
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
+        addr, ladder, m_mode, m_dataMode, presetId,
+        profileFor(*m_model).supports(IcomFeature::VfoMode));
+    if (!plan) {
+        return;
+    }
+    for (const std::vector<std::uint8_t>& command : plan->commands) {
+        sendUserCommand(command);
+    }
+
+    // A filter button is a PRESET RECALL, not merely a slot selector. This is
+    // also how the Flex buttons behave: after an operator drags the skirts,
+    // clicking the active button reapplies its stored passband. Icom remembers
+    // a mutable width and Twin-PBT position inside each FIL slot, so selecting
+    // FIL2 alone would immediately read the customised shape back and appear
+    // to do nothing. The recall plan therefore follows the slot-select command
+    // with the mode's factory 1A 03 width and centred 14 07/08 PBT writes.
+    // Radio readback remains authoritative and corrects any value it quantises.
+    m_filter = presetId;
+    m_ifWidthHz = plan->widthHz;
+    m_ifWidthMode = m_mode;
+    m_ifWidthData = m_dataMode;
+    m_ifWidthSlot = m_filter;
+    m_pbtInner = plan->pbtCode;
+    m_pbtOuter = plan->pbtCode;
+    publishCapabilities();
+    SliceDelta d;
+    d.filterLow = plan->lowHz;
+    d.filterHigh = plan->highHz;
     emit sliceChanged(sliceId(), d);
 }
 

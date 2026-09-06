@@ -68,7 +68,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/IConnectionAutomation.h` | 1 | ui-support — Gui-free connect/disconnect/dialog hook the automation bridge drives; bridge plumbing, not radio state. | unconverted |
 | `core/IambicKeyer.h` | 3 | universal — Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling. | unconverted |
 | `core/IssueReport.h` | 1 | ui-support — Renders a pre-filled GitHub issue body from a SupportBundle snapshot, with PII redaction applied at the render boundary (GHSA-ccrg-j8cp-qhc4). Support and diagnostics tooling; not radio state. | unconverted |
-| `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
+| `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses AetherSDR's kiwi.json mirror of the kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
 | `core/KiwiSdrClient.h` | 2 | vendor(kiwi) — KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself | unconverted |
 | `core/KiwiSdrManager.h` | 8 | vendor(kiwi) — KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension. | unconverted |
 | `core/KiwiSdrProtocol.h` | 8 | vendor(kiwi) — KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting | unconverted |
@@ -167,7 +167,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/aprs/AprsStationList.h` | 1 | universal — Heard-APRS-station model (calls/positions/last-heard); radio-agnostic spot-like data. | unconverted |
 | `core/backends/ConnectionSharingPolicy.h` | 2 | universal — Fail-closed discovery-time policy for whether a busy radio family permits another client. Canonical cross-family connection safety pending capability descriptors. | unconverted |
 | `core/backends/IRadioBackend.h` | 1 | universal — THE radio seam (RFC §5.5) — the canonical intent verbs, typed deltas and normalized signals every family implements. Universal by definition: the UI reaching this header is the seam working as designed, not coupling. Everything below it in core/backends/<family>/ is family-private. | unconverted |
-| `core/backends/RadioCapabilities.h` | 3 | universal — Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it. | unconverted |
+| `core/backends/RadioCapabilities.h` | 6 | universal — Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it. | unconverted |
 | `core/backends/anan/AnanDiscovery.h` | 2 | vendor(anan) — openHPSDR Protocol 2 discovery and ANAN-G2 identity handling. Family-specific discovery belongs below the ANAN backend seam. | unconverted |
 | `core/backends/anan/AnanSettings.h` | 1 | ui-support — Client-side connection and ADC configuration for the ANAN backend. Persisted setup plumbing, not live radio state. | unconverted |
 | `core/backends/anan/P2Protocol.h` | 1 | vendor(anan) — openHPSDR Ethernet Protocol 2 wire primitives for the ANAN-G2 backend. Family protocol code belongs below the radio seam. | unconverted |

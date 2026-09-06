@@ -32,7 +32,9 @@ QJsonObject serverValue(const QString& localTransport)
 
 struct LocalControlServer::Client {
     Client(ControlResourceStore* resources, qint64 maxQueuedOutputBytes)
-        : session(std::make_unique<ControlSession>(resources, maxQueuedOutputBytes))
+        // Only created for sockets accepted by the current-user endpoint.
+        : session(std::make_unique<ControlSession>(
+              resources, maxQueuedOutputBytes, SessionAuthorization::Observer))
     {
     }
 
@@ -163,11 +165,9 @@ void LocalControlServer::acceptConnections()
         });
         connect(socket, &QLocalSocket::readyRead,
                 this, [this, socket] { readClient(socket); });
-        connect(client->session.get(), &ControlSession::outputReady,
-                this, [this, socket] { drainSessionOutput(socket); },
-                Qt::QueuedConnection);
-        connect(client->session.get(), &ControlSession::outputOverflow,
-                socket, &QLocalSocket::abort, Qt::QueuedConnection);
+        client->session->bindOutputTransport(socket,
+            [this, socket](const QByteArray& frame) { return sendFrame(socket, frame); },
+            [socket] { socket->abort(); });
         connect(socket, &QLocalSocket::disconnected,
                 this, [this, socket] {
                     // QLocalSocket::abort() may emit disconnected synchronously
@@ -213,7 +213,7 @@ void LocalControlServer::readClient(QLocalSocket* socket)
         }
 
         const ServiceReply reply = m_service.handle(frame, client->session.get());
-        if (client->session->negotiated) {
+        if (client->session->isNegotiated()) {
             client->handshakeTimer.stop();
         }
         if (!send(socket, reply.message)) {
@@ -221,20 +221,6 @@ void LocalControlServer::readClient(QLocalSocket* socket)
         }
         if (reply.closeAfterWrite) {
             socket->disconnectFromServer();
-            return;
-        }
-    }
-}
-
-void LocalControlServer::drainSessionOutput(QLocalSocket* socket)
-{
-    const auto clientIt = m_clients.find(socket);
-    if (clientIt == m_clients.end()) {
-        return;
-    }
-    const QList<QByteArray> frames = clientIt->second->session->takePendingFrames();
-    for (const QByteArray& frame : frames) {
-        if (!sendFrame(socket, frame)) {
             return;
         }
     }

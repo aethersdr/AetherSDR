@@ -314,11 +314,12 @@ void LocalMemoryBank::scheduleSave()
     m_saveTimer.start();
 }
 
-void LocalMemoryBank::flush()
+bool LocalMemoryBank::flush()
 {
     m_saveTimer.stop();
-    if (!m_dirty)
-        return;
+    if (!m_dirty) {
+        return true;
+    }
 
     // Not writable means load() could not understand the file — a version this
     // build cannot read, a foreign format id, or JSON it could not parse.
@@ -326,7 +327,7 @@ void LocalMemoryBank::flush()
     if (!m_writable) {
         qCWarning(lcProtocol).noquote()
             << "LocalMemoryBank: refusing to overwrite an unreadable bank";
-        return;
+        return false;
     }
 
     // Somebody else wrote the document since we read it.
@@ -345,7 +346,7 @@ void LocalMemoryBank::flush()
             "the memory panel to pick up the other changes.");
         qCWarning(lcProtocol).noquote() << "LocalMemoryBank:" << m_lastError;
         emit saveFailed(m_lastError);
-        return;   // stays dirty
+        return false;   // stays dirty
     }
 
     // savedAt uses millisecond precision: it doubles as the foreign-write
@@ -365,7 +366,7 @@ void LocalMemoryBank::flush()
         emit saveFailed(m_lastError);
         // Stay dirty: the next edit (or flush) retries. A transient failure
         // must not cost the operator every channel they saved since.
-        return;
+        return false;
     }
 
     m_dirty = false;
@@ -375,6 +376,7 @@ void LocalMemoryBank::flush()
     m_seenSavedAt = savedAt;
     qCDebug(lcProtocol).noquote()
         << "LocalMemoryBank: saved" << m_entries.size() << "memories";
+    return true;
 }
 
 void LocalMemoryBank::rememberDocumentState()

@@ -26,6 +26,37 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+// A stable, radio-owned receive-filter preset. `id` is the identity used on
+// the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
+// that preset and must never be used as its identity.
+struct RxFilterPreset {
+    int id = 0;
+    QString label;
+    int widthHz = 0;
+
+    bool operator==(const RxFilterPreset&) const = default;
+};
+
+struct RxFilterControl {
+    QList<RxFilterPreset> presets;
+    int selectedPresetId = 0;
+    int minimumWidthHz = 0;
+    int maximumWidthHz = 0;
+    int widthStepHz = 0;
+
+    bool operator==(const RxFilterControl&) const = default;
+};
+
+// A capability update reaches the two legacy/new presentation setters one at
+// a time. Treat the preset metadata as usable only when it describes every
+// width in the current presentation list; this keeps a disconnect or mode
+// transition from indexing stale FIL metadata against a newly rebuilt list.
+[[nodiscard]] inline bool hasCompleteRxFilterPresets(const RxFilterControl& control,
+                                                      qsizetype widthCount)
+{
+    return !control.presets.isEmpty() && control.presets.size() == widthCount;
+}
+
 enum class FmTonePresentation {
     Legacy,
     Hidden,
@@ -486,6 +517,11 @@ struct RadioCapabilities {
     // advertise the real, discrete set rather than let a continuous-looking
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
+
+    // Stable preset identity and continuous-width limits for radios where a
+    // preset selects a mutable hardware slot. Empty preserves the legacy
+    // width-only button contract above (Flex/HL2/ANAN/Sim).
+    RxFilterControl rxFilterControl;
 
     // Whether the radio implements the independent TX low/high cutoff controls
     // presented by PhoneApplet. False hides the complete control row rather

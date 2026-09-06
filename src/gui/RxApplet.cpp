@@ -2790,7 +2790,7 @@ void RxApplet::updateFilterButtons()
     static constexpr int kMaxRxFilters = 6;
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -2823,6 +2823,16 @@ void RxApplet::updateFilterButtons()
             m_filterCustomHi = loadedHi;
             rebuildFilterButtons();
         }
+    }
+
+    if (hasCompleteRxFilterPresets(m_radioFilterControl, m_filterBtns.size())) {
+        for (int i = 0; i < m_filterBtns.size(); ++i) {
+            QSignalBlocker blocker(m_filterBtns[i]);
+            m_filterBtns[i]->setChecked(
+                m_radioFilterControl.presets.at(i).id
+                == m_radioFilterControl.selectedPresetId);
+        }
+        return;
     }
 
     const int width = m_slice->filterHigh() - m_slice->filterLow();
@@ -2874,7 +2884,7 @@ void RxApplet::updateModeSettings(const QString& mode)
     m_filterWidths.clear();
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
-    if (!saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -2962,6 +2972,28 @@ void RxApplet::setRadioFilterWidths(const QList<int>& widthsHz)
     rebuildFilterButtons();
 }
 
+void RxApplet::setRadioFilterControl(const RxFilterControl& control)
+{
+    if (control == m_radioFilterControl) {
+        return;
+    }
+    m_radioFilterControl = control;
+    if (!control.presets.isEmpty()) {
+        QVector<int> widths;
+        widths.reserve(control.presets.size());
+        for (const RxFilterPreset& preset : control.presets) {
+            widths.append(preset.widthHz);
+        }
+        m_radioFilterWidths = widths;
+    }
+    if (m_filterPassband) {
+        m_filterPassband->setWidthRange(control.minimumWidthHz,
+                                        control.maximumWidthHz,
+                                        control.widthStepHz);
+    }
+    rebuildFilterButtons();
+}
+
 void RxApplet::rebuildFilterButtons()
 {
     // Remove old buttons
@@ -2977,12 +3009,33 @@ void RxApplet::rebuildFilterButtons()
     const bool customisable = m_radioFilterWidths.isEmpty();
     for (int i = 0; i < widths.size(); ++i) {
         const int w = widths[i];
-        auto* btn = mkToggle(formatStepLabel(w));
+        const bool stablePresets =
+            hasCompleteRxFilterPresets(m_radioFilterControl, widths.size());
+        const RxFilterPreset preset = stablePresets
+            ? m_radioFilterControl.presets.at(i) : RxFilterPreset{};
+        auto* btn = mkToggle(stablePresets ? preset.label : formatStepLabel(w));
+        if (stablePresets) {
+            btn->setToolTip(QStringLiteral("%1: %2 receive bandwidth")
+                                .arg(preset.label, formatStepLabel(preset.widthHz)));
+            btn->setAccessibleName(QStringLiteral("Receive filter %1")
+                                       .arg(preset.label));
+        }
         btn->setStyleSheet(kButtonBase() + kBlueActive());
-        connect(btn, &QPushButton::clicked, this, [this, i, customisable](bool) {
-            if (!m_slice) return;
+        connect(btn, &QPushButton::clicked, this,
+                [this, i, customisable, stablePresets, preset](bool) {
+            if (!m_slice) {
+                return;
+            }
+            if (stablePresets) {
+                if (m_radioModel) {
+                    m_radioModel->selectRadioFilterPreset(m_slice->sliceId(), preset.id);
+                }
+                return;
+            }
             const QVector<int>& live = effectiveFilterWidths();
-            if (i >= live.size()) return;
+            if (i >= live.size()) {
+                return;
+            }
             if (customisable && m_filterCustomLo[i] != INT_MIN) {
                 m_slice->setFilterWidth(m_filterCustomLo[i], m_filterCustomHi[i]);
             } else {

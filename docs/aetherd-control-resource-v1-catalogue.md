@@ -28,11 +28,18 @@ an omitted `id` as an all-current-and-future selector for `radioSession`,
 
 ## Methods
 
-All methods require the negotiated session ID. The initial current-user local
-endpoint grants `observe` to every negotiated session; because no other session
-type exists yet, this slice has no separate per-request grant branch. Explicit
-per-session grant mapping and checks arrive with authentication before another
-grant or remote session is exposed.
+All methods require the negotiated session ID and an active `observe` grant.
+The current-user local endpoint supplies observer authorization when it creates
+each session. The transport-neutral service defaults to unauthenticated and
+refuses negotiation without trusted authorization. Authentication without the
+observe grant permits `capabilities.get` only; resource methods return
+`auth.grant_denied` before checking parameters or looking up resources.
+
+Revocation is terminal for that session: subscriptions and pending frames are
+discarded, future resource events are suppressed, and the local transport
+aborts its socket and unwritten output. Bytes already delivered cannot be
+recalled. The client must establish a new authorized connection and negotiate
+and subscribe again. A `hello` on a revoked session cannot restore access.
 
 ### `resource.get`
 

@@ -411,7 +411,8 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
             const RadioCapabilities capabilities = m_model->backendCapabilities();
             return memoryFilterSpec(capabilities, groups,
                                     m_model->globalProfiles(),
-                                    m_model->transmitModel().profileList()).names;
+                                    m_model->transmitModel().profileList(),
+                                    m_model->usesLocalMemoryBank()).names;
         }, true, Validator::None, this));
     m_table->setItemDelegateForColumn(4, new MemoryFieldDelegate(
         staticList(MemoryFields::modes()), false, Validator::None, this));
@@ -1455,7 +1456,7 @@ void MemoryDialog::rebuildFilterCombo()
     const RadioCapabilities capabilities = m_model->backendCapabilities();
     const MemoryFilterSpec filterSpec = memoryFilterSpec(
         capabilities, storedGroups, m_model->globalProfiles(),
-        m_model->transmitModel().profileList());
+        m_model->transmitModel().profileList(), m_model->usesLocalMemoryBank());
     m_filterLabel->setText(filterSpec.label);
 
     for (const QString& name : filterSpec.names) {
@@ -1490,13 +1491,17 @@ void MemoryDialog::updateSelectionActions()
     }
     if (m_selectBtn) {
         bool recallable = false;
+        bool needsConnection = false;
         if (selectedCount == 1) {
             const int index = *selectedMemoryIndices().constBegin();
             const auto memory = m_model->memories().constFind(index);
             recallable = memory != m_model->memories().constEnd() && memory->recallable;
+            needsConnection = recallable && memory->nativeFilter > 0 && !m_model->isConnected();
         }
-        m_selectBtn->setEnabled(selectedCount == 1 && recallable);
-        m_selectBtn->setToolTip(selectedCount == 1 && !recallable
+        m_selectBtn->setEnabled(selectedCount == 1 && recallable && !needsConnection);
+        m_selectBtn->setToolTip(needsConnection
+            ? "Connect to a radio before recalling a synced native memory."
+            : selectedCount == 1 && !recallable
             ? "Split, reverse-split, DV, and DD memories are display-only."
             : (selectedCount == 1 ? QString()
                                   : "Tune is available when exactly one memory is highlighted."));

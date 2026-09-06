@@ -1250,7 +1250,7 @@ QImage grabWidget(QWidget* w)
 QString sliceActionList()
 {
     return QStringLiteral(
-        "add|remove|select|tx|mode|filter|agc|dsp|tone|offset|diversity|"
+        "add|remove|select|tx|mode|filter|filterpreset|agc|dsp|tone|offset|diversity|"
         "centerlock|link|txant|rxant|rxsource|fixture|clearfixture");
 }
 
@@ -1673,8 +1673,16 @@ QWidget* primaryTopLevelWindow()
 
 // linkedTo: peer slice id when this slice is a Slice Link member, else -1
 // (supplied by the GUI's peer query — the link is client-side state).
-QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo)
+QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
+                          const RxFilterControl& filterControl)
 {
+    QString filterPreset;
+    for (const RxFilterPreset& preset : filterControl.presets) {
+        if (preset.id == filterControl.selectedPresetId) {
+            filterPreset = preset.label;
+            break;
+        }
+    }
     return QJsonObject{
         {QStringLiteral("sliceId"),    s->sliceId()},
         {QStringLiteral("letter"),     s->letter()},
@@ -1683,6 +1691,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo)
         {QStringLiteral("mode"),       s->mode()},
         {QStringLiteral("filterLow"),  s->filterLow()},
         {QStringLiteral("filterHigh"), s->filterHigh()},
+        {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
+        {QStringLiteral("filterPreset"), filterPreset},
         {QStringLiteral("active"),     s->isActive()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
@@ -5706,7 +5716,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices())
-            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s)));
+            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl()));
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slices"), arr}};
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
@@ -5785,7 +5795,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         }
         if (!s)
             return err(QStringLiteral("no slice for selector '") + selector + QStringLiteral("'"));
-        data = sliceSnapshot(s, sliceLinkPeerOf(s));
+        data = sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl());
     } else if (model == QLatin1String("pan")) {
         const PanadapterModel* p = nullptr;
         if (selector.isEmpty() || selector == QLatin1String("active"))
@@ -7183,6 +7193,46 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            // Post-normalization values actually held by the model.
                            {QStringLiteral("filterLow"), s->filterLow()},
                            {QStringLiteral("filterHigh"), s->filterHigh()}};
+    }
+    if (action == QLatin1String("filterpreset")) {
+        QString requested = arg.trimmed().toUpper();
+        if (requested.startsWith(QLatin1String("FIL"))) {
+            requested.remove(0, 3);
+        }
+        bool okPreset = false;
+        const int presetId = requested.toInt(&okPreset);
+        const RxFilterControl control = radio->radioFilterControl();
+        const auto preset = std::find_if(
+            control.presets.cbegin(), control.presets.cend(),
+            [presetId](const RxFilterPreset& candidate) {
+                return candidate.id == presetId;
+            });
+        if (!okPreset || preset == control.presets.cend()) {
+            return err(QStringLiteral(
+                "slice filterpreset requires a radio-advertised preset (e.g. FIL1)"));
+        }
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) {
+                s = candidate;
+                break;
+            }
+        }
+        if (!s && !radio->slices().isEmpty()) {
+            s = radio->slices().first();
+        }
+        if (!s) {
+            return err(QStringLiteral("no slice available to select a filter preset on"));
+        }
+
+        radio->selectRadioFilterPreset(s->sliceId(), presetId);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("filterpreset")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("presetId"), presetId},
+                           {QStringLiteral("preset"), preset->label},
+                           {QStringLiteral("requested"), true}};
     }
     if (action == QLatin1String("agc")) {
         // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC

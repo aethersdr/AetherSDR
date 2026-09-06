@@ -1487,11 +1487,29 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::memoryChanged, this,
             [this](const MemoryDelta& delta) { applyMemoryChanges(delta); });
     connect(m_backend.get(), &IRadioBackend::memoryRefreshStarted, this,
-            &RadioModel::memoryRefreshStarted);
+            [this](int total) {
+        m_memoryRefreshActive = true;
+        m_memoryImportFailures = 0;
+        emit memoryRefreshStarted(total);
+    });
     connect(m_backend.get(), &IRadioBackend::memoryRefreshProgress, this,
             &RadioModel::memoryRefreshProgress);
     connect(m_backend.get(), &IRadioBackend::memoryRefreshFinished, this,
-            &RadioModel::memoryRefreshFinished);
+            [this](bool success, int completed, int total) {
+        // The backend finishes only after publishing its final delta. Commit
+        // the bank before announcing success, including empty-channel removals.
+        const bool saved = !m_memoryRefreshActive || !usesLocalMemoryBank()
+            || m_localMemories.flush();
+        if (!saved) {
+            emit configurationWarning(QStringLiteral("Memory Sync could not save the bank: %1")
+                                          .arg(m_localMemories.lastError()));
+        }
+        const int stored = saved ? std::max(0, completed - m_memoryImportFailures) : 0;
+        success = success && saved && m_memoryImportFailures == 0;
+        m_memoryRefreshActive = false;
+        m_memoryImportFailures = 0;
+        emit memoryRefreshFinished(success, stored, total);
+    });
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
 
@@ -1704,6 +1722,8 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
 
 void RadioModel::teardownBackend()
 {
+    m_memoryRefreshActive = false;
+    m_memoryImportFailures = 0;
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream
     // and their worker threads). Qt removes any connection whose sender or
     // receiver is destroyed, so the wiring made by setupBackend() goes with it.
@@ -3968,6 +3988,29 @@ QList<int> RadioModel::radioFilterWidthsHz() const
         return {};
     }
     return backendCapabilities().rxFilterWidthsHz;
+}
+
+RxFilterControl RadioModel::radioFilterControl() const
+{
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    return backendCapabilities().rxFilterControl;
+}
+
+void RadioModel::selectRadioFilterPreset(int sliceId, int presetId)
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    const RxFilterControl control = backendCapabilities().rxFilterControl;
+    const bool declared = std::any_of(
+        control.presets.cbegin(), control.presets.cend(),
+        [presetId](const RxFilterPreset& preset) { return preset.id == presetId; });
+    if (!declared) {
+        return;
+    }
+    m_backend->setSliceFilterPreset(sliceId, presetId);
 }
 
 bool RadioModel::hasRadioSideWaterfallAutoBlack() const
@@ -7961,7 +8004,7 @@ std::optional<quint32> RadioModel::tryMemoryCommand(
         return seq;
     }
 
-    const LocalMemoryBank::CommandResult result = m_localMemories.handleCommand(command);
+    LocalMemoryBank::CommandResult result = m_localMemories.handleCommand(command);
     if (!result.handled)
         return std::nullopt;
 
@@ -7979,8 +8022,10 @@ std::optional<quint32> RadioModel::tryMemoryCommand(
         }
     }
 
-    if (result.recallIndex >= 0)
-        recallCachedMemory(result.recallIndex);
+    if (result.recallIndex >= 0 && !recallCachedMemory(result.recallIndex)) {
+        result.code = 1;
+        result.body = QStringLiteral("Memory slot is display-only, disconnected, or invalid");
+    }
 
     const quint32 seq = m_seqCounter.fetch_add(1);
     if (cb) {
@@ -8068,6 +8113,12 @@ bool RadioModel::recallCachedMemory(int index)
         qCWarning(lcProtocol) << "RadioModel: memory slot is display-only" << index;
         return false;
     }
+    // Native recall needs a live backend session. Refuse before the first
+    // optimistic slice setter, not after partially applying frequency/mode.
+    if (memory.nativeFilter > 0 && !isConnected()) {
+        qCWarning(lcProtocol) << "RadioModel: native memory recall requires a connection";
+        return false;
+    }
 
     // These are the operator-issue setters, the same ones the panel controls
     // call, so each emits its *CommandIssued signal and reaches the radio
@@ -8144,6 +8195,16 @@ bool RadioModel::recallCachedMemory(int index)
     return true;
 }
 
+void RadioModel::reportMemoryImportFailure(const QString& reason)
+{
+    // One visible warning per sweep; still count every refused channel so the
+    // completion result cannot report read replies as successfully stored rows.
+    if (!m_memoryRefreshActive || m_memoryImportFailures++ == 0) {
+        emit configurationWarning(QStringLiteral("Memory Sync could not import a channel: %1")
+                                      .arg(reason));
+    }
+}
+
 void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 {
     // A backend-provided import identity means this is a radio snapshot to fold
@@ -8155,6 +8216,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     const QString importKey = MemoryFields::sanitizeText(d.importKey.value_or(QString()));
     if ((d.importSource || d.importKey) && (importSource.isEmpty() || importKey.isEmpty())) {
         qCWarning(lcProtocol) << "RadioModel: refused incomplete memory import identity";
+        reportMemoryImportFailure(QStringLiteral("incomplete radio/channel identity"));
         return;
     }
     int targetIndex = d.index;
@@ -8162,6 +8224,10 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     bool preserveAnnotations = false;
     if (isImport) {
         m_localMemories.load();
+        if (!m_localMemories.isWritable()) {
+            reportMemoryImportFailure(m_localMemories.lastError());
+            return;
+        }
         targetIndex = m_localMemories.importedSlot(importSource, importKey);
         preserveAnnotations = targetIndex >= 0;
 
@@ -8184,6 +8250,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
                 qCWarning(lcProtocol).noquote()
                     << "RadioModel: could not import radio memory" << *d.importKey
                     << "from" << *d.importSource << created.body;
+                reportMemoryImportFailure(created.body);
                 return;
             }
         }
@@ -8226,6 +8293,14 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
     if (d.importSource)   m.importSource   = importSource;
     if (d.importKey)      m.importKey      = importKey;
     if (d.mode)           m.mode           = sanitize(*d.mode);
+    if (d.mode && !d.dataMode && !isImport && m.nativeFilter > 0) {
+        // A local Mode edit is also an edit to the native DATA bit. Leaving the
+        // old bit behind makes grouped native recall undo USB/LSB/FM edits.
+        const QString mode = MemoryFields::modeToWire(m.mode);
+        const bool dataMode = mode == QLatin1String("DIGU")
+            || mode == QLatin1String("DIGL") || mode == QLatin1String("DFM");
+        m.dataMode = dataMode ? std::max(1, m.dataMode) : 0;
+    }
     if (d.offsetDir)      m.offsetDir      = sanitize(*d.offsetDir);
     if (d.toneMode)       m.toneMode       = sanitize(*d.toneMode);
     if (d.freq)           m.freq           = *d.freq;

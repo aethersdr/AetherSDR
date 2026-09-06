@@ -29,10 +29,11 @@ inline void appendMemoryFilterName(QStringList& names, const QString& candidate)
     const RadioCapabilities& capabilities,
     const QStringList& storedGroups,
     const QStringList& globalProfiles,
-    const QStringList& txProfiles)
+    const QStringList& txProfiles,
+    bool usesLocalBank = false)
 {
     MemoryFilterSpec spec;
-    if (capabilities.hasProfiles) {
+    if (!usesLocalBank && capabilities.hasProfiles) {
         spec.label = QStringLiteral("Profile:");
         for (const QString& profile : globalProfiles) {
             appendMemoryFilterName(spec.names, profile);

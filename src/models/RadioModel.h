@@ -388,6 +388,8 @@ public:
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
     QList<int> radioFilterWidthsHz() const;
+    RxFilterControl radioFilterControl() const;
+    void selectRadioFilterPreset(int sliceId, int presetId);
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.
@@ -1381,6 +1383,7 @@ private:
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
     void applyMemoryChanges(const MemoryDelta& delta);
+    void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
     void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
     void scheduleDStarRuntimeConfiguration();
@@ -1975,6 +1978,8 @@ private:
     // memories.json that reappears on every later disconnect. Cleared only when
     // the session really ends. See usesLocalMemoryBank().
     bool        m_sessionRadioOwnsMemories{false};
+    bool        m_memoryRefreshActive{false};
+    int         m_memoryImportFailures{0};
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};

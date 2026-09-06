@@ -129,6 +129,16 @@ public:
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
+    // Select a stable radio-owned RX filter preset. The passband setter above
+    // remains exclusively a resize/reposition intent; keeping the two verbs
+    // distinct prevents a width that happens to equal a preset from changing
+    // slots. Empty RadioCapabilities::rxFilterControl.presets means callers
+    // never invoke this default no-op.
+    virtual void setSliceFilterPreset(int sliceId, int presetId)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(presetId);
+    }
     // Receive AGC. mode is the neutral vocabulary the slice model uses —
     // "off" / "slow" / "med" / "fast"; thresholdDb is the operator's 0..100
     // AGC-threshold value. A backend whose hardware owns the AGC translates
@@ -890,6 +900,8 @@ signals:
     void memoryChanged(const MemoryDelta& delta);
     void memoryRefreshStarted(int total);
     void memoryRefreshProgress(int completed, int total);
+    // All deltas for this sweep precede completion. This reports radio reads;
+    // RadioModel combines it with import/save results for its UI-facing signal.
     void memoryRefreshFinished(bool success, int completed, int total);
 
     // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The

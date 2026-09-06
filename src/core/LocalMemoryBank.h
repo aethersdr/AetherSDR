@@ -94,7 +94,9 @@ public:
 
     // Write now if anything is pending. Called on disconnect and at teardown so
     // the debounce window can never be the reason an edit is lost.
-    void flush();
+    // Returns false when pending edits could not be committed. Sync completion
+    // must not confuse a decoded radio snapshot with a durably saved bank.
+    bool flush();
 
     // Last file-write failure, empty when the last save succeeded. Surfaced so a
     // read-only config dir shows up as something other than memories that

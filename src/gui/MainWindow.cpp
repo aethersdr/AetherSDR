@@ -7277,6 +7277,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // can never move.
         // Empty on disconnect, which RESTORES the operator's own list rather
         // than stranding them on the last radio's three filters.
+        m_appletPanel->setRadioFilterControl(
+            connected ? caps.rxFilterControl : RxFilterControl{});
         m_appletPanel->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                       : QList<int>{});
         // Same contract for the TRANSMIT passband, and the same restore-on-
@@ -7399,6 +7401,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 vfo->setHasHostNoiseBlanker(hostNoiseBlanker);
                 // The VFO's filter grid and the RX applet's are two views of one
                 // radio; only the applet was being told what the hardware has.
+                vfo->setRadioFilterControl(
+                    connected ? caps.rxFilterControl : RxFilterControl{});
                 vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                     : QList<int>{});
             }
