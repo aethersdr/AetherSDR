@@ -417,7 +417,7 @@ apart from that audit loses the point.
 | 6 | AM is in neither filter-polarity family (`SliceModel.cpp:47-57`) | AM gets an SSB passband that excludes the carrier | *Open* |
 | 7 | No pan-geometry down-verb on `IRadioBackend` | Zoom/pan can't reach the backend; waterfall and pan disagree | *Open* — structural |
 | 8 | Slice frequency **is** pan center (`Hl2Backend.cpp:165`) | Click-to-tune recenters the world instead of landing | *Open* — needs slice-offset-within-passband |
-| 9 | Same null-deref shape in the RADE path (`MainWindow_DigitalModes.cpp:461`) | Will crash HL2 whenever RADE starts | *Open* |
+| ~~9~~ | ~~Same null-deref shape in the RADE path (`MainWindow_DigitalModes.cpp:461`)~~ **DONE** | Selecting RADE on HL2 reached the same null-stream path | Guard at the top of `activateRADE()` (`4077e023`); see §18.3 |
 | 10 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` appears not to suppress autoconnect~~ | Test instance grabs a radio | **Not a bug — the variable does not exist.** Removed application-wide by #4421/#4401; autoconnect is `AutoConnectToLastRadio` alone (`MainWindow.cpp`). Use the isolated profile in §10 |
 | 11 | `SpectrumWidget` **drops** inbound pan geometry during a gesture, assuming another status is coming | View parks at the old centre while slice/pan/waterfall move — measured **permanently 6.3 kHz** out after one drag-tune | `3d52d07d` |
 
@@ -965,7 +965,7 @@ radio. See §18 for the full audit and the proposed seam.
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| ~~24~~ | ~~RADE / DAX-bridge bare `panStream()` deref~~ **DONE** | §18.3, gap 18 | Both halves are closed and §18.3 says so: RADE is guarded in `activateRADE()`, and the DAX bridge was never affected — `startDax()` has always guarded `panStream()` at entry | — |
+| ~~24~~ | ~~RADE / DAX-bridge bare `panStream()` deref~~ **DONE** | §18.3, gap 18 | Both halves are closed: RADE is guarded in `activateRADE()`, and `startDax()` already guarded `panStream()` by the §18 audit. The earlier DAX bring-up crash and its fix remain recorded in §6 gap 1 | — |
 | ~~25~~ | ~~WSPR beacon on a host-modulating backend~~ **DONE** | §18.4 | The audio route already existed (#4471); only the DAX-borrow guard was in the way. First external-oracle TX instrument we have | — |
 | ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument and a `Wideband` tap are still open — nothing needs them yet | S |
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
@@ -2423,7 +2423,8 @@ decision, or an accident of the Flex being the only radio there was.
 ### 18.7 Suggested order
 
 1. ~~**Gap 18**~~ — done. The RADE null-deref is guarded in `activateRADE()`
-   and the DAX bridge never had the defect; see §18.3.
+   and the DAX bridge was already guarded by that audit; see §18.3 and the
+   earlier bring-up fix in §6 gap 1.
 2. ~~**WSPR TX**~~ — done, §18.4. Smallest diff, real operator value, and it
    forced the `hostModulates` TX branch into existence where it was easy to
    reason about.
