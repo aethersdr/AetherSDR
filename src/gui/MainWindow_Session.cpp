@@ -2536,8 +2536,9 @@ QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
 
 bool MainWindow::startAutomationBridge(const QString& sockName)
 {
-    if (m_automation && m_automation->isRunning())
-        return true;  // idempotent
+    if (m_automation) {
+        return true;  // already listening or waiting for the same async token read
+    }
 
     // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
     // endpoint; otherwise the default is PID-suffixed so two instances don't
@@ -2660,8 +2661,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     QPointer<AutomationServer> guard(m_automation.get());
     const QString startName = name;
     AutomationBridgeSettings::loadToken(this, [this, guard, startName](const QString& tok) {
-        if (!guard || m_automation.get() != guard)
+        if (!guard || m_automation.get() != guard) {
             return;  // toggled off or restarted before the token arrived
+        }
         guard->setAuthToken(tok);
         if (tok.isEmpty()) {
             qWarning().noquote()
@@ -2672,6 +2674,14 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         if (!guard->start(startName)) {
             qWarning() << "Automation bridge failed to start (socket in use?)";
             m_automation.reset();
+            // Nothing is listening, so the persisted opt-in must not survive —
+            // otherwise every launch silently re-attempts the doomed start and
+            // the operator is never told (#4181). The env-var force-enable is
+            // not an opt-in we own, so leave the setting alone in that case.
+            if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+                AutomationBridgeSettings::setEnabled(false);
+            }
+            emit automationBridgeStartResult(false);
             return;
         }
         // TX-automation gate — set AFTER start(), which reads
@@ -2690,7 +2700,16 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setReadOnly(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
             || AutomationBridgeSettings::readOnly());
+        // Persist at the owner that observed the successful bind. The modeless
+        // Radio Setup dialog may have closed while the token read was pending.
+        // An environment-forced start must not change the operator's opt-in.
+        if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+            AutomationBridgeSettings::setEnabled(true);
+        }
+        emit automationBridgeStartResult(true);
     });
+    // The bridge is NOT listening yet — the socket binds inside the callback
+    // above. Callers wanting the outcome must watch automationBridgeStartResult.
     return true;  // start initiated; the socket begins listening once the token resolves
 }
 

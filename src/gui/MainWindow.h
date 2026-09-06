@@ -284,8 +284,9 @@ public:
     // both at launch (AETHER_AUTOMATION env var, from main.cpp) and at
     // runtime from the Radio Setup → Network toggle. Idempotent: starting
     // while running is a no-op; stopping while stopped is a no-op.
-    // sockName empty → the default PID-suffixed name. Returns true if the
-    // bridge is listening afterwards.
+    // sockName empty → the default PID-suffixed name. Returns true once a
+    // start is initiated (or already pending/running); observe the result signal
+    // below for the actual bind outcome.
     bool startAutomationBridge(const QString& sockName = QString());
     void stopAutomationBridge();
     // Persist a new shared-secret token and push it to the running bridge
@@ -304,6 +305,13 @@ signals:
     // restore. wirePanadapter() owns the pending dBm handshake state, while the
     // restore can originate in several MainWindow translation units.
     void bandStackRestoreStarting(const QString& panId);
+    // Outcome of an automation-bridge start (#4181). startAutomationBridge()
+    // returns as soon as the start is *initiated* — the socket only binds
+    // later, inside the async token-read callback — so this is the only
+    // signal that says whether the bridge is actually listening. Emitted from
+    // both branches of that callback; RadioSetupDialog uses it to reconcile
+    // the Network-tab toggle. MainWindow persists the result independently.
+    void automationBridgeStartResult(bool ok);
 
 protected:
     void showEvent(QShowEvent* event) override;

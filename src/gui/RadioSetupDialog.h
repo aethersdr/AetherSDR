@@ -60,6 +60,14 @@ public:
     void revealFlexControlSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
+    // Result of the automation-bridge start the Network-tab toggle kicked off
+    // (#4181). The start is ASYNCHRONOUS — the token read has to land before
+    // the socket can listen — so the toggle handler can't know whether the
+    // bridge came up. MainWindow reports back here; on failure we revert the
+    // toggle so the operator isn't told the bridge is listening when nothing
+    // is. MainWindow owns persistence. No-op if the Network tab hasn't
+    // been built (m_automationBridgeBtn == nullptr).
+    void reportAutomationBridgeStartResult(bool ok);
 
 signals:
     void txBandSettingsRequested();
@@ -224,6 +232,9 @@ private:
     QLineEdit* m_nicknameEdit{nullptr};
     QLineEdit* m_callsignEdit{nullptr};
     QPushButton* m_remoteOnBtn{nullptr};
+    // Network tab → Agent Automation (MCP) toggle. Held so the async start
+    // result can reconcile it (#4181); null until buildNetworkTab() runs.
+    QPushButton* m_automationBridgeBtn{nullptr};
 
     // License Info
     QLabel* m_licSubscriptionLabel{nullptr};

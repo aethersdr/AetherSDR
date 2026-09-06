@@ -1782,9 +1782,11 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->addWidget(enforceBtn, 0, 1);
 
         // 128-bit hex token generator — plenty for a local same-user secret.
+        // global() is a securely seeded general-purpose PRNG.
+        // system() is the OS CSPRNG Qt documents for keys and secrets (#4181).
         auto genToken = []() -> QString {
-            quint64 a = QRandomGenerator::global()->generate64();
-            quint64 b = QRandomGenerator::global()->generate64();
+            quint64 a = QRandomGenerator::system()->generate64();
+            quint64 b = QRandomGenerator::system()->generate64();
             return QStringLiteral("%1%2")
                 .arg(a, 16, 16, QLatin1Char('0'))
                 .arg(b, 16, 16, QLatin1Char('0'));
@@ -1845,10 +1847,19 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 mcpBtn->setToolTip(mcpBtn->toolTip()
                     + "\n\nForced on by the AETHER_AUTOMATION launch environment variable.");
             }
+            m_automationBridgeBtn = mcpBtn;
             connect(mcpBtn, &QPushButton::toggled, this,
                     [this, mcpBtn, tokenEdit, genToken, tokenLoaded](bool on) {
                 mcpBtn->setText(on ? "Enabled" : "Disabled");
-                AutomationBridgeSettings::setEnabled(on);
+                // Disabling is synchronous, so persist it now. ENABLING is
+                // not: the socket only listens once the async token read
+                // lands, so MainWindow::startAutomationBridge() persists the
+                // result even if this dialog has closed — otherwise a
+                // bind failure leaves enabled=true with nothing listening and
+                // every launch silently re-attempts the doomed start (#4181).
+                if (!on) {
+                    AutomationBridgeSettings::setEnabled(false);
+                }
                 // Enabling with no token yet → mint one so the bridge is never
                 // exposed without auth. Only when the async token read has
                 // landed (tokenLoaded) so we can't clobber an existing token.
@@ -8605,6 +8616,32 @@ void RadioSetupDialog::setFlexControlConnectionStatus(bool connected, const QStr
         m_flexControlCloseButton->setEnabled(connected);
     if (m_flexControlDetectButton)
         m_flexControlDetectButton->setEnabled(!connected);
+}
+
+void RadioSetupDialog::reportAutomationBridgeStartResult(bool ok)
+{
+    if (!m_automationBridgeBtn) {
+        return;  // the Network tab has not been built
+    }
+    const bool wasEnabled = m_automationBridgeBtn->isChecked();
+    {
+        // MainWindow owns persistence and rejects stale callbacks. Reconcile
+        // even a dialog reopened during the pending read, whose initial toggle
+        // still reflects the old setting. Do not emit a second start/stop.
+        const QSignalBlocker blocker(m_automationBridgeBtn);
+        m_automationBridgeBtn->setChecked(ok);
+        m_automationBridgeBtn->setText(ok ? "Enabled" : "Disabled");
+    }
+    if (ok || !wasEnabled || !isVisible()
+        || qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+        return;
+    }
+    QMessageBox::warning(this, QStringLiteral("Agent Automation (MCP)"),
+        QStringLiteral(
+            "The automation bridge could not start — its socket is most "
+            "likely already in use by another AetherSDR instance.\n\n"
+            "MCP clients will not be able to connect. The toggle has been "
+            "turned back off."));
 }
 
 // ── UI Enhancements tab ───────────────────────────────────────────────────────
