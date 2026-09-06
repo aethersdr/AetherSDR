@@ -9474,7 +9474,7 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     auto* controlSpin = makeLabeledSpin(QStringLiteral("Reg/Control"), 3);
     auto* writeDataSpin = makeLabeledSpin(QStringLiteral("Write Data"), 4);
     // Defaults to the I/O Board's own fixed address (0x1D — MetisProtocol.h's
-    // kIoBoardI2cAddress; a bare literal here rather than importing the
+    // kIoBoardI2cAddr; a bare literal here rather than importing the
     // constant, since this file stays below the vendor-header seam, see
     // tools/check_engine_boundary.py's EB3) and a register worth checking
     // first (0x08 = REG_FAULT — zero for no fault, confirming the board's

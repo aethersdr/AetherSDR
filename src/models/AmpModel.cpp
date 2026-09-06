@@ -17,8 +17,24 @@ void AmpModel::applyChanges(const AmpDelta& d)
     }
 
     // Presence latch: a detected (non-TGXL) power-amp model marks us present.
-    if (d.detectedModel) {
+    if (d.detectedModel && !d.handle.isEmpty()) {
         m_handle = d.handle;
+    }
+
+    const bool appliesToAmp = d.detectedModel.has_value()
+        || (!m_handle.isEmpty() && d.handle == m_handle);
+    bool stateDidChange = false;
+    if (appliesToAmp) {
+        // Apply state before publishing first presence. The presence signal
+        // makes the applet visible and reads operate() immediately; publishing
+        // first used to paint a real operating PGXL as STANDBY during startup.
+        if (d.operate && m_operate != *d.operate) {
+            m_operate = *d.operate;
+            stateDidChange = true;
+        }
+    }
+
+    if (d.detectedModel) {
         if (!m_present) {
             m_present = true;
             // Strict parity with the prior applyStatus (m_ip = kvs.value("ip"),
@@ -29,12 +45,11 @@ void AmpModel::applyChanges(const AmpDelta& d)
         }
     }
 
-    if (!m_handle.isEmpty() && d.handle == m_handle) {
-        // Operate is change-gated; a status without a "state" leaves it as-is.
-        if (d.operate && m_operate != *d.operate) {
-            m_operate = *d.operate;
-            emit stateChanged();
-        }
+    if (stateDidChange) {
+        emit stateChanged();
+    }
+
+    if (appliesToAmp) {
         // Forward telemetry (drain current, mains voltage, meffa, temp, …) so
         // the GUI updates without a direct PGXL TCP connection.
         emit telemetryUpdated(d.telemetry);

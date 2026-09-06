@@ -10,6 +10,7 @@
 
 #include "core/backends/hl2/AdcOverloadLogGate.h"
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2IoBoardPolicy.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/Hl2SpanRebuild.h"   // SpanRebuildOutcome
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
@@ -60,6 +61,13 @@ public:
     // and applied during connect/pushInitialState; capture reports through
     // currentOperatingState() + operatingStateChanged().
     void applyRestoredState(const RestoredRadioState& state) override;
+    // The validated document applyRestoredState() kept — what the session will
+    // seed from at linkUp. Test seam only: currentOperatingState() reads the
+    // RECEIVERS, which are seeded at linkUp and not before, so a pre-connect
+    // test asserting on the snapshot sees construction defaults regardless of
+    // what the validator did (#5031). Assert here for validator behaviour;
+    // assert on the snapshot only after a connect has settled.
+    const RestoredRadioState& restoredStateForTest() const { return m_restoredState; }
     RestoredRadioState currentOperatingState() const override;
     void disconnectRadio() override;
     bool isConnected() const override;
@@ -165,6 +173,22 @@ private:
     // frequency. Idempotent and change-gated, so it is safe to call from every
     // path that can move the dial.
     void applyBandFilter(const char* reason);
+    // Push the transmit frequency to the HL2 IO Board, throttled.
+    //
+    // Called from applyBandFilter() so it inherits every trigger that can move
+    // a band — tune, TX slice, key/unkey, pan, add/close receiver — but from
+    // ABOVE that function's `oc == m_ocFilterByte` early return, because the
+    // two have different resolutions. The filter byte is one of seven relays
+    // and does not change between 7.100 and 7.200 MHz; the IO board wants the
+    // frequency itself and does.
+    void applyIoBoardFrequency();
+    // The single point at which either edge of the IO-board throttle reaches
+    // the wire, so the disconnected guard cannot be present on one path and
+    // missing on the other. Returns false when the push was refused.
+    [[nodiscard]] bool sendIoBoardFrequency(quint64 hz);
+    // Drop the IO-board schedule on linkDown: armed timer, coalesced value and
+    // remembered band all describe a session and must not survive one.
+    void resetIoBoardSchedule();
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band
@@ -291,20 +315,6 @@ private:
     // ioboard.i2cRead/i2cWrite is answered under, or 0 when nothing is
     // outstanding. GUI-thread only, like every other invokeExtension state.
     quint64 m_pendingI2cRequestId = 0;
-    // I/O Board TX-frequency push: the last value actually pushed (0 before
-    // the first push after a connect) and the rate-limit clock — see
-    // setTxFrequency(). Reset on every connectRadio() so a fresh session
-    // always pushes at least once, even to the same frequency the last
-    // session ended on.
-    quint64 m_lastIoBoardTxFreqHz = 0;
-    QElapsedTimer m_ioBoardPushClock;
-    // Trailing flush for the above: a change arriving while the 500 ms window
-    // is still closed is remembered here and re-armed on this single-shot
-    // timer for whenever the window reopens, so the LAST frequency of a
-    // tuning gesture is never silently dropped just because the operator
-    // stopped tuning before the window closed on its own. See setTxFrequency().
-    quint64 m_pendingIoBoardTxFreqHz = 0;
-    QTimer* m_ioBoardTrailingPushTimer = nullptr;
     // Identity of the connected radio (its MAC, from the connect request), so
     // the calibration loads and stores per radio rather than globally: it
     // describes one physical crystal. Empty until connectRadio().
@@ -648,6 +658,30 @@ private:
     // path's m_queuedConnect. GUI thread only.
     bool m_spanRebuildInFlight = false;
     double m_queuedSpanHz = 0.0;         // 0 = nothing queued behind the rebuild
+
+    // The IO board's README asks for at most one frequency update every 0.5 s,
+    // and only on change. Leading edge queues immediately; wire delivery and relay settling
+    // are not acknowledged, so this is not an amplifier-ready interlock;
+    // anything arriving inside the cooldown is coalesced and the LAST value
+    // applied when it expires.
+    //
+    // Coalesce-and-apply, never drop: a VFO wheel delivers ~10 tune events a
+    // second, and simply discarding those inside the window would leave the
+    // amplifier on the old band whenever the operator stopped turning mid-
+    // cooldown — the one moment they are most likely to key.
+    static constexpr int kIoBoardThrottleMs = 500;
+    QTimer* m_ioBoardThrottle = nullptr;
+    hl2::IoBoardSchedule m_ioBoardSchedule;
+    // The band the IO board was last told about, as a bandKeyForHz() key.
+    // Empty means "no session has told it anything", which is also the state
+    // reset() restores — so the first push after any connect is treated as a
+    // band change and takes the leading edge rather than being coalesced.
+    //
+    // Tracked SEPARATELY from m_currentBandKey (the per-band memory's notion):
+    // that one follows the operator's tuning for LNA/drive recall and moves on
+    // paths this does not, and conflating "what the operator is on" with "what
+    // the amplifier has been told" is how the two silently diverge.
+    QString m_ioBoardBandKey;
 
     // Has this connect already derived the passband from the mode? (#4484)
     //

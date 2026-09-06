@@ -100,6 +100,24 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.canTransmit = false;
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = false;  // CRITICAL: must not open mic on connect (#4449)
+    c.hasRadioPttReadback = false;  // receive-only: nothing to key, nothing to read back
+    c.hasFmRepeaterOffset = false;
+    c.hasCwTune = false;
+    c.hasAmCarrierLevel = false;
+    c.hasVoxDelay = false;
+    c.hasAgcThreshold = false;
+    c.hasModeIndependentSquelch = false;
+    c.agcModes = {QStringLiteral("off"), QStringLiteral("slow"),
+                  QStringLiteral("med"), QStringLiteral("fast")};
+    // Unused TX presentation retains the shared legacy shape; canTransmit
+    // above keeps these controls unavailable on the receive-only backend.
+    c.alcMeterUnit = QStringLiteral("dBFS");
+    c.compressionMaximumDb = 25.0f;
+    c.cwSpeedMinWpm = 5;
+    c.cwSpeedMaxWpm = 100;
+    c.cwPitchMinHz = 100;
+    c.cwPitchMaxHz = 6000;
+    c.cwPitchStepHz = 10;
 
     // Receiver limits
     c.maxSlices = 1;
@@ -119,6 +137,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.persistsMemories = false;
     c.hasSupplyVoltageTelemetry = false;
     c.hasMultiClientSessions = false;
+    c.hasAudioPeakingFilter = false;
 
     // Client owns all state (RTL-SDR persists nothing)
     c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::Tuning

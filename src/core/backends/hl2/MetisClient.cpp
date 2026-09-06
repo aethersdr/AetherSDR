@@ -241,6 +241,14 @@ bool MetisClient::start(const Params& params)
     m_haveRxSeq = false;
     m_drops = 0;
     m_linkUp = false;
+    // This object OUTLIVES a connect: Hl2Backend builds it in its constructor
+    // and deletes it in its destructor, so without this the dedupe would carry
+    // a frequency across a disconnect and suppress the first push of the next
+    // session. The IO board may have been power-cycled in between, and nothing
+    // in the protocol can be asked what it currently holds -- the same reason
+    // the band filter is re-primed at every connect rather than trusted.
+    m_ioBoardTxFreqSent = false;
+    m_ioBoardTxFreqHz = 0;
 
     m_socket = new QUdpSocket(this);
     if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
@@ -364,6 +372,13 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // An interrupted five-bank write must not finish in the next session.
+    // Preserve unrelated one-shot setup; only this board's writes are stale.
+    std::erase_if(m_oneShot, [](const Cc& bank) {
+        return bank[0] == kC0I2c2 && bank[1] == kI2cCookieWrite
+            && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
+    });
+    m_ioBoardTxFreqSent = false;
     if (m_linkUp) {
         m_linkUp = false;
         emit linkDown();
@@ -594,13 +609,6 @@ void MetisClient::sendI2cWrite(int bus, int deviceAddress, int control, int data
     dispatchNextI2cJob();
 }
 
-void MetisClient::pushIoBoardTxFrequencyHz(quint64 hz)
-{
-    for (const Cc& frame : ccIoBoardTxFrequency(hz))
-        m_i2cJobs.enqueue(frame);
-    dispatchNextI2cJob();
-}
-
 void MetisClient::resetIoBoardRegisters()
 {
     m_i2cJobs.enqueue(ccIoBoardReset());
@@ -614,6 +622,31 @@ void MetisClient::dispatchNextI2cJob()
         return;
     m_oneShot.push_back(*job);
     m_i2cTimeoutTimer->start();
+}
+
+void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
+{
+    // Refuse disconnected requests even if a caller missed the backend guard.
+    // stop() also discards any unfinished board write from a running session.
+    if (!m_running)
+        return;
+    if (m_ioBoardTxFreqSent && hz == m_ioBoardTxFreqHz)
+        return;                       // already queued in this session
+    m_ioBoardTxFreqSent = true;
+    m_ioBoardTxFreqHz = hz;
+    // INFO, not debug, and for the same reason the band filter is: there is no
+    // readback. The board never answers -- we deliberately do not set RQST --
+    // so this line is the only record of what an amplifier was told to switch
+    // to, and a support log captured after a mis-keying has to already have it.
+    qCInfo(lcHl2).nospace()
+        << "HL2 IO board: TX frequency -> "
+        << QString::number(static_cast<double>(hz) / 1.0e6, 'f', 6)
+        << " MHz (I2C2 chip 0x1D, 5 banks)";
+    // Order is the batch's, not ours -- see ccIoBoardTxFrequency(). Appending
+    // in sequence is the whole contract: the deque preserves it, and the last
+    // bank is the one that makes the board latch.
+    for (const Cc& bank : ccIoBoardTxFrequency(hz))
+        m_oneShot.push_back(bank);
 }
 
 void MetisClient::requestPipelineReset()

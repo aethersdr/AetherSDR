@@ -28,6 +28,7 @@ void TransmitModel::resetState()
     m_usingMemory = false;
     m_showTxInWaterfall = false;
     m_txSliceMode.clear();
+    setTuneAvailable(true);
 
     emit apdStateChanged();
     emit transmittingChanged(false);
@@ -319,8 +320,20 @@ void TransmitModel::setTuneMode(const QString& mode)
     emit commandReady("transmit set tune_mode=" + mode);
 }
 
+void TransmitModel::setTuneAvailable(bool available)
+{
+    if (m_tuneAvailable == available) {
+        return;
+    }
+    m_tuneAvailable = available;
+    emit tuneAvailabilityChanged(available);
+}
+
 void TransmitModel::startTune(PttSource source)
 {
+    if (!m_tuneAvailable) {
+        return;
+    }
     if (!runPttPreflight(source, false))
         return;
 
@@ -348,6 +361,9 @@ void TransmitModel::startTune(PttSource source)
 
 void TransmitModel::startTwoToneTune(PttSource source)
 {
+    if (!m_tuneAvailable) {
+        return;
+    }
     if (!runPttPreflight(source, false))
         return;
 

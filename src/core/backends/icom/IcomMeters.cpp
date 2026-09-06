@@ -56,6 +56,11 @@ constexpr std::array<CurvePoint, 3> kComp{{
     {0, 0.0}, {130, 15.0}, {210, 25.5},
 }};
 
+// IC-7300MK2 CI-V guide, command 15 14: 0/130/210 = 0/15/30 dB.
+constexpr std::array<CurvePoint, 3> kCompIc7300Mk2{{
+    {0, 0.0}, {130, 15.0}, {210, 30.0},
+}};
+
 // Vd (PA drain), raw -> volts. Icom's guide: 0 = 0 V, 75 = 5 V, 241 = 16 V.
 constexpr std::array<CurvePoint, 3> kVd{{
     {0, 0.0}, {75, 5.0}, {241, 16.0},
@@ -251,7 +256,9 @@ double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibratio
         return std::clamp(raw, 0, 255) * 100.0 / 255.0;
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
-    case MeterId::Comp:     return interpolateCurve(kComp, raw);
+    case MeterId::Comp:
+        return calibration == MeterCalibration::Ic7300Mk2
+            ? interpolateCurve(kCompIc7300Mk2, raw) : interpolateCurve(kComp, raw);
     case MeterId::Vd:
         if (!hasVoltageCalibration(calibration)) {
             return 0.0;

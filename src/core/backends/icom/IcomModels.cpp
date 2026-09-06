@@ -351,7 +351,7 @@ constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
 
 }  // namespace
 
-const IcomModel* modelForCivAddress(std::uint8_t addr)
+const IcomModel* modelForId(std::uint8_t addr)
 {
     for (const auto& m : kModels)
         if (m.civAddress == addr)
@@ -491,8 +491,11 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 {
     if (frame.cmd != cmd::kReadId || !frame.hasSub || frame.sub != 0x00)
         return std::nullopt;
-    if (frame.data.empty())
+    if (frame.data.size() != 1 || frame.from == kBroadcastAddress
+        || frame.from >= kControllerAddress
+        || (frame.to != kControllerAddress && frame.to != kBroadcastAddress)) {
         return std::nullopt;
+    }
     return frame.data[0];
 }
 
@@ -620,6 +623,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .scaleForwardPowerToRatedOutput = true,
             .holdIsolatedTxMinimums = true,
         },
+        // IC-705 CI-V Reference Guide 2020, p.15 note *4: 18 01 powers
+        // on from Standby/Shutdown. Native RS-BA1 carries the standard frame;
+        // no model-specific serial preamble is prescribed. Network must be up.
+        .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
         .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
@@ -647,6 +654,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .powerConversion = MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
             .hasPaCurrentTelemetry = true,
         },
+        // Native LAN sequence measured by W5JWP in #5360: 150 extra FE, E1.
+        // This is hardware-derived, not the guide's serial 115200-baud count
+        // (approximately 119 FE). Do not copy it to another model/transport.
+        .powerOn = PowerOnProfile{150, 0xE1, 10000},
         .civRecovery = CivRecoveryProfile{1000, 3},
         .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
         // IC-9700 CI-V Reference Guide 2019, printed p. 8.
@@ -655,15 +666,22 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
+        // CI-V 14 09 endpoints plus wfview funcCwPitch's 5 Hz decoding.
+        .cwPitchStepHz = 5,
+        .hasModeIndependentSquelch = true,
+        .hasCwTune = false,
+        .pollCwSquelchAndTxBandwidth = true,
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,
         .modulation = ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
                                         kIc7300Mk2ModInputs},
         .txBandwidth = TxBandwidthProfile{kTbwLowIc7300Mk2, kTbwHigh,
                                           14, 15, 16, 17},
+        // MK2 guide p. 3: 0F is split 00/01 only; 0C/0D and duplex
+        // 10/11/12 are absent. Its SET-menu split offset is a different control.
         .fmRepeater = FmRepeaterProfile{FmRepeaterDialect::Basic,
                                        kToneSquelchFmAccessModes,
-                                       true, true, true, false, true, true},
+                                       false, true, true, false, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},
@@ -673,6 +691,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 25.0,
             .holdIsolatedTxMinimums = true,
         },
+        // IC-7300MK2 guide, "Turning the transceiver ON": 18 01.
+        // Baud-dependent FE fill is explicitly for the REMOTE jack, not LAN.
+        // Begin probing after one second; readiness comes from the identity reply.
+        .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
         .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
                                 "Group"},
         // IC-7300MK2 CI-V Reference Guide, SET > Network, printed p. 10.

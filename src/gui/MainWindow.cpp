@@ -36,6 +36,7 @@
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
+#include "core/CwRecordGate.h"        // micTapOwnsRecorder — carried explicitly (AGENTS.md, #3532)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
@@ -1697,8 +1698,21 @@ MainWindow::MainWindow(QWidget* parent)
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
     // single time-interleaved RX/TX stream.
+    // Gated on the current TX-slot owner: this tap keeps running through a CW
+    // over (mic capture follows mic_selection, not mode), and the recorder
+    // cannot tell mic bytes from pumped sidetone — ungated, room noise landed
+    // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
+    // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+        // Evaluated at queued-delivery time on the recorder's thread, so blocks
+        // already in flight when ownership flips are gated by the NEW owner —
+        // bounded (tens of ms) leakage in both directions at over boundaries.
+        if (!micTapOwnsRecorder(m_audio->txRecorderSource())) {
+            return;
+        }
+        m_qsoRecorder->feedTxAudio(pcm);
+    });
     // Host-modulated backends (HL2) take their transmit audio from the SAME tap
     // the recorder uses: fully processed, after the test tone, compressor and
     // EQ. One path means the TONE button, the microphone and the recording all
@@ -1709,6 +1723,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
                                    clientLeveled);
     });
+    wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and
@@ -1719,7 +1734,35 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
-            m_qsoRecorder, &QsoRecorder::onMoxChanged);
+            m_qsoRecorder, &QsoRecorder::setCwOverActive);
+    // Queued, unlike the two direct connections below: setCwOverActive reaches
+    // applyOverBookkeeping, which touches a QTimer and can open a file, so it
+    // must run on the recorder's own thread rather than the AudioEngine's.
+    // Mirror the keyer speed so the pump can size the CW over-hang in dit units
+    // rather than a fixed wall-clock value (#4281).
+    m_audio->setCwWpm(m_radioModel.transmitModel().cwSpeed());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwSpeedChanged,
+            m_audio, [ae = m_audio](int wpm) { ae->setCwWpm(wpm); });
+    // Tune carriers raise the interlock as an owned TX but are not a CW over:
+    // mirror tune state so cwOverTxActive can exclude them (#4281).
+    // TransmitModel sets its flag optimistically before the tune command is
+    // even sent, so this mirror cannot lose a race against the interlock rise.
+    m_audio->setTuneActive(m_radioModel.transmitModel().isTuning());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            m_audio, [ae = m_audio](bool tuning) { ae->setTuneActive(tuning); });
+    // Let the CW record pump skip rendering while no file is open (#4281).
+    // Direct connections: the slot is a single atomic store that touches no Qt
+    // state, and recordingStarted is emitted once the file is open and
+    // m_recording is set — so the flag is true before the recorder can accept
+    // anything, and a queued hop cannot lose the first elements of an over.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted,
+            m_audio, [ae = m_audio](const QString&) {
+        ae->setQsoRecordingActive(true);
+    }, Qt::DirectConnection);
+    connect(m_qsoRecorder, &QsoRecorder::recordingStopped,
+            m_audio, [ae = m_audio](const QString&, int) {
+        ae->setQsoRecordingActive(false);
+    }, Qt::DirectConnection);
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in
@@ -3607,7 +3650,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
+        || !statusBar()->currentMessage().isEmpty()) {
         return;
     }
 
@@ -5810,6 +5854,7 @@ void MainWindow::buildUI()
     hbox->addWidget(timeStack);
 
     statusBar()->addWidget(m_statusBarContainer, 1);
+    wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 
@@ -6416,7 +6461,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));
@@ -7254,6 +7299,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // can never move.
         // Empty on disconnect, which RESTORES the operator's own list rather
         // than stranding them on the last radio's three filters.
+        m_appletPanel->setRadioFilterControl(
+            connected ? caps.rxFilterControl : RxFilterControl{});
         m_appletPanel->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                       : QList<int>{});
         // Same contract for the TRANSMIT passband, and the same restore-on-
@@ -7263,6 +7310,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         if (auto* phone = m_appletPanel->phoneApplet()) {
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
+            phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
+            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
@@ -7376,6 +7425,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 vfo->setHasHostNoiseBlanker(hostNoiseBlanker);
                 // The VFO's filter grid and the RX applet's are two views of one
                 // radio; only the applet was being told what the hardware has.
+                vfo->setRadioFilterControl(
+                    connected ? caps.rxFilterControl : RxFilterControl{});
                 vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                     : QList<int>{});
             }
@@ -7398,6 +7449,23 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // session history rather than on the connected radio.
     if (m_appletPanel && m_appletPanel->txApplet()) {
         m_appletPanel->txApplet()->setRadioSideDspAvailable(radioSideDsp);
+    }
+
+    // ── APF on the P/CW pane's CW face (#4879) ──────────────────────────────
+    //
+    // NOT hasRadioSideDsp: Icom declares that true for NR/NB/notch and has no
+    // APF register. The row's only effect is Flex `slice set <n> apf=`, so it
+    // rides hasAudioPeakingFilter (permissive while disconnected, like LMS).
+    // The DSP-tab APF button is still ungated — pre-existing, left alone.
+    if (m_appletPanel && m_appletPanel->phoneCwApplet()) {
+        const RadioCapabilities cwCaps = connected ? caps : RadioCapabilities{};
+        m_appletPanel->phoneCwApplet()->setCompressionMaximumDb(cwCaps.compressionMaximumDb);
+        m_appletPanel->phoneCwApplet()->setAlcMeterUnit(cwCaps.alcMeterUnit);
+        m_appletPanel->phoneCwApplet()->setCwControlLimits(
+            cwCaps.cwSpeedMinWpm, cwCaps.cwSpeedMaxWpm,
+            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
+        m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
+            m_radioModel.hasAudioPeakingFilter());
     }
 
     // ── The 8-band graphic EQ ───────────────────────────────────────────────
@@ -9748,6 +9816,14 @@ void MainWindow::updateKeyerAvailability()
     // activatedAmbiguously (#2464, #2582, #4173).
     SliceModel* txSlice = m_radioModel.txSlice();
     const QString txMode = txSlice ? txSlice->mode() : QString();
+    // Mirror "the TX slice is in a CW mode" into the CW over machinery: the
+    // record-gate latch must not arm off a key edge in a voice mode, and
+    // leaving CW ends any over in flight (#4281). This function already
+    // re-runs on every mode change and TX-slice reassignment — exactly the
+    // coverage the mirror needs. No TX slice (receive-only) parses as not-CW.
+    if (m_audio) {
+        m_audio->setTxModeCw(isCwMode(txMode));
+    }
     // Both keyers carry a family gate ahead of the mode gate: a radio with no
     // text buffer and no voice recorder never gains one by switching mode, so
     // the capability is ANDed into the availability that drives the enabled

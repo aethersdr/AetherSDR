@@ -126,6 +126,14 @@ profile is selected.
 - Replay a saved capture against every profile/polarity in one pass:
   `ax25_libmodem_shim_test --replay-capture <mono-float32.wav>`. Use the
   window's **Capture 3m** button to record a real 2m session first.
+- **Capture 3m** records both directions for transport diagnosis. One
+  `ax25-rx-capture-<id>-float32.wav` contains the mono RX tap. Each transmitted
+  packet also produces `ax25-tx-generated-<id>-<nnn>-float32.wav` at the
+  modem's 24 kHz stereo output. On Icom radios, the matching
+  `ax25-tx-icom-post-resample-<id>-<nnn>-float32.wav` contains the 48 kHz mono
+  float samples immediately before RS-BA1 packetization, including the finite
+  resampler tail flushed after the final modem block. The shared ID and packet
+  number make the two TX stages directly comparable.
 - The Profile A+ slicer set is the fixed Dire Wolf `kVhf1200SpaceGains` series;
   the vendored demodulator and its parameters are documented in
   `third_party/direwolf_afsk/` (`AETHERSDR-PATCHES.md` + the source headers).
@@ -174,6 +182,8 @@ TX diagnostics in the `aether.ax25` category include packet source/destination,
 path, payload bytes, AX.25 frame bytes, bit count, waveform duration, RMS/peak,
 baud, mark/space, polarity, preamble/postamble flag counts, DAX TX stream id,
 PTT lead/tail timing, and paced chunk progress when debug is enabled.
+For Icom, completion also logs the drained resampler sample count and the
+silence bytes added to complete the last 20 ms RS-BA1 audio frame.
 
 ## KISS TNC (TCP)
 

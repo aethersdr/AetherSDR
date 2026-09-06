@@ -613,6 +613,96 @@ int main()
         t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+
+        // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
+        //
+        // This is the check MetisProtocol.cpp's own comment above txFifoCount
+        // asked someone to do ("The gateware RTL is the authority and this has
+        // NOT been checked against it"). Done, against the gateware at
+        // 883a338, and the pre-fix decode was wrong on all three fields.
+        //
+        // control.v:472 builds slot RADDR 0 as
+        //
+        //   data = {6'b000111, ~ext_txinhibit, (&clip_cnt), 8'h00,
+        //    bits    31:26     25              24           23:16
+        //           dsiq_status, VERSION_MAJOR}
+        //           15:8         7:0
+        //
+        // so the whole FIFO field is DATA[15:8] — eight bits, not fifteen. The
+        // reason the old decode was not obviously wrong is that DATA[23:16] is
+        // a constant zero, so (data >> 8) & 0x7FFF happens to come out equal to
+        // dsiq_status. It reads the right number under a name that claims it is
+        // something else, which is why no reading of it ever looked absurd.
+        //
+        // dsiq_fifo composes dsiq_status at fifos.v:100-110:
+        //
+        //   rd_count <= rd_tlength[(rdbits-1):(rdbits-7)];   // TOP 7 bits
+        //   ...
+        //   end else if (rd_tvalidn | ~allow_push) recovery_flag <= 1'b1;
+        //   assign rd_status = {recovery_flag_d1, rd_count};
+        //
+        // Two facts follow, and the old decode contradicts both:
+        //
+        //   [6:0] is the TOP 7 bits of the read-side fill level — a coarse
+        //   occupancy, not a count of samples. Nothing in this word is a
+        //   15-bit depth.
+        //
+        //   [7] is ONE flag covering BOTH "the FIFO ran empty" (rd_tvalidn)
+        //   and "writes were blocked because it filled" (~allow_push,
+        //   fifos.v:55-61). The gateware does not distinguish underflow from
+        //   overflow anywhere. Two booleans cannot be decoded from a
+        //   distinction the wire does not carry.
+        //
+        // NOT established, and deliberately not asserted here: what one unit of
+        // [6:0] is worth in samples or milliseconds. rdbits is 12 for this
+        // board's DSIQ_FIFO_DEPTH of 16384 (hermeslite_core.v:136, not
+        // overridden by variants/hl2b5up_main/hermeslite.v), which makes the
+        // unit 32 read-side words — but the words-to-samples mapping is an
+        // inference, not a read. #17's pacing servo needs that number; this
+        // decode does not, and must not pretend to it.
+        auto raddr0 = [&](std::uint8_t dsiqStatus) {
+            return frame(0x00, (1u << 25) | (std::uint32_t(dsiqStatus) << 8) | 0x15u);
+        };
+
+        Hl2Telemetry f;
+        check(!f.txFifoFillMsbs.has_value() && !f.txFifoRecovery.has_value(),
+              "FIFO status starts unknown, not empty-and-healthy");
+
+        // Recovery flag set, FIFO empty. The old decode reported a depth of 128
+        // for an empty FIFO, because it read the flag as bit 7 of a count.
+        f.apply(*parseEp6Response(raddr0(0x80).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x00,
+              "dsiq_status 0x80: fill level is 0 — the set bit is the flag, not a count");
+        check(f.txFifoRecovery.value_or(false), "dsiq_status 0x80: recovery flag from bit 7");
+
+        // Same flag, a fill level with bit 6 set. The old decode flipped its
+        // verdict from 'underflow' to 'overflow' purely on this fill-level bit
+        // — two opposite diagnoses of one recovery event, chosen by how full
+        // the FIFO happened to be. Now it is one flag either way, and the fill
+        // level is read separately from it.
+        f.apply(*parseEp6Response(raddr0(0xC0).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x40,
+              "dsiq_status 0xC0: fill level is 0x40, not 0xC0");
+        check(f.txFifoRecovery.value_or(false),
+              "dsiq_status 0xC0: same recovery flag as 0x80, not a different fault");
+
+        // Flag clear across the full range of the fill field.
+        f.apply(*parseEp6Response(raddr0(0x7F).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x7F, "dsiq_status 0x7F: fill saturates at 127");
+        check(f.txFifoRecovery.value_or(true) == false,
+              "dsiq_status 0x7F: a full FIFO is not by itself a recovery event");
+        f.apply(*parseEp6Response(raddr0(0x00).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x00, "dsiq_status 0x00: empty");
+        check(f.txFifoRecovery.value_or(true) == false, "dsiq_status 0x00: no recovery");
+
+        // The fill level must not borrow bits from its neighbours. RADDR 0
+        // carries the ADC-overload bit at 24 and the TX-inhibit bit at 25
+        // directly above the constant zero byte; a decode that widened past
+        // DATA[15:8] again would pick them up here.
+        f.apply(*parseEp6Response(frame(0x00, 0xFFFFFFFFu).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x7F,
+              "all-ones DATA: fill level still 7 bits, not widened into DATA[23:16]");
+        check(f.txFifoRecovery.value_or(false), "all-ones DATA: recovery flag set");
     }
 
     // ---- I/O Board: raw I2C request/reply (register 0x3C/0x3D) ----
@@ -664,45 +754,20 @@ int main()
               "an ACK for an unrelated RADDR is not mistaken for an I2C reply");
     }
 
-    // ---- N2ADR/KP4RX I/O Board: TX-frequency push + startup reset ----
+    // ---- N2ADR/KP4RX I/O Board: startup reset ----
+    //
+    // ccIoBoardTxFrequency() itself is pinned in the "IO board transmit-
+    // frequency batch" block below (upstream's write-only I2C2 mechanism —
+    // see MetisProtocol.h's comment on why the automatic push and this
+    // reset use two different I2C paths). This block covers only what
+    // remains this project's own addition: the documented startup reset,
+    // which goes through the GENERIC ACK'd I2cBus::Bus2 write since it is
+    // a one-shot connect-time write, not part of the per-tune push.
     {
-        // 14.250000 MHz = 14,250,000 Hz = 0x00_00_D9_70_10.
-        const auto frames = ccIoBoardTxFrequency(14'250'000);
-        for (const Cc& f : frames) {
-            check(f[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
-                  "every I/O Board register write is an RQST on I2C bus 2 (the board's own bus — "
-                  "confirmed against a real Thetis<->HL2 capture; NOT bus 1, despite the board's "
-                  "own Pico schematic labeling its I2C peripheral pins \"I2C1\")");
-            check(f[2] == (0x80 | kIoBoardI2cAddress),
-                  "every I/O Board register write targets the board's fixed I2C address (0x1D)");
-        }
-        check(frames[0][3] == kIoBoardRegTxFreqByte4, "frame 0 targets REG_TX_FREQ_BYTE4");
-        check(frames[1][3] == kIoBoardRegTxFreqByte3, "frame 1 targets REG_TX_FREQ_BYTE3");
-        check(frames[2][3] == kIoBoardRegTxFreqByte2, "frame 2 targets REG_TX_FREQ_BYTE2");
-        check(frames[3][3] == kIoBoardRegTxFreqByte1, "frame 3 targets REG_TX_FREQ_BYTE1");
-        check(frames[4][3] == kIoBoardRegTxFreqByte0, "frame 4 (LAST) targets REG_TX_FREQ_BYTE0 — triggers the update");
-
-        check(frames[0][4] == 0x00, "14.25 MHz byte4 (bits 39-32) is 0x00");
-        check(frames[1][4] == 0x00, "14.25 MHz byte3 (bits 31-24) is 0x00");
-        check(frames[2][4] == 0xD9, "14.25 MHz byte2 (bits 23-16) is 0xD9");
-        check(frames[3][4] == 0x70, "14.25 MHz byte1 (bits 15-8) is 0x70");
-        check(frames[4][4] == 0x10, "14.25 MHz byte0 (bits 7-0) is 0x10 (14,250,000 = 0xD97010)");
-
-        // Round trip against a value that exercises every byte.
-        const auto full = ccIoBoardTxFrequency(0x0102030405ULL);
-        check(full[0][4] == 0x01 && full[1][4] == 0x02 && full[2][4] == 0x03
-                  && full[3][4] == 0x04 && full[4][4] == 0x05,
-              "every byte of a 5-byte-spanning value round-trips to its own register");
-
-        // Clamped, not wrapped, past the 5-byte (40-bit) range.
-        const auto clamped = ccIoBoardTxFrequency(~0ULL);
-        check(clamped[0][4] == 0xFF && clamped[4][4] == 0xFF,
-              "a value above 2^40-1 clamps to the register's full range rather than wrapping");
-
         const Cc reset = ccIoBoardReset();
         check(reset[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
               "the startup reset is also on I2C bus 2");
-        check(reset[2] == (0x80 | kIoBoardI2cAddress), "the startup reset targets the same fixed address");
+        check(reset[2] == (0x80 | kIoBoardI2cAddr), "the startup reset targets the same fixed address");
         check(reset[3] == kIoBoardRegControl, "the startup reset targets REG_CONTROL");
         check(reset[4] == 0x01, "the startup reset writes 1 (per the firmware's documented reset convention)");
     }
@@ -722,8 +787,8 @@ int main()
         check(!q.dispatchNext().has_value(), "nothing to dispatch from an empty queue");
 
         const Cc jobA = ccIoBoardReset();
-        const Cc jobB = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegInputPins);
-        const Cc jobC = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddress, kIoBoardRegOutputPins);
+        const Cc jobB = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddr, kIoBoardRegInputPins);
+        const Cc jobC = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddr, kIoBoardRegOutputPins);
         q.enqueue(jobA);
         q.enqueue(jobB);
         q.enqueue(jobC);
@@ -773,6 +838,55 @@ int main()
         const auto bad = swrFromRaw(100, 500);
         check(bad.has_value() && *bad > 100.0,
               "reverse above forward clamps to a very high SWR, not negative");
+    }
+
+    // ---- Direct I2C writes on the external bus (I2C2 / addr 0x3d) ----
+    {
+        const Cc w = ccI2c2Write(0x1D, 4, 0xAB);
+        // C0 is the bus address SHIFTED LEFT ONE, like every other C0 constant:
+        // 0x3d << 1 == 0x7A. Bit 0 stays clear so withMox() owns keying, and
+        // bit 7 (RQST) stays clear so the radio sends no reply.
+        check(w[0] == 0x7A, "I2C2 write C0 is addr 0x3d << 1");
+        check((w[0] & 0x01) == 0, "I2C2 write leaves MOX to withMox()");
+        check((w[0] & 0x80) == 0, "I2C2 write does NOT set RQST (no reply wanted)");
+        check(w[1] == 0x06, "I2C2 write cookie is 0x06");
+        check(w[2] == 0x9D, "C2 is stop-bit | 7-bit chip address");
+        check(w[3] == 4, "C3 is the register number");
+        check(w[4] == 0xAB, "C4 is the data byte");
+
+        // A caller who passes an already-shifted 8-bit I2C address must not be
+        // able to clear the stop bit.
+        check(ccI2c2Write(0x9D, 0, 0)[2] == 0x9D, "chip address masked to 7 bits");
+    }
+
+    // ---- IO board transmit-frequency batch ----
+    {
+        // 14.074 MHz = 0x00_00_D6_C0_90. Five bytes, MSB (always 0 on HF) first.
+        const auto banks = ccIoBoardTxFrequency(14'074'000ull);
+        check(banks.size() == 5, "five banks, one per frequency register");
+        const std::uint8_t wantReg[5]  = {0, 1, 2, 3, 4};
+        const std::uint8_t wantData[5] = {0x00, 0x00, 0xD6, 0xC0, 0x90};
+        for (std::size_t i = 0; i < 5; ++i) {
+            check(banks[i][3] == wantReg[i], "register order ascends 0..4");
+            check(banks[i][4] == wantData[i], "big-endian byte split");
+            check(banks[i][0] == 0x7A && banks[i][1] == 0x06 && banks[i][2] == 0x9D,
+                  "every bank addresses the IO board on I2C2");
+        }
+        // The LSB register COMMITS on the board, so it must be sent last. If
+        // this ever flips, the board latches a frequency built from four new
+        // bytes and one stale one.
+        check(banks[4][3] == 4, "LSB register is written LAST (it commits)");
+
+        // Reassembling the way the Pico firmware does must return the input.
+        std::uint64_t rebuilt = 0;
+        for (std::size_t i = 0; i < 5; ++i)
+            rebuilt = (rebuilt << 8) | banks[i][4];
+        check(rebuilt == 14'074'000ull, "round-trips through the firmware's assembly");
+
+        // Top byte is real: a value above 32 bits must not be truncated.
+        const auto high = ccIoBoardTxFrequency(0x11'22'33'44'55ull);
+        check(high[0][4] == 0x11 && high[4][4] == 0x55,
+              "all 40 bits reach the wire");
     }
 
     if (g_failures == 0)

@@ -166,6 +166,26 @@ public:
     // recorded from this declaration, and `std::uint8_t` does not normalize to
     // the same string as `unsigned char`.
     Q_INVOKABLE void setBandFilter(int ocFilterByte);
+    // Push the TRANSMIT frequency to the HL2 IO Board (I2C2 chip 0x1D) so an
+    // attached amplifier, antenna relay or transverter follows the band.
+    //
+    // Five one-shot banks, LSB last, because that register is what commits the
+    // value on the board — see ccIoBoardTxFrequency(), which owns the ordering.
+    // They ride m_oneShot rather than the rotation for the same reason the
+    // filter byte does: an amplifier still switched to the previous band when
+    // the operator keys is the failure that matters, and the deque both
+    // preserves order and drains one bank per EP2 frame (~2.6 ms at 48 kHz),
+    // so all five land in about 13 ms.
+    //
+    // SENT UNCONDITIONALLY, with no "do you have an IO board" setting, on the
+    // same reasoning the J16 filter byte is driven blind: a chip that is not on
+    // the bus NACKs its address, the gateware's i2c_master raises missed_ack
+    // and moves on. Costing an absent board nothing is what makes the setting
+    // unnecessary, and a setting defaulted off is a support burden — the
+    // symptom of forgetting it is an amplifier on the wrong band.
+    //
+    // quint64, not std::uint32_t: the board's field is 40 bits wide.
+    Q_INVOKABLE void setIoBoardTxFrequencyHz(quint64 hz);
     [[nodiscard]] std::uint8_t bandFilter() const noexcept { return m_params.ocFilterByte; }
     // Queue a one-shot filter-pipeline reset (MetisProtocol kC0Sync) to be sent
     // on the next EP2 frame, ahead of the round robin.
@@ -273,26 +293,27 @@ public:
     Q_INVOKABLE void setTxTestTone(double offsetHz, double amplitude);
     [[nodiscard]] bool txTestToneEnabled() const noexcept { return m_toneAmp > 0.0; }
 
-    // I/O Board accessory: raw I2C read/write (ticket #11) and the
-    // automatic N2ADR/KP4RX I/O Board TX-frequency push. All four funnel
-    // through ONE internal queue (m_i2cJobs) rather than straight onto
-    // m_oneShot, because the underlying RQST/ACK protocol tolerates exactly
-    // one outstanding I2C transaction at a time — no transaction id, matched
-    // purely by arrival order — so a manual panel call and an automatic push
-    // landing close together must never be allowed to race the same
-    // unmarked ACK. See dispatchNextI2cJob().
+    // I/O Board accessory (ticket #11): the manual read/write panel and its
+    // startup reset. All three funnel through ONE internal queue (m_i2cJobs)
+    // rather than straight onto m_oneShot, because the underlying RQST/ACK
+    // protocol tolerates exactly one outstanding I2C transaction at a time —
+    // no transaction id, matched purely by arrival order — so two manual
+    // panel calls landing close together must never be allowed to race the
+    // same unmarked ACK. See dispatchNextI2cJob().
+    //
+    // The AUTOMATIC N2ADR/KP4RX TX-frequency push (band following) is a
+    // DIFFERENT, write-only mechanism — setIoBoardTxFrequencyHz(), below —
+    // that deliberately does NOT set RQST and so never awaits an ACK, and so
+    // never needs this queue at all: see ccI2c2Write()'s own comment in
+    // MetisProtocol.h for why the two paths are kept separate.
     Q_INVOKABLE void sendI2cRead(int bus, int deviceAddress, int control);
     Q_INVOKABLE void sendI2cWrite(int bus, int deviceAddress, int control, int data);
-    // Pushes the 5-byte TX frequency to the I/O Board (ccIoBoardTxFrequency)
-    // so it can drive whatever band-dependent hardware it's wired to (a
-    // XieGu-style band-voltage output for an external amp, antenna
-    // selection, etc.) — see MetisProtocol.h's kIoBoard* constants. `hz`
-    // is the TRUE (uncalibrated-scale) transmit frequency.
-    Q_INVOKABLE void pushIoBoardTxFrequencyHz(quint64 hz);
     // The I/O Board's documented startup reset (ccIoBoardReset): write 1 to
     // REG_CONTROL so stale register data from a previous session or a
     // different SDR program can't be acted on before the first real
-    // TX-frequency push arrives.
+    // TX-frequency push arrives. Goes through the generic ACK'd queue above
+    // (m_i2cJobs), since this is a one-shot connect-time write, not part of
+    // the per-tune frequency push.
     Q_INVOKABLE void resetIoBoardRegisters();
 
 signals:
@@ -316,8 +337,12 @@ signals:
     // driving it from a timer here.
     void linkCountersUpdated(const AetherSDR::hl2::MetisClient::LinkCounters& c);
     // Radio telemetry decoded from the EP6 C&C bytes: forward/reverse power,
-    // temperature, TX FIFO depth, ADC overload, PTT. Free-running, so it
+    // temperature, TX FIFO status, ADC overload, PTT. Free-running, so it
     // arrives without us issuing a request.
+    //
+    // "status", not "depth": the wire carries a recovery flag plus the top 7
+    // bits of the fill level, and no sample count at all. See
+    // Hl2Telemetry::apply().
     void telemetryUpdated(const AetherSDR::hl2::Hl2Telemetry& t);
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
@@ -356,7 +381,7 @@ private:
     // Sends the front of m_i2cJobs if nothing is currently awaiting an ACK.
     // Called after every enqueue and after every completion (ack or
     // timeout), so the queue drains itself one transaction at a time — see
-    // the class-level note on sendI2cRead()/pushIoBoardTxFrequencyHz().
+    // the class-level note on sendI2cRead().
     void dispatchNextI2cJob();
 
     // EP2 cadence follows the frame geometry, not the EP6 arrival rate: the
@@ -445,7 +470,15 @@ private:
     // Ordering matters: a frequency change and its pipeline reset must reach the
     // radio in that order, and neither should wait up to three frames for the
     // rotation to come back around.
+    friend struct MetisClientTestAccess; // socket-free transport-state injection
     std::deque<Cc> m_oneShot;           // which register pair to send next
+    // Last transmit frequency handed to the IO board, and whether one ever was.
+    // A separate flag rather than a 0 sentinel: 0 Hz is not a plausible tuned
+    // frequency, but "never sent" still has to survive a radio that legitimately
+    // reports it, and the first push after connect must go out even if the
+    // backend's throttle happens to compute the same value it had before.
+    quint64 m_ioBoardTxFreqHz = 0;
+    bool m_ioBoardTxFreqSent = false;
     std::uint32_t m_expectedRxSeq = 0;   // for EP6 drop detection
     bool m_haveRxSeq = false;
     quint64 m_drops = 0;

@@ -1,4 +1,16 @@
 {
+ "core/control/RadioCatalogue.h": {
+  "tag": "universal",
+  "note": "Bounded read-only discovery resource projected from normalized observations; no vendor wire types or connection intents.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/discovery/RadioDiscoverySource.h": {
+  "tag": "universal",
+  "note": "QtCore normalized discovery/lifecycle seam; native implementations and vendor payloads stay below the backend boundary.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AcomConnection.h": {
   "tag": "peripheral(acom)",
   "note": "Direct serial/ser2net client for the ACOM S-series amplifier line (600S primary target, protocol shared across 500S/700S/1200S/2020S) — a standalone RS-232 accessory with no FlexRadio awareness at all, same precedent as core/PgxlConnection.h and core/TgxlConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/acom-600s-amplifier-design.md.",
@@ -161,6 +173,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/CwRecordGate.h": {
+  "tag": "universal",
+  "note": "Pure predicates for Client-Side QSO-recorder TX-slot ownership during a CW over; radio-agnostic policy, no vendor wire.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/CwSidetoneGenerator.h": {
   "tag": "universal",
   "note": "Engine-side low-latency CW sidetone DSP driven by keying intent; radio-agnostic (DAX only in comment).",
@@ -265,7 +283,7 @@
  },
  "core/KiwiPublicDirectory.h": {
   "tag": "vendor(kiwi)",
-  "note": "Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
+  "note": "Fetches/parses AetherSDR's kiwi.json mirror of the kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
   "split": "",
   "confidence": "high"
  },
@@ -716,6 +734,12 @@
  "core/tnc/Ax25.h": {
   "tag": "universal",
   "note": "AX.25 frame data types/constants; radio-agnostic protocol layer.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/Ax25AudioCapture.h": {
+  "tag": "universal",
+  "note": "AX.25 Capture 3m diagnostics: capture-id/path naming and the shared float32 WAV writer for the RX, generated-TX and post-resample stages; radio-agnostic diagnostic I/O (#5311).",
   "split": "",
   "confidence": "high"
  },
