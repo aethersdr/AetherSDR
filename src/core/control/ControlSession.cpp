@@ -7,6 +7,7 @@
 #include <QThread>
 #include <QUuid>
 
+#include <algorithm>
 #include <utility>
 
 namespace AetherSDR::control {
@@ -16,10 +17,12 @@ Q_LOGGING_CATEGORY(lcControlSession, "aether.control.session")
 ControlSession::ControlSession(ControlResourceStore* resources,
                                qint64 maxQueuedOutputBytes,
                                SessionAuthorization authorization,
-                               QObject* parent)
+                               QObject* parent,
+                               std::function<qint64()> monotonicNanoseconds)
     : QObject(parent),
       m_resources(resources),
       m_authorization(authorization),
+      m_monotonicNanoseconds(std::move(monotonicNanoseconds)),
       m_maxQueuedOutputBytes(maxQueuedOutputBytes)
 {
     Q_ASSERT(m_resources);
@@ -33,19 +36,49 @@ bool ControlSession::isAuthenticated() const
 {
     return !m_revoked
         && (m_authorization == SessionAuthorization::Observer
+            || m_authorization == SessionAuthorization::Controller
+            || m_authorization == SessionAuthorization::ObserverController
             || m_authorization == SessionAuthorization::AuthenticatedWithoutGrants);
 }
 
 bool ControlSession::canObserve() const
 {
     return isAuthenticated() && isNegotiated()
-        && m_authorization == SessionAuthorization::Observer;
+        && (m_authorization == SessionAuthorization::Observer
+            || m_authorization == SessionAuthorization::ObserverController);
+}
+
+bool ControlSession::canControl() const
+{
+    return isAuthenticated() && isNegotiated()
+        && (m_authorization == SessionAuthorization::Controller
+            || m_authorization == SessionAuthorization::ObserverController);
 }
 
 void ControlSession::completeNegotiation()
 {
     Q_ASSERT(isAuthenticated() && !isNegotiated());
     m_sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_requestClock.start();
+    m_lastRequestTime = m_monotonicNanoseconds ? m_monotonicNanoseconds() : 0;
+}
+
+bool ControlSession::consumeRequest()
+{
+    if (m_requestLimitExceeded) {
+        return false;
+    }
+    const qint64 now = m_monotonicNanoseconds ? m_monotonicNanoseconds() : m_requestClock.nsecsElapsed();
+    const qint64 elapsed = std::max(qint64{0}, now - m_lastRequestTime);
+    m_lastRequestTime = std::max(now, m_lastRequestTime);
+    m_requestTokens = std::min(static_cast<double>(kRequestBurst),
+                              m_requestTokens + static_cast<double>(elapsed) * kRequestsPerSecond / 1'000'000'000.0);
+    if (m_requestTokens < 1.0) {
+        m_requestLimitExceeded = true;
+        return false;
+    }
+    m_requestTokens -= 1.0;
+    return true;
 }
 
 std::optional<ProtocolError> ControlSession::observationError() const

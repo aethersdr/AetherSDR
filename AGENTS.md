@@ -486,12 +486,17 @@ available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata
 Neither option connects a radio. Icom manual setup, SmartLink and external
 directories are excluded. Catalogue fields and lifecycle are specified in
 `docs/aetherd-control-resource-v1-catalogue.md`.
-Sessions now require explicit trusted authorization; the local transport grants
-observe permission, and reads/subscriptions enforce it. The revocation hook
+Sessions require explicit trusted authorization; the local transport defaults
+to observe permission, and reads/subscriptions enforce it. The daemon's explicit
+`--allow-local-control` flag additionally grants non-TX control to current-user
+local clients. Only typed catalogue-selected `radio.connect` / `radio.disconnect`
+are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
+revision checks and limits. Clients cannot supply arbitrary endpoints or
+credentials. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon
-path invokes it yet. Credential verification/provisioning and control/transmit
+path invokes it yet. Remote credential verification/provisioning and transmit
 grants are not implemented yet.
-Meters, read-only transmit state, authenticated non-TX control, and the desktop
+Meters, read-only transmit state, typed slice/pan receive controls, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

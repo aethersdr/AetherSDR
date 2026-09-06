@@ -216,6 +216,11 @@ commands. Create a new instance to restart discovery.
 `canTransmit` is observation only. It does not advertise a protocol TX method
 or grant and cannot key a radio.
 
+When the optional local connection target is installed, `connectionControl`
+adds bounded `state` and `errorCode` observations. Their schema and the separate
+control methods are specified in
+[`aetherd-local-connection-control.md`](aetherd-local-connection-control.md).
+
 ### `slice`
 
 - `id`, `letter`, `panadapterId`, `owned`.

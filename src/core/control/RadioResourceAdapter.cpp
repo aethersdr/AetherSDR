@@ -54,15 +54,21 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
 
 RadioResourceAdapter::RadioResourceAdapter(
     RadioModel* radio, ControlResourceStore* resources,
-    QString radioSessionId, QObject* parent)
+    QString radioSessionId, QObject* parent, RadioConnectionTarget* connectionTarget)
     : QObject(parent),
       m_radio(radio),
       m_resources(resources),
-      m_radioSessionId(std::move(radioSessionId))
+      m_radioSessionId(std::move(radioSessionId)), m_connectionTarget(connectionTarget)
 {
     Q_ASSERT(m_radio);
     Q_ASSERT(m_resources);
     Q_ASSERT(!m_radioSessionId.isEmpty());
+    if (m_connectionTarget) {
+        connect(m_connectionTarget, &RadioConnectionTarget::stateChanged,
+                this, &RadioResourceAdapter::publishRadioSession);
+        connect(m_connectionTarget, &QObject::destroyed,
+                this, &RadioResourceAdapter::publishRadioSession);
+    }
 
     connect(m_radio, &RadioModel::infoChanged,
             this, &RadioResourceAdapter::publishRadioSession);
@@ -261,7 +267,7 @@ void RadioResourceAdapter::clearDynamicResources()
 void RadioResourceAdapter::publishRadioSession()
 {
     const RadioCapabilities capabilities = m_radio->backendCapabilities();
-    const QJsonObject value{
+    QJsonObject value{
         {QStringLiteral("id"), m_radioSessionId},
         {QStringLiteral("connected"), m_radio->isConnected()},
         {QStringLiteral("family"), m_radio->family()},
@@ -272,6 +278,18 @@ void RadioResourceAdapter::publishRadioSession()
              {QStringLiteral("version"), m_radio->version()},
              {QStringLiteral("manufacturer"), capabilities.manufacturer}}},
         {QStringLiteral("capabilities"), capabilityValue(capabilities)}};
+    if (m_connectionTarget) {
+        QString state;
+        switch (m_connectionTarget->state()) {
+        case RadioConnectionTarget::State::Idle: state = QStringLiteral("idle"); break;
+        case RadioConnectionTarget::State::Connecting: state = QStringLiteral("connecting"); break;
+        case RadioConnectionTarget::State::Connected: state = QStringLiteral("connected"); break;
+        case RadioConnectionTarget::State::Disconnecting: state = QStringLiteral("disconnecting"); break;
+        }
+        value.insert(QStringLiteral("connectionControl"), QJsonObject{
+            {QStringLiteral("state"), state},
+            {QStringLiteral("errorCode"), m_connectionTarget->errorCode()}});
+    }
     m_resources->upsert({QStringLiteral("radioSession"), {}, m_radioSessionId}, value);
 }
 

@@ -8,6 +8,8 @@
 #include <QCoreApplication>
 #include <QTextStream>
 
+#include <utility>
+
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
@@ -32,26 +34,44 @@ int main(int argc, char* argv[])
         QStringLiteral("Publish the simulator discovery identity without accessing radio hardware."));
     parser.addOption(localDiscoveryOption);
     parser.addOption(simDiscoveryOption);
+    const QCommandLineOption controlOption(
+        QStringLiteral("allow-local-control"),
+        QStringLiteral("Grant current-user local clients non-TX connect/disconnect permission."));
+    parser.addOption(controlOption);
     parser.process(app);
 
-    AetherSDR::RadioSession radioSession;
-    radioSession.setSessionId(1);
-    AetherSDR::control::LocalControlServer server;
-    [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
-        &radioSession.radioModel(), &server.resourceStore(),
-        QStringLiteral("radio-1"));
+    AetherSDR::control::LocalControlServer server(
+        nullptr, {}, nullptr, parser.isSet(controlOption));
     if (!server.listen(parser.value(socketOption))) {
         QTextStream(stderr) << "aetherd: cannot listen on local socket '"
                             << parser.value(socketOption) << "'\n";
         return 1;
     }
-    // Constructed only once the endpoint is ours: makeDiscoverySource() loads
-    // the shared settings store for --discover-local, and a daemon that never
-    // serves a request must not create or migrate the operator's store.
-    AetherSDR::control::RadioCatalogue catalogue(
+    // Claim the endpoint before settings or model construction: even the
+    // AppSettings singleton constructor can create directories/migrate paths.
+    // Native settings must then load before RadioModel snapshots its settings.
+    std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
-            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)}),
-        &server.resourceStore());
+            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
+    AetherSDR::RadioSession radioSession;
+    radioSession.setSessionId(1);
+    std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
+    if (parser.isSet(controlOption)) {
+        connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
+        if (!connectionTarget || !server.bindConnectionTarget(connectionTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize connection control\n";
+            return 1;
+        }
+    }
+    AetherSDR::control::RadioCatalogue catalogue(
+        std::move(discoverySource), &server.resourceStore());
+    [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
+        &radioSession.radioModel(), &server.resourceStore(),
+        QStringLiteral("radio-1"), nullptr, connectionTarget.get());
     catalogue.start();
-    return app.exec();
+    const int result = app.exec();
+    // The server was constructed first; stop delivery before target/model
+    // teardown rather than relying on reverse local-variable destruction.
+    server.close();
+    return result;
 }

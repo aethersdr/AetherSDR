@@ -1,9 +1,11 @@
 #pragma once
 
 #include "ControlResourceStore.h"
+#include "RadioConnectionTarget.h"
 
 #include <QObject>
 #include <QSet>
+#include <QPointer>
 #include <QString>
 
 namespace AetherSDR {
@@ -24,7 +26,8 @@ public:
     RadioResourceAdapter(RadioModel* radio,
                          ControlResourceStore* resources,
                          QString radioSessionId,
-                         QObject* parent = nullptr);
+                         QObject* parent = nullptr,
+                         RadioConnectionTarget* connectionTarget = nullptr);
 
     [[nodiscard]] QString radioSessionId() const { return m_radioSessionId; }
     void publishAll();
@@ -42,6 +45,7 @@ private:
     RadioModel* m_radio{nullptr};
     ControlResourceStore* m_resources{nullptr};
     QString m_radioSessionId;
+    QPointer<RadioConnectionTarget> m_connectionTarget;
     QSet<SliceModel*> m_slices;
     QSet<PanadapterModel*> m_panadapters;
 };

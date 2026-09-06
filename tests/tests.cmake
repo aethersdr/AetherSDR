@@ -80,6 +80,7 @@ add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
 # Socket-free session authorization and revocation; only the real protocol
 # service/store/session are compiled. No sockets, radio models, or settings.
 add_executable(control_authorization_test
+    src/core/control/RadioConnectionTarget.h
     tests/control_authorization_test.cpp
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
@@ -120,6 +121,7 @@ add_test(NAME control_resource_service_test COMMAND control_resource_service_tes
 # plus the native RadioInfo -> DiscoveredRadio projection table-tested per family.
 # QtNetwork is used only for QHostAddress validation, never a socket or peer.
 add_executable(radio_catalogue_test
+    src/core/control/RadioConnectionTarget.h
     tests/radio_catalogue_test.cpp
     src/core/discovery/RadioDiscoverySource.h
     src/core/control/RadioCatalogue.cpp
@@ -133,6 +135,23 @@ target_compile_definitions(radio_catalogue_test PRIVATE AETHERSDR_VERSION="${PRO
 target_link_libraries(radio_catalogue_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME radio_catalogue_test COMMAND radio_catalogue_test)
 
+# Socket-free control proof: normalized discovery and connection target are
+# injected; no radio backend, socket, settings store, or fake firmware peer.
+add_executable(control_connection_test
+    tests/control_connection_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/discovery/RadioDiscoverySource.h
+    src/core/control/RadioCatalogue.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlProtocolCodec.cpp
+)
+target_include_directories(control_connection_test PRIVATE src)
+target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME control_connection_test COMMAND control_connection_test)
+
 # Real factory wiring, with local=false: simulator metadata only, no sockets,
 # device scans, radio connections or third-party firmware stand-ins.
 add_executable(radio_discovery_source_test tests/radio_discovery_source_test.cpp)
@@ -143,11 +162,15 @@ add_test(NAME radio_discovery_source_test COMMAND radio_discovery_source_test)
 # Socket-free daemon startup policy: a fresh child process reads isolated saved
 # nicknames through native static helpers; no discovery source is started with
 # local=true and no socket, USB scan or synthetic firmware peer is used.
+# Also launches the real daemon with an invalid logical endpoint name, which
+# must fail before binding a socket or constructing model/settings consumers.
 add_executable(aetherd_discovery_startup_test tests/aetherd_discovery_startup_test.cpp)
 target_include_directories(aetherd_discovery_startup_test PRIVATE src tests)
 target_compile_definitions(aetherd_discovery_startup_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(aetherd_discovery_startup_test PRIVATE aethercore Qt6::Core)
-add_test(NAME aetherd_discovery_startup_test COMMAND aetherd_discovery_startup_test)
+add_dependencies(aetherd_discovery_startup_test aetherd)
+add_test(NAME aetherd_discovery_startup_test
+    COMMAND aetherd_discovery_startup_test $<TARGET_FILE:aetherd>)
 
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
