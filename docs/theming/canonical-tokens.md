@@ -105,6 +105,15 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
 | `color.waterfall.colormap` | (gradient — Phase 2 gradient support) | the 8-stop RF colormap |
 
+### Hardware-display colours (specialised — paint code only)
+
+| Token | Canonical | Notes |
+|---|---|---|
+| `color.spe.lcd.background` | `#102010` | SPE Expert LCD glass background |
+| `color.spe.lcd.foreground` | `#d6f5d6` | illuminated SPE Expert LCD pixel |
+| `color.spe.lcd.dim` | `#3a553a` | waiting-for-display text |
+| `color.spe.lcd.bezel` | `#222822` | SPE Expert LCD bezel |
+
 ### Slice indicators
 
 | Token | Canonical | Notes |

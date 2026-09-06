@@ -2,7 +2,6 @@
 
 #include "AppSettings.h"
 #include "LogManager.h"
-#include "ThemeManager.h"
 #include "EibiCodeMaps.h"
 
 #include <QDir>

@@ -187,6 +187,8 @@ QString familyFromProfile(const QJsonObject& profile)
         return QString::fromLatin1(ConnectionPanel::kFamilyAnan);
     if (family == QLatin1String(ConnectionPanel::kFamilyIcom))
         return QString::fromLatin1(ConnectionPanel::kFamilyIcom);
+    if (family == QLatin1String(ConnectionPanel::kFamilyRtl))
+        return QString::fromLatin1(ConnectionPanel::kFamilyRtl);
     return QString::fromLatin1(ConnectionPanel::kFamilyFlex);
 }
 
@@ -720,6 +722,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualRadioTypeCombo->addItem(tr("Hermes-Lite 2"), QString::fromLatin1(kFamilyHl2));
     m_manualRadioTypeCombo->addItem(tr("ANAN-G2"), QString::fromLatin1(kFamilyAnan));
     m_manualRadioTypeCombo->addItem(tr("Icom (network)"), QString::fromLatin1(kFamilyIcom));
+#ifdef AETHER_BACKEND_RTL
+    m_manualRadioTypeCombo->addItem(tr("RTL-SDR (USB)"), QString::fromLatin1(kFamilyRtl));
+#endif
     addManualRow(QStringLiteral("Radio type:"), m_manualRadioTypeCombo);
 
     m_manualIpCombo = new QComboBox(manualGroup);
@@ -1144,6 +1149,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         s.save();
     });
     root->addWidget(m_autoConnectCheck);
+
+    auto* wakeOnConnect = new QCheckBox(tr("Wake Icom on connect"), this);
+    wakeOnConnect->setObjectName(QStringLiteral("connectionWakeOnConnect"));
+    wakeOnConnect->setAccessibleName(tr("Wake Icom on connect"));
+    wakeOnConnect->setAccessibleDescription(tr(
+        "If Icom identity does not answer, wake the selected supported model once. "
+        "Supports IC-705, IC-7300MK2 and IC-9700, including automatic detection."));
+    wakeOnConnect->setToolTip(tr(
+        "Wake a supported Icom from standby only if it does not answer identification. "
+        "For a custom CI-V address, select the model in Connect by IP. "
+        "Does not put the radio to sleep on disconnect."));
+    wakeOnConnect->setChecked(IcomSettings::wakeOnConnect());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(wakeOnConnect, lowBandwidthCheckStyle);
+    connect(wakeOnConnect, &QCheckBox::toggled, this, [](bool on) {
+        IcomSettings::setWakeOnConnect(on);
+    });
+    root->addWidget(wakeOnConnect);
 
     // Demo mode (RFC #4288): offer the synthetic "AetherSDR Demo — Simulator"
     // entry in the radio list. Default on for discoverability; the choice
@@ -2316,6 +2338,7 @@ void ConnectionPanel::setManualFamily(const QString& family)
         lowered == QLatin1String(kFamilyHl2)  ? QString::fromLatin1(kFamilyHl2)
       : lowered == QLatin1String(kFamilyAnan) ? QString::fromLatin1(kFamilyAnan)
       : lowered == QLatin1String(kFamilyIcom) ? QString::fromLatin1(kFamilyIcom)
+      : lowered == QLatin1String(kFamilyRtl)  ? QString::fromLatin1(kFamilyRtl)
                                               : QString::fromLatin1(kFamilyFlex);
     const int index = m_manualRadioTypeCombo->findData(wanted);
     if (index < 0 || index == m_manualRadioTypeCombo->currentIndex()) {

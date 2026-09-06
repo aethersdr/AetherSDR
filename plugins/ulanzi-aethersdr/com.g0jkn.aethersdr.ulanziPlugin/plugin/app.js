@@ -158,7 +158,15 @@ function parseTci(msg) {
       // and dropped every steady-state update, freezing the local mirror at
       // the init-burst snapshot → ±5 steps bounced ±5 around that frozen
       // value forever (e.g. 45 ↔ 55 around an init volume of 50).
-      case 'volume':       radio.volume   = parseInt(p.length >= 2 ? p[1] : p[0]); break;
+      // #3502: AE echoes VOLUME in dB (−60..0). A positive value can only
+      // come from a legacy percent-scale AE, so ≥1 = percent, ≤0 = dB.
+      case 'volume': {
+        const raw = parseInt(p.length >= 2 ? p[1] : p[0]);
+        if (Number.isFinite(raw)) {
+          radio.volume = raw >= 1 ? Math.min(raw, 100) : dbToPercent(raw);
+        }
+        break;
+      }
       case 'drive':        radio.rfPower  = parseInt(p.length >= 2 ? p[1] : p[0]); break;
       case 'mic_level':    radio.micLevel = parseInt(p.length >= 2 ? p[1] : p[0]); break;
       // Dial controls. AE emits `rx_filter_band:<trx>,<low>,<high>;` and
@@ -215,20 +223,47 @@ function cmdVfoStepCoarse(direction) { return cmdSetFreq(radio.frequency + direc
 // optimistically assuming AE accepts.  If AE rejects (clamp, lock, etc.),
 // the parser still catches any later echo and corrects us.
 //
-// AF volume is echoed (so parser tracking works there too), but doing the
-// optimistic update for it as well keeps the three actions consistent and
-// is harmless — the subsequent parser echo just confirms the same value.
+// AF volume is echoed, but its dB wire scale cannot represent every integer
+// percent. The round-trip-safe ladder below makes the optimistic value and the
+// subsequent parser echo agree instead of snapping the next step backwards.
 //
 // `mic_level` is an AE extension (not in the published TCI spec) but is
 // honoured — verified live 2026-05-28 to drive TX mic gain on AetherSDR.
 const clamp01_100 = (v) => Math.max(0, Math.min(100, v));
 
+// TCI VOLUME wire scale is dB (−60..0; −60 = silence) per the spec / AetherSDR
+// #3502; AE's internal master volume is 0–100 percent. Echoes are converted
+// back to percent exactly as TciProtocol::volumePercentFromDb does.
+const dbToPercent = (db) => (db <= -60
+  ? 0
+  : Math.min(100, Math.max(1, Math.round(100 * Math.pow(10, db / 20)))));
+
+// These percentages survive AE's integer-dB echo exactly. A uniform percent
+// step does not: 95% echoes as 0 dB / 100%, which stalls repeated down steps.
+// Fine and keypad turns move one rung; the coarse dial moves two.
+const VOLUME_LEVELS = [0, 5, 11, 18, 25, 32, 40, 50, 63, 79, 100];
+
+function closestVolumeIndex(value) {
+  let best = 0, bestDist = Infinity;
+  for (let i = 0; i < VOLUME_LEVELS.length; i++) {
+    const dist = Math.abs(VOLUME_LEVELS[i] - value);
+    if (dist < bestDist) { bestDist = dist; best = i; }
+  }
+  return best;
+}
+
 // `step` defaults to the keypad's ±5; the dial handlers pass their own
 // per-detent step (see DIAL below).
 function cmdAfGain(direction, step = GAIN_STEP) {
-  const v = clamp01_100(radio.volume + direction * step);
+  const rungStep = Math.max(1, Math.round(step / GAIN_STEP));
+  const nextIndex = Math.max(0, Math.min(VOLUME_LEVELS.length - 1,
+    closestVolumeIndex(radio.volume) + direction * rungStep));
+  const v = VOLUME_LEVELS[nextIndex];
   radio.volume = v;
-  return `volume:0,${v};`;
+  // #3502: never send `volume:0` — AE reads 0 as 0 dB = FULL volume (was 0%
+  // mute). Emit −60 dB for true silence at the bottom of the dial; 1–100 are
+  // still accepted as legacy percent by AE's compat shim.
+  return `volume:0,${v === 0 ? -60 : v};`;
 }
 function cmdRfGain(direction, step = GAIN_STEP) {
   const v = clamp01_100(radio.rfPower + direction * step);

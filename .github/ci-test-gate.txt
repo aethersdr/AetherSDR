@@ -1,0 +1,25 @@
+# Tests the per-PR gate (.github/workflows/ci.yml) is allowed to run. FROZEN.
+#
+# These stay on the macOS / Windows jobs because the claim each pins is about
+# that platform's toolchain (Metal, MSVC); most also run on the Linux lanes.
+# This list does not grow. New tests run unfiltered on every push to main
+# (.github/workflows/full-suite.yml) and again weekly under the sanitizers
+# (.github/workflows/sanitizers.yml), from the moment they are declared in
+# tests/tests.cmake; they do not get a `ctest -R` step in ci.yml.
+# tools/check_ci_test_gate.py fails Static checks when ci.yml's -R patterns
+# resolve to a name that is not here. Removing a test from ci.yml: run
+#     python tools/check_ci_test_gate.py --update
+# and commit the shorter list; --update only ever removes names. Adding one is
+# a hand edit to this file — the diff is the review signal the freeze exists
+# to produce, and it needs a maintainer's reason in the PR body.
+#
+# One name per line, sorted, each with the platform claim that keeps it here —
+# so a one-line diff to this file is reviewable on its own (#5405 review).
+# The trailing comments are not parsed; the checker reads the first field.
+aether_dv_waveform_no_args            # Windows: MSVC builds the D-STAR waveform helper
+asr_gpu_probe_test                    # macOS only: Apple Silicon Metal probe
+cross_needle_meter_test               # Windows: #4559's separator assertion failed on MSVC, passed on Linux
+digital_voice_waveform_process_test   # Windows: MSVC codepath for the DV waveform
+dstar_model_test                      # Windows: MSVC, and links the ThumbDV compat shim
+mac_nr_filter_test                    # macOS only: if(APPLE) in tests.cmake
+thumbdv_queue_test                    # Windows: MSVC + the smartsdr-dsp compat/windows shim

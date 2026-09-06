@@ -33,6 +33,10 @@ public:
     static QString username();
     static void setUsername(const QString& username);
 
+    // Client-owned, opt-in connection policy, stored in the Icom document.
+    static bool wakeOnConnect();
+    static void setWakeOnConnect(bool enabled);
+
     // The last host connected to, so the connect dialog can offer it back.
     static QString lastHost();
     static void setLastHost(const QString& host);
@@ -63,8 +67,8 @@ public:
     // is allowed to overrule it. Three states, not two, because "A2" means
     // different things depending on where it was typed:
     //
-    //   Auto    nobody chose. Seed from the model the handshake names, then
-    //           adopt whatever answers the broadcast 0x19 0x00.
+    //   Auto    nobody chose. Query 19 00 at the broadcast address, then
+    //           adopt the sole responder's source address.
     //   Model   the operator picked a model from the list. That is a SHORTCUT
     //           for an address, not a device selection, so a radio that reports
     //           a different address is correcting a stale pick and wins.
