@@ -21,6 +21,13 @@ constexpr const char* kFieldSwapAudioChannels = "swapAudioChannels";
 constexpr int kDefaultTxLatency = 20;
 constexpr int kDefaultPttHang = 12;
 
+// kTxLatencyMax/kPttHangMax are re-declared on Hl2MiscOptionsSettings itself
+// (see its own comment) so RadioSetupDialog.cpp doesn't need to import
+// MetisProtocol.h just for two range limits. Asserted equal here, in the one
+// file allowed to know both, so they can never silently drift.
+static_assert(Hl2MiscOptionsSettings::kTxLatencyMax == hl2::kTxLatencyMax);
+static_assert(Hl2MiscOptionsSettings::kPttHangMax == hl2::kPttHangMax);
+
 // Read-modify-write against the EXACT row (never the family-wide fallback) —
 // a writer must judge the row it is about to replace, not a composed default
 // (AGENTS.md "Radio-Scoped Feature Documents").

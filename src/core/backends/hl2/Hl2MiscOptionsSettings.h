@@ -42,6 +42,16 @@ public:
     static int pttHang(const RadioSettingsScope& scope);
     static void setPttHang(const RadioSettingsScope& scope, int value);
 
+    // The two fields' widths on the wire (MetisProtocol.h's kTxLatencyMax /
+    // kPttHangMax — a 7-bit and a 5-bit field respectively). Re-declared here,
+    // rather than making the GUI's settings page import the wire-protocol
+    // header directly for two range limits, since that header is
+    // above the vendor-header seam for GUI-layer files (see
+    // tools/check_engine_boundary.py's EB3). The .cpp static_asserts these
+    // equal the real protocol constants, so they cannot silently drift.
+    static constexpr int kTxLatencyMax = 127;
+    static constexpr int kPttHangMax = 31;
+
     // Swap left/right on the outgoing transmit audio path. Defaults false.
     //
     // CURRENTLY A NO-OP ON THE WIRE: this backend's EP2 audio slot is always

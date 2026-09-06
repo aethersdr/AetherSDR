@@ -4073,6 +4073,37 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                 Q_ARG(int, m.value(QStringLiteral("data")).toInt()));
             return;
         }
+        // The I/O Board's own pin-status poll (RadioSetupDialog's 1Hz
+        // auto-poll row): no bus/address/register args, unlike the generic
+        // i2cRead above — this ONE known device's bus/address/register are
+        // this backend's own knowledge (MetisProtocol.h's kIoBoard*
+        // constants), not something the GUI layer should hold directly
+        // (RadioSetupDialog.cpp stays below the vendor-header seam; see
+        // tools/check_engine_boundary.py's EB3).
+        if (verb == QLatin1String("ioboard.readInputPins")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, 2), Q_ARG(int, hl2::kIoBoardI2cAddress),
+                Q_ARG(int, hl2::kIoBoardRegInputPins));
+            return;
+        }
+        if (verb == QLatin1String("ioboard.readOutputPins")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, 2), Q_ARG(int, hl2::kIoBoardI2cAddress),
+                Q_ARG(int, hl2::kIoBoardRegOutputPins));
+            return;
+        }
 
         // "Filter Board" page (ticket #12): manual J16 relay override.
         if (verb == QLatin1String("filterboard.setManualEnabled")) {

@@ -10,7 +10,6 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/backends/hl2/Hl2MiscOptionsSettings.h" // Hermes Lite 2 misc-options page
-#include "core/backends/hl2/MetisProtocol.h"  // kTxLatencyMax/kPttHangMax field widths
 #include "core/backends/hl2/Hl2FilterBoard.h" // manual J16 filter-board table
 #include "core/backends/hl2/Hl2FilterBoardSettings.h" // "Hl2FilterBoard" root key
 #include "core/backends/IRadioBackend.h"      // extensionResult (I/O Board I2C round trip)
@@ -9357,7 +9356,7 @@ QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
     latencyLabel->setStyleSheet(kLabelStyle);
     grid->addWidget(latencyLabel, 0, 1);
     auto* latencySpin = new QSpinBox;
-    latencySpin->setRange(0, hl2::kTxLatencyMax);
+    latencySpin->setRange(0, Hl2MiscOptionsSettings::kTxLatencyMax);
     latencySpin->setValue(Hl2MiscOptionsSettings::txLatency(m_model->settingsScope()));
     latencySpin->setKeyboardTracking(false);
     latencySpin->setAccessibleName(QStringLiteral("TX latency"));
@@ -9370,7 +9369,7 @@ QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
     hangLabel->setStyleSheet(kLabelStyle);
     grid->addWidget(hangLabel, 1, 1);
     auto* hangSpin = new QSpinBox;
-    hangSpin->setRange(0, hl2::kPttHangMax);
+    hangSpin->setRange(0, Hl2MiscOptionsSettings::kPttHangMax);
     hangSpin->setValue(Hl2MiscOptionsSettings::pttHang(m_model->settingsScope()));
     hangSpin->setKeyboardTracking(false);
     hangSpin->setAccessibleName(QStringLiteral("PTT hang"));
@@ -9474,11 +9473,14 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     auto* addressSpin = makeLabeledSpin(QStringLiteral("I2C Address"), 2, 0x7F);
     auto* controlSpin = makeLabeledSpin(QStringLiteral("Reg/Control"), 3);
     auto* writeDataSpin = makeLabeledSpin(QStringLiteral("Write Data"), 4);
-    // Defaults to the I/O Board's own fixed address and a register worth
-    // checking first (0x08 = REG_FAULT — zero for no fault, confirming the
-    // board's alive without touching anything). Still just a starting
-    // point for arbitrary exploration, not a restriction.
-    addressSpin->setValue(hl2::kIoBoardI2cAddress);
+    // Defaults to the I/O Board's own fixed address (0x1D — MetisProtocol.h's
+    // kIoBoardI2cAddress; a bare literal here rather than importing the
+    // constant, since this file stays below the vendor-header seam, see
+    // tools/check_engine_boundary.py's EB3) and a register worth checking
+    // first (0x08 = REG_FAULT — zero for no fault, confirming the board's
+    // alive without touching anything). Still just a starting point for
+    // arbitrary exploration, not a restriction.
+    addressSpin->setValue(0x1D);
     controlSpin->setValue(0x08);
 
     auto* resultLabel = new QLabel(QStringLiteral("—"));
@@ -9581,27 +9583,24 @@ QWidget* RadioSetupDialog::buildIoBoardTab()
     // Always live, independent of "Enable I2C control" — that checkbox gates
     // the GENERIC arbitrary-address panel only; the pin row is read-only and
     // targets this one known board, so there is nothing it could do that an
-    // operator needs to opt into. Hardcodes bus 2 / kIoBoardI2cAddress
-    // (confirmed values — see the constant's own comment) rather than
-    // reading busGroup/addressSpin, so retyping some other address into the
-    // manual panel for an unrelated diagnostic can never disturb this.
+    // operator needs to opt into. Uses the backend's own dedicated verbs
+    // (ioboard.readInputPins/readOutputPins) rather than the generic
+    // ioboard.i2cRead with a bus/address/register this file would have to
+    // hold — the bus/address/register for this one known device are the
+    // BACKEND's knowledge (MetisProtocol.h's kIoBoard* constants), not
+    // something a GUI-layer file should import directly (this file stays
+    // below the vendor-header seam; see tools/check_engine_boundary.py's
+    // EB3). Also means retyping some other address into the manual panel
+    // for an unrelated diagnostic can never disturb this row.
     auto triggerReadInputPins = [this, nextRequestId, pendingKind] {
         *pendingKind = QStringLiteral("pin-in");
-        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
-            (*nextRequestId)++, QVariant(QVariantMap{
-                {QStringLiteral("bus"), 2},
-                {QStringLiteral("address"), hl2::kIoBoardI2cAddress},
-                {QStringLiteral("control"), hl2::kIoBoardRegInputPins},
-            }));
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+            QStringLiteral("ioboard.readInputPins"), (*nextRequestId)++, QVariant());
     };
     auto triggerReadOutputPins = [this, nextRequestId, pendingKind] {
         *pendingKind = QStringLiteral("pin-out");
-        m_model->invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("ioboard.i2cRead"),
-            (*nextRequestId)++, QVariant(QVariantMap{
-                {QStringLiteral("bus"), 2},
-                {QStringLiteral("address"), hl2::kIoBoardI2cAddress},
-                {QStringLiteral("control"), hl2::kIoBoardRegOutputPins},
-            }));
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+            QStringLiteral("ioboard.readOutputPins"), (*nextRequestId)++, QVariant());
     };
 
     // Alternate input/output polls once a second. Alternating (never both
