@@ -3757,6 +3757,7 @@ add_executable(system_info_dialog_test
     src/core/ThemeSeedGenerated.cpp
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
+    src/core/MemoryTelemetry.cpp
     src/core/ThreadName.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4564,6 +4565,32 @@ target_include_directories(system_info_test PRIVATE src)
 target_link_libraries(system_info_test PRIVATE Qt6::Core)
 set_target_properties(system_info_test PROPERTIES AUTOMOC ON)
 add_test(NAME system_info_test COMMAND system_info_test)
+
+# #2554 (Memory tab): the collector publishes a process-memory sample on every
+# tick through a queued signal; this drives the real thread wiring (moveToThread,
+# init on started, the 1.5 s timer) and reads the live process. No socket, no
+# radio, no widget.
+add_executable(system_info_collector_test
+    tests/system_info_collector_test.cpp
+    src/core/SystemInfoCollector.cpp
+    src/core/SystemInfo.cpp
+    src/core/MemoryTelemetry.cpp
+    src/core/ThreadName.cpp
+)
+target_include_directories(system_info_collector_test PRIVATE src)
+target_link_libraries(system_info_collector_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(system_info_collector_test PROPERTIES AUTOMOC ON)
+add_test(NAME system_info_collector_test COMMAND system_info_collector_test)
+
+# #2554 (Memory tab): the dialog's bounded memory history and the chart slicing it
+# shares with NetworkDiagnosticsDialog (1 s raw to 5 min, bucket averages beyond).
+# Header-only class; pure logic, constructed samples; no widget, no socket.
+add_executable(memory_history_ring_test
+    tests/memory_history_ring_test.cpp
+)
+target_include_directories(memory_history_ring_test PRIVATE src)
+target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
+add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
 
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host
