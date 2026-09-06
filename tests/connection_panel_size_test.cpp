@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFont>
+#include <QFile>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
@@ -461,6 +462,44 @@ int main(int argc, char** argv)
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QApplication app(argc, argv);
+
+    // MainWindow is intentionally not linked into this focused widget target.
+    // Pin the consolidated startup policy instead: each settings combination
+    // must schedule at most one idempotent show request, while the two real
+    // operator entry points retain deliberate toggle behavior.
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    report("startup dialog test can inspect MainWindow",
+           mainWindowSource.open(QIODevice::ReadOnly));
+    const QByteArray mainWindowText = mainWindowSource.readAll();
+    const qsizetype startupPolicyStart = mainWindowText.indexOf(
+        "// Saved-radio autoconnect is controlled solely");
+    const qsizetype startupPolicyEnd = mainWindowText.indexOf(
+        "// Auto-connect to routed radios", startupPolicyStart);
+    const QByteArray startupPolicy = mainWindowText.mid(
+        startupPolicyStart, startupPolicyEnd - startupPolicyStart);
+    report("connection dialog startup policy remains one adjacent block",
+           startupPolicyStart >= 0 && startupPolicyEnd > startupPolicyStart);
+    report("auto-connect opt-out idempotently shows connection dialog",
+           startupPolicy.contains(
+               "QTimer::singleShot(0, this, &MainWindow::showConnectionDialog);"));
+    report("missing-radio fallback idempotently shows connection dialog",
+           startupPolicy.contains(
+               "QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });"));
+    report("startup policy never toggles an already-visible dialog",
+           !startupPolicy.contains("toggleConnectionDialog"));
+
+    QFile menuSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Menus.cpp"));
+    report("startup dialog test can inspect the Settings menu",
+           menuSource.open(QIODevice::ReadOnly));
+    report("Settings menu retains deliberate toggle behavior",
+           menuSource.readAll().contains("toggleConnectionDialog();"));
+
+    QFile shortcutSource(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
+    report("startup dialog test can inspect keyboard shortcuts",
+           shortcutSource.open(QIODevice::ReadOnly));
+    report("keyboard shortcut retains deliberate toggle behavior",
+           shortcutSource.readAll().contains("toggleConnectionDialog();"));
     AppSettings::instance().load();
     std::printf("ConnectionPanel screen-fit test harness (#4515)\n\n");
 

@@ -1,5 +1,7 @@
 #include "IambicKeyer.h"
 
+#include "ThreadName.h"
+
 #include <algorithm>
 
 namespace AetherSDR {
@@ -138,6 +140,12 @@ void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
 
 void IambicKeyer::workerLoop()
 {
+    // A raw std::thread never passes through QThread::start(), so Qt cannot
+    // name it the way it names the QThread workers — without this the keyer
+    // shows up as an unnamed row in the System Info thread table (#2554), which
+    // is unhelpful for exactly the CW timing work that would consult it.
+    setCurrentThreadName("IambicKeyer");
+
     Element lastSent = Element::Dah;   // first paddle press emits whatever's wanted
     bool firstInSqueeze = true;        // resets each time we re-enter the active phase
 

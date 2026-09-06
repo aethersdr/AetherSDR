@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.8.4
+## Current cycle: post-v26.9.1
 
 ### In flight
 

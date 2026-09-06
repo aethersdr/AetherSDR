@@ -9,15 +9,15 @@
 
 namespace AetherSDR {
 
-// Portable, versioned JSON persistence for the CLIENT-side memory bank — the
-// channels an operator saves on a radio that has no memory storage of its own
-// (Hermes-Lite 2, Kiwi, the demo backend). On a Flex the radio owns the slots
-// and this file is never touched; see RadioCapabilities::persistsMemories.
+// Portable, versioned JSON persistence for the CLIENT-side memory bank — both
+// channels the operator creates here and snapshots explicitly imported from a
+// radio. On a Flex the radio owns and mutates the active slots, so this document
+// is not the session store; see RadioCapabilities::persistsMemories.
 //
 // Envelope:
 //   {
 //     "format": "aether.memories",
-//     "version": 1,
+//     "version": 1 or 2,
 //     "savedAt": "2026-07-29T14:00:00Z",
 //     "savedBy": "AetherSDR",
 //     "memories": [ { "index": 0, ...MemoryEntry... } ]
@@ -35,7 +35,10 @@ namespace AetherSDR {
 // bank is sparse.
 class LocalMemoryStore {
 public:
-    static constexpr int kFormatVersion = 1;
+    static constexpr int kFormatVersion = 2;
+    // Keep ordinary client memories readable by version-1 builds. Imported
+    // recall state needs version 2: older writers would drop safety metadata.
+    static int formatVersionFor(const QMap<int, MemoryEntry>& memories);
     static constexpr const char* kFormatId = "aether.memories";
 
     // The bank's home since RFC #4603 PR 6: ONE shared feature document in

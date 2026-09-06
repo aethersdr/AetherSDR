@@ -15,6 +15,7 @@
 #include <limits>
 
 #include "core/KiwiSdrProtocol.h"
+#include "core/backends/RadioCapabilities.h"
 
 class QPushButton;
 class ScrollableLabel;
@@ -27,6 +28,7 @@ class QCheckBox;
 class QGraphicsOpacityEffect;
 class QDoubleSpinBox;
 class QGridLayout;
+class QVBoxLayout;
 class QPainter;
 class QHideEvent;
 class QResizeEvent;
@@ -610,6 +612,7 @@ public:
     // the VFO grid was simply never given it, so the two filter surfaces
     // in the app disagreed about what the radio could do.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
 
     // Reflect whether any client-side AetherDSP NR module (NR2 / NR4 / MNR /
     // BNR / DFNR / RN2) is active by accenting the ADSP launcher, so the cue is
@@ -711,10 +714,15 @@ private:
     QStackedWidget*  m_digOffsetStack{nullptr};    // switches between label and edit
     // FM-family OPT controls. DSTR uses the duplex controls but not CTCSS.
     QWidget*       m_fmContainer{nullptr};
+    QVBoxLayout*   m_fmLayout{nullptr};
     QWidget*       m_fmToneContainer{nullptr};
+    QWidget*       m_fmToneRxContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};
     QComboBox*     m_fmToneRxValueCmb{nullptr};
+    QComboBox*     m_fmDtcsCodeCmb{nullptr};
+    QComboBox*     m_fmDtcsPolarityCmb{nullptr};
+    QWidget*       m_fmDtcsContainer{nullptr};
     QDoubleSpinBox* m_fmOffsetSpin{nullptr};
     QPushButton*   m_fmOffsetDown{nullptr};
     QPushButton*   m_fmSimplexBtn{nullptr};
@@ -733,6 +741,7 @@ private:
     QVector<int> m_filterWidths;
     // Radio-declared ladder; empty when the radio does not declare one.
     QVector<int> m_radioFilterWidths;
+    RxFilterControl m_radioFilterControl;
     // Parallel to m_filterWidths.  When a slot has user-defined custom
     // edges (right-click → "Set Custom Edges..."), the lo/hi are stored
     // here and applied directly instead of going through applyFilterPreset's

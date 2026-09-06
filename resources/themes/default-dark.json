@@ -91,7 +91,16 @@
             "trace":    "{color.blue.500}",
             "peakHold": "{color.amber.500}",
             "average":  "{color.gray.400}",
-            "grid":     "{color.gray.850}"
+            "grid":     "{color.gray.850}",
+            "zoomButton.disabled.background": "#5a0f0f1a",
+            "zoomButton.disabled.border":     "#5a304050",
+            "zoomButton.disabled.text":       "#8c90a0b0"
+          },
+          "spe.lcd": {
+            "background": "#102010",
+            "foreground": "#d6f5d6",
+            "dim":        "#3a553a",
+            "bezel":      "#222822"
           },
           "waterfall.colormap": {
             "default": {

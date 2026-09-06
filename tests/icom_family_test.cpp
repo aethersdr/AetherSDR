@@ -24,10 +24,34 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <utility>
 #include <vector>
 
 using namespace AetherSDR;
+
+namespace AetherSDR::icom {
+
+struct IcomCivBackendTestAccess {
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static std::optional<std::vector<std::uint8_t>> confirmationFor(
+        const IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        return backend.confirmationFor(frame);
+    }
+
+    static void injectConnectedFrame(IcomCivBackend& backend, const CivFrame& frame)
+    {
+        backend.m_connected = true;
+        backend.onCivFrame(frame, backend.m_sessionGeneration);
+    }
+};
+
+} // namespace AetherSDR::icom
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
@@ -56,16 +80,27 @@ int main(int argc, char** argv)
 
     const auto icomNotice = experimentalRadioDescriptor(QStringLiteral("icom"));
     const auto hl2Notice = experimentalRadioDescriptor(QStringLiteral("hl2"));
+    const auto ananNotice = experimentalRadioDescriptor(QStringLiteral("anan"));
     check(icomNotice && icomNotice->displayName == QStringLiteral("Icom"),
           "Icom is identified as an experimental radio family");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
           "Hermes-Lite 2 is identified as an experimental radio family");
+    check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),
+          "ANAN-G2 is identified as an experimental radio family");
     check(!experimentalRadioDescriptor(QStringLiteral("flex")),
           "Flex is not marked as an experimental radio family");
     check(icomNotice
-              && experimentalRadioNoticeText(icomNotice->displayName)
+              && experimentalRadioNoticeText(icomNotice->displayName, /*transmitAvailable=*/true)
                      .contains(QStringLiteral("Help \u2192 File an Issue")),
           "the experimental notice points operators to the issue-reporting workflow");
+    check(icomNotice
+              && experimentalRadioNoticeText(icomNotice->displayName, /*transmitAvailable=*/true)
+                     .contains(QStringLiteral("receive and transmit functions are available")),
+          "a transmit-capable family's notice does not claim receive-only");
+    check(ananNotice
+              && experimentalRadioNoticeText(ananNotice->displayName, /*transmitAvailable=*/false)
+                     .contains(QStringLiteral("receive-only")),
+          "a receive-only family's notice does not falsely claim transmit support");
 
     // ---- the factory selects it ------------------------------------------
     model.connectToRadio(infoFor(QStringLiteral("icom")));
@@ -87,6 +122,109 @@ int main(int argc, char** argv)
           "an Icom remembers its own state, so the client restores NOTHING");
     check(!caps.hasDownwardExpander,
           "Icom exposes no DEXP surface without an evidenced command path");
+    check(!caps.canReboot && !caps.hasRemoteOnControl
+              && !caps.canUpgradeFirmware,
+          "Icom hides unsupported remote radio-management controls");
+    check(!caps.hasSmartLink && !caps.hasLicenseInfo
+              && !caps.hasClientNetworkConfig
+              && !caps.hasFlexControlIntegration
+              && !caps.hasAudioCompression && !caps.hasSharpFilters,
+          "Icom hides unsupported Flex Settings surfaces");
+    check(!caps.usesVita49Transport,
+          "Icom hides Flex VITA-49 receive-buffer tuning");
+    check(!caps.hasPrivateIpConnectionPolicy,
+          "Icom hides the Flex private-IP connection policy");
+
+    auto* selectedBackend = dynamic_cast<icom::IcomCivBackend*>(model.backend());
+    check(selectedBackend != nullptr,
+          "the selected Icom backend is available for model capability checks");
+    if (selectedBackend) {
+        const icom::IcomModel& initialModel = selectedBackend->model();
+        const auto* ic705 = icom::modelForId(0xA4);
+        const auto* ic9700 = icom::modelForId(0xA2);
+        check(ic705 && ic9700, "the IC-705 and IC-9700 model profiles exist");
+        if (ic705 && ic9700) {
+            icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic705);
+            const RadioCapabilities ic705Caps = selectedBackend->capabilities();
+            check(ic705Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic705Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic705Caps.fmDtcsCodes.size() == 104,
+                  "IC-705 advertises its documented complete DTCS UI vocabulary");
+
+            icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, *ic9700);
+            const RadioCapabilities ic9700Caps = selectedBackend->capabilities();
+            check(ic9700Caps.fmToneModes.contains(QStringLiteral("dtcs_txrx"))
+                      && ic9700Caps.fmToneModes.contains(
+                          QStringLiteral("ctcss_tx_dtcs_rx"))
+                      && ic9700Caps.fmDtcsCodes.size() == 104,
+                  "IC-9700 advertises its documented complete DTCS UI vocabulary");
+
+            RadioDelta published;
+            bool sawNetworkName = false;
+            QObject::connect(selectedBackend, &IRadioBackend::radioChanged,
+                             [&published, &sawNetworkName](const RadioDelta& delta) {
+                if (delta.networkName) {
+                    published = delta;
+                    sawNetworkName = true;
+                }
+            });
+            icom::CivFrame networkNameFrame;
+            networkNameFrame.cmd = icom::cmd::kSetting;
+            networkNameFrame.hasSub = true;
+            networkNameFrame.sub = 0x05;
+            networkNameFrame.data = {0x01, 0x44, 'S', 'H', 'A', 'C', 'K'};
+            icom::IcomCivBackendTestAccess::injectConnectedFrame(
+                *selectedBackend, networkNameFrame);
+            check(sawNetworkName
+                      && published.networkName == QStringLiteral("SHACK")
+                      && !published.nickname,
+                  "IC-9700 Network Name publishes dedicated network identity");
+            check(model.networkName() == QStringLiteral("SHACK")
+                      && model.nickname().isEmpty(),
+                  "Network Name reaches RadioModel without replacing station nickname");
+
+            check(QMetaObject::invokeMethod(&model, "onDisconnected",
+                                            Qt::DirectConnection),
+                  "Icom network-name reset fixture reached RadioModel");
+            check(model.networkName().isEmpty(),
+                  "disconnect clears session-owned Icom Network Name");
+        }
+        icom::IcomCivBackendTestAccess::selectModel(*selectedBackend, initialModel);
+    }
+
+    {
+        icom::IcomCivBackend backend;
+        const auto* ic9700 = icom::modelForId(0xA2);
+        check(ic9700 != nullptr, "the IC-9700 exists for disconnect-state coverage");
+        if (ic9700) {
+            icom::IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            bool resetPublished = false;
+            QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                             [&resetPublished](int, const SliceDelta& delta) {
+                resetPublished = delta.fmDtcsCode == -1
+                    && delta.fmDtcsTxReverse == false
+                    && delta.fmDtcsRxReverse == false;
+            });
+            const bool invoked = QMetaObject::invokeMethod(
+                &backend, "onSessionDisconnected", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("test disconnect")));
+            check(invoked && resetPublished,
+                  "IC-9700 disconnect withdraws established DTCS state");
+
+            const auto confirmation =
+                icom::IcomCivBackendTestAccess::confirmationFor(
+                    backend, icom::cmdSetDtcsTone(0xA2, 23, true, false));
+            // With no live session, confirmationFor() uses the documented
+            // disconnected fallback address; this assertion proves the 1B 02
+            // write schedules the matching authoritative register readback.
+            check(confirmation
+                      && *confirmation
+                          == icom::cmdReadRepeaterToneRegister(
+                              0xA4, icom::repeaterTone::kDtcs),
+                  "DTCS operator writes schedule an immediate authoritative readback");
+        }
+    }
 
     // The Icom transport reports one stable VFO as slice 0. On reconnect,
     // RadioModel stages the old SliceModel so the UI can keep its subscriptions
@@ -114,6 +252,20 @@ int main(int argc, char** argv)
                 icomBackend, "onSessionConnected", Qt::DirectConnection,
                 Q_ARG(QString, QStringLiteral("IC-705")));
             check(firstConnected, "the first Icom session reaches its connected edge");
+            check(!icomBackend->capabilities().hasGpsHardware,
+                  "a familiar network name cannot grant GPS before CI-V identity");
+            icom::CivFrame identity;
+            identity.to = 0xE0;
+            identity.from = 0xA4;
+            identity.cmd = 0x19;
+            identity.hasSub = true;
+            identity.sub = 0x00;
+            identity.data = {0xA4};
+            icom::IcomCivBackendTestAccess::injectConnectedFrame(*icomBackend, identity);
+            check(icomBackend->capabilities().hasGpsHardware,
+                  "IC-705 backend publishes its profile's GPS hardware capability");
+            check(reconnectModel.hasGpsSetupHardware(),
+                  "IC-705 profile enables the Settings GPS hardware surface");
 
             SliceDelta initial;
             initial.panId = QStringLiteral("icom");
@@ -214,11 +366,35 @@ int main(int argc, char** argv)
           "the WSPR route fails closed if the current backend cannot take seam audio");
 
     const auto ic705Mod = icom::modulationProfileFor(
-        *icom::modelForCivAddress(0xA4));
+        *icom::modelForId(0xA4));
     const auto ic9700Mod = icom::modulationProfileFor(
-        *icom::modelForCivAddress(0xA2));
+        *icom::modelForId(0xA2));
     const auto mk2Mod = icom::modulationProfileFor(
-        *icom::modelForCivAddress(0xB6));
+        *icom::modelForId(0xB6));
+    check(icom::profileFor(*icom::modelForId(0xA4)).hasGpsHardware,
+          "IC-705 profile declares its internal GPS receiver");
+    check(!icom::profileFor(*icom::modelForId(0xA2)).hasGpsHardware,
+          "IC-9700 profile does not declare GPS hardware");
+    check(!icom::profileFor(*icom::modelForId(0xB6)).hasGpsHardware,
+          "IC-7300MK2 profile does not declare GPS hardware");
+    const auto ic9700Network = icom::profileFor(
+        *icom::modelForId(0xA2)).networkConfiguration;
+    const auto ic705Network = icom::profileFor(
+        *icom::modelForId(0xA4)).networkConfiguration;
+    const auto mk2Network = icom::profileFor(
+        *icom::modelForId(0xB6)).networkConfiguration;
+    check(ic9700Network && ic9700Network->effectiveIpItem == 139
+              && ic9700Network->subnetMaskItem == 140
+              && ic9700Network->gatewayItem == 141
+              && ic9700Network->networkNameItem == 144,
+          "IC-9700 profile maps its documented SET 0139-0144 network fields");
+    check(!ic705Network,
+          "IC-705 does not claim network registers absent from its CI-V guide");
+    check(mk2Network && mk2Network->effectiveIpItem == 102
+              && mk2Network->subnetMaskItem == 103
+              && mk2Network->gatewayItem == 104
+              && mk2Network->networkNameItem == 107,
+          "IC-7300MK2 profile maps its documented SET 0102-0107 network fields");
     check(ic705Mod && ic705Mod->dataOffInputItem == 118
               && ic705Mod->dataInputItem == 119
               && ic705Mod->networkOnlyValue == 0x03,
@@ -236,7 +412,7 @@ int main(int argc, char** argv)
               && ic9700Mod->phoneLevelFollowsNetworkInput,
           "IC-9700 uses its documented SET 0112-0116 modulation map and routes "
           "the Phone level through LAN only while LAN is selected");
-    check(icom::profileFor(*icom::modelForCivAddress(0xA2))
+    check(icom::profileFor(*icom::modelForId(0xA2))
               .supports(icom::IcomFeature::ModulationInput),
           "IC-9700 modulation input diagnostics carry model-owned guide evidence");
     check(ic705Mod && !ic705Mod->phoneLevelFollowsNetworkInput
@@ -253,36 +429,36 @@ int main(int argc, char** argv)
     // An IC-9700 has LAN rather than Wi-Fi. Its independently verified profile
     // above must therefore use value 05 and must not borrow the IC-705's WLAN
     // value 03.
-    check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
+    check(!AetherSDR::icom::modelForId(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — its network modulation source is LAN");
     check(!AetherSDR::icom::profileFor(
-              *AetherSDR::icom::modelForCivAddress(0xA2))
+              *AetherSDR::icom::modelForId(0xA2))
                .meters.hasPaTemperatureTelemetry,
           "the IC-9700 profile does not declare PA-temperature telemetry");
     check(AetherSDR::icom::profileFor(
-              *AetherSDR::icom::modelForCivAddress(0xA2))
+              *AetherSDR::icom::modelForId(0xA2))
               .meters.hasPaCurrentTelemetry,
           "the IC-9700 profile independently declares Radio Vitals PA current");
     check(!AetherSDR::icom::profileFor(
-               *AetherSDR::icom::modelForCivAddress(0xA4))
+               *AetherSDR::icom::modelForId(0xA4))
                .meters.hasPaCurrentTelemetry
               && !AetherSDR::icom::profileFor(
-                      *AetherSDR::icom::modelForCivAddress(0xB6))
+                      *AetherSDR::icom::modelForId(0xB6))
                       .meters.hasPaCurrentTelemetry,
           "IC-705 and IC-7300MK2 do not inherit the IC-9700 Radio Vitals surface");
     check(AetherSDR::icom::profileFor(
-              *AetherSDR::icom::modelForCivAddress(0xA2))
+              *AetherSDR::icom::modelForId(0xA2))
               .speechProcessorLevelMaximum == 100,
           "the IC-9700 profile declares its continuous processor range");
     check(AetherSDR::icom::profileFor(
-              *AetherSDR::icom::modelForCivAddress(0xA2))
+              *AetherSDR::icom::modelForId(0xA2))
               .speechProcessorLabel == "COMP",
           "the IC-9700 profile declares its radio-native COMP label");
     check(AetherSDR::icom::profileFor(
-              *AetherSDR::icom::modelForCivAddress(0xA4))
+              *AetherSDR::icom::modelForId(0xA4))
                   .speechProcessorLevelMaximum == 2
               && AetherSDR::icom::profileFor(
-                     *AetherSDR::icom::modelForCivAddress(0xB6))
+                     *AetherSDR::icom::modelForId(0xB6))
                      .speechProcessorLevelMaximum == 2,
           "IC-705 and IC-7300MK2 retain the three-position processor contract");
     check(icom::speechProcessorRawLevel(100, 0) == 0
@@ -293,11 +469,19 @@ int main(int argc, char** argv)
               && icom::speechProcessorRawLevel(2, 1) == 153
               && icom::speechProcessorRawLevel(2, 2) == 229,
           "sibling Icom processor presets retain raw 76/153/229 encoding");
+    std::vector<std::uint8_t> tunerModels;
+    for (const icom::IcomModel& model : icom::knownModels()) {
+        if (icom::profileFor(model).supports(icom::IcomFeature::AntennaTuner)) {
+            tunerModels.push_back(model.civAddress);
+        }
+    }
+    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0x8E, 0x94, 0xB6},
+          "each evidenced internal/external-tuner model opts into tuner control");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {
-        const auto ic705Tbw = icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xA4));
-        const auto mk2Tbw   = icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xB6));
+        const auto ic705Tbw = icom::txBandwidthProfileFor(*icom::modelForId(0xA4));
+        const auto mk2Tbw   = icom::txBandwidthProfileFor(*icom::modelForId(0xB6));
         check(ic705Tbw && ic705Tbw->wideItem == 19 && ic705Tbw->midItem == 20
                   && ic705Tbw->narrowItem == 21 && ic705Tbw->dataItem == 22,
               "IC-705 TX bandwidth lives at SET 0019/0020/0021/0022");
@@ -332,12 +516,12 @@ int main(int argc, char** argv)
 
         // AN UNREAD MODEL GETS NOTHING, so setTxFilter() declines rather than
         // writing a passband into whatever SET item happens to share the number.
-        check(!icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xA2)),
+        check(!icom::txBandwidthProfileFor(*icom::modelForId(0xA2)),
               "the IC-9700 has no TBW profile and must not borrow one");
         check(!icom::txBandwidthProfileFor(icom::unknownModel()),
               "and neither does an unrecognised radio");
     }
-    check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,
+    check(AetherSDR::icom::modelForId(0xA4)->hasWifi,
           "the IC-705 does — the one model the WLAN check is legitimate for");
 
     check(!caps.radioOwnsDbmScale,
@@ -426,10 +610,10 @@ int main(int argc, char** argv)
                   "every table row has a real CI-V address - a 0 would render as "
                   "a chooser entry that addresses nobody");
             check(!m.name.empty(), "and a name to put in front of the operator");
-            // The address is the key modelForCivAddress() looks up, so a
+            // The address is the key modelForId() looks up, so a
             // duplicate would make one of the two models unreachable by the
             // 0x19 0x00 reply - silently, and in favour of whichever came first.
-            check(icom::modelForCivAddress(m.civAddress) != nullptr,
+            check(icom::modelForId(m.civAddress) != nullptr,
                   "and is reachable by its own address");
             // ROUND TRIP through the name, which is the ONLY identity available
             // during the RS-BA1 handshake - before any CI-V stream exists, and
@@ -489,6 +673,11 @@ int main(int argc, char** argv)
     {
         const icom::IcomModel* ic705 = icom::modelForName("IC-705");
         check(ic705 != nullptr, "the IC-705 is in the table");
+        check(icom::profileFor(*ic705).supports(icom::IcomFeature::GpsPosition),
+              "the IC-705 alone declares its verified CI-V GPS position surface");
+        check(icom::profileFor(*ic705).supports(
+                  icom::IcomFeature::GpsTimeConfiguration),
+              "the IC-705 alone declares its verified NTP/GPS clock settings");
         const QStringList bands = parseDeclaredBands(
             QString::fromUtf8(ic705->bands.data(),
                               static_cast<int>(ic705->bands.size())));
@@ -519,6 +708,10 @@ int main(int argc, char** argv)
         check(icom::bandsFor(*ic705).empty(),
               "the IC-705 has no discontinuous native-band range override, so "
               "its declared buttons keep canonical labels");
+        check(!icom::profileFor(*ic9700).supports(icom::IcomFeature::GpsPosition)
+                  && !icom::profileFor(*ic9700).supports(
+                      icom::IcomFeature::GpsTimeConfiguration),
+              "another Icom does not inherit IC-705 GPS commands by profile position");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))
@@ -537,7 +730,7 @@ int main(int argc, char** argv)
         // them. A declaration added to one of these would REPLACE that grid, so
         // this is the guard against a well-meant edit doing it by halves.
         for (std::uint8_t addr : {0x98, 0x8E, 0x94, 0xB6}) {   // 7610, 785x, 7300, 7300MK2
-            const icom::IcomModel* m = icom::modelForCivAddress(addr);
+            const icom::IcomModel* m = icom::modelForId(addr);
             check(m != nullptr && m->bands.empty(),
                   "an HF-only row declares no bands and keeps the built-in grid");
         }
@@ -552,10 +745,10 @@ int main(int argc, char** argv)
     // discriminator: flipping either one silently changes what the operator is
     // offered, and the IC-7300 / IC-7300MK2 pair is exactly where it is easy to
     // get wrong — same family name, one USB-only, one with an Ethernet port.
-    check(!icom::modelForCivAddress(0x94)->hasNetwork,
+    check(!icom::modelForId(0x94)->hasNetwork,
           "the IC-7300 is CI-V only - it cannot answer a Connect-by-IP session "
           "directly, so the chooser must not offer it");
-    check(icom::modelForCivAddress(0xB6)->hasNetwork,
+    check(icom::modelForId(0xB6)->hasNetwork,
           "the IC-7300MK2 CAN - it has an Ethernet port, and dropping it from "
           "the chooser would hide the model this backend was validated on");
 

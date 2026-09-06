@@ -8,7 +8,9 @@
 //     Map + decision guide: docs/architecture/mainwindow-decomposition.md
 // ─────────────────────────────────────────────────────────────────────────────
 
+#include "core/backends/anan/AnanDiscovery.h"
 #include "core/backends/hl2/Hl2Discovery.h"
+#include "core/RtlSdrDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
@@ -73,6 +75,7 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
 #include "core/DxccColorProvider.h"
@@ -134,12 +137,14 @@ class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
 class NetworkDiagnosticsHistory;
+class MemoryHistoryRing;
 class WhatsNewDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
+class SystemInfoDialog;
 class AgcCalibrationDialog;
 class MemoryDialog;
 class NetSchedulerDialog;
@@ -403,6 +408,8 @@ private:
     // nothing to be honest about, and a control that stays hidden after
     // unplugging reads as a fault rather than as an accurate report.
     void applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps);
+    void applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps);
+    void wireStatusBarMessages();
 
     // Push radio-side-DSP availability into one overlay menu's WNB row. Separate
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
@@ -497,6 +504,7 @@ private:
     void disableSplit();
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
+    void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
     void wireMeters();              // MainWindow_Wiring.cpp
     void wireSpotSubsystem();       // MainWindow_Spots.cpp
     // RadioSession precursors (#3351 Phase 2c / #3445) — MainWindow_Session.cpp
@@ -881,6 +889,7 @@ private:
     void showPanadapterSliceCapacityMessage();
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
+    void showSystemInfoDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
     // Construct the AetherModem window hidden if it does not exist yet, and
@@ -1005,6 +1014,11 @@ private:
     // HPSDR/Metis discovery for Hermes-Lite 2 radios. Feeds the same
     // ConnectionPanel slots as m_discovery, tagged family="hl2".
     hl2::Hl2Discovery m_hl2Discovery;
+    // openHPSDR Protocol 2 discovery for the ANAN-G2. Feeds the same
+    // ConnectionPanel slots as m_discovery, tagged family="anan".
+    anan::AnanDiscovery m_ananDiscovery;
+    // Local USB discovery for RTL-SDR devices, tagged family="rtl".
+    RtlSdrDiscovery m_rtlDiscovery;
     // Radio sessions (#3445 Camp B / #3351). Each session owns the full
     // per-radio aggregate; today there is exactly one. The vector sits at
     // the old `RadioModel m_radioModel` member position so destruction
@@ -1027,6 +1041,11 @@ private:
     QByteArray        m_knownDefaultAudioOutputId;
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
+    // The Runtime Monitor's memory history (#2554), owned here for the same
+    // reason the network history is: the dialog is WA_DeleteOnClose and a
+    // trend chart that forgot everything on Close would not be a trend.
+    // Filled only while the dialog is open (sampling follows visibility).
+    std::unique_ptr<MemoryHistoryRing> m_memoryHistory;
     QsoRecorder*      m_qsoRecorder{nullptr};
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new
@@ -1072,6 +1091,7 @@ private:
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
+    LpMeterConnection m_lpMeterConn;    // TelePost LP-100A wattmeter, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
@@ -1397,6 +1417,7 @@ private:
     QPointer<CallsignLookupDialog> m_callsignLookupDialog;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
+    QPointer<SystemInfoDialog> m_systemInfoDialog;
     QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
@@ -1452,6 +1473,8 @@ private:
     // waveforms / no multi-client sessions.
     QAction*         m_waveformsAction{nullptr};
     QAction*         m_multiFlexAction{nullptr};
+    QAction*         m_aetherControlAction{nullptr};
+    QAction*         m_flexControlKnobAction{nullptr};
 
     // Audio stream re-creation flag (after profile load)
     bool             m_needAudioStream{false};
@@ -1550,6 +1573,7 @@ private:
     bool m_useSystemClock{true};     // true when no GPS installed
     bool m_paTempUseFahrenheit{true};
     bool m_hasPaTempTelemetry{false};
+    bool m_paCurrentStatusPreferred{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
@@ -1628,6 +1652,9 @@ private:
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
+    // WheelApf-while-off hint: wall-clock until which the notice is already
+    // on screen, so a spinning knob does not re-upsert the card per detent (#4658).
+    qint64 m_apfOffHintUntilMs{0};
     // User layout choices should suppress startup rearrange, but still allow
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
