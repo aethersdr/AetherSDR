@@ -501,8 +501,15 @@ predicates the readouts ask before printing. See [`HERMES.md`](../HERMES.md)
 
 ## Tests
 
-[`tests/radio_capability_gating_test.cpp`](../../tests/radio_capability_gating_test.cpp)
-asserts each backend's declared flags, the relay firing on both edges, and the
-permissive-on-disconnect rule. Every assertion reads a **capability** — never
-`caps.family`, never a backend type. A test that asserted the family would pass
-just as happily against the anti-pattern the struct exists to prevent.
+[`tests/icom_control_profile_test.cpp`](../../tests/icom_control_profile_test.cpp)
+asserts the model-profile capabilities and the refusals they gate, and that the
+other backends keep the controls those refusals take away.
+[`tests/icom_ptt_authority_test.cpp`](../../tests/icom_ptt_authority_test.cpp)
+covers the keying-authority side. Every assertion reads a **capability** —
+never `caps.family`, never a backend type. A test that asserted the family
+would pass just as happily against the anti-pattern the struct exists to
+prevent.
+
+The wider per-backend declaration sweep lived in
+`tests/radio_capability_gating_test.cpp` until #5452 removed it for an
+ASan-flaky IC-9700 block; #5443 tracks recovering the rest of that coverage.
