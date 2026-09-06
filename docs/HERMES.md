@@ -1941,8 +1941,8 @@ receiver somewhere it cannot hear.
 
 **The HL2 has no switchable filters of its own.** It has seven open-collector
 outputs at `0x00[23:17]`, which the *gateware* forwards as one byte to I2C
-address `0x20`. Nothing in this codebase writes I2C — setting the config bits
-IS the whole mechanism (oracle §8).
+address `0x20`. For this J16 path, setting the config bits is the whole mechanism
+(oracle §8); the separate IO-board path below uses direct I2C2 writes.
 
 Two things make this the riskiest change in the area:
 
@@ -1973,6 +1973,19 @@ Two deliberate departures from "always engage the HPF":
 readback anywhere in the protocol — the gateware writes to I2C and nothing
 answers — so that log line is the only evidence of what the relays were told to
 do, and a support log captured after the fact has to already contain it.
+
+The external HL2 IO Board at I2C2 address `0x1D` is separate from J16.
+It receives true transmit RF frequency as five single-byte writes to registers
+0 through 4, MSB first; register 4 commits the value. Connect and band changes
+push immediately, while same-band movement coalesces over 500 ms. An immediate
+push supersedes any older pending frequency, and link loss clears the schedule.
+
+MOX/TUNE do not defer the IO board alone: the existing TX NCO and filter paths
+already follow a retune, so withholding only the amplifier leaves it on the
+wrong band until unkey. This path does not provide cold relay sequencing or
+acknowledged amplifier readiness. Ending transmission before changing bands
+requires a separately approved change to the keying behavior. No IO-board
+write asserts transmit intent; C0 MOX remains owned by the existing TX gate.
 
 ### 17.3 Verifying something with no readback
 

@@ -495,6 +495,13 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
+add_executable(hl2_io_board_policy_test
+    tests/hl2_io_board_policy_test.cpp
+)
+target_include_directories(hl2_io_board_policy_test PRIVATE src)
+add_test(NAME hl2_io_board_policy_test COMMAND hl2_io_board_policy_test)
+
 # ANAN P2 protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 # Direct port of the live-validated anan/spike/phase1a.py spike (aetherd ANAN
 # P2 Phase 1a), run against a real ANAN-G2 on the bench.
