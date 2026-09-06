@@ -417,7 +417,7 @@ apart from that audit loses the point.
 | 6 | AM is in neither filter-polarity family (`SliceModel.cpp:47-57`) | AM gets an SSB passband that excludes the carrier | *Open* |
 | 7 | No pan-geometry down-verb on `IRadioBackend` | Zoom/pan can't reach the backend; waterfall and pan disagree | *Open* — structural |
 | 8 | Slice frequency **is** pan center (`Hl2Backend.cpp:165`) | Click-to-tune recenters the world instead of landing | *Open* — needs slice-offset-within-passband |
-| 9 | Same null-deref shape in the RADE path (`MainWindow_DigitalModes.cpp:461`) | Will crash HL2 whenever RADE starts | *Open* |
+| ~~9~~ | ~~Same null-deref shape in the RADE path (`MainWindow_DigitalModes.cpp:461`)~~ **DONE** | Selecting RADE on HL2 reached the same null-stream path | Guard at the top of `activateRADE()` (`4077e023`); see §18.3 |
 | 10 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` appears not to suppress autoconnect~~ | Test instance grabs a radio | **Not a bug — the variable does not exist.** Removed application-wide by #4421/#4401; autoconnect is `AutoConnectToLastRadio` alone (`MainWindow.cpp`). Use the isolated profile in §10 |
 | 11 | `SpectrumWidget` **drops** inbound pan geometry during a gesture, assuming another status is coming | View parks at the old centre while slice/pan/waterfall move — measured **permanently 6.3 kHz** out after one drag-tune | `3d52d07d` |
 
@@ -543,11 +543,23 @@ sub-actions, so action-level drift is invisible to CI.
 
 ### Still missing
 
-1. **Read back what the DSP was actually configured with.** The recurring
-   failure is model/DSP divergence (gaps 3, 5). `get_state` reports the *model*.
-   An agent needs `get_state model=dsp backend=...` exposing the live WDSP
-   config: in/dsp/out rates, block sizes, AGC mode + ceiling, filter edges.
-   **This one verb would have caught gaps 3, 4 and 5 immediately.**
+1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
+   `get_state model=dsp` now carries a `backend` object alongside the
+   client-side chain: `family`, and a `chains` list. Each entry names its
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive and a
+   hand-written phasing modulator on transmit, whose config is a different
+   struct) and its `level`, because "read-back" is used loosely and the
+   difference decides what a mismatch proves: `channel-config` is what
+   `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
+   DSP's own state, and `not-configured` marks an unavailable configuration.
+   An unconfigured or refused TX setup, or an explicitly cancelled/disconnected
+   session reports that level without stale/default configuration fields.
+   Normal unkeying and transient link loss retain the applied configuration:
+   `dsp-config` describes the DSP, not whether the wire is connected or keyed.
+   Values come from `WdspChannel::config()` and `Hl2TxDsp`'s own struct, never
+   from `Hl2Backend::Receiver` — a read-back that reported the request back
+   would be certifying its own input, the rule
+   `Hl2RxDsp::appliedNoiseBlankerEnabled()` already states.
 2. **A pitch/tone assertion primitive.** Every audio measurement this session
    was hand-rolled numpy over `capture_audio` JSON. A `capture_audio` mode
    returning dominant frequencies, peak/RMS, clipped-sample fraction and
@@ -658,10 +670,131 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
 - Launch the app as the **foreground process of a backgrounded shell**;
   launching it with `&` inside a foreground command gets it killed with the
   shell's process group.
-- First WDSP channel open costs **~19 s** generating FFTW wisdom; every later
-  open — any receiver, any sample rate — is **40–175 ms**. The planning cost is
+- An earlier first WDSP channel open took **~19 s** generating FFTW wisdom;
+  warm opens in that observation were **40–175 ms**. These are historical
+  observations, not a current cold-open estimate or a timeout budget; the later
+  bench observations below were substantially slower. The planning cost is
   not a bug and cannot be optimised away, but it is now paid **off the GUI
   thread** and reported in the connect animation; see §22.
+
+- **Warm-open timings assume the wisdom cache survives. Redirecting `HOME`
+  can move that cache too, depending on the other environment variables.**
+  An isolated profile can therefore turn a warm open into a cold one.
+
+  For this macOS recipe, the config variables and the WDSP cache have separate
+  resolution rules. `HOME` affects the cache only when neither a non-empty
+  `AETHER_WDSP_WISDOM_DIR` nor `XDG_CACHE_HOME` overrides it:
+
+  | variable | what it moves |
+  |---|---|
+  | `CFFIXED_USER_HOME` | Qt's config and log locations — `QStandardPaths::writableLocation(GenericConfigLocation)`, so the settings store and `LogManager`'s rotated log |
+  | `XDG_CONFIG_HOME` | the same locations on platforms that consult it |
+  | **`HOME`** | locations resolved from `QDir::homePath()`; also the WDSP wisdom cache on macOS/Linux when `AETHER_WDSP_WISDOM_DIR` and `XDG_CACHE_HOME` do not override it |
+
+  After the explicit `AETHER_WDSP_WISDOM_DIR` override, macOS/Linux resolve
+  `WdspChannel::wisdomPath()` through `$XDG_CACHE_HOME`, **else** `$HOME/.cache`,
+  with `/aethersdr/wdsp-fftw-wisdom` appended. Windows uses `LOCALAPPDATA`
+  instead of those two variables. An empty resolved directory falls back to
+  the system temporary directory. Wisdom is imported before the channels are
+  built and exported after.
+
+  **Without the explicit override, an inherited `XDG_CACHE_HOME` means that
+  redirecting `HOME` does not move the wisdom cache.** If that inherited path
+  still names the operator's cache, the "isolated" run reads it — and, because
+  the export is unconditional in an app process, **writes to it too**. That is the dangerous outcome, not the slow
+  one: the run is fast, looks correct, and quietly rewrites a file outside the
+  profile it was supposed to be confined to. `XDG_CACHE_HOME` is commonly
+  exported on Linux and rarely on macOS, which is exactly the kind of difference
+  that makes a harness behave one way on a developer's machine and another in
+  CI.
+
+  Without either cache override, redirecting `HOME` to a fresh directory on
+  macOS/Linux gives the first isolated run a cold cache even on a machine that
+  has connected a hundred times. If an inherited `XDG_CACHE_HOME` still points
+  at the operator's cache, redirecting `HOME` alone does not isolate it.
+
+  **VERIFY THE PATH THE PROCESS GOT, NOT THE ONE YOU ASKED FOR.** This is the
+  general form and it is worth more than the specific trap: a harness that
+  exports a variable and prints that it exported it has confirmed its own
+  intent, not the outcome. Read the environment of the running process —
+  `ps eww <pid>` on macOS, `/proc/<pid>/environ` on Linux — or log
+  `wisdomPath()` from inside the app and compare it against what you meant. A
+  request that is accepted, validated and reported as fine, then discarded
+  further down, produces exactly the same output as one that worked.
+
+  **How often you pay that depends on your profile's lifetime, so be deliberate
+  about it.** The recipe above exports a stable `$T=/tmp/aether-hl2-test` and
+  `mkdir -p`s it, so a cache resolved under that profile survives between runs
+  and only the first launch is slow — until something clears `/tmp`. A harness
+  that discards both the profile and its cache, using `mktemp -d`, a cleanup
+  trap, or a fresh container, has **no warm run at all**: every launch is a
+  first open, and that is the case that reads as a hang. Which shape you have is not
+  visible from the symptom, so decide it rather than discover it.
+
+  The earlier ~19 s observation does not predict these runs, and the recorded
+  evidence does not establish why they differ. Do not infer a receiver-count
+  multiplier or a portable cold-open time from these separate observations.
+  WDSP builds every FFT with `FFTW_PATIENT`, 35 plans per channel.
+  Two independent measurements, both on
+  this bench, changing only whether that cache was reachable:
+
+  | what was measured | cache present | cache absent |
+  |---|---|---|
+  | connect, via the bridge | **4.1 s** | **still running at 150 s** (abandoned, not a completion time) |
+  | first `WdspChannel` open, direct | **86 ms** (warm re-open) | **98.3 s** on an idle machine; **188.1 s** at one-minute load 38–40 |
+
+  The second row is the one to quote, because it is a completion time rather
+  than the moment an observer gave up. Raw result and runner are in the bench
+  notebook repo, not this one: `hl2-lab`, at
+  `streams/hl2-telemetry/runs/d57_bench_quiet_result.txt` and
+  `d57_bench_quiet.py`. Quiet throughout — 21 load samples at 5 s intervals, all
+  between 3.3 and 4.1. Note what it says about the first
+  row: **150 s was not a failure**, it was a working open that had not finished
+  yet. That abandoned observation does not justify a 150 s failure bound;
+  the landed #5415 watchdog allows 600 s for this phase.
+
+  **The fix is one variable**, and the code already provides it for its own
+  tests — see the `AETHER_WDSP_WISDOM_DIR` branch at the top of
+  `WdspChannel::wisdomPath()`:
+
+  ```bash
+  # ABSOLUTE, and resolved BEFORE HOME is redirected.
+  export AETHER_WDSP_WISDOM_DIR=/var/tmp/aethersdr-harness-wisdom
+  ```
+
+  It is checked **first and unconditionally**, ahead of `XDG_CACHE_HOME`,
+  `LOCALAPPDATA` and `HOME`, so it is the only one of these that binds whatever
+  else the environment carries. That — not the convenience — is why it is the
+  fix: redirecting `HOME` is a guess about which branch of the resolution order
+  a machine will take.
+
+  **Do not write `$HOME/...` here.** `HOME` is the variable this very recipe
+  redirects, so a `$HOME`-relative path lands *inside* the temporary tree and is
+  deleted with it — the fix silently undoes itself, and the symptom is
+  indistinguishable from not having applied it. On a single command line with
+  `HOME=$T` in front, `$HOME` happens to expand from the caller's environment
+  and it appears to work; in a script that sets `HOME` first, it does not. Use
+  an absolute path.
+
+  Point it at a directory that OUTLIVES the run. The harness then pays the
+  planning cost once instead of on every launch, and keeps the isolation the
+  rest of the recipe is for.
+
+  Two traps worth naming, both of which cost a day here. There are **two**
+  FFTW wisdom files — `AudioEngine::wisdomFilePath()` under
+  `~/.config/AetherSDR/` for NR2, and `WdspChannel::wisdomPath()` under
+  `~/.cache/aethersdr/` for the channels — and the startup log line
+  `Audio NR2 wisdom summary:` followed by `status=missing` refers to the
+  **first**, which is routinely absent and says nothing about the second.
+
+  **The DSP-setup diagnostic from #5415 has landed.** `Hl2Backend` logs
+  `HL2 DSP setup: opening` at phase start and `HL2 DSP setup: chains open after`
+  when setup returns. The watchdog warns after 10 s, repeats every 30 s while
+  waiting, and reports a connection error at 600 s. A timeout invalidates the
+  attempt; it cannot interrupt an in-progress WDSP open, whose eventual
+  completion releases the stale chains. These logs and the bounded wait answer
+  the silence reported in #5413. The initial `ok`/`deferred` reply still means
+  the connect was accepted, not that the radio is connected.
 - The `tools/hl2/` Python spike defaults to broadcasting
   `255.255.255.255`, which fails on macOS with `OSError 65` when multiple
   interfaces are up. Use `--bcast <subnet>.255`. The in-app Qt sweep is fine.
@@ -936,7 +1069,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 7 | ~~Read receiver count from discovery `0x13`~~ | O §1 | **DONE — §19.** `maxSlices`/`maxPanadapters` report the RUNNING count: requested, clamped by discovery `0x13`, clamped again by the link budget | S |
 | ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
 | 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
-| 10 | RADE null-deref at `MainWindow_DigitalModes.cpp:461` | ours, gap 9 | Same shape as the DAX crash; will kill HL2 the moment RADE starts | XS |
+| ~~10~~ | ~~RADE null-deref at `MainWindow_DigitalModes.cpp:461`~~ **DONE** | ours, gap 9 | Fixed, and §18.3 already records it. `activateRADE()` guards `panStream()` at its top and declines with a message; the bare `connect` further down is inside that guarded region | — |
 | 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
 | 12 | One dB-reference object per slice (LNA + calibration + AGC threshold) | A2 §A3 | Every LNA change shifts the absolute reference; the trace jumps and users read it as a real event | S |
 | ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
@@ -965,7 +1098,7 @@ radio. See §18 for the full audit and the proposed seam.
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| 24 | RADE / DAX-bridge bare `panStream()` deref | §18.3, gap 18 | **SIGSEGV on mode change**, same shape as gap 1. Do this before any of the below | XS |
+| ~~24~~ | ~~RADE / DAX-bridge bare `panStream()` deref~~ **DONE** | §18.3, gap 18 | Both halves are closed: RADE is guarded in `activateRADE()`, and `startDax()` already guarded `panStream()` by the §18 audit. The earlier DAX bring-up crash and its fix remain recorded in §6 gap 1 | — |
 | ~~25~~ | ~~WSPR beacon on a host-modulating backend~~ **DONE** | §18.4 | The audio route already existed (#4471); only the DAX-borrow guard was in the way. First external-oracle TX instrument we have | — |
 | ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument and a `Wideband` tap are still open — nothing needs them yet | S |
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
@@ -2369,7 +2502,7 @@ backend from re-running this audit:
 |---|---|---|---|
 | ~~16~~ | ~~CW/RTTY decoders and the QSO recorder's RX tap bind to bus A inside `wirePanStreamRxAudioSinks()`~~ **DONE** | Decoders were silently dead; no error, no log line, the toggle worked and nothing decoded | `rxDemodAudioReady`, §18.8 |
 | 17 | `AetherClockEngine` binds to bus B **and** to a DAX channel-hold registry, keyed on a channel number a single-DDC radio does not have | WWV/WWVB never decodes; the DAX-hold provider correctly no-ops, which hides it | *Open* — needs slice-identity routing, not channel-identity |
-| 18 | RADE and the DAX bridge dereference `panStream()` bare | **SIGSEGV on mode change** — same shape as gap 1 | *Open* — do this first |
+| ~~18~~ | ~~RADE and the DAX bridge dereference `panStream()` bare~~ **DONE** | **SIGSEGV on mode change** — same shape as gap 1 | Guard at the top of `activateRADE()`; the DAX half was a misreading, corrected in §18.3 |
 | 19 | Presentation audio source tag is a hardcoded `kiwi : "flex"` ternary | Third concurrent family is unaddressable; `AsrTapPolicy` cannot tell two radios apart | *Open* — fold into §18.5 |
 
 **The generalised rule, for the next backend:**
@@ -2422,7 +2555,9 @@ decision, or an accident of the Flex being the only radio there was.
 
 ### 18.7 Suggested order
 
-1. **Gap 18** — the RADE/DAX-bridge null-deref. A crash outranks a feature.
+1. ~~**Gap 18**~~ — done. The RADE null-deref is guarded in `activateRADE()`
+   and the DAX bridge was already guarded by that audit; see §18.3 and the
+   earlier bring-up fix in §6 gap 1.
 2. ~~**WSPR TX**~~ — done, §18.4. Smallest diff, real operator value, and it
    forced the `hostModulates` TX branch into existence where it was easy to
    reason about.

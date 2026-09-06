@@ -3277,6 +3277,24 @@ if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)
     add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
     # A missing simulator is an honest skip, never a passing TX proof.
     set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The DSP read-back against a real gateware implementation. Behind the same
+    # flag because it shares the fixture, though unlike the loopback test it
+    # never keys — every control it drives is receive-side.
+    #
+    # SOCKETS THIS TEST BINDS, per the socket-test canon: it binds an EPHEMERAL
+    # IPv4 UDP socket (port 0, kernel-assigned) and sends Metis discovery to
+    # UDP 1024 on the simulator host — 127.0.0.1 unless AETHER_HL2_SIM_HOST
+    # overrides it. It listens only for replies from the host it probed, and
+    # requires hpsdrsim's synthetic AA:BB:CC:DD:88:FF before connecting, so it
+    # cannot drive a real radio that happens to answer. No listening server, no
+    # fixed local port, no outbound connection beyond that host.
+    add_executable(hl2_dsp_readback_sim_test tests/hl2_dsp_readback_sim_test.cpp)
+    target_include_directories(hl2_dsp_readback_sim_test PRIVATE src)
+    target_link_libraries(hl2_dsp_readback_sim_test
+        PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME hl2_dsp_readback_sim_test COMMAND hl2_dsp_readback_sim_test)
+    set_tests_properties(hl2_dsp_readback_sim_test PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
@@ -4098,6 +4116,30 @@ add_executable(hl2_tx_level_policy_test
 )
 target_include_directories(hl2_tx_level_policy_test PRIVATE src)
 add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
+
+add_executable(hl2_dsp_readback_test
+    tests/hl2_dsp_readback_test.cpp
+)
+target_include_directories(hl2_dsp_readback_test PRIVATE src)
+target_link_libraries(hl2_dsp_readback_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_dsp_readback_test COMMAND hl2_dsp_readback_test)
+
+# The bridge half of the same read-back: `get dsp` and `get dsp … backend` must
+# answer from one object, because assert_state and wait_for only ever issue the
+# property form (#5401 review). Socket-free — the line dispatcher is called
+# directly against a stand-in backend; no QLocalServer is created, no radio is
+# contacted, and the stub cannot key.
+add_executable(automation_dsp_backend_readback_test
+    tests/automation_dsp_backend_readback_test.cpp
+)
+target_include_directories(automation_dsp_backend_readback_test PRIVATE src tests)
+# aetherdesktop_support (where AutomationServer.cpp lives) is added by the
+# AETHER_AUTOMATION_SERVER_TESTS loop below.
+target_link_libraries(automation_dsp_backend_readback_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_dsp_backend_readback_test
+         COMMAND automation_dsp_backend_readback_test)
 # Socket-free HL2 gain persistence: boardMaxRx bypasses discovery; the test
 # never pumps events and cancels DSP setup before it can start Metis UDP.
 add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
@@ -4527,6 +4569,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_tx_watchdog_test
     automation_rn2_probe_test
     connect_state_model_test
+    automation_dsp_backend_readback_test
     tci_automation_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
