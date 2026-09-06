@@ -5453,9 +5453,9 @@ void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
     // Stamp the frequency frame this row was captured in, so the viewport can
     // remap it later regardless of how the center/bandwidth has since panned.
     const FrequencyFrame requestedFrame{frameCenterMhz, frameBandwidthMhz};
-    const FrequencyFrame stampFrame = requestedFrame.isValid()
-        ? requestedFrame
-        : FrequencyFrame{m_centerMhz, m_bandwidthMhz};
+    const FrequencyFrame stampFrame = stampFrameForHistoryRow(
+        requestedFrame,
+        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz});
     if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryRowCenterMhz.size()) {
         m_wfHistoryRowCenterMhz[m_wfHistoryWriteRow] = stampFrame.centerMhz;
         m_wfHistoryRowBwMhz[m_wfHistoryWriteRow] = stampFrame.bandwidthMhz;
@@ -7475,13 +7475,22 @@ void SpectrumWidget::applyDeferredRangeIfIdle()
 void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                                bool animateSmallNudges)
 {
-    if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
+    if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz) {
+        // Still confirm even though nothing changes on-screen --
+        // appendHistoryRow()'s callers depend on m_confirmedCenterMhz/
+        // m_confirmedBandwidthMhz being current even in the common case
+        // where a zoom gesture's optimistic guess already matched what the
+        // backend just confirmed (ten9876, #5142 review, "Blocker 1").
+        m_confirmedCenterMhz    = centerMhz;
+        m_confirmedBandwidthMhz = bandwidthMhz;
         return;
+    }
 
     // While the user is actively dragging the pan or a VFO/slice, the local
     // drag path owns the visual center. Radio echoes for intermediate drag
     // positions are stale by the time they arrive and would force the flag and
-    // waterfall back through old frames.
+    // waterfall back through old frames. NOT confirmed -- a stale echo isn't
+    // truth (see stale-echo guard below for the same reasoning).
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const bool vfoDragPanEchoHold =
         m_vfoDragPanEchoHoldUntilMs > 0 && nowMs < m_vfoDragPanEchoHoldUntilMs;
@@ -7494,7 +7503,8 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // While a local zoom/range gesture is settling, the widget owns the visual
     // center and bandwidth. Flex can echo older center-only statuses after a
     // combined center+bandwidth command; accepting those stale centers retargets
-    // the local view and can churn remote Kiwi W/F zoom/start requests.
+    // the local view and can churn remote Kiwi W/F zoom/start requests. NOT
+    // confirmed, same reasoning as the drag-hold guard above.
     if (m_frequencyRangeSettlePending
         && m_frequencyRangePendingValid
         && !mhzNearlyEqual(centerMhz, m_centerMhz)
@@ -7521,13 +7531,25 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // would either reverse the in-flight animation or trigger a false large-shift
     // that blanks the spectrum, so skip it — but only when the bandwidth is also
     // unchanged, so that bandwidth corrections (e.g. after xpixels resize) are
-    // not silently dropped (#1729).
+    // not silently dropped (#1729). NOT confirmed -- a stale echo isn't truth.
     if (m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped &&
         std::abs(centerMhz - m_panCenterStart) < 1e-9 &&
         bandwidthMhz == m_bandwidthMhz) {
         return;
     }
+
+    // Every return above this point is a value this function does NOT treat
+    // as confirmed truth (still dragging, a settling gesture, or a stale
+    // animation echo -- see each guard's own comment). Everything past here
+    // IS being applied, so this is the correct point to record it as
+    // confirmed for appendHistoryRow()/updateWaterfallRow()/
+    // pushWaterfallRow() to stamp waterfall rows with -- moved here from the
+    // top of the function, which ran before all three of the guards above
+    // despite their own comments claiming otherwise (ten9876, #5142 review,
+    // "Blocker 1").
+    m_confirmedCenterMhz    = centerMhz;
+    m_confirmedBandwidthMhz = bandwidthMhz;
 
     // Distinguish pan-follow nudges (#989) from large jumps (band change, click-to-tune).
     // Nudges shift center by ~10% of halfBw; 25% threshold comfortably separates the two.
@@ -8503,13 +8525,31 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // tile bin via: binIdx = (freq - tileLowFreq) / binBandwidth.
     const int srcSize = binsIntensity.size();
     const double tileBw = (srcSize > 0) ? (highFreqMhz - lowFreqMhz) / srcSize : 0.0;
-    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    // Confirmed geometry, not the on-screen m_centerMhz/m_bandwidthMhz (which
+    // may hold an operator's not-yet-real zoom guess) -- this is what lays
+    // out the row's ACTUAL pixel data, and it must always agree with the
+    // stamp given to appendHistoryRow() below, or remapHistoryRowInto() will
+    // show the wrong signal at the wrong frequency later, not just a black
+    // gap. See m_confirmedCenterMhz's own declaration comment.
+    //
+    // Cropping to that viewport is only legitimate where this tile actually
+    // covers it -- true for a Flex tile, false for an exact-span sweep, and
+    // claiming coverage over the zero-filled remainder is what bakes black
+    // rectangles into retained history. Where the tile falls short, its own
+    // extent is authoritative and the row is laid out across the tile
+    // instead. See primaryRowFrameForNativeTile().
+    const FrequencyFrame primaryFrame = primaryRowFrameForNativeTile(
+        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz},
+        lowFreqMhz, highFreqMhz);
+    const double panStartMhz =
+        primaryFrame.centerMhz - primaryFrame.bandwidthMhz / 2.0;
 
     QVector<quint8> levels(destWidth, 0);
     QVector<quint8> supplementalLevels(destWidth, 0);
     if (tileBw > 0) {
         for (int x = 0; x < destWidth; ++x) {
-            const double freq = panStartMhz + (static_cast<double>(x) / destWidth) * m_bandwidthMhz;
+            const double freq = panStartMhz
+                + (static_cast<double>(x) / destWidth) * primaryFrame.bandwidthMhz;
             const double binF = (freq - lowFreqMhz) / tileBw;
             const int binIdx = static_cast<int>(binF);
             if (binIdx >= 0 && binIdx < srcSize) {
@@ -8550,7 +8590,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     const double incomingSupplementalBandwidthMhz =
         highFreqMhz - lowFreqMhz;
     const WaterfallBlankerFrameBundle incomingFrames{
-        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+        // Must match panStartMhz above -- the row may only claim the span it
+        // was actually laid out across. The supplemental frame is untouched:
+        // it's already derived from the tile's own real bounds
+        // (lowFreqMhz/highFreqMhz), not the on-screen guess.
+        primaryFrame,
         FrequencyFrame{incomingSupplementalCenterMhz,
                        incomingSupplementalBandwidthMhz},
     };
@@ -12201,6 +12245,17 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
 
     const int srcSize = bins.size();
+    // On-screen geometry, NOT confirmed -- unlike updateWaterfallRow() (which
+    // lays out an explicitly-tiled row's own pixel data against confirmed
+    // geometry), panStartMhz here feeds ONLY the TX-mask test below; the
+    // actual bin-to-column mapping a few lines down is a plain proportional
+    // stretch of `bins` over destWidth and never consults it. `bins` itself
+    // is m_bins, which reprojectSpectrum()/updateSpectrum() keep resampled
+    // to the CURRENT on-screen m_centerMhz/m_bandwidthMhz, not the
+    // last-confirmed span -- so the mask must test against that same
+    // on-screen frame or it blanks the wrong columns relative to what's
+    // actually being plotted during a zoom's divergence window (ten9876,
+    // #5142 review, "Blocker 2").
     const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
@@ -12265,8 +12320,13 @@ void SpectrumWidget::pushKiwiSdrWaterfallRow(const QVector<float>& bins,
 
     const int srcSize = bins.size();
     if (rowCenterMhz <= 0.0 || rowBandwidthMhz <= 0.0) {
-        rowCenterMhz = m_centerMhz;
-        rowBandwidthMhz = m_bandwidthMhz;
+        // Confirmed geometry, not the on-screen guess -- see
+        // m_confirmedCenterMhz's own declaration comment. No pixel-layout
+        // consistency concern here (unlike updateWaterfallRow()/
+        // pushWaterfallRow() above): this function resamples bins onto
+        // destWidth proportionally, independent of these values either way.
+        rowCenterMhz = m_confirmedCenterMhz;
+        rowBandwidthMhz = m_confirmedBandwidthMhz;
     }
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();

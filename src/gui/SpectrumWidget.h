@@ -1387,6 +1387,21 @@ private:
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};
+    // Last geometry the backend has ACTUALLY confirmed, separate from
+    // m_centerMhz/m_bandwidthMhz above (which may hold an operator's
+    // not-yet-real zoom guess -- the four zoom gesture handlers write their
+    // locally-computed target here immediately, before the backend confirms
+    // it, for instant visual feedback). appendHistoryRow()'s callers use
+    // THESE, not the on-screen value, so a waterfall history row is never
+    // permanently stamped/laid out with a guess that might not become true
+    // -- see setFrequencyRangeInternal()'s own comment for the one place
+    // this pair updates. Mirrors the discipline RadioModel::requestPanCenter()
+    // already established one layer up (its own -1.0 "don't advance
+    // optimistically" bandwidth argument, citing this exact "bakes black
+    // rows into waterfall history" failure) -- that fix doesn't reach here,
+    // where the actual row stamping happens.
+    double m_confirmedCenterMhz{14.225};
+    double m_confirmedBandwidthMhz{0.200};
     // Pan-follow smooth animation (#989): animates m_centerMhz toward the target
     // for small nudges so the VFO widget glides instead of snapping.
     QVariantAnimation* m_panCenterAnim{nullptr};
