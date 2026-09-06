@@ -1,5 +1,7 @@
 #include "core/backends/icom/IcomModels.h"
 
+#include "core/backends/icom/CivCodec.h"   // setting::kNtp* — one source for the SET items
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -241,7 +243,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 14> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 17> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -267,11 +269,17 @@ constexpr std::array<FeatureEvidence, 14> kIc705Evidence{{
     {IcomFeature::DialLock, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, 16 50"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
+    {IcomFeature::GpsPosition, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-705 CI-V Reference Guide 2020, 23 00/01; live position proof 2026-08-21"},
+    {IcomFeature::GpsTimeConfiguration, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-705 CI-V Reference Guide 2020, SET 0167-0169 and 1A 07/08; live NTP proof 2026-08-21"},
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-705 CI-V Reference Guide 2020, command 1A 00 memory-channel records"},
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-705 CI-V Reference Guide 2020, command 1C 01"},
 }};
 
-constexpr std::array<FeatureEvidence, 14> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 15> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -300,9 +308,11 @@ constexpr std::array<FeatureEvidence, 14> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 16 50"},
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, command 1A 00 memory-channel records"},
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7300MK2 CI-V Reference Guide, command 1C 01"},
 }};
 
-constexpr std::array<FeatureEvidence, 13> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 14> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -330,11 +340,18 @@ constexpr std::array<FeatureEvidence, 13> kIc9700Evidence{{
     {IcomFeature::MemoryChannels, EvidenceKind::OfficialGuide,
      "IC-9700 CI-V Reference Guide 2019, command 1A 00 memory-channel records"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not attested"},
+    {IcomFeature::AntennaTuner, EvidenceKind::None,
+     "IC-9700 CI-V Reference Guide does not declare an antenna tuner"},
+}};
+
+constexpr std::array<FeatureEvidence, 1> kTunerOnlyEvidence{{
+    {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
+     "IC-7300, IC-7610, and IC-7850/IC-7851 CI-V Reference Guides, command 1C 01"},
 }};
 
 }  // namespace
 
-const IcomModel* modelForCivAddress(std::uint8_t addr)
+const IcomModel* modelForId(std::uint8_t addr)
 {
     for (const auto& m : kModels)
         if (m.civAddress == addr)
@@ -474,8 +491,11 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 {
     if (frame.cmd != cmd::kReadId || !frame.hasSub || frame.sub != 0x00)
         return std::nullopt;
-    if (frame.data.empty())
+    if (frame.data.size() != 1 || frame.from == kBroadcastAddress
+        || frame.from >= kControllerAddress
+        || (frame.to != kControllerAddress && frame.to != kBroadcastAddress)) {
         return std::nullopt;
+    }
     return frame.data[0];
 }
 
@@ -583,6 +603,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     // from silently becoming a write contract for another transmitter.
     static const IcomModelProfile kIc705Profile{
         .supportedBringup = true,
+        .hasGpsHardware = true,
         .guideRevision = "IC-705 CI-V Reference Guide 2020",
         .features = kIc705Evidence,
         .modulation = ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
@@ -592,13 +613,20 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
+        .gps = GpsProfile{setting::kNtpEnabled, setting::kNtpServer,
+                          setting::kGpsTimeCorrect, true},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{
             .calibration = MeterCalibration::Ic705,
             .currentFullScaleAmps = 4.0,
+            .scaleForwardPowerToRatedOutput = true,
             .holdIsolatedTxMinimums = true,
         },
+        // IC-705 CI-V Reference Guide 2020, p.15 note *4: 18 01 powers
+        // on from Standby/Shutdown. Native RS-BA1 carries the standard frame;
+        // no model-specific serial preamble is prescribed. Network must be up.
+        .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
         .memory = MemoryProfile{MemoryDialect::Ic705, 0, 99, 0, 99, true, "Group"},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
@@ -626,21 +654,34 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .powerConversion = MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
             .hasPaCurrentTelemetry = true,
         },
+        // Native LAN sequence measured by W5JWP in #5360: 150 extra FE, E1.
+        // This is hardware-derived, not the guide's serial 115200-baud count
+        // (approximately 119 FE). Do not copy it to another model/transport.
+        .powerOn = PowerOnProfile{150, 0xE1, 10000},
         .civRecovery = CivRecoveryProfile{1000, 3},
         .memory = MemoryProfile{MemoryDialect::Ic9700, 1, 3, 1, 99, false, "Band"},
+        // IC-9700 CI-V Reference Guide 2019, printed p. 8.
+        .networkConfiguration = NetworkConfigurationProfile{139, 140, 141, 144},
         .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
+        // CI-V 14 09 endpoints plus wfview funcCwPitch's 5 Hz decoding.
+        .cwPitchStepHz = 5,
+        .hasModeIndependentSquelch = true,
+        .hasCwTune = false,
+        .pollCwSquelchAndTxBandwidth = true,
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,
         .modulation = ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
                                         kIc7300Mk2ModInputs},
         .txBandwidth = TxBandwidthProfile{kTbwLowIc7300Mk2, kTbwHigh,
                                           14, 15, 16, 17},
+        // MK2 guide p. 3: 0F is split 00/01 only; 0C/0D and duplex
+        // 10/11/12 are absent. Its SET-menu split offset is a different control.
         .fmRepeater = FmRepeaterProfile{FmRepeaterDialect::Basic,
                                        kToneSquelchFmAccessModes,
-                                       true, true, true, false, true, true},
+                                       false, true, true, false, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},
@@ -650,12 +691,22 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
             .currentFullScaleAmps = 25.0,
             .holdIsolatedTxMinimums = true,
         },
+        // IC-7300MK2 guide, "Turning the transceiver ON": 18 01.
+        // Baud-dependent FE fill is explicitly for the REMOTE jack, not LAN.
+        // Begin probing after one second; readiness comes from the identity reply.
+        .powerOn = PowerOnProfile{0, kControllerAddress, 1000},
         .memory = MemoryProfile{MemoryDialect::Ic7300Mk2, -1, -1, 1, 99, false,
                                 "Group"},
+        // IC-7300MK2 CI-V Reference Guide, SET > Network, printed p. 10.
+        .networkConfiguration = NetworkConfigurationProfile{102, 103, 104, 107},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };
     static const IcomModelProfile kUnprofiled{};
+    static const IcomModelProfile kTunerOnlyProfile{
+        .guideRevision = "model-specific CI-V Reference Guide",
+        .features = kTunerOnlyEvidence,
+    };
 
     switch (model.civAddress) {
     case 0xA4:
@@ -664,6 +715,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         return kIc9700Profile;
     case 0xB6:
         return kIc7300Mk2Profile;
+    case 0x94: // IC-7300
+    case 0x98: // IC-7610
+    case 0x8E: // IC-7850 / IC-7851
+        return kTunerOnlyProfile;
     default:
         return kUnprofiled;
     }
@@ -687,7 +742,10 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
     case IcomFeature::DialLock:            return "dial-lock";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
+    case IcomFeature::GpsPosition:         return "gps-position";
+    case IcomFeature::GpsTimeConfiguration: return "gps-time-configuration";
     case IcomFeature::MemoryChannels:      return "memory-channels";
+    case IcomFeature::AntennaTuner:        return "antenna-tuner";
     }
     return "unknown";
 }

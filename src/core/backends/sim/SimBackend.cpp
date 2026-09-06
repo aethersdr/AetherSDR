@@ -254,6 +254,18 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.canReboot = false;
+    caps.hasRemoteOnControl = false;
+    caps.canUpgradeFirmware = false;
+    caps.hasSmartLink = false;
+    caps.hasLicenseInfo = false;
+    caps.hasClientNetworkConfig = false;
+    caps.hasFlexControlIntegration = false;
+    caps.hasAudioCompression = false;
+    caps.hasSharpFilters = false;
+    caps.usesVita49Transport = false;
+    caps.hasNetworkConfigurationReadback = false;
+    caps.hasPrivateIpConnectionPolicy = false;
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
@@ -280,11 +292,14 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveOnlyModes = {};
     caps.hasRadioDialLock = false;
     caps.hasTuner = false;
+    caps.hasTunerMemories = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
+    caps.hasAudioPeakingFilter = false;
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
+    caps.hasDdcPanEdgeRolloff = false;   // synthetic scene, no real receive chain
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
@@ -295,9 +310,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
     caps.hasDownwardExpander = false;
+    caps.hasAgcThreshold = true;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
+    caps.hasRadioPttReadback = false;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
     caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists
@@ -323,6 +340,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMinWidthHz = 0.0;
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
+    caps.hasGpsSatelliteTelemetry = false;
+    caps.hasGpsFrequencyReference = false;
+    caps.hasGpsTimeConfiguration = false;
+    caps.hasGpsHardware = false;
+    caps.gpsHardwareRequiresPresence = false;
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
     caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
     caps.hasPaCurrentTelemetry = false;       // synthetic scene; no PA current

@@ -166,6 +166,12 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // "idle" / "connecting" / "connected" — the bridge's third value, so a
+    // caller can tell a connect that is working from one that is not happening
+    // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
+    // isConnected() and isConnectAttemptInFlight() below — one lifecycle, not
+    // a second one owned by this field.
+    QString connectState() const;
     // True from the moment a connect is requested until it lands, fails, or is
     // abandoned. isConnected() alone cannot express "still working": it is
     // false both before an attempt starts and while one is in flight, which is
@@ -248,11 +254,14 @@ public:
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
     QString gateway()     const { return m_gateway; }
+    QString networkName() const { return m_networkName; }
     QString mac()         const { return m_mac; }
     bool    enforcePrivateIp() const { return m_enforcePrivateIp; }
 
     // GPS data
     QString gpsStatus()    const { return m_gpsStatus; }
+    bool    gpsPositionValid() const { return m_gpsPositionValid; }
+    QString gpsSource()    const { return m_gpsSource; }
     int     gpsTracked()   const { return m_gpsTracked; }
     int     gpsVisible()   const { return m_gpsVisible; }
     QString gpsGrid()      const { return m_gpsGrid; }
@@ -260,10 +269,19 @@ public:
     QString gpsLat()       const { return m_gpsLat; }
     QString gpsLon()       const { return m_gpsLon; }
     QString gpsTime()      const { return m_gpsTime; }
+    QString gpsDate()      const { return m_gpsDate; }
     QString gpsSpeed()     const { return m_gpsSpeed; }
     QString gpsTrack()     const { return m_gpsTrack; }
     QString gpsFreqError() const { return m_gpsFreqError; }
     QString gpsNtpServerAddress() const;
+    bool gpsNtpEnabled() const { return m_gpsNtpEnabled; }
+    QString gpsNtpServer() const { return m_gpsNtpServer; }
+    bool gpsTimeCorrectionEnabled() const { return m_gpsTimeCorrectionEnabled; }
+    QString gpsNtpSyncStatus() const { return m_gpsNtpSyncStatus; }
+    void setGpsNtpEnabled(bool on);
+    void setGpsNtpServer(const QString& address);
+    void setGpsTimeCorrectionEnabled(bool on);
+    void requestGpsNtpSync();
 
     // Max slices reported by radio
     int maxSlices() const {
@@ -356,11 +374,16 @@ public:
     // Flex the moment it disconnects would be a regression rather than an
     // honesty gain.
     //
+    // hasAudioPeakingFilter() is the same permissive shape: APF already
+    // ships on the DSP tab, and hiding the P/CW CW-face row on a Flex
+    // unplug would blink a control the operator still has.
+    //
     // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
     // new button; a permissive default would show it on every radio in
     // the window before a backend reports, including the Flexes that
     // notch with TNFs instead and will never claim it.
     bool hasLmsNoiseFilters() const;
+    bool hasAudioPeakingFilter() const;
     bool hasManualNotch() const;
     // Whether THIS HOST blanks impulse noise in the radio's IQ
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
@@ -371,6 +394,8 @@ public:
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
     QList<int> radioFilterWidthsHz() const;
+    RxFilterControl radioFilterControl() const;
+    void selectRadioFilterPreset(int sliceId, int presetId);
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.
@@ -499,11 +524,22 @@ public:
     // 6000-series radios without turning the family-level capability into a
     // per-unit presence claim.
     bool hasGpsHardware() const {
-        return m_model.contains("8400") || m_model.contains("8600")
+        const RadioCapabilities caps = backendCapabilities();
+        return (isConnected() && caps.hasGpsLocation && !caps.hasGpsFrequencyReference)
+               || m_model.contains("8400") || m_model.contains("8600")
                || m_model.startsWith("AU-")
                || m_gpsdoPresent
                || (!m_gpsStatus.isEmpty()
                    && m_gpsStatus != QLatin1String("Not Present"));
+    }
+    // Settings needs a hardware-presence answer across families. Flex's backend
+    // declaration is intentionally coarse (the family can carry an optional
+    // GPSDO), so retain the live per-unit check above there. Other backends use
+    // their model profile for fixed hardware such as the IC-705's internal GPS.
+    bool hasGpsSetupHardware() const {
+        const RadioCapabilities caps = backendCapabilities();
+        return caps.hasGpsHardware
+               && (!caps.gpsHardwareRequiresPresence || hasGpsHardware());
     }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
@@ -549,16 +585,17 @@ public:
 
     // ── Memory command routing ──────────────────────────────────────────────
     //
-    // Answer a `memory …` command from the local bank or the cached read-only
-    // radio view. Returns the sequence number sendCmd() would have returned
+    // Answer a `memory …` command from the local bank or a native writable
+    // radio. Returns the sequence number sendCmd() would have returned
     // (non-zero — sendCommand() reads that as "dispatched"), or nullopt when a
     // writable/native radio backend must take its normal path.
     // (spelled out rather than the ResponseCallback alias — that is declared
     // further down this class.)
     std::optional<quint32> tryMemoryCommand(
         const QString& command, const RadioConnection::ResponseCallback& cb);
-    // Settle which store owns the memory cache for the session being started:
-    // the local bank, or the radio's own slots.
+    // Settle which store owns the memory cache for the session being started.
+    // Read-only radio snapshots are ingested into the local bank; only a native
+    // writable store takes exclusive ownership.
     void syncMemoryStoreForSession();
     // Push the loaded bank into m_memories, emitting per-slot memoryChanged so
     // the browse panel and the panadapter memory-spot feed populate exactly as
@@ -616,14 +653,13 @@ public:
     const QMap<int, MemoryEntry>& memories() const { return m_memories; }
     void handleMemoryStatus(int index, const QMap<QString, QString>& kvs);
 
-    // True when memory channels live in a file on THIS host rather than in the
-    // radio — the HL2/Kiwi/demo case, and the disconnected case. Driven by
-    // RadioCapabilities::persistsMemories, so a new backend gets the local bank
-    // by default rather than writing channels into a radio that drops them.
+    // True when the working memory model lives in the database on THIS host —
+    // including every Icom (radio sync is an ingestion path), HL2/Kiwi/demo,
+    // and the disconnected case. Only a native writable radio store opts out.
     bool usesLocalMemoryBank() const;
-    // True when the active store accepts create/edit/remove. A radio-backed
-    // read-only snapshot (initial Icom support) returns false while the
-    // existing host bank and Flex radio return true.
+    // True when the active working store accepts create/edit/remove. Icom uses
+    // the host bank even though its radio-side source is read-only; Flex writes
+    // its own native store.
     bool memoriesWritable() const;
     bool memoriesRefreshable() const;
     void refreshMemories(const QString& group = QString());
@@ -746,6 +782,9 @@ public:
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
+    // One explicit wake, followed by one bounded connection attempt. Never persisted.
+    bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
+    bool radioWakeActive() const { return m_radioWakeActive; }
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     void setPendingClientDisconnects(const QList<quint32>& handles);
     bool disconnectClient(quint32 handle);
@@ -1004,6 +1043,8 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    void radioWakeProgress(const QString& message, bool active);
+    void radioWakeFailed(const QString& message);
     // Radio CONFIGURATION advice that does not end the session. See
     // IRadioBackend::configurationWarning for why this is a separate channel.
     void configurationWarning(const QString& msg);
@@ -1141,6 +1182,10 @@ signals:
                           const QString& grid, const QString& altitude,
                           const QString& lat, const QString& lon,
                           const QString& utcTime);
+    // Radio-authoritative NTP and GPS clock settings changed after CI-V
+    // read-back. No arguments keeps consumers coupled to normalized model
+    // getters rather than an Icom-specific payload.
+    void gpsTimeSettingsChanged();
     // Emitted when the station callsign becomes known or changes (from the
     // radio "info"/status feed). Lets features like the PSK Reporter map pick
     // up a late-arriving or edited callsign without a reconnect.
@@ -1153,6 +1198,10 @@ signals:
     void networkQualityChanged(const QString& quality, int pingMs);
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
+    // Emitted only after the active backend has drained finite TX-audio state.
+    // drainMs is how much already-submitted audio (host queue plus radio
+    // buffer) is still to be played — hold PTT for that long, then the tail.
+    void txAudioFinished(quint64 token, int drainMs);
     // Emitted when the radio assigns a remote audio TX stream ID (voice/VOX).
     void remoteTxStreamReady(quint32 streamId);
     // Audio TX gate for sample pipeline (separate from optimistic MOX UI state).
@@ -1242,7 +1291,6 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
-
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
     // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit
     // tears down without pumping the event loop, so the queued
@@ -1291,6 +1339,9 @@ public:
     // audio, whose level the sender owns (#4796).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled);
+    // Ordered completion barrier for a finite modem stream. The token lets the
+    // producer reject a stale completion from an aborted transmission.
+    void finishTxAudio(quint64 token);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1341,6 +1392,7 @@ private slots:
     void onBackendSpectrumFrame(int panId, const QByteArray& frame);
 
 private:
+    friend struct RadioModelWakeTestAccess;
     void handleRadioStatus(const QMap<QString, QString>& kvs);
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
@@ -1350,6 +1402,7 @@ private:
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
     void applyMemoryChanges(const MemoryDelta& delta);
+    void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
     void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
     void scheduleDStarRuntimeConfiguration();
@@ -1492,6 +1545,7 @@ private:
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
+    void updateTuneAvailability();
     // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
     // without per-band data leave the existing radio-reported limit alone.
     void refreshTxPowerLimit();
@@ -1584,6 +1638,29 @@ public:
     {
         onStatusReceived(object, kvs);
     }
+    // Drive the reconnect/reclaim portion of the normalized backend seam
+    // without a synthetic radio peer. The socket-free resource test uses these
+    // to prove that a reclaimed non-Flex slice is republished.
+    void stageSessionModelsForReconnectForTest()
+    {
+        stageSessionModelsForReconnect();
+    }
+    void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
+    {
+        if (m_backend) {
+            emit m_backend->sliceChanged(sliceId, delta);
+        }
+    }
+
+    // Install a backend directly, bypassing buildBackend()'s family wiring.
+    //
+    // The DSP read-back path — AutomationServer's `get dsp` — needs exactly one
+    // thing from this model: backend()->dspChains(). Reaching it through
+    // buildBackend() would mean constructing a real family backend, i.e. a wire
+    // object and its I/O thread, inside a test whose whole point is that it
+    // opens no socket. Takes ownership. Nothing in production calls this; the
+    // family string is set alongside because the read-back reports it.
+    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
@@ -1671,6 +1748,7 @@ private:
     QString     m_ip;
     QString     m_netmask;
     QString     m_gateway;
+    QString     m_networkName;
     QString     m_mac;
     bool        m_hasStaticIp{false};
     QString     m_staticIp;
@@ -1767,6 +1845,8 @@ private:
 
     // GPS state
     QString m_gpsStatus;           // "Locked", "Present", "Not Present"
+    bool    m_gpsPositionValid{false};
+    QString m_gpsSource;
     int     m_gpsTracked{0};
     int     m_gpsVisible{0};
     QString m_gpsGrid;
@@ -1774,9 +1854,14 @@ private:
     QString m_gpsLat;
     QString m_gpsLon;
     QString m_gpsTime;
+    QString m_gpsDate;
     QString m_gpsSpeed;
     QString m_gpsTrack;
     QString m_gpsFreqError;
+    bool    m_gpsNtpEnabled{false};
+    QString m_gpsNtpServer;
+    bool    m_gpsTimeCorrectionEnabled{false};
+    QString m_gpsNtpSyncStatus;
     QString m_automationGpsNtpServerAddress;
 
     // Per-band TX settings (from "transmit band" and "interlock band" status)
@@ -1822,6 +1907,10 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Command-edge fallback for a backend with no radio TX readback. One that
+    // declares RadioCapabilities::hasRadioPttReadback (Icom) waits for the
+    // decoded backend edge instead.
+    void publishCommandedBackendTransmitEdge(bool tx);
     // Key-on guard for the MOX/TUNE seam paths, which do not run through
     // setTransmit() and therefore missed its canTransmit test. Returns true when
     // keying may proceed; on refusal it rolls back the optimistic transmit state
@@ -1923,6 +2012,8 @@ private:
     // memories.json that reappears on every later disconnect. Cleared only when
     // the session really ends. See usesLocalMemoryBank().
     bool        m_sessionRadioOwnsMemories{false};
+    bool        m_memoryRefreshActive{false};
+    int         m_memoryImportFailures{0};
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};
@@ -2002,6 +2093,11 @@ private:
     void restoreAutomationSliceFixtureBaseline();
 
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
+    bool m_radioWakeActive = false;
+    quint64 m_radioWakeGeneration = 0;
+    QString m_radioWakeModel;
+    void cancelRadioWake();
+    void finishRadioWake(const QString& message, bool success);
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
     // See isConnectAttemptInFlight(). Set by the connect entry points, cleared

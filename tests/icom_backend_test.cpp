@@ -469,6 +469,18 @@ int main(int argc, char** argv)
     // canonicalises it, while capability code that compares the display text
     // literally loses CWK.
     radio.setDeviceName("IC 705");
+    radio.setSetting(setting::kNtpEnabled, 0x01);
+    radio.setSettingText(setting::kNtpServer, "time.nist.gov");
+    radio.setSetting(setting::kGpsTimeCorrect, 0x01);
+    radio.setGpsSource(0x01);
+    radio.setGpsPosition({
+        0x34, 0x13, 0x46, 0x40, 0x01,
+        0x01, 0x18, 0x03, 0x53, 0x40, 0x00,
+        0x01, 0x74, 0x25, 0x00,
+        0x02, 0x75,
+        0x00, 0x04, 0x27,
+        0x20, 0x26, 0x08, 0x21, 0x12, 0x34, 0x56,
+    });
     IcomCivBackend backend;
 
     int sliceAudioBuffers = 0;
@@ -499,6 +511,27 @@ int main(int argc, char** argv)
     // one both end up in the same place.
     std::vector<bool> moxPublications;
     std::vector<bool> xfcPublications;
+    GpsDelta gpsState;
+    QObject::connect(&backend, &IRadioBackend::gpsChanged, &app,
+                     [&](const GpsDelta& d) {
+                         if (d.status) { gpsState.status = d.status; }
+                         if (d.positionValid) { gpsState.positionValid = d.positionValid; }
+                         if (d.source) { gpsState.source = d.source; }
+                         if (d.grid) { gpsState.grid = d.grid; }
+                         if (d.altitude) { gpsState.altitude = d.altitude; }
+                         if (d.lat) { gpsState.lat = d.lat; }
+                         if (d.lon) { gpsState.lon = d.lon; }
+                         if (d.time) { gpsState.time = d.time; }
+                         if (d.date) { gpsState.date = d.date; }
+                         if (d.speed) { gpsState.speed = d.speed; }
+                         if (d.track) { gpsState.track = d.track; }
+                         if (d.ntpEnabled) { gpsState.ntpEnabled = d.ntpEnabled; }
+                         if (d.ntpServer) { gpsState.ntpServer = d.ntpServer; }
+                         if (d.gpsTimeCorrectionEnabled) {
+                             gpsState.gpsTimeCorrectionEnabled = d.gpsTimeCorrectionEnabled;
+                         }
+                         if (d.ntpSyncStatus) { gpsState.ntpSyncStatus = d.ntpSyncStatus; }
+                     });
     const auto mergeSlice = [&lastSliceState](const SliceDelta& d) {
         if (d.nr) lastSliceState.nr = d.nr;
         if (d.nb) lastSliceState.nb = d.nb;
@@ -688,6 +721,8 @@ int main(int argc, char** argv)
     check(!caps.hasDaxStreams, "no IQ on any networked Icom — absent, not deferred");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "the radio remembers its own state, so the client restores NOTHING");
+    check(caps.hasRadioPttReadback,
+          "Icom declares hasRadioPttReadback: setKeying() is intent, 1C 00 is state");
     check(caps.hasRadioSideDsp, "NR/NB/notch run in the radio's firmware");
     check(caps.hasRadioSideCwKeyer && caps.cwTextKeyerName == QLatin1String("CWK"),
           "CWK capability follows the resolved CI-V model, not its display string");
@@ -713,6 +748,12 @@ int main(int argc, char** argv)
                       && fm.value(QStringLiteral("dtcs")).toBool()
                       && fm.value(QStringLiteral("xfc")).toBool(),
                   "profile.show carries the IC-705 repeater dialect, DTCS and XFC");
+            const QVariantMap gps = profile.value(QStringLiteral("gps")).toMap();
+            check(gps.value(QStringLiteral("ntpEnabledSetItem")).toInt() == 167
+                      && gps.value(QStringLiteral("ntpServerSetItem")).toInt() == 168
+                      && gps.value(QStringLiteral("timeCorrectSetItem")).toInt() == 169
+                      && gps.value(QStringLiteral("ntpAccess")).toBool(),
+                  "profile.show carries the IC-705 GPS/NTP command shape");
         }
     }
     check(caps.cwTextMinWpm == 6 && caps.cwTextMaxWpm == 48
@@ -747,6 +788,46 @@ int main(int argc, char** argv)
     check(backend.model().verified, "whose capability numbers are tier-1 verified");
     check(waitSchedulerIdle(),
           "connect-time radio-authoritative state converges through the scheduler");
+    const RadioCapabilities connectedCaps = backend.capabilities();
+    check(connectedCaps.hasGpsLocation && connectedCaps.hasGpsTimeConfiguration,
+          "the resolved IC-705 advertises GPS position and clock configuration");
+    check(!connectedCaps.hasGpsSatelliteTelemetry
+              && !connectedCaps.hasGpsFrequencyReference,
+          "but does not overclaim satellite counts, lock, or a GPS frequency reference");
+    check(gpsState.positionValid.value_or(false)
+              && gpsState.status.value_or(QString{}) == QStringLiteral("Position reported"),
+          "the startup read publishes a usable position without inventing a lock");
+    check(!gpsState.grid.value_or(QString{}).isEmpty()
+              && gpsState.date.value_or(QString{}) == QStringLiteral("2026-08-21")
+              && gpsState.time.value_or(QString{}) == QStringLiteral("12:34:56Z"),
+          "coordinates are derived to grid square and the full radio UTC is preserved");
+    check(gpsState.ntpEnabled.value_or(false)
+              && gpsState.ntpServer.value_or(QString{}) == QStringLiteral("time.nist.gov")
+              && gpsState.gpsTimeCorrectionEnabled.value_or(false),
+          "the dashboard state is adopted from the radio's NTP/GPS settings");
+
+    backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("gps.ntp.enabled"),
+                            0, false);
+    check(waitSchedulerIdle() && radio.setting(setting::kNtpEnabled) == 0x00
+              && gpsState.ntpEnabled.has_value() && !*gpsState.ntpEnabled,
+          "an explicit NTP toggle is written, read back, and only then published");
+    backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("gps.ntp.server"),
+                            0, QStringLiteral("pool.ntp.org"));
+    check(waitSchedulerIdle()
+              && radio.settingText(setting::kNtpServer) == "pool.ntp.org"
+              && gpsState.ntpServer.value_or(QString{}) == QStringLiteral("pool.ntp.org"),
+          "an explicit NTP hostname write preserves all bytes and publishes read-back");
+    backend.invokeExtension(QStringLiteral("icom"),
+                            QStringLiteral("gps.time-correction"), 0, false);
+    check(waitSchedulerIdle() && radio.setting(setting::kGpsTimeCorrect) == 0x00
+              && gpsState.gpsTimeCorrectionEnabled.has_value()
+              && !*gpsState.gpsTimeCorrectionEnabled,
+          "GPS Time Correct also follows explicit-write then read-back authority");
+    backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("gps.ntp.sync"),
+                            0, {});
+    check(waitSchedulerIdle()
+              && gpsState.ntpSyncStatus.value_or(QString{}) == QStringLiteral("Succeeded"),
+          "Sync now follows 1A 07 with the radio's 1A 08 access result");
     check(lastTransmitState.cwSpeed.value_or(-1) == 28,
           "connect reads and adopts the radio's 28 WPM key speed");
     check(lastTransmitState.cwPitch.value_or(-1) == 601,
@@ -1027,6 +1108,8 @@ int main(int argc, char** argv)
                                      movesPttOrTuner);
               }, 1000),
               "the keyed intent reaches the radio through the scheduler");
+        check(waitFor([&] { return lastTransmitState.mox.value_or(false); }, 1000),
+              "the radio-confirmed PTT state reaches the backend seam");
         for (int i = 0; i < 20; ++i)
             backend.submitTxAudio(pcm, 24000, /*clientLeveled=*/false);
         QTest::qWait(200);
@@ -1060,14 +1143,10 @@ int main(int argc, char** argv)
 
     // ---- THE PTT CONFIRMATION WINDOW, IN BOTH DIRECTIONS ------------------
     //
-    // RFC #4983's captured FT8 failure and its explicit counter-rule live here.
-    // The window is what lets a newer key-on intent outlive an older poll's OFF
-    // answer; it must NOT also let a client's unkey request outlive the radio
-    // saying it is still transmitting.
+    // Command intent is NOT radio state. AetherModem waits on the true edge
+    // from this path before releasing sample zero, so a delayed/refused Icom
+    // key must leave the seam unkeyed and keep TX audio gated.
     {
-        // (a) THE CAPTURED FAILURE. Key on, then have the radio insist it is
-        //     still RX — exactly the pre-key poll answer arriving late. The
-        //     model must not follow it back to RX inside the window.
         backend.setKeying(false);
         check(waitSchedulerIdle(), "PTT fixture starts unkeyed");
         moxPublications.clear();
@@ -1075,39 +1154,42 @@ int main(int argc, char** argv)
         radio.m_pttOverride = false;         // radio keeps answering "RX"
         backend.setKeying(true);
         QTest::qWait(600);                   // several 250 ms fallback polls
-        check(std::find(moxPublications.begin(), moxPublications.end(), false)
-                  == moxPublications.end(),
-              "a contradictory PTT OFF is suppressed while a key-on intent is "
-              "pending — the captured FT8 transmit-audio teardown");
-        check(lastTransmitState.mox.value_or(false),
-              "and the model stays keyed for the operator who asked to transmit");
-
-        // The window is BOUNDED. Past it the radio wins again (Constitution II),
-        // otherwise a client belief outlives the hardware indefinitely.
-        QTest::qWait(700);
         check(!lastTransmitState.mox.value_or(true),
-              "once the 1 s window expires the radio's own report wins again");
+              "a key-on command never publishes TX while the radio still reports RX");
+        check(std::find(moxPublications.begin(), moxPublications.end(), true)
+                  == moxPublications.end(),
+              "no optimistic true edge escapes before radio confirmation");
 
-        // (b) THE DIRECTION THAT MUST NEVER BE SUPPRESSED. Ask to unkey while
-        //     the radio insists it is transmitting — a lost or refused unkey.
-        //     Swallowing this is the one failure that leaves an operator on the
-        //     air with a UI that says otherwise (Constitution VI fails closed).
+        // The radio applies the command later. The next fallback poll is the
+        // authoritative transition that AetherModem is allowed to follow.
         radio.m_pttOverride = true;
+        check(waitFor([&] { return lastTransmitState.mox.value_or(false); }, 1000),
+              "a delayed radio PTT true is eventually published");
+        check(std::find(moxPublications.begin(), moxPublications.end(), true)
+                  != moxPublications.end(),
+              "the confirmed true edge is visible to the TX coordinator");
+
+        // Unkey remains fail-closed: until the radio itself reports RX, the
+        // backend continues to publish/show that the transmitter is keyed —
+        // and a readback that CONTRADICTS the unkey is republished even though
+        // the backend's own keyed flag did not change, so RadioModel's
+        // optimistic RX presentation is corrected (Constitution VI).
         moxPublications.clear();
         backend.setKeying(false);
         check(waitFor([&] {
                   return std::find(moxPublications.begin(), moxPublications.end(),
                                    true) != moxPublications.end();
               }, 1000),
-              "a radio reporting KEYED after an unkey request is published "
-              "immediately, NOT suppressed by the confirmation window");
+              "a radio reporting KEYED after an unkey request is republished "
+              "immediately, NOT swallowed by the on-change gate");
         check(lastTransmitState.mox.value_or(false),
-              "and the model shows the transmitter that is actually on the air");
+              "a refused/delayed unkey cannot make the UI claim the radio is RX");
 
-        radio.m_pttOverride.reset();
+        radio.m_pttOverride = false;
         backend.setKeying(false);
         check(waitFor([&] { return !lastTransmitState.mox.value_or(true); }, 2000),
               "an obedient radio then unkeys normally");
+        radio.m_pttOverride.reset();
         check(waitSchedulerIdle(), "PTT fixture drains");
     }
 

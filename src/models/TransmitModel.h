@@ -117,6 +117,8 @@ public:
     void    setMaxPowerLevel(int w) { if (m_maxPowerLevel != w) { m_maxPowerLevel = w; emit maxPowerLevelChanged(w); } }
     QString tuneMode()        const { return m_tuneMode; }
     QString txSliceMode()     const { return m_txSliceMode; }
+    bool tuneAvailable() const { return m_tuneAvailable; }
+    void setTuneAvailable(bool available);
     bool    showTxInWaterfall() const { return m_showTxInWaterfall; }
 
     // ── APD getters ─────────────────────────────────────────────────────────
@@ -208,6 +210,10 @@ public:
     // than briefly greying out a control that does exist.
     void setHasTuner(bool present);
     [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
+    // Independent from matching: Flex exposes radio-side ATU memory recall
+    // and database operations, while an Icom 1C 01 tuner path does not.
+    void setHasTunerMemories(bool present);
+    [[nodiscard]] bool hasTunerMemories() const { return m_hasTunerMemories; }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -320,7 +326,9 @@ signals:
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
     void hasTunerChanged(bool present);
+    void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
+    void tuneAvailabilityChanged(bool available);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
     // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
@@ -424,6 +432,7 @@ private:
     int    m_rfPower{100};
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
+    bool   m_hasTunerMemories{true};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};
@@ -484,6 +493,7 @@ private:
     int     m_rcaTxReqPolarity{0};
     int     m_maxPowerLevel{100};
     QString m_tuneMode{"single_tone"};
+    bool m_tuneAvailable = true;
     QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
     bool    m_showTxInWaterfall{false};
 
