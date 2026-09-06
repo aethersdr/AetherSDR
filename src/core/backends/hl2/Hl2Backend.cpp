@@ -4975,8 +4975,9 @@ void Hl2Backend::applyIoBoardFrequency()
     // bypass result (kOcNone) is a relay pattern with no frequency to offer.
     const Receiver* txRx = rx(m_txDdc);
     const double hz = txRx ? txRx->sliceFreqHz : m_rx[0].sliceFreqHz;
-    if (!(hz > 0.0))
-        return;                 // also rejects NaN, which a comparison to <= 0 would not
+    if (!std::isfinite(hz) || hz <= 0.0 || hz > static_cast<double>(0xFF'FF'FF'FF'FFULL)) {
+        return;                 // validate before converting to the 40-bit field
+    }
 
     // sliceFreqHz is TRUE-RF and the board's field wants true RF: it compares
     // against band edges to pick a relay. The frequency-calibration scaling in
@@ -4995,10 +4996,10 @@ void Hl2Backend::applyIoBoardFrequency()
         m_ioBoardThrottle->setSingleShot(true);
         m_ioBoardThrottle->setInterval(kIoBoardThrottleMs);
         connect(m_ioBoardThrottle, &QTimer::timeout, this, [this] {
-            if (m_pendingIoBoardHz == 0)
+            const quint64 pending = m_ioBoardSchedule.takePending();
+            if (pending == 0) {
                 return;                  // cooldown expired with nothing waiting
-            const quint64 pending = m_pendingIoBoardHz;
-            m_pendingIoBoardHz = 0;
+            }
             if (!sendIoBoardFrequency(pending))
                 return;                  // disconnected: nothing to re-arm for
             // Re-arm: a tune still in progress must keep coalescing.
@@ -5006,19 +5007,13 @@ void Hl2Backend::applyIoBoardFrequency()
         });
     }
 
-    // The whole decision, in one place, from a policy the suite can exercise
-    // without a radio — see Hl2IoBoardPolicy.h for why each condition sits
-    // where it does. m_tuning counts as keyed: TUNE radiates.
-    switch (ioBoardAction(m_connected, m_keyed || m_tuning,
-                          m_ioBoardThrottle->isActive(), bandChanged)) {
+    // Neither MOX nor TUNE defers the amplifier alone: the TX NCO/filter
+    // already follow the requested band. Immediate sends also discard an older
+    // coalesced value so the timeout cannot send the board back to that band.
+    switch (m_ioBoardSchedule.request(m_connected, m_ioBoardThrottle->isActive(),
+                                      bandChanged, target)) {
     case IoBoardAction::DropDisconnected:
-        m_pendingIoBoardHz = 0;
-        return;
-    case IoBoardAction::DeferKeyed:
-        // Deliberately not stashed: unkey re-runs this path and recomputes.
-        return;
     case IoBoardAction::Coalesce:
-        m_pendingIoBoardHz = target;     // superseded by any later request
         return;
     case IoBoardAction::Send:
         break;
@@ -5043,14 +5038,10 @@ bool Hl2Backend::sendIoBoardFrequency(quint64 hz)
     // condition is one call site too many, so both now go through here and the
     // asymmetry cannot come back.
     //
-    // WHY DISCONNECTED MATTERS: MetisClient::m_oneShot is not cleared by
-    // start() or stop(), and unlike the filter byte the IO-board frequency is
-    // not re-primed through Params. A bank queued while down therefore survives
-    // as the FIRST thing the next session transmits, briefly pointing an
-    // amplifier at the band this session ended on. linkUp() pushes the real
-    // frequency immediately afterwards, so dropping it here loses nothing.
+    // Do not let a disconnected tune enqueue work for a future session.
+    // The MetisClient guard and stop-time purge also enforce this at the wire.
     if (!m_connected) {
-        m_pendingIoBoardHz = 0;
+        m_ioBoardSchedule.reset();
         return false;
     }
     QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
@@ -5072,7 +5063,7 @@ void Hl2Backend::resetIoBoardSchedule()
     // cannot be made across a disconnect.
     if (m_ioBoardThrottle)
         m_ioBoardThrottle->stop();
-    m_pendingIoBoardHz = 0;
+    m_ioBoardSchedule.reset();
     m_ioBoardBandKey.clear();
 }
 

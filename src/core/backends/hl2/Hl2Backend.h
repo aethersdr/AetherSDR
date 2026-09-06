@@ -606,8 +606,8 @@ private:
     double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
 
     // The IO board's README asks for at most one frequency update every 0.5 s,
-    // and only on change. Leading edge applies IMMEDIATELY, so an operator who
-    // changes band and keys straight away finds the amplifier already switched;
+    // and only on change. Leading edge queues immediately; wire delivery and relay settling
+    // are not acknowledged, so this is not an amplifier-ready interlock;
     // anything arriving inside the cooldown is coalesced and the LAST value
     // applied when it expires.
     //
@@ -617,7 +617,7 @@ private:
     // cooldown — the one moment they are most likely to key.
     static constexpr int kIoBoardThrottleMs = 500;
     QTimer* m_ioBoardThrottle = nullptr;
-    quint64 m_pendingIoBoardHz = 0;      // 0 = nothing coalesced
+    hl2::IoBoardSchedule m_ioBoardSchedule;
     // The band the IO board was last told about, as a bandKeyForHz() key.
     // Empty means "no session has told it anything", which is also the state
     // reset() restores — so the first push after any connect is treated as a

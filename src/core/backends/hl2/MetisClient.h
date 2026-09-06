@@ -393,6 +393,7 @@ private:
     // Ordering matters: a frequency change and its pipeline reset must reach the
     // radio in that order, and neither should wait up to three frames for the
     // rotation to come back around.
+    friend struct MetisClientTestAccess; // socket-free transport-state injection
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // Last transmit frequency handed to the IO board, and whether one ever was.
     // A separate flag rather than a 0 sentinel: 0 Hz is not a plausible tuned

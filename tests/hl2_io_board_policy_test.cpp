@@ -1,107 +1,57 @@
-// HL2 IO-board push scheduling policy. Pure — no Qt, no aethercore, no radio.
-//
-// Every defect found in this feature during review was in the scheduling, not
-// the encoder: a guard present on one edge of the throttle and absent on the
-// other, an armed timer surviving a disconnect, a band change coalesced as
-// though it were ordinary frequency drift. These checks pin the conditions so
-// those cannot come back silently.
-
+// Socket-free scheduling regressions; the backend uses this state on both
+// the tune path and the QTimer timeout path.
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
-
 #include <cstdio>
 
 using namespace AetherSDR::hl2;
-
-static int g_failures = 0;
-static void check(bool cond, const char* what)
+static int failures = 0;
+static void check(bool ok, const char* message)
 {
-    if (!cond) {
-        std::fprintf(stderr, "FAIL: %s\n", what);
-        ++g_failures;
+    if (!ok) {
+        std::fprintf(stderr, "FAIL: %s\n", message);
+        ++failures;
     }
-}
-
-// Named arguments at the call site: ioBoardAction(connected, keyed,
-// throttleActive, bandChanged) is four bools, and a transposed pair would
-// otherwise still compile and still look right.
-static IoBoardAction act(bool connected, bool keyed, bool throttled, bool bandChanged)
-{
-    return ioBoardAction(connected, keyed, throttled, bandChanged);
 }
 
 int main()
 {
-    // ---- disconnected wins over everything ----
-    {
-        // The consequence outlives the session: a bank queued while down is not
-        // discarded by start()/stop() and becomes the FIRST thing the next
-        // connect sends, pointing an amplifier at the previous band.
-        check(act(false, false, false, false) == IoBoardAction::DropDisconnected,
-              "disconnected and idle drops");
-        check(act(false, false, false, true) == IoBoardAction::DropDisconnected,
-              "a band change while disconnected still drops");
-        check(act(false, true, true, true) == IoBoardAction::DropDisconnected,
-              "disconnected outranks every other condition");
+    IoBoardSchedule schedule;
+    check(schedule.request(true, false, true, 7'100'000) == IoBoardAction::Send,
+          "connect sends immediately");
+    check(schedule.request(true, true, false, 7'101'000) == IoBoardAction::Coalesce,
+          "same-band sweep coalesces");
+    check(schedule.request(true, true, true, 14'225'000) == IoBoardAction::Send,
+          "40m to 20m beats the cooldown, including during MOX/TUNE");
+    check(schedule.takePending() == 0,
+          "timeout after band change must not restore the pending 40m value");
 
-        // THE REGRESSION. The original code guarded the trailing edge of the
-        // throttle and not the leading one, so a tune while disconnected with
-        // an idle timer queued five banks. That is this exact combination.
-        check(act(false, false, /*throttled=*/false, /*bandChanged=*/true)
-                  == IoBoardAction::DropDisconnected,
-              "leading edge while disconnected drops (the reviewed regression)");
-    }
+    (void)schedule.request(true, true, false, 14'226'000);
+    (void)schedule.request(true, true, false, 14'227'000);
+    check(schedule.takePending() == 14'227'000, "timeout sends latest same-band value");
+    check(schedule.takePending() == 0, "timeout consumes pending work once");
 
-    // ---- keyed defers, and is never overridden by a band change ----
-    {
-        // Switching a band relay under RF burns its contacts. A band change is
-        // the one thing that otherwise beats the throttle, so it is the case
-        // most likely to be let through by a careless edit.
-        check(act(true, true, false, false) == IoBoardAction::DeferKeyed,
-              "keyed defers");
-        check(act(true, true, false, true) == IoBoardAction::DeferKeyed,
-              "keyed defers EVEN on a band change — relay under RF");
-        check(act(true, true, true, true) == IoBoardAction::DeferKeyed,
-              "keyed defers regardless of the throttle");
-    }
+    (void)schedule.request(true, true, false, 14'228'000);
+    check(schedule.request(false, false, true, 7'100'000) == IoBoardAction::DropDisconnected,
+          "disconnected leading edge refuses to send");
+    check(schedule.takePending() == 0, "disconnected request discards pending work");
+    (void)schedule.request(true, true, false, 14'229'000);
+    schedule.reset();
+    check(schedule.takePending() == 0, "link loss cancels pending work");
+    check(schedule.request(true, false, true, 7'100'000) == IoBoardAction::Send,
+          "reconnect immediately pushes the current frequency");
 
-    // ---- the throttle coalesces same-band movement only ----
-    {
-        check(act(true, false, true, false) == IoBoardAction::Coalesce,
-              "same-band movement inside the cooldown coalesces");
-        check(act(true, false, false, false) == IoBoardAction::Send,
-              "same-band movement with an idle throttle sends");
-    }
-
-    // ---- a band change beats the throttle ----
-    {
-        // applyBandFilter moves the physical filter relay immediately. Holding
-        // the amplifier back for the cooldown leaves the two disagreeing, and
-        // keying in that window is the hazard.
-        check(act(true, false, true, true) == IoBoardAction::Send,
-              "a band change sends on the leading edge even mid-cooldown");
-        check(act(true, false, false, true) == IoBoardAction::Send,
-              "a band change with an idle throttle sends");
-    }
-
-    // ---- exhaustive: every combination has exactly one defined outcome ----
-    {
-        int sends = 0, coalesces = 0, defers = 0, drops = 0;
-        for (int i = 0; i < 16; ++i) {
-            const bool c = i & 1, k = i & 2, t = i & 4, b = i & 8;
-            switch (act(c, k, t, b)) {
-            case IoBoardAction::Send:             ++sends;     break;
-            case IoBoardAction::Coalesce:         ++coalesces; break;
-            case IoBoardAction::DeferKeyed:       ++defers;    break;
-            case IoBoardAction::DropDisconnected: ++drops;     break;
-            }
+    for (int bits = 0; bits < 8; ++bits) {
+        const bool connected = bits & 1;
+        const bool throttled = bits & 2;
+        const bool bandChanged = bits & 4;
+        const IoBoardAction result = ioBoardAction(connected, throttled, bandChanged);
+        if (!connected) {
+            check(result == IoBoardAction::DropDisconnected, "all disconnected states drop");
+        } else if (bandChanged || !throttled) {
+            check(result == IoBoardAction::Send, "connected band changes and idle sends proceed");
+        } else {
+            check(result == IoBoardAction::Coalesce, "only same-band cooldown coalesces");
         }
-        check(drops == 8, "half of all states are disconnected, and all drop");
-        check(defers == 4, "connected+keyed always defers");
-        check(coalesces == 1, "only connected, unkeyed, throttled, same-band coalesces");
-        check(sends == 3, "the remaining connected+unkeyed states send");
     }
-
-    if (g_failures == 0)
-        std::fprintf(stderr, "hl2_io_board_policy_test: all checks passed\n");
-    return g_failures == 0 ? 0 : 1;
+    return failures == 0 ? 0 : 1;
 }

@@ -359,6 +359,13 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // An interrupted five-bank write must not finish in the next session.
+    // Preserve unrelated one-shot setup; only this board's writes are stale.
+    std::erase_if(m_oneShot, [](const Cc& bank) {
+        return bank[0] == kC0I2c2 && bank[1] == kI2cCookieWrite
+            && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
+    });
+    m_ioBoardTxFreqSent = false;
     if (m_linkUp) {
         m_linkUp = false;
         emit linkDown();
@@ -540,16 +547,12 @@ void MetisClient::setBandFilter(int ocFilterByte)
 
 void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
 {
-    // DEFENCE IN DEPTH against a bank outliving its session. m_oneShot is not
-    // cleared by start() or stop(), so anything queued while the stream is down
-    // becomes the first thing the NEXT connect transmits -- pointing an
-    // amplifier at the band the previous session ended on. Hl2Backend already
-    // refuses to schedule while disconnected; this is the wire's own refusal,
-    // so a future caller that misses that guard cannot reintroduce the hazard.
+    // Refuse disconnected requests even if a caller missed the backend guard.
+    // stop() also discards any unfinished board write from a running session.
     if (!m_running)
         return;
     if (m_ioBoardTxFreqSent && hz == m_ioBoardTxFreqHz)
-        return;                       // board already holds this frequency
+        return;                       // already queued in this session
     m_ioBoardTxFreqSent = true;
     m_ioBoardTxFreqHz = hz;
     // INFO, not debug, and for the same reason the band filter is: there is no
