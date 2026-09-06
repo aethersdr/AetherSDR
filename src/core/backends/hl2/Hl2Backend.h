@@ -747,6 +747,10 @@ private:
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
     int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
+    // The connect param pinned a gain that the start band did not have stored.
+    // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
+    // Cleared when the operator changes gain or leaves the start band.
+    bool m_lnaSessionPin = false;
     int m_driveDefaultPercent = -1;  // <0: no restored default; leave drive alone
     QString m_currentBandKey;
     // True while band-memory / restore code drives setTxPower() itself: the
