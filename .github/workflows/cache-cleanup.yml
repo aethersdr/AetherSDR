@@ -34,22 +34,19 @@ name: Cache cleanup
 # pins the repo at its allowance on its own, holding well under a day of caches
 # nothing will ever read.
 #
-# NOT handled here: caches on refs/pull/N/merge, which become unreadable when
-# the PR closes. A job for those was written and pulled back out before merge —
-# `pull_request` grants a read-only GITHUB_TOKEN for fork PRs and `permissions:`
-# cannot elevate it, so `gh cache delete` 403s; 22 of 25 open PRs are from
-# forks, so it would have failed on nearly every close. It also may not be
-# needed: PRs only WRITE a dependency cache (Qt, FFTW, DeepFilterNet) when the
-# key is not already readable, and the reason they were doing so is that main's
-# copy kept being evicted by the churn ci.yml's save-on-main split removes. Left
-# for a follow-up that can measure whether anything is still accumulating there,
-# and settle the trigger (a scheduled sweep avoids the privileged-trigger
-# question entirely).
+# The other cause is caches on refs/pull/N/merge, which become unreadable the
+# moment the PR closes — handled by sweep-closed-prs below, on a schedule rather
+# than on the close event. See that job for why the trigger is what it is.
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  # Daily, plus on demand. See sweep-closed-prs for why this is scheduled
+  # rather than fired from `pull_request: closed`.
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 # actions:write is the only elevated scope and it cannot reach anything outside
 # the cache API. It lives in this workflow rather than as a step in ci.yml
@@ -65,6 +62,8 @@ permissions:
 
 jobs:
   prune-main:
+    # Only on a main push run — a scheduled or manual invocation is for the
+    # sweep below and has no new main entry to supersede anything.
     # workflow_run.event == 'push', NOT head_branch == 'main'. A fork's default
     # branch is usually also called main, so a head_branch test fires on fork PR
     # runs too — harmless in effect (the prune is idempotent and no fork run
@@ -155,6 +154,120 @@ jobs:
         # needed `if: always()` + `needs:`, which fired on every CI completion —
         # ~35 runners a day to print one line, nearly all of them after a prune
         # that had been skipped.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/actions/cache/usage" \
+            --jq '"Repo Actions cache: \(.active_caches_count) entries, \((.active_caches_size_in_bytes/1073741824)*100|floor/100) GiB of 10 GiB allowance"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ── Dead cause 2: the PR closed ─────────────────────────────────────────────
+  # A PR's caches live on refs/pull/N/merge, a ref only that PR can read. Once it
+  # closes nothing can ever read them again, but they hold budget for up to the
+  # full 7-day retention.
+  #
+  # ci.yml's save-on-main split already stops PRs writing the big COMPILER
+  # caches. What can still land on a PR ref is a content-hash-keyed DEPENDENCY
+  # cache (Qt, FFTW3, DeepFilterNet3, qtkeychain) — and only when the key is not
+  # already readable from main. Those are not small: PR #4910 held 2.3 GiB, of
+  # which a single Qt entry was 1,297 MiB.
+  #
+  # WHY SCHEDULED, not `pull_request: closed`
+  #
+  # The obvious trigger cannot work. For a `pull_request` event whose head is a
+  # fork, GitHub issues a read-only GITHUB_TOKEN and a `permissions:` block can
+  # only lower that ceiling, never raise it — so actions:write is not granted,
+  # `gh cache delete` returns 403, and the job fails.
+  #
+  # The population that matters is CLOSED PRs, since that is what a
+  # `types: [closed]` trigger fires on: ~70% of recently closed PRs here came
+  # from forks (42 of 60 over a wide window, 8 of the last 20). The 22-of-25
+  # figure quoted during review counts OPEN PRs — a different and less
+  # applicable measure, noted because it is the one in #5008's history. Either
+  # way this is the common case, and the job would have gone red on every one of
+  # them while deleting nothing.
+  #
+  # `pull_request_target` would get a writable token and is the documented-safe
+  # shape for a job that checks nothing out. It is deliberately not used: a
+  # schedule needs no privileged trigger at all, is idempotent, and self-heals —
+  # it picks up PRs closed while the workflow was broken, renamed or disabled,
+  # which an event-driven job silently misses forever.
+  #
+  # The cost is latency: a closed PR's caches live until the next run. That is
+  # the right trade when the entries are already unreachable — nothing is
+  # waiting on them, they are only occupying budget.
+  sweep-closed-prs:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete caches belonging to closed PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # --limit 100 comfortably exceeds the repo's entry count (20 when this
+          # was written, and the whole point of this workflow is to keep it low).
+          # Logged below if it is ever hit, because a silent truncation here
+          # would look exactly like "nothing to clean".
+          caches=$(gh cache list --limit 100 --json id,key,ref,sizeInBytes)
+          total=$(printf '%s' "$caches" | jq 'length')
+          [ "$total" -lt 100 ] || echo "::warning::cache list hit the 100 limit; some entries not examined this run"
+
+          # Only refs/pull/N/merge entries are candidates. main and tag refs are
+          # not swept here: main's are handled by prune-main, and tag caches
+          # belong to release workflows that run rarely enough not to matter.
+          pr_refs=$(printf '%s' "$caches" \
+            | jq -r '[.[] | select(.ref | test("^refs/pull/[0-9]+/merge$"))] | .[].ref' \
+            | sort -u)
+
+          if [ -z "$pr_refs" ]; then
+            echo "No PR-scoped caches at all — nothing to sweep."
+            exit 0
+          fi
+
+          freed=0
+          swept=0
+          for ref in $pr_refs; do
+            num=$(printf '%s' "$ref" | sed 's|refs/pull/||; s|/merge||')
+
+            # An OPEN PR's caches are still live — leave them. Anything else
+            # (CLOSED or MERGED) can never be read again.
+            state=$(gh pr view "$num" --json state --jq .state 2>/dev/null || echo UNKNOWN)
+            if [ "$state" = "OPEN" ]; then
+              continue
+            fi
+            if [ "$state" = "UNKNOWN" ]; then
+              # A cache ref with no resolvable PR. Left alone deliberately:
+              # deleting on a failed lookup would turn a transient API error
+              # into data loss, and the next run retries for free.
+              echo "  #$num: state unresolved, skipping this run"
+              continue
+            fi
+
+            bytes=$(printf '%s' "$caches" \
+              | jq --arg r "$ref" '[.[] | select(.ref == $r) | .sizeInBytes] | add // 0')
+            mib=$(( bytes / 1048576 ))
+            echo "#$num ($state): sweeping ${mib} MiB"
+
+            # --all --ref deletes the ref's caches in one call.
+            # --succeed-on-no-caches keeps this green if LRU took them between
+            # the listing and now. (Requires --all; gh >= 2.63, which every
+            # current ubuntu-latest image satisfies.)
+            if gh cache delete --all --ref "$ref" --succeed-on-no-caches; then
+              freed=$(( freed + mib ))
+              swept=$(( swept + 1 ))
+            else
+              echo "  #$num: delete failed, will retry next run"
+            fi
+          done
+
+          echo "Swept $swept closed PR(s), freeing ~${freed} MiB."
+
+      - name: Report repo cache usage
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
