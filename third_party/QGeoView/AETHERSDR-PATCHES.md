@@ -105,6 +105,11 @@ this list current when updating the snapshot.
     null placeholders. An ordinary update skips unchanged cameras and cannot
     retry those indexed failures. Completed coverage is retained; online
     request coalescing still applies. Radar opts in with bounded retry delays.
+    Intentional cancellations do not count as failures. Encoded-size aborts
+    are marked before aborting and do count; retiring a reply disconnects its
+    layer callbacks, and stale completions cannot remove a newer request.
+    The socket-free `map_tile_reply_test` covers cleanup, direct cancellation,
+    size-limit aborts, timeouts, and same-tile requests in a new generation.
 
 14. **`lib/src/QGVMapQGItem.cpp` — direct image painting on OpenGL viewports.**
     `QGVImage` wrappers use `NoCache` when attached to an OpenGL-backed view.
@@ -119,8 +124,9 @@ this list current when updating the snapshot.
     tiles. `QGVLayerTilesOnline` clips fallback tiles to that footprint while
     painting: a completed higher-resolution tile replaces its entire footprint,
     including transparent pixels, rather than revealing old rain beneath it.
-    Pending/failed descendants keep their fallback. Radar opts in and retains
-    three adjacent zoom levels; ordinary opaque basemap layers do not opt in.
+    Pending/failed descendants keep their fallback. Clipping uses const index
+    lookup without a per-paint level-map copy. Radar opts in and retains three
+    adjacent zoom levels; ordinary opaque basemap layers do not opt in.
     Parent retirement also counts `4^zoomDelta` descendants, not
     `2^(zoomDelta+1)`: eight of sixteen grandchildren cannot replace a parent.
     `weather_radar_loading_test` injects real QGeoView tile deliveries without

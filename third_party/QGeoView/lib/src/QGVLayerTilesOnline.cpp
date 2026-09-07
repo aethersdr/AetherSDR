@@ -28,6 +28,7 @@
 namespace {
 constexpr int kDecodedTileCacheBytes = 64 * 1024 * 1024;
 constexpr qint64 kMaximumEncodedTileBytes = 1024 * 1024;
+constexpr auto kSizeLimitAbortProperty = "qgvSizeLimitAbort";
 
 class TransparentFallbackTile final : public QGVImage {
 public:
@@ -73,12 +74,10 @@ quint64 QGVLayerTilesOnline::failedTileRequestCount() const
 
 void QGVLayerTilesOnline::onClean()
 {
-    const QList<QNetworkReply*> replies = mRequest.values();
-    mRequest.clear();
+    const QList<QGV::GeoTilePos> requests = mRequest.keys();
     mWaiting.clear();
-    for (QNetworkReply* reply : replies) {
-        reply->abort();
-        reply->deleteLater();
+    for (const QGV::GeoTilePos& tilePos : requests) {
+        removeReply(tilePos);
     }
     QGVLayerTiles::onClean();
 }
@@ -164,12 +163,15 @@ void QGVLayerTilesOnline::request(const QGV::GeoTilePos& tilePos)
     connect(reply, &QNetworkReply::downloadProgress, reply,
             [reply](qint64 received, qint64) {
                 if (received > kMaximumEncodedTileBytes) {
+                    // abort() may emit finished synchronously. Mark first so
+                    // size enforcement remains a failure, unlike view cleanup.
+                    reply->setProperty(kSizeLimitAbortProperty, true);
                     reply->abort();
                 }
             });
 
     mRequest[sourceTilePos] = reply;
-    connect(reply, &QNetworkReply::finished, reply,
+    connect(reply, &QNetworkReply::finished, this,
             [this, reply, sourceTilePos]() { onReplyFinished(reply, sourceTilePos); });
 
     qgvDebug() << "request" << url;
@@ -193,11 +195,19 @@ void QGVLayerTilesOnline::cancel(const QGV::GeoTilePos& tilePos)
 
 void QGVLayerTilesOnline::onReplyFinished(QNetworkReply* reply, const QGV::GeoTilePos& tilePos)
 {
+    // A queued completion from an old generation must not remove a newer
+    // request for this same canonical tile or inflate its failure count.
+    if (mRequest.value(tilePos, nullptr) != reply) {
+        return;
+    }
     if (reply->error() != QNetworkReply::NoError) {
         if (reply->error() != QNetworkReply::OperationCanceledError) {
             qgvCritical() << "ERROR" << reply->errorString();
         }
-        ++mFailedTileRequestCount;
+        if (reply->error() != QNetworkReply::OperationCanceledError
+            || reply->property(kSizeLimitAbortProperty).toBool()) {
+            ++mFailedTileRequestCount;
+        }
         mWaiting.remove(tilePos);
         removeReply(tilePos);
         return;
@@ -260,6 +270,9 @@ void QGVLayerTilesOnline::removeReply(const QGV::GeoTilePos& tilePos)
         return;
     }
     mRequest.remove(tilePos);
+    // Retire before aborting: abort may synchronously invoke finished().
+    // Disconnect only layer callbacks; unrelated observers keep their signal.
+    disconnect(reply, nullptr, this, nullptr);
     reply->abort();
     reply->close();
     reply->deleteLater();

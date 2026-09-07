@@ -165,7 +165,13 @@ void QGVLayerTiles::onTile(const QGV::GeoTilePos& tilePos, QGVDrawItem* tileObj)
 QPainterPath QGVLayerTiles::tileUncoveredPath(const QGV::GeoTilePos& tilePos) const
 {
     QPainterPath path;
-    const QGVDrawItem* tile = mIndex.value(tilePos.zoom()).value(tilePos);
+    // Keep both lookups const: painting must not copy/refcount a level map
+    // or detach the shared tile index.
+    const auto levelIt = mIndex.constFind(tilePos.zoom());
+    if (levelIt == mIndex.cend()) {
+        return path;
+    }
+    const QGVDrawItem* tile = levelIt.value().value(tilePos, nullptr);
     if (tile == nullptr) {
         return path;
     }
