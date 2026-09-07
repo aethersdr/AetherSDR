@@ -742,6 +742,7 @@ set(CORE_SOURCES
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
+    src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp

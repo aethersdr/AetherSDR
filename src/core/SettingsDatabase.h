@@ -89,7 +89,7 @@ public:
                             const QString& value);
     bool readRadioFeature(const QString& family, const QString& radioId,
                           const QString& feature, int& schemaVersion,
-                          QString& value);
+                          QString& value, bool* readFailedOut = nullptr);
     bool removeRadioFeature(const QString& family, const QString& radioId,
                             const QString& feature);
     // Full enumeration for diagnostics (--config features / support bundle).

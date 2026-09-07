@@ -1303,7 +1303,8 @@ public:
     // HL2 MAC); an unconnected model yields a family-wide scope.
     RadioSettingsScope settingsScope() const
     {
-        return RadioSettingsScope(m_family, serial());
+        return RadioSettingsScope(m_family, settingsRadioId(
+            m_family, serial(), m_lastInfo.serialIdentity));
     }
 
     // Fire a vendor-extension verb at the connected backend (IRadioBackend
@@ -1530,7 +1531,7 @@ private:
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
-    void handRestoredStateToBackend(const QString& serial);  // RFC #4603
+    void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
     void captureClientOwnedCwState(RestoredRadioState& state) const;

@@ -179,7 +179,9 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 
     int idx = -1;
     if (!targetSerial.isEmpty()) {
-        if (targetSerial.startsWith(QLatin1String("rtl:"))) {
+        if ((request.serialIdentity.indexLocator
+             || request.serialIdentity.reportedSerial.isEmpty())
+            && targetSerial.startsWith(QLatin1String("rtl:"))) {
             bool ok = false;
             int parsedIdx = targetSerial.mid(4).toInt(&ok);
             if (ok && parsedIdx >= 0 && parsedIdx < count) {
@@ -253,11 +255,11 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
     if (rtlsdr_get_device_usb_strings(idx, vendorBuf, productBuf, serialBuf) == 0) {
         m_vendor  = QString::fromUtf8(vendorBuf);
         m_product = QString::fromUtf8(productBuf);
-        m_serial  = QString::fromUtf8(serialBuf);
+        m_serial  = QString::fromUtf8(serialBuf).trimmed();
     } else {
         m_vendor  = tr("Realtek");
         m_product = tr("RTL2832U");
-        m_serial  = QString::number(idx);
+        m_serial.clear(); // Enumeration indices are connection locators, never serials.
     }
 
     // ── Configure initial frequency, direct sampling, and gain ───────────────

@@ -3415,6 +3415,12 @@ set_tests_properties(radio_setup_ip_config_presentation_test PROPERTIES
 # RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
 # capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
 # load AND store, per-radio isolation, family-wide fallback, schema tolerance.
+# Socket-free RTL persistence/identity foundation; no librtlsdr or live backend.
+add_executable(rtl_slice_settings_test tests/rtl_slice_settings_test.cpp)
+target_include_directories(rtl_slice_settings_test PRIVATE src tests)
+target_link_libraries(rtl_slice_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4491,6 +4497,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    rtl_slice_settings_test
     hl2_gain_restore_test
     icom_identity_test
     icom_control_profile_test
