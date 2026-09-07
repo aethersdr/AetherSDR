@@ -179,7 +179,7 @@ private:
         for (int i = 0; i < count; ++i) {
             map.m_weatherRadarFrames.append(start.addSecs(i * 300));
             map.m_weatherRadarFrameSampleTimes.append(start.addSecs(i * 300 + 150));
-            map.m_weatherRadarFrameRasterIds.append({100 + i});
+            map.m_weatherRadarFrameRasterIds.append(QVector<qint64>{100 + i});
         }
         map.bufferWeatherRadarFrames();
     }
