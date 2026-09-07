@@ -3355,17 +3355,52 @@ void Hl2Backend::setKeying(bool key)
     // not log per block, and a per-block test would fire on every normal
     // transmission because the pauses between words sit far below the target.
     if (m_keyed && !key) {
-        // HOW FAR BELOW THE TARGET COUNTS AS QUIET IS PROVISIONAL AND UNMEASURED.
+        // HOW FAR BELOW THE TARGET COUNTS AS QUIET. Upper bound MEASURED;
+        // the value inside it CHOSEN. Both halves are stated because they have
+        // different standing.
         //
         // The old -45 dBFS was a property of the hold — a real threshold in the
-        // DSP that an over either cleared or did not. Nothing replaces it,
-        // because nothing in the record measures how far under alcTargetPeak a
-        // transmission may sit before an operator would call it quiet on the
-        // air. 20 dB is a placeholder chosen to be obviously below a
-        // deliberately-set level and obviously above the noise, NOT a measured
-        // figure, and it must not be quoted as one. The d81-speech-pauses bench
-        // is what sets it; until that run, this constant is a guess with a name.
-        constexpr double kQuietMarginBelowTargetDb = 20.0;
+        // DSP that an over either cleared or did not. Nothing in the DSP
+        // replaces it, so this is a judgement about the air, informed by a
+        // measurement rather than derived from one.
+        //
+        // MEASURED (d81b-speech-pauses-alc, four legs, twelve speech bursts,
+        // two mic gains 20 dB apart, on this build — against hpsdrsim on a
+        // loopback approval, NOT on the air, and nothing radiated):
+        //
+        //   speech crest factor            18.87 dB, sd 0.80
+        //   burst-to-burst level spread    <= 0.91 dB
+        //   mic slider 50 (unity)          peak 19.56-19.67 dB BELOW
+        //                                  alcTargetPeak
+        //
+        // The unity figure is read off d81b's own result.json rather than off a
+        // summary of it: speech_output_dbfs is -21.08 dBFS on the fault leg and
+        // -20.97 dBFS on the control leg, both at mic_level 50, against
+        // 20*log10(0.85) = -1.4116 dBFS.
+        //
+        // THE UPPER BOUND IS ~19.56 dB AND IT IS HARD. Unity is where an operator
+        // who has never moved the slider sits, and on this build that is about
+        // 19.6 dB short of the target — precisely the operator this diagnostic
+        // exists to reach. A margin at or above 19.56 would stay SILENT on them.
+        // The earlier placeholder here was 20.0 dB, so it was outside its own
+        // bound and would have failed in the one case it was written for. That
+        // is why a guess with a name is still a guess.
+        //
+        // CHOSEN, 12.0 dB: it fires on unity with 7.6 dB to spare, it does not
+        // fire until a station is two S-units down — weak on the air, not merely
+        // conservatively set — and it clears the measured noise (0.91 dB of
+        // burst variation, 0.80 dB of crest scatter) by an order of magnitude.
+        //
+        // WHAT WOULD MAKE THIS MEASURED RATHER THAN BOUNDED. d81b bounds the
+        // correct setting from ONE side only. There is no bracket: d81b's
+        // slider-100 legs run a DIFFERENT stimulus (sp-53.wav) from the unity
+        // legs (sp-38.wav, sp-50.wav), and the record's own op_leg_caveat says
+        // they are not comparable leg-to-leg, so their 8.68 dB of applied ALC
+        // reduction is not the other half of a bracket around unity. One
+        // further leg at slider ~74 — where 0.8 dB per step puts the peak on
+        // the target — would measure the healthy case directly and give this
+        // constant data on both sides.
+        constexpr double kQuietMarginBelowTargetDb = 12.0;
         const double targetDbfs =
             20.0 * std::log10(std::max(1e-9, m_alcTargetPeak));
         const double quietBelowDbfs = targetDbfs - kQuietMarginBelowTargetDb;
