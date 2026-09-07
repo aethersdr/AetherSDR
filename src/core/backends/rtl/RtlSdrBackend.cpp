@@ -120,6 +120,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.cwPitchStepHz = 10;
 
     // Receiver limits
+    c.canCreateSlices = false;
     c.maxSlices = 1;
     c.maxPanadapters = 1;
 

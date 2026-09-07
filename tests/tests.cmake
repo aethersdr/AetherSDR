@@ -4140,6 +4140,14 @@ target_link_libraries(automation_dsp_backend_readback_test PRIVATE
 )
 add_test(NAME automation_dsp_backend_readback_test
          COMMAND automation_dsp_backend_readback_test)
+# Ordinary RX lifecycle through production model/backend bindings and an
+# injected command/reply sink. No sockets, firmware peer, DSP or USB access.
+add_executable(backend_slice_lifecycle_test tests/backend_slice_lifecycle_test.cpp)
+target_include_directories(backend_slice_lifecycle_test PRIVATE src tests)
+target_link_libraries(backend_slice_lifecycle_test PRIVATE
+    aethercore Qt6::Core Qt6::Test
+)
+add_test(NAME backend_slice_lifecycle_test COMMAND backend_slice_lifecycle_test)
 # Socket-free HL2 gain persistence: boardMaxRx bypasses discovery; the test
 # never pumps events and cancels DSP setup before it can start Metis UDP.
 add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
@@ -4482,6 +4490,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    backend_slice_lifecycle_test
     hl2_gain_restore_test
     icom_identity_test
     icom_control_profile_test
@@ -4570,6 +4579,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_rn2_probe_test
     connect_state_model_test
     automation_dsp_backend_readback_test
+    backend_slice_lifecycle_test
     tci_automation_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)

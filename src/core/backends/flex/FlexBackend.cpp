@@ -143,6 +143,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
     // FlexBackend refines these from live radio status as touchpoints convert.
     const ModelCapabilities mc = capabilitiesFor(caps.model);
+    caps.canCreateSlices = true;
     caps.maxSlices = mc.maxSlices;
     // approx: pan capacity is not strictly slice count on real Flex hardware;
     // refined from live radio status in a later touchpoint conversion.

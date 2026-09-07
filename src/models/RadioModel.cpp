@@ -893,62 +893,7 @@ void RadioModel::setupBackend(const QString& family)
     // per backend, so every consumer of rxDemodAudioReady is family-blind and
     // survives a swap without rewiring. See the signal's header comment.
     wireRxDemodAudioBus();
-
-    // aetherd RFC 2.3: the first converted touchpoint. The backend decodes the
-    // universal pan center/bandwidth from Flex status and emits this normalized
-    // signal; RadioModel drives the addressed PanadapterModel. (Template for the
-    // remaining universal fields and the other mixed models.)
-    connect(m_backend.get(), &IRadioBackend::panCenterBandwidthChanged, this,
-            [this](const QString& panId, double centerMhz, double bandwidthMhz) {
-        // aetherd Gap B (Step 2c): remember the geometry even when no
-        // PanadapterModel resolves — an HL2 session has none, and the neutral
-        // waterfall rows below still need the band edges.
-        // Which pane this geometry belongs to. Was pan index 0 unconditionally,
-        // which is right at one receiver and wrong at four: every pan's
-        // waterfall then scaled against the first pan's band edges, so three of
-        // them drew the correct spectrum over the wrong frequency axis.
-        const int panIdx = m_flexBackend ? kNeutralPanIndexNone
-                                         : neutralPanIndexFor(panId);
-        if (panIdx != kNeutralPanIndexNone) {
-            m_backendPanCenterMhz[panIdx] = centerMhz;
-            m_backendPanBandwidthMhz[panIdx] = bandwidthMhz;
-        }
-        auto* pan = resolveBackendPan(panId);
-        if (!pan && !m_flexBackend && !m_connection) {
-            // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend
-            // WITHOUT a wire. No Flex "display pan" status exists to create one,
-            // so without this there is no PanadapterModel to route frames to and
-            // the UI never builds a pane — the render path was falling back to the
-            // active spectrum widget, which is null when no pan applet exists.
-            //
-            // The !m_connection gate: a backend that vends its own RadioConnection
-            // (the demo's Route A SimBackend) claims its pans from its own wire
-            // status, so minting a neutral twin here created a second, ownerless
-            // pan applet — the ghost "Slice A" of #4671. Its pans arrive through
-            // the claim path; only truly wire-less backends (HL2) materialise.
-            //
-            // One pane per backend pan id, so a multi-receiver backend gets a
-            // pane each instead of four receivers sharing one.
-            pan = ensureOwnedPanadapter(neutralPanIdString(panIdx));
-            if (pan)
-                pan->setWaterfallId(neutralWfIdString(panIdx));
-        }
-        if (!pan) return;
-        const bool spanChanged = pan->setCenterBandwidth(centerMhz, bandwidthMhz);
-        // A backend that snaps a requested span to fixed hardware rates (HL2
-        // offers four) reports back the span it actually runs. When that equals
-        // what the model already held, the change-gated setter emits nothing —
-        // and that is exactly the case the view most needs to hear about, because
-        // it applied the operator's request optimistically and is now wider than
-        // the data. Scoped to backends that stream raw spectra so Flex status
-        // echoes, which are frequent and never refuse anything, keep their
-        // existing no-op behaviour. (#4470)
-        if (!spanChanged && shapesDisplayRatesLocally()) {
-            pan->republishCenterBandwidth();
-        }
-        // Legacy signal MainWindow still consumes (unchanged behavior).
-        emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
-    });
+    wireBackendReceiverState();
 
     // aetherd RFC 2.3: min/max dBm — the second universal pan field. The backend
     // decodes the display level range; RadioModel applies it to the addressed
@@ -1101,26 +1046,6 @@ void RadioModel::setupBackend(const QString& family)
         }
     });
 
-    // The backend confirms a slice is GONE. Paired with panRemoved above,
-    // because on a backend where a slice IS a receiver, closing one retires
-    // both. Without this the SliceModel outlived its receiver and every later
-    // capacity check counted it.
-    connect(m_backend.get(), &IRadioBackend::sliceRemoved, this,
-            [this](int sliceId) {
-        SliceModel* s = slice(sliceId);
-        if (!s)
-            return;
-        m_slices.removeAll(s);
-        qCDebug(lcProtocol) << "RadioModel: backend slice removed" << sliceId;
-        // Removing the transmit slice moves transmit without any slice delta to
-        // announce it, so the TX-waveform meter binding has to be recomputed
-        // here as well as on sliceChanged.
-        m_meterModel.setActiveTxSlice(activeTxSliceNum());
-        emit sliceRemoved(sliceId);
-        emit slotOccupancyChanged(sliceId);
-        s->deleteLater();
-    });
-
     // The pan's front end is wide (its band filter had to be bypassed).
     connect(m_backend.get(), &IRadioBackend::panWideChanged, this,
             [this](const QString& panId, bool wide) {
@@ -1269,211 +1194,6 @@ void RadioModel::setupBackend(const QString& family)
             return;
         m_meterModel.updateValueByName(meterId.left(colon), meterId.mid(colon + 1),
                                        static_cast<float>(value));
-    });
-
-    // aetherd RFC 2.3: SliceModel touchpoint. The backend decodes Flex slice
-    // status into a typed SliceDelta; RadioModel routes it to the addressed slice.
-    // This is an AutoConnection: because FlexBackend shares RadioModel's thread it
-    // resolves to a synchronous DirectConnection today, so a slice just appended
-    // to m_slices is populated before the sliceAdded UI notify below. (If a
-    // backend is ever moved to a worker thread this becomes queued — the ordering
-    // guarantee would then need an explicit populate step, not Qt::DirectConnection
-    // across threads. #4068 review.)
-    connect(m_backend.get(), &IRadioBackend::sliceChanged, this,
-            [this](int sliceId, const SliceDelta& delta) {
-        SliceModel* s = slice(sliceId);
-        // A non-Flex backend labels its pan with its own id ("hl2"), but the UI
-        // associates a slice with a pan by matching PanadapterModel::panId(). Left
-        // unmapped the slice belongs to no pan, so no slice flag is drawn on the
-        // panadapter even though the VFO shows the right frequency. Re-address the
-        // delta at the pan we materialised.
-        //
-        // ...but ONLY when we materialised one. A backend that vends its own
-        // RadioConnection claims its pans from its own wire, so its pan ids ARE
-        // the model keys — the same discriminator resolveBackendPan() uses. The
-        // demo announces slice.panId = "0x40000000", already a key; rewriting it
-        // into the neutral space pointed the slice at a pan nothing holds, and
-        // every slice-to-pane association keys off that exact equality (pan title
-        // bar, adaptive RX filter, auto-squelch, centre-lock, band recall). (#4671)
-        SliceDelta mapped = delta;
-        if (!m_flexBackend && !m_connection && mapped.panId) {
-            // Through the SAME allocator the geometry handler uses, so a slice
-            // lands on the pane its own receiver feeds. Pinned to index 0 while
-            // one pan existed; at four receivers that put every slice flag on
-            // the first panadapter.
-            mapped.panId = neutralPanIdString(neutralPanIndexFor(*mapped.panId));
-        }
-        if (!s && !m_flexBackend) {
-            // aetherd Gap B (Step 2c): no Flex "slice" status ever runs for a
-            // non-Flex backend, so nothing would create the model and every delta
-            // would be dropped (slice panel stuck at 0.000000). Materialise it on
-            // the first delta and route mode intents back through the seam.
-            if (auto it = m_staleSlices.find(sliceId);
-                it != m_staleSlices.end() && it.value()) {
-                s = it.value();
-                m_staleSlices.erase(it);
-                qCDebug(lcProtocol) << "RadioModel: reclaimed non-Flex slice"
-                                    << sliceId << "from previous session";
-                m_slices.append(s);
-                s->applyChanges(mapped);
-                m_meterModel.setActiveTxSlice(activeTxSliceNum());
-                refreshTxPowerLimit();
-                // Reclaim deliberately does not emit sliceAdded: the UI already
-                // owns this object. Notify non-UI observers through the existing
-                // occupancy edge so adapters that detached on disconnect can
-                // reattach and republish it.
-                emit slotOccupancyChanged(sliceId);
-                // Reuse the same SliceModel so every UI subscriber — including
-                // RX Controls — stays attached. A sliceAdded here would build a
-                // duplicate VFO for an object the UI already owns.
-                return;
-            }
-            s = new SliceModel(sliceId, this);
-            connect(s, &SliceModel::modeChangeRequested, this,
-                    [this, s](const QString& mode) {
-                if (m_backend) m_backend->setSliceMode(s->sliceId(), mode);
-            });
-            // Tuning and filter intents route through the seam too. A non-Flex
-            // backend never sees SliceModel::commandReady (that carries Flex
-            // wire text through the Flex-only slice sink), so without these the
-            // operator's tune/filter changes update the UI and are then dropped.
-            // Both signals are OPERATOR-issued only — radio-status application
-            // does not emit them — so echoing radio state back as a command
-            // cannot happen (Principle II).
-            connect(s, &SliceModel::frequencyCommandIssued, this,
-                    [this, s](double mhz) {
-                if (m_backend) m_backend->setSliceFrequency(s->sliceId(), mhz * 1.0e6);
-            });
-            connect(s, &SliceModel::filterCommandIssued, this,
-                    [this, s](int lowHz, int highHz) {
-                if (m_backend) m_backend->setSliceFilter(s->sliceId(), lowHz, highHz);
-            });
-            // AGC is the same shape: the RX applet's mode combo and threshold
-            // slider drive SliceModel, whose Flex wire text a non-Flex backend
-            // never sees. Without this the controls move, the model updates and
-            // the DSP keeps whatever it was opened with — a dead slider.
-            connect(s, &SliceModel::agcCommandIssued, this,
-                    [this, s](const QString& mode, int thresholdDb) {
-                if (m_backend) m_backend->setSliceAgc(s->sliceId(), mode, thresholdDb);
-            });
-            // Receive DSP the radio runs. Same reasoning as AGC above: the
-            // applet toggles drive SliceModel, whose Flex wire text a non-Flex
-            // backend never sees, so without these the controls move and the
-            // radio's own NR/NB/notch/squelch keep whatever state they had.
-            connect(s, &SliceModel::noiseReductionCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceNoiseReduction(s->sliceId(), on, level);
-            });
-            connect(s, &SliceModel::noiseBlankerCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceNoiseBlanker(s->sliceId(), on, level);
-            });
-            connect(s, &SliceModel::autoNotchCommandIssued, this, [this, s](bool on) {
-                if (m_backend) m_backend->setSliceAutoNotch(s->sliceId(), on);
-            });
-            connect(s, &SliceModel::manualNotchCommandIssued, this,
-                    [this, s](bool on, int position) {
-                if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
-            });
-            connect(s, &SliceModel::squelchCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
-            });
-            // FM repeater controls are distinct neutral intents. Flex
-            // continues to use SliceModel's wire text; every other backend gets
-            // the same operator action through the seam instead of silently
-            // updating only the widgets.
-            connect(s, &SliceModel::fmToneModeCommandIssued, this,
-                    [this, s](const QString& mode) {
-                if (m_backend) {
-                    m_backend->setSliceFmToneMode(s->sliceId(), mode);
-                }
-            });
-            connect(s, &SliceModel::fmToneValueCommandIssued, this,
-                    [this, s](double hz) {
-                if (m_backend) {
-                    m_backend->setSliceFmToneValue(s->sliceId(), hz);
-                }
-            });
-            connect(s, &SliceModel::fmToneRxValueCommandIssued, this,
-                    [this, s](double hz) {
-                if (m_backend) {
-                    m_backend->setSliceFmToneRxValue(s->sliceId(), hz);
-                }
-            });
-            connect(s, &SliceModel::fmDtcsCommandIssued, this,
-                    [this, s](int code, bool txReverse, bool rxReverse) {
-                if (m_backend) {
-                    m_backend->setSliceFmDtcs(
-                        s->sliceId(), code, txReverse, rxReverse);
-                }
-            });
-            connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
-                    [this, s](const QString& direction) {
-                if (m_backend) {
-                    m_backend->setSliceRepeaterOffsetDir(s->sliceId(), direction);
-                }
-            });
-            connect(s, &SliceModel::fmRepeaterOffsetCommandIssued, this,
-                    [this, s](double hz) {
-                if (m_backend) {
-                    m_backend->setSliceFmRepeaterOffset(s->sliceId(), hz);
-                }
-            });
-            connect(s, &SliceModel::fmRepeaterRecallCommandIssued, this,
-                    [this, s](const QString& direction, double offsetHz,
-                              const QString& toneMode, double toneHz) {
-                if (m_backend) {
-                    m_backend->setSliceFmRepeater(s->sliceId(), direction, offsetHz,
-                                                  toneMode, toneHz);
-                }
-            });
-            // RIT / XIT. The control already existed in VfoWidget and drove
-            // SliceModel; only the last hop to the seam was missing.
-            connect(s, &SliceModel::ritCommandIssued, this, [this](bool on, int hz) {
-                if (!m_backend) return;
-                m_backend->setRitEnabled(on);
-                m_backend->setRitOffset(hz);
-            });
-            connect(s, &SliceModel::xitCommandIssued, this, [this](bool on, int hz) {
-                if (!m_backend) return;
-                m_backend->setXitEnabled(on);
-                // The TRANSMIT offset verb, which defaults to the receive one
-                // for a radio with a single shared register (Icom) and is
-                // overridable by a radio with two (Flex).
-                m_backend->setXitOffset(hz);
-            });
-
-            wireSliceAudioIntentsToBackend(s);
-            m_slices.append(s);
-            s->applyChanges(mapped);
-            m_meterModel.setActiveTxSlice(activeTxSliceNum());
-            refreshTxPowerLimit();
-            emit sliceAdded(s);
-            return;
-        }
-        if (s) {
-            s->applyChanges(mapped);
-            // Which slice owns transmit decides which TX-waveform meters resolve
-            // — MeterModel::compPeakIndexForActiveTxSlice() keys the compression
-            // meter off it, and it initialises to -1 meaning "none".
-            //
-            // The five existing calls all live in handleSliceStatus(), the Flex
-            // TEXT status path, which a seam backend never reaches. So on any
-            // non-Flex family m_activeTxSlice stayed -1 forever: TX:COMPPEAK was
-            // defined, its value arrived and was stored, and nothing ever read it
-            // because no index resolved. The gauge sat at zero while the
-            // compressor behind it was working.
-            //
-            // Unconditional rather than gated on delta.txSlice: setActiveTxSlice()
-            // early-returns when the value is unchanged, and the transmit slice
-            // can also move because a slice was REMOVED, which carries no delta
-            // at all.
-            m_meterModel.setActiveTxSlice(activeTxSliceNum());
-            if (mapped.frequency.has_value() || mapped.txSlice.has_value()) {
-                refreshTxPowerLimit();
-            }
-        }
     });
 
     // aetherd RFC 2.3: TransmitModel touchpoint. The backend decodes the five
@@ -1749,8 +1469,320 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
         emit pingReceived();
 }
 
+void RadioModel::wireBackendReceiverState()
+{
+    if (!m_backend) {
+        return;
+    }
+    const quint64 generation = m_backendReceiverGeneration;
+    // aetherd RFC 2.3: the first converted touchpoint. The backend decodes the
+    // universal pan center/bandwidth from Flex status and emits this normalized
+    // signal; RadioModel drives the addressed PanadapterModel. (Template for the
+    // remaining universal fields and the other mixed models.)
+    connect(m_backend.get(), &IRadioBackend::panCenterBandwidthChanged, this,
+            [this, generation](const QString& panId, double centerMhz, double bandwidthMhz) {
+        // Qt may already have queued this call before sender destruction.
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        // aetherd Gap B (Step 2c): remember the geometry even when no
+        // PanadapterModel resolves — an HL2 session has none, and the neutral
+        // waterfall rows below still need the band edges.
+        // Which pane this geometry belongs to. Was pan index 0 unconditionally,
+        // which is right at one receiver and wrong at four: every pan's
+        // waterfall then scaled against the first pan's band edges, so three of
+        // them drew the correct spectrum over the wrong frequency axis.
+        const int panIdx = m_flexBackend ? kNeutralPanIndexNone
+                                         : neutralPanIndexFor(panId);
+        if (panIdx != kNeutralPanIndexNone) {
+            m_backendPanCenterMhz[panIdx] = centerMhz;
+            m_backendPanBandwidthMhz[panIdx] = bandwidthMhz;
+        }
+        auto* pan = resolveBackendPan(panId);
+        if (!pan && !m_flexBackend && !m_connection) {
+            // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend
+            // WITHOUT a wire. No Flex "display pan" status exists to create one,
+            // so without this there is no PanadapterModel to route frames to and
+            // the UI never builds a pane — the render path was falling back to the
+            // active spectrum widget, which is null when no pan applet exists.
+            //
+            // The !m_connection gate: a backend that vends its own RadioConnection
+            // (the demo's Route A SimBackend) claims its pans from its own wire
+            // status, so minting a neutral twin here created a second, ownerless
+            // pan applet — the ghost "Slice A" of #4671. Its pans arrive through
+            // the claim path; only truly wire-less backends (HL2) materialise.
+            //
+            // One pane per backend pan id, so a multi-receiver backend gets a
+            // pane each instead of four receivers sharing one.
+            pan = ensureOwnedPanadapter(neutralPanIdString(panIdx));
+            if (pan)
+                pan->setWaterfallId(neutralWfIdString(panIdx));
+        }
+        if (!pan) return;
+        const bool spanChanged = pan->setCenterBandwidth(centerMhz, bandwidthMhz);
+        // A backend that snaps a requested span to fixed hardware rates (HL2
+        // offers four) reports back the span it actually runs. When that equals
+        // what the model already held, the change-gated setter emits nothing —
+        // and that is exactly the case the view most needs to hear about, because
+        // it applied the operator's request optimistically and is now wider than
+        // the data. Scoped to backends that stream raw spectra so Flex status
+        // echoes, which are frequent and never refuse anything, keep their
+        // existing no-op behaviour. (#4470)
+        if (!spanChanged && shapesDisplayRatesLocally()) {
+            pan->republishCenterBandwidth();
+        }
+        // Legacy signal MainWindow still consumes (unchanged behavior).
+        emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
+    });
+
+    // The backend confirms a slice is GONE. Paired with panRemoved above,
+    // because on a backend where a slice IS a receiver, closing one retires
+    // both. Without this the SliceModel outlived its receiver and every later
+    // capacity check counted it.
+    connect(m_backend.get(), &IRadioBackend::sliceRemoved, this,
+            [this, generation](int sliceId) {
+        // Qt may already have queued this call before sender destruction.
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        SliceModel* s = slice(sliceId);
+        if (!s)
+            return;
+        m_slices.removeAll(s);
+        qCDebug(lcProtocol) << "RadioModel: backend slice removed" << sliceId;
+        // Removing the transmit slice moves transmit without any slice delta to
+        // announce it, so the TX-waveform meter binding has to be recomputed
+        // here as well as on sliceChanged.
+        m_meterModel.setActiveTxSlice(activeTxSliceNum());
+        emit sliceRemoved(sliceId);
+        emit slotOccupancyChanged(sliceId);
+        s->deleteLater();
+    });
+
+    // aetherd RFC 2.3: SliceModel touchpoint. The backend decodes Flex slice
+    // status into a typed SliceDelta; RadioModel routes it to the addressed slice.
+    // This is an AutoConnection: because FlexBackend shares RadioModel's thread it
+    // resolves to a synchronous DirectConnection today, so a slice just appended
+    // to m_slices is populated before the sliceAdded UI notify below. (If a
+    // backend is ever moved to a worker thread this becomes queued — the ordering
+    // guarantee would then need an explicit populate step, not Qt::DirectConnection
+    // across threads. #4068 review.)
+    connect(m_backend.get(), &IRadioBackend::sliceChanged, this,
+            [this, generation](int sliceId, const SliceDelta& delta) {
+        // Qt may already have queued this call before sender destruction.
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        SliceModel* s = slice(sliceId);
+        // A non-Flex backend labels its pan with its own id ("hl2"), but the UI
+        // associates a slice with a pan by matching PanadapterModel::panId(). Left
+        // unmapped the slice belongs to no pan, so no slice flag is drawn on the
+        // panadapter even though the VFO shows the right frequency. Re-address the
+        // delta at the pan we materialised.
+        //
+        // ...but ONLY when we materialised one. A backend that vends its own
+        // RadioConnection claims its pans from its own wire, so its pan ids ARE
+        // the model keys — the same discriminator resolveBackendPan() uses. The
+        // demo announces slice.panId = "0x40000000", already a key; rewriting it
+        // into the neutral space pointed the slice at a pan nothing holds, and
+        // every slice-to-pane association keys off that exact equality (pan title
+        // bar, adaptive RX filter, auto-squelch, centre-lock, band recall). (#4671)
+        SliceDelta mapped = delta;
+        if (!m_flexBackend && !m_connection && mapped.panId) {
+            // Through the SAME allocator the geometry handler uses, so a slice
+            // lands on the pane its own receiver feeds. Pinned to index 0 while
+            // one pan existed; at four receivers that put every slice flag on
+            // the first panadapter.
+            mapped.panId = neutralPanIdString(neutralPanIndexFor(*mapped.panId));
+        }
+        if (!s && !m_flexBackend) {
+            // aetherd Gap B (Step 2c): no Flex "slice" status ever runs for a
+            // non-Flex backend, so nothing would create the model and every delta
+            // would be dropped (slice panel stuck at 0.000000). Materialise it on
+            // the first delta and route mode intents back through the seam.
+            if (auto it = m_staleSlices.find(sliceId);
+                it != m_staleSlices.end() && it.value()) {
+                s = it.value();
+                m_staleSlices.erase(it);
+                qCDebug(lcProtocol) << "RadioModel: reclaimed non-Flex slice"
+                                    << sliceId << "from previous session";
+                m_slices.append(s);
+                s->applyChanges(mapped);
+                m_meterModel.setActiveTxSlice(activeTxSliceNum());
+                refreshTxPowerLimit();
+                // Reclaim deliberately does not emit sliceAdded: the UI already
+                // owns this object. Notify non-UI observers through the existing
+                // occupancy edge so adapters that detached on disconnect can
+                // reattach and republish it.
+                emit slotOccupancyChanged(sliceId);
+                // Reuse the same SliceModel so every UI subscriber — including
+                // RX Controls — stays attached. A sliceAdded here would build a
+                // duplicate VFO for an object the UI already owns.
+                return;
+            }
+            s = new SliceModel(sliceId, this);
+            connect(s, &SliceModel::modeChangeRequested, this,
+                    [this, s](const QString& mode) {
+                if (m_backend) m_backend->setSliceMode(s->sliceId(), mode);
+            });
+            // Tuning and filter intents route through the seam too. A non-Flex
+            // backend never sees SliceModel::commandReady (that carries Flex
+            // wire text through the Flex-only slice sink), so without these the
+            // operator's tune/filter changes update the UI and are then dropped.
+            // Both signals are OPERATOR-issued only — radio-status application
+            // does not emit them — so echoing radio state back as a command
+            // cannot happen (Principle II).
+            connect(s, &SliceModel::frequencyCommandIssued, this,
+                    [this, s](double mhz) {
+                if (m_backend) m_backend->setSliceFrequency(s->sliceId(), mhz * 1.0e6);
+            });
+            connect(s, &SliceModel::filterCommandIssued, this,
+                    [this, s](int lowHz, int highHz) {
+                if (m_backend) m_backend->setSliceFilter(s->sliceId(), lowHz, highHz);
+            });
+            // AGC is the same shape: the RX applet's mode combo and threshold
+            // slider drive SliceModel, whose Flex wire text a non-Flex backend
+            // never sees. Without this the controls move, the model updates and
+            // the DSP keeps whatever it was opened with — a dead slider.
+            connect(s, &SliceModel::agcCommandIssued, this,
+                    [this, s](const QString& mode, int thresholdDb) {
+                if (m_backend) m_backend->setSliceAgc(s->sliceId(), mode, thresholdDb);
+            });
+            // Receive DSP the radio runs. Same reasoning as AGC above: the
+            // applet toggles drive SliceModel, whose Flex wire text a non-Flex
+            // backend never sees, so without these the controls move and the
+            // radio's own NR/NB/notch/squelch keep whatever state they had.
+            connect(s, &SliceModel::noiseReductionCommandIssued, this,
+                    [this, s](bool on, int level) {
+                if (m_backend) m_backend->setSliceNoiseReduction(s->sliceId(), on, level);
+            });
+            connect(s, &SliceModel::noiseBlankerCommandIssued, this,
+                    [this, s](bool on, int level) {
+                if (m_backend) m_backend->setSliceNoiseBlanker(s->sliceId(), on, level);
+            });
+            connect(s, &SliceModel::autoNotchCommandIssued, this, [this, s](bool on) {
+                if (m_backend) m_backend->setSliceAutoNotch(s->sliceId(), on);
+            });
+            connect(s, &SliceModel::manualNotchCommandIssued, this,
+                    [this, s](bool on, int position) {
+                if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
+            });
+            connect(s, &SliceModel::squelchCommandIssued, this,
+                    [this, s](bool on, int level) {
+                if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
+            });
+            // FM repeater controls are distinct neutral intents. Flex
+            // continues to use SliceModel's wire text; every other backend gets
+            // the same operator action through the seam instead of silently
+            // updating only the widgets.
+            connect(s, &SliceModel::fmToneModeCommandIssued, this,
+                    [this, s](const QString& mode) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneMode(s->sliceId(), mode);
+                }
+            });
+            connect(s, &SliceModel::fmToneValueCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmToneRxValueCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneRxValue(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmDtcsCommandIssued, this,
+                    [this, s](int code, bool txReverse, bool rxReverse) {
+                if (m_backend) {
+                    m_backend->setSliceFmDtcs(
+                        s->sliceId(), code, txReverse, rxReverse);
+                }
+            });
+            connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
+                    [this, s](const QString& direction) {
+                if (m_backend) {
+                    m_backend->setSliceRepeaterOffsetDir(s->sliceId(), direction);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterOffsetCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmRepeaterOffset(s->sliceId(), hz);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterRecallCommandIssued, this,
+                    [this, s](const QString& direction, double offsetHz,
+                              const QString& toneMode, double toneHz) {
+                if (m_backend) {
+                    m_backend->setSliceFmRepeater(s->sliceId(), direction, offsetHz,
+                                                  toneMode, toneHz);
+                }
+            });
+            // RIT / XIT. The control already existed in VfoWidget and drove
+            // SliceModel; only the last hop to the seam was missing.
+            connect(s, &SliceModel::ritCommandIssued, this, [this](bool on, int hz) {
+                if (!m_backend) return;
+                m_backend->setRitEnabled(on);
+                m_backend->setRitOffset(hz);
+            });
+            connect(s, &SliceModel::xitCommandIssued, this, [this](bool on, int hz) {
+                if (!m_backend) return;
+                m_backend->setXitEnabled(on);
+                // The TRANSMIT offset verb, which defaults to the receive one
+                // for a radio with a single shared register (Icom) and is
+                // overridable by a radio with two (Flex).
+                m_backend->setXitOffset(hz);
+            });
+
+            wireSliceAudioIntentsToBackend(s);
+            m_slices.append(s);
+            s->applyChanges(mapped);
+            m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            refreshTxPowerLimit();
+            emit sliceAdded(s);
+            return;
+        }
+        if (s) {
+            s->applyChanges(mapped);
+            // Which slice owns transmit decides which TX-waveform meters resolve
+            // — MeterModel::compPeakIndexForActiveTxSlice() keys the compression
+            // meter off it, and it initialises to -1 meaning "none".
+            //
+            // The five existing calls all live in handleSliceStatus(), the Flex
+            // TEXT status path, which a seam backend never reaches. So on any
+            // non-Flex family m_activeTxSlice stayed -1 forever: TX:COMPPEAK was
+            // defined, its value arrived and was stored, and nothing ever read it
+            // because no index resolved. The gauge sat at zero while the
+            // compressor behind it was working.
+            //
+            // Unconditional rather than gated on delta.txSlice: setActiveTxSlice()
+            // early-returns when the value is unchanged, and the transmit slice
+            // can also move because a slice was REMOVED, which carries no delta
+            // at all.
+            m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            if (mapped.frequency.has_value() || mapped.txSlice.has_value()) {
+                refreshTxPowerLimit();
+            }
+        }
+    });
+
+    connect(m_backend.get(), &IRadioBackend::sliceLifecycleFailed, this,
+            [this, generation](const QString& operation, int sliceId, const QString& reason) {
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        qCWarning(lcProtocol) << "RadioModel: slice" << operation << "failed:"
+                             << sliceId << reason;
+        emit sliceLifecycleFailed(operation, sliceId, reason);
+    });
+}
+
 void RadioModel::teardownBackend()
 {
+    ++m_backendReceiverGeneration;
+    m_sliceLifecycleCommandSinkForTest = {};
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream
@@ -5030,72 +5062,63 @@ void RadioModel::cwAutoTuneOnce(int sliceId)
     sendCmd(QString("slice auto_tune %1").arg(sliceId));
 }
 
-void RadioModel::addSlice()
+bool RadioModel::addSlice()
 {
     if (m_activePanId.isEmpty()) {
         qCWarning(lcProtocol) << "RadioModel::addSlice: no panadapter, cannot create slice";
-        return;
+        return false;
     }
-
-    // Create a new slice offset from existing slices so VFO flags deconflict.
-    // Use pan center, but if an existing slice is within 5 kHz, offset by
-    // 20% of the visible bandwidth.
-    auto* pan = activePanadapter();
-    double newFreq = pan ? pan->centerMhz() : 14.1;
-    const double offsetMhz = (pan ? pan->bandwidthMhz() : 0.2) * 0.2;  // 20% of visible BW
-    for (auto* s : m_slices) {
-        if (std::abs(s->frequency() - newFreq) < 0.005) {  // within 5 kHz
-            newFreq += offsetMhz;
-            break;
-        }
-    }
-    const QString freq = QString::number(newFreq, 'f', 6);
-    const QString cmd = QString("slice create pan=%1 freq=%2").arg(m_activePanId, freq);
-
-    qCDebug(lcProtocol) << "RadioModel::addSlice:" << cmd;
-    sendCmd(cmd, [this](int code, const QString& body) {
-        if (code != 0) {
-            qCWarning(lcProtocol) << "RadioModel: slice create failed, code"
-                       << Qt::hex << code << "body:" << body;
-            emit sliceCreateFailed(maxSlices(), m_model);
-        } else {
-            qCDebug(lcProtocol) << "RadioModel: new slice created, index =" << body;
-        }
-    });
+    return addSliceOnPan(m_activePanId);
 }
 
-void RadioModel::addSliceOnPan(const QString& panId)
+bool RadioModel::addSliceOnPan(const QString& panId)
 {
-    if (panId.isEmpty()) { addSlice(); return; }
-
-    auto* pan = panadapter(panId);
-    double newFreq = pan ? pan->centerMhz() : 14.1;
-    const double offsetMhz = (pan ? pan->bandwidthMhz() : 0.2) * 0.2;
-    for (auto* s : m_slices) {
+    if (panId.isEmpty()) {
+        return addSlice();
+    }
+    // Preserve the existing placement: pan center, shifted by 20% of visible
+    // bandwidth if any existing slice is within 5 kHz.
+    PanadapterModel* pan = panadapter(panId);
+    if (!pan) {
+        return false;
+    }
+    double newFreq = pan->centerMhz();
+    const double offsetMhz = pan->bandwidthMhz() * 0.2;
+    for (SliceModel* s : m_slices) {
         if (std::abs(s->frequency() - newFreq) < 0.005) {
             newFreq += offsetMhz;
             break;
         }
     }
-    addSliceOnPan(panId, newFreq);
+    return addSliceOnPan(panId, newFreq);
 }
 
-void RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
+bool RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
 {
-    if (panId.isEmpty()) {
-        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: no panadapter, cannot create slice";
-        return;
+    if (panId.isEmpty() || !panadapter(panId)) {
+        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: unknown panadapter" << panId;
+        return false;
     }
-    if (!std::isfinite(freqMhz)) {
+    const double frequencyHz = freqMhz * 1.0e6;
+    if (!std::isfinite(freqMhz) || !std::isfinite(frequencyHz) || freqMhz <= 0.0) {
         qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: invalid frequency" << freqMhz;
-        return;
+        return false;
+    }
+    if (!hasCommandPlane()) {
+        // Refusal is terminal. Paired/fixed receivers do not acquire an
+        // independent lifecycle just because maxSlices happens to exceed one.
+        return m_backend && backendCapabilities().canCreateSlices
+            && m_backend->createSlice(backendPanIdFor(panId), frequencyHz);
     }
 
     const QString freq = QString::number(freqMhz, 'f', 6);
     const QString cmd = QString("slice create pan=%1 freq=%2").arg(panId, freq);
-
+    const quint64 generation = m_backendReceiverGeneration;
     qCDebug(lcProtocol) << "RadioModel::addSliceOnPan:" << cmd;
-    sendCmd(cmd, [this](int code, const QString& body) {
+    return dispatchSliceLifecycleCommand(cmd, [this, generation](int code, const QString& body) {
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
         if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel: slice create failed, code"
                        << Qt::hex << code << "body:" << body;
@@ -5104,6 +5127,27 @@ void RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
             qCDebug(lcProtocol) << "RadioModel: new slice created, index =" << body;
         }
     });
+}
+
+bool RadioModel::removeSlice(int sliceId)
+{
+    // Ordinary close cannot remove the last receiver or a foreign/unknown ID.
+    // Split/TX cleanup has its own ownership contract and does not use this.
+    if (m_slices.size() <= 1 || !slice(sliceId)) {
+        return false;
+    }
+    if (!hasCommandPlane()) {
+        return m_backend && m_backend->removeSlice(sliceId);
+    }
+    return dispatchSliceLifecycleCommand(QStringLiteral("slice remove %1").arg(sliceId));
+}
+
+bool RadioModel::dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback)
+{
+    if (m_sliceLifecycleCommandSinkForTest) {
+        return m_sliceLifecycleCommandSinkForTest(command, std::move(callback));
+    }
+    return sendCmd(command, std::move(callback)) != 0;
 }
 
 void RadioModel::createPanadapter()
@@ -9176,9 +9220,11 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     // the destructor's disconnect then runs against freed memory — which is
     // exactly what a second call to this helper produced (SIGSEGV in
     // QObject::disconnect at teardown, all checks having passed).
+    dropAllSessionModelsForFamilySwitch();
     teardownBackend();
     m_backend = std::move(backend);
     m_family = family;
+    wireBackendReceiverState();
 }
 
 QString RadioModel::neutralPanIdStringForTest(int panIdx)

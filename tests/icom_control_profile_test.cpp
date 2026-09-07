@@ -123,6 +123,7 @@ int main(int argc, char** argv)
     {
         FlexBackend flex;
         const RadioCapabilities caps = flex.capabilities();
+        check(caps.canCreateSlices, "Flex retains independent ordinary slice creation");
         check(caps.hasAgcThreshold && caps.hasAmCarrierLevel && caps.hasVoxDelay,
               "Flex retains AGC threshold, AM carrier, and VOX delay");
         check(!caps.hasModeIndependentSquelch, "Flex retains its mode-specific SQL policy");
@@ -131,6 +132,8 @@ int main(int argc, char** argv)
                   && caps.cwPitchStepHz == 10,
               "Flex retains its existing CW control ranges");
         hl2::Hl2Backend hl2Backend;
+        check(!hl2Backend.capabilities().canCreateSlices,
+              "HL2 paired receiver/pan topology does not expose independent creation");
         check(hl2Backend.capabilities().hasAgcThreshold, "HL2 retains host AGC threshold");
     }
     {
@@ -141,6 +144,7 @@ int main(int argc, char** argv)
             IcomCivBackend backend;
             IcomCivBackendTestAccess::selectModel(backend, *ic705);
             const RadioCapabilities caps = backend.capabilities();
+            check(!caps.canCreateSlices, "Icom fixed receivers do not expose independent slice creation");
             check(caps.txPowerBands.size() == 1
                       && caps.txPowerMaxWattsAt(14'200'000.0) == 10.0,
                   "IC-705 alone declares its continuous 10 W rated-output range");
