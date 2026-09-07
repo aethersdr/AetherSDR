@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QIODevice>
 #include <QRegularExpression>
@@ -680,7 +681,9 @@ void testNegativeCorpus(const QString& dir)
         {"ASR endpoint https://audit-asr.internal/v1",                   "audit-asr"},
         {"FreeDV reported grid AU12di for peer",                         "AU12di"},
         {"exe=/home/auditor/AetherSDR/AetherSDR",                        "/home/auditor"},
-        {"peer 2001:db8::audi:7334 established",                         "2001:db8"},
+        // A valid address: "audi" is not a hextet, and a fixture that is not
+        // an address proves nothing about the address rule.
+        {"peer 2001:db8::dead:beef established",                          "2001:db8"},
         {"QRZ session for auditor@example.com failed",                   "auditor@example.com"},
         {"rotator disconnected from audit-rotator.lan",                  "audit-rotator"},
     };
@@ -697,6 +700,153 @@ void testNegativeCorpus(const QString& dir)
         }
     }
     report("negative corpus: no planted value survives the writer", allClean);
+}
+
+
+// ---------------------------------------------------------------------------
+// Review of #5481 (@jensenpat, @chibondking): each case below reproduces a
+// defect that the first round of rules shipped with and the first round of
+// tests did not notice.
+// ---------------------------------------------------------------------------
+
+// The compressed-IPv6 pattern originally had every group around "::"
+// optional, so its shortest match was "::" alone and any C++ qualified name
+// in a message was rewritten. 48 log sites stream Class::method as the
+// literal start of their message.
+void testQualifiedNamesSurviveIpv6Rule(const QString& dir)
+{
+    const QString path = dir + "/qualified_names.log";
+    const QString contents = writeAndRead(
+        path, QtWarningMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("WanConnection::sendCommand: not connected; "
+                       "std::vector allocation failed in "
+                       "HidEncoderManager::setKeyImage; Foo::bar"));
+    report("C++ qualified names are not mistaken for IPv6 addresses",
+           contents.contains(QStringLiteral("WanConnection::sendCommand"))
+           && contents.contains(QStringLiteral("std::vector"))
+           && contents.contains(QStringLiteral("HidEncoderManager::setKeyImage"))
+           && contents.contains(QStringLiteral("Foo::bar"))
+           && !contents.contains(QStringLiteral("[v6-redacted]")));
+}
+
+// An address written as two-digit hextets is still an address; the MAC rule
+// used to consume its first six groups.
+void testEightGroupIpv6OfTwoDigitHextets(const QString& dir)
+{
+    const QString path = dir + "/ipv6_hextets.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("peer 20:01:0d:b8:00:00:00:01 established"));
+    report("an eight-group IPv6 of two-digit hextets is not read as a MAC",
+           contents.contains(QStringLiteral("[v6-redacted]"))
+           && !contents.contains(QStringLiteral("**:**")));
+}
+
+// A quoted value may contain an escaped quote. A grammar that stops at the
+// first '"' ends the match early and leaves the tail of the value in the log
+// -- worse than not matching, because the line then looks redacted.
+void testEscapedQuoteInsideValue(const QString& dir)
+{
+    const QString path = dir + "/escaped_quote.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.mqtt"),
+        QStringLiteral(R"(payload {"password":"start\"AuditSecretTail"})"));
+    report("a value containing an escaped quote is redacted whole",
+           !contents.contains(QStringLiteral("AuditSecretTail"))
+           && !contents.contains(QStringLiteral("start")));
+}
+
+// A Digest header is a comma-separated parameter list, not one value. The
+// generic one-value grammar left nonce and response standing.
+void testDigestParameterListIsRedacted(const QString& dir)
+{
+    const QString path = dir + "/digest.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.wan"),
+        QStringLiteral("Authorization: Digest username=\"alice\", realm=\"home\", "
+                       "nonce=\"AuditNonce\", response=\"AuditResponse\""));
+    report("every Digest parameter is redacted, not just the first",
+           contents.contains(QStringLiteral("Digest"))
+           && !contents.contains(QStringLiteral("AuditNonce"))
+           && !contents.contains(QStringLiteral("AuditResponse"))
+           && !contents.contains(QStringLiteral("alice")));
+}
+
+// The home-root rule ran to the next path separator, so a home directory at
+// the end of a field swallowed everything after it on the line.
+void testHomeRootDoesNotEatFollowingFields(const QString& dir)
+{
+    const QString path = dir + "/home_boundary.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.app"),
+        QStringLiteral("home=/home/auditor status=connected slice=0"));
+    report("a home root does not consume the fields that follow it",
+           contents.contains(QStringLiteral("home=~"))
+           && contents.contains(QStringLiteral("status=connected"))
+           && contents.contains(QStringLiteral("slice=0"))
+           && !contents.contains(QStringLiteral("auditor")));
+}
+
+// Redaction has to survive a second pass: SupportBundle re-scrubs logs that
+// are already clean. A short value used to have its own marker re-eaten,
+// giving token=***R***REDACTED***.
+void testIdempotentForShortAndMarkedValues(const QString& dir)
+{
+    const QString line = QStringLiteral(
+        "a token=ab b password=x c authorization: Basic ZHhwYXNzd29yZA== "
+        "d home=/home/auditor status=up e peer fe80::1%eth0");
+    const QString once = redactPii(line);
+    const QString twice = redactPii(once);
+    report("redaction is idempotent for short and already-marked values",
+           once == twice && !once.contains(QStringLiteral("***R***")));
+    const QString path = dir + "/idempotent_short.log";
+    const QString contents = writeAndRead(path, QtDebugMsg,
+                                          QStringLiteral("aether.wan"), once);
+    report("re-writing an already-redacted short value changes nothing",
+           contents.contains(once));
+}
+
+// The host-context keywords are ordinary English. Without a hostname shape
+// check they consumed the next word of prose.
+void testHostContextKeywordsSpareProse(const QString& dir)
+{
+    const QString path = dir + "/host_prose.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.audio"),
+        QStringLiteral("PipeWireNativeContext: disconnected from PipeWire; "
+                       "TLS disconnected from SmartLink server; "
+                       "connecting to shack.example.net:1883"));
+    report("connection keywords redact hosts but not ordinary prose",
+           contents.contains(QStringLiteral("disconnected from PipeWire"))
+           && contents.contains(QStringLiteral("disconnected from SmartLink server"))
+           && !contents.contains(QStringLiteral("shack.example.net")));
+}
+
+// redactPii() runs on EVERY log line, on the writer's hot path, and
+// SupportBundle's export loop inherits its cost per line. Building the
+// generated regexes per call cost about 1 ms a line; this pins the order of
+// magnitude without asserting a precise figure that would flake on slower
+// runners.
+void testRedactionThroughput()
+{
+    const QString sample = QStringLiteral(
+        "FlexBackend::onStatus: slice 0 freq=14074000 mode=DIGU "
+        "callsign=KK7GWY port=4992");
+    // Warm the caches so the first-call construction is not timed.
+    (void)redactPii(sample);
+    QElapsedTimer timer;
+    timer.start();
+    constexpr int kIterations = 2000;
+    for (int i = 0; i < kIterations; ++i)
+        (void)redactPii(sample);
+    const double usPerLine = double(timer.nsecsElapsed()) / kIterations / 1000.0;
+    // Measured ~8 us/line here against ~1000 us/line when the patterns were
+    // rebuilt per call. 200 us is far above the former and far below the
+    // latter, so it catches a regression of that class without flaking.
+    const bool ok = usPerLine < 200.0;
+    if (!ok)
+        std::printf("       redactPii cost: %.1f us/line\n", usPerLine);
+    report("redactPii does not rebuild its patterns per call", ok);
 }
 
 } // namespace
@@ -746,6 +896,15 @@ int main(int argc, char** argv)
     testDiagnosticFieldsRemainReadable(dir);
     testRedactionIsIdempotent(dir);
     testNegativeCorpus(dir);
+
+    testQualifiedNamesSurviveIpv6Rule(dir);
+    testEightGroupIpv6OfTwoDigitHextets(dir);
+    testEscapedQuoteInsideValue(dir);
+    testDigestParameterListIsRedacted(dir);
+    testHomeRootDoesNotEatFollowingFields(dir);
+    testIdempotentForShortAndMarkedValues(dir);
+    testHostContextKeywordsSpareProse(dir);
+    testRedactionThroughput();
 
     return g_failed == 0 ? 0 : 1;
 }

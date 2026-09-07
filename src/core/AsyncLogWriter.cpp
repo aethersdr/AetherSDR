@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdio>
 #include <utility>
+#include <vector>
 
 // Naming this thread is done HERE rather than through AetherSDR::ThreadName
 // (src/core/ThreadName.h), which is the canonical helper and the one every
@@ -74,48 +75,108 @@ QString labelForType(QtMsgType type)
 // log lines are scrubbed.  Declared in AsyncLogWriter.h.
 namespace {
 
-// The value grammar every keyword rule shares. Covers bare tokens, single- and
-// double-quoted values, and the backslash-escaped spelling QDebug produces when
-// it formats a QByteArray or QString payload (\"value\"). Keeping this in ONE
-// place is the point of the table: the old hand-written rules disagreed about
-// which of these forms they accepted.
+// ---------------------------------------------------------------------------
+// The value grammar every keyword rule shares.
+//
+// ESCAPE-AWARE ON PURPOSE, and the two quoted branches escape DIFFERENTLY.
+//
+// In ordinary text a quoted value may contain an escaped quote, so the value
+// runs to its real closing quote: `[^"\\]|\\.` consumes an escaped character
+// as one unit. A grammar that stopped at the first `"` ended the match early
+// and left the tail of the secret standing — worse than not matching, because
+// the line then looks redacted.
+//
+// In QDebug's spelling the DELIMITER is itself `\"`, so the same trick
+// over-consumes: `\\.` happily eats the closing `\"` and runs on into the
+// next field, which swallowed one JSON key and left the value after it
+// unredacted. That branch therefore takes any character that does not begin a
+// `\"` sequence, and stops at the first real delimiter.
+//
+// The leading negative lookahead keeps redaction IDEMPOTENT: without it a
+// second pass treats the marker `***REDACTED***` as a fresh value and eats its
+// own prefix, so `token=***REDACTED***` became `token=***R***REDACTED***`.
+// Idempotence is load-bearing — SupportBundle re-scrubs already-clean logs on
+// the way into an archive.
 constexpr const char* kSeparator = R"((\\?["']?\s*[:=]\s*))";
 constexpr const char* kValue =
-    R"((?:\\"[^"\\]*\\"|"[^"]*"|'[^']*'|[^\s#|,;&}\]]+))";
+    R"((?!\*\*\*REDACTED\*\*\*)(?!(?:bearer|basic|digest)\s+\*\*\*REDACTED\*\*\*))"
+    R"((?:\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s#|,;&}\]]+))";
 
 // An Authorization value may lead with a scheme word that is NOT the secret.
-// Consuming it as the value is worse than not matching at all: it redacts
-// "Basic" and leaves the credential standing.
+// Consuming it as the value redacts "Basic" and leaves the credential standing.
 constexpr const char* kAuthScheme = R"((?:(bearer|basic|digest)(\s+))?)";
+
+// Build once, use forever. These patterns are immutable, and compiling them
+// per call cost ~1 ms per log line on the writer's hot path — which
+// SupportBundle's per-line export loop then inherited synchronously.
+struct FieldRule {
+    QRegularExpression re;
+    int                keepPrefix;
+};
+
+const std::vector<FieldRule>& fieldRules()
+{
+    static const std::vector<FieldRule>* rules = [] {
+        auto* v = new std::vector<FieldRule>;
+        const auto add = [&v](const char* keyword, int keep) {
+            v->push_back({QRegularExpression(
+                              QStringLiteral(R"(\b(%1)%2%3(%4))")
+                                  .arg(QLatin1String(keyword), QLatin1String(kSeparator),
+                                       QLatin1String(kAuthScheme), QLatin1String(kValue)),
+                              QRegularExpression::CaseInsensitiveOption),
+                          keep});
+        };
+        for (const auto& f : LogRedactionPolicy::kOpaqueValueFields)
+            add(f.keyword, f.keepPrefixChars);
+        for (const auto& f : LogRedactionPolicy::kSensitiveValueFields)
+            add(f.keyword, f.keepPrefixChars);
+        return v;
+    }();
+    return *rules;
+}
+
+const std::vector<QRegularExpression>& hostContextRules()
+{
+    static const std::vector<QRegularExpression>* rules = [] {
+        auto* v = new std::vector<QRegularExpression>;
+        for (const char* kw : LogRedactionPolicy::kHostContextKeywords) {
+            // The captured token must LOOK like a host: a dotted name, or a
+            // single label immediately followed by ":port". Without that the
+            // keywords match ordinary prose — "disconnected from PipeWire" and
+            // "resolving multiFLEX conflict" both lost their next word.
+            v->push_back(QRegularExpression(
+                QStringLiteral(
+                    R"(\b(%1)(\s+)\\?"?((?:[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+|[A-Za-z0-9\-]+(?=:\d))))"
+                    R"(\\?"?)")
+                    .arg(QLatin1String(kw)),
+                QRegularExpression::CaseInsensitiveOption));
+        }
+        return v;
+    }();
+    return *rules;
+}
 
 // Replace every match's value group, keeping `keepPrefix` leading characters
 // only when the value is strictly longer than that. A prefix as long as the
-// value is not a redaction, and that is exactly how a short value used to
-// survive: the old rule required four characters plus at least one more, so
-// anything four characters or shorter never matched at all.
-QString redactField(QString in, const QString& keyword, int keepPrefix)
+// value is not a redaction.
+QString redactField(QString in, const FieldRule& rule)
 {
-    const QRegularExpression re(
-        QStringLiteral(R"(\b(%1)%2%3(%4))").arg(keyword, QLatin1String(kSeparator),
-                                                QLatin1String(kAuthScheme),
-                                                QLatin1String(kValue)),
-        QRegularExpression::CaseInsensitiveOption);
     QString out;
     qsizetype last = 0;
-    auto it = re.globalMatch(in);
+    auto it = rule.re.globalMatch(in);
     while (it.hasNext()) {
         const QRegularExpressionMatch m = it.next();
         out += in.mid(last, m.capturedStart() - last);
-        // Strip the quoting/escaping so the prefix decision is made against
-        // the value itself, not against its punctuation.
+        // Strip the quoting/escaping so the prefix decision is made against the
+        // value itself, not against its punctuation.
         QString value = m.captured(5);
         QString open;
         if (value.startsWith(QLatin1String("\\\""))) { open = QStringLiteral("\\\""); }
         else if (value.startsWith('"') || value.startsWith('\'')) { open = value.left(1); }
-        if (!open.isEmpty() && value.size() >= 2 * open.size()) {
+        if (!open.isEmpty() && value.size() >= 2 * open.size())
             value = value.mid(open.size(), value.size() - 2 * open.size());
-        }
-        const QString prefix = value.size() > keepPrefix ? value.left(keepPrefix) : QString();
+        const QString prefix =
+            value.size() > rule.keepPrefix ? value.left(rule.keepPrefix) : QString();
         out += m.captured(1) + m.captured(2) + m.captured(3) + m.captured(4)
              + open + prefix + QStringLiteral("***REDACTED***") + open;
         last = m.capturedEnd();
@@ -130,17 +191,23 @@ QString redactPii(const QString& msg)
 {
     QString out = msg;
 
-    // ORDER MATTERS in this first block. IPv6 runs before IPv4 so an
-    // IPv4-mapped address (::ffff:192.0.2.7) is scrubbed as one address rather
-    // than having its tail rewritten in place and its v6 prefix left standing.
-    // Home paths run before anything that could match inside a user name.
+    // ORDER MATTERS through the structural rules below. Eight-group IPv6 runs
+    // before MAC (a MAC has six groups and cannot match it, but an address of
+    // two-digit hextets would otherwise be eaten by the MAC rule first), MAC
+    // runs before compressed IPv6, and home paths run before anything that
+    // could match inside a user name.
 
     // Home directory prefix -> ~. Both slash styles, and the literal
     // /home/<user>, /Users/<user> and C:\Users\<user> roots, because the
-    // running process's QDir::homePath() is not always the path's own root:
-    // a Flatpak sandbox, an elevated run, or a log copied off another machine
-    // all produce a home path this process never had. User names may contain
-    // spaces, so the segment runs to the next separator, not the next space.
+    // running process's QDir::homePath() is not always the path's own root: a
+    // Flatpak sandbox, an elevated run, or a log copied off another machine all
+    // produce a home path this process never had.
+    //
+    // THE USER SEGMENT IS BOUNDED. A Windows user name may contain spaces, but
+    // a rule that simply runs to the next separator swallows whatever follows
+    // the path on the line: "home=/home/auditor status=connected" collapsed to
+    // "home=~", deleting the diagnostic. Spaces are therefore accepted only
+    // when a path separator actually follows the run.
     const QString home = QDir::homePath();
     if (!home.isEmpty()) {
         QString nativeHome = home;
@@ -151,9 +218,17 @@ QString redactPii(const QString& msg)
         }
     }
     static const QRegularExpression* homeRootRe = new QRegularExpression(
-        R"((?:/home/|/Users/|[A-Za-z]:\\{1,2}Users\\{1,2})([^/\\:*?"<>|\r\n]+))",
+        R"((?:/home/|/Users/|[A-Za-z]:\\{1,2}Users\\{1,2}))"
+        R"((?:[^/\\:*?"<>|\r\n\s=]+(?:[ ]+[^/\\:*?"<>|\r\n\s=]+)*(?=[/\\])|[^/\\:*?"<>|\r\n\s=]+))",
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*homeRootRe, QStringLiteral("~"));
+
+    // IPv6, full eight-group form. Runs ahead of the MAC rule so an address
+    // written as two-digit hextets (20:01:0d:b8:00:00:00:01) is recognised as
+    // an address rather than half-consumed as a MAC.
+    static const QRegularExpression* ipv6FullRe = new QRegularExpression(
+        R"(\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b)");
+    out.replace(*ipv6FullRe, QStringLiteral("[v6-redacted]"));
 
     // MAC addresses: 00-1C-2D-05-37-2A -> **-**-**-**-**-2A
     //                00:1C:2D:05:37:2A -> **:**:**:**:**:2A
@@ -161,18 +236,21 @@ QString redactPii(const QString& msg)
         R"(([0-9A-Fa-f]{2})([:-])([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2}))");
     out.replace(*macRe, QStringLiteral("**\\2**\\2**\\2**\\2**\\2\\7"));
 
-    // IPv6 literals. Two rules, because the only shapes that are unambiguously
-    // an address are "contains ::" and "exactly eight groups". A looser
-    // "two or more hex groups" pattern also matches a MAC address and an
-    // elapsed-time value like 12:34:56, both of which are diagnostic and both
-    // of which it silently destroyed. Covers compressed, bracketed-with-port,
-    // IPv4-mapped and %scope forms; the last group is not kept because a v6
-    // interface identifier is commonly derived from the MAC.
-    static const QRegularExpression* ipv6FullRe = new QRegularExpression(
-        R"(\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b)");
-    out.replace(*ipv6FullRe, QStringLiteral("[v6-redacted]"));
+    // IPv6, compressed form. ANCHORED ON A HEXTET ADJACENT TO "::" — every
+    // group around the "::" used to be optional, so the shortest string the
+    // pattern matched was "::" on its own and any C++ qualified name in a
+    // message was rewritten: "WanConnection::sendCommand" became
+    // "WanConnection[v6-redacted]sendCommand". 48 log sites stream
+    // Class::method as the literal start of their message.
+    //
+    // A hextet is required on at least one side, and the token must not be
+    // flanked by other name characters, so a qualified name cannot match while
+    // "::1", "fe80::1%eth0" and "::ffff:192.0.2.7" still do.
     static const QRegularExpression* ipv6CompressedRe = new QRegularExpression(
-        R"(\[?(?:[0-9A-Fa-f]{1,4}:(?!:))*[0-9A-Fa-f]{0,4}::(?:[0-9A-Fa-f]{1,4}:)*(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4})?(?:%[0-9A-Za-z]+)?\]?)");
+        R"((?<![0-9A-Za-z_:.\-])\[?(?:)"
+        R"((?:[0-9A-Fa-f]{1,4}:(?!:))*[0-9A-Fa-f]{1,4}::(?:[0-9A-Fa-f]{1,4}:)*(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4})?)"
+        R"(|::(?:[0-9A-Fa-f]{1,4}:)*(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4}))"
+        R"()(?:%[0-9A-Za-z]+)?\]?(?![0-9A-Za-z_]))");
     out.replace(*ipv6CompressedRe, QStringLiteral("[v6-redacted]"));
 
     // IPv4 addresses: 192.168.50.121 -> *.*.*. 121 (keep last octet).
@@ -188,56 +266,49 @@ QString redactPii(const QString& msg)
         R"(\d{4}-\d{4}-\d{4}-(\d{4}))");
     out.replace(*serialRe, QStringLiteral("****-****-****-\\1"));
 
-    // Bare email addresses, wherever they appear in prose. The keyword-shaped
-    // spellings (email=, mail_address:) come from the table below; this covers
-    // SmartLinkClient's call-site truncation, which the redactor now owns.
+    // Bare email addresses, wherever they appear in prose.
     static const QRegularExpression* emailRe = new QRegularExpression(
         R"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})");
     out.replace(*emailRe, QStringLiteral("***REDACTED***"));
 
-    // Every keyword rule, generated from the one table (#5480).
-    for (const auto& f : LogRedactionPolicy::kOpaqueValueFields)
-        out = redactField(std::move(out), QLatin1String(f.keyword), f.keepPrefixChars);
-    for (const auto& f : LogRedactionPolicy::kSensitiveValueFields)
-        out = redactField(std::move(out), QLatin1String(f.keyword), f.keepPrefixChars);
+    // A DIGEST HEADER IS A PARAMETER LIST, not a single value, and the generic
+    // one-value grammar left every parameter after the first standing —
+    // including nonce and response. Redact the whole comma-separated tail.
+    static const QRegularExpression* digestRe = new QRegularExpression(
+        R"((\bauthorization\s*[:=]\s*digest\s+|\bdigest\s+(?=[A-Za-z]+\s*=))[^\r\n]*)",
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(*digestRe, QStringLiteral("\\1***REDACTED***"));
+
+    // Every keyword rule, generated once from the one table (#5480).
+    for (const FieldRule& rule : fieldRules())
+        out = redactField(std::move(out), rule);
 
     // The standalone "bearer <token>" scheme, which carries no separator and so
-    // cannot come from the table.
+    // cannot come from the table. Digest is handled above; basic/bearer only
+    // here, and only when the following token looks like a credential blob
+    // rather than an ordinary word.
     static const QRegularExpression* bearerRe = new QRegularExpression(
-        R"(\b(bearer|basic|digest)(\s+)([A-Za-z0-9_\-\.]{4})[A-Za-z0-9_\-\.+/=]+)",
+        R"(\b(bearer|basic)(\s+)([A-Za-z0-9_\-\.]{4})[A-Za-z0-9_\-\.+/=]{4,})",
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*bearerRe, QStringLiteral("\\1\\2\\3***REDACTED***"));
 
-    // A numeric coordinate PAIR carried in a location=/gps= field, where the
-    // field name names no axis. Quoted forms included: location="47.6,-122.3"
-    // is how a JSON status frame spells it.
+    // A numeric coordinate PAIR carried in a location=/gps= field.
     static const QRegularExpression* coordinatePairRe = new QRegularExpression(
         R"(\b(gps(?:[_-]?location)?|location|coord(?:inates)?)(\\?["']?\s*[:=]\s*)\\?["']?[-+]?\d{1,3}(?:\.\d+)?\s*[,/]\s*[-+]?\d{1,3}(?:\.\d+)?\\?["']?)",
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*coordinatePairRe, QStringLiteral("\\1\\2***REDACTED***"));
 
-    // Maidenhead grid as a bare word after a "grid" keyword, which is how
-    // FreeDvClient logs it. Anchored on the keyword and on the strict
-    // 2-letter/2-digit[/2-letter] shape so ordinary prose is not eaten.
+    // Maidenhead grid as a bare word after a "grid" keyword.
     static const QRegularExpression* gridWordRe = new QRegularExpression(
         R"(\b(grid|locator|maidenhead)(\s+)\\?"?[A-Za-z]{2}\d{2}(?:[A-Za-z]{2})?\\?"?\b)",
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*gridWordRe, QStringLiteral("\\1\\2***REDACTED***"));
 
-    // Peer hostnames after a connection keyword (WanConnection, MqttClient,
-    // PgxlConnection, GreenHeronModel). The :port is preserved because it is
-    // diagnostic and is not the operator's to hide; a trailing "timed out" or
-    // similar prose keeps reading because the host token stops at whitespace.
-    for (const char* kw : LogRedactionPolicy::kHostContextKeywords) {
-        const QRegularExpression re(
-            QStringLiteral(R"(\b(%1)(\s+)\\?"?([A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*)\\?"?(?=[\s:,]|$))")
-                .arg(QLatin1String(kw)),
-            QRegularExpression::CaseInsensitiveOption);
+    // Peer hostnames after a connection keyword.
+    for (const QRegularExpression& re : hostContextRules())
         out.replace(re, QStringLiteral("\\1\\2***REDACTED***"));
-    }
 
-    // "user <name>" as logged by the Icom control-stream login line, where the
-    // separator is whitespace rather than "=".
+    // "user <name>" as logged by the Icom control-stream login line.
     static const QRegularExpression* userWordRe = new QRegularExpression(
         R"(\b(username|user)(\s+)(?!(?:name|id|agent)\b)\\?"?[A-Za-z0-9._\-]+\\?"?(?=[\s,.:]|$))",
         QRegularExpression::CaseInsensitiveOption);
@@ -250,6 +321,7 @@ QString redactPii(const QString& msg)
 
     return out;
 }
+
 
 namespace {
 

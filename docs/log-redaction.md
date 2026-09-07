@@ -30,9 +30,20 @@ adding a field is one row there plus one case in `tests/async_log_writer_test.cp
 
 Each of these is matched in bare, single-quoted, double-quoted, JSON and
 Qt-escaped (`\"value\"`) spellings, because they all share one value grammar.
+That grammar is escape-aware, and the two quoted spellings escape differently:
+in ordinary text a value runs past `\"` to its real closing quote, while in
+QDebug's spelling `\"` *is* the delimiter. Both are pinned by tests.
+
 Redaction is **idempotent**: re-running it over an already-scrubbed line is a
 no-op, which is what lets the support bundle re-scrub older logs on the way
-out.
+out. The marker `***REDACTED***` is explicitly excluded from the value grammar
+to keep that true — without it a second pass consumed its own marker and a
+short value became `token=***R***REDACTED***`.
+
+Redaction runs on **every** log line, so the generated patterns are compiled
+once and cached. `testRedactionThroughput` guards that: building them per call
+cost roughly 1 ms a line, which `SupportBundle`'s per-line export loop then
+inherited synchronously.
 
 ## Deliberately NOT redacted
 
@@ -43,6 +54,13 @@ broken real triage before, so do not "fix" them:
 - Radio model, firmware and software version (including 4-part build numbers)
 - Port numbers, slice/stream ids, frequencies, modes
 - Identifiers that merely end in a keyword, e.g. `keytoken=`
+- **C++ qualified names** — `WanConnection::sendCommand`, `std::vector`. 48 log
+  sites stream `Class::method` as the literal start of their message, and an
+  under-anchored IPv6 rule rewrote every one of them. The compressed-address
+  rule requires a hextet adjacent to the `::`.
+- **Ordinary prose after a connection keyword** — "disconnected from PipeWire",
+  "resolving multiFLEX conflict". The host-context rules require the captured
+  token to look like a host (a dotted name, or a label followed by `:port`).
 
 ## Limitations — check a new log site against these
 
