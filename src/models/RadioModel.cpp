@@ -1467,10 +1467,10 @@ void RadioModel::setupBackend(const QString& family)
     // without this, a family swap silently parts the two: the new modulator is
     // constructed at its own 1.0 default (Hl2TxDsp::m_micGain) while
     // TransmitModel::m_micLevel still holds the operator's position, because
-    // nothing resets that model and micLevel is not persisted for
-    // applyRestoredState() to restore. Connect an HL2, set MIC to 80, visit the
-    // demo or a Flex, come back: the slider reads 80, the snapshot's micLevel
-    // reads 80, and the radio is transmitting at unity.
+    // nothing resets that model — resetState() leaves micLevel alone on purpose,
+    // a radio swap not being a change of microphone. Connect an HL2, set MIC to
+    // 80, visit the demo or a Flex, come back: the slider reads 80, the
+    // snapshot's micLevel reads 80, and the radio is transmitting at unity.
     //
     // That is the readback-agreeing-with-the-failure shape this whole change
     // exists to eliminate, so it cannot be left standing one seam over. Pushing
@@ -1479,10 +1479,15 @@ void RadioModel::setupBackend(const QString& family)
     // exists, and a backend that is never connected should still answer
     // healthSnapshot() honestly.
     //
-    // Free on the constructor's own call, where TransmitModel is at its 50 and
-    // 50 maps to the 1.0 the modulator already holds. Same Flex gate as the
-    // seam: on a Flex the slider's `transmit set miclevel=` reaches the radio's
-    // own preamp and this must not double it.
+    // On the constructor's OWN call this is now the road the operator's stored
+    // level travels: TransmitModel's constructor restores micLevel from
+    // PhoneMicLevel, and TransmitModel is a member of this class, so by the time
+    // the first backend exists the model may already be at yesterday's 70 and
+    // this push is the only thing that puts the modulator there. It is free —
+    // 50 onto the 1.0 the modulator already holds — only for the operator who
+    // has never moved the slider. Same Flex gate as the seam: on a Flex the
+    // slider's `transmit set miclevel=` reaches the radio's own preamp and this
+    // must not double it.
     if (m_backend && !usesFlexCommandPlane())
         m_backend->setMicGain(m_transmitModel.micLevel());
 }

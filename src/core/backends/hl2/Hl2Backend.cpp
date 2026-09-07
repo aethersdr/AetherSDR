@@ -3937,12 +3937,15 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 
 // The Phone applet's MIC slider, 0..100, onto the modulator's linear pre-ALC gain.
 //
-// 50 IS UNITY, and that is load-bearing rather than cosmetic. TransmitModel
-// constructs m_micLevel at 50 and nothing restores it at startup, so a session
-// where the operator never touches the slider must leave the modulator exactly
-// where its own default (m_micGain = 1.0) puts it. A mapping with unity anywhere
-// else would silently change the transmit level of every existing HL2 install
-// the first time this code shipped.
+// 50 IS UNITY, and that is load-bearing rather than cosmetic. TransmitModel now
+// restores m_micLevel from PhoneMicLevel at startup, so the slider arrives here
+// carrying the operator's last position rather than a fresh 50 — but 50 remains
+// the model's default and therefore what an operator who has never moved the
+// control is restored to, and that session must still leave the modulator
+// exactly where its own default (m_micGain = 1.0) puts it. A mapping with unity
+// anywhere else would silently change the transmit level of every existing HL2
+// install, both the first time this code shipped and the first launch after the
+// level began persisting.
 //
 // Above and below that, +/-20 dB linear in dB — 0.4 dB per slider step, which is
 // fine enough to set by ear and wide enough to cover the range between a headset

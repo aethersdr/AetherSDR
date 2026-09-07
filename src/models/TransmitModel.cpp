@@ -1,4 +1,5 @@
 #include "TransmitModel.h"
+#include "core/AppSettings.h"
 #include "core/ClientQuindarTone.h"
 #include "core/LogManager.h"
 #include <QDebug>
@@ -7,9 +8,50 @@
 
 namespace AetherSDR {
 
+namespace {
+// The Phone/CW mic level, persisted.
+//
+// APPLICATION-GLOBAL, which is the smallest thing that fixes the defect and
+// probably not the final shape — a mic level is a property of the microphone in
+// front of ONE radio, and the precedent for scoping it is DisplayRfGain_hl2,
+// a key formerly shared with the Flex backend that was seen pushing a Flex-era
+// value onto an HL2 at connect. Scoping this one needs the value restored at
+// CONNECT rather than at construction, which is a different change; left global
+// and flagged rather than half-done.
+const QString kMicLevelKey     = QStringLiteral("PhoneMicLevel");
+constexpr int kMicLevelDefault = 50;
+}  // namespace
+
 TransmitModel::TransmitModel(QObject* parent)
     : QObject(parent)
-{}
+{
+    // RESTORE THE OPERATOR'S MIC LEVEL HERE, IN THE CONSTRUCTOR, ON PURPOSE.
+    //
+    // On a host-modulating backend the MIC slider is the only control the
+    // operator has over where their audio lands relative to the ALC's hold
+    // threshold — setKeying()'s "raise mic gain" diagnostic tells them to move
+    // it — and any operating procedure that begins "set mic gain once" is
+    // defeated by a control that returns to unity every launch.
+    //
+    // The constructor is the right place because the seam already runs from
+    // here: RadioModel pushes m_transmitModel.micLevel() at BACKEND
+    // CONSTRUCTION and TransmitModel is a member of RadioModel, so a value
+    // restored now is in place before that push and reaches the modulator with
+    // no new wiring and no second source of truth. resetState() deliberately
+    // does not touch m_micLevel — a radio swap does not change which microphone
+    // is in front of the operator — so this stays restored across a disconnect.
+    //
+    // Not toInt() alone: QVariant::toInt() answers 0 for anything it cannot
+    // read, 0 is inside the slider's range, and 0 is the MUTE (see
+    // hl2::micSliderToLinear). A store this client cannot parse must leave the
+    // operator at unity rather than silently off the air, so an unreadable row
+    // falls back to the default and only a readable one is clamped.
+    bool parsed = false;
+    const int stored = AppSettings::instance()
+                           .value(kMicLevelKey, kMicLevelDefault)
+                           .toInt(&parsed);
+    m_micLevel = parsed ? qBound(0, stored, 100) : kMicLevelDefault;
+}
 
 TransmitModel::~TransmitModel()
 {
@@ -576,6 +618,17 @@ void TransmitModel::setMicLevel(int level)
     level = qBound(0, level, 100);
     if (m_micLevel != level) {
         m_micLevel = level;
+        // Persist inside the CHANGED test rather than beside the unconditional
+        // re-assert below: the re-assert exists because the backend may have
+        // been rebuilt underneath a value that never moved, and that is a fact
+        // about the modulator, not a new operator decision to record. Writing on
+        // every call would dirty a settings row on every reconnect.
+        //
+        // setValue, not setValue + save(): AppSettings commits its dirty rows in
+        // one transaction, and MainWindow::closeEvent() already runs that save
+        // over the whole store at quit. A save() per slider step would put SQLite
+        // I/O on the drag of a control the operator sweeps by ear.
+        AppSettings::instance().setValue(kMicLevelKey, level);
         emit micStateChanged();  // PhoneCwApplet's mic slider binds to this
     }
     // Unconditional, like commandReady below and deliberately NOT inside the
