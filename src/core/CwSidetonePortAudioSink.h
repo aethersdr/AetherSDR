@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CwSidetoneSinkBackend.h"
+#include "CwSidetoneEdgeProbe.h"
 
 #include <portaudio.h>
 
@@ -47,6 +48,20 @@ private:
 
     PaStream*                          m_stream{nullptr};
     std::atomic<CwSidetoneGenerator*>  m_generator{nullptr};
+    // Diagnostics: callback liveness + the loudest sample rendered, so a
+    // "started but silent" report can distinguish a dead callback from a
+    // generator that renders silence. Logged by stop().
+    std::atomic<quint64>               m_cbCount{0};
+    std::atomic<quint32>               m_cbPeakMicro{0};   // |sample| * 1e6
+    // paOutputUnderflow / paOutputOverflow counts. The callback used to
+    // discard statusFlags, which left the #4890 element-timing tail
+    // (2 outliers in 196, +/-8-11 ms) attributable only by guess: an
+    // underflow and host wake jitter look identical in the envelope. These
+    // separate them — an outlier with a coincident underflow is the audio
+    // system missing its deadline, one without is jitter somewhere else.
+    std::atomic<quint32>               m_cbUnderflows{0};
+    std::atomic<quint32>               m_cbOverflows{0};
+    CwSidetoneEdgeProbe                m_edgeProbe;
     int                                m_actualRate{0};
     QString                            m_deviceDescription;
     bool                               m_fallbackOccurred{false};

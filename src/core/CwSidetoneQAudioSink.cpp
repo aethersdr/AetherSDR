@@ -135,12 +135,14 @@ void CwSidetoneQAudioSink::onTimerTick()
     if (m_sampleFormat == QAudioFormat::Float) {
         QByteArray chunk(byteCount, '\0');
         m_generator->process(reinterpret_cast<float*>(chunk.data()), frames);
+        m_edgeProbe.scan(reinterpret_cast<const float*>(chunk.constData()), frames);
         m_device->write(chunk);
     } else {
         const qsizetype scratchBytes = qsizetype(frames) * 2 * qsizetype(sizeof(float));
         if (m_scratch.size() < scratchBytes) m_scratch.resize(scratchBytes);
         auto* fbuf = reinterpret_cast<float*>(m_scratch.data());
         m_generator->process(fbuf, frames);
+        m_edgeProbe.scan(fbuf, frames);
 
         QByteArray chunk(byteCount, Qt::Uninitialized);
         auto* ibuf = reinterpret_cast<int16_t*>(chunk.data());
@@ -158,6 +160,7 @@ void CwSidetoneQAudioSink::onTimerTick()
 void CwSidetoneQAudioSink::stop()
 {
     if (m_timer && m_timer->isActive()) m_timer->stop();
+    m_edgeProbe.dump("QAudioSink", m_actualRate);
     if (m_sink) {
         auto* sink = m_sink;
         m_sink = nullptr;

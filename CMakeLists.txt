@@ -296,10 +296,37 @@ else()
     message(STATUS "Qt6Keychain not found — credential persistence disabled")
 endif()
 
-# PortAudio (optional fallback for audio)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(PORTAUDIO portaudio-2.0)
+# PortAudio (optional fallback for audio; on Windows it is the CW sidetone's
+# callback-model path — without it the sidetone runs on the push-model
+# QAudioSink and the WASAPI-preference logic from #3193 never compiles, #5200)
+# Windows: run scripts/setup/setup-portaudio.ps1 first to build the static lib
+# Linux:   apt install portaudio19-dev
+# macOS:   brew install portaudio
+if(WIN32)
+    set(PORTAUDIO_ROOT "${CMAKE_SOURCE_DIR}/third_party/portaudio")
+    if(EXISTS "${PORTAUDIO_ROOT}/include/portaudio.h")
+        set(PORTAUDIO_FOUND TRUE)
+        set(PORTAUDIO_INCLUDE_DIRS "${PORTAUDIO_ROOT}/include")
+        # Static lib, so its host-API system dependencies must be named here
+        # (matches INTERFACE_LINK_LIBRARIES of PortAudio's own CMake export).
+        set(PORTAUDIO_LIBRARIES
+            "${PORTAUDIO_ROOT}/lib/portaudio_static_x64.lib"
+            winmm dsound ole32 uuid setupapi)
+        # CI greps configure output for this exact line — a soft-optional
+        # dependency that vanishes must fail the gate, not silently skip
+        # compiling the sink (same rule as the GPU-spectrum assert).
+        message(STATUS "PortAudio (third_party) found — CW sidetone callback sink enabled")
+    else()
+        # Soft-optional (build proceeds), but VISIBLY: without this the
+        # sidetone silently lands on the push-model QAudioSink path.
+        message(WARNING "PortAudio not found — run scripts/setup/setup-portaudio.ps1; "
+                        "the CW sidetone will use the push-model QAudioSink")
+    endif()
+else()
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PORTAUDIO portaudio-2.0)
+    endif()
 endif()
 
 # FFTW3 (required by vendored WDSP; also used by NR2 spectral noise reduction)
