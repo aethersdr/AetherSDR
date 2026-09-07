@@ -3529,6 +3529,15 @@ add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(tx_audio_source_wiring_test
+    tests/tx_audio_source_wiring_test.cpp
+)
+target_include_directories(tx_audio_source_wiring_test PRIVATE src)
+target_compile_definitions(tx_audio_source_wiring_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(tx_audio_source_wiring_test PRIVATE Qt6::Core)
+add_test(NAME tx_audio_source_wiring_test COMMAND tx_audio_source_wiring_test)
+
 add_executable(meter_applet_capability_test
     tests/meter_applet_capability_test.cpp
     src/gui/MeterApplet.cpp
