@@ -89,8 +89,11 @@ namespace {
 // In QDebug's spelling the DELIMITER is itself `\"`, so the same trick
 // over-consumes: `\\.` happily eats the closing `\"` and runs on into the
 // next field, which swallowed one JSON key and left the value after it
-// unredacted. That branch therefore takes any character that does not begin a
-// `\"` sequence, and stops at the first real delimiter.
+// unredacted. That branch therefore stops at the first real delimiter — but it
+// must first consume an ENCODED escaped quote as a unit. QDebug doubles the
+// backslash, so a JSON `\"` inside the value arrives as `\\` + `\"`; without
+// that alternative the branch terminated inside it and left the value's tail
+// in the log.
 //
 // The leading negative lookahead keeps redaction IDEMPOTENT: without it a
 // second pass treats the marker `***REDACTED***` as a fresh value and eats its
@@ -100,7 +103,7 @@ namespace {
 constexpr const char* kSeparator = R"((\\?["']?\s*[:=]\s*))";
 constexpr const char* kValue =
     R"((?!\*\*\*REDACTED\*\*\*)(?!(?:bearer|basic|digest)\s+\*\*\*REDACTED\*\*\*))"
-    R"((?:\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s#|,;&}\]]+))";
+    R"((?:\\"(?:\\\\\\"|(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s#|,;&}\]]+))";
 
 // An Authorization value may lead with a scheme word that is NOT the secret.
 // Consuming it as the value redacts "Basic" and leaves the credential standing.
@@ -146,8 +149,8 @@ const std::vector<QRegularExpression>& hostContextRules()
             // "resolving multiFLEX conflict" both lost their next word.
             v->push_back(QRegularExpression(
                 QStringLiteral(
-                    R"(\b(%1)(\s+)\\?"?((?:[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+|[A-Za-z0-9\-]+(?=:\d))))"
-                    R"(\\?"?)")
+                    R"(\b(%1)(\s+)(\\?"?)(?:[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+|[A-Za-z0-9\-]+(?=:\d)))"
+                    R"((\\?"?))")
                     .arg(QLatin1String(kw)),
                 QRegularExpression::CaseInsensitiveOption));
         }
@@ -175,6 +178,16 @@ QString redactField(QString in, const FieldRule& rule)
         else if (value.startsWith('"') || value.startsWith('\'')) { open = value.left(1); }
         if (!open.isEmpty() && value.size() >= 2 * open.size())
             value = value.mid(open.size(), value.size() - 2 * open.size());
+        // Already redacted (in any quoting) — re-emit verbatim. The regex
+        // lookahead sits before the opening quote, so it cannot see a marker
+        // inside one, and a quoted short value had its own marker re-eaten:
+        // {"token":"ab"} became {"token":"***R***REDACTED***"} on the second
+        // pass. SupportBundle re-scrubs already-clean logs, so this must hold.
+        if (value.startsWith(QLatin1String("***REDACTED***"))) {
+            out += m.captured(0);
+            last = m.capturedEnd();
+            continue;
+        }
         const QString prefix =
             value.size() > rule.keepPrefix ? value.left(rule.keepPrefix) : QString();
         out += m.captured(1) + m.captured(2) + m.captured(3) + m.captured(4)
@@ -219,7 +232,7 @@ QString redactPii(const QString& msg)
     }
     static const QRegularExpression* homeRootRe = new QRegularExpression(
         R"((?:/home/|/Users/|[A-Za-z]:\\{1,2}Users\\{1,2}))"
-        R"((?:[^/\\:*?"<>|\r\n\s=]+(?:[ ]+[^/\\:*?"<>|\r\n\s=]+)*(?=[/\\])|[^/\\:*?"<>|\r\n\s=]+))",
+        R"((?:[^/\\:*?"<>|\r\n\s=]+(?:[ ]+[^/\\:*?"<>|\r\n\s=]+)*(?=[/\\"'])|[^/\\:*?"<>|\r\n\s=]+))",
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*homeRootRe, QStringLiteral("~"));
 
@@ -266,10 +279,6 @@ QString redactPii(const QString& msg)
         R"(\d{4}-\d{4}-\d{4}-(\d{4}))");
     out.replace(*serialRe, QStringLiteral("****-****-****-\\1"));
 
-    // Bare email addresses, wherever they appear in prose.
-    static const QRegularExpression* emailRe = new QRegularExpression(
-        R"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})");
-    out.replace(*emailRe, QStringLiteral("***REDACTED***"));
 
     // A DIGEST HEADER IS A PARAMETER LIST, not a single value, and the generic
     // one-value grammar left every parameter after the first standing —
@@ -282,6 +291,17 @@ QString redactPii(const QString& msg)
     // Every keyword rule, generated once from the one table (#5480).
     for (const FieldRule& rule : fieldRules())
         out = redactField(std::move(out), rule);
+
+    // Bare email addresses in prose, AFTER the keyword rules.
+    //
+    // Running this first was an ordering bug: it rewrote the head of a field's
+    // value to the marker, and the marker exclusion in kValue then made the
+    // field rule skip the whole field — so "password=person@example.com!tail"
+    // kept its tail. Keyword fields are redacted whole first; whatever address
+    // is left is genuinely loose in prose.
+    static const QRegularExpression* emailRe = new QRegularExpression(
+        R"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})");
+    out.replace(*emailRe, QStringLiteral("***REDACTED***"));
 
     // The standalone "bearer <token>" scheme, which carries no separator and so
     // cannot come from the table. Digest is handled above; basic/bearer only
@@ -306,13 +326,18 @@ QString redactPii(const QString& msg)
 
     // Peer hostnames after a connection keyword.
     for (const QRegularExpression& re : hostContextRules())
-        out.replace(re, QStringLiteral("\\1\\2***REDACTED***"));
+        out.replace(re, QStringLiteral("\\1\\2\\3***REDACTED***\\4"));
 
     // "user <name>" as logged by the Icom control-stream login line.
+    // "user <name>" as logged by the Icom control-stream login line
+    // (IcomSession.cpp:273), which streams a QString and therefore QUOTES it.
+    // The quotes are the discriminator and are required: "user" is ordinary
+    // English before a bare word, and an unquoted rule ate the next word at
+    // real sites ("user settings received", "user themes").
     static const QRegularExpression* userWordRe = new QRegularExpression(
-        R"(\b(username|user)(\s+)(?!(?:name|id|agent)\b)\\?"?[A-Za-z0-9._\-]+\\?"?(?=[\s,.:]|$))",
+        R"(\b(username|user)(\s+)(\\?["'])(?!\*\*\*REDACTED)[A-Za-z0-9._\-@]+(\\?["']))",
         QRegularExpression::CaseInsensitiveOption);
-    out.replace(*userWordRe, QStringLiteral("\\1\\2***REDACTED***"));
+    out.replace(*userWordRe, QStringLiteral("\\1\\2\\3***REDACTED***\\4"));
 
     // URL userinfo (scheme://user:pass@host) and the host authority itself.
     static const QRegularExpression* urlAuthorityRe = new QRegularExpression(

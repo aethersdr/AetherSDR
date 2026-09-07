@@ -534,9 +534,13 @@ void testUserFieldRedaction(const QString& dir)
     const QString path = dir + "/user.log";
     const QString contents = writeAndRead(
         path, QtDebugMsg, QStringLiteral("aether.icom"),
-        QStringLiteral("control login user pat_jensen accepted username=pat.j "
+        // The whitespace form is QUOTED, because the real site
+        // (IcomSession.cpp:273) streams a QString and QDebug quotes it. An
+        // unquoted rule here would eat ordinary prose - see
+        // testUserRuleTakesQuotedNamesOnly.
+        QStringLiteral("control login user \"pat_jensen\" accepted username=pat.j "
                        "user_name=\"Pat\""));
-    report("user name fields are redacted in keyword and whitespace forms",
+    report("user name fields are redacted in keyword and quoted forms",
            !contents.contains(QStringLiteral("pat_jensen"))
            && !contents.contains(QStringLiteral("pat.j"))
            && !contents.contains(QStringLiteral("\"Pat\"")));
@@ -676,7 +680,7 @@ void testNegativeCorpus(const QString& dir)
         {"SmartLink WAN: id_token=AUDITTOKENVALUE1234 refresh=x",        "AUDITTOKENVALUE1234"},
         {"SmartLink user_settings first_name=AuditGiven last_name=X",    "AuditGiven"},
         {R"(MQTT recv aether/status {"grid_square":"AUDITGRID"})",       "AUDITGRID"},
-        {"Icom control login user auditoperator accepted",               "auditoperator"},
+        {R"(Icom control login for user "auditoperator" accepted)",       "auditoperator"},
         {"MQTT connecting to audit-broker.example.net:8883",             "audit-broker"},
         {"ASR endpoint https://audit-asr.internal/v1",                   "audit-asr"},
         {"FreeDV reported grid AU12di for peer",                         "AU12di"},
@@ -849,6 +853,105 @@ void testRedactionThroughput()
     report("redactPii does not rebuild its patterns per call", ok);
 }
 
+
+// ---------------------------------------------------------------------------
+// Second review round on #5481 (@Ozy311, and the still-valid nits from the
+// aethersdr-agent pass). Rule INTERACTIONS, which the first two rounds of
+// cases missed entirely by testing each rule in isolation.
+// ---------------------------------------------------------------------------
+
+// The email rule used to run before the keyword rules, rewriting the head of a
+// field's value to the marker; the marker exclusion in the value grammar then
+// made the field rule skip the whole field, so the tail survived.
+void testEmailInsideCredentialFieldDoesNotMaskIt(const QString& dir)
+{
+    const QString path = dir + "/email_field_order.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.wan"),
+        QStringLiteral("password=person@example.com!AuditTailOne "
+                       "token=person@example.com/AuditTailTwo"));
+    report("an address inside a field value does not mask the rest of it",
+           !contents.contains(QStringLiteral("AuditTailOne"))
+           && !contents.contains(QStringLiteral("AuditTailTwo"))
+           && !contents.contains(QStringLiteral("person@example.com")));
+}
+
+// QDebug doubles the backslash, so a JSON escaped quote inside a value arrives
+// as "\\" followed by "\"". The Qt branch terminated inside that pair.
+void testQtEncodedEscapedQuoteInsideValue(const QString& dir)
+{
+    const QString path = dir + "/qt_escaped_quote.log";
+    QString formatted;
+    QDebug(&formatted) << QByteArray(
+        R"({"password":"start\"AuditQtTail","state":"ok"})");
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.mqtt"), formatted);
+    report("a Qt-encoded escaped quote does not end the value early",
+           !contents.contains(QStringLiteral("AuditQtTail"))
+           && !contents.contains(QStringLiteral("start"))
+           // the rest of the payload must still be readable
+           && contents.contains(QStringLiteral("state")));
+}
+
+// The idempotence lookahead sits before the opening quote, so it could not see
+// a marker inside one: {"token":"ab"} became {"token":"***R***REDACTED***"}.
+void testIdempotentForQuotedShortValues(const QString& dir)
+{
+    const QString once = redactPii(QStringLiteral(R"({"token":"ab","password":"x"})"));
+    const QString twice = redactPii(once);
+    report("redaction is idempotent for quoted short values",
+           once == twice && !once.contains(QStringLiteral("***R***")));
+    const QString path = dir + "/idempotent_quoted.log";
+    const QString contents = writeAndRead(path, QtDebugMsg,
+                                          QStringLiteral("aether.mqtt"), once);
+    report("re-writing an already-redacted quoted value changes nothing",
+           contents.contains(once));
+}
+
+// "user" is ordinary English before a bare word. The real credential site
+// (IcomSession.cpp:273) streams a QString, so QDebug quotes it — the quotes
+// are the discriminator.
+void testUserRuleTakesQuotedNamesOnly(const QString& dir)
+{
+    const QString path = dir + "/user_shape.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.icom"),
+        QStringLiteral("SmartLinkClient: user settings received; "
+                       "ThemeManager: user themes; "
+                       "control stream ready - sending login for user \"auditoperator\""));
+    report("a quoted user name is redacted and bare prose after \"user\" is not",
+           contents.contains(QStringLiteral("user settings received"))
+           && contents.contains(QStringLiteral("user themes"))
+           && !contents.contains(QStringLiteral("auditoperator")));
+}
+
+// A quoted Windows-style home directory whose user name contains a space:
+// path="/home/Audit Name" used to keep the surname.
+void testQuotedHomeRootWithSpaces(const QString& dir)
+{
+    const QString path = dir + "/home_quoted.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.app"),
+        QStringLiteral(R"(path="/home/Audit Name" status=ok)"));
+    report("a quoted home root with a space in the name is redacted whole",
+           !contents.contains(QStringLiteral("Audit"))
+           && !contents.contains(QStringLiteral("Name"))
+           && contents.contains(QStringLiteral("status=ok")));
+}
+
+// The connection-keyword rules consume the surrounding quotes; they have to
+// put them back or a quoted host loses its quoting.
+void testQuotedHostKeepsItsQuotes(const QString& dir)
+{
+    const QString path = dir + "/host_quotes.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("connecting to \"shack.example.net\" now"));
+    report("a quoted host keeps its quotes around the marker",
+           contents.contains(QStringLiteral("\"***REDACTED***\""))
+           && !contents.contains(QStringLiteral("shack.example.net")));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -905,6 +1008,13 @@ int main(int argc, char** argv)
     testIdempotentForShortAndMarkedValues(dir);
     testHostContextKeywordsSpareProse(dir);
     testRedactionThroughput();
+
+    testEmailInsideCredentialFieldDoesNotMaskIt(dir);
+    testQtEncodedEscapedQuoteInsideValue(dir);
+    testIdempotentForQuotedShortValues(dir);
+    testUserRuleTakesQuotedNamesOnly(dir);
+    testQuotedHomeRootWithSpaces(dir);
+    testQuotedHostKeepsItsQuotes(dir);
 
     return g_failed == 0 ? 0 : 1;
 }

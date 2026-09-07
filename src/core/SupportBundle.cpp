@@ -109,7 +109,24 @@ bool copyLogRedacted(const QString& from, const QString& to)
     while (!in.atEnd()) {
         const QByteArray raw = in.readLine();
         const QString line = QString::fromUtf8(raw);
-        out.write(redactPii(line).toUtf8());
+        const QByteArray scrubbed = redactPii(line).toUtf8();
+        // A short write leaves a TRUNCATED log in the bundle that reads as a
+        // short log rather than a failed copy, which is the worst of both: the
+        // recipient draws conclusions from an incomplete file without knowing
+        // it is incomplete. Fail the copy and remove the partial destination so
+        // the caller's `continue` skips it entirely.
+        if (out.write(scrubbed) != scrubbed.size()) {
+            qWarning() << "support bundle: log copy failed for" << from << out.errorString();
+            out.close();
+            out.remove();
+            return false;
+        }
+    }
+    out.close();
+    if (out.error() != QFileDevice::NoError) {
+        qWarning() << "support bundle: log flush failed for" << from << out.errorString();
+        out.remove();
+        return false;
     }
     return true;
 }

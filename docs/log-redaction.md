@@ -22,10 +22,10 @@ adding a field is one row there plus one case in `tests/async_log_writer_test.cp
 | Email address, in prose or as a field value | `***REDACTED***` |
 | `token` / `id_token` / `access_token` / `refresh_token` / `authorization` / `auth` / `api_key` / `session_id` | first 4 characters kept, rest redacted |
 | `pass` / `password` / `passwd` / `passphrase` | fully redacted |
-| `first_name` / `last_name` / `full_name` / `user_name` / `owner`, and `user <name>` | fully redacted |
+| `first_name` / `last_name` / `full_name` / `user_name` / `owner`, and a **quoted** `user "<name>"` | fully redacted |
 | `lat` / `latitude` / `lon` / `longitude`, and a `location=`/`gps=` coordinate pair | fully redacted |
 | `grid` / `grid_square` / `locator` / `maidenhead`, keyword or whitespace form | fully redacted |
-| Hostname after `connecting to`, `connected to`, `reconnecting to`, `disconnected from`, `connect to`, `pin for`, `resolving` | fully redacted, `:port` preserved |
+| Hostname after `connecting to`, `connected to`, `reconnecting to`, `disconnected from`, `connect to`, `disconnecting from`, `pin for` — **only when the token looks like a host** (dotted name, or label followed by `:port`) | fully redacted, `:port` preserved |
 | URL authority (`scheme://user:pass@host`) | fully redacted, path preserved |
 
 Each of these is matched in bare, single-quoted, double-quoted, JSON and
