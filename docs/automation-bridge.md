@@ -719,7 +719,7 @@ connects).
 | `model` | `selector` | returns |
 |---|---|---|
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
-| `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the radio-side DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
+| `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the backend-owned DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate) |
 | `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
@@ -1206,8 +1206,9 @@ radio-side `nr`/`nb`/`anf` in `get slice`. There is no widget that exposes which
 of the six AudioEngine NR modules is active and how it's tuned, so this is the
 only non-screenshot way to assert it.
 
-The response also carries **`backend`** — what the *radio's* DSP is configured
-with, which is a different question from everything else here (#5401).
+The response also carries **`backend`** — the backend-owned DSP configuration,
+separate from AudioEngine's AetherDSP chain. For HL2, these DSP chains run
+inside AetherSDR on the host, not in radio firmware (#5401).
 
 ```json
 → {"cmd":"get","model":"dsp"}
@@ -1253,15 +1254,17 @@ with, which is a different question from everything else here (#5401).
   persisted `bnr` intensity, merged with the AppSettings-persisted
   NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
   #3902 — no container, so it exposes only `intensity`.)
-- `backend` — **the radio-side DSP read-back**, and the one part of this
-  response that is not about the client. Everything above describes AetherDSP's
-  own chain in `AudioEngine`; this is what the DSP *on the radio* is configured
-  with. `family` is the connected backend's family (`"hl2"` above), and `chains`
+- `backend` — **the backend-owned DSP read-back**. Everything above describes
+  AetherDSP's chain in `AudioEngine`; this object describes the backend's
+  separate DSP chains. For HL2, both `rx-wdsp` and `hl2-tx` run on AetherSDR's
+  host I/O thread, so this is host DSP configuration, not firmware read-back.
+  `family` is the connected backend's family (`"hl2"` above), and `chains`
   is a list with one entry per DSP chain that backend runs. It exists because
   the recurring defect on a new backend is model/DSP divergence — a control
   moves, the model records it, nothing reaches the DSP, and the symptom is "the
-  control does nothing". Every other `get` model answers from the **model**, so
-  none of them can see it.
+  control does nothing". Reading the requested values from `get slice` alone
+  cannot prove that they reached the DSP; backend read-backs such as this object
+  and `get hostnb` expose that distinction.
 - `backend.chains[].chain` — **which** chain the entry describes: on a
   Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (a hand-written phasing
   modulator on transmit, whose config is a different struct entirely). A backend
@@ -1273,7 +1276,8 @@ with, which is a different question from everything else here (#5401).
   proves:
   - `channel-config` — what the channel was **opened** with, after any clamping
     or refusal. One level below the model and one above a query into WDSP
-    itself.
+    itself. Within this entry, `wdspNotchCount` and `appliedNoiseBlanker`
+    are exceptions: they query WDSP directly.
   - `dsp-config` — the DSP's **own state**.
   - `not-configured` — a chain that **exists with nothing behind it**. Reported
     present-but-unconfigured rather than omitted, and deliberately **without**
