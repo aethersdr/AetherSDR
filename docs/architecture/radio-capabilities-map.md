@@ -35,7 +35,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
-| `canCreateSlices` | ✅ | ❌ | ❌ | `RadioModel::addSliceOnPan` | Independent ordinary RX slice creation on an existing pan, through the model API (Flex keeps its command-plane adapter). Capacity remains `maxSlices`; paired/fixed receiver topologies do not gain independent creation. Icom, ANAN and RTL explicitly declare false; RTL remains one slice in RFC #5468 P01. Sim's existing command-plane behavior is retained. |
+| `canCreateSlices` | ✅ | ❌ | ❌ | `RadioModel::addSliceOnPan`, only without a command plane | Admission to the neutral backend's independent slice-creation hook on an existing pan. Flex and Sim use their existing command adapters without consulting this field, so the values shown are declarations, not a UI availability rule; do not gate +RX on this field alone. Capacity remains `maxSlices`; paired/fixed receiver topologies do not gain independent creation. Icom, ANAN and RTL explicitly declare false; RTL remains one slice in RFC #5468 P01. |
 | `family` | `"flex"` | `"hl2"` | `"sim"` | `MainWindow::rfGainSettingsKey` | Scopes the persisted RF-gain key per family |
 | `model` | from provider | `"Hermes-Lite 2"` | `"AetherSDR Demo"` | `FlexBackend::capabilities` | Key into the ModelCapabilities table |
 | `manufacturer` | `"FlexRadio"` | `"Hermes-Lite"` | `"AetherSDR"` | `MainWindow::refreshRadioIdentityLabels` | Status-bar make row ABOVE the model, shown only when the model string does not already carry the brand (`FLEX-8400M` does, `IC-705` does not). Display only — nothing branches on it. Icom: `"Icom"` |

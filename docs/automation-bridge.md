@@ -1458,7 +1458,7 @@ re-poll `get slices`.
 
 | `action` | `value` | effect |
 |---|---|---|
-| `add` | optional `<mhz>` | create a slice (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant) |
+| `add` | optional finite positive `<mhz>` | request a slice through RadioModel (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant). Omit the value for default placement; an explicit malformed, non-finite or non-positive value is an error, never a default-frequency fallback |
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
@@ -1476,6 +1476,18 @@ re-poll `get slices`.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+Ordinary `add`/`remove` requests report acceptance, not completion. An accepted
+request can still be pending; re-poll `get slices` for authoritative ownership.
+Explicit invalid `add` values return `"slice add requires a finite positive
+frequency in MHz"` after the capacity pre-check. A RadioModel refusal returns
+`"refused: radio did not accept slice creation"` or
+`"refused: radio did not accept slice removal"`; this includes unsupported
+backend operations and does not imply that a wire command was sent. The latter
+replaces the earlier non-Flex `"not supported on this radio (no Flex command
+plane)"` response, so scripts matching that text must update. Removal retains
+`"refused: cannot remove the last slice"` and `"no slice with id <sliceId>"`
+for the local last-slice and unknown-ID checks, respectively.
 
 ### `notch`
 

@@ -5271,7 +5271,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // onSliceRemoved clears center lock only after authoritative removal.
         // A refused or pending request must leave the current receiver intact.
         if (!m_radioModel.removeSlice(sliceId)) {
-            statusBar()->showMessage(tr("Radio did not accept slice removal"), 4000);
+            statusBar()->showMessage(tr("Cannot remove this slice"), 4000);
         }
     });
     connect(sw, &SpectrumWidget::sliceCreateRequested,
@@ -5688,7 +5688,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         // onSliceRemoved clears center lock only after authoritative removal.
         // A refused or pending request must leave the current receiver intact.
         if (!m_radioModel.removeSlice(sliceId)) {
-            statusBar()->showMessage(tr("Radio did not accept slice removal"), 4000);
+            statusBar()->showMessage(tr("Cannot remove this slice"), 4000);
         }
     });
     connect(w, &VfoWidget::stepTuneRequested, this, [this, sliceId](double mhz) {

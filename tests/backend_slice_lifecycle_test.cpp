@@ -30,6 +30,18 @@ public:
     {
         radio.m_connection = connection;
     }
+    static void setSessionSerials(RadioModel& radio, const QString& connected,
+                                 const QString& nextTarget)
+    {
+        radio.m_connectedSessionSerial = connected;
+        radio.m_lastInfo.serial = nextTarget;
+    }
+    static void completeDisconnect(RadioModel& radio)
+    {
+        // Inject the receipt edge into the real handler. setBackendForTest
+        // installs receiver bindings, not setupBackend's connection wiring.
+        radio.onDisconnected();
+    }
 };
 class AutomationServerTestAccess
 {
@@ -61,13 +73,15 @@ public:
     RadioCapabilities caps;
     int frequencyCalls = 0;
     int modeCalls = 0;
+    bool connected = true;
+    int disconnectCalls = 0;
     // Uninitialized RadioConnection has no socket, timer, thread or peer. Its
     // presence models the exact ownership boundary used by Flex and hybrid Sim.
     std::unique_ptr<RadioConnection> commandPlane;
     RadioCapabilities capabilities() const override { return caps; }
     void connectRadio(const RadioConnectRequest&) override {}
-    void disconnectRadio() override {}
-    bool isConnected() const override { return true; }
+    void disconnectRadio() override { connected = false; ++disconnectCalls; }
+    bool isConnected() const override { return connected; }
     void setSliceFrequency(int, double) override { ++frequencyCalls; }
     void setSliceMode(int, const QString&) override { ++modeCalls; }
     void setSliceFilter(int, int, int) override {}
@@ -152,6 +166,11 @@ void testNeutralLifecycle()
     QSignalSpy removed(&radio, &RadioModel::sliceRemoved);
     QSignalSpy dropped(&radio, &RadioModel::commandDropped);
     QSignalSpy failed(&radio, &RadioModel::sliceLifecycleFailed);
+    int lifecycleCommands = 0;
+    radio.setSliceLifecycleCommandSinkForTest([&](const QString&, std::function<void(int, const QString&)>) {
+        ++lifecycleCommands;
+        return true;
+    });
     bool completeAtNotification = false;
     QObject::connect(&radio, &RadioModel::sliceAdded, &radio, [&](SliceModel* slice) {
         completeAtNotification = slice->panId() == pan && slice->frequency() == 14.234567
@@ -190,11 +209,24 @@ void testNeutralLifecycle()
 
     backend->acceptCreate = false;
     check(!radio.addSliceOnPan(pan, 14.22), "backend creation refusal propagates");
-    check(radio.slices().size() == 1 && dropped.isEmpty(), "creation refusal has no state or Flex fallback");
+    check(failed.size() == 1 && failed.at(0).at(0).toString() == QLatin1String("create")
+              && failed.at(0).at(1).toInt() == -1 && !failed.at(0).at(2).toString().isEmpty(),
+          "backend creation refusal tells the operator through the lifecycle failure signal");
     backend->caps.canCreateSlices = false;
     const int callsBeforeUnsupported = backend->createCalls;
     check(!radio.addSliceOnPan(pan, 14.23) && backend->createCalls == callsBeforeUnsupported,
           "capacity alone cannot grant independent slice creation");
+    check(failed.size() == 2 && failed.at(1).at(0).toString() == QLatin1String("create")
+              && failed.at(1).at(1).toInt() == -1 && !failed.at(1).at(2).toString().isEmpty(),
+          "unsupported creation also tells the operator without calling the backend hook");
+    check(radio.slices().size() == 1 && radio.slice(0) == original
+              && original->frequency() == 14.26 && original->mode() == QLatin1String("LSB")
+              && radio.panadapters().size() == 1 && original->panId() == pan
+              && added.size() == 1 && removed.isEmpty(),
+          "creation refusals preserve receiver state and ownership");
+    check(lifecycleCommands == 0 && dropped.isEmpty(),
+          "creation refusal diagnostic does not fall back to a Flex command");
+    failed.clear();
     backend->caps.canCreateSlices = true;
     backend->acceptCreate = true;
     check(radio.addSliceOnPan(pan, 14.24), "pending creation is accepted before a later failure");
@@ -266,6 +298,95 @@ void testReplacement()
           "replacement cannot inherit the previous backend's creation capability");
     emit current->sliceChanged(0, fullDelta(QStringLiteral("third-pan")));
     check(radio.slices().size() == 1, "same-family replacement can publish fresh state");
+    // Complete RTL -> another family -> RTL through the same production teardown
+    // and receiver bindings. Reusing the first RTL pan ID must not retain state.
+    current = install(radio, QStringLiteral("rtl"));
+    check(radio.slices().isEmpty() && radio.panadapters().isEmpty(),
+          "returning to RTL starts without the intervening family's models");
+    const QString rtlPan = publishPan(radio, *current, QStringLiteral("old-pan"));
+    emit current->sliceChanged(0, fullDelta(QStringLiteral("old-pan"), 14.5));
+    check(radio.addSliceOnPan(rtlPan, 14.6) && current->createCalls == 1
+              && current->requestedPan == QLatin1String("old-pan")
+              && std::abs(current->requestedHz - 14600000.0) < 0.001,
+          "returning RTL uses its own creation capability and fresh pan mapping");
+    SliceModel* returned = radio.slice(0);
+    returned->setFrequency(14.55);
+    check(current->frequencyCalls == 1 && radio.slices().size() == 1
+              && returned->panId() == rtlPan,
+          "returning RTL has one intent binding and accepted creation remains pending");
+}
+
+void testDisconnectAndReclaim()
+{
+    for (const bool sameRadio : {true, false}) {
+        RadioModel radio;
+        LifecycleBackend* backend = install(radio);
+        const QString opaquePan = QStringLiteral("disconnect-pan");
+        const QString pan = publishPan(radio, *backend, opaquePan);
+        emit backend->sliceChanged(0, fullDelta(opaquePan, 14.2));
+        emit backend->sliceChanged(1, fullDelta(opaquePan, 14.3));
+        SliceModel* original = radio.slice(0);
+        SliceModel* sibling = radio.slice(1);
+        PanadapterModel* originalPan = radio.panadapter(pan);
+        QSignalSpy added(&radio, &RadioModel::sliceAdded);
+        QSignalSpy removed(&radio, &RadioModel::sliceRemoved);
+        QSignalSpy failed(&radio, &RadioModel::sliceLifecycleFailed);
+        QSignalSpy connectionState(&radio, &RadioModel::connectionStateChanged);
+        QSignalSpy occupancy(&radio, &RadioModel::slotOccupancyChanged);
+        check(radio.addSliceOnPan(pan, 14.4) && radio.removeSlice(1)
+                  && radio.slices().size() == 2,
+              "disconnect fixture starts with accepted, unconfirmed create and removal");
+
+        // Same-family radio swaps can replace the target before the old backend
+        // reports disconnect. The connected serial, not that target, owns the
+        // surviving models. Both serials are inputs to the production handler.
+        RadioModelSliceLifecycleTestAccess::setSessionSerials(
+            radio, QStringLiteral("rtl-device-A"),
+            sameRadio ? QStringLiteral("rtl-device-A") : QStringLiteral("rtl-device-B"));
+        radio.disconnectFromRadio();
+        check(backend->disconnectCalls == 1 && !radio.isConnected(),
+              "ordinary disconnect dispatches once through the neutral backend");
+        RadioModelSliceLifecycleTestAccess::completeDisconnect(radio);
+        check(connectionState.size() == 1 && !connectionState.at(0).at(0).toBool(),
+              "production disconnect handler publishes the disconnected state");
+        check(radio.slice(0) == original && radio.slice(1) == sibling
+                  && radio.panadapter(pan) == originalPan && removed.isEmpty()
+                  && added.isEmpty() && failed.isEmpty(),
+              "disconnect preserves UI objects without completing pending slice operations");
+
+        // Inject only the next connected state and invoke the existing production
+        // staging seam. No synthetic transport or duplicate lifecycle wiring.
+        backend->connected = true;
+        radio.stageSessionModelsForReconnectForTest();
+        check(radio.slices().isEmpty() && radio.panadapters().isEmpty(),
+              "reconnect staging withdraws prior-session models from live ownership");
+        if (sameRadio) {
+            check(removed.isEmpty() && !originalPan->centerKnown(),
+                  "same-radio staging preserves reclaim candidates but resets center authority");
+            emit backend->panCenterBandwidthChanged(opaquePan, 14.25, 0.1);
+            emit backend->sliceChanged(0, fullDelta(opaquePan, 14.25));
+            emit backend->sliceChanged(1, fullDelta(opaquePan, 14.35));
+            check(radio.slice(0) == original && radio.slice(1) == sibling
+                      && radio.panadapter(pan) == originalPan && added.isEmpty()
+                      && removed.isEmpty() && occupancy.size() == 2,
+                  "same-radio normalized state reclaims objects without duplicate slice ownership");
+            check(original->frequency() == 14.25 && sibling->frequency() == 14.35
+                      && originalPan->centerKnown() && originalPan->centerMhz() == 14.25,
+                  "reclaim refreshes slice and pan state from the new session");
+            original->setFrequency(14.26);
+            check(backend->frequencyCalls == 1 && backend->createCalls == 1
+                      && backend->removeCalls == 1,
+                  "reclaim retains one intent binding and never retries pending lifecycle requests");
+        } else {
+            check(removed.size() == 2 && occupancy.size() == 2,
+                  "changed radio serial prunes old ownership after production disconnect capture");
+            emit backend->panCenterBandwidthChanged(opaquePan, 14.25, 0.1);
+            emit backend->sliceChanged(0, fullDelta(opaquePan, 14.25));
+            check(radio.slice(0) != original && radio.panadapter(pan) != originalPan
+                      && added.size() == 1 && radio.slices().size() == 1,
+                  "same-family different-radio state cannot reclaim the old device's objects");
+        }
+    }
 }
 
 void testCommandAdapter()
@@ -369,6 +490,7 @@ int main(int argc, char** argv)
     check(profile.isValid(), "isolated settings profile is available");
     testNeutralLifecycle();
     testReplacement();
+    testDisconnectAndReclaim();
     testCommandAdapter();
     testBridgeAndDefaults();
     return failures == 0 ? 0 : 1;

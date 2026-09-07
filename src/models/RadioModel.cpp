@@ -5107,8 +5107,17 @@ bool RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
     if (!hasCommandPlane()) {
         // Refusal is terminal. Paired/fixed receivers do not acquire an
         // independent lifecycle just because maxSlices happens to exceed one.
-        return m_backend && backendCapabilities().canCreateSlices
-            && m_backend->createSlice(backendPanIdFor(panId), frequencyHz);
+        if (m_backend && backendCapabilities().canCreateSlices
+            && m_backend->createSlice(backendPanIdFor(panId), frequencyHz)) {
+            return true;
+        }
+        // This refusal replaces sendCmd's loud commandDropped path (#5263).
+        // GUI callers may discard the result; the existing lifecycle signal
+        // still tells the operator that the request did not create a receiver.
+        const QString reason = tr("this radio cannot create a slice here");
+        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: backend declined" << panId << reason;
+        emit sliceLifecycleFailed(QStringLiteral("create"), -1, reason);
+        return false;
     }
 
     const QString freq = QString::number(freqMhz, 'f', 6);
