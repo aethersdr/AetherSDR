@@ -1000,6 +1000,7 @@ set(GUI_SOURCES
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp
+    src/gui/map/CityLightsSource.cpp src/gui/map/CityLightsItem.cpp
     src/gui/map/MapTerminatorItem.cpp
     src/gui/map/WeatherRadarPlaybackItem.cpp
     src/gui/map/WeatherRadarSource.cpp

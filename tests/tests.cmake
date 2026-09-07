@@ -1199,6 +1199,15 @@ set_tests_properties(map_image_cache_test PROPERTIES
 
 # NOAA radar URL generation is bounded, canonical across wrapped world copies,
 # and fixed to the public HTTPS host. This test is pure and never uses network.
+# Injected public HTTP replies; this test binds no sockets and contacts no provider.
+add_executable(city_lights_source_test tests/city_lights_source_test.cpp
+    src/gui/map/CityLightsSource.cpp)
+target_include_directories(city_lights_source_test PRIVATE src)
+target_link_libraries(city_lights_source_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
+add_test(NAME city_lights_source_test COMMAND city_lights_source_test)
+set_tests_properties(city_lights_source_test PROPERTIES TIMEOUT 30)
+
 add_executable(weather_radar_source_test
     tests/weather_radar_source_test.cpp
     src/gui/map/WeatherRadarSource.cpp)
@@ -1229,6 +1238,7 @@ set_tests_properties(weather_radar_wrap_render_test PROPERTIES
 # Proves delayed/out-of-order downloads, view cache reuse, and retained geometry.
 add_executable(weather_radar_loading_test
     tests/weather_radar_loading_test.cpp
+    src/gui/map/CityLightsSource.cpp src/gui/map/CityLightsItem.cpp
     src/gui/map/MapDisplayWidget.cpp src/gui/map/MapView.cpp src/gui/map/GlobeMapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp src/gui/map/MapTerminatorItem.cpp

@@ -24,6 +24,7 @@ class MapMarkerItem;
 class MapMarkerBatchItem;
 class MapPathBatchItem;
 class MapTerminatorItem;
+class CityLightsItem;
 class WeatherRadarPlaybackItem;
 class WeatherRadarTileLayer;
 
@@ -93,6 +94,9 @@ public:
 
     void setDayNightTerminatorVisible(bool visible);
     bool dayNightTerminatorVisible() const;
+    void setCityLightsVisible(bool visible);
+    void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setCityLightsBrightness(int percent);
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const;
     int pendingWeatherRadarRequests() const;
@@ -119,6 +123,7 @@ public:
     QGVMap* map() const { return m_map; }
 
 signals:
+    void imageOverlayViewChanged();
     void markerClicked(const MapView::Marker& marker);
     void weatherRadarFrameLoaded(const QDateTime& frameTime);
     void weatherRadarPlaybackPresented(quint64 presentationSequence);
@@ -175,6 +180,9 @@ private:
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
     QGVLayer* m_terminatorLayer{nullptr};
+    void updateMapAttribution();
+    CityLightsItem* m_cityLightsItem{nullptr};
+    bool m_cityLightsVisible{false};
     QGVLayer* m_weatherRadarPlaybackLayer{nullptr};
     WeatherRadarTileLayer* m_weatherRadarLayer{nullptr};
     WeatherRadarTileLayer* m_weatherRadarNextLayer{nullptr};

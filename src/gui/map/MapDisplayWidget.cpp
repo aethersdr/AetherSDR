@@ -1,4 +1,5 @@
 #include "MapDisplayWidget.h"
+#include "CityLightsSource.h"
 #include "GlobeMapView.h"
 #include "WeatherRadarPlaybackTimeline.h"
 #include "WeatherRadarTexture.h"
@@ -58,6 +59,13 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     , m_flatView(new MapView(
           this, MapView::ViewportMode::OpenGlIfAvailable))
 {
+    m_cityLightsSource = new CityLightsSource(this);
+    connect(m_cityLightsSource, &CityLightsSource::imageChanged,
+            this, &MapDisplayWidget::presentCityLights);
+    connect(m_cityLightsSource, &CityLightsSource::statusChanged,
+            this, &MapDisplayWidget::cityLightsStatusChanged);
+    connect(m_flatView, &MapView::imageOverlayViewChanged,
+            this, &MapDisplayWidget::refreshCityLightsView);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_flatView);
     connect(m_flatView, &MapView::markerClicked,
@@ -239,6 +247,7 @@ bool MapDisplayWidget::pathsVisible() const
 void MapDisplayWidget::setDayNightTerminatorVisible(bool visible)
 {
     m_terminatorVisible = visible;
+    m_cityLightsSource->setNightOnly(visible);
     if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setDayNightTerminatorVisible(visible);
         m_flatViewDirty = true;
@@ -251,6 +260,55 @@ void MapDisplayWidget::setDayNightTerminatorVisible(bool visible)
 bool MapDisplayWidget::dayNightTerminatorVisible() const
 {
     return m_terminatorVisible;
+}
+
+void MapDisplayWidget::setCityLightsVisible(bool visible)
+{
+    m_cityLightsVisible = visible;
+    m_cityLightsSource->setNightOnly(m_terminatorVisible);
+    m_cityLightsSource->setEnabled(visible && isVisible());
+    presentCityLights();
+    refreshCityLightsView();
+}
+
+void MapDisplayWidget::setCityLightsBrightness(int percent)
+{
+    m_cityLightsBrightness = std::clamp(percent, 0, 100);
+    presentCityLights();
+}
+
+void MapDisplayWidget::presentCityLights()
+{
+    // Keep pixels with the bounds of the completed render, including while a
+    // different viewport image is downloading or its twilight mask is pending.
+    m_flatView->setCityLightsVisible(m_cityLightsVisible);
+    m_flatView->setCityLightsBrightness(m_cityLightsBrightness);
+    m_flatView->setCityLightsImage(m_cityLightsSource->image(), m_cityLightsSource->bounds());
+    if (m_globeView != nullptr) {
+        m_globeView->setCityLightsVisible(m_cityLightsVisible);
+        m_globeView->setCityLightsBrightness(m_cityLightsBrightness);
+        m_globeView->setCityLightsImage(m_cityLightsSource->image(), m_cityLightsSource->bounds());
+    }
+}
+
+void MapDisplayWidget::refreshCityLightsView()
+{
+    if (m_cityLightsVisible && isVisible()) {
+        m_cityLightsSource->setView(weatherRadarCurrentView());
+    }
+}
+
+void MapDisplayWidget::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    m_cityLightsSource->setEnabled(m_cityLightsVisible);
+    refreshCityLightsView();
+}
+
+void MapDisplayWidget::hideEvent(QHideEvent* event)
+{
+    QWidget::hideEvent(event);
+    m_cityLightsSource->setEnabled(false);
 }
 
 void MapDisplayWidget::setWeatherRadarVisible(bool visible)
@@ -1809,6 +1867,8 @@ void MapDisplayWidget::ensureGlobeView()
             this, &MapDisplayWidget::markerClicked);
     connect(m_globeView, &GlobeMapView::rendererUnavailable,
             this, &MapDisplayWidget::handleGlobeUnavailable);
+    connect(m_globeView, &GlobeMapView::imageOverlayViewChanged,
+            this, &MapDisplayWidget::refreshCityLightsView);
     connect(m_globeView, &GlobeMapView::weatherRadarFrameLoaded,
             this, [this](const QDateTime& frameTime) {
                 if (!m_weatherRadarPlaybackClockPending
@@ -1932,6 +1992,8 @@ void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
     if (m_weatherRadarPlaybackRequested && m_weatherRadarFrames.size() >= 2) {
         m_weatherRadarRebufferTimer->start(350);
     }
+    presentCityLights();
+    refreshCityLightsView();
     emit projectionModeChanged(mode);
 }
 

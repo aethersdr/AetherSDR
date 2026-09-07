@@ -374,6 +374,17 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         pskSettings().value("showTerminator").toBool(true));
     topBar->addWidget(m_terminatorCheck);
 
+    m_cityLightsCheck = new QCheckBox(tr("City lights"), reportsBox);
+    m_cityLightsCheck->setObjectName(QStringLiteral("pskReporterCityLights"));
+    m_cityLightsCheck->setAccessibleName(tr("Show NASA city lights"));
+    m_cityLightsCheck->setAccessibleDescription(tr(
+        "Historical NASA/GSFC night lights from 2016, not current activity. "
+        "With Day/night enabled, lights fade in during twilight. "
+        "Otherwise lights are visible worldwide."));
+    m_cityLightsCheck->setToolTip(m_cityLightsCheck->accessibleDescription());
+    m_cityLightsCheck->setChecked(pskSettings().value("showCityLights").toBool(false));
+    topBar->addWidget(m_cityLightsCheck);
+
     m_weatherRadarCheck = new QCheckBox(tr("Weather radar"), reportsBox);
     m_weatherRadarCheck->setObjectName(
         QStringLiteral("pskReporterWeatherRadar"));
@@ -461,6 +472,42 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     topBar->addWidget(m_weatherRadarFrameLabel);
     topBar->addStretch(1);
     reportsLayout->addLayout(topBar);
+    auto* lightsRow = new QHBoxLayout();
+    auto* lightsLabel = new QLabel(tr("City lights brightness:"), reportsBox);
+    m_cityLightsBrightness = new GuardedSlider(Qt::Horizontal, reportsBox);
+    m_cityLightsBrightness->setObjectName(QStringLiteral("pskReporterCityLightsBrightness"));
+    m_cityLightsBrightness->setAccessibleName(tr("City lights brightness"));
+    m_cityLightsBrightness->setAccessibleDescription(tr("Overlay intensity from 0 to 100 percent."));
+    m_cityLightsBrightness->setToolTip(m_cityLightsBrightness->accessibleDescription());
+    m_cityLightsBrightness->setRange(0, 100);
+    m_cityLightsBrightness->setFixedWidth(120);
+    m_cityLightsBrightness->setFocusPolicy(Qt::StrongFocus);
+    m_cityLightsBrightness->setValue(std::clamp(
+        pskSettings().value("cityLightsBrightness").toInt(70), 0, 100));
+    m_cityLightsBrightness->setDragValueFormatter([](int value) {
+        return QStringLiteral("%1%").arg(value);
+    });
+    applyPrimarySliderStyle(m_cityLightsBrightness);
+    lightsLabel->setBuddy(m_cityLightsBrightness);
+    auto* lightsValue = new QLabel(QStringLiteral("%1%").arg(m_cityLightsBrightness->value()), reportsBox);
+    lightsValue->setMinimumWidth(36);
+    m_cityLightsStatus = new QLabel(reportsBox);
+    m_cityLightsStatus->setObjectName(QStringLiteral("pskReporterCityLightsStatus"));
+    m_cityLightsStatus->setAccessibleName(tr("City lights loading status"));
+    lightsRow->addWidget(lightsLabel);
+    lightsRow->addWidget(m_cityLightsBrightness);
+    lightsRow->addWidget(lightsValue);
+    lightsRow->addWidget(m_cityLightsStatus);
+    lightsRow->addStretch();
+    reportsLayout->addLayout(lightsRow);
+    for (QWidget* widget : QList<QWidget*>{lightsLabel, m_cityLightsBrightness,
+                                          lightsValue, m_cityLightsStatus}) {
+        widget->setVisible(m_cityLightsCheck->isChecked());
+        connect(m_cityLightsCheck, &QCheckBox::toggled, widget, &QWidget::setVisible);
+    }
+    connect(m_cityLightsBrightness, &QSlider::valueChanged, lightsValue, [lightsValue](int value) {
+        lightsValue->setText(QStringLiteral("%1%").arg(value));
+    });
     root->addWidget(reportsBox);
 
     auto* beaconBox = new QGroupBox(tr("WSPR beacon"), bodyWidget());
@@ -615,6 +662,18 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         : MapDisplayWidget::ProjectionMode::Flat);
     m_mapView->setPathsVisible(m_pathsCheck->isChecked());
     m_mapView->setDayNightTerminatorVisible(m_terminatorCheck->isChecked());
+    m_mapView->setCityLightsBrightness(m_cityLightsBrightness->value());
+    m_mapView->setCityLightsVisible(m_cityLightsCheck->isChecked());
+    connect(m_cityLightsCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showCityLights", on);
+        m_mapView->setCityLightsVisible(on);
+    });
+    connect(m_cityLightsBrightness, &QSlider::valueChanged, this, [this](int percent) {
+        writePskSetting("cityLightsBrightness", percent);
+        m_mapView->setCityLightsBrightness(percent);
+    });
+    connect(m_mapView, &MapDisplayWidget::cityLightsStatusChanged,
+            m_cityLightsStatus, &QLabel::setText);
     {
         QVector<QPair<QString, QColor>> legend;
         for (const char* m : { "FT8", "FT4", "WSPR", "JS8", "CW", "PSK",

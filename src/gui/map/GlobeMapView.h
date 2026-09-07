@@ -59,6 +59,9 @@ public:
     bool pathsVisible() const { return m_pathsVisible; }
     void setDayNightTerminatorVisible(bool visible);
     bool dayNightTerminatorVisible() const { return m_terminatorVisible; }
+    void setCityLightsVisible(bool visible);
+    void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setCityLightsBrightness(int percent);
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const { return m_weatherRadarVisible; }
     int pendingWeatherRadarRequests() const;
@@ -78,6 +81,7 @@ public:
     void setLegend(const QVector<QPair<QString, QColor>>& entries);
 
 signals:
+    void imageOverlayViewChanged();
     void markerClicked(const GlobeMapView::Marker& marker);
     void rendererUnavailable(const QString& reason);
     void weatherRadarFrameLoaded(const QDateTime& frameTime);
@@ -150,6 +154,15 @@ private:
     void requestNextTiles();
     void cancelTileRequests();
     void cleanupOpenGlResources();
+    void drawCityLights(const QMatrix4x4& matrix);
+    void updateMapAttribution();
+    QImage m_cityLightsImage;
+    QRectF m_cityLightsBounds;
+    std::unique_ptr<QOpenGLTexture> m_cityLightsTexture;
+    std::unique_ptr<QOpenGLShaderProgram> m_cityLightsProgram;
+    bool m_cityLightsVisible{false};
+    bool m_cityLightsDirty{false};
+    float m_cityLightsOpacity{0.7F};
     void reportRendererUnavailable(const QString& reason,
                                    const QString& detail = {});
     void scheduleAtlasUpload();

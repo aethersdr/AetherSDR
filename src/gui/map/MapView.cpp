@@ -1,4 +1,5 @@
 #include "MapView.h"
+#include "CityLightsItem.h"
 #include "MapMarkerBatchItem.h"
 #include "MapMarkerItem.h"
 #include "MapHoverPathSelection.h"
@@ -151,6 +152,14 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     m_map->geoView()->setHorizontalWrapEnabled(true);
     m_map->geoView()->setVerticalBoundsEnabled(true);
 
+    auto* lightsLayer = new QGVLayer();
+    lightsLayer->setName(QStringLiteral("NASA city lights"));
+    lightsLayer->setZValue(-32050); // Above night shading, below weather and reports.
+    m_map->addItem(lightsLayer);
+    m_cityLightsItem = new CityLightsItem();
+    lightsLayer->addItem(m_cityLightsItem);
+    m_cityLightsItem->setVisible(false);
+
     m_weatherRadarLayer = new WeatherRadarTileLayer();
     m_weatherRadarLayer->setEnabled(false);
     m_weatherRadarLayer->setZValue(-32000);
@@ -220,6 +229,7 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
             &WeatherRadarPlaybackItem::framePreloaded,
             this, &MapView::weatherRadarPlaybackFramePreloaded);
     connect(m_map, &QGVMap::areaChanged, this, [this] {
+        emit imageOverlayViewChanged();
         if (m_weatherRadarPlaybackActive) {
             emit weatherRadarPlaybackInvalidated();
         }
@@ -563,9 +573,7 @@ void MapView::setWeatherRadarVisible(bool visible)
         m_weatherRadarNextLayer->setOpacity(0.0);
         m_pendingWeatherRadarFrameId.clear();
     }
-    m_attribution->setText(visible
-        ? QStringLiteral("© OpenStreetMap contributors · Radar: NOAA/NWS")
-        : QStringLiteral("© OpenStreetMap contributors"));
+    updateMapAttribution();
     m_attribution->adjustSize();
     layoutOverlayButtons();
     if (visible) {
@@ -716,6 +724,37 @@ void MapView::handleWeatherRadarFrameReady(
     m_weatherRadarTransition->stop();
     m_weatherRadarTransition->setCurrentTime(0);
     m_weatherRadarTransition->start();
+}
+
+void MapView::setCityLightsVisible(bool visible)
+{
+    m_cityLightsVisible = visible;
+    m_cityLightsItem->setVisible(visible);
+    updateMapAttribution();
+}
+
+void MapView::setCityLightsImage(const QImage& image, const QRectF& bounds)
+{
+    m_cityLightsItem->setImage(image, bounds);
+}
+
+void MapView::setCityLightsBrightness(int percent)
+{
+    m_cityLightsItem->setOpacity(std::clamp(percent, 0, 100) / 100.0);
+}
+
+void MapView::updateMapAttribution()
+{
+    QString text = QStringLiteral("© OpenStreetMap contributors");
+    if (m_cityLightsVisible) {
+        text += QStringLiteral(" · Lights: NASA/GSFC, 2016");
+    }
+    if (m_weatherRadarEnabled) {
+        text += QStringLiteral(" · Radar: NOAA/NWS");
+    }
+    m_attribution->setText(text);
+    m_attribution->adjustSize();
+    layoutOverlayButtons();
 }
 
 void MapView::updateAttributionStyle()
@@ -1039,6 +1078,7 @@ void MapView::rebuildWorldCopies()
 void MapView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    emit imageOverlayViewChanged();
     clampMinZoomToViewport();
     layoutOverlayButtons();
     if (m_weatherRadarPlaybackActive) {

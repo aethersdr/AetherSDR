@@ -90,6 +90,9 @@ private:
     QCheckBox*          m_allCallsignsCheck{nullptr};
     QCheckBox*          m_activeMonitorsCheck{nullptr};
     QCheckBox*          m_terminatorCheck{nullptr};
+    QCheckBox*          m_cityLightsCheck{nullptr};
+    GuardedSlider*      m_cityLightsBrightness{nullptr};
+    QLabel*            m_cityLightsStatus{nullptr};
     QCheckBox*          m_weatherRadarCheck{nullptr};
     QToolButton*        m_weatherRadarPlayButton{nullptr};
     QComboBox*          m_weatherRadarHistoryCombo{nullptr};
