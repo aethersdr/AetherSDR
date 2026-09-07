@@ -49,39 +49,35 @@ public:
         double filterLowHz = 300.0;
         double filterHighHz = 2700.0;
 
-        // Automatic level control. Speech arrives 20-30 dB below the level
-        // needed to modulate fully, so without this a normal speaking voice
-        // produces almost no RF — measured on hardware: audio at -10 dBFS gave
-        // 1226 counts of forward power, at -30 dBFS gave 47, and speech sits
-        // around -32 dBFS. A real transceiver closes that gap with mic gain,
-        // compression and ALC; this is the ALC.
+        // Automatic level control, PROTECTION ONLY: it may reduce gain, never
+        // add it. The ceiling is unity and there is no field that can raise it.
+        //
+        // That is what the name has always meant elsewhere. create_txa() in
+        // third_party/wdsp/upstream/TXA.c builds the stage it calls `alc` with
+        // run=1 and max_gain=1.0 — always on, and structurally incapable of
+        // adding gain — and puts the gain that CAN be added in a separate
+        // `leveler`, built run=0 (off by default) with max_gain=1.778, which is
+        // +5 dB. Two stages, two jobs, and only one of them is an ALC.
+        //
+        // This stage was previously both, with makeup up to 40 dB and an
+        // absolute hold threshold below which it stopped lifting. The measured
+        // consequence was that 20.5 dB of speech-to-floor separation went in
+        // and 0.33 dB came out: the hold sat below the room, so the room was
+        // lifted level with the speech. The gap it was closing is real —
+        // measured on hardware, audio at -10 dBFS gave 1226 counts of forward
+        // power, at -30 dBFS gave 47, and speech sits around -32 dBFS — but a
+        // level-dependent makeup stage is the wrong instrument for it. The
+        // operator's mic gain closes it instead, which is why
+        // Hl2TxLevelPolicy.h's slider now reaches +40 dB rather than +20.
+        //
+        // What is left here is the half that was never the bug: reduction, on a
+        // fast attack and a slow release, so an over-level input is limited
+        // smoothly rather than flat-topped by the hard clamp behind it. An ALC
+        // that cannot pull down on a transient is a splatter generator.
         bool alcEnabled = true;
         double alcTargetPeak = 0.85;   // leave headroom below clipping
-        double alcMaxGainDb = 40.0;    // do not amplify a silent room forever
         double alcAttackSec = 0.005;   // catch a syllable's onset
         double alcReleaseSec = 0.500;  // slow enough not to pump between words
-
-        // Below this input peak the ALC HOLDS its gain instead of continuing to
-        // raise it. This is what stops the stage behaving like a second
-        // compressor once the operator has an explicit one.
-        //
-        // Without it, every pause between words is a signal to keep increasing
-        // gain — up to alcMaxGainDb, which is 40 dB — so room noise, mic hiss
-        // and the shack fan are lifted to the same target peak as speech, and
-        // the next syllable arrives into a stage that has to attack 40 dB back
-        // down. That is audible as pumping, and it gets worse, not better, when
-        // the operator enables the speech processor: the compressor raises the
-        // average level, the ALC re-levels it away, and the two chase each
-        // other. Holding through pauses leaves the ALC doing the one job it is
-        // needed for — makeup gain for a quiet mic, without which speech at
-        // around -32 dBFS barely modulates — and stops it re-deciding that job
-        // during silence.
-        //
-        // NOT a gate: nothing is muted, and gain REDUCTION is never held off
-        // (see processAudioBlock), because an ALC that cannot pull down on a
-        // transient is a splatter generator. This only suppresses the *upward*
-        // move while the input is too quiet to be speech.
-        double alcHoldBelowDbfs = -45.0;
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
@@ -113,31 +109,34 @@ public slots:
     // TCI or DAX TX audio (WSJT-X, fldigi, the PipeWire bridge), where the
     // sender has already applied its own power/attenuation control.
     //
-    // THE CONTRACT IS ONE-SIDED, and its two halves are different claims:
+    // THE FLAG IS NOW INERT HERE, and saying so is the point of this comment.
     //
-    //   * The CLIENT owns its level upward. Nothing here adds gain it did not
-    //     ask for — the ALC's makeup half is ceilinged at unity for such
-    //     blocks. That half is #4796: an ALC exists to close the 20-30 dB gap
-    //     between a microphone and full modulation, and applied to a client
-    //     that sets its own level it does the opposite of what either party
-    //     wants — it normalizes the client's level control away above the hold
-    //     threshold, and freezes into a path-dependent gain below it.
-    //   * The MODULATOR owns its own ceiling. Reduction still applies, because
-    //     that half was never the bug. m_micGain reaches 10x (+20 dB), so a
-    //     full-scale client with the TX gain slider up arrives well inside the
-    //     hard clamp in processAudioBlock, and flat-topping an SSB modulator
-    //     input splatters across the band. That clamp is a backstop, not a
-    //     level control, and must not become the only thing standing between a
-    //     hot client and the air.
+    // It used to select the ALC's ceiling: unity for client-leveled audio,
+    // alcMaxGainDb (40 dB) for everything else. That asymmetry was #4796 — an
+    // ALC applied to a client that sets its own level normalized that level
+    // control away above the hold threshold and froze into a path-dependent
+    // gain below it. The remedy was to ceiling the client path at unity.
     //
-    // The hold (alcHoldBelowDbfs) belongs to the makeup half and so applies to
-    // the mic path only. Leaving it on this path would strand a client-leveled
-    // over at whatever reduction its loudest block called for — #4796
-    // mirrored. hl2_txdsp_test pins all three of these claims.
+    // The ceiling is now unity on EVERY path, so the two branches have
+    // converged and there is nothing left for the flag to select. What
+    // survives is the half that was never the bug and never depended on the
+    // flag: the MODULATOR owns its own ceiling. Reduction still applies to
+    // everything, because m_micGain reaches 100x (+40 dB, Hl2TxLevelPolicy.h)
+    // and a full-scale source with the TX gain slider up arrives far inside
+    // the hard clamp below — and flat-topping an SSB modulator input splatters
+    // across the band. That clamp is a backstop, not a level control, and must
+    // not become the only thing standing between a hot source and the air.
+    //
+    // The parameter is retained rather than removed because the signature is
+    // Q_INVOKABLE and crossed by a queued connection from
+    // Hl2Backend::submitTxAudio; dropping it is a clean follow-up, and doing
+    // it here would put a signature churn in the same diff as a level change.
+    // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
+    // that the convergence is a no-op on the TCI/DAX path.
     //
     // The engine's own generated audio (WSPR beacon, AX.25 modem tones, the
-    // RADE modem waveform) arrives with this false and keeps the whole ALC,
-    // matching its on-air level to date.
+    // RADE modem waveform) arrives with this false, and now sees exactly what
+    // a client-leveled block sees.
     void processAudioBlock(const std::vector<float>& mono, bool clientLeveled);
     // Drop anything buffered — on unkey, so the next transmission does not
     // start with the tail of the previous one.

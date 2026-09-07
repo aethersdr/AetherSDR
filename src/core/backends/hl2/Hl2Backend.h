@@ -810,16 +810,16 @@ private:
     int m_txFilterHighHz = 2700;
 
     // Loudest microphone peak of the current transmission, in dBFS, so setKeying()
-    // can tell at unkey whether the operator spent the whole of it below the ALC's
-    // hold threshold — the one case where holding the gain leaves them quiet
-    // rather than merely stopping the stage pumping. -140 is the floor
-    // Hl2TxDsp::micPeak reports for silence, and means "nothing measured yet".
+    // can tell at unkey whether the operator spent the whole of it well below the
+    // ALC's target — which, now that the ALC only reduces, means they went out
+    // that quiet on the air. -140 is the floor Hl2TxDsp::micPeak reports for
+    // silence, and means "nothing measured yet".
     float m_txMicPeakMaxDbfs = -140.0f;
 
     // True once the current transmission has carried client-leveled (TCI/DAX)
-    // audio, for which the ALC is bypassed (#4796). Gates the unkey "raise mic
-    // gain" diagnostic, whose advice only applies to the microphone path.
-    // Cleared on each key edge in setKeying().
+    // audio. Gates the unkey "raise mic gain" diagnostic, whose advice only
+    // applies to the microphone path — a TCI/DAX client's level is set in the
+    // client. Cleared on each key edge in setKeying().
     bool m_txAudioClientLeveled = false;
 
     // The passband to push at the modulator for `mode`: the operator's if they
@@ -953,18 +953,24 @@ private:
     // exact pair that was indistinguishable while this control was dead.
     double m_appliedMicGainLinear = std::numeric_limits<double>::quiet_NaN();
 
-    // The ALC hold threshold the modulator was CONFIGURED with, captured from
-    // the Config that connectRadio() hands it. Read by healthSnapshot() and by
-    // setKeying()'s "raise mic gain" diagnostic, both of which previously
-    // re-derived it from a default-constructed Config and so would have gone on
-    // reporting -45 dBFS the day connectRadio() set the field to anything else.
+    // The ALC target peak the modulator was CONFIGURED with, captured from the
+    // Config that connectRadio() hands it. Read by healthSnapshot() and by
+    // setKeying()'s "raise mic gain" diagnostic, both of which would otherwise
+    // re-derive it from a default-constructed Config and so go on reporting
+    // 0.85 the day connectRadio() sets the field to anything else.
+    //
+    // This mirror used to hold alcHoldBelowDbfs. That field is gone with the
+    // ALC's makeup half, and the target replaced it rather than the row being
+    // deleted: now that the stage only reduces, the pre-ALC mic peak IS the
+    // on-air level up to the target, so the target is what both readers have
+    // to compare a peak against.
     //
     // Seeded with Config's own default so a snapshot taken before the first
     // connect still reports what the modulator would use. The literal is spelt
     // out because Hl2TxDsp is only forward-declared in this header — a
     // static_assert in Hl2Backend.cpp pins it to Config's default, so the two
     // cannot drift silently.
-    double m_alcHoldBelowDbfs = -45.0;
+    double m_alcTargetPeak = 0.85;
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
