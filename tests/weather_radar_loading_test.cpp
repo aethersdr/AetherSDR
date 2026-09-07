@@ -236,6 +236,7 @@ private slots:
                            kRadarWorldWidth, kRadarWorldWidth);
         QImage lights(256, 256, QImage::Format_ARGB32_Premultiplied);
         lights.fill(Qt::green);
+        globe.setDayNightTerminatorVisible(false);
         globe.setCityLightsImage(lights, world);
         globe.setCityLightsBrightness(100);
         globe.setCityLightsVisible(true);
@@ -251,6 +252,40 @@ private slots:
         globe.setCityLightsVisible(true);
         globe.setCityLightsBrightness(100);
         QTRY_VERIFY(center().green() > 240);
+        lights.fill(qRgba(16, 8, 0, 16));
+        globe.setCityLightsImage(lights, world);
+        globe.setCityLightsFaintLights(0);
+        QTRY_VERIFY(center().red() >= 14 && center().red() <= 18);
+        const auto* resident = globe.m_cityLightsTexture.get();
+        const qint64 imageKey = globe.m_cityLightsImage.cacheKey();
+        for (int value : {50, 100, 0, 80}) {
+            globe.setCityLightsFaintLights(value);
+            QVERIFY(!globe.m_cityLightsDirty);
+            const int expected = qRound(255 * std::pow(16.0 / 255, 1.0 - 0.65 * value / 100));
+            QTRY_VERIFY(std::abs(center().red() - expected) <= 3);
+            QCOMPARE(globe.m_cityLightsTexture.get(), resident);
+            QCOMPARE(globe.m_cityLightsImage.cacheKey(), imageKey);
+        }
+        const auto* lightsProgram = globe.m_cityLightsProgram.get();
+        globe.makeCurrent();
+        globe.uploadAtlas();
+        const bool retainedTexture = globe.m_cityLightsTexture.get() == resident;
+        const bool retainedProgram = globe.m_cityLightsProgram.get() == lightsProgram;
+        globe.doneCurrent();
+        QVERIFY2(retainedTexture && retainedProgram,
+                 "Basemap uploads must preserve city-light GPU resources");
+        const int enhanced = qRound(255 * std::pow(16.0 / 255, 1.0 - 0.65 * 0.8));
+        QTRY_VERIFY(std::abs(center().red() - enhanced) <= 3);
+        lights.fill(Qt::white);
+        globe.setCityLightsImage(lights, world);
+        globe.setCityLightsWarmth(0);
+        QTRY_VERIFY(center().blue() > 250);
+        const auto* warmTexture = globe.m_cityLightsTexture.get();
+        globe.setCityLightsWarmth(25);
+        QTRY_VERIFY(std::abs(center().blue() - 230) <= 3);
+        QVERIFY(std::abs(center().green() - 245) <= 3);
+        QCOMPARE(globe.m_cityLightsTexture.get(), warmTexture);
+        QVERIFY(!globe.m_cityLightsDirty);
         globe.m_weatherRadarVisible = true;
         QImage rain(256, 256, WeatherRadarTexture::kImageFormat);
         rain.fill(Qt::blue);
@@ -1188,6 +1223,37 @@ private slots:
         QVERIFY(layer->tileUncoveredPath(child).contains(delivered));
         layer->deliver(QGV::GeoTilePos(1, QPoint(0, 0)));
         QVERIFY(layer->tileUncoveredPath(child).isEmpty());
+    }
+
+    void overlayLoadingMessagesCoexist()
+    {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        MapDisplayWidget map;
+        map.resize(800, 500);
+        map.show();
+        map.m_cityLightsVisible = true;
+        emit map.cityLightsStatusChanged(QStringLiteral("Loading city lights…"));
+        QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
+        QTRY_VERIFY(map.m_weatherRadarLoadingLabel->isVisible());
+        QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading city lights…"));
+        map.m_weatherRadarVisible = true;
+        map.m_weatherRadarLoadingText = QStringLiteral("Loading radar… 2/6");
+        map.m_weatherRadarLoadingAnnouncement = QStringLiteral("Loading radar…");
+        map.updateOverlayLoadingStatus();
+        QCOMPARE(map.m_weatherRadarLoadingLabel->text(),
+                 QStringLiteral("Loading radar… 2/6\nLoading city lights…"));
+        QVERIFY(map.m_weatherRadarLoadingLabel->testAttribute(Qt::WA_TransparentForMouseEvents));
+        map.m_weatherRadarVisible = false;
+        map.updateWeatherRadarLoadingStatus();
+        QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading city lights…"));
+        emit map.cityLightsStatusChanged(QString());
+        QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
+        emit map.cityLightsStatusChanged(QStringLiteral("Loading city lights…"));
+        emit map.cityLightsStatusChanged(QString());
+        QTest::qWait(400);
+        QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
+        QGV::setNetworkManager(nullptr);
     }
 
     void progressiveZoomAndFailures()

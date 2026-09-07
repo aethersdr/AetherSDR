@@ -92,7 +92,8 @@ private:
     QCheckBox*          m_terminatorCheck{nullptr};
     QCheckBox*          m_cityLightsCheck{nullptr};
     GuardedSlider*      m_cityLightsBrightness{nullptr};
-    QLabel*            m_cityLightsStatus{nullptr};
+    GuardedSlider*      m_cityLightsFaintLights{nullptr};
+    GuardedSlider*      m_cityLightsWarmth{nullptr};
     QCheckBox*          m_weatherRadarCheck{nullptr};
     QToolButton*        m_weatherRadarPlayButton{nullptr};
     QComboBox*          m_weatherRadarHistoryCombo{nullptr};

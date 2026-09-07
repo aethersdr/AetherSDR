@@ -22,6 +22,10 @@ public:
     void setEnabled(bool enabled);
     void setView(const WeatherRadarViewGeometry& view);
     void setNightOnly(bool nightOnly);
+    void setFaintLights(int percent);
+    void setWarmth(int percent);
+    const QImage& originalImage() const { return m_original; }
+    QRectF originalBounds() const { return m_loaded.bounds; }
     const QImage& image() const { return m_image; }
     QRectF bounds() const { return m_imageBounds; }
 
@@ -29,7 +33,7 @@ public:
     static QUrl imageUrl(const WeatherRadarViewGeometry& view);
     static QImage decode(const QByteArray& bytes, const QSize& expectedSize);
     static QImage nightImage(const QImage& image, const QRectF& bounds,
-                             const QDateTime& time, bool nightOnly);
+                             const QDateTime& time, bool nightOnly, int faintLights = 0, int warmth = 0);
 
 signals:
     void imageChanged();
@@ -50,6 +54,8 @@ private:
     QImage m_image;
     QRectF m_imageBounds;
     quint64 m_generation{0};
+    int m_faintLights{50};
+    int m_warmth{0};
     bool m_enabled{false};
     bool m_nightOnly{true};
     bool m_rendering{false};

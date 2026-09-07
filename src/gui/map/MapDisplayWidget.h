@@ -62,6 +62,8 @@ public:
     void setCityLightsVisible(bool visible);
     bool cityLightsVisible() const { return m_cityLightsVisible; }
     void setCityLightsBrightness(int percent);
+    void setCityLightsFaintLights(int percent);
+    void setCityLightsWarmth(int percent);
     int cityLightsBrightness() const { return m_cityLightsBrightness; }
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const { return m_weatherRadarVisible; }
@@ -97,6 +99,7 @@ public slots:
 protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     friend class WeatherRadarLoadingTest;
@@ -129,6 +132,7 @@ private:
         const QString& key, const CachedWeatherRadarFrame& frame);
     void finishWeatherRadarDownloadBatch();
     void updateWeatherRadarLoadingStatus();
+    void updateOverlayLoadingStatus();
     void retryWeatherRadarHistory();
     void requestNextWeatherRadarBufferedFrames();
     void tryStartWeatherRadarBufferedPrefix();
@@ -157,6 +161,8 @@ private:
     CityLightsSource* m_cityLightsSource{nullptr};
     bool m_cityLightsVisible{false};
     int m_cityLightsBrightness{70};
+    int m_cityLightsFaintLights{50};
+    int m_cityLightsWarmth{25};
     QStackedLayout* m_stack{nullptr};
     MapView* m_flatView{nullptr};
     GlobeMapView* m_globeView{nullptr};
@@ -203,6 +209,10 @@ private:
     QElapsedTimer m_weatherRadarLoadingElapsed;
     WeatherRadarLoadingStatus m_weatherRadarLoadingStatus;
     QString m_weatherRadarLoadingAnnouncement;
+    QString m_weatherRadarLoadingText;
+    QString m_cityLightsLoadingText;
+    QString m_overlayLoadingAnnouncement;
+    QTimer* m_cityLightsLoadingTimer{nullptr};
     QVector<int> m_weatherRadarSegmentDurationsMs;
     QHash<int, QImage> m_weatherRadarDecodedImages;
     QSet<int> m_weatherRadarDecodePending;

@@ -80,8 +80,10 @@ private slots:
     void requestGeometryAndDataset()
     {
         const auto view = CityLightsSource::boundedView({QRectF(-1e7, 2e6, 2e6, 3e6), QSize(12000, 12000)});
-        QVERIFY(view.size.width() <= 2048);
-        QVERIFY(view.size.height() <= 2048);
+        QVERIFY(view.size.width() <= 4096);
+        QVERIFY(view.size.height() <= 4096);
+        QVERIFY(view.size.width() > 2048);
+        QVERIFY(view.size.height() > 2048);
         QVERIFY(view.bounds.contains(QRectF(-1e7, 2e6, 2e6, 3e6)));
         const QUrl url = CityLightsSource::imageUrl(view);
         const QUrlQuery query(url);
@@ -114,6 +116,41 @@ private slots:
         QVERIFY(CityLightsSource::decode(bytes, QSize(20, 20)).isNull());
         QVERIFY(CityLightsSource::decode("<ServiceException>unavailable</ServiceException>", QSize(3, 1)).isNull());
         QVERIFY(CityLightsSource::decode(bytes, QSize(30000, 30000)).isNull());
+    }
+
+    void faintLightsPreserveBlackHighlightsAndHue()
+    {
+        QImage input(256, 1, QImage::Format_ARGB32_Premultiplied);
+        for (int x = 0; x < 256; ++x) {
+            input.setPixel(x, 0, qRgba(x, x / 2, 0, x));
+        }
+        const QRectF bounds(0, 0, 1000, 1000);
+        const QDateTime time = QDateTime::fromString("2026-03-20T12:00:00Z", Qt::ISODate);
+        QCOMPARE(CityLightsSource::nightImage(input, bounds, time, false, 0), input);
+        const QImage enhanced = CityLightsSource::nightImage(input, bounds, time, false, 50);
+        QCOMPARE(enhanced.pixel(0, 0), input.pixel(0, 0));
+        QCOMPARE(enhanced.pixel(255, 0), input.pixel(255, 0));
+        QVERIFY(qRed(enhanced.pixel(16, 0)) > 2 * 16);
+        for (int x = 1; x < 256; ++x) {
+            const QRgb p = enhanced.pixel(x, 0);
+            QVERIFY(qRed(p) >= qRed(enhanced.pixel(x - 1, 0)));
+            QCOMPARE(qRed(p), qAlpha(p));
+            QVERIFY(qGreen(p) <= qAlpha(p));
+            QCOMPARE(qBlue(p), 0);
+        }
+        const QImage maximum = CityLightsSource::nightImage(input, bounds, time, false, 100);
+        QVERIFY(qRed(maximum.pixel(16, 0)) > qRed(enhanced.pixel(16, 0)));
+    }
+
+    void warmthPreservesCoverage()
+    {
+        QImage input(2, 1, QImage::Format_ARGB32_Premultiplied);
+        input.setPixel(0, 0, qRgba(255, 255, 255, 255));
+        input.setPixel(1, 0, 0);
+        const QImage warm = CityLightsSource::nightImage(input, QRectF(0, 0, 100, 100),
+            QDateTime::currentDateTimeUtc(), false, 0, 25);
+        QCOMPARE(warm.pixel(0, 0), qRgba(255, 245, 230, 255));
+        QCOMPARE(warm.pixel(1, 0), QRgb(0));
     }
 
     void solarMaskUsesNorthPositiveBounds()

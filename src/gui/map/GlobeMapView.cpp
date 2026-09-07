@@ -743,8 +743,7 @@ void GlobeMapView::paintVectorOverlay(QPainter& painter)
 void GlobeMapView::uploadAtlas()
 {
     m_texture.reset();
-    m_cityLightsTexture.reset();
-    m_cityLightsProgram.reset();
+    // Basemap refreshes must retain the independent city-light GPU resources.
     m_texture = std::make_unique<QOpenGLTexture>(m_atlas);
     m_texture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
     m_texture->setMagnificationFilter(QOpenGLTexture::Linear);
@@ -1809,6 +1808,18 @@ void GlobeMapView::setCityLightsVisible(bool visible)
     update();
 }
 
+void GlobeMapView::setCityLightsWarmth(int percent)
+{
+    m_cityLightsWarmth = std::clamp(percent, 0, 100) / 100.0F;
+    update();
+}
+
+void GlobeMapView::setCityLightsFaintLights(int percent)
+{
+    m_cityLightsGamma = 1.0F - 0.65F * std::clamp(percent, 0, 100) / 100.0F;
+    update();
+}
+
 void GlobeMapView::setCityLightsBrightness(int percent)
 {
     m_cityLightsOpacity = std::clamp(percent, 0, 100) / 100.0F;
@@ -1860,6 +1871,10 @@ void GlobeMapView::drawCityLights(const QMatrix4x4& matrix)
             uniform sampler2D lights;
             uniform highp vec4 bounds;
             uniform lowp float opacity;
+            uniform highp float lightsGamma;
+            uniform highp float warmth;
+            uniform highp vec3 sunDirection;
+            uniform lowp float nightOnly;
             void main() {
                 highp vec3 n = normalize(earthPosition);
                 // GIBS EPSG:3857 stops at +/-85.051129 degrees. Do not stretch
@@ -1871,7 +1886,15 @@ void GlobeMapView::drawCityLights(const QMatrix4x4& matrix)
                     0.5 - log(tan(0.785398163 + latitude / 2.0)) / 6.283185307);
                 highp vec2 uv = (worldUv - bounds.xy) / (bounds.zw - bounds.xy);
                 if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
-                gl_FragColor = texture2D(lights, uv) * opacity;
+                highp vec4 light = texture2D(lights, uv);
+                // Adjust the resident original texture, never upload on slider changes.
+                if (light.a > 0.0) {
+                    light *= pow(light.a, lightsGamma) / light.a;
+                }
+                highp float t = clamp(-dot(n, sunDirection) / 0.104528463, 0.0, 1.0);
+                highp float night = mix(1.0, t * t * (3.0 - 2.0 * t), nightOnly);
+                light.rgb *= vec3(1.0, 1.0 - 0.15 * warmth, 1.0 - 0.40 * warmth);
+                gl_FragColor = light * (opacity * night);
             }
         )";
         if (!m_cityLightsProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, vertex)
@@ -1904,6 +1927,12 @@ void GlobeMapView::drawCityLights(const QMatrix4x4& matrix)
     m_cityLightsProgram->setUniformValue("lights", 0);
     m_cityLightsProgram->setUniformValue("bounds", normalizedRadarTextureBounds(m_cityLightsBounds));
     m_cityLightsProgram->setUniformValue("opacity", m_cityLightsOpacity);
+    m_cityLightsProgram->setUniformValue("lightsGamma", m_cityLightsGamma);
+    m_cityLightsProgram->setUniformValue("warmth", m_cityLightsWarmth);
+    const SolarTerminator::Position sun = SolarTerminator::positionAt(QDateTime::currentDateTimeUtc());
+    m_cityLightsProgram->setUniformValue("sunDirection", geoVector(
+        qRadiansToDegrees(sun.declinationRad), qRadiansToDegrees(sun.subsolarLonRad)));
+    m_cityLightsProgram->setUniformValue("nightOnly", m_terminatorVisible ? 1.0F : 0.0F);
     m_cityLightsTexture->bind(0);
     m_vertexBuffer.bind();
     m_indexBuffer.bind();

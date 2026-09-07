@@ -1,6 +1,8 @@
 #include "CityLightsSource.h"
 #include "SolarTerminator.h"
 
+#include <array>
+
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QDir>
@@ -14,7 +16,7 @@
 
 namespace AetherSDR {
 namespace {
-constexpr int kMaximumDimension = 2048;
+constexpr int kMaximumDimension = 4096;
 constexpr qint64 kMaximumBytes = 16 * 1024 * 1024;
 // GIBS GoogleMapsCompatible_Level8: 256 pixels * 2^8 across the world.
 constexpr double kNativePixelMetres = kRadarWorldWidth / 65536.0;
@@ -116,12 +118,20 @@ QImage CityLightsSource::decode(const QByteArray& bytes, const QSize& expectedSi
 }
 
 QImage CityLightsSource::nightImage(const QImage& source, const QRectF& bounds,
-                                   const QDateTime& time, bool nightOnly)
+                                   const QDateTime& time, bool nightOnly, int faintLights, int warmth)
 {
-    if (!nightOnly || source.isNull()) {
+    if ((!nightOnly && faintLights == 0 && warmth == 0) || source.isNull()) {
         return source;
     }
     QImage image = source.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    // Lift dim lights without clipping bright city centers or changing hue.
+    // A lookup table avoids a power operation for every image pixel.
+    const double warm = std::clamp(warmth, 0, 100) / 100.0;
+    const double gamma = 1.0 - 0.65 * std::clamp(faintLights, 0, 100) / 100.0;
+    std::array<double, 256> gains{};
+    for (int value = 1; value < 256; ++value) {
+        gains[value] = std::pow(value / 255.0, gamma) * 255.0 / value;
+    }
     const SolarTerminator::Position sun = SolarTerminator::positionAt(time);
     QVector<double> hourCosines(image.width());
     for (int x = 0; x < image.width(); ++x) {
@@ -141,13 +151,34 @@ QImage CityLightsSource::nightImage(const QImage& source, const QRectF& bounds,
             const double elevation = latitudeSin * sunSin + latitudeCos * sunCos * hourCosines[x];
             // Smooth civil twilight: absent at the horizon, full at -6 degrees.
             const double t = std::clamp(-elevation / std::sin(M_PI / 30.0), 0.0, 1.0);
-            const double amount = t * t * (3.0 - 2.0 * t);
             const QRgb p = pixels[x];
-            pixels[x] = qRgba(qRound(qRed(p) * amount), qRound(qGreen(p) * amount),
-                              qRound(qBlue(p) * amount), qRound(qAlpha(p) * amount));
+            const double amount = (nightOnly ? t * t * (3.0 - 2.0 * t) : 1.0)
+                * gains[qAlpha(p)];
+            pixels[x] = qRgba(qRound(qRed(p) * amount), qRound(qGreen(p) * amount * (1.0 - 0.15 * warm)),
+                              qRound(qBlue(p) * amount * (1.0 - 0.40 * warm)), qRound(qAlpha(p) * amount));
         }
     }
     return image;
+}
+
+void CityLightsSource::setWarmth(int percent)
+{
+    const int value = std::clamp(percent, 0, 100);
+    if (value == m_warmth) {
+        return;
+    }
+    m_warmth = value;
+    renderImage();
+}
+
+void CityLightsSource::setFaintLights(int percent)
+{
+    const int value = std::clamp(percent, 0, 100);
+    if (value == m_faintLights) {
+        return;
+    }
+    m_faintLights = value;
+    renderImage();
 }
 
 void CityLightsSource::setEnabled(bool enabled)
@@ -288,12 +319,15 @@ void CityLightsSource::renderImage()
     m_rendering = true;
     const qint64 key = m_original.cacheKey();
     const bool nightOnly = m_nightOnly;
+    const int faintLights = m_faintLights;
+    const int warmth = m_warmth;
     auto* watcher = new QFutureWatcher<QImage>(this);
-    connect(watcher, &QFutureWatcher<QImage>::finished, this, [this, watcher, key, nightOnly] {
+    connect(watcher, &QFutureWatcher<QImage>::finished, this, [this, watcher, key, nightOnly, faintLights, warmth] {
         const QImage image = watcher->result();
         watcher->deleteLater();
         m_rendering = false;
-        if (m_enabled && key == m_original.cacheKey() && nightOnly == m_nightOnly) {
+        if (m_enabled && key == m_original.cacheKey() && nightOnly == m_nightOnly
+            && faintLights == m_faintLights && warmth == m_warmth) {
             m_image = image;
             m_imageBounds = m_loaded.bounds;
             emit imageChanged();
@@ -304,7 +338,7 @@ void CityLightsSource::renderImage()
         }
     });
     watcher->setFuture(QtConcurrent::run(&CityLightsSource::nightImage, m_original,
-        m_loaded.bounds, QDateTime::currentDateTimeUtc(), nightOnly));
+        m_loaded.bounds, QDateTime::currentDateTimeUtc(), nightOnly, faintLights, warmth));
 }
 
 } // namespace AetherSDR

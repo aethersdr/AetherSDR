@@ -62,6 +62,8 @@ public:
     void setCityLightsVisible(bool visible);
     void setCityLightsImage(const QImage& image, const QRectF& bounds);
     void setCityLightsBrightness(int percent);
+    void setCityLightsFaintLights(int percent);
+    void setCityLightsWarmth(int percent);
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const { return m_weatherRadarVisible; }
     int pendingWeatherRadarRequests() const;
@@ -163,6 +165,8 @@ private:
     bool m_cityLightsVisible{false};
     bool m_cityLightsDirty{false};
     float m_cityLightsOpacity{0.7F};
+    float m_cityLightsGamma{1.0F};
+    float m_cityLightsWarmth{0.0F};
     void reportRendererUnavailable(const QString& reason,
                                    const QString& detail = {});
     void scheduleAtlasUpload();

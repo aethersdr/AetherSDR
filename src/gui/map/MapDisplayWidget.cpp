@@ -143,7 +143,7 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     m_weatherRadarNetwork->setTransferTimeout(kTimelineTimeoutMs);
     m_weatherRadarLoadingLabel = new QLabel(this);
     m_weatherRadarLoadingLabel->setObjectName(QStringLiteral("pskReporterWeatherRadarLoading"));
-    m_weatherRadarLoadingLabel->setAccessibleName(tr("Radar loading status"));
+    m_weatherRadarLoadingLabel->setAccessibleName(tr("Map overlay loading status"));
     m_weatherRadarLoadingLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_weatherRadarLoadingLabel->setFocusPolicy(Qt::NoFocus);
     m_weatherRadarLoadingLabel->setAlignment(Qt::AlignCenter);
@@ -152,6 +152,21 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
         "QLabel { background: {{color.background.2}}; color: {{color.text.primary}};"
         " border: 1px solid {{color.border.subtle}}; border-radius: 6px; padding: 5px 10px; }");
     m_weatherRadarLoadingLabel->hide();
+    m_cityLightsLoadingTimer = new QTimer(this);
+    m_cityLightsLoadingTimer->setSingleShot(true);
+    m_cityLightsLoadingTimer->setInterval(350);
+    connect(m_cityLightsLoadingTimer, &QTimer::timeout,
+            this, &MapDisplayWidget::updateOverlayLoadingStatus);
+    connect(this, &MapDisplayWidget::cityLightsStatusChanged, this, [this](const QString& status) {
+        m_cityLightsLoadingText = status;
+        if (status.isEmpty()) {
+            m_cityLightsLoadingTimer->stop();
+        } else {
+            // Avoid flashing a notice for quick cache hits.
+            m_cityLightsLoadingTimer->start();
+        }
+        updateOverlayLoadingStatus();
+    });
     m_weatherRadarLoadingTimer = new QTimer(this);
     m_weatherRadarLoadingTimer->setInterval(100);
     connect(m_weatherRadarLoadingTimer, &QTimer::timeout,
@@ -247,7 +262,7 @@ bool MapDisplayWidget::pathsVisible() const
 void MapDisplayWidget::setDayNightTerminatorVisible(bool visible)
 {
     m_terminatorVisible = visible;
-    m_cityLightsSource->setNightOnly(visible);
+    m_cityLightsSource->setNightOnly(visible && m_projectionMode == ProjectionMode::Flat);
     if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setDayNightTerminatorVisible(visible);
         m_flatViewDirty = true;
@@ -265,10 +280,31 @@ bool MapDisplayWidget::dayNightTerminatorVisible() const
 void MapDisplayWidget::setCityLightsVisible(bool visible)
 {
     m_cityLightsVisible = visible;
-    m_cityLightsSource->setNightOnly(m_terminatorVisible);
+    updateOverlayLoadingStatus();
+    m_cityLightsSource->setNightOnly(m_terminatorVisible && m_projectionMode == ProjectionMode::Flat);
     m_cityLightsSource->setEnabled(visible && isVisible());
     presentCityLights();
     refreshCityLightsView();
+}
+
+void MapDisplayWidget::setCityLightsWarmth(int percent)
+{
+    m_cityLightsWarmth = std::clamp(percent, 0, 100);
+    if (m_projectionMode == ProjectionMode::Globe) {
+        m_globeView->setCityLightsWarmth(m_cityLightsWarmth);
+    } else {
+        m_cityLightsSource->setWarmth(m_cityLightsWarmth);
+    }
+}
+
+void MapDisplayWidget::setCityLightsFaintLights(int percent)
+{
+    m_cityLightsFaintLights = std::clamp(percent, 0, 100);
+    if (m_projectionMode == ProjectionMode::Globe) {
+        m_globeView->setCityLightsFaintLights(m_cityLightsFaintLights);
+    } else {
+        m_cityLightsSource->setFaintLights(m_cityLightsFaintLights);
+    }
 }
 
 void MapDisplayWidget::setCityLightsBrightness(int percent)
@@ -287,7 +323,9 @@ void MapDisplayWidget::presentCityLights()
     if (m_globeView != nullptr) {
         m_globeView->setCityLightsVisible(m_cityLightsVisible);
         m_globeView->setCityLightsBrightness(m_cityLightsBrightness);
-        m_globeView->setCityLightsImage(m_cityLightsSource->image(), m_cityLightsSource->bounds());
+        m_globeView->setCityLightsFaintLights(m_cityLightsFaintLights);
+        m_globeView->setCityLightsWarmth(m_cityLightsWarmth);
+        m_globeView->setCityLightsImage(m_cityLightsSource->originalImage(), m_cityLightsSource->originalBounds());
     }
 }
 
@@ -342,7 +380,9 @@ void MapDisplayWidget::setWeatherRadarVisible(bool visible)
         m_weatherRadarLoadingTimer->stop();
         m_weatherRadarLoadingElapsed.invalidate();
         m_weatherRadarLoadingStatus.reset();
-        m_weatherRadarLoadingLabel->hide();
+        m_weatherRadarLoadingText.clear();
+        m_weatherRadarLoadingAnnouncement.clear();
+        updateOverlayLoadingStatus();
     }
 }
 
@@ -361,9 +401,10 @@ void MapDisplayWidget::updateWeatherRadarLoadingStatus()
             ? m_flatView->weatherRadarLoadFailed() : m_globeView->weatherRadarLoadFailed();
     const bool busy = pending > 0 || (playback && m_weatherRadarTimelineReply != nullptr);
     if (!m_weatherRadarVisible) {
-        m_weatherRadarLoadingLabel->hide();
-        m_weatherRadarLoadingStatus.reset();
+        m_weatherRadarLoadingText.clear();
         m_weatherRadarLoadingAnnouncement.clear();
+        updateOverlayLoadingStatus();
+        m_weatherRadarLoadingStatus.reset();
         return;
     }
     if (!m_weatherRadarLoadingElapsed.isValid()) {
@@ -373,8 +414,9 @@ void MapDisplayWidget::updateWeatherRadarLoadingStatus()
         m_weatherRadarLoadingElapsed.elapsed(), busy, failed, pending,
         m_weatherRadarDownloadReady.size(), !playback);
     if (state == WeatherRadarLoadingStatus::State::Hidden) {
-        m_weatherRadarLoadingLabel->hide();
+        m_weatherRadarLoadingText.clear();
         m_weatherRadarLoadingAnnouncement.clear();
+        updateOverlayLoadingStatus();
         return;
     }
     const QString message = state == WeatherRadarLoadingStatus::State::Failed
@@ -384,7 +426,36 @@ void MapDisplayWidget::updateWeatherRadarLoadingStatus()
         ? tr("%1 %2/%3").arg(message)
               .arg(m_weatherRadarDownloadReady.size()).arg(m_weatherRadarFrames.size())
         : message;
-    m_weatherRadarLoadingLabel->setText(text);
+    m_weatherRadarLoadingText = text;
+    m_weatherRadarLoadingAnnouncement = message;
+    updateOverlayLoadingStatus();
+}
+
+void MapDisplayWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    updateOverlayLoadingStatus();
+}
+
+void MapDisplayWidget::updateOverlayLoadingStatus()
+{
+    QStringList rows;
+    QStringList announcements;
+    if (m_weatherRadarVisible && !m_weatherRadarLoadingText.isEmpty()) {
+        rows.append(m_weatherRadarLoadingText);
+        announcements.append(m_weatherRadarLoadingAnnouncement);
+    }
+    if (m_cityLightsVisible && !m_cityLightsLoadingTimer->isActive()
+        && !m_cityLightsLoadingText.isEmpty()) {
+        rows.append(m_cityLightsLoadingText);
+        announcements.append(m_cityLightsLoadingText);
+    }
+    if (rows.isEmpty()) {
+        m_weatherRadarLoadingLabel->hide();
+        m_overlayLoadingAnnouncement.clear();
+        return;
+    }
+    m_weatherRadarLoadingLabel->setText(rows.join(QLatin1Char('\n')));
     m_weatherRadarLoadingLabel->setMaximumWidth(std::max(1, width() - 32));
     m_weatherRadarLoadingLabel->adjustSize();
     m_weatherRadarLoadingLabel->move(
@@ -393,8 +464,9 @@ void MapDisplayWidget::updateWeatherRadarLoadingStatus()
     m_weatherRadarLoadingLabel->show();
     m_weatherRadarLoadingLabel->raise();
     // Announce state transitions only, not every completed image/tile.
-    if (m_weatherRadarLoadingAnnouncement != message) {
-        m_weatherRadarLoadingAnnouncement = message;
+    const QString message = announcements.join(QLatin1Char('\n'));
+    if (m_overlayLoadingAnnouncement != message) {
+        m_overlayLoadingAnnouncement = message;
         m_weatherRadarLoadingLabel->setAccessibleName(message);
         QAccessibleEvent event(m_weatherRadarLoadingLabel, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);
@@ -1992,6 +2064,10 @@ void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
     if (m_weatherRadarPlaybackRequested && m_weatherRadarFrames.size() >= 2) {
         m_weatherRadarRebufferTimer->start(350);
     }
+    // Flat view uses CPU processing; the globe shades the original on the GPU.
+    m_cityLightsSource->setNightOnly(m_terminatorVisible && mode == ProjectionMode::Flat);
+    m_cityLightsSource->setFaintLights(mode == ProjectionMode::Flat ? m_cityLightsFaintLights : 0);
+    m_cityLightsSource->setWarmth(mode == ProjectionMode::Flat ? m_cityLightsWarmth : 0);
     presentCityLights();
     refreshCityLightsView();
     emit projectionModeChanged(mode);

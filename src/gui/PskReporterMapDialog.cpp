@@ -491,17 +491,63 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     lightsLabel->setBuddy(m_cityLightsBrightness);
     auto* lightsValue = new QLabel(QStringLiteral("%1%").arg(m_cityLightsBrightness->value()), reportsBox);
     lightsValue->setMinimumWidth(36);
-    m_cityLightsStatus = new QLabel(reportsBox);
-    m_cityLightsStatus->setObjectName(QStringLiteral("pskReporterCityLightsStatus"));
-    m_cityLightsStatus->setAccessibleName(tr("City lights loading status"));
+    auto* faintLabel = new QLabel(tr("Faint lights:"), reportsBox);
+    m_cityLightsFaintLights = new GuardedSlider(Qt::Horizontal, reportsBox);
+    m_cityLightsFaintLights->setObjectName(QStringLiteral("pskReporterCityLightsFaintLights"));
+    m_cityLightsFaintLights->setAccessibleName(tr("City lights faint lights"));
+    m_cityLightsFaintLights->setAccessibleDescription(tr(
+        "Reveal dim settlements without washing out bright city centers. Zero preserves the original intensity; 100 gives the strongest enhancement."));
+    m_cityLightsFaintLights->setToolTip(m_cityLightsFaintLights->accessibleDescription());
+    m_cityLightsFaintLights->setRange(0, 100);
+    m_cityLightsFaintLights->setFixedWidth(120);
+    m_cityLightsFaintLights->setFocusPolicy(Qt::StrongFocus);
+    m_cityLightsFaintLights->setValue(std::clamp(
+        pskSettings().value("cityLightsFaintLights").toInt(50), 0, 100));
+    m_cityLightsFaintLights->setDragValueFormatter([](int value) {
+        return QStringLiteral("%1%").arg(value);
+    });
+    applyPrimarySliderStyle(m_cityLightsFaintLights);
+    faintLabel->setBuddy(m_cityLightsFaintLights);
+    auto* faintValue = new QLabel(QStringLiteral("%1%").arg(m_cityLightsFaintLights->value()), reportsBox);
+    faintValue->setMinimumWidth(36);
+    connect(m_cityLightsFaintLights, &QSlider::valueChanged, faintValue, [faintValue](int value) {
+        faintValue->setText(QStringLiteral("%1%").arg(value));
+    });
+    auto* warmthLabel = new QLabel(tr("Warmth:"), reportsBox);
+    m_cityLightsWarmth = new GuardedSlider(Qt::Horizontal, reportsBox);
+    m_cityLightsWarmth->setObjectName(QStringLiteral("pskReporterCityLightsWarmth"));
+    m_cityLightsWarmth->setAccessibleName(tr("City lights warmth"));
+    m_cityLightsWarmth->setAccessibleDescription(tr(
+        "Adjust the display tint from original white at 0 to warm golden light at 100. This is a visual preference, not measured lamp color."));
+    m_cityLightsWarmth->setToolTip(m_cityLightsWarmth->accessibleDescription());
+    m_cityLightsWarmth->setRange(0, 100);
+    m_cityLightsWarmth->setFixedWidth(120);
+    m_cityLightsWarmth->setFocusPolicy(Qt::StrongFocus);
+    m_cityLightsWarmth->setValue(std::clamp(
+        pskSettings().value("cityLightsWarmth").toInt(25), 0, 100));
+    m_cityLightsWarmth->setDragValueFormatter([](int value) {
+        return QStringLiteral("%1%").arg(value);
+    });
+    applyPrimarySliderStyle(m_cityLightsWarmth);
+    warmthLabel->setBuddy(m_cityLightsWarmth);
+    auto* warmthValue = new QLabel(QStringLiteral("%1%").arg(m_cityLightsWarmth->value()), reportsBox);
+    warmthValue->setMinimumWidth(36);
+    connect(m_cityLightsWarmth, &QSlider::valueChanged, warmthValue, [warmthValue](int value) {
+        warmthValue->setText(QStringLiteral("%1%").arg(value));
+    });
     lightsRow->addWidget(lightsLabel);
     lightsRow->addWidget(m_cityLightsBrightness);
     lightsRow->addWidget(lightsValue);
-    lightsRow->addWidget(m_cityLightsStatus);
+    lightsRow->addWidget(faintLabel);
+    lightsRow->addWidget(m_cityLightsFaintLights);
+    lightsRow->addWidget(faintValue);
+    lightsRow->addWidget(warmthLabel);
+    lightsRow->addWidget(m_cityLightsWarmth);
+    lightsRow->addWidget(warmthValue);
     lightsRow->addStretch();
     reportsLayout->addLayout(lightsRow);
     for (QWidget* widget : QList<QWidget*>{lightsLabel, m_cityLightsBrightness,
-                                          lightsValue, m_cityLightsStatus}) {
+                                          lightsValue, faintLabel, m_cityLightsFaintLights, faintValue, warmthLabel, m_cityLightsWarmth, warmthValue}) {
         widget->setVisible(m_cityLightsCheck->isChecked());
         connect(m_cityLightsCheck, &QCheckBox::toggled, widget, &QWidget::setVisible);
     }
@@ -662,6 +708,16 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         : MapDisplayWidget::ProjectionMode::Flat);
     m_mapView->setPathsVisible(m_pathsCheck->isChecked());
     m_mapView->setDayNightTerminatorVisible(m_terminatorCheck->isChecked());
+    m_mapView->setCityLightsWarmth(m_cityLightsWarmth->value());
+    connect(m_cityLightsWarmth, &QSlider::valueChanged, this, [this](int percent) {
+        writePskSetting("cityLightsWarmth", percent);
+        m_mapView->setCityLightsWarmth(percent);
+    });
+    m_mapView->setCityLightsFaintLights(m_cityLightsFaintLights->value());
+    connect(m_cityLightsFaintLights, &QSlider::valueChanged, this, [this](int percent) {
+        writePskSetting("cityLightsFaintLights", percent);
+        m_mapView->setCityLightsFaintLights(percent);
+    });
     m_mapView->setCityLightsBrightness(m_cityLightsBrightness->value());
     m_mapView->setCityLightsVisible(m_cityLightsCheck->isChecked());
     connect(m_cityLightsCheck, &QCheckBox::toggled, this, [this](bool on) {
@@ -672,8 +728,6 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         writePskSetting("cityLightsBrightness", percent);
         m_mapView->setCityLightsBrightness(percent);
     });
-    connect(m_mapView, &MapDisplayWidget::cityLightsStatusChanged,
-            m_cityLightsStatus, &QLabel::setText);
     {
         QVector<QPair<QString, QColor>> legend;
         for (const char* m : { "FT8", "FT4", "WSPR", "JS8", "CW", "PSK",
