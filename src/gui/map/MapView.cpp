@@ -574,8 +574,6 @@ void MapView::setWeatherRadarVisible(bool visible)
         m_pendingWeatherRadarFrameId.clear();
     }
     updateMapAttribution();
-    m_attribution->adjustSize();
-    layoutOverlayButtons();
     if (visible) {
         m_weatherRadarLayer->setSource(m_weatherRadarSource);
     }

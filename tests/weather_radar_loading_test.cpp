@@ -1232,6 +1232,7 @@ private slots:
         MapDisplayWidget map;
         map.resize(800, 500);
         map.show();
+        const QString accessibleName = map.m_weatherRadarLoadingLabel->accessibleName();
         map.m_cityLightsVisible = true;
         emit map.cityLightsStatusChanged(QStringLiteral("Loading city lights…"));
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
@@ -1243,12 +1244,17 @@ private slots:
         map.updateOverlayLoadingStatus();
         QCOMPARE(map.m_weatherRadarLoadingLabel->text(),
                  QStringLiteral("Loading radar… 2/6\nLoading city lights…"));
+        QCOMPARE(map.m_weatherRadarLoadingLabel->accessibleName(), accessibleName);
+        QCOMPARE(map.m_weatherRadarLoadingLabel->accessibleDescription(),
+                 QStringLiteral("Loading radar…\nLoading city lights…"));
         QVERIFY(map.m_weatherRadarLoadingLabel->testAttribute(Qt::WA_TransparentForMouseEvents));
         map.m_weatherRadarVisible = false;
         map.updateWeatherRadarLoadingStatus();
         QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading city lights…"));
         emit map.cityLightsStatusChanged(QString());
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
+        QCOMPARE(map.m_weatherRadarLoadingLabel->accessibleName(), accessibleName);
+        QVERIFY(map.m_weatherRadarLoadingLabel->accessibleDescription().isEmpty());
         emit map.cityLightsStatusChanged(QStringLiteral("Loading city lights…"));
         emit map.cityLightsStatusChanged(QString());
         QTest::qWait(400);

@@ -452,7 +452,12 @@ void MapDisplayWidget::updateOverlayLoadingStatus()
     }
     if (rows.isEmpty()) {
         m_weatherRadarLoadingLabel->hide();
-        m_overlayLoadingAnnouncement.clear();
+        if (!m_overlayLoadingAnnouncement.isEmpty()) {
+            m_overlayLoadingAnnouncement.clear();
+            m_weatherRadarLoadingLabel->setAccessibleDescription(QString());
+            QAccessibleEvent event(m_weatherRadarLoadingLabel, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        }
         return;
     }
     m_weatherRadarLoadingLabel->setText(rows.join(QLatin1Char('\n')));
@@ -467,8 +472,8 @@ void MapDisplayWidget::updateOverlayLoadingStatus()
     const QString message = announcements.join(QLatin1Char('\n'));
     if (m_overlayLoadingAnnouncement != message) {
         m_overlayLoadingAnnouncement = message;
-        m_weatherRadarLoadingLabel->setAccessibleName(message);
-        QAccessibleEvent event(m_weatherRadarLoadingLabel, QAccessible::NameChanged);
+        m_weatherRadarLoadingLabel->setAccessibleDescription(message);
+        QAccessibleEvent event(m_weatherRadarLoadingLabel, QAccessible::DescriptionChanged);
         QAccessible::updateAccessibility(&event);
     }
 }

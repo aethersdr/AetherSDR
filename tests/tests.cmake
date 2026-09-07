@@ -1197,8 +1197,6 @@ add_test(NAME map_image_cache_test COMMAND map_image_cache_test)
 set_tests_properties(map_image_cache_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# NOAA radar URL generation is bounded, canonical across wrapped world copies,
-# and fixed to the public HTTPS host. This test is pure and never uses network.
 # Injected public HTTP replies; this test binds no sockets and contacts no provider.
 add_executable(city_lights_source_test tests/city_lights_source_test.cpp
     src/gui/map/CityLightsSource.cpp)
@@ -1208,6 +1206,8 @@ target_link_libraries(city_lights_source_test PRIVATE
 add_test(NAME city_lights_source_test COMMAND city_lights_source_test)
 set_tests_properties(city_lights_source_test PROPERTIES TIMEOUT 30)
 
+# NOAA radar URL generation is bounded, canonical across wrapped world copies,
+# and fixed to the public HTTPS host. This test is pure and never uses network.
 add_executable(weather_radar_source_test
     tests/weather_radar_source_test.cpp
     src/gui/map/WeatherRadarSource.cpp)

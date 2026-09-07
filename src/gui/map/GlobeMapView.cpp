@@ -1959,7 +1959,6 @@ void GlobeMapView::setWeatherRadarVisible(bool visible)
     }
     m_weatherRadarVisible = visible;
     updateMapAttribution();
-    layoutOverlays();
     if (visible) {
         m_detailSelectionDirty = true;
         setWeatherRadarSource(m_weatherRadarSource);
