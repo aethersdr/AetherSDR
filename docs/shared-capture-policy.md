@@ -88,6 +88,16 @@ assigns the target generation for a reconfiguration and assembles one coherent
 readback with that generation. Hardware transactions, rollback, asynchronous
 ownership and publication remain the integration layer's responsibility.
 
+Center domains and returned centers must use the same adapter-declared
+representation. The adapter must document whether readback is logical library
+state or a measured hardware quantity. In
+[Osmocom librtlsdr v2.0.2](https://github.com/osmocom/rtl-sdr/blob/v2.0.2/src/librtlsdr.c#L836-L863)
+and [RTL-SDR Blog commit aed0ea19](https://github.com/rtlsdrblog/rtl-sdr-blog/blob/aed0ea19f3a273370a13c9009b96313c75d54c7b/src/librtlsdr.c#L887-L936),
+`rtlsdr_get_center_freq()` returns the cached requested frequency stored after
+successful tuning; it does not measure the achieved PLL frequency. Verify other
+library versions or forks before relying on that behavior. This policy's
+validation does not establish physical RF accuracy, which needs hardware evidence.
+
 ## Fixed-capture restore
 
 `restoreFixedCapture` validates the actual established capture and all input

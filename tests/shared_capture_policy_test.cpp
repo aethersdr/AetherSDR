@@ -372,6 +372,14 @@ void malformedInputs()
         check(selectCenter(good, one, domain).error == Error::InvalidDomains,
               "invalid, empty-grid, unresolved or overflowing-index domain rejected");
     }
+    // The capture and slice otherwise fit; small indices leave the resolution
+    // guard as the reason to reject this grid's colliding center values.
+    constexpr double kLargeGridOriginHz = 549755813888.0; // 2^39; ULP is 2^-13.
+    const std::array<CenterDomain, 1> unresolvedGrid{{
+        {kLargeGridOriginHz, kLargeGridOriginHz + 1, kLargeGridOriginHz, 1e-5}}};
+    const std::array<SliceDescriptor, 1> highSlice{{slice(0, kLargeGridOriginHz)}};
+    check(selectCenter(capture(kLargeGridOriginHz), highSlice, unresolvedGrid).error == Error::InvalidDomains,
+          "sub-ULP center step rejected even when grid indices are bounded");
     const std::array<SliceDescriptor, 2> duplicate{{one[0], one[0]}};
     check(selectCenter(good, duplicate, kDomains).error == Error::DuplicateId, "duplicate desired slots refuse whole request");
     const std::vector<SliceDescriptor> oversized(kMaxEntries + 1, one[0]);

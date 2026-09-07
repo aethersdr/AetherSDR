@@ -305,7 +305,8 @@ SelectionResult selectCenter(const CaptureDescriptor& capture,
     }
     CaptureDescriptor proposed = capture;
     proposed.centerHz = *best;
-    // Acceptance is only a proposal. Validate the quantized center before return.
+    // Acceptance is only a proposal. Re-validate as defense in depth after
+    // candidate range and containment checks.
     error = validateReadback(proposed, proposed, desired, domains, limits);
     if (error != Error::None) {
         return {error, std::nullopt};
