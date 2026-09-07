@@ -1,4 +1,5 @@
 #include "PskReporterMapDialog.h"
+#include "GuardedSlider.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -10,11 +11,13 @@
 #include "core/TxKeyingMarker.h"
 #include "core/WsprBeacon.h"
 #include "map/MapDisplayWidget.h"
+#include "map/WeatherRadarFrameTime.h"
 #include "models/EqualizerModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QCheckBox>
@@ -35,6 +38,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QToolTip>
+#include <QToolButton>
 #include <QtMath>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -369,6 +373,92 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_terminatorCheck->setChecked(
         pskSettings().value("showTerminator").toBool(true));
     topBar->addWidget(m_terminatorCheck);
+
+    m_weatherRadarCheck = new QCheckBox(tr("Weather radar"), reportsBox);
+    m_weatherRadarCheck->setObjectName(
+        QStringLiteral("pskReporterWeatherRadar"));
+    m_weatherRadarCheck->setAccessibleName(
+        tr("Show NOAA weather radar overlay"));
+    m_weatherRadarCheck->setAccessibleDescription(tr(
+        "Shows near-real-time NOAA radar over the map. Coverage is primarily "
+        "the United States and nearby regions."));
+    m_weatherRadarCheck->setToolTip(tr(
+        "Overlay near-real-time NOAA/NWS composite reflectivity; disabled "
+        "when this checkbox is off"));
+    m_weatherRadarCheck->setChecked(
+        pskSettings().value("showWeatherRadar").toBool(false));
+    topBar->addWidget(m_weatherRadarCheck);
+
+    m_weatherRadarPlayButton = new QToolButton(reportsBox);
+    m_weatherRadarPlayButton->setObjectName(
+        QStringLiteral("pskReporterWeatherRadarPlay"));
+    m_weatherRadarPlayButton->setText(QStringLiteral("▶"));
+    m_weatherRadarPlayButton->setAutoRaise(true);
+    m_weatherRadarPlayButton->setAccessibleName(
+        tr("Play historical weather radar"));
+    m_weatherRadarPlayButton->setToolTip(
+        tr("Loop through original NOAA radar images; no generated transitions"));
+    m_weatherRadarPlayButton->setEnabled(
+        m_weatherRadarCheck->isChecked());
+    topBar->addWidget(m_weatherRadarPlayButton);
+
+    m_weatherRadarHistoryCombo = new QComboBox(reportsBox);
+    m_weatherRadarHistoryCombo->setObjectName(
+        QStringLiteral("pskReporterWeatherRadarHistory"));
+    m_weatherRadarHistoryCombo->setAccessibleName(
+        tr("Weather radar history duration"));
+    m_weatherRadarHistoryCombo->addItem(tr("1 h"), 1);
+    m_weatherRadarHistoryCombo->addItem(tr("2 h"), 2);
+    m_weatherRadarHistoryCombo->addItem(tr("4 h"), 4);
+    const int savedRadarHours = std::clamp(
+        pskSettings().value("weatherRadarHistoryHours").toInt(1), 1, 4);
+    const int savedRadarHoursIndex =
+        m_weatherRadarHistoryCombo->findData(savedRadarHours);
+    m_weatherRadarHistoryCombo->setCurrentIndex(
+        savedRadarHoursIndex >= 0 ? savedRadarHoursIndex : 0);
+    m_weatherRadarHistoryCombo->setEnabled(
+        m_weatherRadarCheck->isChecked());
+    topBar->addWidget(m_weatherRadarHistoryCombo);
+
+    auto* radarSpeedLabel = new QLabel(tr("Speed:"), reportsBox);
+    m_weatherRadarSpeedSlider = new GuardedSlider(Qt::Horizontal, reportsBox);
+    m_weatherRadarSpeedSlider->setObjectName(QStringLiteral("pskReporterWeatherRadarSpeed"));
+    m_weatherRadarSpeedSlider->setAccessibleName(tr("Weather radar playback speed"));
+    m_weatherRadarSpeedSlider->setAccessibleDescription(tr(
+        "25 to 500 percent of normal speed (0.25 to 5 times). "
+        "Changes how quickly original NOAA images loop without reloading them. "
+        "The final image always holds for one second."));
+    m_weatherRadarSpeedSlider->setToolTip(m_weatherRadarSpeedSlider->accessibleDescription());
+    m_weatherRadarSpeedSlider->setRange(25, 500);
+    m_weatherRadarSpeedSlider->setSingleStep(1);
+    m_weatherRadarSpeedSlider->setPageStep(25);
+    m_weatherRadarSpeedSlider->setFixedWidth(110);
+    m_weatherRadarSpeedSlider->setFocusPolicy(Qt::StrongFocus);
+    m_weatherRadarSpeedSlider->setDragValueFormatter([](int speed) {
+        return QStringLiteral("%1×").arg(speed / 100.0, 0, 'f', 2);
+    });
+    applyPrimarySliderStyle(m_weatherRadarSpeedSlider);
+    const int savedRadarSpeed = weatherRadarPlaybackSpeedPercent(
+        pskSettings().value("weatherRadarSpeedPercent").toInt(100));
+    m_weatherRadarSpeedSlider->setValue(savedRadarSpeed);
+    m_weatherRadarSpeedSlider->setEnabled(m_weatherRadarCheck->isChecked());
+    m_weatherRadarSpeedValue = new QLabel(
+        QStringLiteral("%1×").arg(savedRadarSpeed / 100.0, 0, 'f', 2), reportsBox);
+    m_weatherRadarSpeedValue->setObjectName(QStringLiteral("pskReporterWeatherRadarSpeedValue"));
+    m_weatherRadarSpeedValue->setMinimumWidth(42);
+    radarSpeedLabel->setBuddy(m_weatherRadarSpeedSlider);
+    topBar->addWidget(radarSpeedLabel);
+    topBar->addWidget(m_weatherRadarSpeedSlider);
+    topBar->addWidget(m_weatherRadarSpeedValue);
+    m_weatherRadarFrameLabel = new QLabel(tr("Live"), reportsBox);
+    m_weatherRadarFrameLabel->setObjectName(
+        QStringLiteral("pskReporterWeatherRadarFrame"));
+    m_weatherRadarFrameLabel->setAccessibleName(
+        tr("Weather radar frame time"));
+    m_weatherRadarFrameLabel->setMinimumWidth(135);
+    m_weatherRadarFrameLabel->setEnabled(
+        m_weatherRadarCheck->isChecked());
+    topBar->addWidget(m_weatherRadarFrameLabel);
     topBar->addStretch(1);
     reportsLayout->addLayout(topBar);
     root->addWidget(reportsBox);
@@ -540,6 +630,51 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         writePskSetting("showPaths", on);
         m_mapView->setPathsVisible(on);
     });
+    connect(m_weatherRadarCheck, &QCheckBox::toggled, this,
+            [this](bool on) {
+                writePskSetting("showWeatherRadar", on);
+                m_weatherRadarPlayButton->setEnabled(on);
+                m_weatherRadarHistoryCombo->setEnabled(on);
+                m_weatherRadarSpeedSlider->setEnabled(on);
+                m_weatherRadarFrameLabel->setEnabled(on);
+                if (!on) {
+                    m_weatherRadarTimelineLoading = false;
+                    m_weatherRadarPlayButton->setText(
+                        QStringLiteral("▶"));
+                    m_weatherRadarFrameLabel->setText(tr("Live"));
+                }
+                if (isVisible()) {
+                    m_mapView->setWeatherRadarVisible(on);
+                }
+            });
+    connect(m_weatherRadarPlayButton, &QToolButton::clicked, this,
+            [this] {
+                if (m_mapView->weatherRadarAnimating()
+                    || m_weatherRadarTimelineLoading) {
+                    m_mapView->stopWeatherRadarAnimation();
+                    return;
+                }
+                m_mapView->startWeatherRadarAnimation(
+                    m_weatherRadarHistoryCombo->currentData().toInt());
+            });
+    connect(m_weatherRadarHistoryCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                const int hours =
+                    m_weatherRadarHistoryCombo->currentData().toInt();
+                writePskSetting("weatherRadarHistoryHours", hours);
+                if (m_mapView->weatherRadarAnimating()
+                    || m_weatherRadarTimelineLoading) {
+                    m_mapView->startWeatherRadarAnimation(hours);
+                }
+            });
+    connect(m_weatherRadarSpeedSlider, &QSlider::valueChanged,
+            this, [this](int speed) {
+                m_weatherRadarSpeedValue->setText(
+                    QStringLiteral("%1×").arg(speed / 100.0, 0, 'f', 2));
+                writePskSetting("weatherRadarSpeedPercent", speed);
+                m_mapView->setWeatherRadarPlaybackSpeed(speed);
+            });
     connect(m_globeCheck, &QCheckBox::toggled, this, [this](bool on) {
         writePskSetting("showGlobe", on);
         m_mapView->setProjectionMode(on
@@ -585,6 +720,68 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                 if (!marker.clickInfo.isEmpty()) {
                     QToolTip::showText(QCursor::pos(), marker.clickInfo);
                 }
+            });
+    connect(m_mapView,
+            &MapDisplayWidget::weatherRadarTimelineLoadingChanged,
+            this, [this](bool loading) {
+                m_weatherRadarTimelineLoading = loading;
+                if (loading) {
+                    m_weatherRadarPlayButton->setText(
+                        QStringLiteral("■"));
+                    m_weatherRadarPlayButton->setAccessibleName(
+                        tr("Cancel loading historical weather radar"));
+                    m_weatherRadarFrameLabel->setText(tr("Loading"));
+                } else {
+                    m_weatherRadarPlayButton->setText(
+                        m_mapView->weatherRadarAnimating()
+                            ? QStringLiteral("❚❚")
+                            : QStringLiteral("▶"));
+                    m_weatherRadarPlayButton->setAccessibleName(
+                        m_mapView->weatherRadarAnimating()
+                            ? tr("Pause historical weather radar")
+                            : tr("Play historical weather radar"));
+                }
+            });
+    connect(m_mapView,
+            &MapDisplayWidget::weatherRadarAnimationStateChanged,
+            this, [this](bool playing) {
+                m_weatherRadarPlayButton->setText(
+                    playing ? QStringLiteral("❚❚")
+                            : QStringLiteral("▶"));
+                m_weatherRadarPlayButton->setAccessibleName(
+                    playing ? tr("Pause historical weather radar")
+                            : tr("Play historical weather radar"));
+            });
+    connect(m_mapView, &MapDisplayWidget::weatherRadarFrameChanged,
+            this, [this](const QDateTime& frameTime, bool live) {
+                if (live) {
+                    m_weatherRadarFrameLabel->setText(tr("Live"));
+                    m_weatherRadarFrameLabel->setToolTip(
+                        tr("Latest NOAA radar frame"));
+                    return;
+                }
+                const qint64 ageMinutes = std::max<qint64>(0,
+                    frameTime.secsTo(QDateTime::currentDateTimeUtc()) / 60);
+                const WeatherRadarLocalFrameTime localTime = weatherRadarLocalFrameTime(frameTime);
+                m_weatherRadarFrameLabel->setText(tr("%1 (%2m old)")
+                    .arg(localTime.clock)
+                    .arg(ageMinutes));
+                m_weatherRadarFrameLabel->setToolTip(
+                    tr("NOAA radar frame: %1 (local time). %2 minutes old. "
+                       "New observations are checked every minute during playback.")
+                        .arg(localTime.details)
+                        .arg(ageMinutes));
+            });
+    connect(m_mapView, &MapDisplayWidget::weatherRadarAnimationError,
+            this, [this](const QString& message) {
+                m_weatherRadarTimelineLoading = false;
+                m_weatherRadarPlayButton->setText(QStringLiteral("▶"));
+                m_weatherRadarFrameLabel->setText(tr("Unavailable"));
+                m_weatherRadarFrameLabel->setToolTip(message);
+                QToolTip::showText(
+                    m_weatherRadarPlayButton->mapToGlobal(
+                        QPoint(0, m_weatherRadarPlayButton->height())),
+                    message, m_weatherRadarPlayButton);
             });
 
     // Bottom row: forecasted HF band conditions justified to the bottom-left
@@ -1906,6 +2103,9 @@ void PskReporterMapDialog::updateBandConditions()
 void PskReporterMapDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
+    m_mapView->setWeatherRadarVisible(m_weatherRadarCheck->isChecked());
+    m_mapView->setWeatherRadarPlaybackSpeed(
+        m_weatherRadarSpeedSlider->value());
     updateHomeFromRadio();
     if (m_propForecast != nullptr) {
         // Refresh the detailed forecast (band conditions) on open; the
@@ -1927,6 +2127,7 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
     // Stop hitting the network while the window is closed.
     m_client->stop();
     m_globalClient->stop();
+    m_mapView->setWeatherRadarVisible(false);
     m_started = false;
     PersistentDialog::closeEvent(event);
 }

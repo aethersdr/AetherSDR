@@ -899,6 +899,9 @@ set(GUI_SOURCES
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp
     src/gui/map/MapTerminatorItem.cpp
+    src/gui/map/WeatherRadarPlaybackItem.cpp
+    src/gui/map/WeatherRadarSource.cpp
+    src/gui/map/WeatherRadarTileLayer.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp

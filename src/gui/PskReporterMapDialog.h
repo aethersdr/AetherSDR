@@ -11,6 +11,8 @@ class QSpinBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QToolButton;
+class GuardedSlider;
 
 namespace AetherSDR {
 
@@ -88,6 +90,12 @@ private:
     QCheckBox*          m_allCallsignsCheck{nullptr};
     QCheckBox*          m_activeMonitorsCheck{nullptr};
     QCheckBox*          m_terminatorCheck{nullptr};
+    QCheckBox*          m_weatherRadarCheck{nullptr};
+    QToolButton*        m_weatherRadarPlayButton{nullptr};
+    QComboBox*          m_weatherRadarHistoryCombo{nullptr};
+    GuardedSlider*      m_weatherRadarSpeedSlider{nullptr};
+    QLabel*            m_weatherRadarSpeedValue{nullptr};
+    QLabel*             m_weatherRadarFrameLabel{nullptr};
     QTimer*             m_emptyStateTimer{nullptr};
     QTimer*             m_lookbackDebounce{nullptr};
     QTimer*             m_markerRefreshTimer{nullptr};
@@ -127,6 +135,7 @@ private:
     bool                m_beaconPrevTxEq{false};
     bool                m_beaconArmed{false};
     bool                m_beaconTransmitting{false};
+    bool                m_weatherRadarTimelineLoading{false};
     QLabel*             m_bandCondPills[4]{};
     bool                m_started{false};
     bool                m_mapCallsignUserEdited{false};
