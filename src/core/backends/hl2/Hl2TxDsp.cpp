@@ -170,10 +170,8 @@ bool Hl2TxDsp::isLowerSideband() const
     }
 }
 
-// `clientLeveled` is unused since the ALC's ceiling became unity on every path;
-// see the declaration in Hl2TxDsp.h for why the parameter is kept for now.
 void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
-                                 [[maybe_unused]] bool clientLeveled)
+                                 TxAudioSource source)
 {
     if (m_bandpass.empty() || mono.empty())
         return;
@@ -245,14 +243,20 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // 20 dB out. Above the target the loop reduces on its 5 ms attack, so the
     // response degrades to smooth limiting instead of clipping.
     //
-    // `clientLeveled` no longer reaches this loop. It selected the ceiling and
-    // qualified the hold, and both are gone; see the note on the declaration in
-    // Hl2TxDsp.h for why the parameter is kept for now.
+    // THE MIC SLIDER IS A MICROPHONE CONTROL, so it does not reach the engine's
+    // own generated audio. See the note on the declaration in Hl2TxDsp.h.
+    //
+    // Decided ONCE per block and used by both loops below, so the level the ALC
+    // measures and the level that reaches the modulator cannot disagree — they
+    // are the same number by construction rather than by two matching edits.
+    const double micGain =
+        (source == TxAudioSource::EngineGenerated) ? 1.0 : m_micGain;
+
     if (m_config.alcEnabled) {
         float blockPeak = 0.0f;
         for (std::size_t s = 0; s < consumed; ++s)
             blockPeak = std::max(blockPeak, std::fabs(
-                static_cast<float>(m_inBuffer[s] * m_micGain)));
+                static_cast<float>(m_inBuffer[s] * micGain)));
 
         if (blockPeak > 1e-6f) {
             const double wanted = m_config.alcTargetPeak / blockPeak;
@@ -291,7 +295,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
         // the operator nothing — it reports the ALC's success, not their input
         // level. What a mic-gain control acts on is this, and how hard the ALC
         // is working is reported separately as alcGain().
-        const float preAlc = static_cast<float>(m_inBuffer[s] * m_micGain);
+        const float preAlc = static_cast<float>(m_inBuffer[s] * micGain);
         peak = std::max(peak, std::fabs(preAlc));
 
         // Hard limit AFTER the ALC. The ALC is a smoothed estimate and will

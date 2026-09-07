@@ -7,6 +7,7 @@
 #include <complex>
 #include <string>
 #include <vector>
+#include "core/backends/IRadioBackend.h"
 
 namespace AetherSDR::hl2 {
 
@@ -127,17 +128,35 @@ public slots:
     // across the band. That clamp is a backstop, not a level control, and must
     // not become the only thing standing between a hot source and the air.
     //
-    // The parameter is retained rather than removed because the signature is
-    // Q_INVOKABLE and crossed by a queued connection from
-    // Hl2Backend::submitTxAudio; dropping it is a clean follow-up, and doing
-    // it here would put a signature churn in the same diff as a level change.
-    // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
-    // that the convergence is a no-op on the TCI/DAX path.
+    // THE PARAMETER HAS A JOB AGAIN, AND IT IS THE MIC SLIDER.
     //
-    // The engine's own generated audio (WSPR beacon, AX.25 modem tones, the
-    // RADE modem waveform) arrives with this false, and now sees exactly what
-    // a client-leveled block sees.
-    void processAudioBlock(const std::vector<float>& mono, bool clientLeveled);
+    // It went vestigial when the ceiling became unity — it had selected the
+    // ceiling and qualified the hold, and both went. It is now a THREE-STATE
+    // source (TxAudioSource), and what it decides is whether m_micGain applies
+    // at all:
+    //
+    //   Microphone / ClientLeveled   m_micGain applies. On the mic path it is
+    //                                the operator's own level control; on the
+    //                                client path it is a proportional
+    //                                attenuator, which is what #4796 left it.
+    //   EngineGenerated              m_micGain DOES NOT APPLY. A mic slider is
+    //                                a microphone control. The WSPR pump, the
+    //                                AX.25 modem and the RADE waveform each
+    //                                generate at a level chosen for them, and
+    //                                yoking a beacon to the setting an operator
+    //                                picked for their voice is a defect that
+    //                                predates the ALC change — it was merely
+    //                                invisible while 40 dB of makeup
+    //                                normalised every one of them to target.
+    //
+    // The ALC itself is unchanged for all three: reduction-only, unity ceiling.
+    // Engine audio is protected from splatter exactly like everything else; it
+    // simply is not RE-LEVELLED on its way in.
+    //
+    // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
+    // that none of this moved the TCI/DAX path.
+    void processAudioBlock(const std::vector<float>& mono,
+                           TxAudioSource source);
     // Drop anything buffered — on unkey, so the next transmission does not
     // start with the tail of the previous one.
     void reset();

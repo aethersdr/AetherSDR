@@ -58,7 +58,8 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
                                                  float* lastMicPeak = nullptr,
                                                  bool alc = false,
                                                  const double* passband = nullptr,
-                                                 bool clientLeveled = false)
+                                                 TxAudioSource source =
+                                                     TxAudioSource::Microphone)
 {
     Hl2TxDsp tx;
     Hl2TxDsp::Config cfg;
@@ -105,7 +106,7 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
         const std::size_t n = std::min(kChunk, audio.size() - off);
         tx.processAudioBlock(std::vector<float>(audio.begin() + static_cast<std::ptrdiff_t>(off),
                                                 audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                             clientLeveled);
+                             source);
     }
     return out;
 }
@@ -374,7 +375,7 @@ int main(int argc, char** argv)
                         amplitude * std::sin(2.0 * M_PI * 1000.0
                                              * (off + static_cast<int>(n)) / fs));
                 }
-                tx.processAudioBlock(chunk, /*clientLeveled=*/false);
+                tx.processAudioBlock(chunk, TxAudioSource::Microphone);
             }
             // Settled tail only, so the opening blocks are not representative.
             double mx = 0.0;
@@ -426,10 +427,10 @@ int main(int argc, char** argv)
         // client-leveled. 20 dB apart in, 20 dB apart out.
         const auto quiet = modulate(WdspChannel::Mode::Usb, kTone, 0.00316, 1.0,
                                     1.0, nullptr, true, nullptr,
-                                    /*clientLeveled=*/true);
+                                    TxAudioSource::ClientLeveled);
         const auto loud  = modulate(WdspChannel::Mode::Usb, kTone, 0.0316, 1.0,
                                     1.0, nullptr, true, nullptr,
-                                    /*clientLeveled=*/true);
+                                    TxAudioSource::ClientLeveled);
         if (!quiet.empty() && !loud.empty()) {
             const double a = binPower(quiet, kTone, kFsOut);
             const double b = binPower(loud, kTone, kFsOut);
@@ -486,7 +487,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, /*clientLeveled=*/true);
+                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled);
                 }
                 marks[stage + 1] = out.size();
             }
@@ -560,12 +561,12 @@ int main(int argc, char** argv)
 
         const auto hot = modulate(WdspChannel::Mode::Usb, kHarmTone, 1.0,
                                   kHotMicGain, 1.5, nullptr, true, nullptr,
-                                  /*clientLeveled=*/true);
+                                  TxAudioSource::ClientLeveled);
         // 24 dB below the ALC target at unity mic gain: the limiter cannot
         // engage, so this is what "undistorted" reads on this instrument.
         const auto clean = modulate(WdspChannel::Mode::Usb, kHarmTone, 0.05,
                                     1.0, 1.5, nullptr, true, nullptr,
-                                    /*clientLeveled=*/true);
+                                    TxAudioSource::ClientLeveled);
         if (!hot.empty() && !clean.empty()) {
             const auto tail  = settledTail(hot);     // skips the 5 ms attack
             const auto ctail = settledTail(clean);
@@ -634,7 +635,7 @@ int main(int argc, char** argv)
         constexpr double kHotMicGain = 10.0;
         const auto fresh = modulate(WdspChannel::Mode::Usb, kTone, 0.000316,
                                     kHotMicGain, 1.5, nullptr, true, nullptr,
-                                    /*clientLeveled=*/true);
+                                    TxAudioSource::ClientLeveled);
 
         Hl2TxDsp tx;
         Hl2TxDsp::Config cfg;
@@ -671,7 +672,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, /*clientLeveled=*/true);
+                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled);
                 }
                 if (stage == 0)
                     afterLoud = out.size();
@@ -696,6 +697,74 @@ int main(int argc, char** argv)
             check(std::fabs(lastGainDb) < 1.0,
                   "ALC gain is back at 0 dB once the client is quiet again");
         }
+    }
+
+    // ── The engine's own generated audio keeps the level it was generated at ──
+    //
+    // WSPR, the AX.25 modem and the RADE waveform reach the modulator as
+    // TxAudioSource::EngineGenerated. Two properties, and the second is the one
+    // that was actually broken on the air.
+    //
+    // 1. THE MIC SLIDER DOES NOT REACH IT. A slider set for a voice is not a
+    //    control over an unattended beacon. Before the source enum, engine
+    //    audio was indistinguishable from mic audio and moved with it.
+    // 2. THE LEVEL SURVIVES. A generator emitting -20 dBFS transmits -20 dBFS.
+    //
+    // Both were invisible while the ALC carried 40 dB of makeup, because it
+    // normalised every generated level onto its target. The bench measured the
+    // consequence once the makeup went: 18.58 dB of unattended shortfall
+    // (bench-runner runs/wspr-unattended-ab, both binaries, same stimulus).
+    {
+        constexpr double kGenerated = 0.1;      // -20.000 dBFS, the WSPR default
+        float mp = 0.0f;
+        auto peak = [](const std::vector<std::complex<float>>& iq) {
+            double m = 0.0;
+            for (const auto& v : iq) m = std::max(m, static_cast<double>(std::abs(v)));
+            return m;
+        };
+
+        const double pUnity = peak(modulate(WdspChannel::Mode::Usb, kTone,
+            kGenerated, 1.0, 1.0, &mp, true, nullptr, TxAudioSource::EngineGenerated));
+        const double pUp    = peak(modulate(WdspChannel::Mode::Usb, kTone,
+            kGenerated, 100.0, 1.0, &mp, true, nullptr, TxAudioSource::EngineGenerated));
+        const double pDown  = peak(modulate(WdspChannel::Mode::Usb, kTone,
+            kGenerated, 0.1, 1.0, &mp, true, nullptr, TxAudioSource::EngineGenerated));
+
+        const double spreadDb = 20.0 * std::log10(
+            std::max(pUp, pDown) / std::max(1e-12, std::min(pUp, pDown)));
+        std::fprintf(stderr,
+            "engine-generated: mic 1x %.6f, 100x %.6f, 0.1x %.6f -> spread %.2f dB\n",
+            pUnity, pUp, pDown, spreadDb);
+        check(spreadDb < 0.5,
+              "the mic slider does not reach engine-generated audio");
+
+        // And the mic path is untouched by all of it. This one is also the
+        // CONTROL for the level assertion below.
+        const double micUnity = peak(modulate(WdspChannel::Mode::Usb, kTone,
+            kGenerated, 1.0, 1.0, &mp, true));
+
+        // Consistency alone is not enough -- three identical WRONG answers
+        // would pass the spread check. The level must be RIGHT, and "right" is
+        // measured rather than asserted against a constant: the modulator has
+        // its own scale factor (an amplitude of 0.5 leaves as |IQ| 0.52, see
+        // the diag line above), so dividing by a guessed number would test the
+        // guess. The microphone path at UNITY mic gain applies no gain either,
+        // so it IS the reference -- and the claim becomes exactly what it
+        // should be: engine-generated audio comes out where mic audio would
+        // with the slider at unity, whatever the slider actually says.
+        const double vsControlDb =
+            20.0 * std::log10(std::max(1e-12, pUnity / micUnity));
+        std::fprintf(stderr,
+            "engine-generated vs mic-at-unity control: %+.3f dB\n", vsControlDb);
+        check(std::fabs(vsControlDb) < 0.1,
+              "engine-generated audio transmits at the level it was generated at");
+        const double micHalf  = peak(modulate(WdspChannel::Mode::Usb, kTone,
+            kGenerated, 0.5, 1.0, &mp, true));
+        const double micDropDb =
+            20.0 * std::log10(std::max(1e-12, micHalf / micUnity));
+        std::fprintf(stderr,
+            "mic path still follows the slider: %.2f dB for a 2:1 cut\n", micDropDb);
+        check(micDropDb < -3.0, "the mic slider still moves microphone audio");
     }
 
     if (g_failures == 0)

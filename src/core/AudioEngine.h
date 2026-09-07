@@ -40,6 +40,7 @@ class QMediaDevices;
 #include <deque>
 #include <vector>
 #include <cstdint>
+#include "core/backends/IRadioBackend.h"
 
 namespace AetherSDR {
 
@@ -723,14 +724,19 @@ signals:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     //
-    // `clientLeveled` is true when the frames came from an external TCI/DAX
+    // `source` says WHERE the frames came from — see TxAudioSource. It was a
+    // bool that only distinguished external TCI/DAX from everything else,
+    // which put the microphone and the engine's own generators in one bucket.
+    // `source` is TxAudioSource::ClientLeveled when the frames came from an
+    // external TCI/DAX
     // client (feedDaxTxAudio's markExternalSource) rather than the mic chain or
     // the engine's own tone generators. Such a client owns its level — WSJT-X's
     // Pwr slider attenuates the audio it streams — and a host-modulating
     // backend must not run makeup gain over it (#4796). Slots that only record
     // or meter the stream can ignore the flag (Qt permits connecting to a slot
     // with fewer arguments).
-    void txFinalMonitorPcmReady(const QByteArray& int16Stereo, bool clientLeveled);
+    void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
+                                TxAudioSource source);
     void modemTxAudioFinished(quint64 token);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio

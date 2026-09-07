@@ -105,7 +105,7 @@ public:
     void setKeying(bool key) override;
     void setCwKeying(bool down, bool breakIn, int breakInDelayMs) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled) override;
+                       TxAudioSource source) override;
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
@@ -821,6 +821,11 @@ private:
     // applies to the microphone path — a TCI/DAX client's level is set in the
     // client. Cleared on each key edge in setKeying().
     bool m_txAudioClientLeveled = false;
+    // Set when any block of THIS transmission came from the engine's own
+    // generators (WSPR pump, AX.25 modem, RADE waveform). Gates the unkey
+    // "raise mic gain" diagnostic off: the mic slider is not in that audio's
+    // path, so the advice would name a control that cannot help.
+    bool m_txAudioEngineGenerated = false;
 
     // The passband to push at the modulator for `mode`: the operator's if they
     // have chosen one, otherwise that mode's default.

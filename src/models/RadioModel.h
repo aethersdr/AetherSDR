@@ -1399,7 +1399,7 @@ public:
     // AudioEngine's source decision through: true for external TCI/DAX client
     // audio, whose level the sender owns (#4796).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled);
+                       TxAudioSource source);
     // Ordered completion barrier for a finite modem stream. The token lets the
     // producer reject a stale completion from an aborted transmission.
     void finishTxAudio(quint64 token);

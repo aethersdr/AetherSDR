@@ -27,6 +27,20 @@
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
 
+// Where a block of transmit audio originated. See submitTxAudio() below for
+// why this is three states and not the bool it replaced.
+//
+// Declared as a metatype because it travels on AudioEngine's
+// txFinalMonitorPcmReady signal, and AudioEngine lives on its own thread —
+// a queued connection cannot marshal a type Qt has never been told about,
+// and the failure is a runtime warning and a dropped signal, not a compile
+// error.
+enum class TxAudioSource {
+    Microphone = 0,
+    ClientLeveled,
+    EngineGenerated,
+};
+
 namespace AetherSDR {
 
 // Neutral, family-agnostic connect descriptor. Core fields cover the common
@@ -845,18 +859,38 @@ public:
     // the microphone and any future source all reach the air through ONE path,
     // so what the operator monitors is what gets transmitted.
     //
-    // `clientLeveled` is true when the audio came from an external TCI/DAX
-    // client rather than the mic chain or the engine's own generators. The
-    // sender of such audio has already applied its own level control, so a
-    // host-modulating backend must not run makeup gain (ALC) over it (#4796).
+    // WHERE THE TRANSMIT AUDIO CAME FROM, which decides whose level it is.
+    //
+    // This was a bool named `clientLeveled` and the bool could not say enough.
+    // It answered "did an external client set this level?" — true for TCI/DAX,
+    // false for EVERYTHING ELSE — which put the operator's microphone and the
+    // engine's own generated tones in one bucket. They are not the same thing
+    // and they must not be levelled the same way:
+    //
+    //   Microphone       the operator sets the level, with the mic slider,
+    //                    deliberately, and is standing there to hear the result.
+    //   ClientLeveled    TCI/DAX. The sender already applied its own control,
+    //                    so a host-modulating backend must not add makeup over
+    //                    it (#4796).
+    //   EngineGenerated  the WSPR pump, the AX.25 modem and the RADE waveform.
+    //                    WE generated this, at a level WE chose, and NOBODY IS
+    //                    WATCHING — a WSPR frame keys for 111.6 s unattended.
+    //                    The mic slider is a microphone control and has no
+    //                    business moving it.
+    //
+    // The distinction was harmless while the ALC carried up to 40 dB of makeup:
+    // it normalised every one of these to its target, so generated audio came
+    // out right no matter what level it was generated at. Removing the makeup
+    // made the difference load-bearing, and made this enum necessary.
+    //
     // No default argument — defaults on virtuals bind statically, and the
     // override a caller actually reaches would quietly diverge from it.
     virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled)
+                               TxAudioSource source)
     {
         Q_UNUSED(int16Stereo);
         Q_UNUSED(sampleRateHz);
-        Q_UNUSED(clientLeveled);
+        Q_UNUSED(source);
     }
 
     // Finish a finite processed-audio stream before its caller starts the PTT
@@ -1335,3 +1369,5 @@ private:
 // RadioModel's constructor, so a queued or QMetaMethod-based connection of
 // linkStatsUpdated delivers rather than silently dropping.
 Q_DECLARE_METATYPE(AetherSDR::IRadioBackend::LinkStats)
+
+Q_DECLARE_METATYPE(TxAudioSource)

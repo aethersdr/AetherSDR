@@ -1722,7 +1722,7 @@ MainWindow::MainWindow(QWidget* parent)
     // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
     // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+            m_qsoRecorder, [this](const QByteArray& pcm, TxAudioSource /*source*/) {
         // Evaluated at queued-delivery time on the recorder's thread, so blocks
         // already in flight when ownership flips are gated by the NEW owner —
         // bounded (tens of ms) leakage in both directions at over boundaries.
@@ -1737,9 +1737,9 @@ MainWindow::MainWindow(QWidget* parent)
     // agree with what actually goes on the air. A Flex radio modulates on the
     // radio side and ignores this.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            this, [this](const QByteArray& pcm, bool clientLeveled) {
+            this, [this](const QByteArray& pcm, TxAudioSource source) {
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   clientLeveled);
+                                   source);
     });
     wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
