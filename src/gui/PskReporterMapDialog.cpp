@@ -10,6 +10,7 @@
 #include "core/PskReporterClient.h"
 #include "core/TxKeyingMarker.h"
 #include "core/WsprBeacon.h"
+#include "map/CityLightsShading.h"
 #include "map/MapDisplayWidget.h"
 #include "map/WeatherRadarFrameTime.h"
 #include "models/EqualizerModel.h"
@@ -483,7 +484,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_cityLightsBrightness->setFixedWidth(120);
     m_cityLightsBrightness->setFocusPolicy(Qt::StrongFocus);
     m_cityLightsBrightness->setValue(std::clamp(
-        pskSettings().value("cityLightsBrightness").toInt(70), 0, 100));
+        pskSettings().value("cityLightsBrightness").toInt(CityLightsShading::kDefaultBrightness), 0, 100));
     m_cityLightsBrightness->setDragValueFormatter([](int value) {
         return QStringLiteral("%1%").arg(value);
     });
@@ -502,7 +503,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_cityLightsFaintLights->setFixedWidth(120);
     m_cityLightsFaintLights->setFocusPolicy(Qt::StrongFocus);
     m_cityLightsFaintLights->setValue(std::clamp(
-        pskSettings().value("cityLightsFaintLights").toInt(50), 0, 100));
+        pskSettings().value("cityLightsFaintLights").toInt(CityLightsShading::kDefaultFaintLights), 0, 100));
     m_cityLightsFaintLights->setDragValueFormatter([](int value) {
         return QStringLiteral("%1%").arg(value);
     });
@@ -524,7 +525,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_cityLightsWarmth->setFixedWidth(120);
     m_cityLightsWarmth->setFocusPolicy(Qt::StrongFocus);
     m_cityLightsWarmth->setValue(std::clamp(
-        pskSettings().value("cityLightsWarmth").toInt(25), 0, 100));
+        pskSettings().value("cityLightsWarmth").toInt(CityLightsShading::kDefaultWarmth), 0, 100));
     m_cityLightsWarmth->setDragValueFormatter([](int value) {
         return QStringLiteral("%1%").arg(value);
     });

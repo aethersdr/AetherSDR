@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CityLightsShading.h"
 #include "MapView.h"
 #include "WeatherRadarLoadingStatus.h"
 #include "WeatherRadarPlaybackTimeline.h"
@@ -155,14 +156,14 @@ private:
     void cancelWeatherRadarTimelineRequest();
     void resetWeatherRadarAnimation(bool returnToLive);
     void pruneWeatherRadarCache();
-
     void refreshCityLightsView();
     void presentCityLights();
+
     CityLightsSource* m_cityLightsSource{nullptr};
     bool m_cityLightsVisible{false};
-    int m_cityLightsBrightness{70};
-    int m_cityLightsFaintLights{50};
-    int m_cityLightsWarmth{25};
+    int m_cityLightsBrightness{CityLightsShading::kDefaultBrightness};
+    int m_cityLightsFaintLights{CityLightsShading::kDefaultFaintLights};
+    int m_cityLightsWarmth{CityLightsShading::kDefaultWarmth};
     QStackedLayout* m_stack{nullptr};
     MapView* m_flatView{nullptr};
     GlobeMapView* m_globeView{nullptr};

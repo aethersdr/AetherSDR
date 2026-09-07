@@ -726,6 +726,9 @@ void MapView::handleWeatherRadarFrameReady(
 
 void MapView::setCityLightsVisible(bool visible)
 {
+    if (m_cityLightsVisible == visible) {
+        return;
+    }
     m_cityLightsVisible = visible;
     m_cityLightsItem->setVisible(visible);
     updateMapAttribution();

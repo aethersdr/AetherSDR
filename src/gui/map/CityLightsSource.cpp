@@ -127,7 +127,7 @@ QImage CityLightsSource::nightImage(const QImage& source, const QRectF& bounds,
     // Lift dim lights without clipping bright city centers or changing hue.
     // A lookup table avoids a power operation for every image pixel.
     const double warm = std::clamp(warmth, 0, 100) / 100.0;
-    const double gamma = 1.0 - 0.65 * std::clamp(faintLights, 0, 100) / 100.0;
+    const double gamma = CityLightsShading::faintLightsGamma(faintLights);
     std::array<double, 256> gains{};
     for (int value = 1; value < 256; ++value) {
         gains[value] = std::pow(value / 255.0, gamma) * 255.0 / value;
@@ -140,6 +140,7 @@ QImage CityLightsSource::nightImage(const QImage& source, const QRectF& bounds,
         hourCosines[x] = std::cos(longitude - sun.subsolarLonRad);
     }
     const double sunSin = std::sin(sun.declinationRad);
+    const double twilightSine = CityLightsShading::twilightSine();
     const double sunCos = std::cos(sun.declinationRad);
     for (int y = 0; y < image.height(); ++y) {
         const double northing = bounds.bottom() - (y + 0.5) * bounds.height() / image.height();
@@ -149,13 +150,16 @@ QImage CityLightsSource::nightImage(const QImage& source, const QRectF& bounds,
         QRgb* pixels = reinterpret_cast<QRgb*>(image.scanLine(y));
         for (int x = 0; x < image.width(); ++x) {
             const double elevation = latitudeSin * sunSin + latitudeCos * sunCos * hourCosines[x];
-            // Smooth civil twilight: absent at the horizon, full at -6 degrees.
-            const double t = std::clamp(-elevation / std::sin(M_PI / 30.0), 0.0, 1.0);
+            // Smooth civil twilight: absent at the horizon, full at
+            // -kCivilTwilightDegrees.
+            const double t = std::clamp(-elevation / twilightSine, 0.0, 1.0);
             const QRgb p = pixels[x];
             const double amount = (nightOnly ? t * t * (3.0 - 2.0 * t) : 1.0)
                 * gains[qAlpha(p)];
-            pixels[x] = qRgba(qRound(qRed(p) * amount), qRound(qGreen(p) * amount * (1.0 - 0.15 * warm)),
-                              qRound(qBlue(p) * amount * (1.0 - 0.40 * warm)), qRound(qAlpha(p) * amount));
+            pixels[x] = qRgba(qRound(qRed(p) * amount),
+                              qRound(qGreen(p) * amount * (1.0 - CityLightsShading::kWarmthGreenLoss * warm)),
+                              qRound(qBlue(p) * amount * (1.0 - CityLightsShading::kWarmthBlueLoss * warm)),
+                              qRound(qAlpha(p) * amount));
         }
     }
     return image;

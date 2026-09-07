@@ -1238,7 +1238,8 @@ set_tests_properties(weather_radar_wrap_render_test PROPERTIES
 # Proves delayed/out-of-order downloads, view cache reuse, and retained geometry.
 add_executable(weather_radar_loading_test
     tests/weather_radar_loading_test.cpp
-    src/gui/map/CityLightsSource.cpp src/gui/map/CityLightsItem.cpp
+    src/gui/map/CityLightsItem.cpp
+    src/gui/map/CityLightsSource.cpp
     src/gui/map/MapDisplayWidget.cpp src/gui/map/MapView.cpp src/gui/map/GlobeMapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp src/gui/map/MapTerminatorItem.cpp

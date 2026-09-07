@@ -1,3 +1,4 @@
+#include "gui/map/CityLightsShading.h"
 #include "gui/map/CityLightsSource.h"
 #include "gui/map/SolarTerminator.h"
 
@@ -151,6 +152,27 @@ private slots:
             QDateTime::currentDateTimeUtc(), false, 0, 25);
         QCOMPARE(warm.pixel(0, 0), qRgba(255, 245, 230, 255));
         QCOMPARE(warm.pixel(1, 0), QRgb(0));
+        // The CPU path and the globe shader share one set of constants; a
+        // change on either side must show up here and in the shader source.
+        QCOMPARE(warm.pixel(0, 0), qRgba(255,
+            qRound(255 * (1.0 - CityLightsShading::kWarmthGreenLoss * 0.25)),
+            qRound(255 * (1.0 - CityLightsShading::kWarmthBlueLoss * 0.25)), 255));
+    }
+
+    void shaderCompiledFromSharedConstants()
+    {
+        const QString shader = CityLightsShading::fragmentShaderSource();
+        QVERIFY(!shader.contains(QLatin1String("WARMTH_")));
+        QVERIFY(!shader.contains(QLatin1String("TWILIGHT_SINE")));
+        QVERIFY(shader.contains(QStringLiteral("1.0 - %1 * warmth, 1.0 - %2 * warmth")
+            .arg(CityLightsShading::glslNumber(CityLightsShading::kWarmthGreenLoss),
+                 CityLightsShading::glslNumber(CityLightsShading::kWarmthBlueLoss))));
+        QVERIFY(shader.contains(QStringLiteral("/ %1, 0.0, 1.0)")
+            .arg(CityLightsShading::glslNumber(CityLightsShading::twilightSine()))));
+        QCOMPARE(CityLightsShading::faintLightsGamma(0), 1.0);
+        QCOMPARE(CityLightsShading::faintLightsGamma(100), 1.0 - CityLightsShading::kFaintLightsGammaSpan);
+        QCOMPARE(CityLightsShading::faintLightsGamma(250), CityLightsShading::faintLightsGamma(100));
+        QVERIFY(std::abs(CityLightsShading::twilightSine() - std::sin(M_PI / 30.0)) < 1e-12);
     }
 
     void solarMaskUsesNorthPositiveBounds()
@@ -216,6 +238,22 @@ private slots:
         QTRY_COMPARE(network.requests.size(), 4);
         network.requests.last()->complete();
         QTRY_VERIFY(source.bounds() != retainedBounds);
+        QTRY_VERIFY(!source.renderPending());
+        // A parameter change re-renders asynchronously; consumers must not
+        // present image() until imageChanged says it reflects the parameters.
+        const int before = changed.size();
+        source.setFaintLights(10);
+        QVERIFY(source.renderPending());
+        // Queued behind the running render: that render's result is stale and
+        // is dropped, so exactly one imageChanged follows for the final state.
+        source.setWarmth(40);
+        QVERIFY(source.renderPending());
+        QTRY_COMPARE(changed.size(), before + 1);
+        QVERIFY(!source.renderPending());
+        QTest::qWait(100);
+        QCOMPARE(changed.size(), before + 1);
+        source.setWarmth(40); // Unchanged value schedules nothing.
+        QVERIFY(!source.renderPending());
     }
 };
 

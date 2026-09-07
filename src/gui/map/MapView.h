@@ -176,11 +176,11 @@ private:
     void configureViewportInput(QWidget* viewport);
     void fallBackToRasterViewport();
     void updateAttributionStyle();
+    void updateMapAttribution();
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
     QGVLayer* m_terminatorLayer{nullptr};
-    void updateMapAttribution();
     CityLightsItem* m_cityLightsItem{nullptr};
     bool m_cityLightsVisible{false};
     QGVLayer* m_weatherRadarPlaybackLayer{nullptr};

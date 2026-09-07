@@ -319,7 +319,13 @@ void MapDisplayWidget::presentCityLights()
     // different viewport image is downloading or its twilight mask is pending.
     m_flatView->setCityLightsVisible(m_cityLightsVisible);
     m_flatView->setCityLightsBrightness(m_cityLightsBrightness);
-    m_flatView->setCityLightsImage(m_cityLightsSource->image(), m_cityLightsSource->bounds());
+    // The CPU render only carries flat-map parameters while the flat view is
+    // current: in globe mode the source renders the plain original for the
+    // GPU. Never hand that, or a render still catching up after a projection
+    // switch, to the flat item; imageChanged delivers the correct one.
+    if (m_projectionMode == ProjectionMode::Flat && !m_cityLightsSource->renderPending()) {
+        m_flatView->setCityLightsImage(m_cityLightsSource->image(), m_cityLightsSource->bounds());
+    }
     if (m_globeView != nullptr) {
         m_globeView->setCityLightsVisible(m_cityLightsVisible);
         m_globeView->setCityLightsBrightness(m_cityLightsBrightness);

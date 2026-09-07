@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CityLightsShading.h"
 #include "MapView.h"
 #include "GlobeNavigation.h"
 #include "WeatherRadarSource.h"
@@ -158,15 +159,6 @@ private:
     void cleanupOpenGlResources();
     void drawCityLights(const QMatrix4x4& matrix);
     void updateMapAttribution();
-    QImage m_cityLightsImage;
-    QRectF m_cityLightsBounds;
-    std::unique_ptr<QOpenGLTexture> m_cityLightsTexture;
-    std::unique_ptr<QOpenGLShaderProgram> m_cityLightsProgram;
-    bool m_cityLightsVisible{false};
-    bool m_cityLightsDirty{false};
-    float m_cityLightsOpacity{0.7F};
-    float m_cityLightsGamma{1.0F};
-    float m_cityLightsWarmth{0.0F};
     void reportRendererUnavailable(const QString& reason,
                                    const QString& detail = {});
     void scheduleAtlasUpload();
@@ -207,6 +199,15 @@ private:
     QToolButton* makeOverlayButton(const QString& text, const QString& tip);
     void updateTheme();
 
+    QImage m_cityLightsImage;
+    QRectF m_cityLightsBounds;
+    std::unique_ptr<QOpenGLTexture> m_cityLightsTexture;
+    std::unique_ptr<QOpenGLShaderProgram> m_cityLightsProgram;
+    bool m_cityLightsVisible{false};
+    bool m_cityLightsDirty{false};
+    float m_cityLightsOpacity{CityLightsShading::kDefaultBrightness / 100.0F};
+    float m_cityLightsGamma{float(CityLightsShading::faintLightsGamma(CityLightsShading::kDefaultFaintLights))};
+    float m_cityLightsWarmth{CityLightsShading::kDefaultWarmth / 100.0F};
     std::unique_ptr<QOpenGLShaderProgram> m_program;
     std::unique_ptr<QOpenGLShaderProgram> m_radarProgram;
     std::unique_ptr<QOpenGLTexture> m_texture;

@@ -10,7 +10,8 @@ lights appear worldwide. The **City lights brightness** slider, shown when the
 layer is enabled, adjusts intensity from 0 to 100 percent. Visibility defaults
 to off; brightness defaults to 70 percent. **Faint lights** defaults to 50 percent and lifts dim settlements while preserving
 black backgrounds, hue, and bright city centers. Zero restores the original
-intensity mapping. All preferences are saved in the
+intensity mapping. **Warmth** defaults to 0, which keeps NASA's original
+grayscale appearance; raising it tints lights golden. All preferences are saved in the
 existing `PskReporter` settings object. The layer is independent of weather
 radar and its playback clock; twilight always follows current UTC.
 
@@ -67,7 +68,10 @@ The detail enhancement uses an independently designed gamma curve on light
 coverage, before twilight and overall brightness. The globe keeps the original
 image resident on the GPU and applies enhancement and twilight in its fragment
 shader. Slider changes update a uniform and repaint, without CPU image work or
-texture uploads. The flat view uses the CPU image path. OpenHamClock was used only
+texture uploads. The flat view uses the CPU image path. Both paths take their
+gamma span, warmth coefficients, twilight depth and control defaults from
+`src/gui/map/CityLightsShading.h`, and the globe shader is generated from those
+constants, so the projections cannot drift apart. OpenHamClock was used only
 as a public visual reference; no implementation code was inspected or copied.
 The larger export budget improves Retina detail; full-world/date-line exports
 remain less detailed than regional views and are not a tiled renderer.

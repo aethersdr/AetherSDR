@@ -1,4 +1,5 @@
 #include "GlobeMapView.h"
+#include "CityLightsShading.h"
 
 #include "MapHoverPathSelection.h"
 #include "SolarTerminator.h"
@@ -1803,6 +1804,9 @@ void GlobeMapView::setDayNightTerminatorVisible(bool visible)
 
 void GlobeMapView::setCityLightsVisible(bool visible)
 {
+    if (m_cityLightsVisible == visible) {
+        return;
+    }
     m_cityLightsVisible = visible;
     updateMapAttribution();
     update();
@@ -1816,7 +1820,7 @@ void GlobeMapView::setCityLightsWarmth(int percent)
 
 void GlobeMapView::setCityLightsFaintLights(int percent)
 {
-    m_cityLightsGamma = 1.0F - 0.65F * std::clamp(percent, 0, 100) / 100.0F;
+    m_cityLightsGamma = float(CityLightsShading::faintLightsGamma(percent));
     update();
 }
 
@@ -1866,39 +1870,9 @@ void GlobeMapView::drawCityLights(const QMatrix4x4& matrix)
                 gl_Position = matrix * vec4(position, 1.0);
             }
         )";
-        static constexpr char fragment[] = R"(
-            varying highp vec3 earthPosition;
-            uniform sampler2D lights;
-            uniform highp vec4 bounds;
-            uniform lowp float opacity;
-            uniform highp float lightsGamma;
-            uniform highp float warmth;
-            uniform highp vec3 sunDirection;
-            uniform lowp float nightOnly;
-            void main() {
-                highp vec3 n = normalize(earthPosition);
-                // GIBS EPSG:3857 stops at +/-85.051129 degrees. Do not stretch
-                // the last image row over the poles. Derive UV per fragment
-                // so coarse sphere geometry does not distort close-up lights.
-                if (abs(n.y) > 0.996272077) discard;
-                highp float latitude = asin(clamp(n.y, -1.0, 1.0));
-                highp vec2 worldUv = vec2(atan(n.x, n.z) / 6.283185307 + 0.5,
-                    0.5 - log(tan(0.785398163 + latitude / 2.0)) / 6.283185307);
-                highp vec2 uv = (worldUv - bounds.xy) / (bounds.zw - bounds.xy);
-                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
-                highp vec4 light = texture2D(lights, uv);
-                // Adjust the resident original texture, never upload on slider changes.
-                if (light.a > 0.0) {
-                    light *= pow(light.a, lightsGamma) / light.a;
-                }
-                highp float t = clamp(-dot(n, sunDirection) / 0.104528463, 0.0, 1.0);
-                highp float night = mix(1.0, t * t * (3.0 - 2.0 * t), nightOnly);
-                light.rgb *= vec3(1.0, 1.0 - 0.15 * warmth, 1.0 - 0.40 * warmth);
-                gl_FragColor = light * (opacity * night);
-            }
-        )";
         if (!m_cityLightsProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, vertex)
-            || !m_cityLightsProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, fragment)
+            || !m_cityLightsProgram->addShaderFromSourceCode(QOpenGLShader::Fragment,
+                                                             CityLightsShading::fragmentShaderSource())
             || !m_cityLightsProgram->link()) {
             qCWarning(lcPskReporterGlobe) << "City lights shader:" << m_cityLightsProgram->log();
             return;

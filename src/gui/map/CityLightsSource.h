@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CityLightsShading.h"
 #include "WeatherRadarViewGeometry.h"
 
 #include <QImage>
@@ -28,6 +29,9 @@ public:
     QRectF originalBounds() const { return m_loaded.bounds; }
     const QImage& image() const { return m_image; }
     QRectF bounds() const { return m_imageBounds; }
+    // True while image() does not yet reflect the current parameters:
+    // a render is running, or one is queued behind it.
+    bool renderPending() const { return m_rendering || m_renderAgain; }
 
     static WeatherRadarViewGeometry boundedView(const WeatherRadarViewGeometry& view);
     static QUrl imageUrl(const WeatherRadarViewGeometry& view);
@@ -54,8 +58,8 @@ private:
     QImage m_image;
     QRectF m_imageBounds;
     quint64 m_generation{0};
-    int m_faintLights{50};
-    int m_warmth{0};
+    int m_faintLights{CityLightsShading::kDefaultFaintLights};
+    int m_warmth{CityLightsShading::kDefaultWarmth};
     bool m_enabled{false};
     bool m_nightOnly{true};
     bool m_rendering{false};
