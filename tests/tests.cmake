@@ -66,6 +66,15 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
+add_executable(shared_capture_policy_test
+    tests/shared_capture_policy_test.cpp
+    src/core/SharedCapturePolicy.cpp
+)
+target_include_directories(shared_capture_policy_test PRIVATE src)
+set_target_properties(shared_capture_policy_test PROPERTIES AUTOMOC OFF)
+add_test(NAME shared_capture_policy_test COMMAND shared_capture_policy_test)
+
 # ── AetherD control protocol tests ───────────────────────────────────────────
 # AetherD control protocol v1: transport-neutral envelope validation and
 # fail-closed structural limits. QtCore only; no daemon/socket/model dependency.

@@ -757,6 +757,7 @@ set(CORE_SOURCES
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
+    src/core/SharedCapturePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
