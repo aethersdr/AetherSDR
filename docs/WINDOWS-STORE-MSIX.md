@@ -340,21 +340,28 @@ submitted packages must end in `.0`.
 Production tag pushes use the source release version: `26.9.2` becomes
 `26.9.2.0`, independent of the workflow run number and flight configuration.
 The tag must exactly match `project(AetherSDR VERSION ...)`. Three-component
-versions and explicit zero fourth components are supported; a nonzero CalVer
-hotfix revision is refused until an explicit Store version policy is selected.
-The planner must not silently replace a release patch or discard a hotfix.
+versions and explicit zero fourth components are supported. A nonzero CalVer
+hotfix revision, unsupported Store patch, or mismatched/suffixed tag yields a
+plan with `storeEligible = false`, an empty MSIX version and an explanatory
+warning. MSIX creation, Store symbol-package validation and production Store
+submission are skipped; the portable ZIP, Inno installer, debug-symbol artifact
+and GitHub release attachment remain enabled. The planner must not silently
+replace a release patch or discard a hotfix.
+
+Before uploading a production package, compare its version with the highest
+production package accepted in Partner Center. Restoring release-based numbering
+must not be treated as permission to downgrade an already accepted package.
 
 Development builds, including manual flights, retain `YY.M.<workflow run
 number>.0`. Their run number must fit `1..65535`; that limit does not apply to
 production because production does not use it. Rerunning a development workflow
 reuses its version.
 
-**Flight upgrade ordering is separate from production naming.** A flight such
-as `26.9.205.0` is higher than production `26.9.2.0`; do not assume the next
-production release supersedes it for flight users. Before another flight,
-select a version strategy against the highest package accepted in Partner
-Center. This production correction does not redesign flight numbering or reset
-any accepted Store version.
+**Developer flights intentionally rank ahead of production.** A flight such
+as `26.9.205.0` is higher than production `26.9.2.0`, allowing developers to
+receive the flight. That separation is intentional; the next production patch
+does not necessarily supersede it for flight users. This production correction
+does not redesign flight numbering or reset any accepted Store version.
 
 Local `create-msix.ps1` builds also default to the normalized source version.
 With `-CreateUpload`, a nonzero fourth component is rejected before staging

@@ -41,15 +41,24 @@ if ($sourceVersion.Major -lt 1 -or $sourceVersion.Major -gt 65535 -or $sourceVer
 
 # Release tags must describe the same version as the application. Never let a
 # flight's run counter or configured ID rewrite a production package version.
+$storeEligible = $true
+$storeSkipReason = ''
+$msixVersion = ''
 if ($release) {
-    if ($sourceVersion.Build -lt 0 -or $sourceVersion.Build -gt 65535 -or $sourceVersion.Revision -gt 0) {
-        throw "Production Store versions require a three-component source version (or a zero fourth component), with patch in 0..65535. Nonzero CalVer hotfix revisions need an explicit Store version policy."
-    }
     $tagVersion = $Ref.Substring('refs/tags/v'.Length)
-    if ($tagVersion -ne $match.Matches[0].Groups[1].Value) {
-        throw "Release tag version '$tagVersion' does not match the source version. Bump CMakeLists.txt before tagging."
+    if ($sourceVersion.Build -lt 0 -or $sourceVersion.Build -gt 65535 -or $sourceVersion.Revision -gt 0) {
+        $storeSkipReason = "Production Store versions require a three-component source version (or a zero fourth component), with patch in 0..65535. Nonzero CalVer hotfix revisions need an explicit Store version policy."
     }
-    $msixVersion = "$($sourceVersion.Major).$($sourceVersion.Minor).$($sourceVersion.Build).0"
+    elseif ($tagVersion -ne $match.Matches[0].Groups[1].Value) {
+        $storeSkipReason = "Release tag version '$tagVersion' does not match the source version. Bump CMakeLists.txt before tagging."
+    }
+    if ($storeSkipReason) {
+        $storeEligible = $false
+        Write-Warning "Skipping MSIX and Store submission: $storeSkipReason Portable ZIP and Inno installer remain enabled."
+    }
+    else {
+        $msixVersion = "$($sourceVersion.Major).$($sourceVersion.Minor).$($sourceVersion.Build).0"
+    }
 }
 else {
     if ($RunNumber -lt 1 -or $RunNumber -gt 65535) {
@@ -60,7 +69,9 @@ else {
 
 [pscustomobject]@{
     releaseArtifacts = $release
-    productionDraft = $release -and -not [string]::IsNullOrWhiteSpace($ProductId)
+    productionDraft = $release -and $storeEligible -and -not [string]::IsNullOrWhiteSpace($ProductId)
     publishFlight = $flight
+    storeEligible = $storeEligible
+    storeSkipReason = $storeSkipReason
     msixVersion = $msixVersion
 }

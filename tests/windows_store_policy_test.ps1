@@ -45,6 +45,7 @@ try {
                 Assert-True ($plan.productionDraft -eq $releaseExpected) "Production routing: $eventName $ref $requested"
                 Assert-True ($plan.publishFlight -eq ($eventName -eq 'workflow_dispatch' -and $requested)) 'Flight routing'
                 $expectedVersion = if ($releaseExpected) { '26.9.1.0' } else { '26.9.203.0' }
+                Assert-True ($plan.storeEligible) 'Supported production and development plans stay Store eligible'
                 Assert-True ($plan.msixVersion -eq $expectedVersion) "Version routing: $eventName $ref $requested"
             }
         }
@@ -73,15 +74,27 @@ try {
             $inputs.FlightId = $flightId
             $plan = & $planScript @inputs
             Assert-True ($plan.msixVersion -eq '26.9.2.0') 'Production version must ignore run number and flight ID'
+            Assert-True ($plan.storeEligible -and $plan.storeSkipReason -eq '') 'Supported production release is Store eligible'
             Assert-True ($plan.productionDraft -and -not $plan.publishFlight) 'Production remains draft-only'
         }
     }
-    $inputs.Ref = 'refs/tags/v26.9.1'
-    Assert-Throws { & $planScript @inputs } 'does not match the source version'
+    # Store-ineligible releases must still reach the ZIP/EXE attachment path.
+    foreach ($tag in @('v26.9.1', 'v26.9.2-beta', 'v26.9.2a')) {
+        $inputs.Ref = "refs/tags/$tag"
+        $plan = & $planScript @inputs
+        Assert-True ($plan.releaseArtifacts) 'Mismatched/suffixed tag keeps release artifacts enabled'
+        Assert-True (-not $plan.storeEligible -and -not $plan.productionDraft -and -not $plan.publishFlight) 'Mismatched/suffixed tag skips only Store paths'
+        Assert-True ($plan.msixVersion -eq '') 'Ineligible release must not invent a Store version'
+        Assert-True ($plan.storeSkipReason -match 'does not match') 'Tag mismatch explains Store skip'
+    }
     foreach ($invalidVersion in @('26.9.2.1', '26.9.65536', '26.9')) {
         Set-Content -LiteralPath $project -Value "project(AetherSDR VERSION $invalidVersion LANGUAGES CXX)"
         $inputs.Ref = "refs/tags/v$invalidVersion"
-        Assert-Throws { & $planScript @inputs } 'Production Store versions require'
+        $plan = & $planScript @inputs
+        Assert-True ($plan.releaseArtifacts) 'Unsupported Store version keeps ZIP/EXE enabled'
+        Assert-True (-not $plan.storeEligible -and -not $plan.productionDraft -and -not $plan.publishFlight) 'Unsupported Store version skips Store paths'
+        Assert-True ($plan.msixVersion -eq '') 'Unsupported Store version has no fallback numbering'
+        Assert-True ($plan.storeSkipReason -match 'Production Store versions require') 'Unsupported Store version explains skip'
     }
     $inputs.Ref = 'refs/tags/v26.9.2.0'
     Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2.0 LANGUAGES CXX)'
