@@ -1858,6 +1858,72 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
 
+    // A REFUSED TUNE MUST NOT READ AS A SUCCESSFUL ONE.
+    //
+    // FA is the radio's NG. Until now nothing consumed it: observe() treats
+    // FB and FA identically (both merely retire the transaction and carry no
+    // state), so a refused write left the optimistic frequency standing in the
+    // model and the operator looking at a number the radio never entered.
+    //
+    // The IC-9700 makes this reachable in ordinary use. It has three bands and
+    // two receivers, so a receiver cannot be tuned to a band the other one
+    // already holds; the radio answers cmd 05 with FA and stays put. Measured
+    // on hardware 2026-08-29 — six cross-band sets, six FAs, and the display
+    // followed all six. See #4840.
+    //
+    // Correct on every model, not just that one: FA on a frequency write means
+    // the write did not take, whatever the reason.
+    //
+    // Deliberately narrow. Only a frequency write is corrected here, because
+    // that is the case with hardware evidence and a known-good restoration
+    // value (m_frequencyHz, which is radio-authoritative). Other refused
+    // writes are a separate question and are left alone rather than guessed at.
+    // ⚠ BOTH halves of the predicate are load-bearing, and `lastCompletedKey`
+    // alone is NOT enough. observe() sets it only when a frame MATCHES the
+    // in-flight transaction; an unmatched FA returns Observation::Unmatched and
+    // leaves the key at its previous value. Frequency writes are the most
+    // common transaction, so `lastCompletedKey == "frequency"` is usually true
+    // from the last real tune — and a later stray or duplicate NG, or an NG for
+    // a transaction that already expired, would fire this block with no
+    // frequency write refused at all: a false "the radio refused the tune"
+    // toast plus a redundant re-assert. That is precisely the lying-indicator
+    // failure this block exists to remove, inverted.
+    //
+    // Observation::Accepted is the signal that THIS frame completed the
+    // in-flight transaction; the key then says WHICH transaction it was.
+    if (frame.isNg()
+        && observation == IcomCivScheduler::Observation::Accepted
+        && m_civScheduler.stats().lastCompletedKey == "frequency"
+        && m_frequencyHz != 0) {
+        // Re-assert the radio's real VFO one event-loop turn later, exactly as
+        // the out-of-band gate in setSliceFrequency() and the refused mode in
+        // setSliceMode() already do: SliceModel has accepted and announced the
+        // operator's request by now, so a direct emit would be overwritten by
+        // that announcement and the indicator would keep lying.
+        const double actualMhz = static_cast<double>(m_frequencyHz) / 1.0e6;
+        qCWarning(lcIcomLink)
+            << "radio refused the frequency write (CI-V FA); restoring"
+            << actualMhz << "MHz";
+        QTimer::singleShot(0, this, [this, actualMhz] {
+            SliceDelta delta;
+            delta.frequency = actualMhz;
+            emit sliceChanged(sliceId(), delta);
+        });
+        // The dual-receiver explanation is TRUE ONLY WHERE THERE ARE TWO.
+        // This block fires on every Icom model, so an IC-705 refusing a write
+        // for some other reason was being handed a reason that cannot apply to
+        // it. State the refusal generically and append the cause only where the
+        // profile actually has a second receiver to collide with.
+        QString why = tr("The radio refused the tune. It is still on %1 MHz.")
+                          .arg(actualMhz, 0, 'f', 6);
+        if (m_model && m_model->receivers > 1) {
+            why += QLatin1Char(' ');
+            why += tr("On this model a receiver cannot move to a band the "
+                      "other receiver already holds.");
+        }
+        emit configurationWarning(why);
+    }
+
     noteControlSeen(frame.cmd, frame.sub, frame.hasSub);
 
     switch (frame.cmd) {
