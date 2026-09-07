@@ -131,3 +131,8 @@ this list current when updating the snapshot.
     `2^(zoomDelta+1)`: eight of sixteen grandchildren cannot replace a parent.
     `weather_radar_loading_test` injects real QGeoView tile deliveries without
     sockets and covers missing descendants, transparent replacement and zoom out.
+
+16. **Current tile coverage readiness.** `currentTilesComplete()` checks the
+    selected viewport after coalesced camera processing, including undelivered
+    placeholders. Radar readiness can acknowledge an unchanged completed tile
+    set after a small pan without requiring another decoded tile.

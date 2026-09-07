@@ -189,6 +189,23 @@ QPainterPath QGVLayerTiles::tileUncoveredPath(const QGV::GeoTilePos& tilePos) co
     return path;
 }
 
+bool QGVLayerTiles::currentTilesComplete() const
+{
+    // A queued camera update still describes the previous viewport. Do not
+    // publish that coverage until the coalesced tile selection has settled.
+    if (mCameraUpdateTimer.isActive() || mCurZoom < 0 || mCurRect.isEmpty()) {
+        return false;
+    }
+    for (int x = mCurRect.left(); x < mCurRect.right(); ++x) {
+        for (int y = mCurRect.top(); y < mCurRect.bottom(); ++y) {
+            if (!isTileFinished(QGV::GeoTilePos(mCurZoom, QPoint(x, y)))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void QGVLayerTiles::retryUnfinishedTiles()
 {
     if (getMap() == nullptr || !isVisible()) {

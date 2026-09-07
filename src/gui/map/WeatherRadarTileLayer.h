@@ -38,8 +38,6 @@ private:
     QTimer m_readinessTimer;
     QElapsedTimer m_readinessElapsed;
     QString m_readyFrameId;
-    bool m_sawPendingRequest{false};
-    quint64 m_deliveryBaseline{0};
     quint64 m_failureBaseline{0};
     int m_retryCount{0};
     bool m_loadFailed{false};

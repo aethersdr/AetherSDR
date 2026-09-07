@@ -50,6 +50,7 @@ protected:
     QPainterPath tileUncoveredPath(const QGV::GeoTilePos& tilePos) const;
     // Opt-in retry; ordinary camera updates intentionally skip unchanged views.
     void retryUnfinishedTiles();
+    bool currentTilesComplete() const;
 
     virtual int minZoomlevel() const = 0;
     virtual int maxZoomlevel() const = 0;

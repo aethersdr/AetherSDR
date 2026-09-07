@@ -251,6 +251,43 @@ private slots:
         QGV::setNetworkManager(nullptr);
     }
 
+    void completedLiveTilesSurviveSmallPan()
+    {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        QGVMap map;
+        map.resize(600, 400);
+        map.show();
+        QTest::qWait(20);
+        map.cameraTo(QGVCameraActions(&map).scaleTo(.0001)
+            .moveTo(QPointF(-1.05e7, -4.0e6)), false);
+        QCoreApplication::processEvents();
+        auto* layer = new WeatherRadarTileLayer();
+        layer->setEnabled(false);
+        map.addItem(layer);
+        QSignalSpy ready(layer, &WeatherRadarTileLayer::frameReady);
+        layer->setEnabled(true);
+        QTRY_VERIFY(!network.allReplies.isEmpty());
+        QTest::qWait(200);
+        const int requests = network.allReplies.size();
+        for (const auto& reply : std::as_const(network.allReplies)) {
+            reply->complete();
+        }
+        // Two screen pixels: a genuine camera change with the same tile set.
+        // Deliver all replies, then pan before the 25ms readiness tick.
+        map.cameraTo(QGVCameraActions(&map)
+            .moveTo(QPointF(-1.05e7 + 20000, -4.0e6)), false);
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 1500);
+        QCOMPARE(network.allReplies.size(), requests);
+        QCOMPARE(layer->pendingRequestCount(), 0);
+        // A second pan after readiness must also acknowledge existing coverage.
+        map.cameraTo(QGVCameraActions(&map)
+            .moveTo(QPointF(-1.05e7 + 40000, -4.0e6)), false);
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 2, 1500);
+        layer->setEnabled(false);
+        QGV::setNetworkManager(nullptr);
+    }
+
     void liveTilesRetryWithoutCameraMovement()
     {
         ControlledRadarNetwork network;

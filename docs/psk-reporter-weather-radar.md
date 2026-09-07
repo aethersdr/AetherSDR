@@ -18,11 +18,14 @@ Downloads run in the background. The loading indicator shows completed/total
 frames, and the last usable radar coverage stays visible while new coverage
 loads. Zooming may require new, higher-resolution exports; cached data is
 reused when it covers the requested view. Failed requests retry in the
-background after a brief failure notice, and expired observations leave the
+background; playback failures show a brief notice, and expired observations leave the
 loop as NOAA's catalog advances.
 
 Radar imagery can be delayed or unavailable. Check the displayed observation
-time and age; this overlay is not a substitute for official weather warnings.
+time and age during playback. Live exports do not include a verified scan time,
+so live mode shows **Age unknown** rather than treating the request time as an
+observation. Live loading failures remain visible while replacement imagery
+is unavailable. This overlay is not a substitute for official weather warnings.
 
 ## Rendering invariants
 

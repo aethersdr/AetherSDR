@@ -450,7 +450,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     topBar->addWidget(radarSpeedLabel);
     topBar->addWidget(m_weatherRadarSpeedSlider);
     topBar->addWidget(m_weatherRadarSpeedValue);
-    m_weatherRadarFrameLabel = new QLabel(tr("Live"), reportsBox);
+    m_weatherRadarFrameLabel = new QLabel(tr("Age unknown"), reportsBox);
     m_weatherRadarFrameLabel->setObjectName(
         QStringLiteral("pskReporterWeatherRadarFrame"));
     m_weatherRadarFrameLabel->setAccessibleName(
@@ -641,7 +641,10 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                     m_weatherRadarTimelineLoading = false;
                     m_weatherRadarPlayButton->setText(
                         QStringLiteral("▶"));
-                    m_weatherRadarFrameLabel->setText(tr("Live"));
+                    const WeatherRadarFramePresentation presentation =
+                        weatherRadarFramePresentation({}, true);
+                    m_weatherRadarFrameLabel->setText(presentation.text);
+                    m_weatherRadarFrameLabel->setToolTip(presentation.tooltip);
                 }
                 if (isVisible()) {
                     m_mapView->setWeatherRadarVisible(on);
@@ -754,23 +757,10 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
             });
     connect(m_mapView, &MapDisplayWidget::weatherRadarFrameChanged,
             this, [this](const QDateTime& frameTime, bool live) {
-                if (live) {
-                    m_weatherRadarFrameLabel->setText(tr("Live"));
-                    m_weatherRadarFrameLabel->setToolTip(
-                        tr("Latest NOAA radar frame"));
-                    return;
-                }
-                const qint64 ageMinutes = std::max<qint64>(0,
-                    frameTime.secsTo(QDateTime::currentDateTimeUtc()) / 60);
-                const WeatherRadarLocalFrameTime localTime = weatherRadarLocalFrameTime(frameTime);
-                m_weatherRadarFrameLabel->setText(tr("%1 (%2m old)")
-                    .arg(localTime.clock)
-                    .arg(ageMinutes));
-                m_weatherRadarFrameLabel->setToolTip(
-                    tr("NOAA radar frame: %1 (local time). %2 minutes old. "
-                       "New observations are checked every minute during playback.")
-                        .arg(localTime.details)
-                        .arg(ageMinutes));
+                const WeatherRadarFramePresentation presentation =
+                    weatherRadarFramePresentation(frameTime, live);
+                m_weatherRadarFrameLabel->setText(presentation.text);
+                m_weatherRadarFrameLabel->setToolTip(presentation.tooltip);
             });
     connect(m_mapView, &MapDisplayWidget::weatherRadarAnimationError,
             this, [this](const QString& message) {

@@ -2,6 +2,7 @@
 #include "gui/map/WeatherRadarPlaybackTimeline.h"
 #include "gui/map/WeatherRadarWorldWrap.h"
 #include "gui/map/WeatherRadarFrameTime.h"
+#include "gui/map/WeatherRadarLoadingStatus.h"
 
 using AetherSDR::WeatherRadarObservation;
 using AetherSDR::kRadarWorldWidth;
@@ -39,6 +40,25 @@ int main()
     const WeatherRadarSource source(
         WeatherRadarSource::Provider::NoaaMrms, input);
     bool ok = true;
+    const auto liveLabel = AetherSDR::weatherRadarFramePresentation(input, true, input.addSecs(3600));
+    ok &= expect(liveLabel.text == QStringLiteral("Age unknown")
+                     && liveLabel.tooltip.contains(QStringLiteral("observation time is unavailable")),
+                 "a live cache bucket must never be labelled as a fresh observation");
+    const auto historyLabel = AetherSDR::weatherRadarFramePresentation(input, false, input.addSecs(3600));
+    ok &= expect(historyLabel.text.contains(QStringLiteral("60m old")),
+                 "historical observation age remains available");
+    using Loading = AetherSDR::WeatherRadarLoadingStatus;
+    Loading liveStatus;
+    ok &= expect(liveStatus.update(0, false, true, 0, 0, true) == Loading::State::Failed
+                     && liveStatus.update(60000, false, true, 0, 0, true) == Loading::State::Failed
+                     && liveStatus.update(61000, true, false, 4, 0, true) == Loading::State::Failed,
+                 "live failure must remain visible during failure and replacement loading");
+    ok &= expect(liveStatus.update(62000, false, false, 0, 0, true) == Loading::State::Hidden,
+                 "successful live recovery clears the failure notice");
+    Loading playbackStatus;
+    playbackStatus.update(0, false, true, 0, 0);
+    ok &= expect(playbackStatus.update(60000, false, true, 0, 0) == Loading::State::Hidden,
+                 "historical imagery keeps its existing brief notice and explicit frame age");
     const QLocale usLocale(QLocale::English, QLocale::UnitedStates);
     const QTimeZone newYork(QByteArrayLiteral("America/New_York"));
     const auto evening = AetherSDR::weatherRadarLocalFrameTime(

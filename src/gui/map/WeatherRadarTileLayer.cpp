@@ -20,7 +20,6 @@ WeatherRadarTileLayer::WeatherRadarTileLayer()
     m_readinessTimer.setInterval(25);
     connect(&m_readinessTimer, &QTimer::timeout, this, [this] {
         const int pending = pendingRequestCount();
-        m_sawPendingRequest = m_sawPendingRequest || pending > 0;
         if (pending == 0
             && failedTileRequestCount() > m_failureBaseline) {
             if (m_readinessElapsed.elapsed() < (m_loadFailed ? 5000 : 1000)) {
@@ -31,9 +30,7 @@ WeatherRadarTileLayer::WeatherRadarTileLayer()
                 emit frameLoadFailed(m_source.frameTime());
             }
             m_retryCount = std::min(3, m_retryCount + 1);
-            m_deliveryBaseline = decodedTileDeliveryCount();
             m_failureBaseline = failedTileRequestCount();
-            m_sawPendingRequest = false;
             m_readinessElapsed.restart();
             // Retain completed tiles and retry real null placeholders even
             // without camera movement. After reporting failure, keep retrying
@@ -43,9 +40,8 @@ WeatherRadarTileLayer::WeatherRadarTileLayer()
         }
         // Camera processing is coalesced by QGeoView. Give it a short window
         // to enqueue requests; an all-cache hit legitimately stays at zero.
-        if (pending == 0
-            && decodedTileDeliveryCount() > m_deliveryBaseline
-            && (m_sawPendingRequest || m_readinessElapsed.elapsed() >= 300)) {
+        if (pending == 0 && currentTilesComplete()
+            && m_readinessElapsed.elapsed() >= 300) {
             m_readinessTimer.stop();
             m_loadFailed = false;
             m_readyFrameId = m_source.frameId();
@@ -95,8 +91,6 @@ void WeatherRadarTileLayer::beginReadinessCheck()
         });
         return;
     }
-    m_sawPendingRequest = pendingRequestCount() > 0;
-    m_deliveryBaseline = decodedTileDeliveryCount();
     m_failureBaseline = failedTileRequestCount();
     m_retryCount = 0;
     m_readinessElapsed.restart();
@@ -111,7 +105,10 @@ void WeatherRadarTileLayer::onCamera(
         // A frame that was complete at the previous zoom is not proof that
         // the newly visible high-resolution coverage succeeded.
         m_readyFrameId.clear();
-        beginReadinessCheck();
+        // A small pan can keep exactly the same completed tile set. Preserve
+        // failure accounting too: a pan must not forgive an unfinished tile.
+        m_readinessElapsed.restart();
+        m_readinessTimer.start();
     }
 }
 

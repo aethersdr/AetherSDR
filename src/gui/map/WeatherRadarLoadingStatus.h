@@ -6,12 +6,14 @@ namespace AetherSDR {
 
 // Presentation only: hiding a notification must never cancel its downloads or
 // retries. One failure notice per loading episode avoids flashing a new badge
-// on every background retry. A fully successful idle state rearms it.
+// on every background retry. Live imagery retains the notice because its scan
+// age is unknown. A fully successful idle state rearms it.
 class WeatherRadarLoadingStatus {
 public:
     enum class State { Hidden, Loading, Failed };
 
-    State update(qint64 nowMs, bool busy, bool failed, int pending, int ready)
+    State update(qint64 nowMs, bool busy, bool failed, int pending, int ready,
+                 bool retainFailure = false)
     {
         if (!busy && !failed) {
             reset();
@@ -32,7 +34,8 @@ public:
             m_failedMs = nowMs;
         }
         if (m_failedMs >= 0) {
-            return nowMs - m_failedMs < 3000 ? State::Failed : State::Hidden;
+            return retainFailure || nowMs - m_failedMs < 3000
+                ? State::Failed : State::Hidden;
         }
         return nowMs - m_startedMs < 300 ? State::Hidden : State::Loading;
     }

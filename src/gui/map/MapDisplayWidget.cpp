@@ -313,7 +313,7 @@ void MapDisplayWidget::updateWeatherRadarLoadingStatus()
     }
     const WeatherRadarLoadingStatus::State state = m_weatherRadarLoadingStatus.update(
         m_weatherRadarLoadingElapsed.elapsed(), busy, failed, pending,
-        m_weatherRadarDownloadReady.size());
+        m_weatherRadarDownloadReady.size(), !playback);
     if (state == WeatherRadarLoadingStatus::State::Hidden) {
         m_weatherRadarLoadingLabel->hide();
         m_weatherRadarLoadingAnnouncement.clear();
