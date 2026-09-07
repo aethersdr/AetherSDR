@@ -9,12 +9,10 @@
 
 // Phase 5 — model identity and per-model capability.
 //
-// The CI-V address IS the model identity, and command 0x19 0x00 asks the radio
-// for it. QUERY IT; never assume. The address is user-changeable, several Icom
-// models speak this same RS-BA1 transport, and Icom's own RS-BA1 server can
-// front a USB-only radio over the network — so a backend that hardcodes 0xA4
-// will happily mis-decode an IC-9700 someone pointed it at, and the failure
-// looks like corrupt spectrum rather than a wrong model.
+// CI-V command 19 00 returns a model ID independently of the configurable bus
+// address in the reply envelope. The table's civAddress is the factory default
+// (numerically equal to the model ID), never the current command destination.
+// Network Radio Name is arbitrary display text and cannot select a profile.
 //
 // Qt-free; icom_models_test drives it.
 //
@@ -201,19 +199,12 @@ txBandwidthProfileFor(const IcomModel& model);
 [[nodiscard]] int nearestEdgeHz(std::span<const int> table, int hz) noexcept;
 [[nodiscard]] int edgeIndexFor(std::span<const int> table, int hz) noexcept;
 
-// Look up by the address the radio reported. Returns nullptr for an address we
-// do not recognise — which is a real and expected outcome, not an error: Icom
-// has ~130 CI-V addresses and this table has a handful.
-[[nodiscard]] const IcomModel* modelForCivAddress(std::uint8_t addr);
+// Look up the model ID payload returned by CI-V 19 00. Unknown IDs return
+// nullptr; a configured command address is never an input to this lookup.
+[[nodiscard]] const IcomModel* modelForId(std::uint8_t id);
 
-// Look up by the name the radio reports in its RS-BA1 capabilities packet
-// ("IC-705"). That name arrives during the HANDSHAKE — before the session is
-// connected — whereas the CI-V address needs a 0x19 0x00 round trip on a
-// stream that does not exist yet. So this is what resolves the model in time
-// for the connect-edge capability publication; the address corrects it after.
-//
-// Matched case-insensitively and ignoring '-' so "IC705" and "ic-705" both
-// land, since the field is free text set on the radio.
+// Canonical profile-name lookup for tools/tests. Never use operator-defined
+// RS-BA1 names to identify connected hardware.
 [[nodiscard]] const IcomModel* modelForName(std::string_view name);
 
 // Every model in the table.
@@ -270,7 +261,7 @@ struct IcomBand {
 [[nodiscard]] std::uint64_t nearestSupportedFrequency(const IcomModel& model,
                                                       std::uint64_t hz) noexcept;
 
-// Decode the reply to CI-V 0x19 0x00. Returns the reported address, or nullopt
+// Decode the reply to CI-V 0x19 0x00. Returns the model ID, or nullopt
 // if this is not that reply.
 [[nodiscard]] std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame);
 
@@ -346,7 +337,10 @@ enum class IcomFeature : std::uint8_t {
     TxFrequencyCheck,
     DialLock,
     CivDataRestart,
+    GpsPosition,
+    GpsTimeConfiguration,
     MemoryChannels,
+    AntennaTuner,
 };
 
 enum class MemoryDialect : std::uint8_t {
@@ -403,6 +397,17 @@ struct RxAntennaProfile {
     bool readbackAvailable = false;
 };
 
+// Model-specific GPS and clock command shape. SET-menu item numbers are not
+// stable across Icom models, so they belong in the profile rather than in an
+// IC-705 address branch at the call site. Feature evidence independently gates
+// position and clock support: a future radio may implement only one half.
+struct GpsProfile {
+    int ntpEnabledItem = -1;
+    int ntpServerItem = -1;
+    int timeCorrectItem = -1;
+    bool hasNtpAccess = false;
+};
+
 struct MeterCalibrationProfile {
     enum class PowerConversion : std::uint8_t {
         NativeWatts,
@@ -412,6 +417,10 @@ struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
     PowerConversion powerConversion = PowerConversion::NativeWatts;
+    // Opt into a forward-power face derived from this model's published
+    // txPowerMaxWatts even when it has one continuous tuning range. Keep this
+    // model-specific: a low-power face must not leak to sibling Icom profiles.
+    bool scaleForwardPowerToRatedOutput = false;
     // UI exposure is narrower than wire decoding. Several Icom profiles have
     // an Id calibration, but each model must be approved independently before
     // Radio Vitals offers that instrument.
@@ -426,9 +435,15 @@ struct MeterCalibrationProfile {
     bool hasPaTemperatureTelemetry = false;
 };
 
-// Recovery policy is model capability, not shared Icom scheduler policy.  The
-// RS-BA1 data-start envelope and its retry timing are enabled only for models
-// whose public/live evidence supports this exact recovery path.
+// Explicit native-network wake framing. This never grants a model identity or TX.
+struct PowerOnProfile {
+    std::size_t extraPreambleBytes = 0;
+    std::uint8_t controllerAddress = kControllerAddress;
+    int readyDelayMs = 1000;
+};
+
+// Recovery policy is model capability, not shared Icom scheduler policy.
+// RS-BA1 data-start recovery is enabled only with model-specific evidence.
 struct CivRecoveryProfile {
     int retryIntervalMs = 1000;
     int maxAttempts = 3;
@@ -451,6 +466,12 @@ struct NetworkConfigurationProfile {
 struct IcomModelProfile {
     bool supportedBringup = false;
     bool hasGpsHardware = false;
+    // Physical pitch detent; 1 preserves legacy decoding on unverified models.
+    int cwPitchStepHz = 1;
+    bool hasModeIndependentSquelch = false;
+    bool hasCwTune = true;
+    // Additional native control readbacks verified for this model.
+    bool pollCwSquelchAndTxBandwidth = false;
     int speechProcessorLevelMaximum = 2;
     std::string_view speechProcessorLabel = "PROC";
     std::string_view guideRevision;
@@ -462,9 +483,11 @@ struct IcomModelProfile {
     std::optional<FmRepeaterProfile> fmRepeater;
     std::optional<CwTextKeyerProfile> cwTextKeyer;
     std::optional<RxAntennaProfile> rxAntenna;
+    std::optional<GpsProfile> gps;
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;
+    std::optional<PowerOnProfile> powerOn;
     std::optional<CivRecoveryProfile> civRecovery;
     std::optional<MemoryProfile> memory;
     std::optional<NetworkConfigurationProfile> networkConfiguration;

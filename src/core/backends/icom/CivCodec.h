@@ -80,6 +80,10 @@ struct CivFrame {
 // Build a frame. `to` is the radio's CI-V address.
 [[nodiscard]] std::vector<std::uint8_t> buildFrame(std::uint8_t to, std::uint8_t cmd,
                                                    std::span<const std::uint8_t> payload = {});
+// Explicit Power ON only. Native-network framing is selected by the model profile.
+[[nodiscard]] std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to,
+    std::size_t extraPreambleBytes = 0, std::uint8_t from = kControllerAddress);
+
 [[nodiscard]] std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd,
                                                       std::uint8_t sub,
                                                       std::span<const std::uint8_t> payload = {});
@@ -203,6 +207,7 @@ inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceive
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
 inline constexpr std::uint8_t kTone         = 0x1B;   // sub 00: repeater CTCSS frequency
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
+inline constexpr std::uint8_t kGps          = 0x23;   // position / GPS source
 inline constexpr std::uint8_t kScope        = 0x27;
 // The attenuator, and it is NOT sub-addressed like 0x14/0x16 — the single
 // data byte IS the setting, in BCD dB. The IC-705 takes 00 (off) and 20
@@ -330,6 +335,9 @@ inline constexpr std::uint8_t kDialLock      = 0x50;
 // that is listening somewhere else.
 namespace setting {
 inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
+inline constexpr int kNtpEnabled      = 167;   // 00 off, 01 on
+inline constexpr int kNtpServer       = 168;   // up to 64 ASCII characters
+inline constexpr int kGpsTimeCorrect  = 169;   // 00 off, 01 auto
 }  // namespace setting
 
 // The SUBCOMMANDS of 0x1A. 0x05 is the SET menu everything above reaches
@@ -337,6 +345,8 @@ inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
 namespace settingSub {
 inline constexpr std::uint8_t kFilterWidth = 0x03;   // the IF width, in circuit now
 inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET menu
+inline constexpr std::uint8_t kNtpAccess   = 0x07;   // terminate/initiate NTP access
+inline constexpr std::uint8_t kNtpResult   = 0x08;   // accessing / succeeded / failed
 }  // namespace settingSub
 
 // Read or write a 1A 05 SET-menu item. `item` is the DECIMAL menu number as
@@ -348,6 +358,34 @@ inline constexpr std::uint8_t kMenu        = 0x05;   // 1A 05 <item> — the SET
 // unlike the one-byte enums written by cmdWriteSetting().
 [[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingLevel(std::uint8_t to, int item,
                                                              int value);
+[[nodiscard]] std::vector<std::uint8_t> cmdWriteSettingData(
+    std::uint8_t to, int item, std::span<const std::uint8_t> value);
+
+// IC-705 GPS and clock control. The position wire shape is documented by
+// Icom's IC-705 CI-V Reference Guide pp. 21 and 25. It is intentionally kept
+// in this transport-free codec so a future local-serial Icom path gets exactly
+// the same validation as the RS-BA1 network path.
+namespace gps {
+inline constexpr std::uint8_t kPosition = 0x00;
+inline constexpr std::uint8_t kSource   = 0x01;
+inline constexpr std::uint8_t kManual   = 0x02;
+}  // namespace gps
+
+struct GpsPosition {
+    double latitude = 0.0;
+    double longitude = 0.0;
+    std::optional<double> altitudeMetres;
+    std::optional<int> courseDegrees;
+    std::optional<double> speedKmh;
+    std::optional<std::string> utcIso8601;
+};
+
+[[nodiscard]] std::optional<GpsPosition>
+decodeGpsPosition(std::span<const std::uint8_t> data);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadGpsPosition(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadGpsSource(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdNtpAccess(std::uint8_t to, bool initiate);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadNtpAccessResult(std::uint8_t to);
 
 // Four zero-padded decimal IPv4 octets, each encoded in two BCD bytes, as used
 // by the Icom SET-menu network registers. Invalid BCD and octets >255 fail.
@@ -476,12 +514,39 @@ struct VfoModeState {
 // the same narrow-to-wide order as every other filter row in the app.
 [[nodiscard]] std::vector<int> filterWidthsForMode(const std::string& mode);
 
+struct FilterPresetState {
+    int id = 0;
+    int widthHz = 0;
+
+    bool operator==(const FilterPresetState&) const = default;
+};
+
+// FIL1/FIL2/FIL3 in radio order. The selected slot may carry a custom width;
+// replacing its content must never reorder or rename the slot.
+[[nodiscard]] std::vector<FilterPresetState> filterPresetsForMode(
+    const std::string& mode, int selectedPresetId = 0, int selectedWidthHz = 0);
+
 // The passband that filter gives in that mode, in Hz relative to the carrier,
 // sign carrying the sideband (SliceModel's convention). The backend needs this
 // because an IC-705's IF filters cannot be read back as Hz — nothing else in
 // the chain can fill the window in.
 [[nodiscard]] std::pair<int, int> passbandForModeAndFilter(const std::string& mode,
                                                           int filter);
+
+// Complete wire plan for recalling a FIL button. The select command comes
+// first, followed (where the mode permits it) by the slot's factory width and
+// centred Twin-PBT writes. Keeping this Qt- and transport-free lets the exact
+// operator command sequence be mutation-tested without a fake radio socket.
+struct FilterPresetRecallPlan {
+    std::vector<std::vector<std::uint8_t>> commands;
+    int widthHz = 0;
+    int lowHz = 0;
+    int highHz = 0;
+    int pbtCode = 128;
+};
+[[nodiscard]] std::optional<FilterPresetRecallPlan> filterPresetRecallPlan(
+    std::uint8_t to, const std::string& ladderMode, CivMode wireMode,
+    bool dataMode, int presetId, bool useVfoMode);
 
 // ---------------------------------------------------------------------------
 // IF filter WIDTH (1A 03) — the actual passband, not the slot that holds it

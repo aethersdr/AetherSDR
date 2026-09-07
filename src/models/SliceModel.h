@@ -108,6 +108,27 @@ public:
     int     receiveAgcThreshold() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveAgcThreshold
                                               : m_agcThreshold; }
+    // The AGC-T threshold's span on this slice: 0..100 on a Flex slice, the
+    // external receiver's dB span while it replaces the slice audio. Owned
+    // here so callers above the radio seam need no vendor header (#5384).
+    int     receiveAgcThresholdMinimum() const;
+    int     receiveAgcThresholdMaximum() const;
+    // The AGC-T knob on the controller surfaces (the MIDI/StreamDeck/Ulanzi
+    // parameter registry, the FlexControl/TMate2 wheel funnel, the keyboard
+    // steps) is ONE knob backed by TWO properties, selected by the receive-side
+    // AGC mode: agc_off_level while AGC is off, agc_threshold otherwise
+    // (FlexLib Slice.cs AGCOffLevel / AGCThreshold; docs/agc-t-calibration-
+    // design.md). The GUI slider has honoured that split since #1183; these
+    // members give the controller surfaces the same decision in one place
+    // (#5384). The calibrator, CAT, TCI, the bridge verb and band-snapshot
+    // restore address the two properties by name and do not route through
+    // here. Ranges: agc_off_level is 0..100 on every backend; the threshold
+    // keeps the span receiveAgcThresholdMinimum()/Maximum() report.
+    bool    agcTKnobUsesOffLevel() const;
+    int     agcTKnobMinimum() const;
+    int     agcTKnobMaximum() const;
+    int     agcTKnobLevel() const;
+    void    setAgcTKnobLevel(int value);
     int     agcOffLevel()  const { return m_agcOffLevel; }
     int     flexAgcOffLevel() const { return m_agcOffLevel; }
     int     receiveAgcOffLevel() const { return m_externalReceiveAudioReplacement

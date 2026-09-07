@@ -562,6 +562,46 @@ void SliceModel::setAgcMode(const QString& mode)
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
 }
 
+int SliceModel::receiveAgcThresholdMinimum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMinDb : 0;
+}
+
+int SliceModel::receiveAgcThresholdMaximum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMaxDb : 100;
+}
+
+bool SliceModel::agcTKnobUsesOffLevel() const
+{
+    return receiveAgcMode() == QStringLiteral("off");
+}
+
+int SliceModel::agcTKnobMinimum() const
+{
+    return agcTKnobUsesOffLevel() ? 0 : receiveAgcThresholdMinimum();
+}
+
+int SliceModel::agcTKnobMaximum() const
+{
+    return agcTKnobUsesOffLevel() ? 100 : receiveAgcThresholdMaximum();
+}
+
+int SliceModel::agcTKnobLevel() const
+{
+    return agcTKnobUsesOffLevel() ? receiveAgcOffLevel() : receiveAgcThreshold();
+}
+
+// The setters clamp and de-duplicate; nothing is re-asserted here.
+void SliceModel::setAgcTKnobLevel(int value)
+{
+    if (agcTKnobUsesOffLevel()) {
+        setAgcOffLevel(value);
+    } else {
+        setAgcThreshold(value);
+    }
+}
+
 void SliceModel::setAgcThreshold(int value)
 {
     if (m_externalReceiveAudioReplacement) {

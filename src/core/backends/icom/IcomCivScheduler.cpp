@@ -193,6 +193,39 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         return std::nullopt;
     }
 
+    // Two opposing pressures, both measured on the ready queue.
+    //
+    // meterOverdue: a visible meter has been waiting longer than its freshness
+    // budget, so background aging should stand down.
+    //
+    // backgroundStarved: the ceiling on that stand-down. A meter set that
+    // replenishes faster than the link drains it keeps meterOverdue true
+    // forever, and a floor that never lifts is not pacing — it is the
+    // starvation the aging rule exists to prevent, reappearing on the other
+    // side. Measured from the LATER of the request's own enqueue and the last
+    // background dispatch, so it is a rate limit on background work rather
+    // than a queue-age trigger that a backlog would latch permanently on.
+    bool meterOverdue = false;
+    bool backgroundStarved = false;
+    for (const Queued& queued : m_queue) {
+        if (queued.request.notBeforeMs > nowMs) {
+            continue;
+        }
+        if (queued.request.priority == Priority::ActiveMeter) {
+            if (nowMs - queued.enqueuedAtMs >= kMeterQueueBudgetMs) {
+                meterOverdue = true;
+            }
+        } else if (queued.request.priority > Priority::ActiveMeter) {
+            const std::int64_t since = nowMs - std::max(queued.enqueuedAtMs,
+                                                        m_lastBackgroundDispatchMs);
+            if (since >= kBackgroundStarvationCeilingMs) {
+                backgroundStarved = true;
+            }
+        }
+    }
+    // One background request is admitted when the ceiling is reached; the
+    // dispatch below re-arms both guards, so the admission is single-shot.
+    const bool yieldToMeters = (m_backgroundSinceMeter || meterOverdue) && !backgroundStarved;
     auto best = m_queue.end();
     for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
         if (it->request.notBeforeMs > nowMs) {
@@ -205,9 +238,9 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         if (!emergency && m_lastDispatchMs > 0 && nowMs - m_lastDispatchMs < kSlotMs) {
             continue;
         }
-        const Priority candidatePriority = effectivePriority(*it, nowMs);
+        const Priority candidatePriority = effectivePriority(*it, nowMs, yieldToMeters);
         const Priority bestPriority = best == m_queue.end()
-            ? Priority::Maintenance : effectivePriority(*best, nowMs);
+            ? Priority::Maintenance : effectivePriority(*best, nowMs, yieldToMeters);
         if (best == m_queue.end()
             || candidatePriority < bestPriority
             || (candidatePriority == bestPriority
@@ -221,6 +254,12 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
 
     Queued selected = std::move(*best);
     m_queue.erase(best);
+    if (selected.request.priority == Priority::ActiveMeter) {
+        m_backgroundSinceMeter = false;
+    } else if (selected.request.priority > Priority::ActiveMeter) {
+        m_backgroundSinceMeter = true;
+        m_lastBackgroundDispatchMs = nowMs;
+    }
     m_lastDispatchMs = nowMs;
     selected.dispatchedAtMs = nowMs;
     if (selected.request.expectsReply) {
@@ -258,25 +297,29 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
 }
 
 IcomCivScheduler::Priority
-IcomCivScheduler::effectivePriority(const Queued& request, std::int64_t nowMs) const noexcept
+IcomCivScheduler::effectivePriority(const Queued& request, std::int64_t nowMs,
+                                     bool yieldToMeters) const noexcept
 {
-    // Emergency/operator ordering is invariant. Background work ages up only
-    // as far as the visible-meter band, so a dead or slow radio cannot let the
-    // high-rate PTT/S-meter loops permanently starve control reconciliation
-    // or startup. An actual PTT write/confirmation remains Operator priority.
+    // Aging lets background reconciliation make progress under meter load,
+    // but only one background request may win before the next ready meter.
+    // Otherwise an old control burst drains in FIFO order ahead of every TX
+    // meter, creating a gap even on a radio that answers promptly. Higher
+    // priority PTT/operator/emergency dispatches do not consume the meter turn.
+    // On slower dispatch loops, even alternating can exceed freshness budgets,
+    // so an overdue meter stands background aging down as well.
     //
-    // THE FLOOR IS ActiveMeter, NOT Ptt.  takeNext() breaks an equal-priority
-    // tie on sequence, and an aged item always has the lower sequence — so
-    // letting background work reach Priority::Ptt did not merely stop
-    // outranking the keyed-state fallback poll, it dispatched ahead of it, one
-    // whole poll interval per aged entry.  Aging to ActiveMeter still beats
-    // fresh meter traffic on the FIFO tie (which is all anti-starvation needs)
-    // while leaving PTT a strict edge that no amount of waiting can erode.
+    // BOTH OF THOSE ARE DELAYS, NEVER A HOLD. takeNext() lifts the floor again
+    // once kBackgroundStarvationCeilingMs has passed with no background
+    // dispatch: on a link whose meters replenish faster than it drains them,
+    // an overdue meter is always queued, and a floor conditioned on that alone
+    // would stop control reconciliation and the startup snapshot outright
+    // rather than merely deferring them.
     const int base = static_cast<int>(request.request.priority);
-    const int floor = static_cast<int>(Priority::ActiveMeter);
-    if (base <= floor) {
+    if (base <= static_cast<int>(Priority::ActiveMeter)) {
         return request.request.priority;
     }
+    const int floor = static_cast<int>(yieldToMeters
+        ? Priority::Control : Priority::ActiveMeter);
     const std::int64_t waitedMs = std::max<std::int64_t>(0, nowMs - request.enqueuedAtMs);
     const int aged = base - static_cast<int>(waitedMs / kPriorityAgingMs);
     return static_cast<Priority>(std::max(floor, aged));
@@ -391,6 +434,8 @@ IcomCivScheduler::ResetResult IcomCivScheduler::reset(TerminalOutcome outcome) n
     m_sequence = 0;
     m_lastDispatchMs = 0;
     m_inFlightAtMs = 0;
+    m_backgroundSinceMeter = false;
+    m_lastBackgroundDispatchMs = 0;
     m_stats = Stats{};
     return result;
 }

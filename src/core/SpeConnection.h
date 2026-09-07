@@ -50,10 +50,10 @@ public:
 #endif
     // Network mode expects a ser2net-style TCP proxy in either raw or
     // telnet mode — both verified against real 1.5K-FA hardware (the
-    // validation station runs telnet mode). Telnet negotiation bytes and
-    // IAC-escaping are shrugged off by the parser's sync-run resync; the
-    // rare status frame whose checksum byte happens to be 0xFF is dropped
-    // and simply re-polled 100 ms later. Telnet mode is also what the remote
+    // validation station runs telnet mode). The LCD parser accepts both raw
+    // binary frames and telnet's doubled-IAC form and validates their 16-bit
+    // checksum. A rare Status checksum byte of 0xFF is still dropped and
+    // simply re-polled 100 ms later. Telnet mode is also what the remote
     // power-ON pulse needs — it drives the proxy's DTR/RTS lines via RFC 2217
     // COM-port control, so ser2net must run the port as
     // `accepter: telnet(rfc2217=true),<port>`. A raw or plain-telnet port
@@ -73,6 +73,13 @@ public:
     void cyclePowerLevel() { sendKey(Spe::Key::Power); }
     void tune() { sendKey(Spe::Key::Tune); }
     void switchOff() { sendKey(Spe::Key::SwitchOff); }
+
+    // Remote LCD mirroring: while enabled (and connected) the amplifier's
+    // display is polled with the 0x80 request at kLcdPollIntervalMs and
+    // every decoded refresh arrives via lcdFrameReceived. Driven by the
+    // applet's floating state — the docked rail has no room for the LCD,
+    // so polling it there would be pure link noise.
+    void setLcdPolling(bool on);
 
     // Power the amplifier ON — a hardware pulse on the serial connector's
     // control lines, not a protocol command, so it works while the amp is
@@ -100,6 +107,11 @@ signals:
     void disconnected();
     void connectionFailed(const QString& errorString);
     void statusUpdated(const AetherSDR::Spe::Status& status);
+    void lcdFrameReceived(const AetherSDR::Spe::Lcd::Frame& frame);
+    // True only after a checksum-valid LCD reply, and false again after two
+    // missed 600 ms refreshes or whenever LCD polling/transport stops. The
+    // floating menu keys use this independently of Status liveness.
+    void lcdFreshChanged(bool fresh);
     // Fires on the first Status reply of a connection and again if the
     // reported ID ever changes (in practice: never mid-session). The GUI
     // applies gauge ranges and model-dependent layout from this.
@@ -126,6 +138,8 @@ private:
     void pollTick();
     void powerOnStep();
     void setControlLines(bool dtr, bool rts);  // transport-appropriate DTR/RTS
+    void requestLcdFrame();
+    void setLcdFresh(bool fresh);
 
     QIODevice*    m_device{nullptr};
     QTcpSocket    m_socket;
@@ -154,6 +168,16 @@ private:
     QTimer m_pollTimer;
     static constexpr int kPollIntervalMs = 100;
 
+    // LCD refresh poll — the field-proven application's cadence. Slower
+    // than the status poll on purpose: a display frame is 371 bytes
+    // against Status's ~76, and the panel is for eyes, not telemetry.
+    QTimer m_lcdTimer;
+    QTimer m_lcdStaleTimer;
+    bool   m_lcdWanted{false};
+    bool   m_lcdFresh{false};
+    static constexpr int kLcdPollIntervalMs = 600;
+    static constexpr int kLcdStaleTimeoutMs = kLcdPollIntervalMs * 2;
+
     QString m_currentModelId;
 
     // Power-ON pulse state machine (see powerOn()). -1 = idle.
@@ -163,6 +187,7 @@ private:
     // from its reply to WILL COM-PORT-OPTION. Network mode only; a local
     // serial port drives its own lines and needs no negotiation.
     Spe::Rfc2217::OptionReply m_comPortOption{Spe::Rfc2217::OptionReply::None};
+    bool m_rfc2217NegotiationPending{false};
     // Last 2 bytes of the previous network read — prepended to the next scan
     // so a DO/DONT reply split across TCP segments is still seen (the
     // sequence is 3 bytes, so 2 carried bytes always suffice).

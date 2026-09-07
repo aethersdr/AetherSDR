@@ -37,7 +37,6 @@
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceFeature.h"
-#include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "models/BandDefs.h"
 #include "models/SliceModel.h"
@@ -1126,28 +1125,21 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [stepActivePanRfGain]() {
             stepActivePanRfGain(-1);
         }, true);
+    // #5384: the AGC-T knob follows the slice's AGC mode (agc_off_level while
+    // AGC is off, agc_threshold otherwise) as the on-screen slider does; the
+    // range follows the same choice.
     m_shortcutManager.registerAction("agct_up", "AGC-T Up", "AGC",
         QKeySequence(), [this]() {
-            auto* s = activeSlice();
-            if (s) {
-                const bool external = s->externalReceiveReplacementActive();
-                const int current = external ? s->receiveAgcThreshold()
-                                             : s->agcThreshold();
-                s->setAgcThreshold(std::min(
-                    external ? KiwiSdrProtocol::kAgcThresholdMaxDb : 100,
-                    current + 5));
+            if (auto* s = activeSlice()) {
+                s->setAgcTKnobLevel(std::min(s->agcTKnobMaximum(),
+                                             s->agcTKnobLevel() + 5));
             }
         }, true);
     m_shortcutManager.registerAction("agct_down", "AGC-T Down", "AGC",
         QKeySequence(), [this]() {
-            auto* s = activeSlice();
-            if (s) {
-                const bool external = s->externalReceiveReplacementActive();
-                const int current = external ? s->receiveAgcThreshold()
-                                             : s->agcThreshold();
-                s->setAgcThreshold(std::max(
-                    external ? KiwiSdrProtocol::kAgcThresholdMinDb : 0,
-                    current - 5));
+            if (auto* s = activeSlice()) {
+                s->setAgcTKnobLevel(std::max(s->agcTKnobMinimum(),
+                                             s->agcTKnobLevel() - 5));
             }
         }, true);
 

@@ -540,6 +540,7 @@ QJsonObject describeWidget(const QWidget* w)
         const QVariant gl = w->property("gaugeLabel");
         if (gl.isValid()) {
             o[QStringLiteral("gaugeLabel")] = gl.toString();
+            o[QStringLiteral("gaugeUnit")] = w->property("gaugeUnit").toString();
             o[QStringLiteral("gaugeValue")] = w->property("gaugeValue").toDouble();
             // gaugeFraction is the DERIVED state — the fill actually painted,
             // after ballistics. Every other field here is an INPUT, and the
@@ -1250,7 +1251,7 @@ QImage grabWidget(QWidget* w)
 QString sliceActionList()
 {
     return QStringLiteral(
-        "add|remove|select|tx|mode|filter|agc|dsp|tone|offset|diversity|"
+        "add|remove|select|tx|mode|filter|filterpreset|agc|dsp|tone|offset|diversity|"
         "centerlock|link|txant|rxant|rxsource|fixture|clearfixture");
 }
 
@@ -1673,8 +1674,16 @@ QWidget* primaryTopLevelWindow()
 
 // linkedTo: peer slice id when this slice is a Slice Link member, else -1
 // (supplied by the GUI's peer query — the link is client-side state).
-QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo)
+QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
+                          const RxFilterControl& filterControl)
 {
+    QString filterPreset;
+    for (const RxFilterPreset& preset : filterControl.presets) {
+        if (preset.id == filterControl.selectedPresetId) {
+            filterPreset = preset.label;
+            break;
+        }
+    }
     return QJsonObject{
         {QStringLiteral("sliceId"),    s->sliceId()},
         {QStringLiteral("letter"),     s->letter()},
@@ -1683,6 +1692,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo)
         {QStringLiteral("mode"),       s->mode()},
         {QStringLiteral("filterLow"),  s->filterLow()},
         {QStringLiteral("filterHigh"), s->filterHigh()},
+        {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
+        {QStringLiteral("filterPreset"), filterPreset},
         {QStringLiteral("active"),     s->isActive()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
@@ -1834,6 +1845,11 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("callsign"),     r->callsign()},
         {QStringLiteral("nickname"),     r->nickname()},
         {QStringLiteral("connected"),    r->isConnected()},
+        // The third value beside the bool, NOT a replacement for it: "idle",
+        // "connecting" or "connected". A caller that issued `connect ip` and
+        // reads `connected: false` cannot otherwise tell a connect that is
+        // working from one that is not happening (#5413 item 3).
+        {QStringLiteral("connectState"), r->connectState()},
         {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
         {QStringLiteral("txPower"),      r->txPower()},
@@ -1851,6 +1867,11 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("available"), r->hasGpsHardware()
              || !r->gpsStatus().isEmpty()},
         {QStringLiteral("status"), r->gpsStatus()},
+        // Backend-normalized validity and source (GpsDelta::positionValid /
+        // source), so a scenario can assert "usable fix" without parsing
+        // family-specific status prose.
+        {QStringLiteral("positionValid"), r->gpsPositionValid()},
+        {QStringLiteral("source"), r->gpsSource()},
         {QStringLiteral("tracked"), r->gpsTracked()},
         {QStringLiteral("visible"), r->gpsVisible()},
         {QStringLiteral("grid"), r->gpsGrid()},
@@ -1858,10 +1879,18 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("latitude"), r->gpsLat()},
         {QStringLiteral("longitude"), r->gpsLon()},
         {QStringLiteral("utcTime"), r->gpsTime()},
+        {QStringLiteral("utcDate"), r->gpsDate()},
         {QStringLiteral("speed"), r->gpsSpeed()},
         {QStringLiteral("course"), r->gpsTrack()},
         {QStringLiteral("frequencyError"), r->gpsFreqError()},
         {QStringLiteral("ntpServerAddress"), r->gpsNtpServerAddress()},
+        // Radio-owned NTP *client* configuration (hasGpsTimeConfiguration;
+        // IC-705 SET 0167-0169 and 1A 08), distinct from the Flex-hosted NTP
+        // server address above.
+        {QStringLiteral("ntpClientEnabled"), r->gpsNtpEnabled()},
+        {QStringLiteral("ntpClientServer"), r->gpsNtpServer()},
+        {QStringLiteral("gpsTimeCorrection"), r->gpsTimeCorrectionEnabled()},
+        {QStringLiteral("ntpSyncStatus"), r->gpsNtpSyncStatus()},
         {QStringLiteral("referenceSetting"), r->oscSetting()},
         {QStringLiteral("referenceActual"), r->oscState()},
         {QStringLiteral("referenceLocked"), r->oscLocked()},
@@ -2183,7 +2212,11 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C
         {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
-        {QStringLiteral("swAlc"),           m->swAlc()},              // dBFS post-ALC SSB peak
+        {QStringLiteral("alc"), QJsonObject{
+            {QStringLiteral("value"), m->alcUpdatedAtMs() > 0 ? QJsonValue(m->alcValue()) : QJsonValue()},
+            {QStringLiteral("unit"), m->alcUnit()},
+            {QStringLiteral("ageMs"), age(m->alcUpdatedAtMs())}}},
+        {QStringLiteral("swAlc"), m->swAlc()}, // Legacy normalized TCI value; see alc for physical units
         {QStringLiteral("hwAlc"),           m->hwAlc()},              // dBFS external HW-ALC
         {QStringLiteral("micPeak"),         m->micPeak()},            // dBFS
         {QStringLiteral("micLevel"),        m->micLevel()},           // dBFS
@@ -2383,6 +2416,12 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    if (m_meterWindowActive) {
+        sampleMeterWindow();
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+    }
     if (!m_server)
         return;
 
@@ -3095,6 +3134,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doGet(a.model, a.selector, a.property);
             });
 
+        add("meterwindow", {}, "meterwindow <start [duration_ms]|status|stop> — bounded meter ages and unrounded peaks; never keys TX",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doMeterWindow(a.action, a.value);
+            });
+
         add("connect", {}, "connect <list|show|hide|local|ip|wait> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) -> QJsonObject {
@@ -3446,7 +3491,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]|session|scheduler|incident> — CI-V "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|session|scheduler|incident> — CI-V "
             "inject, frame trace, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
@@ -4338,7 +4383,20 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             done = true;
         }
     } else if (action == QLatin1String("setCurrentText")) {
-        if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
+        if (auto* cb = qobject_cast<QComboBox*>(w)) {
+            const int row = cb->findText(value);
+            if (row < 0 && !cb->isEditable()) {
+                return err(QStringLiteral("no combo item labeled '%1'").arg(value));
+            }
+            if (row >= 0) {
+                const QModelIndex index = cb->model()->index(row, cb->modelColumn(), cb->rootModelIndex());
+                if (!(cb->model()->flags(index) & Qt::ItemIsEnabled)) {
+                    return err(QStringLiteral("combo item is disabled"));
+                }
+            }
+            cb->setCurrentText(value);
+            done = true;
+        }
         else if (auto* tb = qobject_cast<QTabBar*>(w)) {
             // Select a tab by its label — the only way to reach deferred
             // setup-dialog tabs (built on first selection) from the bridge.
@@ -4384,7 +4442,19 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             done = true;
         }
     } else if (action == QLatin1String("setCurrentIndex")) {
-        if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentIndex(value.toInt()); done = true; }
+        if (auto* cb = qobject_cast<QComboBox*>(w)) {
+            bool valid = false;
+            const int row = value.toInt(&valid);
+            if (!valid || row < -1 || row >= cb->count()) {
+                return err(QStringLiteral("combo index is out of range"));
+            }
+            const QModelIndex index = cb->model()->index(row, cb->modelColumn(), cb->rootModelIndex());
+            if (row >= 0 && !(cb->model()->flags(index) & Qt::ItemIsEnabled)) {
+                return err(QStringLiteral("combo item is disabled"));
+            }
+            cb->setCurrentIndex(row);
+            done = true;
+        }
         else if (auto* tb = qobject_cast<QTabBar*>(w)) { tb->setCurrentIndex(value.toInt()); done = true; }
     } else if (action == QLatin1String("selectRow")) {
         // Select a whole row in an item view (QTableWidget / QTreeWidget /
@@ -4524,6 +4594,111 @@ void AutomationServer::setClockModel(AetherClockModel* model)
     m_clockModel = model;
 }
 
+void AutomationServer::setRadioModel(RadioModel* model)
+{
+    if (m_meterWindowActive) {
+        sampleMeterWindow();
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+    }
+    m_radioModel = model;
+}
+
+QJsonObject AutomationServer::doMeterWindow(const QString& action, const QString& value)
+{
+    if (action == QLatin1String("start")) {
+        if (!m_radioModel || !m_radioModel->isConnected()) {
+            return err(QStringLiteral("meterwindow requires a connected radio"));
+        }
+        if (m_meterWindowActive) {
+            return err(QStringLiteral("meterwindow already active; stop it before restarting"));
+        }
+        bool valid = true;
+        const int durationMs = value.isEmpty() ? 5000 : value.toInt(&valid);
+        if (!valid || durationMs < 1 || durationMs > 60000) {
+            return err(QStringLiteral("meterwindow duration must be 1..60000 ms"));
+        }
+        m_meterWindow.start(QDateTime::currentMSecsSinceEpoch(), durationMs);
+        m_meterWindowStarted = true;
+        m_meterWindowActive = true;
+        if (!m_meterWindowTimer) {
+            m_meterWindowTimer = new QTimer(this);
+            m_meterWindowTimer->setInterval(20);
+            connect(m_meterWindowTimer, &QTimer::timeout, this, &AutomationServer::sampleMeterWindow);
+        }
+        m_meterWindowSamples = connect(&m_radioModel->meterModel(), &MeterModel::meterUpdated,
+            this, [this](int index, float value) {
+                if (!m_meterWindowActive || !m_radioModel) {
+                    return;
+                }
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                const MeterModel& model = m_radioModel->meterModel();
+                if (const MeterDef* def = model.meterDef(index)) {
+                    m_meterWindow.observe(*def, model.valueUpdatedAtMs(index), value, now);
+                }
+                if (m_meterWindow.expired(now)) {
+                    sampleMeterWindow();
+                }
+            });
+        sampleMeterWindow();
+        if (m_meterWindowActive) {
+            m_meterWindowTimer->start();
+        }
+    } else if (action == QLatin1String("status") || action == QLatin1String("stop")) {
+        if (!m_meterWindowStarted) {
+            return err(QStringLiteral("no meter observation window has been started"));
+        }
+        sampleMeterWindow();
+        if (action == QLatin1String("stop")) {
+            m_meterWindowActive = false;
+            m_meterWindowTimer->stop();
+            disconnect(m_meterWindowSamples);
+        }
+    } else {
+        return err(QStringLiteral("meterwindow requires start, status, or stop"));
+    }
+    QJsonObject result = m_meterWindow.snapshot();
+    result.insert(QStringLiteral("ok"), true);
+    result.insert(QStringLiteral("active"), m_meterWindowActive);
+    return result;
+}
+
+void AutomationServer::sampleMeterWindow()
+{
+    if (!m_meterWindowActive) {
+        return;
+    }
+    if (!m_radioModel) {
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+        return;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const MeterModel& model = m_radioModel->meterModel();
+    for (int index : model.definedIndices()) {
+        if (const MeterDef* def = model.meterDef(index)) {
+            m_meterWindow.observe(*def, model.valueUpdatedAtMs(index), model.value(index), now);
+        }
+    }
+    if (m_meterWindow.expired(now) || !m_radioModel->isConnected()) {
+        m_meterWindowActive = false;
+        m_meterWindowTimer->stop();
+        disconnect(m_meterWindowSamples);
+    }
+}
+
+void AutomationServer::setAudioEngine(AudioEngine* audio)
+{
+    m_audioEngine = audio;
+}
+
+void AutomationServer::setQsoRecorder(QsoRecorder* recorder)
+{
+    m_qsoRecorder = recorder;
+}
+
 namespace {
 // AetherClock model snapshot for "get clock" (PRD-A: bridge exposure).
 QJsonObject clockSnapshot(const AetherClockModel* m)
@@ -4626,10 +4801,44 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             s.value("DfnrPostFilterBeta", "0.0").toFloat();
         tuning[QStringLiteral("dfnr")] = dfnr;
         data[QStringLiteral("tuning")] = tuning;
+        // The BACKEND's DSP, which is a different question from everything
+        // above. `data` describes the client-side chain in AudioEngine — NR2,
+        // NR4, DFNR and their tuning. What §8 asked for is what the RADIO's DSP
+        // is configured with, and the recurring defect is divergence between
+        // the two: a control moves, the model records it, nothing reaches the
+        // DSP, and the symptom is "the control does nothing".
+        //
+        // Every entry names its `chain`, because a backend may run more than one
+        // and they need not share a vocabulary — a Hermes-Lite 2 runs WDSP on
+        // receive and a hand-written phasing modulator on transmit. Each also
+        // names its `level`, because "read-back" is used loosely and the
+        // difference decides what a mismatch proves: `channel-config` is what
+        // the channel was opened with, `dsp-config` is the DSP's own state, and
+        // `not-configured` is a chain that exists with nothing behind it.
+        //
+        // MERGED BEFORE THE PROPERTY BRANCH BELOW, and that ordering is the
+        // contract rather than a detail. A field added after it reaches the
+        // full snapshot but answers "unknown property" to `property=backend` —
+        // and the property form is the only one assert_state and wait_for use,
+        // so a read-back added after the narrowing is one no automation client
+        // can assert on (#5401 review).
+        if (m_radioModel) {
+            if (IRadioBackend* backend = m_radioModel->backend()) {
+                const QVariantList chains = backend->dspChains();
+                if (!chains.isEmpty()) {
+                    data[QStringLiteral("backend")] = QJsonObject{
+                        {QStringLiteral("family"),
+                         m_radioModel->family()},
+                        {QStringLiteral("chains"),
+                         QJsonArray::fromVariantList(chains)}};
+                }
+            }
+        }
         if (!property.isEmpty()) {
-            if (!data.contains(property))
+            if (!data.contains(property)) {
                 return err(QStringLiteral("unknown property '") + property
                            + QStringLiteral("' for dsp"));
+            }
             return QJsonObject{{QStringLiteral("ok"), true},
                                {QStringLiteral("model"), model},
                                {QStringLiteral("property"), property},
@@ -5678,7 +5887,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices())
-            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s)));
+            arr.append(sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl()));
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slices"), arr}};
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
@@ -5757,7 +5966,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         }
         if (!s)
             return err(QStringLiteral("no slice for selector '") + selector + QStringLiteral("'"));
-        data = sliceSnapshot(s, sliceLinkPeerOf(s));
+        data = sliceSnapshot(s, sliceLinkPeerOf(s), radio->radioFilterControl());
     } else if (model == QLatin1String("pan")) {
         const PanadapterModel* p = nullptr;
         if (selector.isEmpty() || selector == QLatin1String("active"))
@@ -6017,7 +6226,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
             QPointer<QObject> guard(conn->asQObject());
             QPointer<AutomationServer> self(this);
-            QTimer::singleShot(0, qApp, [guard, self, conn, selectedSerial] {
+            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial] {
                 if (!guard) {
                     return;
                 }
@@ -6047,7 +6256,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
                 QPointer<QObject> guard(conn->asQObject());
                 QPointer<AutomationServer> self(this);
-                QTimer::singleShot(0, qApp, [guard, self, conn, serial] {
+                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial] {
                     if (!guard) {
                         return;
                     }
@@ -6155,7 +6364,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
         QPointer<QObject> guard(conn->asQObject());
         QPointer<AutomationServer> self(this);
-        QTimer::singleShot(0, qApp, [guard, self, conn, target, family] {
+        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family] {
             if (!guard) {
                 return;
             }
@@ -6202,7 +6411,7 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
     const bool wasVisible = conn && conn->automationDialogVisible();
     QPointer<QObject> guardedHost = host;
     QPointer<QObject> guard(conn ? conn->asQObject() : nullptr);
-    QTimer::singleShot(0, qApp, [guardedHost, guard, conn, show] {
+    QTimer::singleShot(0, QCoreApplication::instance(), [guardedHost, guard, conn, show] {
         if (guardedHost) {
             const char* method = show ? "showConnectionDialog" : "hideConnectionDialog";
             if (QMetaObject::invokeMethod(guardedHost, method, Qt::DirectConnection)) {
@@ -6240,7 +6449,7 @@ QJsonObject AutomationServer::doDisconnect()
 
     QPointer<QObject> guard(conn->asQObject());
     QPointer<AutomationServer> self(this);
-    QTimer::singleShot(0, qApp, [guard, self, conn] {
+    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn] {
         if (!guard) {
             return;
         }
@@ -6603,6 +6812,9 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
         if (!m_txAllowed)
             return err(QStringLiteral("blocked: txtest keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        if (!tx.tuneAvailable()) {
+            return err(QStringLiteral("tune carrier is unavailable in the current radio mode"));
+        }
         tx.startTwoToneTune();
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
         m_txBridgeInitiated = true;   // the watchdog polices scripts, not people
@@ -7156,6 +7368,46 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("filterLow"), s->filterLow()},
                            {QStringLiteral("filterHigh"), s->filterHigh()}};
     }
+    if (action == QLatin1String("filterpreset")) {
+        QString requested = arg.trimmed().toUpper();
+        if (requested.startsWith(QLatin1String("FIL"))) {
+            requested.remove(0, 3);
+        }
+        bool okPreset = false;
+        const int presetId = requested.toInt(&okPreset);
+        const RxFilterControl control = radio->radioFilterControl();
+        const auto preset = std::find_if(
+            control.presets.cbegin(), control.presets.cend(),
+            [presetId](const RxFilterPreset& candidate) {
+                return candidate.id == presetId;
+            });
+        if (!okPreset || preset == control.presets.cend()) {
+            return err(QStringLiteral(
+                "slice filterpreset requires a radio-advertised preset (e.g. FIL1)"));
+        }
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) {
+                s = candidate;
+                break;
+            }
+        }
+        if (!s && !radio->slices().isEmpty()) {
+            s = radio->slices().first();
+        }
+        if (!s) {
+            return err(QStringLiteral("no slice available to select a filter preset on"));
+        }
+
+        radio->selectRadioFilterPreset(s->sliceId(), presetId);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("filterpreset")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("presetId"), presetId},
+                           {QStringLiteral("preset"), preset->label},
+                           {QStringLiteral("requested"), true}};
+    }
     if (action == QLatin1String("agc")) {
         // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC
         // through the same operator setters the RX applet uses, so the change
@@ -7515,6 +7767,10 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
     }
 
     delta.status = QStringLiteral("Locked");
+    // The dashboard, APRS beacon and clock agreement gate on the normalized
+    // validity flag, not on the "Locked" prose, so the fixture must carry it.
+    delta.positionValid = true;
+    delta.source = QStringLiteral("GPSDO");
     delta.time = QDateTime::currentDateTimeUtc().time()
                      .toString(QStringLiteral("HH:mm:ss'Z'"));
     delta.speed = QStringLiteral("0 kts");
@@ -7963,6 +8219,21 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
         return err(QStringLiteral("no backend available"));
 
     const QString a = action.trimmed().toLower();
+    if (a == QLatin1String("wake")) {
+        if (m_readOnly) { return err(QStringLiteral("Wake is unavailable in read-only mode")); }
+        const QStringList fields = arg.simplified().split(QLatin1Char(' '));
+        bool modelOk = false;
+        bool addressOk = false;
+        const int model = fields.value(0).toInt(&modelOk, 16);
+        const int address = fields.value(1).toInt(&addressOk, 16);
+        if (fields.size() != 2 || !modelOk || !addressOk) {
+            return err(QStringLiteral("civ wake requires model ID and radio address in hex"));
+        }
+        QString error;
+        if (!m_radioModel->wakeIcomRadio(model, address, &error)) { return err(error); }
+        return QJsonObject{{QStringLiteral("ok"), true},
+            {QStringLiteral("status"), QStringLiteral("wake requested; identity not yet verified")}};
+    }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("session")
                         && a != QLatin1String("incident")

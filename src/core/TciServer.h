@@ -264,8 +264,11 @@ private:
         QHash<int, QByteArray> rxAccumBuf;
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
-        bool         iqEnabled{false};       // client sent IQ_START
-        int          iqChannel{0};           // TCI TRX → DAX IQ channel (0-based)
+        // TCI IQ subscriptions are per client AND per receiver. SDC can open
+        // several skimmers over one WebSocket by sending iq_start for each
+        // receiver; a single scalar silently replaced the previous receiver
+        // and left its radio-side DAX IQ stream orphaned.
+        QSet<int>    iqReceivers;             // TCI TRX indexes (0..3)
         bool         spectrumEnabled{false}; // client sent spectrum_event:on;
         // Payload-free lifecycle telemetry retained across disconnect. Command
         // names are stored without their arguments, so diagnostics can identify
@@ -279,6 +282,27 @@ private:
         int          lastSocketError{-1};
         QString      lastSocketErrorString;
     };
+
+    // TCI IQ subscription plumbing. A receiver's IQ comes from the DAX IQ
+    // channel bound to that receiver's *pan*, not from trx+1 directly: on a
+    // FLEX `daxiq_channel` is a Panadapter property and the pan↔channel
+    // binding is 1:1 in both directions, so two receivers whose slices share
+    // a panadapter necessarily share one channel (measured on a FLEX-6700,
+    // firmware V1.4.0.0 — binding a channel to a second pan makes the radio
+    // push `daxiq_channel=0` to the first). Since those two receivers also see
+    // the same spectrum, one stream legitimately serves both; the frames are
+    // stamped with each subscriber's own receiver index on the way out.
+    int  iqChannelForTrx(int trx) const;   // 0 when the receiver has no channel
+    bool iqChannelInUse(int channel) const;
+    bool startIqForClient(ClientState& client, int trx);
+    void stopIqForClient(ClientState& client, int trx);
+    bool ensureIqStream(int trx);
+    void releaseIqStreamIfUnused(int trx);
+    void releaseIqChannel(int channel);
+    void reconcileIqStreams();
+    void releaseAllIqStreams();
+    void resetIqStreamBookkeeping();
+    int  achievedIqSampleRate() const;
 
     // Minimum frames to accumulate before flushing to r8brain.
     // ~21ms at 24kHz — large enough for clean resampling, small enough
@@ -302,6 +326,16 @@ private:
     QPointer<SliceModel> m_activeSlice;
     QString           m_activeLetter;   // focused slice's display letter (#4160)
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
+    // DAX IQ channels created by TCI. A channel the DAX IQ applet already owns
+    // is never taken over: `iq_start` is refused rather than retargeting the
+    // operator's pan and rate behind their back. Ownership, in-flight create
+    // and pending removal are three separate facts — conflating them wedged a
+    // receiver whose create was lost or which outlived a stop()/start() cycle.
+    QSet<int>          m_tciIqChannels;      // 1-based channels TCI created
+    QSet<int>          m_iqCreateInFlight;   // create issued, status not yet seen
+    QSet<int>          m_pendingIqRemovals;  // awaiting a create status to reap
+    QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
+    int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
     // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,

@@ -5,6 +5,13 @@
 
 #include <sqlite3.h>
 
+// Belt against a -DUSE_SYSTEM_SQLITE=ON pkg-config floor (CMakeLists.txt,
+// sqlite3>=3.33) disagreeing with the header actually picked up at compile
+// time: SettingsDatabase uses sqlite_schema (3.33.0, below) and VACUUM INTO
+// (3.27.0). Catches the mismatch at compile time rather than at first launch.
+static_assert(SQLITE_VERSION_NUMBER >= 3033000,
+              "SettingsDatabase requires SQLite >= 3.33.0 (sqlite_schema)");
+
 namespace AetherSDR {
 
 namespace {
@@ -50,6 +57,43 @@ public:
 private:
     sqlite3_stmt* m_stmt = nullptr;
 };
+
+bool setOwnerOnlyPermissions(const QString& filePath, bool required,
+                             QString& error)
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(filePath);
+    Q_UNUSED(required);
+    Q_UNUSED(error);
+    return true;
+#else
+    if (!QFile::exists(filePath)) {
+        if (!required) {
+            return true;
+        }
+        error = QStringLiteral("SQLite did not create %1").arg(filePath);
+        return false;
+    }
+
+    const QFileDevice::Permissions ownerOnly =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+    if (!QFile::setPermissions(filePath, ownerOnly)) {
+        error = QStringLiteral("cannot set owner-only permissions on %1")
+                    .arg(filePath);
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool hardenDatabaseFilePermissions(const QString& path, QString& error)
+{
+    return setOwnerOnlyPermissions(path, true, error)
+           && setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
+                                      error)
+           && setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
+                                      error);
+}
 
 } // namespace
 
@@ -100,12 +144,41 @@ bool SettingsDatabase::open(const QString& path)
     m_db = db;
     m_path = path;
 
+    // Re-establish, at runtime, the two aether_sqlite3 compile-time hardening
+    // options that a -DUSE_SYSTEM_SQLITE=ON distro library does not carry.
+    // Both are cheap and safe to redo unconditionally on the vendored path,
+    // keeping one behavior for both builds.
+    const int dqsDmlResult =
+        sqlite3_db_config(m_db, SQLITE_DBCONFIG_DQS_DML, 0, nullptr);
+    const int dqsDdlResult =
+        sqlite3_db_config(m_db, SQLITE_DBCONFIG_DQS_DDL, 0, nullptr);
+    if (dqsDmlResult != SQLITE_OK || dqsDdlResult != SQLITE_OK) {
+        m_lastError = QStringLiteral("cannot disable SQLite double-quoted "
+                                     "string literals (%1/%2)")
+                          .arg(dqsDmlResult)
+                          .arg(dqsDdlResult);
+        qWarning() << "SettingsDatabase:" << m_lastError;
+        close();
+        return false;
+    }
+
     // busy_timeout first so a concurrent instance's transaction doesn't turn
     // every subsequent pragma into an immediate SQLITE_BUSY failure.
     sqlite3_busy_timeout(m_db, 5000);
 
     if (!exec("PRAGMA journal_mode=WAL;")
         || !exec("PRAGMA synchronous=NORMAL;")) {
+        close();
+        return false;
+    }
+
+    // sqlite3_open_v2() creates the handle lazily; journal_mode is the first
+    // statement that guarantees the database file exists. Harden it before
+    // createSchema() performs the first write. SQLite then derives new WAL/SHM
+    // modes from the database mode on Unix; the later pass verifies all files
+    // explicitly once the write has materialized them.
+    if (!hardenDatabaseFilePermissions(path, m_lastError)) {
+        qWarning() << "SettingsDatabase:" << m_lastError;
         close();
         return false;
     }
@@ -142,6 +215,11 @@ bool SettingsDatabase::open(const QString& path)
         // Newer binary's database: reopen READ-ONLY so the ENGINE enforces
         // what the caller's read-only convention promises (PR #4612 review) —
         // and close without a checkpoint, which would write the newer file.
+        if (!hardenDatabaseFilePermissions(path, m_lastError)) {
+            qWarning() << "SettingsDatabase:" << m_lastError;
+            close();
+            return false;
+        }
         m_newerSchema = true;
         sqlite3_close(m_db);
         m_db = nullptr;
@@ -165,6 +243,11 @@ bool SettingsDatabase::open(const QString& path)
     }
 
     if (!createSchema()) {
+        close();
+        return false;
+    }
+    if (!hardenDatabaseFilePermissions(path, m_lastError)) {
+        qWarning() << "SettingsDatabase:" << m_lastError;
         close();
         return false;
     }

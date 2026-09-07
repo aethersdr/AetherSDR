@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-dev \
     libasound2-dev \
     libfftw3-dev \
+    librtlsdr-dev \
     libhidapi-dev \
     portaudio19-dev \
     libpipewire-0.3-dev \

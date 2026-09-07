@@ -728,6 +728,8 @@ void SpectrumOverlayMenu::buildAntPanel()
     gainLabel->setFixedWidth(kLabelW);
     gainRow->addWidget(gainLabel);
     m_rfGainSlider = new GuardedSlider(Qt::Horizontal);
+    m_rfGainSlider->setObjectName(QStringLiteral("antennaRfGainSlider"));
+    m_rfGainSlider->setAccessibleName(QStringLiteral("RF gain"));
     m_rfGainSlider->setRange(-8, 32);
     m_rfGainSlider->setSingleStep(8);
     m_rfGainSlider->setPageStep(8);

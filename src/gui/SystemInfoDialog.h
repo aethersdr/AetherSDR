@@ -2,7 +2,9 @@
 
 #include "PersistentDialog.h"
 #include "core/SystemInfo.h"
+#include "core/SystemInfoCollector.h"
 #include "core/ThreadCpuRing.h"
+#include "MemoryHistoryRing.h"
 
 #include <QFile>
 #include <QHash>
@@ -11,6 +13,7 @@
 #include <QVector>
 
 class QCheckBox;
+class QComboBox;
 class QPushButton;
 class QHBoxLayout;
 class QLabel;
@@ -21,7 +24,7 @@ class QTimer;
 
 namespace AetherSDR {
 
-class SystemInfoCollector;
+class TimeSeriesGraphWidget;
 
 // Runtime diagnostics for AetherSDR itself (#2554).
 //
@@ -34,7 +37,10 @@ class SystemInfoDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
-    explicit SystemInfoDialog(QWidget* parent = nullptr);
+    // `history` is the app-lifetime memory ring MainWindow owns (#2554); the
+    // dialog is WA_DeleteOnClose, so anything it owned would die with Close.
+    // Null means "use my own" — what the tests do.
+    explicit SystemInfoDialog(MemoryHistoryRing* history = nullptr, QWidget* parent = nullptr);
     ~SystemInfoDialog() override;
 
 protected:
@@ -51,6 +57,11 @@ private slots:
     // the suite, and the table's contents were the largest thing no test could
     // reach.
     void applySample(const QVector<AetherSDR::ThreadCpuSample>& threads);
+
+    // The Memory tab's counterpart: one reading into the ring, the readouts
+    // and the chart refreshed from it. A slot for the same reason as
+    // applySample — a test hands it constructed samples and reads the labels.
+    void applyMemorySample(const AetherSDR::MemorySample& sample);
 
     // Acceptance criterion 3, in its minimal form: the summary line goes red
     // when a thread crosses 90 % of one core. A slot for the same reason
@@ -69,9 +80,12 @@ private slots:
 
 private:
     QWidget* buildThreadsTab();
+    QWidget* buildMemoryTab();
     QWidget* buildLogsTab();
 
     void applyAlertStyle();
+    void refreshMemoryChart();
+    int  selectedMemoryRangeSeconds() const;
 
     void startSampling();
     void stopSampling();
@@ -111,6 +125,21 @@ private:
     // connections compare the generation they were made under and drop what
     // no longer belongs to a live sampling run.
     quint64       m_samplingGeneration{0};
+
+    // Memory tab (#2554 acceptance criterion 4). The ring is NOT cleared when
+    // sampling stops: unlike Peak's "last 60 s", a trend chart is honest about
+    // a gap — the series break where nothing was sampled (maxConnectGapSeconds)
+    // — and it outlives the dialog when MainWindow hands one in, so Close and
+    // reopen shows what was sampled before. History accrues only while open.
+    MemoryHistoryRing     m_ownMemoryRing;              // used when nothing is injected
+    MemoryHistoryRing*    m_memoryRing{&m_ownMemoryRing};
+    TimeSeriesGraphWidget* m_memoryGraph{nullptr};
+    QComboBox*            m_memoryRange{nullptr};
+    QLabel*               m_memorySummary{nullptr};
+    QLabel*               m_memoryResident{nullptr};
+    QLabel*               m_memoryPeak{nullptr};
+    QLabel*               m_memoryPrivate{nullptr};
+    QLabel*               m_memoryVirtual{nullptr};
 
     // Logs tab
     QWidget*        m_logsPage{nullptr};   // parent for dynamically rebuilt filters

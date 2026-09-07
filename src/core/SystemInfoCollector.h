@@ -3,15 +3,33 @@
 #include "SystemInfo.h"
 
 #include <QElapsedTimer>
+#include <QMetaType>
 #include <QObject>
+#include <QString>
 #include <QVector>
 
 class QTimer;
 
 namespace AetherSDR {
 
-// Samples per-thread CPU on a worker thread and publishes the result to the GUI
-// (#2554).
+// One reading of this process's memory, taken on the collector's tick and
+// carried to the GUI by value (#2554, the Memory tab). A flat copy of the
+// fields ProcessMemorySnapshot::capture() fills, so the dialog needs neither
+// MemoryTelemetry.h nor a JSON round-trip to draw a chart. residentMetric names
+// what "resident" means on this platform (physicalFootprint / workingSet /
+// vmRss / unsupported) — the number is only honest with its name beside it.
+struct MemorySample {
+    qint64  wallMs{0};              // QDateTime::currentMSecsSinceEpoch() at capture
+    bool    valid{false};           // false = this platform reported nothing usable
+    QString residentMetric;
+    quint64 residentBytes{0};
+    quint64 peakResidentBytes{0};
+    quint64 privateBytes{0};
+    quint64 virtualBytes{0};
+};
+
+// Samples per-thread CPU (and, since the Memory tab, process memory) on a
+// worker thread and publishes the result to the GUI (#2554).
 //
 // Shaped like the other workers in this codebase rather than as a self-owning
 // thread: the object is parentless, moved onto a QThread by its owner, and
@@ -68,6 +86,12 @@ signals:
     // or a toast attaches here without the collector having to know.
     void thresholdExceeded(const QString& threadName, double percentOfCore);
 
+    // Process memory on every tick, including the first: unlike the CPU
+    // percentages it needs no previous sample to be meaningful, so the Memory
+    // tab shows a point 1.5 s after the dialog opens rather than 3 s. Queued
+    // to the GUI thread like sampleReady.
+    void memorySampleReady(const AetherSDR::MemorySample& sample);
+
 private:
     void sampleOnce();
 
@@ -78,3 +102,5 @@ private:
 };
 
 }  // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::MemorySample)

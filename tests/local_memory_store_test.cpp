@@ -24,14 +24,24 @@ MemoryEntry sampleMemory(int index)
     m.index = index;
     m.group = "Local Repeaters";
     m.owner = "KI6BCJ";
+    m.channel = "42";
+    m.importSource = "icom:radio-serial";
+    m.importKey = "-1:42";
     m.freq = 146.94;
     m.name = "W6ABC Mt Diablo";
     m.mode = "FM";
+    m.nativeFilter = 2;
+    m.dataMode = 1;
     m.step = 5000;
     m.offsetDir = "down";
     m.repeaterOffset = 0.6;
     m.toneMode = "ctcss_tx";
     m.toneValue = 103.5;
+    m.rxToneValue = 88.5;
+    m.dtcsCode = 23;
+    m.dtcsTxReverse = true;
+    m.dtcsRxReverse = false;
+    m.recallable = true;
     m.squelch = true;
     m.squelchLevel = 20;
     m.rxFilterLow = -8000;
@@ -68,6 +78,24 @@ int main()
 
         const MemoryEntry& g = result.memories.value(7);
         ok &= expect(g == sampleMemory(7), "every MemoryEntry field preserved");
+    }
+
+    // A version bump is needed only for fields older writers cannot preserve.
+    {
+        MemoryEntry ordinary;
+        ordinary.index = 0;
+        ordinary.mode = "USB";
+        ordinary.freq = 14.25;
+        QMap<int, MemoryEntry> bank{{0, ordinary}};
+        ok &= expect(LocalMemoryStore::parse(LocalMemoryStore::serialize(bank)).version == 1,
+                     "ordinary memories keep the version-1 format");
+        bank[0].recallable = false;
+        ok &= expect(LocalMemoryStore::parse(LocalMemoryStore::serialize(bank)).version == 2,
+                     "display-only safety metadata requires the protected version-2 format");
+        bank[0] = ordinary;
+        bank[0].nativeFilter = 2;
+        ok &= expect(LocalMemoryStore::formatVersionFor(bank) == 2,
+                     "native recall metadata requires version 2 even without provenance");
     }
 
     // --- the map key wins over a disagreeing index field ------------------

@@ -40,6 +40,45 @@ void captureLogHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
     }
 }
 
+// RadioModel has no outbound-command signal, and the pan↔channel binding this
+// file now asserts goes out through RadioModel::sendCommand(), not DaxIqModel.
+// It is logged at debug on aether.protocol, so capture that for the lifetime of
+// a test rather than leaving the bind unasserted — without it, four channels
+// fighting over one panadapter looks identical to four working streams.
+class ScopedCommandLog
+{
+public:
+    ScopedCommandLog()
+    {
+        g_logSink = &m_lines;
+        m_previous = qInstallMessageHandler(captureLogHandler);
+        QLoggingCategory::setFilterRules(QStringLiteral("aether.protocol.debug=true"));
+    }
+    ~ScopedCommandLog()
+    {
+        QLoggingCategory::setFilterRules(QString());
+        qInstallMessageHandler(m_previous);
+        g_logSink = nullptr;
+    }
+    ScopedCommandLog(const ScopedCommandLog&) = delete;
+    ScopedCommandLog& operator=(const ScopedCommandLog&) = delete;
+
+    bool contains(const QString& fragment) const
+    {
+        for (const QString& line : m_lines) {
+            if (line.contains(fragment)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void clear() { m_lines.clear(); }
+
+private:
+    QStringList      m_lines;
+    QtMessageHandler m_previous{nullptr};
+};
+
 // Collect everything logged while `body` runs. aether.cat defaults to
 // QtWarningMsg, so the info-level route line needs the rule as well as the
 // handler.
@@ -1339,6 +1378,443 @@ public:
                            expectedPcm.constData(),
                            static_cast<size_t>(expectedPcm.size())) == 0;
     }
+
+    // Put a fixture slice on a panadapter of its own. automationApplySliceFixture
+    // hardcodes pan 0x40000000 for every slice, which is the shared-pan case —
+    // useful on its own, but it cannot exercise four distinct channels.
+    static void movePan(RadioModel& model, int sliceId, const QString& panId)
+    {
+        QMap<QString, QString> kvs;
+        kvs.insert(QStringLiteral("pan"), panId);
+        model.handleSliceStatusForTest(sliceId, kvs, false);
+    }
+
+    struct IqHarness {
+        QStringList         iqCommands;
+        QVector<QByteArray> frames;
+    };
+
+    static QSet<int> frameReceivers(const QVector<QByteArray>& frames)
+    {
+        QSet<int> receivers;
+        for (const QByteArray& frame : frames) {
+            if (frame.size() < 64) {
+                continue;
+            }
+            quint32 receiver = 0;
+            quint32 type = 0;
+            std::memcpy(&receiver, frame.constData(), sizeof(receiver));
+            std::memcpy(&type,
+                        frame.constData() + 6 * static_cast<int>(sizeof(quint32)),
+                        sizeof(type));
+            if (type == 0) {
+                receivers.insert(static_cast<int>(receiver));
+            }
+        }
+        return receivers;
+    }
+
+    // Four receivers on four panadapters: the ordinary skimmer setup. Each takes
+    // its documented channel (trx n → DAX IQ channel n+1, #3913), each pan is
+    // bound to it, and stopping one leaves the other three streaming.
+    static bool fourPansGiveFourIqStreams()
+    {
+        ScopedCommandLog cmdLog;
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        for (int sliceId = 0; sliceId < DaxIqModel::NUM_CHANNELS; ++sliceId) {
+            if (!model.automationApplySliceFixture(sliceId, QString(), &error)) {
+                std::printf("      IQ fixture %d failed: %s\n", sliceId,
+                            error.toUtf8().constData());
+                return false;
+            }
+            movePan(model, sliceId,
+                    QStringLiteral("0x4000000%1").arg(sliceId));
+        }
+
+        IqHarness h;
+        QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
+                         [&h](const QString& c) { h.iqCommands.append(c); });
+
+        if (!server.start(0) || !server.m_server) {
+            std::printf("      TCI server failed to bind an ephemeral port\n");
+            return false;
+        }
+
+        QWebSocket client;
+        QObject::connect(&client, &QWebSocket::binaryMessageReceived,
+                         [&h](const QByteArray& f) { h.frames.append(f); });
+        client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        for (int i = 0; i < 100
+             && (client.state() != QAbstractSocket::ConnectedState
+                 || server.m_clients.isEmpty()); ++i) {
+            spin(10);
+        }
+        if (client.state() != QAbstractSocket::ConnectedState
+            || server.m_clients.isEmpty()) {
+            return false;
+        }
+
+        client.sendTextMessage(QStringLiteral(
+            "iq_samplerate:96000;iq_start:0;iq_start:1;iq_start:2;iq_start:3;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().iqReceivers.size()
+                    != DaxIqModel::NUM_CHANNELS; ++i) {
+            spin(10);
+        }
+        const QSet<int> allReceivers{0, 1, 2, 3};
+        if (server.m_iqSampleRate != 96000
+            || server.m_clients.first().iqReceivers != allReceivers) {
+            std::printf("      IQ subscriptions=%lld rate=%d\n",
+                        static_cast<long long>(
+                            server.m_clients.first().iqReceivers.size()),
+                        server.m_iqSampleRate);
+            return false;
+        }
+        for (int channel = 1; channel <= DaxIqModel::NUM_CHANNELS; ++channel) {
+            if (!h.iqCommands.contains(
+                    QStringLiteral("stream create type=dax_iq daxiq_channel=%1")
+                        .arg(channel))) {
+                std::printf("      no DAX IQ create for channel %d\n", channel);
+                return false;
+            }
+            // The stream is inert until its pan is routed to it. Assert the
+            // bind, not just the create — nothing else in this file did, so
+            // four channels fighting over one pan looked identical to four
+            // working streams.
+            if (!cmdLog.contains(
+                    QStringLiteral("display pan set 0x4000000%1 daxiq_channel=%2")
+                        .arg(channel - 1).arg(channel))) {
+                std::printf("      no pan bind for channel %d\n", channel);
+                return false;
+            }
+        }
+
+        float iqPair[2]{0.25f, -0.5f};
+        QByteArray rawPayload(reinterpret_cast<const char*>(iqPair),
+                              static_cast<int>(sizeof(iqPair)));
+        for (int channel = 1; channel <= DaxIqModel::NUM_CHANNELS; ++channel) {
+            server.onIqDataReady(channel, rawPayload, 96000);
+        }
+        for (int i = 0; i < 100
+             && h.frames.size() < DaxIqModel::NUM_CHANNELS; ++i) {
+            spin(10);
+        }
+        if (frameReceivers(h.frames) != allReceivers) {
+            std::printf("      four-stream frame receivers=%lld\n",
+                        static_cast<long long>(frameReceivers(h.frames).size()));
+            return false;
+        }
+
+        // Stopping receiver 1 must leave 0, 2 and 3 live on this same socket,
+        // and must release channel 2 — stream AND pan binding, so the pan is
+        // not left routed at a channel nothing reads.
+        cmdLog.clear();
+        client.sendTextMessage(QStringLiteral("iq_stop:1;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().iqReceivers.contains(1); ++i) {
+            spin(10);
+        }
+        if (!cmdLog.contains(
+                QStringLiteral("display pan set 0x40000001 daxiq_channel=0"))) {
+            std::printf("      stopped receiver left its pan bound\n");
+            return false;
+        }
+        h.frames.clear();
+        for (int channel = 1; channel <= DaxIqModel::NUM_CHANNELS; ++channel) {
+            server.onIqDataReady(channel, rawPayload, 96000);
+        }
+        for (int i = 0; i < 100 && h.frames.size() < 3; ++i) {
+            spin(10);
+        }
+        return server.m_clients.first().iqReceivers == QSet<int>{0, 2, 3}
+            && frameReceivers(h.frames) == QSet<int>{0, 2, 3};
+    }
+
+    // Two receivers whose slices share a panadapter — the ordinary A/B layout.
+    // On a FLEX the pan↔channel binding is 1:1 in both directions, so binding a
+    // second channel to the same pan takes the first one away and the earlier
+    // skimmer goes silent with no error anywhere. Both receivers see the same
+    // spectrum, so ONE channel serves both, and each gets its own frame header.
+    static bool receiversSharingAPanShareOneChannel()
+    {
+        ScopedCommandLog cmdLog;
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        for (int sliceId = 0; sliceId < 2; ++sliceId) {
+            if (!model.automationApplySliceFixture(sliceId, QString(), &error)) {
+                return false;
+            }
+        }
+        // Both fixtures are already on 0x40000000; assert that rather than
+        // assume it, so a fixture change cannot quietly void this test.
+        if (model.slice(0)->panId() != model.slice(1)->panId()) {
+            std::printf("      fixtures are not on a shared pan\n");
+            return false;
+        }
+
+        IqHarness h;
+        QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
+                         [&h](const QString& c) { h.iqCommands.append(c); });
+
+        if (!server.start(0) || !server.m_server) {
+            std::printf("      TCI server failed to bind an ephemeral port\n");
+            return false;
+        }
+        QWebSocket client;
+        QObject::connect(&client, &QWebSocket::binaryMessageReceived,
+                         [&h](const QByteArray& f) { h.frames.append(f); });
+        client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        for (int i = 0; i < 100
+             && (client.state() != QAbstractSocket::ConnectedState
+                 || server.m_clients.isEmpty()); ++i) {
+            spin(10);
+        }
+        if (server.m_clients.isEmpty()) return false;
+
+        client.sendTextMessage(QStringLiteral("iq_start:0;iq_start:1;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().iqReceivers.size() != 2; ++i) {
+            spin(10);
+        }
+        if (server.m_clients.first().iqReceivers != QSet<int>{0, 1}) {
+            std::printf("      shared-pan receivers=%lld\n",
+                        static_cast<long long>(
+                            server.m_clients.first().iqReceivers.size()));
+            return false;
+        }
+        // Exactly one stream, on channel 1, and no second pan bind that would
+        // have stolen it back.
+        if (h.iqCommands.filter(QStringLiteral("stream create type=dax_iq")).size() != 1
+            || !h.iqCommands.contains(
+                   QStringLiteral("stream create type=dax_iq daxiq_channel=1"))) {
+            std::printf("      shared pan created %d streams\n",
+                        static_cast<int>(h.iqCommands
+                            .filter(QStringLiteral("stream create type=dax_iq")).size()));
+            return false;
+        }
+        if (cmdLog.contains(
+                QStringLiteral("display pan set 0x40000000 daxiq_channel=2"))) {
+            std::printf("      second receiver stole the pan binding\n");
+            return false;
+        }
+
+        // One payload on that one channel feeds both receivers, each stamped
+        // with its own receiver index.
+        float iqPair[2]{0.25f, -0.5f};
+        QByteArray rawPayload(reinterpret_cast<const char*>(iqPair),
+                              static_cast<int>(sizeof(iqPair)));
+        server.onIqDataReady(1, rawPayload, 48000);
+        for (int i = 0; i < 100 && h.frames.size() < 2; ++i) {
+            spin(10);
+        }
+        if (frameReceivers(h.frames) != QSet<int>{0, 1}) {
+            std::printf("      shared-channel frame receivers=%lld\n",
+                        static_cast<long long>(frameReceivers(h.frames).size()));
+            return false;
+        }
+
+        // Stopping one must NOT tear down the channel the other still uses.
+        cmdLog.clear();
+        client.sendTextMessage(QStringLiteral("iq_stop:0;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().iqReceivers.contains(0); ++i) {
+            spin(10);
+        }
+        if (!server.m_tciIqChannels.contains(1)
+            || cmdLog.contains(
+                   QStringLiteral("display pan set 0x40000000 daxiq_channel=0"))) {
+            std::printf("      shared channel released while still in use\n");
+            return false;
+        }
+        h.frames.clear();
+        server.onIqDataReady(1, rawPayload, 48000);
+        for (int i = 0; i < 100 && h.frames.isEmpty(); ++i) {
+            spin(10);
+        }
+        return frameReceivers(h.frames) == QSet<int>{1};
+    }
+
+    // A DAX IQ channel the operator's applet already owns is never taken over.
+    // Binding it to the TCI slice's pan makes the radio push daxiq_channel=0 to
+    // the operator's pan and stops their consumer at the source, and nothing
+    // ever puts it back — so refuse, and SAY so rather than going silent.
+    static bool borrowedIqChannelIsRefused()
+    {
+        ScopedCommandLog cmdLog;
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error)) {
+            return false;
+        }
+        // The applet owns channel 1: the stream exists and TCI did not make it.
+        QMap<QString, QString> kvs;
+        kvs.insert(QStringLiteral("daxiq_channel"), QStringLiteral("1"));
+        kvs.insert(QStringLiteral("daxiq_rate"), QStringLiteral("192000"));
+        model.daxIqModel().applyStreamStatus(0x2000abcd, kvs);
+        if (!model.daxIqModel().stream(1).exists) {
+            std::printf("      applet stream fixture did not take\n");
+            return false;
+        }
+
+        IqHarness h;
+        QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
+                         [&h](const QString& c) { h.iqCommands.append(c); });
+
+        if (!server.start(0) || !server.m_server) {
+            std::printf("      TCI server failed to bind an ephemeral port\n");
+            return false;
+        }
+        QStringList replies;
+        QWebSocket client;
+        QObject::connect(&client, &QWebSocket::textMessageReceived,
+                         [&replies](const QString& m) { replies.append(m); });
+        client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        for (int i = 0; i < 100
+             && (client.state() != QAbstractSocket::ConnectedState
+                 || server.m_clients.isEmpty()); ++i) {
+            spin(10);
+        }
+        if (server.m_clients.isEmpty()) return false;
+        replies.clear();
+
+        client.sendTextMessage(QStringLiteral("iq_start:0;"));
+        for (int i = 0; i < 60; ++i) {
+            spin(10);
+        }
+        if (!server.m_clients.first().iqReceivers.isEmpty()) {
+            std::printf("      refused start still subscribed the receiver\n");
+            return false;
+        }
+        // The operator's pan binding and rate are untouched...
+        if (cmdLog.contains(QStringLiteral("display pan set"))) {
+            std::printf("      borrow retargeted the operator's pan\n");
+            return false;
+        }
+        if (!h.iqCommands.isEmpty()) {
+            std::printf("      borrow touched the applet's stream: %s\n",
+                        h.iqCommands.first().toUtf8().constData());
+            return false;
+        }
+        // ...and the refusal ANSWERS, so a blocked skimmer does not hang.
+        for (const QString& r : std::as_const(replies)) {
+            if (r.contains(QStringLiteral("iq_stop:0;"))) {
+                return true;
+            }
+        }
+        std::printf("      refused start sent no reply\n");
+        return false;
+    }
+
+    // Ownership, in-flight-create and pending-removal are three separate facts.
+    // Conflating them wedged a receiver whose stream create was never confirmed:
+    // repeated iq_start could not re-create it (contradicting the documented
+    // re-arm), and a stop()/start() cycle — TciApplet's enable toggle and port
+    // change both do exactly that on this same object — carried the stale claim
+    // into the next session, so no client could ever get IQ again.
+    static bool iqStreamRearmsAfterStopStartCycle()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error)) {
+            return false;
+        }
+        QStringList iqCommands;
+        QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
+                         [&iqCommands](const QString& c) { iqCommands.append(c); });
+
+        // Deliberately NOT registered in m_clients: stop() closes and deletes
+        // every registered socket, and this test only needs the subscription
+        // bookkeeping that startIqForClient drives.
+        TciServer::ClientState cs;
+        const auto startOnce = [&](TciServer& srv) {
+            return srv.startIqForClient(cs, 0);
+        };
+
+        if (!server.start(0) || !server.m_server) {
+            std::printf("      TCI server failed to bind an ephemeral port\n");
+            return false;
+        }
+        if (!startOnce(server)
+            || !iqCommands.contains(
+                   QStringLiteral("stream create type=dax_iq daxiq_channel=1"))) {
+            std::printf("      first iq_start did not create a stream\n");
+            return false;
+        }
+        // The radio never confirms the create, so stream(1).exists stays false.
+        // A repeated iq_start must not re-issue a create while that one is still
+        // outstanding — but it must not be wedged by it either.
+        server.stop();
+        iqCommands.clear();
+
+        if (!server.start(0) || !server.m_server) {
+            return false;
+        }
+        if (!startOnce(server)) {
+            std::printf("      iq_start refused after a stop()/start() cycle\n");
+            return false;
+        }
+        if (!iqCommands.contains(
+                QStringLiteral("stream create type=dax_iq daxiq_channel=1"))) {
+            std::printf("      receiver wedged: no create after restart\n");
+            return false;
+        }
+        return true;
+    }
+
+    // Receiver resources are refcounted across clients. One client's stop must
+    // not remove a stream another still consumes; only the last stop releases
+    // it, and a stop racing the create status stays pending until an id exists.
+    static bool sharedIqSubscriptionIsClientScoped()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error)) {
+            return false;
+        }
+        QWebSocket clientA;
+        QWebSocket clientB;
+        TciServer::ClientState a;
+        a.socket = &clientA;
+        TciServer::ClientState b;
+        b.socket = &clientB;
+        server.m_clients.append(a);
+        server.m_clients.append(b);
+        if (!server.startIqForClient(server.m_clients[0], 0)
+            || !server.startIqForClient(server.m_clients[1], 0)) {
+            std::printf("      shared start refused\n");
+            return false;
+        }
+        if (!server.m_tciIqChannels.contains(1)
+            || server.m_iqPanChannel.value(model.slice(0)->panId()) != 1) {
+            return false;
+        }
+
+        server.stopIqForClient(server.m_clients[0], 0);
+        if (!server.m_tciIqChannels.contains(1)
+            || server.m_pendingIqRemovals.contains(1)
+            || !server.m_clients[1].iqReceivers.contains(0)) {
+            std::printf("      one client's stop released a shared channel\n");
+            return false;
+        }
+
+        // Last subscriber leaves. The radio never confirmed the create, so the
+        // removal parks until the status lands — and the pan binding is dropped
+        // now rather than being left routed at a channel nothing reads.
+        server.stopIqForClient(server.m_clients[1], 0);
+        return server.m_pendingIqRemovals.contains(1)
+            && server.m_iqPanChannel.isEmpty();
+    }
 };
 
 } // namespace AetherSDR
@@ -1401,6 +1877,16 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::pttRouteLogSanitizesClientSource();
     const bool native24kPayload
         = AetherSDR::TciServerReviewTest::native24kAudioRetainsAccumulatedPayload();
+    const bool fourIqStreams
+        = AetherSDR::TciServerReviewTest::fourPansGiveFourIqStreams();
+    const bool sharedPanChannel
+        = AetherSDR::TciServerReviewTest::receiversSharingAPanShareOneChannel();
+    const bool borrowRefused
+        = AetherSDR::TciServerReviewTest::borrowedIqChannelIsRefused();
+    const bool iqRearms
+        = AetherSDR::TciServerReviewTest::iqStreamRearmsAfterStopStartCycle();
+    const bool iqClientScoped
+        = AetherSDR::TciServerReviewTest::sharedIqSubscriptionIsClientScoped();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -1459,6 +1945,16 @@ int main(int argc, char** argv)
                 routeLogSanitizes ? "PASS" : "FAIL");
     std::printf("%s  native 24 kHz TCI RX retains accumulated payload (#4744)\n",
                 native24kPayload ? "PASS" : "FAIL");
+    std::printf("%s  four pans give one TCI client four independent IQ streams\n",
+                fourIqStreams ? "PASS" : "FAIL");
+    std::printf("%s  receivers sharing a pan share one DAX IQ channel\n",
+                sharedPanChannel ? "PASS" : "FAIL");
+    std::printf("%s  an applet-owned DAX IQ channel is refused, not borrowed\n",
+                borrowRefused ? "PASS" : "FAIL");
+    std::printf("%s  IQ re-arms after a stop()/start() cycle\n",
+                iqRearms ? "PASS" : "FAIL");
+    std::printf("%s  shared IQ subscriptions are client-scoped\n",
+                iqClientScoped ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
@@ -1470,6 +1966,7 @@ int main(int argc, char** argv)
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && vfoChannelZeroOnce
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
-        && native24kPayload
+        && native24kPayload && fourIqStreams && sharedPanChannel
+        && borrowRefused && iqRearms && iqClientScoped
         ? 0 : 1;
 }

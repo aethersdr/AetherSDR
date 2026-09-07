@@ -131,6 +131,79 @@ int main(int argc, char** argv)
         ok &= expect(!apply.delta.has_value(), "apply changes no stored state");
     }
 
+    // --- imported radio identity -----------------------------------------
+    {
+        resetBankDocument();
+        LocalMemoryBank bank;
+        bank.setFilePath(dir.path() + "/imports.json");
+        bank.handleCommand("memory create");
+
+        MemoryEntry imported;
+        imported.importSource = QStringLiteral("icom:7300-serial");
+        imported.importKey = QStringLiteral("-1:42");
+        imported.channel = QStringLiteral("42");
+        imported.freq = 14.074;
+        imported.name = QStringLiteral("FT8");
+        imported.mode = QStringLiteral("DIGU");
+        imported.nativeFilter = 2;
+        imported.dataMode = 1;
+        // The bank cannot distinguish a poisoned experimental import from a
+        // deliberately blocked split record. Load must preserve the codec's
+        // decision; an explicit Sync is required to reclassify it.
+        imported.recallable = false;
+        bank.record(0, imported);
+
+        ok &= expect(bank.importedSlot("icom:7300-serial", "-1:42") == 0,
+                     "a repeated radio sync finds its existing database row");
+        ok &= expect(bank.importedSlot("icom:other-radio", "-1:42") == -1,
+                     "the same channel on another radio does not alias");
+        ok &= expect(bank.importedSlot("icom:7300-serial", "-1:43") == -1,
+                     "a different native channel does not alias");
+
+        bank.flush();
+        const QJsonObject beforeLoad = bankDocument();
+        LocalMemoryBank reopened;
+        reopened.setFilePath(dir.path() + "/unused-imports.json");
+        reopened.load();
+        ok &= expect(reopened.importedSlot("icom:7300-serial", "-1:42") == 0,
+                     "radio import identity survives a database reopen");
+        const MemoryEntry stored = reopened.entries().value(0);
+        ok &= expect(stored.channel == "42" && stored.nativeFilter == 2
+                         && stored.dataMode == 1,
+                     "radio recall fields survive a database reopen");
+        ok &= expect(!stored.recallable,
+                     "load preserves a display-only import instead of guessing");
+        ok &= expect(bankDocument() == beforeLoad,
+                     "loading existing imports does not write or upgrade the document");
+    }
+
+    // Opening a version-1 database is not a schema migration. Ordinary local
+    // edits also keep version 1; only the new recall fields require version 2.
+    {
+        resetBankDocument();
+        QJsonObject legacy{{"format", "aether.memories"}, {"version", 1},
+                           {"savedAt", "2026-08-01T00:00:00Z"},
+                           {"memories", QJsonArray{QJsonObject{{"index", 0},
+                               {"freq", 14.074}, {"mode", "DIGU"}}}}};
+        ok &= expect(AppSettings::instance().setRadioFeature(
+                         LocalMemoryStore::documentFamily(), QString(),
+                         LocalMemoryStore::documentFeature(), 1, legacy),
+                     "version-1 database fixture saved");
+        LocalMemoryBank bank;
+        bank.load();
+        ok &= expect(bankDocument() == legacy, "load leaves version-1 bytes unchanged");
+        MemoryEntry edited = bank.entries().value(0);
+        edited.name = "Local annotation";
+        bank.record(0, edited);
+        bank.flush();
+        int rowVersion = 0;
+        const QJsonObject saved = AppSettings::instance().radioFeatureExact(
+            LocalMemoryStore::documentFamily(), QString(),
+            LocalMemoryStore::documentFeature(), &rowVersion);
+        ok &= expect(rowVersion == 1 && saved.value("version").toInt() == 1,
+                     "ordinary local edit keeps row and envelope at version 1");
+    }
+
     // --- rejections -------------------------------------------------------
     {
         resetBankDocument();

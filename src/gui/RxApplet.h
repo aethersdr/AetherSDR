@@ -4,6 +4,8 @@
 #include <QVector>
 #include <QTimer>
 
+#include "core/backends/RadioCapabilities.h"
+
 class ScrollableLabel;
 namespace AetherSDR { class FilterPassbandWidget; }
 
@@ -182,6 +184,7 @@ public:
     // An EMPTY list restores the operator's own configurable set, so this is
     // reversible on disconnect rather than a one-way edit of their settings.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
 private:
     // The list actually in force: the radio's when it declared one, else the
     // operator's configurable set. Every site that indexes filter buttons must
@@ -253,6 +256,7 @@ private:
     // so the settings-driven list is not overwritten — reconnecting to a radio
     // with continuous filters must give the operator their own list back.
     QVector<int>            m_radioFilterWidths;
+    RxFilterControl         m_radioFilterControl;
     // Parallel "custom edges" — INT_MIN sentinel = use mode rules. (#2259)
     QVector<int>            m_filterCustomLo;
     QVector<int>            m_filterCustomHi;

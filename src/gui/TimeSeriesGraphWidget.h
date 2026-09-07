@@ -180,6 +180,57 @@ protected:
             maxY = niceCeiling(maxY);
         }
 
+        // Per-series "last sample" hints in the left gutter.  Each
+        // visible series gets a colored label at the y-pixel matching
+        // its most recent value; labels are spread vertically to avoid
+        // overlap when several streams sit close together (e.g. RX and
+        // Audio both around ~1 Mbps).  Positioned HERE, before the axis
+        // ticks are painted, because a hint and a tick label share the
+        // same gutter: the live value wins, and a tick whose label would
+        // sit under a hint keeps its grid line but loses its text.  The
+        // hints themselves are painted last, over the series.
+        struct ValueHint {
+            double  idealY;
+            double  y;
+            QColor  color;
+            QString text;
+        };
+        QVector<ValueHint> hints;
+        hints.reserve(visibleSeries.size());
+        for (const Series& series : visibleSeries) {
+            if (series.points.isEmpty()) {
+                continue;
+            }
+            const double v = series.points.last().y();
+            double yRatio;
+            if (m_logScale) {
+                const double clamped = std::clamp(v, minY, maxY);
+                yRatio = std::log10(clamped / minY) / std::log10(maxY / minY);
+            } else {
+                yRatio = std::clamp(
+                    (v - minY) / std::max(0.001, maxY - minY),
+                    0.0,
+                    1.0);
+            }
+            const double y = plot.bottom() - plot.height() * yRatio;
+            const QString unitSuffix = series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
+            hints.push_back({y, y, series.color, formatAxisValue(v, unitSuffix)});
+        }
+        std::sort(hints.begin(), hints.end(),
+                  [](const ValueHint& a, const ValueHint& b) { return a.idealY < b.idealY; });
+        constexpr double kHintMinGap = 14.0;
+        double prev = plot.top() - kHintMinGap;
+        for (ValueHint& h : hints) {
+            if (h.y < prev + kHintMinGap) h.y = prev + kHintMinGap;
+            if (h.y > plot.bottom())      h.y = plot.bottom();
+            prev = h.y;
+        }
+        double next = plot.bottom() + kHintMinGap;
+        for (int i = hints.size() - 1; i >= 0; --i) {
+            if (hints[i].y > next - kHintMinGap) hints[i].y = next - kHintMinGap;
+            if (hints[i].y < plot.top())          hints[i].y = plot.top();
+            next = hints[i].y;
+        }
         // Y-axis grid + tick labels.  Linear: 4 evenly-spaced.
         // Log: one tick per decade between minY and maxY so labels
         // sit at clean 1k / 10k / 100k / 1M / 10M boundaries.
@@ -203,9 +254,15 @@ protected:
             } else {
                 label = formatAxisValue(tickValue, axisSuffix);
             }
-            painter.setPen(QColor("#8d99ad"));
-            painter.drawText(QRectF(4, y - 8, 74, 16), Qt::AlignRight | Qt::AlignVCenter,
-                             label);
+            const QRectF tickRect(4, y - 8, 74, 16);
+            const bool underHint = std::any_of(
+                hints.cbegin(), hints.cend(), [&tickRect](const ValueHint& h) {
+                    return QRectF(4, h.y - 10, 74, 20).intersects(tickRect);
+                });
+            if (!underHint) {
+                painter.setPen(QColor("#8d99ad"));
+                painter.drawText(tickRect, Qt::AlignRight | Qt::AlignVCenter, label);
+            }
             painter.setPen(QPen(QColor("#233246"), 1));
         }
         for (int i = 0; i <= 4; ++i) {
@@ -315,60 +372,13 @@ protected:
             painter.drawPath(path);
         }
 
-        // Per-series "last sample" hints in the left gutter.  Each
-        // visible series gets a colored label at the y-pixel matching
-        // its most recent value; labels are spread vertically to avoid
-        // overlap when several streams sit close together (e.g. RX and
-        // Audio both around ~1 Mbps).
-        struct ValueHint {
-            double  idealY;
-            double  y;
-            QColor  color;
-            QString text;
-        };
-        QVector<ValueHint> hints;
-        hints.reserve(visibleSeries.size());
-        for (const Series& series : visibleSeries) {
-            if (series.points.isEmpty()) {
-                continue;
-            }
-            const double v = series.points.last().y();
-            double yRatio;
-            if (m_logScale) {
-                const double clamped = std::clamp(v, minY, maxY);
-                yRatio = std::log10(clamped / minY) / std::log10(maxY / minY);
-            } else {
-                yRatio = std::clamp(
-                    (v - minY) / std::max(0.001, maxY - minY),
-                    0.0,
-                    1.0);
-            }
-            const double y = plot.bottom() - plot.height() * yRatio;
-            const QString unitSuffix = series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
-            hints.push_back({y, y, series.color, formatAxisValue(v, unitSuffix)});
-        }
-        std::sort(hints.begin(), hints.end(),
-                  [](const ValueHint& a, const ValueHint& b) { return a.idealY < b.idealY; });
-        constexpr double kHintMinGap = 14.0;
-        double prev = plot.top() - kHintMinGap;
-        for (ValueHint& h : hints) {
-            if (h.y < prev + kHintMinGap) h.y = prev + kHintMinGap;
-            if (h.y > plot.bottom())      h.y = plot.bottom();
-            prev = h.y;
-        }
-        double next = plot.bottom() + kHintMinGap;
-        for (int i = hints.size() - 1; i >= 0; --i) {
-            if (hints[i].y > next - kHintMinGap) hints[i].y = next - kHintMinGap;
-            if (hints[i].y < plot.top())          hints[i].y = plot.top();
-            next = hints[i].y;
-        }
         for (const ValueHint& h : hints) {
             const QRectF rect(4, h.y - 10, 74, 20);
             // Vertical alpha gradient (0 → chart bg → 0) so the soft
             // top/bottom edges blend into adjacent hints rather than
-            // butting them with a hard rectangle seam.  The opaque
-            // middle band still hides whatever decade tick may sit at
-            // the same y-coordinate.
+            // butting them with a hard rectangle seam.  (A tick label
+            // under this patch is not painted at all — see the tick
+            // loop — so nothing ghosts out past the opaque band.)
             QLinearGradient bgGrad(rect.center().x(), rect.top(),
                                    rect.center().x(), rect.bottom());
             const QColor bgSolid("#050b13");

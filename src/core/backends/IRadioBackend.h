@@ -129,6 +129,16 @@ public:
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
+    // Select a stable radio-owned RX filter preset. The passband setter above
+    // remains exclusively a resize/reposition intent; keeping the two verbs
+    // distinct prevents a width that happens to equal a preset from changing
+    // slots. Empty RadioCapabilities::rxFilterControl.presets means callers
+    // never invoke this default no-op.
+    virtual void setSliceFilterPreset(int sliceId, int presetId)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(presetId);
+    }
     // Receive AGC. mode is the neutral vocabulary the slice model uses —
     // "off" / "slow" / "med" / "fast"; thresholdDb is the operator's 0..100
     // AGC-threshold value. A backend whose hardware owns the AGC translates
@@ -699,6 +709,17 @@ public:
         Q_UNUSED(clientLeveled);
     }
 
+    // Finish a finite processed-audio stream before its caller starts the PTT
+    // drain timer. Stateful converters may emit delayed tail samples here;
+    // streaming/no-op backends have nothing to do.
+    //
+    // Returns how many milliseconds of already-submitted audio are still to be
+    // PLAYED after this call returns — everything queued on the host plus
+    // whatever the radio buffers before its modulator — so the caller can hold
+    // PTT for exactly that long rather than a compile-time worst case. Zero
+    // means "nothing is buffered on your behalf; unkey when you like".
+    virtual int finishTxAudio() { return 0; }
+
     // ---- diagnostics ----
     //
     // A snapshot of whatever health/status registers this backend can report:
@@ -730,6 +751,28 @@ public:
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
+
+    // WHAT THE DSP IS ACTUALLY CONFIGURED WITH, as opposed to what the model
+    // says it asked for.
+    //
+    // The recurring failure on a new backend is model/DSP divergence: a control
+    // moves, the model records it, and nothing reaches the DSP. That reads as
+    // "the control does nothing", which is the hardest symptom to act on
+    // because it is indistinguishable from the operator having misunderstood
+    // the control. `get_state` answers from the MODEL and so cannot see it.
+    //
+    // Each entry describes ONE chain and must carry a `chain` key naming which
+    // — a backend may run more than one, and they need not share a vocabulary.
+    // A Hermes-Lite 2 runs WDSP on receive and a hand-written phasing modulator
+    // on transmit, whose config is a different struct entirely; reporting both
+    // under one shape would mean inventing a union that describes neither. A
+    // reader keys off `chain` rather than guessing from which fields are
+    // present.
+    //
+    // Empty by default: a backend that cannot answer must report nothing rather
+    // than zeros, for the same reason healthSnapshot() distinguishes "0" from
+    // "we never heard".
+    virtual QVariantList dspChains() const { return {}; }
 
     // The state of the TRANSPORT carrying this radio's streams, as opposed to
     // the state of the radio itself (which is healthSnapshot's job).
@@ -890,6 +933,8 @@ signals:
     void memoryChanged(const MemoryDelta& delta);
     void memoryRefreshStarted(int total);
     void memoryRefreshProgress(int completed, int total);
+    // All deltas for this sweep precede completion. This reports radio reads;
+    // RadioModel combines it with import/save results for its UI-facing signal.
     void memoryRefreshFinished(bool success, int completed, int total);
 
     // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The

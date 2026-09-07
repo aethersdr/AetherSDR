@@ -22,6 +22,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#if defined(__MINGW32__)
+// This mingw-w64 header snapshot doesn't declare SetThreadDescription even
+// though kernel32.dll exports it (Windows 10 1607+, MSVC's SDK already has
+// it). Widening _WIN32_WINNT doesn't help — the prototype is absent outright.
+extern "C" __declspec(dllimport) HRESULT WINAPI
+    SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescription);
+#endif
 #elif defined(__APPLE__)
 #include <pthread.h>
 #elif defined(__linux__)

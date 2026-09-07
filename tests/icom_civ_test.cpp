@@ -275,6 +275,87 @@ static void testFmRepeaterCommands()
           "receive CTCSS tone write frame");
 }
 
+static void testGps()
+{
+    // Official IC-705 CI-V pp. 21/25 layout:
+    // N 34 13.464, W 118 03.534, 1742.5 m, 275 deg, 42.7 km/h,
+    // 2026-08-21 12:34:56 UTC.
+    const std::array<std::uint8_t, 27> wire{
+        0x34, 0x13, 0x46, 0x40, 0x01,
+        0x01, 0x18, 0x03, 0x53, 0x40, 0x00,
+        0x01, 0x74, 0x25, 0x00,
+        0x02, 0x75,
+        0x00, 0x04, 0x27,
+        0x20, 0x26, 0x08, 0x21, 0x12, 0x34, 0x56,
+    };
+    const auto position = decodeGpsPosition(wire);
+    check(position.has_value(), "IC-705 GPS position decodes");
+    check(position && std::abs(position->latitude - 34.2244) < 0.000001,
+          "latitude dd mm.mmm and north flag decode");
+    check(position && std::abs(position->longitude - -118.0589) < 0.000001,
+          "longitude ddd mm.mmm and west flag decode");
+    check(position && position->altitudeMetres
+              && std::abs(*position->altitudeMetres - 1742.5) < 0.01,
+          "signed tenth-metre altitude decodes");
+    check(position && position->courseDegrees.value_or(-1) == 275,
+          "course decodes in one-degree steps");
+    check(position && position->speedKmh
+              && std::abs(*position->speedKmh - 42.7) < 0.01,
+          "speed decodes in tenth-km/h steps");
+    check(position && position->utcIso8601.value_or("") == "2026-08-21T12:34:56Z",
+          "full GPS UTC date and time decode");
+
+    auto southEast = wire;
+    southEast[4] = 0x00;   // south
+    southEast[10] = 0x01;  // east
+    const auto opposite = decodeGpsPosition(southEast);
+    check(opposite && opposite->latitude < 0.0 && opposite->longitude > 0.0,
+          "hemisphere flags preserve the official asymmetric encoding");
+
+    std::array<std::uint8_t, 27> noSignal{};
+    noSignal.fill(0xff);
+    check(!decodeGpsPosition(noSignal), "all-FF no-signal GPS report is rejected");
+    auto malformed = wire;
+    malformed[3] |= 0x01;  // low nibble is documented fixed zero
+    check(!decodeGpsPosition(malformed), "fixed GPS nibbles are validated");
+    auto impossibleDate = wire;
+    impossibleDate[22] = 0x02;
+    impossibleDate[23] = 0x30;
+    const auto noInvalidUtc = decodeGpsPosition(impossibleDate);
+    check(noInvalidUtc && !noInvalidUtc->utcIso8601,
+          "an impossible calendar date is not published as UTC");
+    auto beyondPole = wire;
+    beyondPole[0] = 0x90;
+    beyondPole[1] = 0x00;
+    beyondPole[2] = 0x00;
+    beyondPole[3] = 0x10;
+    check(!decodeGpsPosition(beyondPole),
+          "90 degrees plus non-zero minutes is rejected");
+    std::vector<std::uint8_t> wrongLength(wire.begin(), wire.end());
+    wrongLength.push_back(0x00);
+    check(!decodeGpsPosition(wrongLength),
+          "the fixed IC-705 position payload rejects trailing bytes");
+
+    check(bytesAre(cmdReadGpsPosition(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x23, 0x00, 0xFD}),
+          "GPS position read frame");
+    check(bytesAre(cmdReadGpsSource(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x23, 0x01, 0xFD}),
+          "GPS source read frame");
+    check(bytesAre(cmdNtpAccess(kIc705, true),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x07, 0x01, 0xFD}),
+          "NTP sync-now frame");
+    check(bytesAre(cmdReadNtpAccessResult(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x08, 0xFD}),
+          "NTP access-result read frame");
+
+    const std::array<std::uint8_t, 8> server{'t', 'i', 'm', 'e', '.', 'n', 'i', 's'};
+    check(bytesAre(cmdWriteSettingData(kIc705, setting::kNtpServer, server),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x05, 0x01, 0x68,
+                    't', 'i', 'm', 'e', '.', 'n', 'i', 's', 0xFD}),
+          "NTP server address write uses the documented variable ASCII payload");
+}
+
 static void testReassembler()
 {
     CivReassembler r;
@@ -416,6 +497,24 @@ static void testModes()
     // three identical buttons, two of which read as broken.
     check(filterWidthsForMode("WFM").size() == 1, "WFM publishes its single filter once");
 
+    // BUTTON IDENTITY IS THE FIL SLOT, NOT ITS MUTABLE WIDTH. Customising the
+    // selected slot must update its tooltip/passband content without sorting
+    // it into another button position or changing its label.
+    const std::vector<FilterPresetState> usbCustom =
+        filterPresetsForMode("USB", 2, 2700);
+    check((usbCustom == std::vector<FilterPresetState>{{1, 3000}, {2, 2700}, {3, 1800}}),
+          "a custom USB FIL2 width keeps FIL1/FIL2/FIL3 in radio order");
+    const std::vector<FilterPresetState> amCustom =
+        filterPresetsForMode("AM", 1, 10000);
+    check((amCustom == std::vector<FilterPresetState>{{1, 10000}, {2, 6000}, {3, 3000}}),
+          "a custom AM FIL1 width stays FIL1 instead of becoming a 10K button");
+    const std::vector<FilterPresetState> cwCustom =
+        filterPresetsForMode("CW", 3, 700);
+    check((cwCustom == std::vector<FilterPresetState>{{1, 1200}, {2, 500}, {3, 700}}),
+          "a custom CW FIL3 width stays FIL3 even when wider than FIL2");
+    check(filterPresetsForMode("WFM").size() == 1,
+          "a fixed WFM filter publishes one stable slot");
+
     // A sideband passband sits off the carrier and carries its sideband in the
     // sign; AM and its relatives straddle it.
     {
@@ -435,10 +534,123 @@ static void testModes()
         const auto [lo, hi] = passbandForModeAndFilter("SAM", 2);
         check(hi - lo == 6000, "SAM FIL2 is 6 kHz wide, not the 3 kHz SSB fallback");
     }
+
+    // CLICKING ANY FIL BUTTON RECALLS ITS FACTORY SHAPE. These are the exact
+    // edges setSliceFilterPreset feeds back through the width + centred-PBT
+    // writer, including when the requested slot is already selected. Cover all
+    // three identities and every mode family exercised by the live sweep.
+    const auto checkRecall = [](const std::string& mode, int presetId,
+                                int expectedLow, int expectedHigh) {
+        bool dataMode = false;
+        const std::optional<CivMode> wireMode = modeFromNeutral(mode, dataMode);
+        check(wireMode.has_value(), "recall mode maps to CI-V");
+        if (!wireMode) {
+            return;
+        }
+        const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
+            kIc705, mode, *wireMode, dataMode, presetId, true);
+        check(plan.has_value(), "FIL recall plan exists");
+        if (!plan) {
+            return;
+        }
+        const std::string recallName = mode + " FIL" + std::to_string(presetId);
+        check(plan->lowHz == expectedLow && plan->highHz == expectedHigh,
+              (recallName + " recalls its factory width and centred passband").c_str());
+        check(plan->pbtCode == kPbtCentreCode,
+              (recallName + " recall centres Twin PBT").c_str());
+        check(plan->commands.size() == 4,
+              (recallName
+               + " recall selects, resets width, and centres both PBTs").c_str());
+        if (plan->commands.size() != 4) {
+            return;
+        }
+        check(plan->commands[0]
+                  == cmdSetVfoMode(kIc705, *wireMode, dataMode, presetId),
+              "recall selects the requested FIL identity first");
+        const std::optional<std::uint8_t> widthCode =
+            filterWidthCodeFor(mode, expectedHigh - expectedLow);
+        check(widthCode.has_value(), "factory recall width has a CI-V code");
+        if (!widthCode) {
+            return;
+        }
+        check(plan->commands[1] == cmdSetFilterWidth(kIc705, *widthCode),
+              "recall writes the factory filter width");
+        check(plan->commands[2]
+                  == cmdSetLevel(kIc705, level::kPbtInner, kPbtCentreCode),
+              "recall centres inner PBT");
+        check(plan->commands[3]
+                  == cmdSetLevel(kIc705, level::kPbtOuter, kPbtCentreCode),
+              "recall centres outer PBT");
+    };
+    checkRecall("USB", 1, 0, 3000);
+    checkRecall("USB", 2, 300, 2700);
+    checkRecall("USB", 3, 600, 2400);
+    checkRecall("LSB", 1, -3000, 0);
+    checkRecall("LSB", 2, -2700, -300);
+    checkRecall("LSB", 3, -2400, -600);
+    checkRecall("AM", 1, -4500, 4500);
+    checkRecall("AM", 2, -3000, 3000);
+    checkRecall("AM", 3, -1500, 1500);
+    checkRecall("CW", 1, -600, 600);
+    checkRecall("CW", 2, -250, 250);
+    checkRecall("CW", 3, -125, 125);
+
+    // Fixed-width modes still own selectable FIL identities. They must emit
+    // only the mode/slot command, never an IF-width or Twin-PBT write.
+    struct FixedRecallCase {
+        const char* mode;
+        CivMode wireMode;
+        bool dataMode;
+        int slots;
+    };
+    for (const FixedRecallCase& test : {
+             FixedRecallCase{"FM", CivMode::Fm, false, 3},
+             FixedRecallCase{"NFM", CivMode::Fm, false, 3},
+             FixedRecallCase{"DFM", CivMode::Fm, true, 3},
+             FixedRecallCase{"WFM", CivMode::Wfm, false, 1},
+             FixedRecallCase{"DV", CivMode::Dv, false, 3},
+             FixedRecallCase{"DSTAR", CivMode::Dv, false, 3}}) {
+        for (bool useVfoMode : {false, true}) {
+            for (int presetId = 1; presetId <= test.slots; ++presetId) {
+                const auto plan = filterPresetRecallPlan(
+                    kIc705, test.mode, test.wireMode, test.dataMode,
+                    presetId, useVfoMode);
+                check(plan.has_value(), "fixed-mode FIL selection has a plan");
+                if (!plan) {
+                    continue;
+                }
+                const auto select = useVfoMode
+                    ? cmdSetVfoMode(kIc705, test.wireMode, test.dataMode, presetId)
+                    : cmdSetMode(kIc705, test.wireMode, presetId);
+                check(plan->commands == std::vector<std::vector<std::uint8_t>>{select},
+                      "fixed-mode recall sends only the requested slot selection");
+                check(plan->widthHz == 0,
+                      "fixed-mode recall does not claim a programmable IF width");
+                const auto [low, high] = passbandForModeAndFilter(test.mode, presetId);
+                check(plan->lowHz == low && plan->highHz == high,
+                      "fixed-mode recall retains the selected slot's display edges");
+            }
+        }
+    }
+    check(!filterPresetRecallPlan(kIc705, "FM", CivMode::Fm, false, 0, true),
+          "fixed-mode recall rejects undeclared slot zero");
+    check(!filterPresetRecallPlan(kIc705, "WFM", CivMode::Wfm, false, 2, true),
+          "WFM recall rejects a second slot");
 }
 
 static void testCommands()
 {
+    check(bytesAre(cmdPowerOn(0xA4), {0xFE, 0xFE, 0xA4, 0xE0, 0x18, 0x01, 0xFD}),
+          "Power ON uses the guide's literal 18 01 encoding");
+    check(bytesAre(cmdPowerOn(0xB6), {0xFE, 0xFE, 0xB6, 0xE0, 0x18, 0x01, 0xFD}),
+          "IC-7300MK2 standard network power-on frame");
+    const std::vector<std::uint8_t> wake = cmdPowerOn(0x50, 150, 0xE1);
+    check(wake.size() == 157
+              && std::all_of(wake.begin(), wake.begin() + 152,
+                             [](std::uint8_t byte) { return byte == 0xFE; })
+              && std::vector<std::uint8_t>(wake.begin() + 152, wake.end())
+                    == std::vector<std::uint8_t>{0x50, 0xE1, 0x18, 0x01, 0xFD},
+          "contributed native IC-9700 wake framing preserves destination and E1 source");
     check(bytesAre(cmdSetPtt(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0x01, 0xFD}),
           "PTT on is 1C 00 01");
     check(bytesAre(cmdSetTransmitFrequencyCheck(kIc705, true),
@@ -642,10 +854,10 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The twelve that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 26 27. A
+    // The thirteen that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 23 26 27. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 12, "exactly twelve CI-V commands are sub-addressed");
+    check(subAddressed == 13, "exactly thirteen CI-V commands are sub-addressed");
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +1028,7 @@ int main()
     testFraming();
     testBcd();
     testFmRepeaterCommands();
+    testGps();
     testReassembler();
     testModes();
     testCommands();

@@ -10,6 +10,7 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -69,6 +70,7 @@ public:
 
     qint64 nextEdgeMs() const { return nextEdgeMsForTest(); }
     bool epochValid() const { return elapsedValidForTest(); }
+    std::chrono::steady_clock::time_point epoch() const { return epochForTest(); }
     int lastWait() const { return waits.empty() ? -1 : waits.back(); }
 
     std::vector<int> waits;
@@ -96,12 +98,15 @@ struct Fixture {
     // `states`. Reversing these two lines reintroduces a heap-use-after-free at
     // teardown that only the ASan/UBSan job catches (#3740).
     std::vector<int> states;
+    std::vector<std::chrono::steady_clock::time_point> whens;
     TestKeyer keyer;
 
     Fixture()
     {
-        keyer.setOnKeyDownChange([this](bool down) {
+        keyer.setOnKeyDownChange([this](bool down,
+                                        std::chrono::steady_clock::time_point when) {
             states.push_back(down ? 1 : 0);
+            whens.push_back(when);
         });
     }
 };
@@ -276,6 +281,47 @@ void testNaturalDrainResetsTimingEpoch()
 
 } // namespace
 
+// The emitted instant is the grid deadline, not the wake: late ticks move
+// when the callback runs, never the `when` it carries (#4977).
+void testScheduledInstantsFollowTheGridNotTheWake()
+{
+    using namespace std::chrono;
+    Fixture f;
+    f.keyer.setElapsed(0);
+    f.keyer.start(QStringLiteral("S"), 20);   // dit gap dit gap dit @ 60 ms units
+    const auto epoch = f.keyer.epoch();
+
+    // The first edge fires before the epoch is taken, so it carries wall
+    // clock — which is at or before the epoch startEpoch() then records.
+    report("grid: first edge is stamped at or before the epoch",
+           f.whens.size() == 1 && f.whens[0] <= epoch);
+
+    // Wake late for every subsequent edge; the stamps must still sit on the
+    // 60 ms grid, not at the wake.
+    const std::vector<qint64> lateElapsed{75, 131, 198, 252};
+    const std::vector<qint64> gridMs{60, 120, 180, 240};
+    for (size_t i = 0; i < lateElapsed.size(); ++i) {
+        f.keyer.setElapsed(lateElapsed[i]);
+        f.keyer.tick();
+        const bool have = f.whens.size() == i + 2;
+        const qint64 gotMs = have
+            ? duration_cast<milliseconds>(f.whens[i + 1] - epoch).count() : -1;
+        expectEq("grid: edge " + std::to_string(i + 2) + " stamped on the grid",
+                 gotMs, gridMs[i]);
+    }
+    expectStates("grid: edges alternate down/up", f.states, {1, 0, 1, 0, 1});
+
+    // stop() is not a scheduled edge: its key-up carries wall clock, so it
+    // does not wait for the next grid deadline (epoch + 300 ms).  (In this
+    // synchronous harness wall clock is only microseconds past the epoch,
+    // so "before the next deadline" is the observable form of that claim.)
+    f.keyer.setElapsed(300);
+    f.keyer.stop();
+    report("grid: stop key-up is not deferred to the next grid deadline",
+           f.whens.size() == 6 && f.states.back() == 0
+               && f.whens[5] < epoch + milliseconds(300));
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -287,6 +333,7 @@ int main(int argc, char** argv)
     testQueuedMacrosKeepTimingEpoch();
     testStopResetsTimingEpoch();
     testNaturalDrainResetsTimingEpoch();
+    testScheduledInstantsFollowTheGridNotTheWake();
 
     std::printf("\n%s\n",
                 g_failed == 0

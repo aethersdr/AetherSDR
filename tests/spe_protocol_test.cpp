@@ -315,6 +315,136 @@ int main()
            Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffd"))
                == Rfc2217::OptionReply::None);
 
+    // ── LCD display frames (design note §11) — request framing, the
+    //    parser's dedicated display path, checksum rejection, raw/telnet
+    //    transport parity, and character/attribute decode.
+    {
+        report("LCD request is the keystroke framing with code 0x80 + CR LF",
+               Lcd::buildRequest() == QByteArray::fromHex("5555550180800d0a"));
+
+        // Captured Expert 1.3K-FA GetLCD response from expert-amp-server,
+        // pinned at 6b6f39aa0ad6e56984972d203c9bd61b52313e01. Keeping
+        // the offsets and checksum as literal captured bytes makes this fail
+        // if the production constants drift back to the former 369-byte
+        // interpretation. See THIRD_PARTY_LICENSES for the MIT notice.
+        const QByteArray captured = QByteArray::fromBase64(
+            "qqqqagGV/gH4sLGys7Ozs7S1s7a3s7i5urOzs7ifn5+fn5+fn5+fn5+fn5+fn5+foru8vb6+vr/AwcLDwcLExcLCwsLGAAAA"
+            "JTgwJTI0ABEOEysNJiEAAKHHyMnJycnKxsLLzMLNzs/Pz8/QwgAAADNPTElEADNUQVRFAAAAAACh0dLS0tLT1MLV1tLX2NnS0tLa"
+            "28IAAAAmVUxMWQAhVVRPTUFUSUMAody+vr6+vt3e376+vr6+vgAzVEFOREJZAKCgoKCgoKCgoKCgoKCgoKONjY2OjY2NjY6NjY2O"
+            "jY2Njo2NjY2Njo2NjY2Njo2NjY2Njo2NjY2NKS4AjyIhLiSPIS40jyIuK48AIyE0AI8ALzU0AI8AMzcyAI8ANCUtMAASAI8AFBBN"
+            "jwAUQo8AIQCPKSMvLQCPACwvNwCPDQ0ODQ2PABISqiMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATpI=");
+        report("captured GetLCD response is exactly 371 bytes", captured.size() == 371);
+        report("captured payload length is literal 0x016A",
+               static_cast<quint8>(captured.at(3)) == 0x6A
+                   && static_cast<quint8>(captured.at(4)) == 0x01);
+        const auto capturedLcd = Lcd::decode(captured);
+        report("captured GetLCD checksum and layout decode", capturedLcd.has_value());
+        if (capturedLcd) {
+            report("captured character data begins at literal byte 9",
+                   capturedLcd->chars[0][0] == 0xB0);
+        }
+
+        // A synthetic checksum-valid frame gives the character and attribute
+        // assertions simple values while retaining literal wire offsets.
+        QByteArray raw = captured;
+        for (int i = 9; i < 369; ++i) {
+            raw[i] = '\0';
+        }
+        raw[9] = 0x21;                     // direct font-ROM index
+        raw[10] = static_cast<char>(0xE5); // outside both pass-through ranges
+        raw[11] = static_cast<char>(0xFF); // exercises telnet IAC escaping
+        raw[12] = static_cast<char>(0xFE); // logical FF FE 2C must not look like DONT
+        raw[13] = 0x2C;
+        raw[329] = 0x03;                   // column 0, inverse rows 0 and 1
+        quint16 checksum = 0;
+        for (int i = 7; i < 369; ++i) {
+            checksum = static_cast<quint16>(checksum + static_cast<quint8>(raw.at(i)));
+        }
+        raw[369] = static_cast<char>(checksum & 0xFF);
+        raw[370] = static_cast<char>((checksum >> 8) & 0xFF);
+
+        QList<QByteArray> displays;
+        QList<Frame> frames;
+        FrameParser parser;
+        parser.setFrameCallback([&](const Frame& f) { frames.append(f); });
+        parser.setDisplayCallback([&](const QByteArray& d) { displays.append(d); });
+        parser.feed(raw.left(100));
+        report("no display frame emitted until all 371 logical bytes arrive",
+               displays.isEmpty());
+        parser.feed(raw.mid(100));
+        parser.feed(QByteArray::fromHex("aaaaaa010d0d"));  // an ACK right behind it
+        report("display frame handed out whole; the ACK behind it still parses",
+               displays.size() == 1
+                   && displays.at(0).size() == 371
+                   && frames.size() == 1);
+
+        const auto lcd = Lcd::decode(displays.value(0));
+        report("LCD frame decodes", lcd.has_value());
+        if (lcd) {
+            report("printable bytes pass through to the font ROM (0x21 = 'A')",
+                   lcd->chars[0][0] == 0x21);
+            report("a byte outside both pass-through ranges blanks",
+                   lcd->chars[0][1] == 0x60);
+            report("untouched cells read as the ROM's blank",
+                   lcd->chars[7][39] == 0x60);
+            report("attribute bit N flags inverse video on row N of that column",
+                   lcd->inverse[0][0] && lcd->inverse[1][0]
+                       && !lcd->inverse[2][0] && !lcd->inverse[0][1]);
+        }
+        report("a truncated display buffer is rejected rather than misread",
+               !Lcd::decode(raw.left(100)).has_value());
+        QByteArray badChecksum = raw;
+        badChecksum[369] = static_cast<char>(badChecksum.at(369) ^ 0x01);
+        report("a complete display frame with a bad checksum is rejected",
+               !Lcd::decode(badChecksum).has_value());
+
+        QList<QByteArray> afterBadChecksum;
+        QList<Frame> ackAfterBadChecksum;
+        FrameParser badParser;
+        badParser.setDisplayCallback(
+            [&](const QByteArray& d) { afterBadChecksum.append(d); });
+        badParser.setFrameCallback(
+            [&](const Frame& f) { ackAfterBadChecksum.append(f); });
+        badParser.feed(badChecksum + QByteArray::fromHex("aaaaaa010909"));
+        report("bad display checksum resyncs without consuming the following ACK",
+               afterBadChecksum.isEmpty() && ackAfterBadChecksum.size() == 1);
+
+        QByteArray telnet;
+        for (char byte : raw) {
+            telnet.append(byte);
+            if (static_cast<quint8>(byte) == 0xFF) {
+                telnet.append(byte);
+            }
+        }
+        report("telnet doubles the LCD frame's literal IAC bytes",
+               telnet.size() > raw.size());
+        report("escaped LCD bytes cannot fabricate an RFC 2217 refusal",
+               Rfc2217::scanComPortOptionReply(telnet)
+                   == Rfc2217::OptionReply::None);
+
+        QList<QByteArray> telnetDisplays;
+        FrameParser telnetParser;
+        telnetParser.setDisplayCallback(
+            [&](const QByteArray& d) { telnetDisplays.append(d); });
+        const int escapedPair = telnet.indexOf(QByteArray::fromHex("ffff"));
+        telnetParser.feed(telnet.left(escapedPair + 1));
+        report("a telnet IAC pair split across reads remains buffered",
+               telnetDisplays.isEmpty());
+        telnetParser.feed(telnet.mid(escapedPair + 1));
+        report("telnet-escaped display decodes to the byte-exact logical frame",
+               telnetDisplays.size() == 1 && telnetDisplays.at(0) == raw);
+
+        // A 0x6A length byte WITHOUT the 95 FE display marker must fall
+        // through to the CNT check and resync, not stall the parser.
+        QList<Frame> after;
+        FrameParser parser2;
+        parser2.setFrameCallback([&](const Frame& f) { after.append(f); });
+        parser2.feed(QByteArray::fromHex("aaaaaa6a00ff00")
+                     + QByteArray::fromHex("aaaaaa010909"));
+        report("6A without the display marker resyncs to the next real frame",
+               after.size() == 1 && static_cast<quint8>(after.at(0).data.at(0)) == 0x09);
+    }
+
     std::printf("\n%d SPE protocol test(s) failed.\n", g_failed);
     return g_failed == 0 ? 0 : 1;
 }

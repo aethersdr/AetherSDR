@@ -687,8 +687,13 @@ int main(int argc, char** argv)
         stale.filterHighHz = 850.0;
         backend.applyRestoredState(stale);
 
-        const RestoredRadioState snap = backend.currentOperatingState();
-        check(snap.filterLowHz < 0.0 && snap.filterHighHz > 0.0,
+        // Assert on the VALIDATED DOCUMENT, not on currentOperatingState():
+        // that snapshot reads the receivers, and the receivers are seeded from
+        // the document at linkUp — not before. Pre-connect, the snapshot shows
+        // construction defaults whatever the validator did, which is how these
+        // three checks were born red and shipped that way (#5031).
+        const RestoredRadioState& kept = backend.restoredStateForTest();
+        check(kept.filterLowHz < 0.0 && kept.filterHighHz > 0.0,
               "a pre-#4914 CW passband is dropped for one that contains the carrier");
 
         // The same pair under a NON-CW mode is legitimate and must survive:
@@ -699,8 +704,8 @@ int main(int argc, char** argv)
         ssb.filterLowHz  = 350.0;
         ssb.filterHighHz = 850.0;
         usb.applyRestoredState(ssb);
-        const RestoredRadioState usbSnap = usb.currentOperatingState();
-        check(usbSnap.filterLowHz == 350.0 && usbSnap.filterHighHz == 850.0,
+        const RestoredRadioState& usbKept = usb.restoredStateForTest();
+        check(usbKept.filterLowHz == 350.0 && usbKept.filterHighHz == 850.0,
               "a one-sided passband under USB is untouched by the CW guard");
 
         // And a NEW-domain CW pair must pass through unchanged, or the guard
@@ -711,8 +716,8 @@ int main(int argc, char** argv)
         fresh.filterLowHz  = -150.0;
         fresh.filterHighHz =  150.0;
         cw.applyRestoredState(fresh);
-        const RestoredRadioState cwSnap = cw.currentOperatingState();
-        check(cwSnap.filterLowHz == -150.0 && cwSnap.filterHighHz == 150.0,
+        const RestoredRadioState& cwKept = cw.restoredStateForTest();
+        check(cwKept.filterLowHz == -150.0 && cwKept.filterHighHz == 150.0,
               "a new-domain CW passband survives the guard unchanged");
     }
 

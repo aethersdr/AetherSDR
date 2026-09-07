@@ -59,6 +59,8 @@ int main(int argc, char** argv)
             "visible=31#speed=0 kts#track=273.4#freq_error=0 ppb#"
             "status=Fine Lock#time=05:25:20Z"));
         CHECK(d.status.has_value() && *d.status == QStringLiteral("Fine Lock"));
+        CHECK(d.positionValid.has_value() && *d.positionValid);
+        CHECK(d.source.has_value() && *d.source == QStringLiteral("GPSDO"));
         CHECK(d.tracked.has_value() && *d.tracked == 16);   // case-insensitive key
         CHECK(d.visible.has_value() && *d.visible == 31);
         CHECK(d.grid.has_value() && *d.grid == QStringLiteral("DN18rg"));
@@ -75,6 +77,7 @@ int main(int argc, char** argv)
     {
         const GpsDelta d = decodeGps(b, QStringLiteral("status=OK#garbage#=novalue#tracked=3"));
         CHECK(d.status.has_value() && *d.status == QStringLiteral("OK"));
+        CHECK(d.positionValid.has_value() && !*d.positionValid);
         CHECK(d.tracked.has_value() && *d.tracked == 3);
         CHECK(!d.grid.has_value());
     }

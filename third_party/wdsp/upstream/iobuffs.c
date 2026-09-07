@@ -580,11 +580,28 @@ void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *
 	}
 }
 
-void dexchange (int channel, double* in, double* out)
+int dexchange (int channel, double* in, double* out)
 {
 	int n;
 	IOB a = ch[channel].iob.pd;
-	if (!_InterlockedAnd (&ch[channel].run, 1)) _endthread();
+	if (!_InterlockedAnd (&ch[channel].run, 1))
+	{
+		// AetherSDR patch 4: upstream called _endthread() here — terminating
+		// the worker mid-function, with csDSP HELD (wdspmain() calls us inside
+		// it and _endthread() does not unwind, so post_main_destroy() later
+		// found a locked section to DeleteCriticalSection), and skipping
+		// wdspmain()'s exit handshake entirely, so pre_main_destroy() waited
+		// out its full cap on a thread that was already gone and then fell
+		// through with no barrier at all.
+		//
+		// RETURN instead, and let the caller unwind. That makes wdspmain()'s
+		// tail the worker's single exit, which is what lets the handshake
+		// store a generation held in a LOCAL — shared state would be wrong
+		// here: after a fall-through the abandoned worker is still alive, and
+		// anything it reads from ch[] could belong to its successor (#5411
+		// second-opinion review).
+		return 1;
+	}
 
 	EnterCriticalSection (&a->r2_ControlSection);
 	a->r2_havesamps += a->r2_insize;
@@ -601,4 +618,5 @@ void dexchange (int channel, double* in, double* out)
 	memcpy (out, a->r1_baseptr + 2 * a->r1_outidx, a->r1_outsize * sizeof (complex));
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;
+	return 0;
 }

@@ -212,9 +212,10 @@ something unexpected on one with an AH-705.
 
 CI-V transceive does not announce every front-panel change. The backend rotates
 read requests for RF/power/mic/MON/VOX/notch/preamp/attenuator/tuner state on
-the link timer. These are state observations, never a reason to replay a saved
-client value: both Icom models declare an empty `clientSettingsDomains`, so the
-radio remains authoritative across reconnects.
+the link timer. Tuner reads are omitted for profiles without an evidenced tuner
+command path, including the IC-9700. These are state observations, never a
+reason to replay a saved client value: supported Icom profiles declare an empty
+`clientSettingsDomains`, so the radio remains authoritative across reconnects.
 
 The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
 `12 00` with no data reads the selection, but the live B6 radio returned only a
@@ -259,11 +260,15 @@ caps.canTransmit            = true;
 caps.txPowerMaxWatts        = 10.0;
 caps.hostModulates          = false;           // the radio modulates
 caps.hasRadioSideDsp        = true;            // NR/NB/notch are 16 xx, in firmware
-caps.hasTuner               = false;           // no INTERNAL ATU; see note
+caps.hasTuner               = profile.supports(IcomFeature::AntennaTuner); // exact-model evidence
+caps.hasTunerMemories       = false;           // 1C 01 has no Flex-style memory API
 caps.hasSupplyVoltageTelemetry =
     hasVoltageCalibration(profile.meters.calibration); // explicit model allowlist; 15 15 Vd
 caps.hasDaxStreams          = false;           // NO IQ — see oracle §8.1
-caps.hasGpsLocation         = false;           // GPS exists, protocol won't carry it
+caps.hasGpsLocation         = true;            // IC-705: 23 00 position/time
+caps.hasGpsSatelliteTelemetry = false;         // no count, SNR, or lock flag
+caps.hasGpsFrequencyReference = false;         // position GPS, not a GPSDO
+caps.hasGpsTimeConfiguration = true;           // NTP + GPS clock settings
 caps.hasProfiles            = false;
 caps.hasWaveforms           = false;
 caps.hasMultiClientSessions = false;
@@ -273,12 +278,15 @@ caps.canReboot              = false;           // see note
 caps.clientSettingsDomains  = {};              // radio remembers its own state
 ```
 
-**`hasTuner = false` is a judgement call, not a fact.** The IC-705 has no
-internal ATU, but `1C 01` controls an *external* AH-705 — and there is no command
-to detect whether one is attached. So the capability is unanswerable from the
-radio. False is the safer default (no tuner UI on a radio that probably has
-none); an operator with an AH-705 is better served by an explicit setting than by
-a control that appears unconditionally and silently fails.
+**`hasTuner` is exact-model command capability, not an attachment detector.**
+The IC-705 opts in because `1C 01` controls its supported external AH-705 path,
+even though attachment cannot be queried. The IC-7300MK2 opts in for its
+documented tuner path. The IC-9700 and unprofiled models fail closed: the
+backend omits tuner reads and writes. The shared Transmit applet remains stable
+across radios by keeping ATU and its indicators visible but dimming them to the
+unavailable state when this capability is false. Icom does not publish
+`hasTunerMemories`: MEM, its indicator, and memory-only menu actions remain
+visible but unavailable rather than inheriting Flex's separate memory API.
 
 **`canReboot = false` despite `18 00` / `18 01` existing.** Those turn the
 transceiver off and on — but over WiFi, powering off drops the WLAN interface,
@@ -296,6 +304,19 @@ backend reads state at connect; it does not push a restored state.
 (no 148–430 receive on some regional variants). The seam has no gap
 representation, so the honest thing is the outer envelope plus a rejected-tune
 path that reports what the radio actually did.
+
+**The GPS claims are intentionally split.** The IC-705's model-specific guide
+defines `23 00` for latitude, longitude, altitude, course, speed, and a complete
+UTC timestamp; AetherSDR derives the Maidenhead grid locally. It does not define
+a satellite count, fix type, SNR, or explicit lock bit, so the UI says
+"Position reported" rather than manufacturing "Locked" from valid coordinates.
+The GPS feed also does not discipline the RF reference.
+
+The same guide defines NTP Function (`1A 05 0167`), NTP Server Address (`0168`),
+GPS Time Correct (`0169`), NTP access (`1A 07`), and its result (`1A 08`). These
+are radio-persisted settings: connect and polling only read them. A write occurs
+only from an explicit dashboard action and is followed by read-back before the
+normalized model publishes the value.
 
 ---
 
@@ -354,6 +375,41 @@ of the older entry, so work that aged all the way to `Ptt` would be dispatched
 *ahead* of the keyed-state poll rather than merely tying with it. Stopping one
 band short still beats fresh meter traffic on that tie — which is all
 anti-starvation needs — while leaving PTT an edge no amount of waiting erodes.
+Only one background request may take that meter-band turn before a ready
+meter runs. After any background dispatch, aging is capped at `Control`
+until an actual `ActiveMeter` dispatch. PTT/operator/emergency requests do
+not reset this alternation. This prevents a whole aged reconciliation burst
+from draining ahead of fresh TX power/SWR reads. Additionally, once a ready
+meter has spent 100 ms in the queue, background aging is capped at `Control`
+as well, which protects freshness when dispatches are slower than the
+nominal slot.
+
+Both caps are DELAYS, NOT HOLDS, and the difference is the whole design.
+`MeterPoller` re-arms each meter from the ANSWER, so on any link whose round
+trip is slower than the meter demand there is always a ready meter past its
+budget: an overdue-meter cap with no ceiling never lifts, and background work
+stops for the session rather than being deferred. Measured on the production
+scheduler and poller with an injected clock, that cost every `Control`
+reconciliation read from 75 ms round trip upward, and left the startup
+snapshot unable to complete at all at 150 ms — on receive, with no
+transmission involved. So the cap lifts for exactly one request once
+`kBackgroundStarvationCeilingMs` (1500 ms) has passed with no background
+dispatch; that dispatch re-arms both caps, making the admission single-shot
+and the background rate a ceiling rather than a share of the link.
+
+1500 ms is where the two pressures stop trading against each other. Over the
+same 60 s sustained-TX measurement, worst-case forward-power age is 620/710/
+1190 ms at 63/75/100 ms round trip — identical to an unbounded hold at 63 and
+75 ms — while control reconciliation still lands roughly 39-45 times a minute
+instead of never. A larger ceiling buys no further freshness; the ages
+plateau and only background progress is lost. The residual cost is startup on
+a slow link: the connect snapshot converges in 46 s at 150 ms round trip
+against 13 s with no overdue-meter cap at all — slower, but it converges,
+where an uncapped hold never finished it.
+
+Note what this bounds and what it does not: interference by background
+requests, not radio reply time. A lost in-flight reply can still consume the
+350 ms timeout.
 
 Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
 retired before a later read is sent, or that ACK can be mistaken for the read's
@@ -384,9 +440,31 @@ operator they are still on the air. RFC #4983 states the rule directly
 transition guard") and Constitution VI requires every path that can transmit to
 fail closed. Radio truth wins again as soon as the bounded window expires.
 
+The command edge is therefore **intent only**. `setKeying(true)` neither moves
+the backend's keyed state nor publishes `transmitChanged`; only a decoded
+`1C 00 01` reply does that. A waveform client such as AetherModem waits for the
+radio-confirmed edge before releasing sample zero, with a bounded timeout. This
+is load-bearing for short AX.25 frames: the earlier optimistic edge let their
+entire preamble run while an IC-705 was still completing its CI-V PTT transition.
+The backend advertises this contract as `RadioCapabilities::hasRadioPttReadback`;
+`RadioModel` then does not synthesise the command-edge fallback it still uses
+for a backend with no status plane.
+
+Three things are deliberately **not** deferred to the readback, because none of
+them is a claim about the air. The transmit-audio admission gate
+(`txAudioGateOpen`) follows the commanded intent inside its 1 s confirmation
+window and radio truth outside it — gating on the readback alone would head-clip
+every voice, DAX and TCI over by a CI-V round trip and leave the TUNE carrier
+silent until the radio answered. A client unkey still zeroes the derived IC-9700
+forward-power estimate immediately. And a readback that **contradicts** a
+pending unkey (the radio still keyed) is republished even though the backend's
+own keyed flag did not change, so the model's optimistic RX presentation is
+corrected rather than left lying (Constitution VI). `icom_ptt_authority_test`
+pins all of this without a socket.
+
 | group | interval | condition |
 |---|---:|---|
-| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| PTT fallback | 250 ms | connected with an identified CI-V destination; Transceive is only a hint |
 | S meter | 100 ms | RX and visible |
 | power, SWR, ALC, compression | 200 ms | TX and visible |
 | PA current | 500 ms | TX and visible |
@@ -394,7 +472,8 @@ fail closed. Radio truth wins again as soon as the bounded window expires.
 | overflow | 500 ms | RX and visible |
 | NR, NB, auto/manual notch state | 1000 ms | connected |
 | frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
-| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, RIT/XIT | 3000 ms | connected |
+| tuner | 3000 ms | connected and exact profile declares tuner control |
 
 #### State convergence is snapshot + transceive + polling
 
@@ -680,14 +759,29 @@ captures from our own radio.
 ## 9. Explicitly out of scope for phase 1
 
 - **IQ.** It does not exist on this radio. Not deferred — absent.
-- **Writable memory channels.** Initial IC-705, IC-7300MK2, and IC-9700 support
-  reads their model-specific ordinary-channel records with `1A 00`, exposes occupied
-  channels through the shared memory model, and permits tuning to the cached
-  channel state. Reads are button-only; IC-705 requires a selected group so a
-  click queues 100 requests rather than scanning its 10,000-address space.
-  Writing, adding, deleting, scan-edge, call, and satellite
-  memories remain deferred. Other Icom models continue to use the client-side
-  bank until their own published record layouts are implemented and verified.
+- **Writing radio memory channels.** All Icom radios use AetherSDR's shared,
+  writable memory database as the working model. For IC-705, IC-7300MK2, and
+  IC-9700, **Sync Memories** reads the model-specific ordinary-channel records
+  with `1A 00` and ingests occupied channels into that database; Tune then
+  recalls the durable database row like a manual or CSV-imported memory.
+  Imported rows are keyed by the 16-byte radio GUID from the authenticated
+  RS-BA1 capabilities record plus the native group/channel, so DHCP, mDNS and
+  NAT endpoint changes cannot duplicate a radio's channel set. Repeat Sync
+  refreshes tuning fields while preserving the name, owner and group assigned
+  at first import or edited locally. Clearing a native channel removes its
+  matching imported row. Split/RPS/DV/DD records remain display-only.
+  Existing experimental imports with incorrect recallability need one explicit
+  Sync: they did not retain enough split metadata for a safe load-time repair.
+  Loading an existing bank never rewrites it. Ordinary local memories remain
+  schema 1; saves containing native recall fields use schema 2 so an older
+  writer cannot erase recallability, DTCS state or provenance. Downgrading
+  after such a save requires a compatible build or a pre-Sync settings backup.
+  Reads are button-only; IC-705 requires a selected native group so a click queues 100
+  requests rather than scanning its 10,000-address space. Flex global/TX
+  profiles are not valid Icom group selectors. Writing or deleting the radio's
+  own channels, plus scan-edge, call, and satellite memories, remain deferred.
+  Other Icom models still use the same client-side database, but expose no Sync
+  action until their published record layout is implemented and verified.
 - **D-STAR / DV.** A large command surface (`22 xx`, `23 xx`) and a separate
   feature.
 - **Bluetooth transport.** Unknown whether it carries all three streams.
@@ -885,6 +979,29 @@ whatever buffer it is handed into 1364-byte pieces in a loop; the famous pair is
 just what a 1920-byte frame becomes. kappanhang hardcodes the same two offsets.
 Either way the invariant is the frame's **duration**, and the byte count follows
 from the rate and the sample width.
+
+The transmit queue is clocked at **one 20 ms frame pair per 20 ms**, drained by
+elapsed time: a late or coalesced timer tick sends the frames it owes (at most
+three per tick), so backlog cannot ratchet, while an on-time tick sends exactly
+one. A producer may front-load audio to absorb GUI scheduling jitter, and that
+queue depth never turns into a wire burst — but neither can it grow without
+bound, which is what "exactly one per tick" did: a Qt timer only ever fires
+late, so producer and consumer ran at equal rate with no recovery until the
+packetizer's 250 ms cap shed the oldest audio mid-over. That pump clocks every
+Icom transmission, voice included. At scheduled packet completion the backend
+reports what is **actually** still queued — the padded host queue at wire cadence
+plus the negotiated 300 ms radio buffer — and AetherModem holds PTT for that plus
+its ordinary tail; an operator/manual unkey remains immediate and never takes
+that delay.
+
+Finite modem audio has an additional completion barrier. The engine posts it
+behind the final PCM block, and `IcomCivBackend` then drains the 24-to-48 kHz
+resampler before AetherModem starts the unkey timer. r8brain's prewarm removes
+its no-output startup interval, not its linear-phase group delay; without the
+drain, a captured packet kept roughly 70 ms of silence at its front and lost
+roughly 70 ms from its end — enough to remove AX.25 FCS plus postamble. The
+drained samples are queued while PTT is still radio-confirmed, and the remaining
+partial 20 ms transport frame is padded with codec-correct silence.
 
 **THE RATE CANNOT MOVE ON ITS OWN.** `kAudioFrameBytes` was the constant 1920,
 which is 20 ms only at 48 kHz s16. Lowering the rate to 16 kHz while leaving it
@@ -1341,3 +1458,90 @@ of a black panadapter.
 5. **Re-run this sweep against the IC-7300MK2** when one is available. The
    sweeper is model-agnostic and the JSON diffs cleanly, which is the cheapest
    possible way to establish a second model's capability set.
+
+## CI-V identity and custom Network Radio Names (#5164)
+
+Every connection begins with conservative unknown-model capabilities. The
+RS-BA1 Network Radio Name is presentation text only, including names that
+happen to match another supported model. CI-V `19 00` selects the profile from
+its one-byte model-ID payload; the reply envelope's source address selects the
+command destination. These values are independent when the operator changes
+the CI-V address. This follows wfview's `funcTransceiverId` model-ID decode and
+`determineRigCaps` adoption of `incomingCIVAddr` as the destination.
+
+Auto broadcasts identity queries; a manually pinned address receives directed
+queries and rejects other responders. Identification makes at most five attempts
+one second apart, stopping on a valid model-ID reply, conflict, or disconnect.
+A generic FB/FA reply or controller echo cannot complete identification. Meter,
+PTT, and control polling wait until the destination is identified. Exhaustion
+reports a configuration warning and keeps capabilities conservative; it never
+starts a read burst at an unverified seed address or promotes a nickname to a
+hardware profile. A valid late identity restarts the snapshot with the correct
+model vocabulary and publishes capabilities, modes, antenna choices, front-end
+controls, meters, and scope geometry. Repeated identical replies are inert.
+Conflicting identities abort native CW at the previously selected destination
+before withdrawing transmit capability until reconnect. A pinned selection
+that hears only another responder reports both addresses once, without changing
+the selection or accepting that responder's identity.
+
+The current model table recognizes these hexadecimal `19 00` payloads. These
+are model IDs, even though their values match factory CI-V addresses; changing
+the operating address does not change the ID. Recognition alone does not imply
+that every feature or network path has live-hardware validation.
+
+| Model | Model-ID payload |
+|---|---|
+| IC-705 | `A4` |
+| IC-9700 | `A2` |
+| IC-7610 | `98` |
+| IC-7850 / IC-7851 (`IC-785x` profile) | `8E` |
+| IC-7300 | `94` |
+| IC-7300MK2 | `B6` |
+| IC-905 | `AC` |
+
+Sources: the existing `IcomModels.cpp` model table and its Icom/wfview provenance;
+Icom's per-model CI-V guides define `19 00` as the transceiver-ID read. The
+IC-7300MK2 `B6` payload and destination were also confirmed by a receive-only
+connection for this change. For example, `FE FE E0 50 19 00 A4 FD` identifies an
+IC-705 whose operating address is `50`, regardless of its Network Radio Name.
+
+
+### Optional standby wake (#5349, superseding #5360)
+
+The connection panel exposes **Wake Icom on connect**, default off and persisted in
+the existing Icom JSON settings document. An awake identity completes normally
+without sending power commands. Only exhausted identity discovery with explicit
+opt-in requests wake via the namespaced extension channel. Auto obtains the
+wake destination from the capabilities record (absolute byte 0x94), not the
+editable network name or the default settings seed. Pinned addresses remain
+explicit overrides. This network metadata authorizes a destination only;
+`19 00` remains the authority for the model and capabilities. An advertised factory destination for IC-705, IC-7300MK2 or IC-9700 can select
+its wake framing without claiming model identity. An unidentified custom
+address requires an explicit model selection: select the model in Connect by IP
+(the network-advertised custom destination is retained), or use `civ wake` with
+both model ID and address. A missing/unsupported framing hint refuses visibly;
+it never silently gives a custom-address IC-9700 the standard E0 frame.
+
+RadioModel owns one wake operation: one `18 01`, intentional session release,
+a short initial allowance, then one fresh network session with wake disabled.
+IC-705 and IC-7300MK2 start after one second and send per-second identity probes
+until ready; IC-9700 retains the contributed ten-second delay.
+The ordinary repeating reconnect timer is not armed during this operation.
+Wire identity must arrive within 20 seconds after reconnect starts (and match
+a model when one was explicitly selected);
+failure terminates the attempt. Generation checks invalidate delayed work on
+operator disconnect, radio changes, success and failure. No power-off is sent
+on disconnect or exit, and no wake request or transient model claim is persisted.
+
+Credit: W5JWP (@w5jwp) established the IC-9700 native-LAN wake sequence and
+standby/readiness distinction in #5360. Its 150 additional FE bytes, E1 controller
+address and 10-second delay are retained as contributed hardware evidence, not
+as the guide's serial baud-rate requirements. The official IC-9700 guide lists
+approximately 119 FE bytes at 115200 baud. IC-705 documents `18 01` from
+Standby/Shutdown; IC-7300MK2 documents baud-dependent fill specifically for its
+REMOTE jack. Both models have explicit profiles that send the standard E0-controller
+`18 01` frame over the existing RS-BA1 serial envelope, without the IC-9700's
+extra FE prefix. Their one-second initial allowance is client policy, not a guide timing.
+These profiles implement the documented command; live network wake remains to
+be checked on each model. Network control must remain reachable in standby;
+an offline WLAN interface cannot receive CI-V wake.

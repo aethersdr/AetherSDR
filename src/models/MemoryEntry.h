@@ -9,6 +9,11 @@ struct MemoryEntry {
     QString group;
     QString owner;
     QString channel;          // native radio channel label, when one exists
+    // Stable provenance for a channel ingested from a radio. Empty for manual
+    // and CSV-created entries. Sync uses this pair to update the same database
+    // row on the next pass instead of duplicating it.
+    QString importSource;
+    QString importKey;
     double  freq{0.0};
     QString name;
     QString mode;
