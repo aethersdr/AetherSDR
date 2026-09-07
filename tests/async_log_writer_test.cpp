@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QIODevice>
@@ -458,6 +459,246 @@ void testStderrMirroring(const QString& dir)
            !fileBytes.isEmpty() && captured == fileBytes);
 }
 
+
+// ---------------------------------------------------------------------------
+// #5480: coverage brought in line with current log sites. Every case below
+// goes through the real writer (enqueue -> formatLine -> redactPii -> disk),
+// not through redactPii() alone, so a rule that works in isolation but is
+// bypassed on the way to the file still fails here.
+// ---------------------------------------------------------------------------
+
+void testHomePathRedaction(const QString& dir)
+{
+    const QString path = dir + "/home_paths.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.app"),
+        QStringLiteral(R"(exe=/home/pat/AetherSDR/build/AetherSDR )"
+                       R"(mac=/Users/pat.jensen/Applications/AetherSDR.app )"
+                       R"(win=C:\Users\Pat Jensen\AppData\Local\AetherSDR\AetherSDR.exe )"
+                       R"(qt=C:\\Users\\Pat Jensen\\AppData)"));
+    report("home directory prefixes are replaced by ~ on all three platforms",
+           !contents.contains(QStringLiteral("/home/pat"))
+           && !contents.contains(QStringLiteral("/Users/pat.jensen"))
+           && !contents.contains(QStringLiteral("Pat Jensen"))
+           && contents.contains(QStringLiteral("~/AetherSDR/build"))
+           && contents.contains(QStringLiteral("~/Applications"))
+           && contents.contains(QStringLiteral("AppData")));
+}
+
+void testIpv6Redaction(const QString& dir)
+{
+    const QString path = dir + "/ipv6.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("full 2001:0db8:85a3:0000:0000:8a2e:0370:7334 "
+                       "compressed 2001:db8::8a2e:370:7334 "
+                       "bracketed [2001:db8::1]:4992 "
+                       "mapped ::ffff:192.168.50.121 "
+                       "scoped fe80::1%eth0"));
+    report("IPv6 literals are redacted in every spelling",
+           !contents.contains(QStringLiteral("8a2e"))
+           && !contents.contains(QStringLiteral("2001:db8"))
+           && !contents.contains(QStringLiteral("192.168.50.121"))
+           && !contents.contains(QStringLiteral("fe80"))
+           && contents.count(QStringLiteral("[v6-redacted]")) == 5);
+}
+
+void testIpv6DoesNotEatMacOrClock(const QString& dir)
+{
+    const QString path = dir + "/ipv6_boundary.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("mac 00:1C:2D:05:37:2A elapsed 12:34:56"));
+    report("IPv6 rule does not consume MAC addresses or clock values",
+           contents.contains(QStringLiteral("**:**:**:**:**:2A"))
+           && contents.contains(QStringLiteral("12:34:56"))
+           && !contents.contains(QStringLiteral("[v6-redacted]")));
+}
+
+void testEmailRedaction(const QString& dir)
+{
+    const QString path = dir + "/email.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.wan"),
+        QStringLiteral("SmartLink login for pat.jensen@example.co.uk ok "
+                       "email=other+tag@sub.example.com"));
+    report("email addresses are redacted in prose and as field values",
+           !contents.contains(QStringLiteral("pat.jensen@"))
+           && !contents.contains(QStringLiteral("other+tag@"))
+           && !contents.contains(QStringLiteral("example.co.uk")));
+}
+
+void testUserFieldRedaction(const QString& dir)
+{
+    const QString path = dir + "/user.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.icom"),
+        QStringLiteral("control login user pat_jensen accepted username=pat.j "
+                       "user_name=\"Pat\""));
+    report("user name fields are redacted in keyword and whitespace forms",
+           !contents.contains(QStringLiteral("pat_jensen"))
+           && !contents.contains(QStringLiteral("pat.j"))
+           && !contents.contains(QStringLiteral("\"Pat\"")));
+}
+
+void testHostContextRedaction(const QString& dir)
+{
+    const QString path = dir + "/hosts.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("connecting to shack-pi.local:1883 ; "
+                       "reconnecting to mqtt.home.arpa ; "
+                       "disconnected from rotator.lan ; "
+                       "connect to greenheron.lan:4533 timed out"));
+    report("peer hostnames after a connection keyword are redacted",
+           !contents.contains(QStringLiteral("shack-pi"))
+           && !contents.contains(QStringLiteral("home.arpa"))
+           && !contents.contains(QStringLiteral("rotator.lan"))
+           && !contents.contains(QStringLiteral("greenheron"))
+           // the diagnostic tail must survive
+           && contents.contains(QStringLiteral(":1883"))
+           && contents.contains(QStringLiteral("timed out")));
+}
+
+void testGridRedaction(const QString& dir)
+{
+    const QString path = dir + "/grid.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.freedv"),
+        QStringLiteral("reported grid CN87ut peer grid_square=DM79lm "
+                       "gridSquare:\"EM12ab\" locator FN31pr "
+                       "location=\"47.6205,-122.3493\""));
+    report("Maidenhead grids and quoted coordinate pairs are redacted",
+           !contents.contains(QStringLiteral("CN87ut"))
+           && !contents.contains(QStringLiteral("DM79lm"))
+           && !contents.contains(QStringLiteral("EM12ab"))
+           && !contents.contains(QStringLiteral("FN31pr"))
+           && !contents.contains(QStringLiteral("47.6205")));
+}
+
+void testQuotedAndQtEscapedValueForms(const QString& dir)
+{
+    const QString path = dir + "/json_forms.log";
+    // Build the escaped spelling the same way QDebug does for a QByteArray,
+    // rather than hand-writing it: a hand-written fixture would not prove the
+    // rule survives Qt's own quoting. (Ozy311 audit on #5480.)
+    QString qtFormatted;
+    QDebug(&qtFormatted) << QByteArray(
+        R"({"access_token":"AuditJsonSecret","first_name":"Pat","latitude":47.6205})");
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.mqtt"),
+        QStringLiteral(R"(plain {"access_token":"PlainJsonSecret"} qt )") + qtFormatted);
+    report("quoted, JSON and Qt-escaped value spellings are all covered",
+           !contents.contains(QStringLiteral("PlainJsonSecret"))
+           && !contents.contains(QStringLiteral("AuditJsonSecret"))
+           && !contents.contains(QStringLiteral("Pat"))
+           && !contents.contains(QStringLiteral("47.6205")));
+}
+
+void testShortValueIsFullyRedacted(const QString& dir)
+{
+    const QString path = dir + "/short_values.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.wan"),
+        QStringLiteral("a token=ab b token=abcd c token=abcdefgh"));
+    // Assert the EXACT output, not merely the absence of the value followed by
+    // a space: "token=ab***REDACTED***" contains neither "token=ab " nor a
+    // bare "ab" boundary, so a laxer assertion here passes even when the
+    // whole short value is retained as its own "prefix".
+    report("a value no longer than the retained prefix is redacted whole",
+           contents.contains(QStringLiteral("a token=***REDACTED*** b"))
+           && contents.contains(QStringLiteral("b token=***REDACTED*** c"))
+           && contents.contains(QStringLiteral("c token=abcd***REDACTED***")));
+}
+
+void testAuthSchemeIsNotMistakenForTheValue(const QString& dir)
+{
+    const QString path = dir + "/auth_scheme.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.wan"),
+        QStringLiteral("Authorization: Basic ZHhwYXNzd29yZHZhbHVl=="));
+    report("an auth scheme word is preserved and the value after it is redacted",
+           contents.contains(QStringLiteral("Basic"))
+           && !contents.contains(QStringLiteral("ZHhwYXNzd29yZHZhbHVl")));
+}
+
+void testUrlAuthorityRedaction(const QString& dir)
+{
+    const QString path = dir + "/urls.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.asr"),
+        QStringLiteral("endpoint https://asr.internal.example/v1/stream "
+                       "path stays readable"));
+    report("URL authority is redacted while the path stays readable",
+           !contents.contains(QStringLiteral("asr.internal.example"))
+           && contents.contains(QStringLiteral("/v1/stream")));
+}
+
+void testDiagnosticFieldsRemainReadable(const QString& dir)
+{
+    const QString path = dir + "/diagnostics.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("callsign=KK7GWY model=FLEX-8600 firmware=3.8.22 "
+                       "software_ver=4.2.18.41174 port=4992 slice=0 keytoken=x"));
+    report("callsign, model, firmware, version and port stay readable",
+           contents.contains(QStringLiteral("KK7GWY"))
+           && contents.contains(QStringLiteral("FLEX-8600"))
+           && contents.contains(QStringLiteral("3.8.22"))
+           && contents.contains(QStringLiteral("4.2.18.41174"))
+           && contents.contains(QStringLiteral("port=4992"))
+           && contents.contains(QStringLiteral("keytoken=x")));
+}
+
+void testRedactionIsIdempotent(const QString& dir)
+{
+    const QString path = dir + "/idempotent.log";
+    const QString line = QStringLiteral(
+        "radio at 192.168.50.121 token=ABCDEFGH1234 grid CN87ut "
+        "connecting to shack.local mac 00:1C:2D:05:37:2A");
+    const QString once = redactPii(line);
+    report("redactPii is idempotent", redactPii(once) == once);
+    const QString contents = writeAndRead(path, QtDebugMsg,
+                                          QStringLiteral("aether.connection"), once);
+    report("re-writing an already-redacted line changes nothing further",
+           contents.contains(once));
+}
+
+// The negative corpus the issue asks for: representative lines from the
+// protocols we actually log, each carrying a planted value. Nothing planted
+// may survive. Kept as one table so a new log site is one row.
+void testNegativeCorpus(const QString& dir)
+{
+    struct Case { const char* line; const char* planted; };
+    static const Case kCases[] = {
+        {"Flex status: radio 192.168.50.121 lat=47.6205 lon=-122.3493",  "47.6205"},
+        {"SmartLink WAN: id_token=AUDITTOKENVALUE1234 refresh=x",        "AUDITTOKENVALUE1234"},
+        {"SmartLink user_settings first_name=AuditGiven last_name=X",    "AuditGiven"},
+        {R"(MQTT recv aether/status {"grid_square":"AUDITGRID"})",       "AUDITGRID"},
+        {"Icom control login user auditoperator accepted",               "auditoperator"},
+        {"MQTT connecting to audit-broker.example.net:8883",             "audit-broker"},
+        {"ASR endpoint https://audit-asr.internal/v1",                   "audit-asr"},
+        {"FreeDV reported grid AU12di for peer",                         "AU12di"},
+        {"exe=/home/auditor/AetherSDR/AetherSDR",                        "/home/auditor"},
+        {"peer 2001:db8::audi:7334 established",                         "2001:db8"},
+        {"QRZ session for auditor@example.com failed",                   "auditor@example.com"},
+        {"rotator disconnected from audit-rotator.lan",                  "audit-rotator"},
+    };
+    bool allClean = true;
+    int index = 0;
+    for (const auto& c : kCases) {
+        const QString path = QStringLiteral("%1/corpus_%2.log").arg(dir).arg(index++);
+        const QString contents = writeAndRead(path, QtDebugMsg,
+                                              QStringLiteral("aether.connection"),
+                                              QString::fromUtf8(c.line));
+        if (contents.contains(QString::fromUtf8(c.planted))) {
+            std::printf("       corpus leak: %s\n", c.planted);
+            allClean = false;
+        }
+    }
+    report("negative corpus: no planted value survives the writer", allClean);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -490,6 +731,21 @@ int main(int argc, char** argv)
     testHighPriorityReservePreservesCritical(dir);
     testRotationReopenFailureMirrorsToStderr(dir);
     testStderrMirroring(dir);
+
+    testHomePathRedaction(dir);
+    testIpv6Redaction(dir);
+    testIpv6DoesNotEatMacOrClock(dir);
+    testEmailRedaction(dir);
+    testUserFieldRedaction(dir);
+    testHostContextRedaction(dir);
+    testGridRedaction(dir);
+    testQuotedAndQtEscapedValueForms(dir);
+    testShortValueIsFullyRedacted(dir);
+    testAuthSchemeIsNotMistakenForTheValue(dir);
+    testUrlAuthorityRedaction(dir);
+    testDiagnosticFieldsRemainReadable(dir);
+    testRedactionIsIdempotent(dir);
+    testNegativeCorpus(dir);
 
     return g_failed == 0 ? 0 : 1;
 }
