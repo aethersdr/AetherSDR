@@ -997,6 +997,7 @@ set(GUI_SOURCES
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
     src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp

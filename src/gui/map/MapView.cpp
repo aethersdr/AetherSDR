@@ -1,4 +1,5 @@
 #include "MapView.h"
+#include "MapProviderNetworkAccessManager.h"
 #include "CityLightsItem.h"
 #include "MapMarkerBatchItem.h"
 #include "MapMarkerItem.h"
@@ -78,7 +79,7 @@ void MapView::ensureTileNetworkManager()
     // the HTTP cache headers OSM serves — required by the OSM tile usage
     // policy — and the User-Agent uniquely identifies AetherSDR (library
     // defaults and browser impersonation are documented blocking causes).
-    auto* nam = new QNetworkAccessManager(QCoreApplication::instance());
+    auto* nam = new MapProviderNetworkAccessManager(QCoreApplication::instance());
     nam->setTransferTimeout(kTransferTimeoutMs);
     auto* cache = new QNetworkDiskCache(nam);
     cache->setCacheDirectory(

@@ -444,6 +444,9 @@ private slots:
         for (int i = 0; i < replies.size(); ++i) {
             replies.at(i)->complete(i == 0);
         }
+        layer->checkReadiness(59999);
+        QCOMPARE(network.allReplies.size(), requests);
+        layer->checkReadiness(60000);
         QTRY_COMPARE_WITH_TIMEOUT(network.allReplies.size(), requests + 1, 3000);
         QVERIFY(ready.isEmpty());
         network.allReplies.last()->complete();
@@ -488,6 +491,7 @@ private slots:
                     reply->complete(true);
                 }
             }
+            layer->checkReadiness(60000); // Advance retry time without sleeping a minute.
             QTest::qWait(25);
         }
         QCOMPARE(failures.size(), 1);
@@ -840,7 +844,7 @@ private slots:
         QVERIFY(map.m_weatherRadarRebufferTimer->isActive());
         QVERIFY(errors.isEmpty());
         map.m_weatherRadarRebufferTimer->stop();
-        map.rebufferWeatherRadarPlayback(); // Same callback as the five-second retry.
+        map.rebufferWeatherRadarPlayback(); // Same callback as the one-minute retry.
         QVERIFY(map.m_weatherRadarTimelineReply);
         QCOMPARE(map.m_weatherRadarTimelineReply->url(), WeatherRadarSource::noaaTimelineUrl());
         map.stopWeatherRadarAnimation();

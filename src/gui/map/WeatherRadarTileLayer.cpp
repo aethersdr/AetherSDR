@@ -19,35 +19,40 @@ WeatherRadarTileLayer::WeatherRadarTileLayer()
     setOpacity(kWeatherRadarOpacity);
     m_readinessTimer.setInterval(25);
     connect(&m_readinessTimer, &QTimer::timeout, this, [this] {
-        const int pending = pendingRequestCount();
-        if (pending == 0
-            && failedTileRequestCount() > m_failureBaseline) {
-            if (m_readinessElapsed.elapsed() < (m_loadFailed ? 5000 : 1000)) {
-                return;
-            }
-            if (m_retryCount >= 3 && !m_loadFailed) {
-                m_loadFailed = true;
-                emit frameLoadFailed(m_source.frameTime());
-            }
-            m_retryCount = std::min(3, m_retryCount + 1);
-            m_failureBaseline = failedTileRequestCount();
-            m_readinessElapsed.restart();
-            // Retain completed tiles and retry real null placeholders even
-            // without camera movement. After reporting failure, keep retrying
-            // quietly at a slower cadence until disabled or superseded.
-            retryUnfinishedTiles();
+        checkReadiness(m_readinessElapsed.elapsed());
+    });
+}
+
+void WeatherRadarTileLayer::checkReadiness(qint64 elapsedMs)
+{
+    const int pending = pendingRequestCount();
+    if (pending == 0
+        && failedTileRequestCount() > m_failureBaseline) {
+        if (elapsedMs < 60000) {
             return;
         }
-        // Camera processing is coalesced by QGeoView. Give it a short window
-        // to enqueue requests; an all-cache hit legitimately stays at zero.
-        if (pending == 0 && currentTilesComplete()
-            && m_readinessElapsed.elapsed() >= 300) {
-            m_readinessTimer.stop();
-            m_loadFailed = false;
-            m_readyFrameId = m_source.frameId();
-            emit frameReady(m_source.frameTime());
+        if (m_retryCount >= 3 && !m_loadFailed) {
+            m_loadFailed = true;
+            emit frameLoadFailed(m_source.frameTime());
         }
-    });
+        m_retryCount = std::min(3, m_retryCount + 1);
+        m_failureBaseline = failedTileRequestCount();
+        m_readinessElapsed.restart();
+        // Retain completed tiles and retry real null placeholders even
+        // without camera movement. After reporting failure, keep retrying
+        // quietly at the one-minute cadence until disabled or superseded.
+        retryUnfinishedTiles();
+        return;
+    }
+    // Camera processing is coalesced by QGeoView. Give it a short window
+    // to enqueue requests; an all-cache hit legitimately stays at zero.
+    if (pending == 0 && currentTilesComplete()
+        && elapsedMs >= 300) {
+        m_readinessTimer.stop();
+        m_loadFailed = false;
+        m_readyFrameId = m_source.frameId();
+        emit frameReady(m_source.frameTime());
+    }
 }
 
 void WeatherRadarTileLayer::setSource(const WeatherRadarSource& source)

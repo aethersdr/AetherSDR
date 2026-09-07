@@ -51,7 +51,7 @@ reuse when the map is reopened.
   geographic surface normal; no lights are projected onto the far hemisphere.
 - Download limit: 16 MiB, 15-second timeout, one active HTTP request. PNG
   dimensions are checked before decoding. Failures retain the previous image
-  and retry after 30 seconds. The dedicated HTTP disk cache is bounded to
+  and retry no sooner than one minute after a failure. The dedicated HTTP disk cache is bounded to
   64 MiB and follows response cache headers. CPU image work uses the existing
   Qt global worker pool, with at most one twilight-mask job plus a coalesced
   follow-up.
@@ -81,3 +81,6 @@ grayscale NASA lights; increasing it adds a warm-white to golden tint without
 changing opacity. It does not represent measured lamp color. The globe applies
 warmth as a shader uniform without uploading a new image; the flat map applies
 the same channel scaling in its CPU image worker.
+
+See [map provider retry protection](map-provider-retries.md) for shared NASA/NWS
+cooldowns, `Retry-After` handling, recovery probes, and the limits of this protection.

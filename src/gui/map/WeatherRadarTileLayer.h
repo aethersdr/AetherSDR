@@ -32,6 +32,8 @@ protected:
     QString tilePosToUrl(const QGV::GeoTilePos& tilePos) const override;
 
 private:
+    friend class WeatherRadarLoadingTest;
+    void checkReadiness(qint64 elapsedMs);
     void beginReadinessCheck();
 
     WeatherRadarSource m_source;

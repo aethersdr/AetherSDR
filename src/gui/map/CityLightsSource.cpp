@@ -1,4 +1,5 @@
 #include "CityLightsSource.h"
+#include "MapProviderNetworkAccessManager.h"
 #include "SolarTerminator.h"
 
 #include <array>
@@ -23,7 +24,7 @@ constexpr double kNativePixelMetres = kRadarWorldWidth / 65536.0;
 }
 
 CityLightsSource::CityLightsSource(QObject* parent, QNetworkAccessManager* network)
-    : QObject(parent), m_network(network != nullptr ? network : new QNetworkAccessManager(this))
+    : QObject(parent), m_network(network != nullptr ? network : new MapProviderNetworkAccessManager(this))
 {
     if (network == nullptr) {
         auto* cache = new QNetworkDiskCache(m_network);
@@ -296,7 +297,7 @@ void CityLightsSource::requestImage()
                     m_network->cache()->remove(imageUrl(requested));
                 }
                 emit statusChanged(tr("City lights unavailable — retrying"));
-                m_debounce.start(30000);
+                m_debounce.start(60000);
                 return;
             }
             m_loaded = requested;

@@ -44,3 +44,6 @@ Focused regression coverage lives in the weather_radar source, placement,
 wrap-render, loading, and texture tests. Loading tests inject replies without
 opening sockets or contacting NOAA. Native GPU cases require explicit opt-in;
 an offscreen skip is not native rendering verification.
+
+See [map provider retry protection](map-provider-retries.md) for shared NASA/NWS
+cooldowns, `Retry-After` handling, recovery probes, and the limits of this protection.
