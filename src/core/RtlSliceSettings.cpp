@@ -168,6 +168,8 @@ bool RtlSliceSettings::patch(double captureCenterHz, double sampleRateHz,
     int version = 0;
     Status status;
     QJsonObject object = m_scope.featureExact(featureName(), &version, &status);
+    // Decode only as a validity gate: patch the original JSON below so unknown
+    // members survive; rebuilding it from the typed document would lose them.
     Document previous;
     QString reason;
     if (status == Status::Unavailable || status == Status::Corrupt

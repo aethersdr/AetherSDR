@@ -9,6 +9,48 @@ does not distinguish their persistent state. Other families retain their existin
 scope. RTL disconnect/flush completes under the old scope before a session swap.
 Backend metadata no longer fabricates a serial from an enumeration index.
 
+## Identity changes and existing saved state
+
+The family-row choice follows the maintainer's
+[RFC #5468 approval](https://github.com/aethersdr/AetherSDR/issues/5468#issuecomment-5563734720)
+and section 1.1 of the accepted RFC. It deliberately permits shared saved state:
+
+- A dongle with no reported serial writes the RTL family row. Other anonymous
+  dongles read and overwrite that same row, regardless of their USB index.
+- A dongle with a reported serial but no exact saved row also reads that family
+  row. For example, saving an anonymous dongle at 100.1 MHz WFM means a previously
+  unseen identified dongle restores that saved frequency, mode, passband, rate
+  and RF gain. Once the identified dongle saves its own exact row, that row takes
+  precedence over the family row.
+- Duplicate nonempty reported serials use the same exact row and overwrite each
+  other's saved state. Discovery may need an index locator to connect the second
+  dongle, but retains its actual reported serial; it does not turn that serial
+  into an empty identity. Persistent per-dongle isolation is not claimed.
+
+Existing unique reported serials keep their scope, including genuine numeric
+serials. The affected old scopes are locator-keyed rows such as `rtl:0` for an
+anonymous dongle or `rtl:1` for an index-selected duplicate. These rows are
+preserved in the database, but an anonymous or duplicate session now selects
+the family row or the reported-serial row respectively. No old locator-keyed
+`OperatingState` is moved, merged, deleted, or imported into `RtlSlices`; a USB
+index cannot establish which physical dongle owned it.
+
+**Upgrade consequence:** when only the old locator-keyed state exists and there
+is no applicable reported-serial or family row, the first connection receives
+empty restored state and starts with the backend's defaults. This is a one-time
+reset of saved tuning, mode, passband, rate and RF gain until new state is saved
+under the selected scope. If a family row already exists, its state is restored
+instead. A duplicate can instead inherit the original dongle's existing
+reported-serial row. The old rows remain as an orphaned downgrade snapshot; this
+change provides no migration from them and no automatic per-dongle recovery.
+
+Review feedback proposed a separate anonymous index namespace or disabling
+anonymous persistence to prevent family sharing. Those are policy changes to
+the explicitly approved identity rule. F3a retains that rule and documents/tests
+its consequences; it does not claim to eliminate cross-device fallback.
+
+## RtlSlices owner and staged cutover
+
 `RtlSliceSettings` compiles into the engine as the sole owner of feature
 `RtlSlices`, schema 1. Its codec uses Hz and stable keyed IDs, nested squelch,
 normalized modes/AGC, and model percentages. Representation bounds are inherited
@@ -71,5 +113,9 @@ headless connection path must retain the same provenance before persistence.
 
 `rtl_slice_settings_test` uses an isolated SQLite profile, direct owner calls,
 the production F2 helper and a transport-free injected backend for real model
-preconnect/retry/swap/flush paths. It opens no radio, listener or synthetic peer.
+preconnect/retry/swap/flush paths. It covers anonymous-to-unseen-identified
+OperatingState fallback, exact-row precedence, anonymous and duplicate-serial
+sharing, preserved/unclaimed locator rows, and the equivalent RtlSlices owner
+reads/writes. The old-document validity gate is exercised even when the proposed
+patch would replace the malformed field. It opens no radio, listener or synthetic peer.
 Physical USB reordering, GUI and RF behavior remain separate validation work.

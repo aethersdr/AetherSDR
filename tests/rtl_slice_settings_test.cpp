@@ -62,7 +62,10 @@ public:
     {
         RadioCapabilities caps;
         caps.family = QStringLiteral("rtl");
-        caps.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::Tuning;
+        caps.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::Tuning
+                                   | RadioCapabilities::ClientSettingsDomain::Passband
+                                   | RadioCapabilities::ClientSettingsDomain::SpanRate
+                                   | RadioCapabilities::ClientSettingsDomain::RfGain;
         return caps;
     }
     void applyRestoredState(const RestoredRadioState& state) override { restored = state; live = state; }
@@ -187,6 +190,17 @@ int main(int argc, char** argv)
     entries.insert("00", entries.take("0"));
     bad.insert("slices", entries);
     check(!RtlSliceSettings::decode(bad, decoded, reason), "noncanonical numeric ID rejected");
+
+    QJsonObject overwrittenBad = valid;
+    entries = overwrittenBad.value("slices").toObject();
+    entry = entries.value("0").toObject();
+    entry.insert("freq", QStringLiteral("wrong type"));
+    entries.insert("0", entry);
+    overwrittenBad.insert("slices", entries);
+    check(a.setFeature(feature, 1, overwrittenBad), "malformed replacement-target field planted");
+    check(!owner.patch(100'000'000, 2'400'000, {slice(0)})
+              && a.featureExact(feature) == overwrittenBad,
+          "patch validates old document even when replacement would repair its malformed field");
 
     check(a.setFeature(feature, 2, valid), "future schema planted");
     check(owner.load().status == Read::Refused && !owner.patch(100'000'000, 2'400'000, {slice(0)})
@@ -353,6 +367,97 @@ int main(int argc, char** argv)
         next.serialIdentity = {};
         model.connectToRadio(next);
         check(model.settingsScope().radioId().isEmpty(), "unidentified production session uses RTL family scope");
+        check(injected->restored.rfFrequencyHz == 0
+                  && injected->restored.mode.isEmpty()
+                  && injected->restored.filterLowHz == 0
+                  && injected->restored.filterHighHz == 0
+                  && injected->restored.sampleRateHz == 0
+                  && injected->restored.extension.isEmpty(),
+              "only old locator-keyed state yields empty restore when family row is absent");
+        check(index.featureExact(RadioStateMemory::featureName()) == legacy(),
+              "old locator-keyed state remains intact after anonymous connection");
+
+        // RFC #5468 explicitly chooses a shared family row for absent identity.
+        // Exercise its consequence through the current production owner, not
+        // just settingsRadioId(): an unseen reported serial inherits that row.
+        injected->live.rfFrequencyHz = 100'100'000.0;
+        injected->live.mode = QStringLiteral("WFM");
+        injected->live.filterLowHz = -100'000;
+        injected->live.filterHighHz = 100'000;
+        injected->live.sampleRateHz = 2'400'000;
+        injected->live.extensionSchemaVersion = 1;
+        injected->live.extension = QJsonObject{{"rfGain", QJsonObject{{"gainDb", 24}}}};
+        RadioModelWakeTestAccess::pending(model);
+        const RadioSettingsScope unseen("rtl", "789");
+        check(unseen.featureExact(RadioStateMemory::featureName()).isEmpty(),
+              "different reported serial has no exact OperatingState fixture");
+        next.serial = "789";
+        next.serialIdentity = {"789", false};
+        model.connectToRadio(next);
+        check(family.featureExact(RadioStateMemory::featureName()).value("rfFrequencyHz").toDouble()
+                  == 100'100'000.0,
+              "anonymous pending save writes the family row before identified connection");
+        check(model.settingsScope().radioId() == "789"
+                  && injected->restored.rfFrequencyHz == 100'100'000.0
+                  && injected->restored.mode == "WFM"
+                  && injected->restored.filterLowHz == -100'000
+                  && injected->restored.filterHighHz == 100'000
+                  && injected->restored.sampleRateHz == 2'400'000
+                  && injected->restored.extension.value("rfGain").toObject().value("gainDb").toInt() == 24,
+              "unseen identified dongle restores anonymous frequency mode passband rate and gain via family fallback");
+        check(unseen.featureExact(RadioStateMemory::featureName()).isEmpty(),
+              "effective restore alone does not create an exact identified row");
+
+        injected->live.rfFrequencyHz = 102'300'000.0;
+        RadioModelWakeTestAccess::pending(model);
+        next.serial = "rtl:9";
+        next.serialIdentity = {};
+        model.connectToRadio(next);
+        check(injected->restored.rfFrequencyHz == 100'100'000.0
+                  && model.settingsScope().radioId().isEmpty(),
+              "another anonymous locator restores the same shared family row");
+        check(unseen.featureExact(RadioStateMemory::featureName()).value("rfFrequencyHz").toDouble()
+                  == 102'300'000.0,
+              "identified pending save creates its own exact row");
+        next.serial = "789";
+        next.serialIdentity = {"789", false};
+        model.connectToRadio(next);
+        check(injected->restored.rfFrequencyHz == 102'300'000.0,
+              "exact identified OperatingState overrides the anonymous family row");
+
+        injected->live.rfFrequencyHz = 103'400'000.0;
+        RadioModelWakeTestAccess::pending(model);
+        next.serial = "rtl:10";
+        next.serialIdentity = {"789", true};
+        model.connectToRadio(next);
+        check(model.settingsScope().radioId() == "789"
+                  && injected->request.serial == "rtl:10"
+                  && injected->request.serialIdentity.reportedSerial == "789"
+                  && injected->request.serialIdentity.indexLocator
+                  && injected->restored.rfFrequencyHz == 103'400'000.0,
+              "duplicate reported serial shares exact saved state while retaining index-locator provenance");
+
+        // RtlSlices is not the active runtime owner in F3a. Test its approved
+        // fallback and precedence separately, using the actual model scopes.
+        check(RtlSliceSettings(family).patch(100'100'000, 2'400'000, {slice(0, 100'100'000)}),
+              "anonymous RtlSlices family document written through owner");
+        RtlSliceSettings modelOwner(model.settingsScope());
+        check(modelOwner.load().document.slices.value(0).frequencyHz == 100'100'000,
+              "reported serial with no exact RtlSlices inherits anonymous family document");
+        check(modelOwner.patch(103'400'000, 2'400'000, {slice(0, 103'400'000)}),
+              "reported-serial RtlSlices exact document written through model scope");
+        check(modelOwner.load().document.slices.value(0).frequencyHz == 103'400'000
+                  && RtlSliceSettings(family).load().document.slices.value(0).frequencyHz == 100'100'000,
+              "exact RtlSlices overrides family without changing shared document");
+        next.serial = "789";
+        next.serialIdentity = {"789", false};
+        model.connectToRadio(next);
+        check(RtlSliceSettings(model.settingsScope()).load().document.slices.value(0).frequencyHz
+                  == 103'400'000,
+              "duplicate and original reported serial share the same exact RtlSlices document");
+        check(index.featureExact(RadioStateMemory::featureName()) == legacy()
+                  && index.featureExact(feature).isEmpty(),
+              "old locator row stays preserved and unclaimed after all model saves and swaps");
     }
     return failures == 0 ? 0 : 1;
 }
