@@ -1,4 +1,5 @@
 #include "WeatherRadarTileLayer.h"
+#include "WeatherRadarStyle.h"
 
 #include <algorithm>
 
@@ -15,7 +16,7 @@ WeatherRadarTileLayer::WeatherRadarTileLayer()
     setVisibleZoomLayersAboveCurrent(3);
     setTransparentFallbackEnabled(true);
     setHorizontalWrapEnabled(true);
-    setOpacity(0.78);
+    setOpacity(kWeatherRadarOpacity);
     m_readinessTimer.setInterval(25);
     connect(&m_readinessTimer, &QTimer::timeout, this, [this] {
         const int pending = pendingRequestCount();

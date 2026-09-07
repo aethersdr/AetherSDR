@@ -5,6 +5,7 @@
 #include "MapPathBatchItem.h"
 #include "MapTerminatorItem.h"
 #include "WeatherRadarPlaybackItem.h"
+#include "WeatherRadarStyle.h"
 #include "WeatherRadarTileLayer.h"
 #include "WeatherRadarWorldWrap.h"
 #include "core/ThemeManager.h"
@@ -46,7 +47,6 @@ namespace AetherSDR {
 Q_LOGGING_CATEGORY(lcFlatMapRendering, "aether.map.flat.rendering")
 
 namespace {
-constexpr double kWeatherRadarOpacity = 0.78;
 constexpr int kWeatherRadarTransitionMs = 260;
 // Initial view when no home position is known yet: whole world.
 const QGV::GeoRect kWorldRect{ 70.0, -170.0, -60.0, 170.0 };

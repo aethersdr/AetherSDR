@@ -2,6 +2,7 @@
 
 #include "MapHoverPathSelection.h"
 #include "SolarTerminator.h"
+#include "WeatherRadarStyle.h"
 #include "WeatherRadarTexture.h"
 #include "core/ThemeManager.h"
 
@@ -637,7 +638,7 @@ void GlobeMapView::paintGL()
             m_radarProgram->setUniformValue("matrix", matrix);
             m_radarProgram->setUniformValue("atlas", 0);
             m_radarProgram->setUniformValue("previousAtlas", 1);
-            m_radarProgram->setUniformValue("opacity", 0.78F);
+            m_radarProgram->setUniformValue("opacity", float(kWeatherRadarOpacity));
             m_radarProgram->setUniformValue(
                 "transitionBlend", m_weatherRadarTransitionProgress);
             m_radarProgram->setUniformValue(
