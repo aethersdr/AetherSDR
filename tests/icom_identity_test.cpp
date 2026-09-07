@@ -143,11 +143,15 @@ int main(int argc, char** argv)
                                             false, {});
     });
     QObject::connect(&audio, &AudioEngine::txFinalMonitorPcmReady,
-                     [&](const QByteArray& pcm, bool clientLeveled) {
-        check(pcm.size() == 1920 && clientLeveled, "TCI stereo PCM reaches the backend seam intact");
+                     [&](const QByteArray& pcm, TxAudioSource source) {
+        // TCI audio is ClientLeveled: its sender owns the level. The check is
+        // now on the source rather than on a bool, which also pins that the
+        // three-way split did not quietly reclassify the TCI path.
+        check(pcm.size() == 1920 && source == TxAudioSource::ClientLeveled,
+              "TCI stereo PCM reaches the backend seam intact");
         ++audioFrames;
         // The real Icom submission gate must drop this while unkeyed.
-        backend.submitTxAudio(pcm, 24000, clientLeveled);
+        backend.submitTxAudio(pcm, 24000, source);
     });
     const QByteArray pcm(960 * sizeof(float), '\0');
     for (const QString& name : {QStringLiteral("Shack portable"), QStringLiteral("IC-7300MK2"),
