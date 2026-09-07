@@ -68,6 +68,7 @@ void testCapabilitiesAreReceiveOnly()
 {
     SimBackend sim;
     const RadioCapabilities caps = sim.capabilities();
+    report("demo does not advertise independent slice creation", !caps.canCreateSlices);
     report("capabilities family is 'sim'", caps.family == QStringLiteral("sim"));
     report("a demo radio cannot transmit (Principle VI)", !caps.canTransmit);
     report("TX power is zero when RX-only", caps.txPowerMaxWatts == 0.0);

@@ -278,6 +278,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.manufacturer = QStringLiteral("Icom");
     c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
 
+    c.canCreateSlices = false;
     c.maxSlices = m.receivers;
     c.maxPanadapters = m.hasScope ? m.receivers : 0;
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);

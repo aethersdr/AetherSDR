@@ -1436,6 +1436,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // maxSlices") is what this closes.
     const int ceiling = m_connected ? receiverCeiling()
                                     : std::max(1, m_ids.size());
+    c.canCreateSlices = false;
     c.maxSlices = ceiling;
     c.maxPanadapters = ceiling;
     for (const int rate : kIqSampleRatesHz)

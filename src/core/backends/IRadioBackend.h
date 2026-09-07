@@ -310,6 +310,30 @@ public:
     // a single answer.
     virtual void setActiveSlice(int sliceId) { Q_UNUSED(sliceId); }
 
+    // ---- ordinary receive-slice lifecycle ----
+    // panId is backend-owned and opaque; frequencyHz is absolute RF in Hz.
+    // True accepts ownership of a request, not confirmation of a new/removed
+    // slice. Publish confirmed state through sliceChanged / sliceRemoved;
+    // report a later failure through sliceLifecycleFailed. A false return is
+    // final refusal: callers must never fall back to another command plane.
+    // Fixed/paired receiver topologies keep the default refusal. Flex and Sim
+    // retain RadioModel's existing command-plane adapter for these requests.
+    //
+    // A backend must cancel pending work on disconnect/reconnect and discard
+    // completions from retired sessions or receiver instances before emitting
+    // state/failure. Reused slice integers alone cannot identify pending work.
+    virtual bool createSlice(const QString& panId, double frequencyHz)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(frequencyHz);
+        return false;
+    }
+    virtual bool removeSlice(int sliceId)
+    {
+        Q_UNUSED(sliceId);
+        return false;
+    }
+
     // ---- panadapter lifecycle ----
     //
     // Bring up / tear down a panadapter (and, on a backend where a pan IS a
@@ -889,6 +913,11 @@ signals:
     // compared a slice count that never fell against maxSlices() and reported
     // "Slice capacity is full" on a radio with one receiver running.
     void sliceRemoved(int sliceId);
+    // Failure of an accepted ordinary lifecycle request. operation is "create"
+    // or "remove"; sliceId is -1 when creation never allocated a published ID.
+    // This is diagnostic, not a state delta or a split/TX completion protocol.
+    void sliceLifecycleFailed(const QString& operation, int sliceId,
+                              const QString& reason);
     void meterUpdate(const QString& meterId, double value);
 
     // Normalized transmit-status delta (aetherd RFC 2.3 — TransmitModel

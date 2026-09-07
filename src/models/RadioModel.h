@@ -836,9 +836,11 @@ public:
                        std::chrono::steady_clock::time_point scheduledAt = {});
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
-    void addSlice();           // Create a new slice on the active panadapter
-    void addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
-    void addSliceOnPan(const QString& panId, double freqMhz); // Create slice on specific pan/frequency
+    bool addSlice();           // Create a new slice on the active panadapter
+    bool addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
+    bool addSliceOnPan(const QString& panId, double freqMhz);
+    // Ordinary RX close. Confirmation is sliceRemoved, never this return value.
+    bool removeSlice(int sliceId);
     void createPanadapter();   // Create a new independent panadapter
     void removePanadapter(const QString& panId);
     void setPanBandwidth(double bandwidthMhz);
@@ -1145,6 +1147,8 @@ signals:
     // Emitted when the radio rejects a slice create command (e.g. limit reached across
     // all Multi-Flex clients — our local slice count may be below maxSlices()).
     void sliceCreateFailed(int limit, const QString& model);
+    void sliceLifecycleFailed(const QString& operation, int sliceId,
+                              const QString& reason);
     // Emitted when a pan needs xpixels/ypixels pushed (after profile change, reconnect, etc.)
     void panDimensionsNeeded(const QString& panId);
     // Emitted when the radio reports its antenna list (e.g. "ANT1,ANT2,RX_A,RX_B").
@@ -1652,17 +1656,23 @@ public:
         }
     }
 
-    // Install a backend directly, bypassing buildBackend()'s family wiring.
-    //
-    // The DSP read-back path — AutomationServer's `get dsp` — needs exactly one
-    // thing from this model: backend()->dspChains(). Reaching it through
-    // buildBackend() would mean constructing a real family backend, i.e. a wire
-    // object and its I/O thread, inside a test whose whole point is that it
-    // opens no socket. Takes ownership. Nothing in production calls this; the
-    // family string is set alongside because the read-back reports it.
+    // Install a socket-free backend with the same normalized receiver-state
+    // bindings used by production. Replacement drops old session models.
     void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // Replace only the ordinary lifecycle command transport, including replies.
+    // Tests can pin Flex/Sim encoding without constructing a wire object/peer.
+    void setSliceLifecycleCommandSinkForTest(
+        std::function<bool(const QString&, ResponseCallback)> sink)
+    {
+        m_sliceLifecycleCommandSinkForTest = std::move(sink);
+    }
 
 private:
+    friend class RadioModelSliceLifecycleTestAccess;
+    void wireBackendReceiverState();
+    bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
+    quint64 m_backendReceiverGeneration = 0;
+    std::function<bool(const QString&, ResponseCallback)> m_sliceLifecycleCommandSinkForTest;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Connect a slice's operator-issued AUDIO and TX-slice intents to the
     // backend seam. Must be called from EVERY site that constructs a

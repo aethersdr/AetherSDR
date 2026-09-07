@@ -7125,10 +7125,15 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
 
         bool okF = false;
         const double freq = arg.toDouble(&okF);
-        if (okF && freq > 0)
-            radio->addSliceOnPan(radio->panId(), freq);   // specific frequency
-        else
-            radio->addSlice();                            // default (TX freq / active pan)
+        if (!arg.isEmpty() && (!okF || !std::isfinite(freq) || freq <= 0.0)) {
+            return err(QStringLiteral("slice add requires a finite positive frequency in MHz"));
+        }
+        const bool accepted = arg.isEmpty()
+            ? radio->addSlice()
+            : radio->addSliceOnPan(radio->panId(), freq);
+        if (!accepted) {
+            return err(QStringLiteral("refused: radio did not accept slice creation"));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("add")},
                            {QStringLiteral("freq"), okF ? QJsonValue(freq) : QJsonValue()},
                            {QStringLiteral("requested"), true},
@@ -7143,12 +7148,9 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(QStringLiteral("refused: cannot remove the last slice"));
         if (!radio->slice(id))
             return err(QStringLiteral("no slice with id ") + arg);
-        // `slice remove` is Flex wire text and no seam verb exists for it yet
-        // — refuse rather than report ok for a command the model will drop
-        // (M0, #5263).
-        if (!radio->hasCommandPlane())
-            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
-        radio->sendCommand(QStringLiteral("slice remove %1").arg(id));
+        if (!radio->removeSlice(id)) {
+            return err(QStringLiteral("refused: radio did not accept slice removal"));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("remove")},
                            {QStringLiteral("id"), id}};
     }

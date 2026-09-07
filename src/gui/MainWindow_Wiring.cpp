@@ -5268,12 +5268,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::sliceCloseRequested,
             this, [this](int sliceId) {
-        if (m_radioModel.slices().size() <= 1) return;
-        if (SliceModel* slice = m_radioModel.slice(sliceId);
-            centerLockActiveForSlice(slice)) {
-            clearCenterLockForPan(slice->panId(), true);
+        // onSliceRemoved clears center lock only after authoritative removal.
+        // A refused or pending request must leave the current receiver intact.
+        if (!m_radioModel.removeSlice(sliceId)) {
+            statusBar()->showMessage(tr("Radio did not accept slice removal"), 4000);
         }
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
     });
     connect(sw, &SpectrumWidget::sliceCreateRequested,
             this, [this, applet](double freqMhz) {
@@ -5686,12 +5685,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         syncKiwiSdrDiversityEscControls();
     });
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
-        if (m_radioModel.slices().size() <= 1) return;
-        if (SliceModel* slice = m_radioModel.slice(sliceId);
-            centerLockActiveForSlice(slice)) {
-            clearCenterLockForPan(slice->panId(), true);
+        // onSliceRemoved clears center lock only after authoritative removal.
+        // A refused or pending request must leave the current receiver intact.
+        if (!m_radioModel.removeSlice(sliceId)) {
+            statusBar()->showMessage(tr("Radio did not accept slice removal"), 4000);
         }
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
     });
     connect(w, &VfoWidget::stepTuneRequested, this, [this, sliceId](double mhz) {
         if (auto* sl = m_radioModel.slice(sliceId))

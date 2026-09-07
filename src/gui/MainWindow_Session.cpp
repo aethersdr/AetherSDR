@@ -931,6 +931,10 @@ void MainWindow::wireRadioModel()
             QString("%1 supports a maximum of %2 panadapters")
                 .arg(model).arg(limit), 4000);
     });
+    connect(&m_radioModel, &RadioModel::sliceLifecycleFailed, this,
+            [this](const QString& operation, int, const QString& reason) {
+        statusBar()->showMessage(tr("Slice %1 failed: %2").arg(operation, reason), 6000);
+    });
     connect(&m_radioModel, &RadioModel::sliceCreateFailed,
             this, [this](int limit, const QString& model) {
         statusBar()->showMessage(

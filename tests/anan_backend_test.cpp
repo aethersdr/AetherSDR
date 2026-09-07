@@ -89,6 +89,7 @@ int main(int argc, char** argv)
     {
         AnanBackend backend;
         const RadioCapabilities c = backend.capabilities();
+        check(!c.canCreateSlices, "ANAN fixed receiver does not expose independent slice creation");
         check(c.family == QStringLiteral("anan"), "family is anan");
         check(c.model == QStringLiteral("ANAN-G2"), "model is ANAN-G2");
         check(c.maxSlices == 1 && c.maxPanadapters == 1, "single slice, single pan in this phase");

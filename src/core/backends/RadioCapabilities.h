@@ -118,6 +118,10 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
+    // Independent slice creation on an existing pan through RadioModel,
+    // including its legacy Flex command-plane adapter. Separate from capacity:
+    // a paired receiver/pan topology can support several slices but not this.
+    bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
