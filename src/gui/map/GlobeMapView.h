@@ -155,7 +155,7 @@ private:
     void scheduleAtlasUpload();
     void uploadAtlas();
     void uploadWeatherRadarAtlas();
-    void uploadPendingWeatherRadarPlaybackPair();
+    void uploadPendingWeatherRadarPlaybackFrame();
     void uploadPreloadedWeatherRadarAtlas();
     int detailZoomLevel() const;
     void refreshDetailTiles(const QMatrix4x4& model,
@@ -197,30 +197,24 @@ private:
     std::unique_ptr<QOpenGLTexture> m_previousRadarTexture;
     std::unique_ptr<QOpenGLTexture> m_preloadedRadarTexture;
     std::unique_ptr<QOpenGLTexture> m_spareRadarTexture;
-    std::unique_ptr<QOpenGLTexture> m_loopSecondRadarTexture;
     QOpenGLBuffer m_vertexBuffer{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer m_indexBuffer{QOpenGLBuffer::IndexBuffer};
     int m_indexCount{0};
 
     QImage m_atlas;
     QImage m_weatherRadarAtlas;
-    QImage m_pendingPreviousPlaybackRadarAtlas;
     QImage m_pendingCurrentPlaybackRadarAtlas;
     QImage m_preloadedWeatherRadarAtlas;
     QImage m_pendingWeatherRadarAtlas;
     bool m_weatherRadarLoadFailed{false};
     QDateTime m_previousRadarTextureFrameTime;
     QDateTime m_radarTextureFrameTime;
-    QDateTime m_pendingPreviousPlaybackFrameTime;
     QDateTime m_pendingCurrentPlaybackFrameTime;
     QDateTime m_preloadedWeatherRadarFrameTime;
     // Pixel identity travels with each texture, not with its reusable storage.
     // Time/extent/size alone cannot distinguish a replacement image.
     qint64 m_radarTextureImageKey{0};
-    qint64 m_previousRadarTextureImageKey{0};
     qint64 m_preloadedRadarImageKey{0};
-    QDateTime m_loopFirstRadarFrameTime;
-    QDateTime m_loopSecondRadarFrameTime;
     WeatherRadarSource m_weatherRadarSource;
     QString m_pendingWeatherRadarFrameId;
     QString m_loadedWeatherRadarFrameId;
@@ -239,19 +233,17 @@ private:
     QTimer m_weatherRadarPlaybackViewTimer;
     bool m_atlasDirty{false};
     bool m_weatherRadarAtlasDirty{false};
-    bool m_pendingWeatherRadarPlaybackPairDirty{false};
+    bool m_pendingWeatherRadarPlaybackFrameDirty{false};
     bool m_replaceWeatherRadarTexture{false};
     bool m_preloadedWeatherRadarAtlasDirty{false};
     int m_preloadedWeatherRadarUploadRow{0};
     QVector4D m_weatherRadarTextureBounds{0.0F, 0.0F, 1.0F, 1.0F};
     QVector4D m_previousRadarTextureBounds{0.0F, 0.0F, 1.0F, 1.0F};
     QVector4D m_preloadedRadarTextureBounds{0.0F, 0.0F, 1.0F, 1.0F};
-    QVector4D m_loopRadarTextureBounds{0.0F, 0.0F, 1.0F, 1.0F};
     QVector4D m_pendingRadarTextureBounds{0.0F, 0.0F, 1.0F, 1.0F};
     float m_weatherRadarTransitionProgress{1.0F};
     quint64 m_pendingWeatherRadarPresentationSequence{0};
     bool m_releasePreviousRadarTextures{false};
-    bool m_releaseLoopSecondRadarTexture{false};
     bool m_releasePlaybackRadarTextures{false};
     bool m_detailSelectionDirty{true};
     bool m_glInitializationAttempted{false};

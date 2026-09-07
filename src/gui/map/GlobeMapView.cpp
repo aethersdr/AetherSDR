@@ -304,7 +304,6 @@ void GlobeMapView::cleanupOpenGlResources()
     m_previousRadarTexture.reset();
     m_preloadedRadarTexture.reset();
     m_spareRadarTexture.reset();
-    m_loopSecondRadarTexture.reset();
     if (m_vertexBuffer.isCreated()) {
         m_vertexBuffer.destroy();
     }
@@ -492,14 +491,8 @@ void GlobeMapView::paintGL()
         m_previousRadarTexture.reset();
         m_preloadedRadarTexture.reset();
         m_spareRadarTexture.reset();
-        m_loopSecondRadarTexture.reset();
         m_releasePreviousRadarTextures = false;
-        m_releaseLoopSecondRadarTexture = false;
         m_releasePlaybackRadarTextures = false;
-    }
-    if (m_releaseLoopSecondRadarTexture) {
-        m_loopSecondRadarTexture.reset();
-        m_releaseLoopSecondRadarTexture = false;
     }
     if (m_releasePreviousRadarTextures) {
         // Keep the full-globe texture as a reusable back buffer during
@@ -614,8 +607,8 @@ void GlobeMapView::paintGL()
     m_program->release();
 
     if (m_weatherRadarVisible && m_radarProgram != nullptr) {
-        if (m_pendingWeatherRadarPlaybackPairDirty) {
-            uploadPendingWeatherRadarPlaybackPair();
+        if (m_pendingWeatherRadarPlaybackFrameDirty) {
+            uploadPendingWeatherRadarPlaybackFrame();
         } else if (!m_weatherRadarPlaybackActive
                    && (m_weatherRadarAtlasDirty || m_radarTexture == nullptr)) {
             uploadWeatherRadarAtlas();
@@ -770,7 +763,6 @@ void GlobeMapView::uploadWeatherRadarAtlas()
         m_previousRadarTexture.reset();
         m_radarTexture = std::move(nextTexture);
         m_radarTextureImageKey = 0; // Live atlases are not playback observations.
-        m_previousRadarTextureImageKey = 0;
         m_previousRadarTextureFrameTime = {};
         m_radarTextureFrameTime = m_weatherRadarSource.frameTime();
         m_weatherRadarTextureBounds = m_pendingRadarTextureBounds;
@@ -820,7 +812,6 @@ void GlobeMapView::uploadWeatherRadarAtlas()
     }
     m_previousRadarTextureBounds = m_weatherRadarTextureBounds;
     m_radarTextureImageKey = 0;
-    m_previousRadarTextureImageKey = 0;
     m_weatherRadarTextureBounds = m_pendingRadarTextureBounds;
     m_previousRadarTextureFrameTime = hasCurrentFrame
         ? oldCurrentFrameTime : QDateTime{};
@@ -852,12 +843,11 @@ void GlobeMapView::uploadWeatherRadarAtlas()
     }
 }
 
-void GlobeMapView::uploadPendingWeatherRadarPlaybackPair()
+void GlobeMapView::uploadPendingWeatherRadarPlaybackFrame()
 {
-    if (!m_pendingWeatherRadarPlaybackPairDirty
-        || m_pendingPreviousPlaybackRadarAtlas.isNull()
+    if (!m_pendingWeatherRadarPlaybackFrameDirty
         || m_pendingCurrentPlaybackRadarAtlas.isNull()) {
-        m_pendingWeatherRadarPlaybackPairDirty = false;
+        m_pendingWeatherRadarPlaybackFrameDirty = false;
         return;
     }
 
@@ -867,9 +857,7 @@ void GlobeMapView::uploadPendingWeatherRadarPlaybackPair()
     std::unique_ptr<QOpenGLTexture> oldPrevious =
         std::move(m_previousRadarTexture);
     const QDateTime oldCurrentTime = m_radarTextureFrameTime;
-    const QDateTime oldPreviousTime = m_previousRadarTextureFrameTime;
     const QVector4D oldCurrentBounds = m_weatherRadarTextureBounds;
-    const QVector4D oldPreviousBounds = m_previousRadarTextureBounds;
 
     std::unique_ptr<QOpenGLTexture> nextCurrent;
     if (m_preloadedRadarTexture != nullptr
@@ -887,12 +875,6 @@ void GlobeMapView::uploadPendingWeatherRadarPlaybackPair()
                && radarTextureMatches(
                    oldCurrent, m_pendingCurrentPlaybackRadarAtlas)) {
         nextCurrent = std::move(oldCurrent);
-    } else if (m_previousRadarTextureImageKey == m_pendingCurrentPlaybackRadarAtlas.cacheKey()
-               && oldPreviousTime == m_pendingCurrentPlaybackFrameTime
-               && oldPreviousBounds == bounds
-               && radarTextureMatches(
-                   oldPrevious, m_pendingCurrentPlaybackRadarAtlas)) {
-        nextCurrent = std::move(oldPrevious);
     } else {
         nextCurrent = makeRadarTexture(
             m_pendingCurrentPlaybackRadarAtlas);
@@ -906,57 +888,24 @@ void GlobeMapView::uploadPendingWeatherRadarPlaybackPair()
         return;
     }
 
-    std::unique_ptr<QOpenGLTexture> nextPrevious;
-    if (m_pendingPreviousPlaybackFrameTime
-        != m_pendingCurrentPlaybackFrameTime) {
-        if (m_preloadedRadarTexture != nullptr
-            && !m_preloadedWeatherRadarAtlasDirty
-            && m_preloadedWeatherRadarFrameTime
-                == m_pendingPreviousPlaybackFrameTime
-            && m_preloadedRadarTextureBounds == bounds
-            && radarTextureMatches(
-                m_preloadedRadarTexture,
-                m_pendingPreviousPlaybackRadarAtlas)) {
-            nextPrevious = std::move(m_preloadedRadarTexture);
-        } else if (oldCurrentTime == m_pendingPreviousPlaybackFrameTime
-            && oldCurrentBounds == bounds
-            && radarTextureMatches(
-                oldCurrent, m_pendingPreviousPlaybackRadarAtlas)) {
-            nextPrevious = std::move(oldCurrent);
-        } else if (oldPreviousTime == m_pendingPreviousPlaybackFrameTime
-                   && oldPreviousBounds == bounds
-                   && radarTextureMatches(
-                       oldPrevious, m_pendingPreviousPlaybackRadarAtlas)) {
-            nextPrevious = std::move(oldPrevious);
-        } else {
-            nextPrevious = makeRadarTexture(
-                m_pendingPreviousPlaybackRadarAtlas);
-        }
-    }
-
     if (oldCurrent != nullptr) {
         m_spareRadarTexture = std::move(oldCurrent);
     } else if (oldPrevious != nullptr) {
         m_spareRadarTexture = std::move(oldPrevious);
     }
-    m_previousRadarTexture = std::move(nextPrevious);
+    m_previousRadarTexture.reset();
     m_radarTexture = std::move(nextCurrent);
     m_radarTextureImageKey = m_pendingCurrentPlaybackRadarAtlas.cacheKey();
-    m_previousRadarTextureImageKey = m_pendingPreviousPlaybackRadarAtlas.cacheKey();
-    m_previousRadarTextureFrameTime =
-        m_pendingPreviousPlaybackFrameTime;
+    m_previousRadarTextureFrameTime = {};
     m_radarTextureFrameTime = m_pendingCurrentPlaybackFrameTime;
     m_previousRadarTextureBounds = bounds;
     m_weatherRadarTextureBounds = bounds;
-    m_weatherRadarTransitionProgress = 0.0F;
+    m_weatherRadarTransitionProgress = 1.0F;
 
-    const QDateTime firstVisibleFrame =
-        m_pendingPreviousPlaybackFrameTime;
-    m_pendingPreviousPlaybackRadarAtlas = {};
+    const QDateTime firstVisibleFrame = m_pendingCurrentPlaybackFrameTime;
     m_pendingCurrentPlaybackRadarAtlas = {};
-    m_pendingPreviousPlaybackFrameTime = {};
     m_pendingCurrentPlaybackFrameTime = {};
-    m_pendingWeatherRadarPlaybackPairDirty = false;
+    m_pendingWeatherRadarPlaybackFrameDirty = false;
     m_weatherRadarAtlasDirty = false;
     m_replaceWeatherRadarTexture = false;
     m_preloadedWeatherRadarAtlas = {};
@@ -965,9 +914,8 @@ void GlobeMapView::uploadPendingWeatherRadarPlaybackPair()
     m_preloadedWeatherRadarAtlasDirty = false;
     m_preloadedWeatherRadarUploadRow = 0;
 
-    // The clock starts only after the exact source/target pair is resident.
-    // Keeping the old radar texture alive until this point prevents a blank
-    // presentation while a discontinuous loop pair is being installed.
+    // Start the clock only after the original observation is resident.
+    // Keep the old texture alive until then, including at loop restart.
     QTimer::singleShot(0, this, [this, firstVisibleFrame] {
         emit weatherRadarFrameLoaded(firstVisibleFrame);
     });
@@ -2025,15 +1973,12 @@ bool GlobeMapView::showWeatherRadarPlaybackFrame(
     }
     if (startingPlayback) {
         // Install the first original in paintGL; the live radar remains
-        // visible until it is resident. Identical source/target timestamps
-        // make the existing upload path allocate only one texture.
+        // visible until the replacement and its bounds are resident.
         m_weatherRadarSource = WeatherRadarSource::historicalNoaaFrame(frameTime);
-        m_pendingPreviousPlaybackRadarAtlas = image;
         m_pendingCurrentPlaybackRadarAtlas = image;
-        m_pendingPreviousPlaybackFrameTime = frameTime;
         m_pendingCurrentPlaybackFrameTime = frameTime;
         m_pendingRadarTextureBounds = textureBounds;
-        m_pendingWeatherRadarPlaybackPairDirty = true;
+        m_pendingWeatherRadarPlaybackFrameDirty = true;
         m_replaceWeatherRadarTexture = false;
         update();
     } else {
@@ -2074,7 +2019,7 @@ void GlobeMapView::preloadWeatherRadarPlaybackFrame(
             && textureBounds == m_preloadedRadarTextureBounds
             && (m_preloadedWeatherRadarAtlasDirty
                 || radarTextureMatches(m_preloadedRadarTexture, image)))
-        || (m_pendingWeatherRadarPlaybackPairDirty
+        || (m_pendingWeatherRadarPlaybackFrameDirty
             && image.cacheKey() == m_pendingCurrentPlaybackRadarAtlas.cacheKey()
             && frameTime == m_pendingCurrentPlaybackFrameTime
             && textureBounds == m_pendingRadarTextureBounds)) {
@@ -2094,15 +2039,11 @@ void GlobeMapView::clearWeatherRadarPlayback()
     m_weatherRadarTransition->stop();
     m_pendingWeatherRadarPresentationSequence = 0;
     m_weatherRadarPlaybackActive = false;
-    m_pendingWeatherRadarPlaybackPairDirty = false;
+    m_pendingWeatherRadarPlaybackFrameDirty = false;
     m_replaceWeatherRadarTexture = false;
-    m_pendingPreviousPlaybackRadarAtlas = {};
     m_pendingCurrentPlaybackRadarAtlas = {};
-    m_pendingPreviousPlaybackFrameTime = {};
     m_pendingCurrentPlaybackFrameTime = {};
     m_previousRadarTextureFrameTime = {};
-    m_loopFirstRadarFrameTime = {};
-    m_loopSecondRadarFrameTime = {};
     m_releasePlaybackRadarTextures = true;
     m_preloadedWeatherRadarAtlas = {};
     m_preloadedWeatherRadarFrameTime = {};

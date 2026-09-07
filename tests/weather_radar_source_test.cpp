@@ -646,27 +646,6 @@ int main()
                      && cadenceAfterBoundary.progress > 0.0,
                  "a queued acknowledgement at a NOAA knot must advance one frame without a dwell or double step");
 
-    const QVector<int> unalignedDurations{450, 450, 900};
-    const qint64 exactUnalignedKnot =
-        AetherSDR::weatherRadarPlaybackClampToLoopBoundary(
-            448, 464, unalignedDurations, 1000);
-    const AetherSDR::WeatherRadarPlaybackPosition exactKnotPosition =
-        AetherSDR::weatherRadarPlaybackPosition(
-            exactUnalignedKnot, 4, unalignedDurations, 1000);
-    ok &= expect(exactUnalignedKnot == 464
-                     && exactKnotPosition.fromIndex == 1
-                     && exactKnotPosition.toIndex == 2
-                     && exactKnotPosition.progress > 0.0
-                     && AetherSDR::weatherRadarPlaybackClampToLoopBoundary(
-                            exactUnalignedKnot, 466,
-                            unalignedDurations, 1000) == 466,
-                 "a presentation step must retain its full advance across an interior NOAA timestamp");
-    ok &= expect(AetherSDR::weatherRadarPlaybackClampToLoopBoundary(
-                     1792, 1808, unalignedDurations, 1000) == 1800
-                     && AetherSDR::weatherRadarPlaybackClampToLoopBoundary(
-                         2792, 2808, unalignedDurations, 1000) == 2800,
-                 "the final observation and loop restart must still have exact boundaries");
-
     AetherSDR::WeatherRadarPlaybackCadence missingFrameCadence;
     missingFrameCadence.reset(2800, 0);
     const std::optional<qint64> missingFrameElapsed =

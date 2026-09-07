@@ -168,10 +168,8 @@ inline QSet<int> weatherRadarPlaybackDecodedWindow(
         || lookahead < 2) {
         return indexes;
     }
-    // Keep the preceding observation for a seamless loop boundary plus the
-    // complete active pair and its forward look-ahead. In particular, the
-    // source of the pair being painted must not be evicted while that pair is
-    // still interpolating.
+    // Keep the displayed observation, its predecessor, and forward lookahead.
+    // A pending upload must not evict the original still on screen.
     for (int offset = -1; offset < lookahead; ++offset) {
         indexes.insert((fromIndex + offset + frameCount) % frameCount);
     }
@@ -221,45 +219,6 @@ inline QVector<int> weatherRadarPlaybackSegmentDurations(
         durations.append(std::max(1, qRound(static_cast<double>(gap) * scale)));
     }
     return durations;
-}
-
-// Only the loop's final observation needs an exact presentation/hold. Interior
-// observations are continuous knots, not stops: snapping 448->464 to 450 throws
-// away 14 ms and produces a short step once per NOAA frame.
-inline qint64 weatherRadarPlaybackClampToLoopBoundary(
-    qint64 presentedElapsedMs, qint64 candidateElapsedMs,
-    const QVector<int>& segmentDurationsMs, int loopPauseMs)
-{
-    if (presentedElapsedMs < 0 || candidateElapsedMs <= presentedElapsedMs
-        || segmentDurationsMs.isEmpty() || loopPauseMs < 0) {
-        return candidateElapsedMs;
-    }
-    qint64 forwardDuration = 0;
-    for (const int duration : segmentDurationsMs) {
-        if (duration <= 0) {
-            return candidateElapsedMs;
-        }
-        forwardDuration += duration;
-    }
-    const qint64 cycleDuration = forwardDuration + loopPauseMs;
-    if (cycleDuration <= 0) {
-        return candidateElapsedMs;
-    }
-
-    const qint64 cycleBase =
-        (presentedElapsedMs / cycleDuration) * cycleDuration;
-    const qint64 presentedPhase = presentedElapsedMs - cycleBase;
-    const qint64 finalObservation = cycleBase + forwardDuration;
-    if (forwardDuration > presentedPhase
-        && finalObservation <= candidateElapsedMs) {
-        return finalObservation;
-    }
-    const qint64 cycleBoundary = cycleBase + cycleDuration;
-    if (cycleBoundary > presentedElapsedMs
-        && cycleBoundary <= candidateElapsedMs) {
-        return cycleBoundary;
-    }
-    return candidateElapsedMs;
 }
 
 // Samples the whole radar loop from one monotonic clock. Segment durations

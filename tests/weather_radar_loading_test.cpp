@@ -159,11 +159,14 @@ protected:
 class WeatherRadarLoadingTest final : public QObject {
     Q_OBJECT
 private:
-    static void prepare(MapDisplayWidget& map, ControlledRadarNetwork& network, int count = 6)
+    static void prepare(MapDisplayWidget& map, ControlledRadarNetwork& network,
+                        int count = 6, bool nativeFlat = false)
     {
         map.m_weatherRadarNetwork = &network;
         QGVMap* flat = map.m_flatView->findChild<QGVMap*>();
-        flat->geoView()->setViewport(new QWidget()); // Production raster fallback.
+        if (!nativeFlat) {
+            flat->geoView()->setViewport(new QWidget()); // Production raster fallback.
+        }
         map.resize(600, 400);
         map.show();
         QCoreApplication::processEvents();
@@ -506,6 +509,61 @@ private slots:
                 QVERIFY(map.m_weatherRadarDownloadFailed.contains(0));
             }
         }
+        map.stopWeatherRadarAnimation();
+        QGV::setNetworkManager(nullptr);
+    }
+
+    void flatControllerLoopRetainsEveryPaint()
+    {
+        if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
+            QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
+        }
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        MapDisplayWidget map;
+        map.m_weatherRadarHistoryHours = 4;
+        prepare(map, network, 18, true);
+        QOpenGLWidget* viewport = map.m_flatView->findChild<QOpenGLWidget*>();
+        QVERIFY(viewport != nullptr);
+        QTRY_VERIFY(viewport->isValid());
+        map.setWeatherRadarPlaybackSpeed(500);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!map.m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
+            if (ControlledRadarReply* reply = network.pending()) {
+                reply->complete(false, Qt::green);
+            }
+            QTest::qWait(10);
+        }
+        QTRY_COMPARE(map.weatherRadarPlaybackFrameCount(), 18);
+        QTRY_VERIFY(map.m_weatherRadarPresentedImageKey != 0);
+        map.m_weatherRadarFrameCache.clear();
+        int paints = 0;
+        int blanks = 0;
+        int restarts = 0;
+        int previousIndex = -1;
+        const QMetaObject::Connection capture = connect(
+            viewport, &QOpenGLWidget::aboutToCompose, &map, [&] {
+                viewport->makeCurrent();
+                QOpenGLFunctions* gl = viewport->context()->functions();
+                gl->glBindFramebuffer(GL_FRAMEBUFFER, viewport->defaultFramebufferObject());
+                GLubyte rgba[4]{};
+                gl->glReadPixels(qRound(viewport->width() * viewport->devicePixelRatioF() / 2),
+                    qRound(viewport->height() * viewport->devicePixelRatioF() / 2), 1, 1,
+                    GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+                ++paints;
+                if (rgba[1] < 150) {
+                    ++blanks;
+                }
+                if (map.m_weatherRadarFrameIndex == 0 && previousIndex > 0) {
+                    ++restarts;
+                }
+                previousIndex = map.m_weatherRadarFrameIndex;
+            });
+        QTRY_VERIFY_WITH_TIMEOUT(restarts >= 4, 20000);
+        disconnect(capture);
+        QVERIFY(paints > 30);
+        QCOMPARE(blanks, 0);
         map.stopWeatherRadarAnimation();
         QGV::setNetworkManager(nullptr);
     }
