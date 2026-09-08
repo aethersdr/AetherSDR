@@ -130,6 +130,12 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 
 ## Building from Source
 
+> **Qt 6.12 chrome development branch:** this branch requires Qt 6.12, currently
+> a preview SDK. The upstream release-build recipes below still describe Qt
+> 6.8.3; they do not build this branch unchanged. Use the isolated SDK recipe
+> in [Qt 6.12 window chrome](docs/qt612-window-chrome.md). Release CI and the
+> Windows/Linux packaging toolchains have deliberately not been migrated yet.
+
 ### Dependencies
 
 Install all dependencies for a full-featured build. Optional packages are noted — the build succeeds without them but the corresponding features are disabled.

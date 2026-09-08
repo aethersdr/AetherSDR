@@ -3947,6 +3947,7 @@ set_tests_properties(flex_control_dialog_size_test PROPERTIES
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
+    src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
 )
@@ -4379,6 +4380,13 @@ set_target_properties(unified_title_bar_test PROPERTIES AUTOMOC ON)
 add_test(NAME unified_title_bar_test COMMAND unified_title_bar_test)
 set_tests_properties(unified_title_bar_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+if(APPLE)
+    foreach(titlebar_target IN ITEMS unified_title_bar_test titlebar_headphone_mute_test hl2_pc_audio_lock_test)
+        target_sources(${titlebar_target} PRIVATE src/gui/mac/NativeWindowTitle.mm)
+        target_link_libraries(${titlebar_target} PRIVATE "-framework AppKit")
+    endforeach()
+endif()
 
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
 add_executable(icom_replay_test tests/icom_replay_test.cpp)

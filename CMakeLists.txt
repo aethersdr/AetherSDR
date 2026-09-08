@@ -176,49 +176,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
-# Qt6 components
-# Qt 6.8 minimum, matching the Qt every shipped artifact is built against:
-# the AppImage (both arches, .github/workflows/appimage.yml), the Windows
-# installer (check-windows pins 6.8.3 in ci.yml), and the Linux CI image
-# (.github/docker/Dockerfile installs 6.8.3 via aqt). One number, so a Qt API
-# that compiles in CI also compiles for a release build.
-#
-# Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
-# after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
-# CI image on Ubuntu 24.04's Qt 6.4.2, a release EOL upstream since the 6.4
-# series ended at 6.4.3. That gap rejected valid code (PR #4646, QList::assign)
-# while testing a Qt no artifact shipped.
-#
-# Consequence for source builds: Ubuntu 24.04's distro Qt (6.4.2) no longer
-# satisfies this — build against 6.8+ from aqt/Qt online installer, or use a
-# distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
-# 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
-# conditionally compiled out on Linux CI.
-#
-# Probe QUIET first so a below-floor Qt gets an actionable error instead of
-# CMake's bare "the version found is not compatible", which names neither the
-# floor as a project decision nor the way out. Ubuntu 24.04 LTS (Qt 6.4.2) is
-# the common case, it has the largest install base of any supported distro, and
-# it was a documented apt line here until this floor moved — so the people most
-# likely to hit this have the least context for it, and the README they need is
-# a document they have already scrolled past.
-#
-# Falls through untouched when Qt is absent entirely (the REQUIRED call below
-# emits the normal not-found error) or already satisfies the floor.
-find_package(Qt6 QUIET COMPONENTS Core)
-if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
-    message(FATAL_ERROR
-        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
-        "This is the Qt every AetherSDR release binary is built against.\n"
-        "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
-        "Fedora 41+ and Arch all ship 6.8 or newer.\n"
-        "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
-        "or the Qt online installer and re-run with "
-        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
-        "\"Building from Source\" dependency section.")
-endif()
-
-find_package(Qt6 6.8 REQUIRED COMPONENTS
+find_package(Qt6 6.12 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
@@ -2049,19 +2007,13 @@ endif()
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_link_libraries(AetherSDR PRIVATE dwmapi)
 endif()
 
 # macOS app bundle
 if(APPLE)
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
-    # Unified-title-bar chrome: the window is frameless on macOS too, so this
-    # restores the rounded corners, drop shadow and native edge resize that
-    # NSWindowStyleMaskBorderless gives up.  The traffic lights are ours
-    # (WindowCaptionButtons) — see gui/mac/WindowChrome.h for why keeping the
-    # real NSWindow title bar was tried and abandoned.
-    target_sources(AetherSDR PRIVATE src/gui/mac/WindowChrome.mm)
-    target_link_libraries(AetherSDR PRIVATE "-framework AppKit" "-framework QuartzCore")
+    target_sources(AetherSDR PRIVATE src/gui/mac/NativeWindowTitle.mm)
+    target_link_libraries(AetherSDR PRIVATE "-framework AppKit")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"

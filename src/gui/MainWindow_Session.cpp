@@ -76,6 +76,8 @@
 #include "core/AutomationServer.h"
 
 #include <QStatusBar>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -211,6 +213,9 @@ void MainWindow::refreshRadioTabs()
 
     const bool connected = m_radioModel.isConnected();
     const QString activeSerial = connected ? m_radioModel.serial() : QString();
+    const QJsonObject switcher = QJsonDocument::fromJson(AppSettings::instance()
+        .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+    const QJsonArray hidden = switcher.value(QStringLiteral("hiddenRadios")).toArray();
 
     QList<RadioTabEntry> tabs;
     QSet<QString> seen;
@@ -267,11 +272,18 @@ void MainWindow::refreshRadioTabs()
         entry.id = activeSerial;
         entry.name = m_radioModel.nickname().isEmpty() ? m_radioModel.model()
                                                        : m_radioModel.nickname();
+        entry.name = m_connPanel->radioDisplayName(m_radioModel.lastRadioInfo(), entry.name);
         entry.transport = QStringLiteral("Manual");
         entry.status = RadioTabStatus::Connected;
         tabs.prepend(entry);
     }
 
+    for (RadioTabEntry& entry : tabs) {
+        entry.canRename = entry.status == RadioTabStatus::Connected
+            || m_connPanel->canRenameRadio(entry.id);
+        entry.visibleInTabs = entry.status == RadioTabStatus::Connected
+            || !hidden.contains(entry.id);
+    }
     m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(tabs);
     m_titleBar->setActiveRadio(activeSerial);
@@ -508,9 +520,63 @@ void MainWindow::wireDiscovery()
                 return;   // already the active session — nothing to do
             }
             showConnectionDialog();
+            m_connPanel->selectRadio(radioId);
         });
         connect(m_titleBar, &TitleBar::connectManuallyRequested,
-                this, &MainWindow::showConnectionDialog);
+                this, [this]() {
+            showConnectionDialog();
+            m_connPanel->selectManualConnection();
+        });
+        connect(m_connPanel, &ConnectionPanel::radioNicknameChanged,
+                this, &MainWindow::scheduleRadioTabRefresh);
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
+                m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
+                this, [this](const QString& radioId, const QString& action) {
+            const bool active = m_radioModel.isConnected() && m_radioModel.serial() == radioId;
+            if (action == QStringLiteral("disconnect")) {
+                if (active) {
+                    emit m_connPanel->disconnectRequested();
+                }
+            } else if (action == QStringLiteral("rename")) {
+                if (m_connPanel->canRenameRadio(radioId)) {
+                    m_connPanel->renameRadio(radioId);
+                } else if (active && m_connPanel->canRenameRadio(m_radioModel.lastRadioInfo())) {
+                    m_connPanel->renameRadio(m_radioModel.lastRadioInfo());
+                } else if (active) {
+                    openRadioSetupPage(QStringLiteral("Radio"));
+                }
+            } else if (action == QStringLiteral("setup")) {
+                if (active) {
+                    openRadioSetupPage();
+                }
+            } else if (action == QStringLiteral("remove") || action == QStringLiteral("restore")) {
+                if (active && action == QStringLiteral("remove")) {
+                    return;
+                }
+                auto& settings = AppSettings::instance();
+                QJsonObject document = QJsonDocument::fromJson(settings
+                    .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+                QJsonArray hidden = document.value(QStringLiteral("hiddenRadios")).toArray();
+                QJsonArray updated;
+                for (const QJsonValue& serial : hidden) {
+                    if (serial.toString() != radioId) {
+                        updated.append(serial);
+                    }
+                }
+                if (action == QStringLiteral("remove")) {
+                    updated.append(radioId);
+                }
+                if (updated == hidden) {
+                    return;
+                }
+                document.insert(QStringLiteral("hiddenRadios"), updated);
+                settings.setValue("RadioSwitcher", QString::fromUtf8(
+                    QJsonDocument(document).toJson(QJsonDocument::Compact)));
+                settings.save();
+                scheduleRadioTabRefresh();
+            }
+        });
     }
     scheduleRadioTabRefresh();
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,

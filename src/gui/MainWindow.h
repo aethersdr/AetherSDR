@@ -322,10 +322,6 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
-#if defined(Q_OS_WIN)
-    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
-    void applyWindowsCustomFrame();
-#endif
 
 private slots:
     // Radio/connection events
@@ -775,7 +771,6 @@ private:
     // restoreGeometry() on this window, passing the same blob; a no-op off
     // Windows, without the custom frame, or for a maximized/fullscreen blob.
     // (#4328 — see src/gui/WindowGeometryRestore.h.)
-    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.

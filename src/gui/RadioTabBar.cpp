@@ -7,6 +7,9 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -22,6 +25,7 @@
 #include <QVariantList>
 #include <QWindow>
 #include <QtMath>
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -112,6 +116,7 @@ RadioTab::RadioTab(const RadioTabEntry& entry, QWidget* parent)
     : QAbstractButton(parent), m_entry(entry)
 {
     setObjectName(QStringLiteral("radioTab_") + entry.id);
+    setAccessibleIdentifier(objectName());
     setCheckable(true);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::StrongFocus);   // keyboard-reachable per the a11y contract
@@ -152,6 +157,7 @@ void RadioTab::setEntry(const RadioTabEntry& entry)
     }
     m_entry = entry;
     setObjectName(QStringLiteral("radioTab_") + entry.id);
+    setAccessibleIdentifier(objectName());
     refreshAccessibility();
     updateGeometry();
     update();
@@ -269,6 +275,9 @@ void RadioTab::paintEvent(QPaintEvent* ev)
                    theme.color(this, QStringLiteral("color.titlebar.tab.active.background")));
         p.setPen(QPen(theme.color(this, QStringLiteral("color.titlebar.tab.active.border")), 1));
         p.drawPath(shape);
+        p.setPen(QPen(theme.color(this, QStringLiteral("color.border.accent")), 2));
+        p.drawLine(QPointF(kTabRadius + 4, height() - 2),
+                   QPointF(width() - kTabRadius - 4, height() - 2));
     } else if (m_hovered || isDown()) {
         p.fillPath(shape, theme.color(this, QStringLiteral("color.titlebar.tab.hover")));
     }
@@ -385,6 +394,17 @@ public:
 
     QVBoxLayout* rows() const { return m_rows; }
     QWidget*     panel() const { return m_panel; }
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        if (event->key() == Qt::Key_Down || event->key() == Qt::Key_Up) {
+            focusNextPrevChild(event->key() == Qt::Key_Down);
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+    }
 
 private:
     QWidget*     m_panel{nullptr};
@@ -574,7 +594,14 @@ RadioTab* RadioTabBar::linkCarrierTab() const
             return tab;
         }
     }
-    return m_activeId.isEmpty() && !m_tabs.isEmpty() ? m_tabs.first() : nullptr;
+    if (m_activeId.isEmpty()) {
+        for (RadioTab* tab : m_tabs) {
+            if (tab->entry().visibleInTabs) {
+                return tab;
+            }
+        }
+    }
+    return nullptr;
 }
 
 void RadioTabBar::updateTabViewport(RadioTab* ensureVisible)
@@ -624,7 +651,16 @@ void RadioTabBar::setRadios(const QList<RadioTabEntry>& radios)
 
 void RadioTabBar::setDiscoveredRadios(const QList<RadioTabEntry>& radios)
 {
+    if (m_discovered == radios) {
+        return;
+    }
     m_discovered = radios;
+    if (isDiscoveryPopoverVisible()) {
+        const QLineEdit* search = m_popover->findChild<QLineEdit*>(QStringLiteral("radioSwitcherSearch"));
+        const QString query = search ? search->text() : QString();
+        showDiscoveryPopover();
+        m_popover->findChild<QLineEdit*>(QStringLiteral("radioSwitcherSearch"))->setText(query);
+    }
 }
 
 void RadioTabBar::setActiveRadio(const QString& id)
@@ -688,7 +724,7 @@ void RadioTabBar::applyActiveState()
     for (RadioTab* tab : std::as_const(m_tabs)) {
         const bool isActive = tab->entry().id == m_activeId;
         tab->setChecked(isActive);
-        tab->setVisible(!m_compact || tab == shown);
+        tab->setVisible(m_compact ? tab == shown : tab->entry().visibleInTabs);
     }
     if (m_addButton) {
         m_addButton->setVisible(!m_compact);
@@ -717,6 +753,7 @@ bool RadioTabBar::isDiscoveryPopoverVisible() const
 void RadioTabBar::showDiscoveryPopover()
 {
     if (m_popover) {
+        m_popover->hide();
         m_popover->deleteLater();
         m_popover = nullptr;
     }
@@ -735,62 +772,142 @@ void RadioTabBar::showDiscoveryPopover()
                        " font-weight: bold; }"));
     rows->addWidget(heading);
 
-    const QString monoTemplate = QStringLiteral(
-        "QLabel { color: {{color.text.secondary}};"
-        " background: {{color.background.1}};"
-        " font-family: \"{{font.family.mono}}\", \"JetBrains Mono\", monospace;"
-        " font-size: 10px; }");
+    auto* search = new QLineEdit(popover->panel());
+    search->setObjectName(QStringLiteral("radioSwitcherSearch"));
+    search->setAccessibleName(tr("Search radios"));
+    search->setPlaceholderText(tr("Search name, address, or status"));
+    search->setClearButtonEnabled(true);
+    ThemeManager::instance().applyStyleSheet(search, QStringLiteral(
+        "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}};"
+        " border: 1px solid {{color.border.strong}}; border-radius: 4px; padding: 7px; }"
+        "QLineEdit:focus { border-color: {{color.border.accent}}; }"));
+    rows->addWidget(search);
 
-    if (m_discovered.isEmpty()) {
-        auto* empty = new QLabel(QStringLiteral("No radios on the network"),
-                                 popover->panel());
-        ThemeManager::instance().applyStyleSheet(empty, monoTemplate);
-        empty->setContentsMargins(10, 4, 10, 4);
-        rows->addWidget(empty);
-    }
+    auto* scroller = new QScrollArea(popover->panel());
+    scroller->setObjectName(QStringLiteral("radioSwitcherScroller"));
+    scroller->setWidgetResizable(true);
+    scroller->setFrameShape(QFrame::NoFrame);
+    scroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* list = new QWidget(scroller);
+    ThemeManager::instance().applyStyleSheet(list, QStringLiteral(
+        "QWidget { background: {{color.background.1}}; }"));
+    auto* listLayout = new QVBoxLayout(list);
+    listLayout->setContentsMargins(0, 0, 0, 0);
+    listLayout->setSpacing(4);
+    scroller->setWidget(list);
+    rows->addWidget(scroller);
 
-    for (const RadioTabEntry& entry : std::as_const(m_discovered)) {
-        auto* row = new QPushButton(popover->panel());
-        row->setFlat(true);
-        row->setCursor(Qt::PointingHandCursor);
+    auto* empty = new QLabel(tr("No matching radios"), list);
+    empty->setObjectName(QStringLiteral("radioSwitcherEmpty"));
+    ThemeManager::instance().applyStyleSheet(empty, QStringLiteral(
+        "QLabel { background: {{color.background.1}}; color: {{color.text.secondary}}; padding: 10px; }"));
+    listLayout->addWidget(empty);
+
+    QList<RadioTabEntry> entries = m_discovered;
+    std::stable_sort(entries.begin(), entries.end(), [this](const RadioTabEntry& first, const RadioTabEntry& second) {
+        if ((first.id == m_activeId) != (second.id == m_activeId)) {
+            return first.id == m_activeId;
+        }
+        return first.name.localeAwareCompare(second.name) < 0;
+    });
+    QList<QWidget*> radioRows;
+    for (const RadioTabEntry& entry : entries) {
+        auto* container = new QWidget(list);
+        container->setProperty("radioSearchText", entry.name + ' ' + entry.transport
+            + ' ' + entry.id + ' ' + radioTabStatusText(entry.status));
+        auto* rowLayout = new QHBoxLayout(container);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(4);
+        auto* row = new QPushButton(container);
+        row->setObjectName(QStringLiteral("radioSwitcherRow_") + entry.id);
+        row->setAccessibleIdentifier(row->objectName());
         row->setFocusPolicy(Qt::StrongFocus);
+        row->setMinimumHeight(52);
+        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        QFont rowFont = ThemeManager::instance().font(row, QStringLiteral("font.family.ui"));
+        rowFont.setPixelSize(12);
+        row->setFont(rowFont);
+        const QString status = entry.transport + middleDot() + radioTabStatusText(entry.status);
+        const QFontMetrics metrics(rowFont);
+        row->setText(metrics.elidedText(entry.name, Qt::ElideRight, 240)
+            + '\n' + metrics.elidedText(status, Qt::ElideRight, 240));
+        row->setToolTip(entry.name + '\n' + status);
+        row->setAccessibleName(entry.name + QStringLiteral(", ") + status);
         ThemeManager::instance().applyStyleSheet(row, rowStyleTemplate());
-
-        auto* rowLayout = new QVBoxLayout(row);
-        rowLayout->setContentsMargins(10, 5, 10, 5);
-        rowLayout->setSpacing(1);
-
-        auto* name = new QLabel(entry.name, row);
-        ThemeManager::instance().applyStyleSheet(
-            name, QStringLiteral("QLabel { color: {{color.text.primary}};"
-                                 " background: {{color.background.1}}; font-size: 12px;"
-                                 " font-weight: bold; }"));
-        rowLayout->addWidget(name);
-
-        auto* transport = new QLabel(entry.transport, row);
-        ThemeManager::instance().applyStyleSheet(transport, monoTemplate);
-        rowLayout->addWidget(transport);
-
-        // Labels would otherwise eat the click meant for the button.
-        name->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        transport->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-
-        row->setAccessibleName(
-            QStringLiteral("%1, %2, %3")
-                .arg(entry.name, entry.transport, radioTabStatusText(entry.status)));
-
+        rowLayout->addWidget(row, 1);
         const QString id = entry.id;
         connect(row, &QPushButton::clicked, this, [this, id]() {
             if (m_popover) {
                 m_popover->close();
             }
-            // Same rule as a tab click: choosing a row is a request, not a
-            // connection.  The active tab follows the session, never the
-            // gesture that asked for it.
+            emit radioActionRequested(id, QStringLiteral("restore"));
             emit radioActivated(id);
         });
-        rows->addWidget(row);
+
+        auto* actions = new QToolButton(container);
+        actions->setObjectName(QStringLiteral("radioSwitcherActions_") + id);
+        actions->setAccessibleIdentifier(actions->objectName());
+        actions->setText(tr("Actions"));
+        actions->setAccessibleName(tr("Actions for %1").arg(entry.name));
+        actions->setFocusPolicy(Qt::StrongFocus);
+        actions->setPopupMode(QToolButton::InstantPopup);
+        actions->setFixedSize(72, 36);
+        ThemeManager::instance().applyStyleSheet(actions, QStringLiteral(
+            "QToolButton { background: {{color.background.1}}; color: {{color.text.primary}};"
+            " border: 1px solid {{color.border.strong}}; border-radius: 4px; padding: 4px; }"
+            "QToolButton:hover { background: {{color.background.2}}; }"
+            "QToolButton:focus { border-color: {{color.border.accent}}; }"));
+        auto* menu = new QMenu(actions);
+        menu->setObjectName(QStringLiteral("radioSwitcherMenu_") + id);
+        ThemeManager::instance().applyStyleSheet(menu, QStringLiteral(
+            "QMenu { background: {{color.background.1}}; color: {{color.text.primary}};"
+            " border: 1px solid {{color.border.strong}}; padding: 4px; }"
+            "QMenu::item { padding: 8px 18px; }"
+            "QMenu::item:selected { background: {{color.background.2}}; }"
+            "QMenu::item:disabled { color: {{color.text.disabled}}; }"
+            "QMenu::separator { height: 1px; background: {{color.border.strong}}; margin: 4px; }"));
+        auto addAction = [this, menu, id](const QString& label, const QString& action, bool enabled) {
+            QAction* item = menu->addAction(label);
+            item->setObjectName(QStringLiteral("radioSwitcher_") + action + '_' + id);
+            item->setEnabled(enabled);
+            if (action == QStringLiteral("remove")) {
+                item->setToolTip(tr("Hide this tab without deleting radio settings. Find it here again to restore it."));
+            }
+            connect(item, &QAction::triggered, this, [this, id, action]() {
+                if (m_popover) {
+                    m_popover->close();
+                }
+                emit radioActionRequested(id, action);
+            });
+        };
+        const bool connected = entry.status == RadioTabStatus::Connected;
+        addAction(tr("Disconnect"), QStringLiteral("disconnect"), connected);
+        addAction(tr("Rename\u2026"), QStringLiteral("rename"), entry.canRename);
+        addAction(tr("Radio setup\u2026"), QStringLiteral("setup"), connected);
+        menu->addSeparator();
+        addAction(entry.visibleInTabs ? tr("Remove from tabs") : tr("Add to tabs"),
+                  entry.visibleInTabs ? QStringLiteral("remove") : QStringLiteral("restore"),
+                  !connected);
+        actions->setMenu(menu);
+        rowLayout->addWidget(actions);
+        listLayout->addWidget(container);
+        radioRows.append(container);
     }
+    listLayout->addStretch();
+    auto filterRows = [radioRows, empty](const QString& query) {
+        bool found = false;
+        for (QWidget* row : radioRows) {
+            const bool matches = row->property("radioSearchText").toString()
+                .contains(query.trimmed(), Qt::CaseInsensitive);
+            row->setVisible(matches);
+            found = found || matches;
+        }
+        empty->setVisible(!found);
+    };
+    connect(search, &QLineEdit::textChanged, popover, filterRows);
+    filterRows(QString());
+    scroller->setFixedHeight(qBound(64, entries.size() * 56, 336));
+    popover->setFixedWidth(380);
 
     auto* separator = new QFrame(popover->panel());
     separator->setFrameShape(QFrame::HLine);
@@ -815,6 +932,12 @@ void RadioTabBar::showDiscoveryPopover()
     });
     rows->addWidget(manual);
 
+    auto* refresh = new QPushButton(tr("Rescan radios"), popover->panel());
+    refresh->setObjectName(QStringLiteral("radioSwitcherRescan"));
+    refresh->setAccessibleName(tr("Rescan radios"));
+    ThemeManager::instance().applyStyleSheet(refresh, rowStyleTemplate());
+    connect(refresh, &QPushButton::clicked, this, [this]() { emit rescanRequested(); });
+    rows->addWidget(refresh);
     popover->adjustSize();
 
     // Anchor under the "+" button, then clamp into the screen so a radio strip
@@ -824,16 +947,17 @@ void RadioTabBar::showDiscoveryPopover()
                            ? window()->windowHandle()->screen()
                            : nullptr) {
         const QRect avail = scr->availableGeometry();
+        popover->setFixedWidth(qMin(380, avail.width()));
+        scroller->setFixedHeight(qMin(scroller->height(), qMax(48, avail.height() - 190)));
+        popover->adjustSize();
         anchor.setX(qBound(avail.left(),
                            anchor.x(),
-                           avail.right() - popover->width()));
-        anchor.setY(qMin(anchor.y(), avail.bottom() - popover->height()));
+                           qMax(avail.left(), avail.right() - popover->width() + 1)));
+        anchor.setY(qBound(avail.top(), anchor.y(), qMax(avail.top(), avail.bottom() - popover->height() + 1)));
     }
     popover->move(anchor);
     popover->show();
-    if (!m_discovered.isEmpty()) {
-        popover->panel()->setFocus(Qt::TabFocusReason);
-    }
+    search->setFocus(Qt::PopupFocusReason);
 }
 
 QVariantMap RadioTabBar::state() const
@@ -853,6 +977,8 @@ QVariantMap RadioTabBar::state() const
             {QStringLiteral("statusLine"), tab->accessibleDescription()},
             {QStringLiteral("transport"), e.transport},
             {QStringLiteral("active"), tab->isChecked()},
+            {QStringLiteral("visible"), tab->isVisible()},
+            {QStringLiteral("visibleInTabs"), e.visibleInTabs},
             {QStringLiteral("linkCarrier"), tab->isLinkCarrier()},
             {QStringLiteral("accessibleName"), tab->accessibleName()},
         });
@@ -861,6 +987,8 @@ QVariantMap RadioTabBar::state() const
     QVariantList discovered;
     for (const RadioTabEntry& e : std::as_const(m_discovered)) {
         discovered.append(QVariantMap{
+            {QStringLiteral("visibleInTabs"), e.visibleInTabs},
+            {QStringLiteral("canRename"), e.canRename},
             {QStringLiteral("id"), e.id},
             {QStringLiteral("name"), e.name},
             {QStringLiteral("transport"), e.transport},

@@ -17,6 +17,7 @@ class QFrame;
 class QMenuBar;
 class QHBoxLayout;
 class QTimer;
+class QWindow;
 class QGraphicsOpacityEffect;
 class QPropertyAnimation;
 
@@ -26,21 +27,6 @@ class BrandMark;
 class PersistentDialog;
 class WindowCaptionButtons;
 
-// The unified title bar.  One 52 px strip owns the window controls, the brand
-// mark, the radio tabs, and the audio cluster; there is no second in-app title
-// strip on any platform.
-//
-// The window is frameless on every platform, so the controls are always ours;
-// only their shape and which side they sit on differ:
-//   * macOS   — traffic lights at the left, 12 px on a 20 px pitch. NOT the real
-//               NSWindow buttons: keeping the native title bar and painting into
-//               it was tried and abandoned (gui/mac/WindowChrome.h has the
-//               account). That file now only restores the corners, shadow and
-//               native edge resize a borderless NSWindow gives up.
-//   * Windows — Qt::FramelessWindowHint plus a WM_NCCALCSIZE'd frame; 46 px
-//               caption buttons at the right, answering HTMAXBUTTON so Snap
-//               Layouts opens on hover.
-//   * Linux   — chip-style controls at the left.
 class TitleBar : public QWidget {
     Q_OBJECT
 
@@ -94,9 +80,6 @@ public:
     void onHeartbeatLost();   // Call when radio lost from discovery
     void setDiscovering(bool active); // Solid amber while discovering / not yet connected
     void setMinimalMode(bool on);
-    // Windows needs this from nativeEvent(): the maximize control doubles as
-    // "leave minimal mode" there, and the WM_NC* path has to take the same
-    // branch this class takes on platforms where Qt still sees the click.
     bool isMinimalMode() const { return m_minimalMode; }
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
     // Set the flash color used while adaptive throttle is active (empty = restore green).
@@ -112,8 +95,6 @@ public:
     // own Qt::Window.
     void setAppletFloating(bool floating);
 
-    // Windows native hit-testing uses this to expose custom title-bar gaps
-    // as caption drag zones while keeping controls interactive.
     bool isSystemMoveAreaAt(const QPoint& globalPos) const;
 
     // ── Radio tabs ──────────────────────────────────────────────────────────
@@ -124,9 +105,6 @@ public:
     void setDiscoveredRadios(const QList<RadioTabEntry>& radios);
     RadioTabBar* radioTabBar() const { return m_radioTabs; }
 
-    // The caption controls, in whichever style this platform uses.  Windows'
-    // WM_NCHITTEST handler needs the maximize button's rect to answer
-    // HTMAXBUTTON for Snap Layouts.
     WindowCaptionButtons* captionButtons() const { return m_captionButtons; }
 
     // Introspection for the automation bridge (`titlebar` model): the whole
@@ -163,14 +141,15 @@ public:
 private:
     void markDragHandle(QWidget* widget);
     bool isDragHandle(QObject* obj) const;
-    bool startWindowMove(QMouseEvent* ev, bool useSystemMove = true);
-    bool continueWindowMove(QMouseEvent* ev);
-    bool finishWindowMove(QMouseEvent* ev);
+    bool startWindowMove(QMouseEvent* ev);
+    void updateChromeLayout();
+    bool m_updatingChromeLayout{false};
     void handleTitleDoubleClick(QMouseEvent* ev);
     void showFeatureRequestDialogImpl();
     void updatePcAudioToolTip();
     void applyPcAudioStyle();
     void applyBarStyle();
+    QPointer<QWindow> m_chromeWindow;
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
     BrandMark*   m_brand{nullptr};
@@ -201,11 +180,6 @@ private:
     QPointer<PersistentDialog> m_issueReporterDialog;
     QFrame*      m_dockSep{nullptr};
     bool         m_minimalMode{false};
-    bool         m_windowMoveActive{false};
-    bool         m_windowMoveUsesSystem{false};
-    QPoint       m_windowMovePressGlobal;
-    QPoint       m_windowMoveStartPos;
-
     // ── Radio-link (discovery heartbeat) state ──────────────────────────────
     // Rendered by the active radio tab's status dot; there is no separate
     // heartbeat lamp.  The animation lives in RadioTabBar, the state machine

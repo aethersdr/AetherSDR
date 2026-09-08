@@ -40,6 +40,13 @@ public:
     static constexpr int kPreferredHeight = 660;
 
     void setFramelessMode(bool on);
+    bool selectRadio(const QString& serial);
+    void selectManualConnection();
+    bool canRenameRadio(const QString& serial) const;
+    bool canRenameRadio(const RadioInfo& radio) const;
+    QString radioDisplayName(const RadioInfo& radio, const QString& fallback) const;
+    void renameRadio(const QString& serial);
+    void renameRadio(const RadioInfo& radio);
     void fitToScreen(QScreen* preferredScreen = nullptr);
     // Fit, then pull the frame back inside the work area without otherwise
     // moving the window. The placement-preserving counterpart to
@@ -125,6 +132,7 @@ signals:
     void disconnectRequested();
     void routedRadioFound(const RadioInfo& radio);
     void retryDiscoveryRequested();
+    void radioNicknameChanged();
     void networkDiagnosticsRequested();
     void smartLinkLoginRequested(const QString& email, const QString& password);
 

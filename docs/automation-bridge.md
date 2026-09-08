@@ -2708,8 +2708,9 @@ the radio tabs, the audio cluster, and the window controls on every platform.
    "audio":{"pcAudioEnabled":true,"pcAudioLocked":true,"lineoutMuted":false,
             "headphoneMuted":false,"masterVolume":100,"headphoneVolume":50,
             "masterText":"100","headphoneText":"50","sliderWidth":64},
-   "chrome":{"frameless":true,
-             "captionButtons":{"style":"macTrafficLights","close":{…},
+   "chrome":{"frameless":false,"nativeCaption":true,
+             "expandedClientArea":true,"qtVersion":"6.12.0",
+             "captionButtons":{"style":"shared","close":{…},
                                "minimize":{…},"maximize":{…}}},
    "txTimer":{…}}
 ```
@@ -2717,10 +2718,21 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 `offsetInWindow` is the distance from the top of the window to the top of the
 bar and **must be 0** — anything else means something is reserving a strip above
 the unified bar, which is the wasted top row this design exists to remove.
-`chrome.captionButtons.style` is `macTrafficLights`, `windows` or `linuxChips`;
-the window is frameless on all three platforms, so the controls are always the
-app's own. `radios.overflowing` reports whether the bounded tab viewport is
-currently clipping configured radios, and `radios.tabs[].linkCarrier` identifies
+`chrome.nativeCaption` identifies a system-decorated window. With expanded
+client-area support (Cocoa/Windows), Qt owns native window controls and the
+shared fallback caption widgets report `visible:false`. The fallback style
+is `shared`; Linux uses it when custom chrome is enabled. `qtVersion` is the
+actual runtime version, not the build-machine SDK version.
+`brand.rect` is `[x, y, width, height]` in title-bar coordinates.
+On macOS, `chrome.nativeCaptionRect` is the union of visible native caption
+buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
+With expanded chrome, check that the brand begins 16 logical pixels after the
+native rectangle's right edge, unless a larger safe-area inset is required.
+The native controls and brand should share the 52-pixel bar's vertical center.
+`radios.overflowing` reports whether the bounded tab viewport is
+currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
+retained tab preference and `visible` is current widget visibility (which can
+also change in minimal mode). `radios.tabs[].linkCarrier` identifies
 the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
 `in use`, and `statusLine` is the text the tab actually renders — assert against
 that rather than the dot colour, since [status is never encoded by colour
@@ -2730,9 +2742,21 @@ guessing from a screenshot. A trailing property narrows the reply:
 `get titlebar height` → `{"value":52}`.
 
 ### `titlebar`
-Drive the title bar's own controls. Every action goes through the real widget,
-not the model behind it, so a passing call proves the control an operator
-clicks is reachable and wired.
+Drive the title bar's controls. Native-caption minimize/maximize/close actions
+use QWidget window operations; they do **not** prove a native traffic-light
+click, native hover menu, or Windows Snap Layouts. Those require native UI
+testing on the target OS.
+
+The radio switcher is also drivable with existing generic bridge verbs:
+`invoke radioSwitcherSearch setText <query>`,
+`invoke radioSwitcherActions_<radio-id> click`, then invoke the visible menu's
+`radioSwitcher_disconnect_<radio-id>`, `radioSwitcher_rename_<radio-id>`,
+`radioSwitcher_setup_<radio-id>`, or `radioSwitcher_remove_<radio-id>` action.
+Removed tabs offer `radioSwitcher_restore_<radio-id>`. These are widget/action
+targets, not new bridge verbs. `radioNicknameEditor` and `saveRadioNickname`
+exercise client-owned naming. Radio-owned naming uses Radio Setup instead.
+`connectManuallyRow` opens the IP connection page, and `radioSwitcherRescan`
+requests discovery without connecting. Inspect enabled states before invoking.
 
 ```json
 → {"cmd":"titlebar","action":"selectRadio","target":"1234-5678-9012-3456"}

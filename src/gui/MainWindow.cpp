@@ -27,7 +27,10 @@
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
 #include "WindowCaptionButtons.h"
-#include "mac/WindowChrome.h"
+#include "WindowChrome.h"
+#ifdef Q_OS_MACOS
+#include "mac/NativeWindowTitle.h"
+#endif
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #ifdef AETHER_ASR_ENABLED
@@ -262,7 +265,6 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <psapi.h>
-#include <dwmapi.h>   // DwmSetWindowAttribute — rounded corners on Win11
 #else
 #include <sys/resource.h>
 #ifdef Q_OS_MAC
@@ -608,21 +610,6 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 }
 
 // memoryRevealTargetMatches moved to MainWindow_Wiring.cpp (#3351 Phase 1d).
-
-#ifdef Q_OS_WIN
-bool mainWindowCustomFrameEnabled()
-{
-    return AppSettings::instance()
-        .value("FramelessWindow", "True").toString() == "True";
-}
-
-int windowsResizeBorderThickness(HWND hwnd)
-{
-    const UINT dpi = GetDpiForWindow(hwnd);
-    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
-        + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-}
-#endif
 
 // flexWheelModeForAction / flexControlButtonAction moved to
 // MainWindow_Controllers.cpp (#3351 Phase 1a) — only controller code calls them.
@@ -1154,53 +1141,15 @@ MainWindow::MainWindow(QWidget* parent)
             s.setValue("FramelessMigratedV0823", "True");
             s.save();
         }
-        if (s.value("FramelessWindow", "True").toString() == "True") {
-#ifndef Q_OS_WIN
-            // Every platform is frameless, macOS included: the unified 52 px bar
-            // is the window's only title bar and it is ours to draw.  Windows is
-            // the exception only because it keeps a real WS_THICKFRAME and
-            // removes the caption in WM_NCCALCSIZE instead.
-            //
-            // An earlier revision kept the real NSWindow title bar on macOS and
-            // painted the bar into the same strip.  AppKit's title-bar container
-            // sits above Qt's content view and owns the mouse there, so the top
-            // half of every control in the bar went dead and the brand and tabs
-            // rendered a row low — see gui/mac/WindowChrome.h for the full
-            // account of why that approach was abandoned.
-            setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
-#endif
-        }
+        WindowChrome::configure(this,
+            s.value("FramelessWindow", "True").toString() == "True");
 
-        // Theming layer-0 backdrop (Phase 5 PR 3 — "fade to desktop"
-        // experiment).  Disabling the default opaque window background
-        // lets MainWindow::paintEvent() honour color.background.app's
-        // alpha.  Today's installs see no visual change because the
-        // bundled themes ship the token fully opaque (#0f0f1a / #f5f5f8) —
-        // the architectural hook just lets operators dial alpha down
-        // through the Theme Editor to A/B test which applets/docks still
-        // need their own opaque backgrounds.
-        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAttribute(Qt::WA_TranslucentBackground, false);
         setAutoFillBackground(false);
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                 this, qOverload<>(&QWidget::update));
 
-        // 8-axis edge resize for frameless mode — same install pattern
-        // as the floating dialogs (SpotHub, RadioSetup, MemoryDialog).
-        // The filter is application-wide and matches by window, because
-        // MainWindow's direct children (QStatusBar, the central widget,
-        // QSizeGrip) are all native windows that would otherwise swallow
-        // every edge event before the top level saw it — see the
-        // FramelessResizer header (#4827). The 8 px band remains live on every
-        // Linux edge/corner; the title-bar content is vertically inset around
-        // it, and reliable compositors receive startSystemResize(). Windows
-        // answers its edges in WM_NCHITTEST instead. macOS restores
-        // NSWindowStyleMaskResizable in WindowChrome.mm, so AppKit owns native
-        // edge resizing and this filter must not intercept it. Stays installed
-        // across frameless toggles — when the system frame is back on, the
-        // platform owns resize and our filter no-ops.
-#ifndef Q_OS_MAC
         FramelessResizer::install(this, 8);
-#endif
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The
@@ -1533,9 +1482,6 @@ MainWindow::MainWindow(QWidget* parent)
     buildMenuBar();
     buildUI();
     loadCenterLockSettings();
-#ifdef Q_OS_WIN
-    applyWindowsCustomFrame();
-#endif
     registerShortcutActions();
 
     m_swrSweepTimer.setTimerType(Qt::PreciseTimer);
@@ -3515,14 +3461,6 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 // wireAetherDspWidget() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 void MainWindow::paintEvent(QPaintEvent* event)
 {
-    // Layer-0 app backdrop.  WA_TranslucentBackground (set in the
-    // constructor) disables Qt's default opaque window fill, so this
-    // paintEvent is the single source of pixels for any region the rest
-    // of the widget tree doesn't paint.  Honours alpha so operators can
-    // edit color.background.app down toward translucency and see the
-    // desktop bleed through anywhere a child widget doesn't have its own
-    // opaque background — useful for A/B testing which applets/docks
-    // still need explicit fills before a "glass-mode" theme is viable.
     QPainter p(this);
     const QColor bg = ThemeManager::instance().color("color.background.app");
     p.setCompositionMode(QPainter::CompositionMode_Source);
@@ -3534,18 +3472,9 @@ void MainWindow::paintEvent(QPaintEvent* event)
 void MainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
-
-    // macOS frameless trim — rounded corners, shadow, native edge resize.
-    // Applied on every show rather than once: Qt re-creates the NSWindow
-    // whenever window flags change, and the replacement comes back square and
-    // non-resizable.  The call is idempotent, so re-running it is free.
-    if (mac::isSupported()
-        && (windowFlags() & Qt::FramelessWindowHint)) {
-        // 10 px matches the system's own window corner radius on Big Sur and
-        // later; the Windows path asks DWM for its 8 px equivalent.
-        constexpr int kMacWindowCornerRadius = 10;
-        mac::applyFramelessWindowStyle(this, kMacWindowCornerRadius);
-    }
+#ifdef Q_OS_MACOS
+    mac::updateNativeTitleVisibility(this);
+#endif
 
     // The caption controls are keyboard-reachable, which puts them first in the
     // window's tab order — so Qt hands them the initial focus and the window
@@ -3585,14 +3514,7 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    //
-    // Then undo Qt's phantom-caption clamp now the window is mapped and the custom
-    // frame's real (zero) top margin applies.  A false return means Qt itself
-    // refused the blob — most often its large-screen-variation bail — and in
-    // that case the saved rect is exactly what we must not force. (#4328)
-    if (restoreGeometry(m_startupGeometryForFirstShow)) {
-        reanchorCustomFrameGeometry(m_startupGeometryForFirstShow);
-    }
+    restoreGeometry(m_startupGeometryForFirstShow);
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a
@@ -3617,63 +3539,6 @@ void MainWindow::reapplyStartupGeometryAfterShow()
         move(available.center().x() - width() / 2,
              available.center().y() - height() / 2);
     }
-}
-
-void MainWindow::reanchorCustomFrameGeometry(const QByteArray& geometryBlob)
-{
-#ifdef Q_OS_WIN
-    // Call this after every restoreGeometry() on this window, never instead of
-    // one.  Qt's restore runs the saved rect through checkRestoredGeometry(),
-    // which reserves PM_TitleBarHeight above the top edge and shaves
-    // 2 + PM_TitleBarHeight off a window that would otherwise fill the work
-    // area — both correct for a native caption, both pure loss once
-    // WM_NCCALCSIZE has taken ours away.  The result is a title-bar-sized gap
-    // above the window (#4328), and a matching one below it for anyone who
-    // sized the window to their screen.  Re-run the clamp here without the
-    // caption term.  See src/gui/WindowGeometryRestore.h for the arithmetic.
-    if (!mainWindowCustomFrameEnabled()) {
-        return;  // native caption present — Qt's reservation is honest.
-    }
-
-    SavedWindowGeometry saved;
-    if (!parseSavedWindowGeometry(geometryBlob, &saved)) {
-        return;
-    }
-
-    // Read the saved state, not the live one.  Qt applies the maximized and
-    // fullscreen rects without the clamp, so there is nothing to undo — and
-    // reading windowState() instead would make this depend on whether the
-    // platform has finished applying it yet.
-    //
-    // Known limitation: a session that exits maximized still restores DOWN
-    // into the clamped normalGeometry Qt stored, so the gap reappears on the
-    // first un-maximize and closeEvent() then saves it.  Fixing that means
-    // re-applying the saved normal rect on the WindowStateChange out of
-    // maximized, which is a bigger change to a state machine that also carries
-    // the minimal-mode guards — deliberately out of scope here.
-    if (saved.maximized || saved.fullScreen) {
-        return;
-    }
-
-    // Prefer the screen the user actually left the window on; if that monitor
-    // is gone, fall back to wherever Qt just put us.  Either way the rect is
-    // clamped into that screen's work area, so the custom title bar — the only
-    // mouse drag handle a frameless window has — can never land under a
-    // taskbar that moved or appeared between sessions.
-    const QScreen* target = QGuiApplication::screenAt(saved.normalRect.center());
-    if (!target) {
-        target = screen();
-    }
-    if (!target) {
-        return;
-    }
-
-    // setGeometry() rather than move(): the custom frame's margins are zero, so
-    // frame rect == client rect, and the size has to go back too.
-    setGeometry(clampFrameToWorkArea(saved.normalRect, target->availableGeometry()));
-#else
-    Q_UNUSED(geometryBlob);
-#endif
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -3713,206 +3578,6 @@ void MainWindow::updateStatusBarMinimumWidth()
         qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
     setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
 }
-
-#if defined(Q_OS_WIN)
-void MainWindow::applyWindowsCustomFrame()
-{
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (!hwnd) {
-        return;
-    }
-
-    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    const LONG_PTR desiredStyle = style
-        | WS_CAPTION
-        | WS_THICKFRAME
-        | WS_SYSMENU
-        | WS_MINIMIZEBOX
-        | WS_MAXIMIZEBOX;
-    if (style != desiredStyle) {
-        SetWindowLongPtr(hwnd, GWL_STYLE, desiredStyle);
-    }
-
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
-                 | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-
-    // Rounded corners + the system drop shadow, from DWM rather than from a
-    // hand-rolled mask: a masked window loses the shadow and antialiases its
-    // own corners against whatever is behind it.  DWMWA_WINDOW_CORNER_PREFERENCE
-    // is Windows 11 (build 22000+) only; on Windows 10 the call fails with
-    // E_INVALIDARG and the window keeps square corners, which is the correct
-    // look there anyway.  Resolved dynamically so a pre-22000 SDK still builds.
-    //
-    // 33 == DWMWA_WINDOW_CORNER_PREFERENCE, 2 == DWMWCP_ROUND (the 8 px radius).
-    constexpr DWORD kCornerPreferenceAttribute = 33;
-    constexpr DWORD kCornerRound = 2;
-    DWORD preference = kCornerRound;
-    DwmSetWindowAttribute(hwnd, kCornerPreferenceAttribute,
-                          &preference, sizeof(preference));
-}
-
-bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
-{
-    MSG* msg = static_cast<MSG*>(message);
-    if (!msg || !result || !mainWindowCustomFrameEnabled()) {
-        return QMainWindow::nativeEvent(eventType, message, result);
-    }
-
-    if (msg->message == WM_NCCALCSIZE && msg->wParam) {
-        if (IsZoomed(msg->hwnd) && windowHandle()
-            && windowHandle()->visibility() != QWindow::FullScreen) {
-            auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-            RECT* clientArea = &params->rgrc[0];
-            const int border = windowsResizeBorderThickness(msg->hwnd);
-            clientArea->top += border;
-            clientArea->bottom -= border;
-            clientArea->left += border;
-            clientArea->right -= border;
-        }
-        *result = 0;
-        return true;
-    }
-
-    // Snap Layouts.  Windows only offers the layout flyout when the window
-    // answers HTMAXBUTTON over its maximize control — but answering it also
-    // hands that rect to the non-client hit-test, so Qt stops seeing enter,
-    // leave and click there.  Hover paint and activation therefore have to be
-    // driven from these WM_NC* messages instead.
-    auto captionButtons = [this]() -> WindowCaptionButtons* {
-        return (m_titleBar && m_titleBar->isVisible()) ? m_titleBar->captionButtons()
-                                                       : nullptr;
-    };
-
-    if (msg->message == WM_NCMOUSEMOVE) {
-        if (auto* caption = captionButtons()) {
-            const bool onMaximize = msg->wParam == HTMAXBUTTON;
-            caption->setMaximizeForcedHover(onMaximize);
-            // WM_NCMOUSELEAVE only arrives if it has been asked for.  Without
-            // this, moving the cursor from the maximize control into the CLIENT
-            // area produces WM_MOUSEMOVE rather than another WM_NCMOUSEMOVE, so
-            // nothing clears the forced hover and the button stays lit until
-            // the next non-client move.
-            if (onMaximize) {
-                TRACKMOUSEEVENT tme{sizeof(TRACKMOUSEEVENT),
-                                    TME_LEAVE | TME_NONCLIENT, msg->hwnd, 0};
-                TrackMouseEvent(&tme);
-            }
-        }
-    } else if (msg->message == WM_NCMOUSELEAVE) {
-        if (auto* caption = captionButtons()) {
-            caption->setMaximizeForcedHover(false);
-        }
-    } else if (msg->message == WM_NCLBUTTONDOWN && msg->wParam == HTMAXBUTTON) {
-        // Swallow the press so DefWindowProc doesn't start its own caption
-        // interaction; the release below is what actually toggles.
-        *result = 0;
-        return true;
-    } else if (msg->message == WM_NCLBUTTONUP && msg->wParam == HTMAXBUTTON) {
-        // Minimal mode reuses this control to LEAVE minimal mode, so it must
-        // not fall through to a plain maximize — that would blow a deliberately
-        // small strip up to full screen.  Same branch TitleBar takes on the
-        // platforms where Qt still sees the click; on main this worked because
-        // the control was a QLabel routed through TitleBar::eventFilter.
-        if (m_titleBar && m_titleBar->isMinimalMode()) {
-            emit m_titleBar->minimalModeWindowedExitRequested();
-        } else if (isMaximized()) {
-            showNormal();
-        } else {
-            showMaximized();
-        }
-        *result = 0;
-        return true;
-    }
-
-    if (msg->message == WM_NCHITTEST) {
-        RECT windowRect;
-        if (!GetWindowRect(msg->hwnd, &windowRect)) {
-            return QMainWindow::nativeEvent(eventType, message, result);
-        }
-
-        const POINT nativePos{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
-        if (nativePos.x < windowRect.left || nativePos.x > windowRect.right
-            || nativePos.y < windowRect.top || nativePos.y > windowRect.bottom) {
-            return QMainWindow::nativeEvent(eventType, message, result);
-        }
-
-        const bool canResize = !IsZoomed(msg->hwnd)
-            && !(windowState() & Qt::WindowFullScreen);
-        if (canResize) {
-            const int border = windowsResizeBorderThickness(msg->hwnd);
-            const bool onLeft = nativePos.x >= windowRect.left
-                && nativePos.x < windowRect.left + border;
-            const bool onRight = nativePos.x > windowRect.right - border
-                && nativePos.x <= windowRect.right;
-            const bool onTop = nativePos.y >= windowRect.top
-                && nativePos.y < windowRect.top + border;
-            const bool onBottom = nativePos.y > windowRect.bottom - border
-                && nativePos.y <= windowRect.bottom;
-
-            if (onTop && onLeft) {
-                *result = HTTOPLEFT;
-                return true;
-            }
-            if (onTop && onRight) {
-                *result = HTTOPRIGHT;
-                return true;
-            }
-            if (onBottom && onLeft) {
-                *result = HTBOTTOMLEFT;
-                return true;
-            }
-            if (onBottom && onRight) {
-                *result = HTBOTTOMRIGHT;
-                return true;
-            }
-            if (onLeft) {
-                *result = HTLEFT;
-                return true;
-            }
-            if (onRight) {
-                *result = HTRIGHT;
-                return true;
-            }
-            if (onTop) {
-                *result = HTTOP;
-                return true;
-            }
-            if (onBottom) {
-                *result = HTBOTTOM;
-                return true;
-            }
-        }
-
-        // QCursor::pos() rather than the message's own lParam: the caption
-        // rects below are Qt logical coordinates and lParam is physical
-        // pixels, so on a scaled display the two disagree.
-        const QPoint cursor = QCursor::pos();
-
-        // Not in minimal mode: Snap Layouts offering to tile a deliberately
-        // small strip is wrong, and answering HTMAXBUTTON here is what takes
-        // the click away from Qt in the first place.  Declining it lets the
-        // control behave as it does everywhere else — where it exits minimal
-        // mode rather than maximizing.
-        const bool minimalMode = m_titleBar && m_titleBar->isMinimalMode();
-        if (auto* caption = captionButtons(); caption && !minimalMode) {
-            const QRect maxRect = caption->maximizeButtonGlobalRect();
-            if (!maxRect.isNull() && maxRect.contains(cursor)) {
-                *result = HTMAXBUTTON;   // makes Snap Layouts appear on hover
-                return true;
-            }
-        }
-
-        if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isSystemMoveAreaAt(cursor)) {
-            *result = HTCAPTION;
-            return true;
-        }
-    }
-
-    return QMainWindow::nativeEvent(eventType, message, result);
-}
-#endif
 
 void MainWindow::changeEvent(QEvent* event)
 {
@@ -4567,8 +4232,21 @@ bool MainWindow::automationTitleBarAction(const QString& action,
     if (action == QLatin1String("minimize") || action == QLatin1String("maximize")
         || action == QLatin1String("close")) {
         WindowCaptionButtons* caption = m_titleBar->captionButtons();
-        if (!caption) {
-            return fail(QStringLiteral("no caption buttons in the title bar"));
+        if (!caption || !caption->isVisible()) {
+            if (action == QLatin1String("minimize")) {
+                showMinimized();
+            } else if (action == QLatin1String("maximize")) {
+                if (m_titleBar->isMinimalMode()) {
+                    toggleMinimalMode(false);
+                } else if (isMaximized()) {
+                    showNormal();
+                } else {
+                    showMaximized();
+                }
+            } else {
+                close();
+            }
+            return true;
         }
         if (action == QLatin1String("minimize")) emit caption->minimizeRequested();
         else if (action == QLatin1String("maximize")) emit caption->maximizeRestoreRequested();
@@ -9771,27 +9449,11 @@ void MainWindow::setFramelessWindow(bool on)
     // geometry so the window stays where the user put it.
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
-    Qt::WindowFlags flags = windowFlags();
-#ifdef Q_OS_WIN
-    if (flags & Qt::FramelessWindowHint) {
-        flags &= ~Qt::FramelessWindowHint;
-        setWindowFlags(flags);
-        setGeometry(geom);
-        if (wasVisible) {
-            show();
-        }
-    }
-    applyWindowsCustomFrame();
-#else
-    if (on)
-        flags |= Qt::FramelessWindowHint;
-    else
-        flags &= ~Qt::FramelessWindowHint;
-    setWindowFlags(flags);
+    WindowChrome::configure(this, on);
     setGeometry(geom);
-    if (wasVisible)
+    if (wasVisible) {
         show();
-#endif
+    }
 
     // Keep the bottom-right size grip in sync — only useful when frameless.
     if (m_sizeGrip) m_sizeGrip->setVisible(on);
@@ -10039,13 +9701,9 @@ void MainWindow::toggleMinimalMode(bool on)
 
         QByteArray geom = QByteArray::fromBase64(
             s.value("MinimalModeGeometry", "").toByteArray());
-        // Re-anchor as well as restore: this window is already mapped, so Qt
-        // reapplies its caption-reserving clamp on every entry and the #4328
-        // gap would come straight back on one Ctrl+M round trip — then stick,
-        // because closeEvent() saves whatever origin is current.
-        if (!geom.isEmpty() && restoreGeometry(geom))
-            reanchorCustomFrameGeometry(geom);
-
+        if (!geom.isEmpty()) {
+            restoreGeometry(geom);
+        }
         // Defer clearing the guard so any AppKit-deferred WindowStateChange
         // queued by the showNormal() / setFixedWidth() calls above is drained
         // through changeEvent's early-return before the guard drops.
@@ -10100,17 +9758,13 @@ void MainWindow::toggleMinimalMode(bool on)
         // Restore full geometry
         QByteArray geom = QByteArray::fromBase64(
             s.value("FullModeGeometry", "").toByteArray());
-        const bool restored = !geom.isEmpty() && restoreGeometry(geom);
+        if (!geom.isEmpty()) {
+            restoreGeometry(geom);
+        }
 
         // Belt-and-suspenders: if FullModeGeometry encoded a state, ensure
         // we land windowed.
         showNormal();
-
-        // After showNormal(), not before: leaving maximized drops us onto Qt's
-        // clamped normal geometry, which is the rect that carries the #4328
-        // phantom-caption offset.  Re-anchoring first would just be undone.
-        if (restored)
-            reanchorCustomFrameGeometry(geom);
 
         // The round trip ends where it started: minimal entered from
         // canvas mode returns to canvas mode.  Deferred one event-loop
