@@ -4417,8 +4417,14 @@ target_link_libraries(amp_applet_test PRIVATE
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
 
+# Socket-free validation of scoped client display documents.
+add_executable(client_display_settings_test tests/client_display_settings_test.cpp)
+target_include_directories(client_display_settings_test PRIVATE src tests)
+target_link_libraries(client_display_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
+
 # Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
-# No RadioModel instance, radio connection, or firmware peer is constructed.
+# RadioModel supplies identity only; no connectRadio call or firmware peer.
 add_executable(rx_applet_squelch_reconciliation_test
     tests/rx_applet_squelch_reconciliation_test.cpp
     src/gui/RxApplet.cpp
@@ -4615,6 +4621,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    client_display_settings_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
     weather_radar_loading_test

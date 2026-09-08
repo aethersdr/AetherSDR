@@ -5,6 +5,8 @@
 #include <QTimer>
 
 #include "core/backends/RadioCapabilities.h"
+#include "core/RadioSettingsScope.h"
+#include <optional>
 
 class ScrollableLabel;
 namespace AetherSDR { class FilterPassbandWidget; }
@@ -318,6 +320,14 @@ private:
     // so switching the active slice doesn't pull in another slice's threshold.
     int          m_sqlManualLevel{20};
 
+    // Icom has no separate SQL enable register: Off writes threshold zero.
+    // Only client intent is retained, never a live threshold to replay at attach.
+    RadioSettingsScope m_clientSquelchScope;
+    std::optional<int> m_clientManualSqlLevel;
+    bool m_restoreAutoSql{false};
+    bool m_clientSqlAwaitingReport{false};
+    void loadClientSquelchIntent();
+    void saveClientSquelchIntent();
     void applySqlModeVisuals();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);

@@ -18,6 +18,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "core/ClientDisplaySettings.h"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -3060,6 +3061,10 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     // to a Flex has to be told the law changed back.
     sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
     if (m_radioModel.shapesDisplayRatesLocally()) {
+        if (const auto savedRate = ClientDisplaySettings::waterfallRate(
+                m_radioModel.settingsScope(), sw->panIndex(), true)) {
+            sw->setWfLineDuration(*savedRate);
+        }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
     }
@@ -3249,6 +3254,8 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                                           AetherSDR::WaterfallRate::kMin,
                                           AetherSDR::WaterfallRate::kMax);
             dst->setWfLineDuration(wfRate);
+            ClientDisplaySettings::saveWaterfallRate(m_radioModel.settingsScope(),
+                dst->panIndex(), m_radioModel.shapesDisplayRatesLocally(), wfRate);
             if (!m_adaptiveThrottleActive) {
                 m_radioModel.requestPanDisplayRates(targetPanId, /*fps=*/0,
                                                     wfRate);
@@ -4591,6 +4598,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfLineDuration(clampedRate);
+        ClientDisplaySettings::saveWaterfallRate(m_radioModel.settingsScope(),
+            sw->panIndex(), m_radioModel.shapesDisplayRatesLocally(), clampedRate);
         // Same reason as the FPS slider above: on a raw-spectrum backend this is
         // the engine's waterfall shaping target, not a radio setting.
         m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedRate);
@@ -4749,6 +4758,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackOffset(50);
         sw->setWfAutoBlackRadioSide(false);
         sw->setWfLineDuration(100);
+        ClientDisplaySettings::saveWaterfallRate(m_radioModel.settingsScope(),
+            sw->panIndex(), m_radioModel.shapesDisplayRatesLocally(), 100);
         sw->setWfBlankerEnabled(false);
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);
