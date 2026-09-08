@@ -65,7 +65,6 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QGridLayout>
 #include <QLabel>
 #include <QFrame>
 #include <QDrag>
@@ -80,10 +79,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QScopeGuard>
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
-#include "FavoritesPickerDialog.h"
+#include "AppletPicker.h"
 
 namespace AetherSDR {
 
@@ -294,76 +292,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // ── Top button bar: single favorites row + push-down drawer ────────────
-    //
-    // The bar shows kFavoriteCount (5) user-chosen "favorite" buttons in a
-    // single row, with a 6th slot acting as the drawer toggle (▾/▴).
-    // Toggling the drawer reveals/hides a grid containing every other
-    // bar button.  Right-click any bar button to open the picker dialog.
-    //
-    // Construction: every bar button (LCK, VU, RX, …) is created with the
-    // drawer's widget+layout as its rowParent/rowLayout.  Once all are
-    // registered, applyBarLayout() lifts the favorites out of the drawer
-    // into m_favRow.  See registerBarButton() / applyBarLayout().
-    //
-    // All colour values resolved through ThemeManager so the bar
-    // re-themes live alongside the rest of the UI.
-    const QString kBarContainerStyle =
-        QStringLiteral("QWidget#barContainer { background: {{color.background.0}}; }");
-    const QString kBarBtnStyle =
-        QStringLiteral(
-            "QPushButton { background: {{color.background.1}}; "
-            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
-            "padding: 2px 3px; font-size: 11px; font-weight: bold; "
-            "color: {{color.text.primary}}; }"
-            "QPushButton:hover { background: {{color.background.2}}; }"
-            // Active/checked state mirrors the kBlueActive style used by
-            // the RxApplet filter-preset buttons (1.8K/2.1K/…): dim cyan
-            // fill, light text, slightly brighter outline.
-            "QPushButton:checked { background: {{color.accent.dim}}; "
-            "color: {{color.text.primary}}; "
-            "border: 1px solid {{color.accent.bright}}; }"
-            "QPushButton:disabled { color: {{color.text.disabled}}; "
-            "border-color: {{color.background.1}}; }");
-
-    m_favRow = new QWidget;
-    m_favRow->setObjectName("barContainer");
-    ThemeManager::instance().applyStyleSheet(m_favRow, kBarContainerStyle + kBarBtnStyle);
-    m_favLayout = new QGridLayout(m_favRow);
-    m_favLayout->setContentsMargins(2, 3, 2, 3);
-    m_favLayout->setSpacing(2);
-    root->addWidget(m_favRow);
-
-    m_drawer = new QWidget;
-    m_drawer->setObjectName("barContainer");
-    ThemeManager::instance().applyStyleSheet(m_drawer, kBarContainerStyle + kBarBtnStyle +
-        QStringLiteral("QWidget#barContainer { border-bottom: 1px solid {{color.border.subtle}}; }"));
-    m_drawerLayout = new QGridLayout(m_drawer);
-    m_drawerLayout->setContentsMargins(2, 0, 2, 3);
-    m_drawerLayout->setSpacing(2);
-    m_drawer->hide();
-    root->addWidget(m_drawer);
-
-    // Drawer toggle button — always occupies the last slot of the
-    // favorites row.  Right-click also opens the favorites picker
-    // so users can reach it without clicking through to find a favorite.
-    // Uses full-size triangle glyphs (▼/▲) at a larger font size so the
-    // affordance reads at panel-bar scale; the small caret glyphs (▾/▴)
-    // were nearly invisible at the bar's 11px default.
-    m_drawerToggleBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xbc"), m_favRow); // ▼
-    m_drawerToggleBtn->setCheckable(true);
-    m_drawerToggleBtn->setToolTip("Show / hide additional buttons\nRight-click: customize favorites");
-    m_drawerToggleBtn->setAccessibleName("Toggle button drawer");
-    m_drawerToggleBtn->setAccessibleDescription(
-        "Show or hide the panel of non-favorite buttons");
-    m_drawerToggleBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_drawerToggleBtn->setFixedHeight(20);
-    m_drawerToggleBtn->setStyleSheet("QPushButton { font-size: 14px; padding: 0px; }");
-    m_drawerToggleBtn->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_drawerToggleBtn, &QPushButton::toggled,
-            this, &AppletPanel::setDrawerOpen);
-    connect(m_drawerToggleBtn, &QWidget::customContextMenuRequested,
-            this, [this](const QPoint&){ openFavoritesPicker(); });
+    m_picker = new AppletPicker(this);
+    root->addWidget(m_picker);
+    connect(m_picker, &AppletPicker::addRequested, this, &AppletPanel::addSelectedApplet);
+    m_toggleStorage = new QWidget(this);
+    m_toggleStorage->hide();
 
     // Phase 4a (#1713) — container system groundwork.  Created early
     // so the S-Meter (and any future root-level containers) can wrap
@@ -446,10 +379,23 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     const bool sMeterOn = AppSettings::instance()
         .value("Applet_VU", "True").toString() == "True";
     m_sMeterContainer->setContainerVisible(sMeterOn);
-    root->addWidget(m_sMeterContainer);
+    m_pinnedMeterHost = new QWidget(this);
+    m_pinnedMeterHost->setObjectName(QStringLiteral("pinnedMeterHost"));
+    m_pinnedMeterLayout = new QHBoxLayout(m_pinnedMeterHost);
+    m_pinnedMeterLayout->setContentsMargins(0, 0, 0, 0);
+    m_pinnedMeterLayout->addWidget(m_sMeterContainer);
+    root->addWidget(m_pinnedMeterHost);
+    m_sMeterContainer->installEventFilter(this);
+    connect(m_sMeterContainer, &ContainerWidget::dockModeChanged, this, [this]() {
+        QTimer::singleShot(0, this, &AppletPanel::syncPinnedMeter);
+        QTimer::singleShot(0, this, &AppletPanel::refreshAppletPicker);
+    });
 
     // ── Scrollable applet stack (drop-aware) ────────────────────────────────
     m_scrollArea = new AppletDropArea(this);
+    m_scrollArea->setObjectName(QStringLiteral("appletScrollArea"));
+    m_scrollArea->viewport()->setObjectName(QStringLiteral("appletViewport"));
+    m_scrollArea->viewport()->installEventFilter(this);
     m_scrollArea->setFrameShape(QFrame::NoFrame);
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_scrollArea->setWidgetResizable(true);
@@ -568,7 +514,6 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // the right path.
     auto makeEntry = [&](const QString& id, const QString& label,
                          QWidget* contentOrContainer, bool defaultOn,
-                         QWidget* rowParent, QLayout* rowLayout,
                          const QString& buttonText = QString()) -> AppletEntry {
         ContainerWidget* c =
             qobject_cast<ContainerWidget*>(contentOrContainer);
@@ -577,20 +522,14 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             c->setContent(contentOrContainer);
         }
 
-        QPushButton* btn = nullptr;
-        // rowLayout != nullptr is the legacy "this applet has a bar button"
-        // signal — we now register the button into m_barButtons and let
-        // applyBarLayout() decide whether it lands in the favorites
-        // row or the drawer.  The rowParent/rowLayout args themselves
-        // are ignored (kept in the signature only to minimise churn at
-        // the call sites).
-        (void)rowParent;
-        if (rowLayout) {
-            const QString visible = buttonText.isEmpty() ? id : buttonText;
-            btn = new QPushButton(visible, m_drawer);
-            btn->setCheckable(true);
-            registerBarButton(id, visible, label, btn, defaultOn);
-        }
+        const QString visible = buttonText.isEmpty() ? id : buttonText;
+        auto* btn = new QPushButton(visible, m_toggleStorage);
+        btn->setCheckable(true);
+        registerBarButton(id, visible, label, btn, defaultOn);
+        c->installEventFilter(this);
+        connect(c, &ContainerWidget::dockModeChanged, this, [this]() {
+            QTimer::singleShot(0, this, &AppletPanel::refreshAppletPicker);
+        });
 
         const QString key = QStringLiteral("Applet_%1").arg(id);
         bool on = settings.value(key, defaultOn ? "True" : "False").toString() == "True";
@@ -643,6 +582,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                 QSignalBlocker b(btn);
                 btn->setChecked(visible);
             }
+            QTimer::singleShot(0, this, &AppletPanel::refreshAppletPicker);
             // Recall-driven changes are workspace state, not preference
             // changes (red-team B2) — the button sync above still runs so
             // the bar stays honest either way.
@@ -656,7 +596,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     // Controls lock toggle — disables wheel/mouse on sidebar sliders (#745)
     {
-        m_lockBtn = new QPushButton("LOCK", m_drawer);
+        m_lockBtn = new QPushButton("LOCK", m_toggleStorage);
         m_lockBtn->setCheckable(true);
         m_lockBtn->setToolTip("Lock sidebar controls — prevent accidental\n"
                               "value changes while scrolling");
@@ -668,7 +608,13 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_lockBtn->setChecked(false);
         ControlsLock::setLocked(false);
         // ID stays "LCK" so saved layouts from earlier builds still match.
-        registerBarButton("LCK", "LOCK", "Lock sidebar controls", m_lockBtn);
+        m_lockBtn->setParent(m_picker);
+        m_lockBtn->setFixedSize(40, 28);
+        m_lockBtn->setFocusPolicy(Qt::StrongFocus);
+        m_picker->layout()->addWidget(m_lockBtn);
+        ThemeManager::instance().applyStyleSheet(m_lockBtn, QStringLiteral(
+            "QPushButton { font-size: 10px; padding: 0px; min-width: 0px; }"
+            "QPushButton:checked { background: {{color.accent.dim}}; border-color: {{color.border.accent}}; }"));
         connect(m_lockBtn, &QPushButton::toggled, this, [this](bool on) {
             setControlsLocked(on);
         });
@@ -677,7 +623,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // VU button — toggles the S-Meter container (not in the
     // reorderable stack; sits permanently at the top of the sidebar).
     {
-        m_vuBtn = new QPushButton("VU", m_drawer);
+        m_vuBtn = new QPushButton("VU", m_toggleStorage);
         m_vuBtn->setCheckable(true);
         m_vuBtn->setChecked(sMeterOn);
         registerBarButton("VU", "VU", "S-Meter", m_vuBtn);
@@ -704,6 +650,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                 QSignalBlocker b(m_vuBtn);
                 m_vuBtn->setChecked(visible);
             }
+            QTimer::singleShot(0, this, &AppletPanel::refreshAppletPicker);
+            QTimer::singleShot(0, this, &AppletPanel::syncPinnedMeter);
             AppSettings::instance().setValue(
                 "Applet_VU", visible ? "True" : "False");
         });
@@ -726,12 +674,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // PWR is independent from the fixed VU container and participates in the
     // normal order/float/visibility system. Keep it first so enabling it places
     // it directly below the S-meter, but leave it off until the user opts in.
-    // Its bar button remains visible through defaultButtonOrder().
     m_crossNeedleApplet = new CrossNeedleMeterApplet;
     {
         AppletEntry powerEntry = makeEntry("PWR", "Power & SWR",
-                                           m_crossNeedleApplet, false,
-                                           m_drawer, m_drawerLayout);
+                                           m_crossNeedleApplet, false);
         if (ContainerWidget* container =
                 qobject_cast<ContainerWidget*>(powerEntry.widget)) {
             // 640x427 meter face plus the container's fixed 18px title bar.
@@ -750,7 +696,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     }
 
     m_rxApplet = new RxApplet;
-    m_appletOrder.append(makeEntry("RX", "RX Controls", m_rxApplet, true, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("RX", "RX Controls", m_rxApplet, true));
 
     // Tuner / Amp entries use makeEntry like everything else;
     // MainWindow toggles tray-button visibility via setTunerVisible /
@@ -759,8 +705,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // starts hidden (defaultOn = false).
     m_tunerApplet = new TunerApplet;
     {
-        auto entry = makeEntry("TUN", "TGXL", m_tunerApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("TUN", "TGXL", m_tunerApplet, false);
         m_tuneBtn = entry.btn;
         markHardwareConditional("TUN");
         m_appletOrder.append(entry);
@@ -768,8 +713,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_ampApplet = new AmpApplet;
     {
-        auto entry = makeEntry("AMP", "PGXL", m_ampApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("AMP", "PGXL", m_ampApplet, false);
         m_ampBtn = entry.btn;
         markHardwareConditional("AMP");
         m_appletOrder.append(entry);
@@ -779,8 +723,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // (MainWindow calls setAppletVisible("DEMO", isSyntheticDemo)). RFC #4288.
     m_demoApplet = new DemoApplet;
     {
-        auto entry = makeEntry("DEMO", "Demo Noise", m_demoApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("DEMO", "Demo Noise", m_demoApplet, false);
         markHardwareConditional("DEMO");
         m_appletOrder.append(entry);
     }
@@ -790,8 +733,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // at once. See docs/architecture/acom-600s-amplifier-design.md.
     m_acomApplet = new AcomApplet;
     {
-        auto entry = makeEntry("ACOM", "ACOM Amplifier", m_acomApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("ACOM", "ACOM Amplifier", m_acomApplet, false);
         m_acomBtn = entry.btn;
         markHardwareConditional("ACOM");
         m_appletOrder.append(entry);
@@ -802,8 +744,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // docs/architecture/spe-expert-amplifier-design.md.
     m_speApplet = new SpeApplet;
     {
-        auto entry = makeEntry("SPE", "SPE Expert Amplifier", m_speApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("SPE", "SPE Expert Amplifier", m_speApplet, false);
         m_speBtn = entry.btn;
         markHardwareConditional("SPE");
         // Popped out, the applet switches to its roomier presentation and
@@ -829,8 +770,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // docs/architecture/vkamp-amplifier-design.md.
     m_vkampApplet = new VkampApplet;
     {
-        auto entry = makeEntry("VKAMP", "VK3AMP Amplifier", m_vkampApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("VKAMP", "VK3AMP Amplifier", m_vkampApplet, false);
         m_vkampBtn = entry.btn;
         markHardwareConditional("VKAMP");
         m_appletOrder.append(entry);
@@ -843,29 +783,28 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // reveal it. See docs/architecture/lp-100a-wattmeter-design.md.
     m_lpMeterApplet = new LpMeterApplet;
     {
-        auto entry = makeEntry("LP100", "LP-100A Meter", m_lpMeterApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("LP100", "LP-100A Meter", m_lpMeterApplet, false);
         markHardwareConditional("LP100");
         m_appletOrder.append(entry);
     }
 
     m_txApplet = new TxApplet;
-    m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true));
 
     m_phoneApplet = new PhoneApplet;
-    m_appletOrder.append(makeEntry("PHNE", "Phone", m_phoneApplet, true, m_drawer, m_drawerLayout, "PHN"));
+    m_appletOrder.append(makeEntry("PHNE", "Phone", m_phoneApplet, true, "PHN"));
 
     m_phoneCwApplet = new PhoneCwApplet;
-    m_appletOrder.append(makeEntry("P/CW", "Phone/CW", m_phoneCwApplet, true, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("P/CW", "Phone/CW", m_phoneCwApplet, true));
 
     m_eqApplet = new EqApplet;
-    m_appletOrder.append(makeEntry("EQ", "Equalizer", m_eqApplet, true, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("EQ", "Equalizer", m_eqApplet, true));
 
     m_waveApplet = new WaveApplet;
-    m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, m_drawer, m_drawerLayout, "WAV"));
+    m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, "WAV"));
 
     m_aetherClockApplet = new AetherClockApplet;
-    m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
+    m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, "CLK"));
 
     // Mini-Pan — the K4-style narrow scope. Deliberately an applet and NOT a
     // View-menu item: the menu bar does not exist in Minimal Mode, which is
@@ -875,7 +814,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // just re-slices the main pan's frames. Float it out via the container
     // title bar to keep it over a logging app.
     m_miniPanApplet = new MiniPanApplet;
-    m_appletOrder.append(makeEntry("MPAN", "Mini-Pan", m_miniPanApplet, false, m_drawer, m_drawerLayout, "MINI"));
+    m_appletOrder.append(makeEntry("MPAN", "Mini-Pan", m_miniPanApplet, false, "MINI"));
 
     // CEQ and CMP intentionally have no toggle button in the tray —
     // their visibility follows DSP bypass state, driven externally
@@ -959,8 +898,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // marketing name for the whole TX-DSP composite.  Settings ID
     // stays TXDSP for persistence.
     {
-        auto entry = makeEntry("TXDSP", "Channel Strip", txDsp, false,
-                               m_drawer, m_drawerLayout, "VUDU");
+        auto entry = makeEntry("TXDSP", "Channel Strip", txDsp, false, "VUDU");
         // Make the composite's drag MIME match its owning AppletEntry.id
         // so the drop handler's fast lookup hits directly.  Container
         // persistence keys still use the internal id ("tx_dsp") — drag
@@ -972,7 +910,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_catControlApplet = new CatControlApplet;
     {
-        auto catEntry = makeEntry("CAT", "CAT Control", m_catControlApplet, false, m_drawer, m_drawerLayout);
+        auto catEntry = makeEntry("CAT", "CAT Control", m_catControlApplet, false);
         m_appletOrder.append(catEntry);
         // Switch the applet between its simple (docked) and full-table (floating) views.
         if (auto* c = qobject_cast<ContainerWidget*>(catEntry.widget)) {
@@ -988,36 +926,34 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     }
 
     m_daxApplet = new DaxApplet;
-    m_appletOrder.append(makeEntry("DAX", "DAX Audio", m_daxApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("DAX", "DAX Audio", m_daxApplet, false));
 
     m_tciApplet = new TciApplet;
-    m_appletOrder.append(makeEntry("TCI", "TCI Server", m_tciApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("TCI", "TCI Server", m_tciApplet, false));
 
     m_daxIqApplet = new DaxIqApplet;
-    m_appletOrder.append(makeEntry("IQ", "DAX IQ", m_daxIqApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("IQ", "DAX IQ", m_daxIqApplet, false));
 
     m_meterApplet = new MeterApplet;
-    m_appletOrder.append(makeEntry("MTR", "Radio Vitals", m_meterApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("MTR", "Radio Vitals", m_meterApplet, false));
 
     m_profApplet = new ProfileSwitcherApplet;
-    m_appletOrder.append(makeEntry("PROF", "Profile Switcher", m_profApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("PROF", "Profile Switcher", m_profApplet, false));
 
     m_kiwiSdrApplet = new KiwiSdrApplet;
-    m_appletOrder.append(makeEntry("KSDR", "KiwiSDR", m_kiwiSdrApplet, false,
-                                   m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("KSDR", "KiwiSDR", m_kiwiSdrApplet, false));
 
 #ifdef HAVE_RADE
     m_radeApplet = new RadeApplet;
-    m_appletOrder.append(makeEntry("RADE", "RADE Status", m_radeApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("RADE", "RADE Status", m_radeApplet, false));
 #endif
 
     m_healthApplet = new HealthApplet;
-    m_appletOrder.append(makeEntry("HLTH", "Antenna Health", m_healthApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("HLTH", "Antenna Health", m_healthApplet, false));
 
     m_agApplet = new AntennaGeniusApplet;
     {
-        auto entry = makeEntry("AG", "Antenna Genius", m_agApplet, false,
-                               m_drawer, m_drawerLayout);
+        auto entry = makeEntry("AG", "Antenna Genius", m_agApplet, false);
         m_agBtn = entry.btn;
         markHardwareConditional("AG");
         m_appletOrder.append(entry);
@@ -1029,7 +965,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // configured does not display a stray SS button in the top right.
     m_ssApplet = new ShackSwitchApplet;
     {
-        auto entry = makeEntry("SS", "ShackSwitch", m_ssApplet, false, m_drawer, m_drawerLayout);
+        auto entry = makeEntry("SS", "ShackSwitch", m_ssApplet, false);
         m_ssBtn = entry.btn;
         markHardwareConditional("SS");
         m_appletOrder.append(entry);
@@ -1044,7 +980,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_greenHeronApplet = new GreenHeronApplet;
     {
         AppletEntry gheEntry = makeEntry("GHE", "Green Heron", m_greenHeronApplet,
-                                         false, m_drawer, m_drawerLayout);
+                                         false);
         if (auto* c = qobject_cast<ContainerWidget*>(gheEntry.widget)) {
             // Deliberately NO setDefaultFloatingSize(). The compass is inside
             // the rotor section, so it enters and leaves the layout with the
@@ -1067,26 +1003,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
 #ifdef HAVE_MQTT
     m_mqttApplet = new MqttApplet;
-    m_appletOrder.append(makeEntry("MQTT", "MQTT", m_mqttApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("MQTT", "MQTT", m_mqttApplet, false));
 #endif
 
-    // Place the drawer toggle into the favorites row, then apply the
-    // saved (or default) favorites layout to populate both strips.
-    loadButtonLayout();
-    applyBarLayout();
-
-    // Restore drawer open/closed state (default closed).  Signals blocked
-    // to skip the AppSettings::save() roundtrip during init.
-    const bool drawerOpen =
-        AppSettings::instance().value("ButtonBarDrawerOpen", "False").toString() == "True";
-    {
-        QSignalBlocker b(m_drawerToggleBtn);
-        m_drawerToggleBtn->setChecked(drawerOpen);
-    }
-    m_drawer->setVisible(drawerOpen);
-    m_drawerToggleBtn->setText(drawerOpen
-        ? QString::fromUtf8("\xe2\x96\xb2")
-        : QString::fromUtf8("\xe2\x96\xbc"));
+    refreshAppletPicker();
+    QTimer::singleShot(0, this, &AppletPanel::syncPinnedMeter);
 
     // ── Restore saved order ─────────────────────────────────────────────────
     QString savedOrder = settings.value("AppletOrder").toString();
@@ -1356,6 +1277,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("VKAMP"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
@@ -1604,7 +1526,7 @@ int AppletPanel::dropIndexFromY(int localY) const
 
 // Mark a bar button as hardware-available / unavailable and propagate
 // the change to the applet's checked state.  Show/hide of the button
-// itself is left to applyBarLayout() so the combined (hardware-available
+// itself is left to refreshAppletPicker() so the combined (hardware-available
 // ∧ ¬user-hidden) decision lives in one place.
 void AppletPanel::updateHardwareAvailability(const QString& id,
                                              const QString& appletKey,
@@ -1613,19 +1535,8 @@ void AppletPanel::updateHardwareAvailability(const QString& id,
     for (auto& bb : m_barButtons) {
         if (bb.id != id) continue;
         if (!bb.btn) return;
-        const bool wasAvailable = bb.hardwareAvailable;
         bb.hardwareAvailable = hardwareVisible;
         if (hardwareVisible) {
-            // First-time hardware-detect for a button the user hasn't
-            // placed yet → append to Active so the picker shows it and
-            // the bar can render it.  If the user has explicitly hidden
-            // it (m_hiddenButtons), respect that.
-            if (!wasAvailable
-                && !m_buttonOrder.contains(id)
-                && !m_hiddenButtons.contains(id)) {
-                m_buttonOrder.append(id);
-                saveButtonLayout();
-            }
             // Default to THIS applet's own default when Applet_<id> is unset,
             // not to a blanket "True".
             //
@@ -1689,7 +1600,7 @@ void AppletPanel::applyCapabilityVisibility(const QString& id,
         }
         s.save();
     }
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
@@ -1757,49 +1668,49 @@ void AppletPanel::setHardwareEqVisible(bool visible)
 void AppletPanel::setTunerVisible(bool visible)
 {
     updateHardwareAvailability("TUN", "Applet_TUN", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setAmpVisible(bool visible)
 {
     updateHardwareAvailability("AMP", "Applet_AMP", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setAcomVisible(bool visible)
 {
     updateHardwareAvailability("ACOM", "Applet_ACOM", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setSpeVisible(bool visible)
 {
     updateHardwareAvailability("SPE", "Applet_SPE", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setLpMeterVisible(bool visible)
 {
     updateHardwareAvailability("LP100", "Applet_LP100", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setAgVisible(bool visible)
 {
     updateHardwareAvailability("AG", "Applet_AG", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setShackSwitchVisible(bool visible)
 {
     updateHardwareAvailability("SS", "Applet_SS", visible);
-    applyBarLayout();
+    refreshAppletPicker();
 }
 
 void AppletPanel::setDemoVisible(bool visible)
@@ -1812,7 +1723,7 @@ void AppletPanel::setDemoVisible(bool visible)
     // so on the one radio the applet exists for it was refused at the
     // door and a workspace switch could close it with no way back.
     updateHardwareAvailability("DEMO", "Applet_DEMO", visible);
-    applyBarLayout();
+    refreshAppletPicker();
     // The tile additionally auto-opens with the demo connection and
     // auto-closes when it drops (RFC #4288) — unchanged.
     setAppletVisible(QStringLiteral("DEMO"), visible);
@@ -1950,6 +1861,14 @@ bool AppletPanel::eventFilter(QObject* obj, QEvent* ev)
             break;
         }
     }
+    if (m_scrollArea && obj == m_scrollArea->viewport()
+        && (ev->type() == QEvent::Resize || ev->type() == QEvent::Move)) {
+        QTimer::singleShot(0, this, &AppletPanel::syncPinnedMeter);
+    }
+    if (qobject_cast<ContainerWidget*>(obj)
+        && (ev->type() == QEvent::Show || ev->type() == QEvent::Hide)) {
+        QTimer::singleShot(0, this, &AppletPanel::refreshAppletPicker);
+    }
     return QWidget::eventFilter(obj, ev);
 }
 
@@ -1964,8 +1883,6 @@ void AppletPanel::setScrollHandleActive(bool active)
     sb->style()->polish(sb);
 }
 
-// ── Button-bar (active + drawer + hidden) ──────────────────────────────────
-
 void AppletPanel::registerBarButton(const QString& id, const QString& label,
                                     const QString& tooltip, QPushButton* btn,
                                     bool defaultOn)
@@ -1973,102 +1890,16 @@ void AppletPanel::registerBarButton(const QString& id, const QString& label,
     if (!btn) return;
     btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     btn->setFixedHeight(20);
-    btn->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(btn, &QWidget::customContextMenuRequested, this,
-            [this](const QPoint&) { openFavoritesPicker(); });
+    btn->hide();
+    connect(btn, &QPushButton::toggled, this, [this]() {
+        QTimer::singleShot(0, this, &AppletPanel::refreshAppletPicker);
+    });
     m_barButtons.append(BarButton{id, label, tooltip, btn,
                                   /*hardwareAvailable=*/true, defaultOn});
 }
 
-QStringList AppletPanel::defaultButtonOrder() const
-{
-    // Top kFavoriteCount entries become the bar favourites.  Remaining
-    // ids are in canonical registration order so a fresh install matches
-    // the old fixed two-row bar.  IDs are the canonical persistence
-    // keys, which differ from a few labels (WAVE→"WAV", PHNE→"PHN",
-    // TXDSP→"VUDU").
-    //
-    // TUN/AMP/AG are intentionally omitted — these are hardware-
-    // conditional and should not clutter the picker's Active column
-    // until the matching device is detected.  updateHardwareAvailability()
-    // auto-adds them when MainWindow reports the hardware as present,
-    // and the user's explicit Hidden choice is respected from then on.
-    QStringList out = {"VU", "PWR", "RX", "TX", "P/CW"};
-    const QStringList rest = {
-        "LCK", "PHNE", "EQ", "WAVE", "TXDSP",
-        "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "SS", "MQTT"
-    };
-    for (const auto& id : rest)
-        if (!out.contains(id)) out.append(id);
-    return out;
-}
-
-void AppletPanel::loadButtonLayout()
-{
-    m_buttonOrder.clear();
-    m_hiddenButtons.clear();
-
-    // New canonical key: ButtonBarLayout = {"order":[...], "hidden":[...]}.
-    const QString rawLayout =
-        AppSettings::instance().value("ButtonBarLayout").toString();
-    if (!rawLayout.isEmpty()) {
-        QJsonParseError err{};
-        const QJsonDocument doc = QJsonDocument::fromJson(rawLayout.toUtf8(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            const QJsonObject obj = doc.object();
-            for (const auto& v : obj.value("order").toArray())
-                if (v.isString()) m_buttonOrder.append(v.toString());
-            for (const auto& v : obj.value("hidden").toArray())
-                if (v.isString()) m_hiddenButtons.insert(v.toString());
-            return;
-        }
-    }
-
-    // Migration: legacy ButtonBarFavorites (5-item array of canonical
-    // favourite IDs) → ButtonBarLayout.  We adopt the saved favourites
-    // as the head of the order list; applyBarLayout()'s sanitize pass
-    // fills in the rest from defaultButtonOrder() and persists.
-    const QString rawFavs =
-        AppSettings::instance().value("ButtonBarFavorites").toString();
-    if (!rawFavs.isEmpty()) {
-        QJsonParseError err{};
-        const QJsonDocument doc = QJsonDocument::fromJson(rawFavs.toUtf8(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isArray()) {
-            for (const auto& v : doc.array())
-                if (v.isString()) m_buttonOrder.append(v.toString());
-        }
-        AppSettings::instance().remove("ButtonBarFavorites");
-        return;
-    }
-
-    // First launch — use defaults.
-    m_buttonOrder = defaultButtonOrder();
-}
-
-void AppletPanel::saveButtonLayout()
-{
-    QJsonArray orderArr;
-    for (const auto& id : m_buttonOrder) orderArr.append(id);
-    // QSet has no guaranteed iteration order; the hidden list doesn't
-    // need ordering since hidden buttons aren't displayed.
-    QJsonArray hiddenArr;
-    for (const auto& id : m_hiddenButtons) hiddenArr.append(id);
-    QJsonObject obj;
-    obj["order"] = orderArr;
-    obj["hidden"] = hiddenArr;
-    const QString json = QString::fromUtf8(
-        QJsonDocument(obj).toJson(QJsonDocument::Compact));
-    AppSettings::instance().setValue("ButtonBarLayout", json);
-    AppSettings::instance().save();
-}
-
 void AppletPanel::markHardwareConditional(const QString& id)
 {
-    // Mark a bar button as hardware-conditional: it defaults to invisible
-    // in the bar and won't be auto-appended to Active by applyBarLayout()'s
-    // sanitize pass.  When MainWindow later confirms the hardware is
-    // present, updateHardwareAvailability() flips hardwareAvailable=true
-    // and adds the button to Active.
     for (auto& bb : m_barButtons) {
         if (bb.id != id) continue;
         bb.hardwareAvailable = false;
@@ -2077,203 +1908,85 @@ void AppletPanel::markHardwareConditional(const QString& id)
     }
 }
 
-void AppletPanel::disableAppletForButton(const QString& id)
+ContainerWidget* AppletPanel::appletContainer(const QString& id) const
 {
-    for (const auto& bb : m_barButtons) {
-        if (bb.id != id) continue;
-        if (bb.btn && bb.btn->isChecked()) {
-            // Triggers the existing toggled handler — sets
-            // Applet_<id>=False and hides the container.  Works for
-            // LCK/VU via their own handlers too.
-            bb.btn->setChecked(false);
-        }
-        break;
+    if (id == QStringLiteral("VU")) {
+        return m_sMeterContainer;
     }
+    for (const AppletEntry& entry : m_appletOrder) {
+        if (entry.id == id) {
+            return qobject_cast<ContainerWidget*>(entry.widget);
+        }
+    }
+    return nullptr;
 }
 
-void AppletPanel::applyBarLayout()
+bool AppletPanel::appletIsOpen(const QString& id) const
 {
-    if (!m_favLayout || !m_drawerLayout || !m_drawerToggleBtn) return;
-
-    // Batch all reparent + addWidget calls so Qt does a single layout
-    // pass and style polish at the end.  Without this, ~19 individual
-    // setParent() calls each trigger a cascading invalidation — visible
-    // as a startup delay when MainWindow's hardware-presence setters
-    // fire applyBarLayout() several times in a row.
-    const bool favWasUpdating = m_favRow->updatesEnabled();
-    const bool drawerWasUpdating = m_drawer->updatesEnabled();
-    m_favRow->setUpdatesEnabled(false);
-    m_drawer->setUpdatesEnabled(false);
-    auto restoreUpdates = qScopeGuard([&] {
-        m_favRow->setUpdatesEnabled(favWasUpdating);
-        m_drawer->setUpdatesEnabled(drawerWasUpdating);
-    });
-
-    // Sanitize: drop unknown IDs from both lists, then append any
-    // newly-registered buttons (e.g. a freshly added applet in a future
-    // build) to the active list so they appear.
-    {
-        QSet<QString> registered;
-        for (const auto& bb : m_barButtons) registered.insert(bb.id);
-
-        QStringList validOrder;
-        for (const auto& id : m_buttonOrder)
-            if (registered.contains(id) && !validOrder.contains(id))
-                validOrder.append(id);
-
-        QSet<QString> validHidden;
-        for (const auto& id : m_hiddenButtons)
-            if (registered.contains(id)) validHidden.insert(id);
-
-        // Buttons known to the build but missing from both lists →
-        // default to Active (visible).  Skip hardware-conditional
-        // buttons (TUN/AMP/AG/SS) until the corresponding device is
-        // detected — updateHardwareAvailability() adds them on first
-        // hardware-present transition.
-        for (const auto& bb : m_barButtons) {
-            if (validOrder.contains(bb.id) || validHidden.contains(bb.id)) continue;
-            if (!bb.hardwareAvailable) continue;
-            validOrder.append(bb.id);
-        }
-
-        if (validOrder != m_buttonOrder || validHidden != m_hiddenButtons) {
-            m_buttonOrder = validOrder;
-            m_hiddenButtons = validHidden;
-            saveButtonLayout();
-        }
+    const ContainerWidget* container = appletContainer(id);
+    if (!container || !container->isContainerVisible()) {
+        return false;
     }
-
-    auto detach = [](QLayout* layout, QWidget* widget) {
-        if (!widget || !layout) return;
-        layout->removeWidget(widget);
-    };
-
-    // Detach every registered bar button + the drawer toggle from
-    // whichever container they're in.  They keep their parent (we
-    // re-parent below) so signal connections survive.
-    for (const auto& bb : m_barButtons) {
-        if (auto* l = bb.btn->parentWidget() ? bb.btn->parentWidget()->layout() : nullptr)
-            detach(l, bb.btn);
-    }
-    if (auto* l = m_drawerToggleBtn->parentWidget()
-                      ? m_drawerToggleBtn->parentWidget()->layout()
-                      : nullptr) {
-        detach(l, m_drawerToggleBtn);
-    }
-
-    // Both the favorites strip and the drawer use the same column
-    // count so cell widths match exactly across the two grids.
-    constexpr int kCols = 6;
-
-    auto findButton = [this](const QString& id) -> BarButton* {
-        for (auto& bb : m_barButtons)
-            if (bb.id == id) return &bb;
-        return nullptr;
-    };
-
-    // Walk m_buttonOrder, placing each visible button first into the
-    // favourites row (positions 0..kFavoriteCount-1) and then into the
-    // drawer grid.  Hidden buttons and hardware-unavailable buttons get
-    // parked + hidden — they consume no slot.
-    int favSlot = 0;
-    int drawerIdx = 0;
-    for (const auto& id : m_buttonOrder) {
-        BarButton* bb = findButton(id);
-        if (!bb || !bb->btn) continue;
-
-        const bool wantsVisible =
-            bb->hardwareAvailable && !m_hiddenButtons.contains(bb->id);
-        if (!wantsVisible) {
-            bb->btn->setParent(m_drawer);
-            bb->btn->hide();
-            continue;
-        }
-
-        if (favSlot < kFavoriteCount) {
-            bb->btn->setParent(m_favRow);
-            m_favLayout->addWidget(bb->btn, 0, favSlot);
-            bb->btn->setVisible(true);
-            ++favSlot;
-        } else {
-            bb->btn->setParent(m_drawer);
-            m_drawerLayout->addWidget(bb->btn, drawerIdx / kCols, drawerIdx % kCols);
-            bb->btn->setVisible(true);
-            ++drawerIdx;
-        }
-    }
-
-    // User-hidden buttons (not in m_buttonOrder) — defensively park them.
-    for (auto& bb : m_barButtons) {
-        if (!m_hiddenButtons.contains(bb.id)) continue;
-        bb.btn->setParent(m_drawer);
-        bb.btn->hide();
-    }
-
-    // Equal-stretch on both grids so favourite cell width tracks drawer
-    // cell width even when the favourites row isn't fully populated.
-    for (int c = 0; c < kCols; ++c) {
-        m_favLayout->setColumnStretch(c, 1);
-        m_drawerLayout->setColumnStretch(c, 1);
-    }
-
-    // Drawer-toggle is always the last slot of the favorites row.
-    m_drawerToggleBtn->setParent(m_favRow);
-    m_favLayout->addWidget(m_drawerToggleBtn, 0, kCols - 1);
-    m_drawerToggleBtn->show();
+    return !container->isFloating() || !container->window()->isHidden();
 }
 
-void AppletPanel::setDrawerOpen(bool open)
+void AppletPanel::refreshAppletPicker()
 {
-    if (!m_drawer || !m_drawerToggleBtn) return;
-    m_drawer->setVisible(open);
-    // Full-size triangle: ▼ closed, ▲ open
-    m_drawerToggleBtn->setText(open
-        ? QString::fromUtf8("\xe2\x96\xb2")
-        : QString::fromUtf8("\xe2\x96\xbc"));
-    AppSettings::instance().setValue(
-        "ButtonBarDrawerOpen", open ? "True" : "False");
+    if (!m_picker) {
+        return;
+    }
+    QList<AppletPicker::Entry> entries;
+    for (const AppletCatalogEntry& applet : appletCatalog()) {
+        entries.append({applet.id, applet.title, applet.category,
+                        appletHardwareAvailable(applet.id), appletIsOpen(applet.id)});
+    }
+    m_picker->setEntries(entries);
+}
+
+void AppletPanel::addSelectedApplet(const QString& id)
+{
+    ContainerWidget* container = appletContainer(id);
+    if (!container || !appletHardwareAvailable(id) || appletIsOpen(id)) {
+        refreshAppletPicker();
+        return;
+    }
+    for (const BarButton& entry : m_barButtons) {
+        if (entry.id == id && entry.btn) {
+            entry.btn->setChecked(true);
+            break;
+        }
+    }
+    container->setContainerVisible(true);
+    if (container->isFloating()) {
+        container->window()->show();
+        container->window()->raise();
+    } else if (!container->isOnCanvas() && container != m_sMeterContainer) {
+        const QPointer<ContainerWidget> guard(container);
+        QTimer::singleShot(0, this, [this, guard]() {
+            if (guard && !guard->isFloating() && !guard->isOnCanvas()) {
+                m_scrollArea->ensureWidgetVisible(guard->titleBar(), 0, 4);
+            }
+        });
+    }
     AppSettings::instance().save();
+    syncPinnedMeter();
+    refreshAppletPicker();
 }
 
-void AppletPanel::openFavoritesPicker()
+void AppletPanel::syncPinnedMeter()
 {
-    // Lazy-construct + raise pattern per docs/style/dialog-patterns.md.
-    // The dialog is non-modal, WA_DeleteOnClose'd, and frameless-aware
-    // via its PersistentDialog base.  Subsequent right-clicks while the
-    // picker is open just raise it.
-    if (!m_favoritesPicker) {
-        QList<FavoritesPickerDialog::Entry> entries;
-        for (const auto& bb : m_barButtons)
-            entries.append({bb.id, bb.label, bb.tooltip});
-
-        const QStringList hiddenList(m_hiddenButtons.cbegin(),
-                                     m_hiddenButtons.cend());
-
-        auto* dlg = new FavoritesPickerDialog(
-            entries, m_buttonOrder, hiddenList, kFavoriteCount, window());
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        connect(dlg, &FavoritesPickerDialog::layoutAccepted, this,
-                [this](const QStringList& activeOrder,
-                       const QStringList& hidden) {
-                    const QSet<QString> newHidden(hidden.cbegin(),
-                                                  hidden.cend());
-                    // Newly-hidden buttons: disable their applets so a
-                    // hidden tile doesn't keep occupying screen real
-                    // estate after the user hides its toggle.
-                    for (const auto& id : newHidden) {
-                        if (m_hiddenButtons.contains(id)) continue;
-                        disableAppletForButton(id);
-                    }
-                    m_buttonOrder = activeOrder;
-                    m_hiddenButtons = newHidden;
-                    saveButtonLayout();
-                    applyBarLayout();
-                });
-        m_favoritesPicker = dlg;
+    if (!m_pinnedMeterHost || !m_scrollArea) {
+        return;
     }
-    m_favoritesPicker->show();
-    m_favoritesPicker->raise();
-    m_favoritesPicker->activateWindow();
+    const bool docked = !m_sMeterContainer->isFloating() && !m_sMeterContainer->isOnCanvas();
+    m_pinnedMeterHost->setVisible(docked && m_sMeterContainer->isContainerVisible());
+    const QWidget* viewport = m_scrollArea->viewport();
+    const int left = viewport->mapTo(this, QPoint()).x();
+    const int right = qMax(0, width() - left - viewport->width());
+    const QMargins margins(left, 0, right, 0);
+    if (m_pinnedMeterLayout->contentsMargins() != margins) {
+        m_pinnedMeterLayout->setContentsMargins(margins);
+    }
 }
 
 } // namespace AetherSDR

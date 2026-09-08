@@ -16,7 +16,6 @@ class QScrollArea;
 class QTimer;
 class QVBoxLayout;
 class QHBoxLayout;
-class QGridLayout;
 
 namespace AetherSDR {
 class ContainerManager;
@@ -66,13 +65,11 @@ class ProfileSwitcherApplet;
 class HealthApplet;
 class MqttApplet;
 class KiwiSdrApplet;
-class FavoritesPickerDialog;
+class AppletPicker;
 #ifdef HAVE_RADE
 class RadeApplet;
 #endif
 
-// AppletPanel — right-side panel with a row of toggle buttons at the top,
-// an S-Meter gauge below them, and a scrollable stack of applets.
 // Multiple applets can be visible simultaneously. Applets can be reordered
 // by dragging their title bars (QDrag with custom MIME type).
 class AppletPanel : public QWidget {
@@ -338,17 +335,6 @@ private:
     int dropIndexFromY(int localY) const;
     void setScrollHandleActive(bool active);
 
-    // ── Button-bar (active + drawer + hidden) ────────────────────────────────
-    //
-    // Bar model — three buckets, all driven by m_buttonOrder + m_hiddenButtons:
-    //
-    //   * Active (top kFavoriteCount entries of m_buttonOrder that aren't in
-    //     m_hiddenButtons) → favorites row
-    //   * Drawer (remaining shown entries, in m_buttonOrder order) → grid below
-    //   * Hidden (m_hiddenButtons) → not in the bar at all; their applets
-    //     are forced off (Applet_<id>=False) when first moved here
-    //
-    // Reordering in the picker updates m_buttonOrder; the drawer follows.
     struct BarButton {
         QString      id;     // canonical persistence id (e.g. "P/CW")
         QString      label;  // bar label (e.g. "P/CW", "VUDU")
@@ -369,13 +355,11 @@ private:
     void registerBarButton(const QString& id, const QString& label,
                            const QString& tooltip, QPushButton* btn,
                            bool defaultOn = true);
-    void applyBarLayout();
-    void setDrawerOpen(bool open);
-    void openFavoritesPicker();
-    void loadButtonLayout();
-    void saveButtonLayout();
-    QStringList defaultButtonOrder() const;
-    void disableAppletForButton(const QString& id);
+    void refreshAppletPicker();
+    void addSelectedApplet(const QString& id);
+    void syncPinnedMeter();
+    ContainerWidget* appletContainer(const QString& id) const;
+    bool appletIsOpen(const QString& id) const;
     void updateHardwareAvailability(const QString& id,
                                     const QString& appletKey,
                                     bool hardwareVisible);
@@ -388,7 +372,6 @@ private:
     void markHardwareConditional(const QString& id);
     void persistVuMeterSettings() const;
     void showStandardMeterContextMenu(QWidget* source, const QPoint& position);
-    static const int kFavoriteCount = 5;
 
     ContainerManager* m_containerMgr{nullptr};
     ContainerWidget*  m_rootSidebar{nullptr};
@@ -464,17 +447,11 @@ private:
     QWidget*     m_dropIndicator{nullptr};
     QPushButton* m_lockBtn{nullptr};   // controls-lock toggle (#745)
 
-    // Button-bar widgets — both rows are QGridLayout with the same
-    // column count so cell widths match between favorites and drawer.
-    QWidget*     m_favRow{nullptr};
-    QGridLayout* m_favLayout{nullptr};
-    QWidget*     m_drawer{nullptr};
-    QGridLayout* m_drawerLayout{nullptr};
-    QPushButton* m_drawerToggleBtn{nullptr};
+    AppletPicker* m_picker{nullptr};
+    QWidget* m_toggleStorage{nullptr};
+    QWidget* m_pinnedMeterHost{nullptr};
+    QHBoxLayout* m_pinnedMeterLayout{nullptr};
     QVector<BarButton> m_barButtons;
-    QStringList  m_buttonOrder;     // shown buttons in user-chosen order
-    QSet<QString> m_hiddenButtons;  // ids removed from the bar entirely
-    QPointer<FavoritesPickerDialog> m_favoritesPicker;
 
     // Ordered list of applets (drag-reorderable)
     QVector<AppletEntry> m_appletOrder;

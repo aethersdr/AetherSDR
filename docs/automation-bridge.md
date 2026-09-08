@@ -591,6 +591,14 @@ alias.
 An unknown index returns `{"ok":false,"error":"no pan with index N","available":[0]}`.
 
 ### `invoke`
+The sidebar's Add row uses the existing widget verbs: inspect
+`appletPickerCombo` in `dumpTree`, choose an enabled row with
+`invoke appletPickerCombo setCurrentIndex <index>`, then
+`invoke addAppletButton click`. Selection alone must not open a tile.
+`<container>/containerClose` hides it again. `appletViewport`, `VU`, and
+`pinnedMeterHost` expose geometry for checking the pinned meter against the
+scrollable column on both dock sides; `appletPicker` remains above both.
+
 Drive a control deterministically — no pixel-hunting. Resolves `target` exactly
 like `grab`.
 

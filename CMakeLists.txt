@@ -1084,6 +1084,7 @@ set(GUI_SOURCES
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
+    src/gui/AppletPicker.cpp
     src/gui/KiwiSdrApplet.cpp
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/FavoritesPickerDialog.cpp

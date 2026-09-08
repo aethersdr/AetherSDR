@@ -4321,6 +4321,23 @@ set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
 
 # Title-bar headphone mute reconcile contract (#4722) — needs QApplication +
 # Widgets, same dependency set as hl2_pc_audio_lock_test above.
+add_executable(applet_picker_test
+    tests/applet_picker_test.cpp
+    src/gui/AppletPicker.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(applet_picker_test PRIVATE src)
+target_link_libraries(applet_picker_test PRIVATE
+    aether_sqlite3 Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(applet_picker_test PROPERTIES AUTOMOC ON)
+add_test(NAME applet_picker_test COMMAND applet_picker_test)
+set_tests_properties(applet_picker_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(titlebar_headphone_mute_test
     tests/titlebar_headphone_mute_test.cpp
     src/gui/TitleBar.cpp
@@ -4563,6 +4580,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    applet_picker_test
     weather_radar_loading_test
     hl2_gain_restore_test
     icom_identity_test
