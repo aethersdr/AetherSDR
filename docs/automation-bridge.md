@@ -1074,6 +1074,33 @@ python3 tools/radiocert_persist.py run --app build/AetherSDR.app \
   --serial EXACT_DISCOVERY_SERIAL --rx-antennas ANT1 ANT2
 ```
 
+A separate opt-in scenario exercises two slices on one panadapter:
+
+```sh
+python3 tools/radiocert_persist_multislice.py plan
+python3 tools/radiocert_persist_multislice.py run --app build/AetherSDR.app \
+  --profile /tmp/persist-two-slice-profile --output /tmp/persist-two-slice-evidence \
+  --serial EXACT_DISCOVERY_SERIAL
+```
+
+It starts with one owned USB/LSB slice and requires advertised capacity for two.
+Both 14.180 and 14.160 MHz RX seeds must fit inside the original pan span. The
+runner creates the additional slice, assigns distinct SQL, AGC, filter and audio
+values, switches the selected slice, exercises SQL on/off isolation and independent
+mode round trips, then performs a normal restart with both slices present. Radio
+slice letters identify the contexts across restart; current numeric IDs, owned
+slots and pan relationships are validated before mutations. The RX applet is
+checked against the selected slice, while both slices' model values are sampled.
+
+Only the test-created slice is removed/reopened. Original values are restored
+only when the current state still matches the test's expected state. Production
+slice reveal may move the pan center; its restoration also checks for conflicting
+changes and compares MHz at Flex's six-decimal wire resolution. Any unsupported
+topology or unresolved restoration stops with evidence retained. Successful runs
+quit the owned client. The single-slice runner still rejects multiple slices by
+default. Both persistence entry points disable TX permission; transmitting tests
+use the separately authorized procedure in `docs/automation/TX_TEST_PROMPT.md`.
+
 Use new, separate profile and output directories. The supervisor initializes
 `AutoConnectToLastRadio=False` through the normal `--config` CLI before the first
 GUI launch, selects the exact discovered serial, requires Available status and

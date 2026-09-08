@@ -277,5 +277,89 @@ class JournalTest(unittest.TestCase):
         supervisor.process.wait.assert_called_once_with(timeout=30)
 
 
+
+class MultiSlicePolicyTest(unittest.TestCase):
+    def two_slices(self):
+        data = snapshot()
+        data['radio'].update(maxSlices=2, slots=[{'id': 3, 'state': 'ours'}, {'id': 7, 'state': 'ours'}])
+        data['slices'][0]['letter'] = 'A'
+        second = copy.deepcopy(data['slices'][0])
+        second.update(sliceId=7, letter='B', active=False)
+        data['slices'].append(second)
+        return data
+
+    def test_opt_in_keeps_single_slice_default(self):
+        data = self.two_slices()
+        with self.assertRaises(StopRun):
+            ready(data, 'test')
+        self.assertEqual(ready(data, 'test', slice_count=2)[0]['letter'], 'A')
+
+    def test_every_slice_requires_identity_ownership_and_safe_topology(self):
+        mutations = [lambda d: d['slices'][1].update(sliceId=3),
+                     lambda d: d['slices'][1].update(letter='A'),
+                     lambda d: d['slices'][1].pop('letter'),
+                     lambda d: d['slices'][1].update(active=True),
+                     lambda d: d['slices'][1].update(panId='foreign'),
+                     lambda d: d['slices'][1].update(locked=True),
+                     lambda d: d['slices'][1].update(linkedTo=3),
+                     lambda d: d['radio']['slots'][1].update(state='foreign'),
+                     lambda d: d['radio'].update(maxSlices=1)]
+        for mutation in mutations:
+            data = self.two_slices(); mutation(data)
+            with self.subTest(data=data), self.assertRaises(StopRun):
+                ready(data, 'test', slice_count=2)
+
+    def test_restart_rebinds_letters_not_numeric_ids(self):
+        from radiocert_persist_multislice import by_letter
+        data = self.two_slices()
+        data['slices'].reverse()
+        data['slices'][0]['sliceId'] = 42
+        self.assertEqual(by_letter(data)['A']['sliceId'], 3)
+        self.assertEqual(by_letter(data)['B']['sliceId'], 42)
+
+    def test_restoration_refuses_changed_or_missing_values(self):
+        from radiocert_persist_multislice import restoration_conflicts
+        self.assertEqual(restoration_conflicts({'squelchLevel': 26}, {'squelchLevel': 26})['outcome'], 'ESTABLISHED')
+        self.assertEqual(restoration_conflicts({'squelchLevel': 39}, {'squelchLevel': 26})['outcome'], 'CONCERN')
+        self.assertEqual(restoration_conflicts({}, {'squelchLevel': 26})['outcome'], 'INCONCLUSIVE')
+
+    def test_never_remove_original_slice(self):
+        from radiocert_persist_multislice import MultiSliceRun
+        with tempfile.TemporaryDirectory() as directory:
+            run = MultiSliceRun(Mock(), 'test', Journal(Path(directory)/'j.json', {}))
+            run.original = run.extra = 'A'
+            run.action = Mock()
+            with self.assertRaises(StopRun):
+                run.remove_extra()
+            run.action.assert_not_called()
+
+    def test_peer_state_leakage_is_retained(self):
+        result = compare({'A.sql': 26, 'B.sql': 39},
+                         [{'A.sql': 26, 'B.sql': 39}, {'A.sql': 39, 'B.sql': 39}, {'A.sql': 26, 'B.sql': 39}])
+        self.assertEqual(result['outcome'], 'CONCERN')
+
+    def test_pan_restoration_refuses_newer_center(self):
+        from radiocert_persist_multislice import MultiSliceRun
+        with tempfile.TemporaryDirectory() as directory:
+            run = MultiSliceRun(Mock(), 'test', Journal(Path(directory)/'j.json', {}))
+            run.pan_expected = {'centerMhz': 14.12}
+            run.wait_ready = Mock(return_value={'pans': [{'centerMhz': 14.15}]})
+            run.action = Mock()
+            with self.assertRaises(StopRun):
+                run.restore_pan({'centerMhz': 14.1})
+            run.action.assert_not_called()
+
+    def test_pan_center_compares_at_flex_wire_resolution(self):
+        from radiocert_persist_multislice import pan_state
+        self.assertEqual(pan_state({'centerMhz':14.126199999999999}), pan_state({'centerMhz':14.1262}))
+        self.assertNotEqual(pan_state({'centerMhz':14.126201}), pan_state({'centerMhz':14.1262}))
+
+    def test_explicit_tx_permission_still_requires_unkeyed_state(self):
+        data = snapshot();data['identity']['txAllowed'] = True
+        with self.assertRaises(StopRun):ready(data, 'test')
+        ready(data, 'test', tx_permission=True)
+        data['transmit']['tuning'] = True
+        with self.assertRaises(StopRun):ready(data, 'test', tx_permission=True)
+
 if __name__ == "__main__":
     unittest.main()

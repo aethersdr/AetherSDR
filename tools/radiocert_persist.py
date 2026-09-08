@@ -137,12 +137,12 @@ def band_of(frequency):
     return None
 
 
-def ready(snapshot, serial):
+def ready(snapshot, serial, *, slice_count=1, tx_permission=False):
     if snapshot.get("schemaVersion") != SCHEMA:
         raise StopRun("unsupported persist snapshot schema")
     identity, radio = snapshot["identity"], snapshot["radio"]
-    if identity.get("txAllowed") is not False or identity.get("readOnly") is not False:
-        raise StopRun("runner requires a writable, TX-disabled bridge")
+    if type(tx_permission) is not bool or identity.get("txAllowed") is not tx_permission or identity.get("readOnly") is not False:
+        raise StopRun("bridge permission does not match the explicit scenario")
     if not radio.get("connected") or radio.get("serial") != serial:
         raise StopRun("target radio is disconnected or identity changed")
     if snapshot.get("family") != "flex":
@@ -160,15 +160,27 @@ def ready(snapshot, serial):
     if any(not c.get("isUs") for c in clients):
         raise StopRun("another client is present; MultiFlex is a separate, not-yet-implemented stage")
     slices, pans = snapshot.get("slices", []), snapshot.get("pans", [])
-    if len(slices) != 1 or len(pans) != 1:
-        raise StopRun("v1 requires exactly one slice and one panadapter")
-    s, p = slices[0], pans[0]
+    if slice_count not in (1, 2) or len(slices) != slice_count or len(pans) != 1:
+        raise StopRun(f"scenario requires exactly {slice_count} slices and one panadapter")
+    active = [s for s in slices if s.get("active") is True]
+    if len(active) != 1:
+        raise StopRun("active slice is missing or ambiguous")
+    s, p = active[0], pans[0]
     if not p.get("ownedByUs") or not p.get("clientHandle"):
         raise StopRun("pan ownership is unknown or foreign")
-    if s.get("locked") or s.get("diversity") or s.get("externalReceiveReplacement") or s.get("linkedTo", -1) != -1:
-        raise StopRun("locked, linked, diversity or external-source slice needs its own scenario")
-    if s.get("panId") != p.get("panId") or not s.get("active"):
-        raise StopRun("active slice/pan mapping has not converged")
+    for item in slices:
+        if item.get("locked") or item.get("diversity") or item.get("externalReceiveReplacement") or item.get("linkedTo", -1) != -1:
+            raise StopRun("locked, linked, diversity or external-source slice needs its own scenario")
+        if item.get("panId") != p.get("panId"):
+            raise StopRun("slice/pan mapping has not converged")
+    if slice_count == 2:
+        ids = [item.get("sliceId") for item in slices]
+        letters = [item.get("letter") for item in slices]
+        slots = {slot.get("id"): slot.get("state") for slot in radio.get("slots", [])}
+        if (radio.get("maxSlices", 0) < 2 or len(set(ids)) != 2
+                or any(type(i) is not int or i < 0 or slots.get(i) != "ours" for i in ids)
+                or len(set(letters)) != 2 or any(x not in tuple("ABCDEFGH") for x in letters)):
+            raise StopRun("two-slice capability, identity or ownership is incomplete")
     displays = snapshot.get("display", {}).get("pans", [])
     if len(displays) != 1 or displays[0].get("panId") != p.get("panId"):
         raise StopRun("display-to-pan mapping is missing or ambiguous")
