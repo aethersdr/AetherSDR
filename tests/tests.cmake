@@ -1189,6 +1189,97 @@ add_test(NAME map_wrap_test COMMAND map_wrap_test)
 set_tests_properties(map_wrap_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Reply lifecycle accounting uses injected HTTP replies; no sockets are opened.
+add_executable(map_tile_reply_test tests/map_tile_reply_test.cpp)
+target_link_libraries(map_tile_reply_test PRIVATE
+    qgeoview Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+add_test(NAME map_tile_reply_test COMMAND map_tile_reply_test)
+set_tests_properties(map_tile_reply_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
+# QGeoView image attachment must avoid HiDPI CPU-cache thrash on GL viewports.
+# No network, visible window, or GL context; tests real item cache selection.
+add_executable(map_image_cache_test tests/map_image_cache_test.cpp)
+target_link_libraries(map_image_cache_test PRIVATE
+    qgeoview Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGLWidgets)
+add_test(NAME map_image_cache_test COMMAND map_image_cache_test)
+set_tests_properties(map_image_cache_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Injected HTTP replies and virtual time: no sockets, provider traffic or minute-long waits.
+add_executable(map_provider_retry_test tests/map_provider_retry_test.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp)
+target_include_directories(map_provider_retry_test PRIVATE src)
+target_link_libraries(map_provider_retry_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME map_provider_retry_test COMMAND map_provider_retry_test)
+set_tests_properties(map_provider_retry_test PROPERTIES TIMEOUT 30)
+
+# Injected public HTTP replies; this test binds no sockets and contacts no provider.
+add_executable(city_lights_source_test tests/city_lights_source_test.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp
+    src/gui/map/CityLightsSource.cpp)
+target_include_directories(city_lights_source_test PRIVATE src)
+target_link_libraries(city_lights_source_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
+add_test(NAME city_lights_source_test COMMAND city_lights_source_test)
+set_tests_properties(city_lights_source_test PROPERTIES TIMEOUT 30)
+
+# NOAA radar URL generation is bounded, canonical across wrapped world copies,
+# and fixed to the public HTTPS host. This test is pure and never uses network.
+add_executable(weather_radar_source_test
+    tests/weather_radar_source_test.cpp
+    src/gui/map/WeatherRadarSource.cpp)
+target_include_directories(weather_radar_source_test PRIVATE src)
+target_link_libraries(weather_radar_source_test PRIVATE Qt6::Core)
+add_test(NAME weather_radar_source_test COMMAND weather_radar_source_test)
+
+# Radar native-GL placement must agree with Qt's basemap pixels at every DPR.
+# Socket-free QImage/QPainter oracle; exercises pan, zoom and viewport offsets.
+add_executable(weather_radar_placement_test tests/weather_radar_placement_test.cpp)
+target_include_directories(weather_radar_placement_test PRIVATE src)
+target_link_libraries(weather_radar_placement_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME weather_radar_placement_test COMMAND weather_radar_placement_test)
+
+# Real QGeoView/radar-item repeat and frame replacement. No provider or socket.
+# Runs on offscreen raster; native GL coverage is checked via the app bridge.
+add_executable(weather_radar_wrap_render_test
+    tests/weather_radar_wrap_render_test.cpp
+    src/gui/map/WeatherRadarPlaybackItem.cpp)
+target_include_directories(weather_radar_wrap_render_test PRIVATE src)
+target_link_libraries(weather_radar_wrap_render_test PRIVATE
+    qgeoview Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGL Qt6::OpenGLWidgets)
+add_test(NAME weather_radar_wrap_render_test COMMAND weather_radar_wrap_render_test)
+set_tests_properties(weather_radar_wrap_render_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Production playback controller + injected QNetworkReply delivery (NO sockets).
+# Proves delayed/out-of-order downloads, view cache reuse, and retained geometry.
+add_executable(weather_radar_loading_test
+    tests/weather_radar_loading_test.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp
+    src/gui/map/CityLightsItem.cpp
+    src/gui/map/CityLightsSource.cpp
+    src/gui/map/MapDisplayWidget.cpp src/gui/map/MapView.cpp src/gui/map/GlobeMapView.cpp
+    src/gui/map/MapMarkerBatchItem.cpp src/gui/map/MapMarkerItem.cpp
+    src/gui/map/MapPathBatchItem.cpp src/gui/map/MapTerminatorItem.cpp
+    src/gui/map/WeatherRadarSource.cpp src/gui/map/WeatherRadarTileLayer.cpp
+    src/gui/map/WeatherRadarPlaybackItem.cpp)
+target_include_directories(weather_radar_loading_test PRIVATE src)
+target_link_libraries(weather_radar_loading_test PRIVATE aethercore qgeoview
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Test
+    Qt6::OpenGL Qt6::OpenGLWidgets)
+add_test(NAME weather_radar_loading_test COMMAND weather_radar_loading_test)
+set_tests_properties(weather_radar_loading_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+# Production 2D/3D radar upload and shader alpha-filtering contract. No sockets.
+# Default skips before GUI discovery; explicit native GPU opt-in is required.
+add_executable(weather_radar_texture_gl_test tests/weather_radar_texture_gl_test.cpp)
+target_include_directories(weather_radar_texture_gl_test PRIVATE src)
+target_link_libraries(weather_radar_texture_gl_test PRIVATE Qt6::Core Qt6::Gui Qt6::OpenGL)
+add_test(NAME weather_radar_texture_gl_test COMMAND weather_radar_texture_gl_test)
+set_tests_properties(weather_radar_texture_gl_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # Globe drag and roll are independent interaction axes. This pure state test
 # guards the default level orientation, pole bounds and normalization without
 # requiring an OpenGL context or tile network.
@@ -4498,6 +4589,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
+    weather_radar_loading_test
     hl2_gain_restore_test
     icom_identity_test
     icom_control_profile_test

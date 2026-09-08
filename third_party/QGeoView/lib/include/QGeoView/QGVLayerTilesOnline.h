@@ -34,8 +34,13 @@ public:
     QGVLayerTilesOnline();
     ~QGVLayerTilesOnline();
 
+    int pendingRequestCount() const;
+    quint64 decodedTileDeliveryCount() const;
+    quint64 failedTileRequestCount() const;
+
 protected:
     virtual QString tilePosToUrl(const QGV::GeoTilePos& tilePos) const = 0;
+    void onClean() override;
 
 private:
     static QGV::GeoTilePos canonicalTile(const QGV::GeoTilePos& tilePos);
@@ -52,4 +57,6 @@ private:
     QMap<QGV::GeoTilePos, QNetworkReply*> mRequest;
     QMap<QGV::GeoTilePos, QList<int>> mWaiting;
     QCache<QUrl, QImage> mDecodedTileCache;
+    quint64 mDecodedTileDeliveryCount{0};
+    quint64 mFailedTileRequestCount{0};
 };

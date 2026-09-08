@@ -94,6 +94,45 @@ SupportBundle::RadioInfo SupportBundle::collectRadioInfo(const RadioModel* model
     return info;
 }
 
+namespace {
+
+// Stream a log file through redactPii() line by line. Bounded memory: a log
+// can be tens of megabytes and the bundle is generated on the GUI thread.
+bool copyLogRedacted(const QString& from, const QString& to)
+{
+    QFile in(from);
+    if (!in.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+    QFile out(to);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    while (!in.atEnd()) {
+        const QByteArray raw = in.readLine();
+        const QString line = QString::fromUtf8(raw);
+        const QByteArray scrubbed = redactPii(line).toUtf8();
+        // A short write leaves a TRUNCATED log in the bundle that reads as a
+        // short log rather than a failed copy, which is the worst of both: the
+        // recipient draws conclusions from an incomplete file without knowing
+        // it is incomplete. Fail the copy and remove the partial destination so
+        // the caller's `continue` skips it entirely.
+        if (out.write(scrubbed) != scrubbed.size()) {
+            qWarning() << "support bundle: log copy failed for" << from << out.errorString();
+            out.close();
+            out.remove();
+            return false;
+        }
+    }
+    out.close();
+    if (out.error() != QFileDevice::NoError) {
+        qWarning() << "support bundle: log flush failed for" << from << out.errorString();
+        out.remove();
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 QString SupportBundle::createBundle(const RadioInfo& radio)
 {
     auto& logMgr = LogManager::instance();
@@ -120,7 +159,21 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
             if (fi.isSymLink() || fi.size() < 100) continue;
             QString dest = (copied == 0) ? "aethersdr.log"
                                          : QString("aethersdr-%1.log").arg(copied);
-            QFile::copy(fi.absoluteFilePath(), tmp + "/" + dest);
+            // RE-SCRUB ON THE WAY IN, don't QFile::copy (#5480).
+            //
+            // Lines are redacted at capture, so a log written by THIS build is
+            // already clean. An older log on disk is not: it was written by
+            // whatever redactor shipped at the time, and a bundle generated
+            // after an upgrade would carry those pre-upgrade lines out of the
+            // machine unchanged. Redaction is idempotent, so running it again
+            // over an already-clean line is a no-op.
+            //
+            // The source log is deliberately left alone: it is the operator's
+            // own diagnostic record on their own machine, and rewriting it
+            // would destroy detail they may still need. Only the copy that
+            // leaves is scrubbed.
+            if (!copyLogRedacted(fi.absoluteFilePath(), tmp + "/" + dest))
+                continue;
             ++copied;
         }
     }
