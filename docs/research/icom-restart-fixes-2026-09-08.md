@@ -83,5 +83,5 @@ was performed, and filter preset/PBT behavior was not changed.
 
 Raw final evidence is retained locally under
 `build/icom-restart-proof-final/` (journal, snapshots, transaction samples and
-captures). The PR includes a portable summary and actual-widget captures on its
-separate evidence branch; profiles and credentials are excluded.
+captures). Detailed session-derived captures and observations remain local;
+the PR reports validation results without public evidence attachments.
