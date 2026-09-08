@@ -517,6 +517,10 @@ private:
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
+    // One status-bar notice per connect session for a control this radio
+    // cannot honor. Shared by the commandDropped path and by the
+    // capability gates that refuse BEFORE the send (M0, #5263).
+    void showUnsupportedControlNotice();
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
