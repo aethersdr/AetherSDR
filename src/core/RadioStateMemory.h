@@ -54,6 +54,17 @@ RestoredRadioState load(const RadioSettingsScope& scope,
 bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
            const RestoredRadioState& state);
 
+// Explicit RFC #5468 cutover helpers. No current runtime caller. Exact rows
+// only; the new owner must claim successfully before overlapping old-domain
+// capture is disabled. The legacy document stays as a downgrade snapshot.
+struct RtlMigrationSource {
+    AppSettings::FeatureReadStatus status = AppSettings::FeatureReadStatus::Unavailable;
+    RestoredRadioState state;
+};
+RtlMigrationSource rtlMigrationSource(const RadioSettingsScope& scope);
+bool storeRtlRfGainPreservingLegacy(const RadioSettingsScope& scope,
+                                    const RestoredRadioState& state);
+
 } // namespace RadioStateMemory
 
 } // namespace AetherSDR

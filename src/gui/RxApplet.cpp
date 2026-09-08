@@ -2493,6 +2493,14 @@ void RxApplet::connectSlice(SliceModel* s)
     });
 
     auto applySquelchState = [this](bool on, int level, bool externalReceive) {
+        // A band/profile restore can enable SQL and publish its manual level
+        // in the same status while our echo gate still reflects Off (#5501).
+        // Adopt that level before setSqlMode() repaints from the manual cache.
+        // SliceModel publishes SQL before modeChanged for a combined delta;
+        // the button's enabled state can still describe the previous mode.
+        const bool radioEnablesManual =
+            on && m_sqlMode == SqlMode::Off
+            && squelchAvailableInMode(m_slice->mode());
         // In Auto mode the slider represents the operator-chosen dB margin,
         // NOT the algorithm-suggested threshold — skip the value update so
         // the algorithm's tick-by-tick setSquelch echoes don't overwrite
@@ -2504,7 +2512,8 @@ void RxApplet::connectSlice(SliceModel* s)
             // Keep only the Flex manual-level cache in sync with radio-side
             // squelch changes. Kiwi replacement SQL is independent and lives
             // in the external receive state on the slice.
-            if (!externalReceive && m_sqlMode == SqlMode::Manual) {
+            if (!externalReceive
+                && (m_sqlMode == SqlMode::Manual || radioEnablesManual)) {
                 setManualSqlLevelForCurrentSurface(level);
             }
         }
@@ -2516,7 +2525,7 @@ void RxApplet::connectSlice(SliceModel* s)
         if (!on && m_sqlMode != SqlMode::Off) {
             setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);
             modeChanged = true;
-        } else if (on && m_sqlMode == SqlMode::Off && m_sqlBtn->isEnabled()) {
+        } else if (radioEnablesManual) {
             setSqlMode(SqlMode::Manual, /*propagateToRadio=*/false);
             modeChanged = true;
         }
@@ -2900,6 +2909,15 @@ QString RxApplet::formatStepLabel(int hz)
     return QString::number(hz);
 }
 
+bool RxApplet::squelchAvailableInMode(const QString& mode) const
+{
+    const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
+        && m_radioModel->backendCapabilities().hasModeIndependentSquelch
+        && !(m_slice && m_slice->externalReceiveReplacementActive());
+    return allModeSquelch || !(mode == "DIGU" || mode == "DIGL" || mode == "NT"
+                              || mode == "RTTY" || isCwMode(mode));
+}
+
 void RxApplet::updateModeSettings(const QString& mode)
 {
     const auto& settings = modeSettingsFor(mode);
@@ -2963,12 +2981,7 @@ void RxApplet::updateModeSettings(const QString& mode)
     // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
     //   and gates weak FSK signals (#2504)
     // CW: radio locks squelch on at fixed level, rejects changes
-    const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
-        && m_radioModel->backendCapabilities().hasModeIndependentSquelch
-        && !(m_slice && m_slice->externalReceiveReplacementActive());
-    bool sqlDisabled = !allModeSquelch && (mode == "DIGU" || mode == "DIGL" || mode == "NT"
-                        || mode == "RTTY"
-                        || isCwMode(mode));
+    const bool sqlDisabled = !squelchAvailableInMode(mode);
     m_sqlBtn->setEnabled(!sqlDisabled);
     // Slider enabled when the mode allows squelch AND we're not in SqlMode::Off.
     // Manual mode = threshold input; Auto mode = dB margin input.

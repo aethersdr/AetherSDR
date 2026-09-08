@@ -333,7 +333,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
-| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
+| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR), plus the backend's own DSP read-back. |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get gps`](#get) | GPS fix, location, satellite-count, time, course, and reference snapshot. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
@@ -708,8 +708,9 @@ connects).
 
 ```json
 → {"cmd":"get","model":"radio"}
-← {"ok":true,"model":"radio","radio":{"connected":true,"model":"FLEX-8400M",
-   "transmitting":false,"txPower":0,"sliceCount":1,"panCount":1, …}}
+← {"ok":true,"model":"radio","radio":{"connected":true,"connectState":"connected",
+   "model":"FLEX-8400M","transmitting":false,"txPower":0,"sliceCount":1,
+   "panCount":1, …}}
 
 → {"cmd":"get","model":"slice","selector":"active","property":"frequency"}
 ← {"ok":true,"model":"slice","property":"frequency","value":3.6}
@@ -718,8 +719,8 @@ connects).
 | `model` | `selector` | returns |
 |---|---|---|
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
-| `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
-| `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
+| `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the backend-owned DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
+| `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate) |
 | `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
@@ -1205,6 +1206,10 @@ radio-side `nr`/`nb`/`anf` in `get slice`. There is no widget that exposes which
 of the six AudioEngine NR modules is active and how it's tuned, so this is the
 only non-screenshot way to assert it.
 
+The response also carries **`backend`** — the backend-owned DSP configuration,
+separate from AudioEngine's AetherDSP chain. For HL2, these DSP chains run
+inside AetherSDR on the host, not in radio firmware (#5401).
+
 ```json
 → {"cmd":"get","model":"dsp"}
 ← {"ok":true,"model":"dsp","dsp":{
@@ -1221,7 +1226,23 @@ only non-screenshot way to assert it.
      "nr4":{"reductionDb":10,"smoothing":0,"whitening":0,"maskingDepth":50,"suppression":50,"noiseMethod":0,"adaptiveNoise":true},
      "mnr":{"strength":1},
      "dfnr":{"attenLimitDb":100,"postFilterBeta":0},
-     "bnr":{"intensity":1}}}}
+     "bnr":{"intensity":1}},
+   "backend":{
+     "family":"hl2",
+     "chains":[
+       {"chain":"rx-wdsp","receiver":0,"level":"channel-config",
+        "inputRateHz":48000,"dspRateHz":48000,"outputRateHz":48000,
+        "inputBlockSize":512,"dspBlockSize":512,"outputBlockSize":512,
+        "filterLowHz":150,"filterHighHz":2850,
+        "agcMode":"fast","agcMaxGainDb":90,"agcSlopeDb":0,"agcFixedGainDb":10,
+        "wdspNotchCount":0,"appliedNoiseBlanker":false},
+       {"chain":"rx-wdsp","receiver":1,"level":"not-configured"},
+       {"chain":"hl2-tx","level":"dsp-config",
+        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
+        "filterLowHz":300,"filterHighHz":2700,
+        "alcEnabled":true,"alcTargetPeak":0.9,"alcMaxGainDb":20,
+        "alcAttackSec":0.005,"alcReleaseSec":0.25,"alcHoldBelowDbfs":-45,
+        "micGainLinear":1}]}}}
 ```
 
 - `active` — the name of the **one** enabled module (the modules are mutually
@@ -1233,7 +1254,56 @@ only non-screenshot way to assert it.
   persisted `bnr` intensity, merged with the AppSettings-persisted
   NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
   #3902 — no container, so it exposes only `intensity`.)
-- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`.
+- `backend` — **the backend-owned DSP read-back**. Everything above describes
+  AetherDSP's chain in `AudioEngine`; this object describes the backend's
+  separate DSP chains. For HL2, both `rx-wdsp` and `hl2-tx` run on AetherSDR's
+  host I/O thread, so this is host DSP configuration, not firmware read-back.
+  `family` is the connected backend's family (`"hl2"` above), and `chains`
+  is a list with one entry per DSP chain that backend runs. It exists because
+  the recurring defect on a new backend is model/DSP divergence — a control
+  moves, the model records it, nothing reaches the DSP, and the symptom is "the
+  control does nothing". Reading the requested values from `get slice` alone
+  cannot prove that they reached the DSP; backend read-backs such as this object
+  and `get hostnb` expose that distinction.
+- `backend.chains[].chain` — **which** chain the entry describes: on a
+  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (a hand-written phasing
+  modulator on transmit, whose config is a different struct entirely). A backend
+  may run more than one chain and they need not share a vocabulary, so key off
+  `chain` rather than guessing from which fields are present. `rx-wdsp` entries
+  also carry `receiver` — the **DDC index**, not a slice id.
+- `backend.chains[].level` — **how close to the DSP the values came from**.
+  "Read-back" is used loosely, and the difference decides what a mismatch
+  proves:
+  - `channel-config` — what the channel was **opened** with, after any clamping
+    or refusal. One level below the model and one above a query into WDSP
+    itself. Within this entry, `wdspNotchCount` and `appliedNoiseBlanker`
+    are exceptions: they query WDSP directly.
+  - `dsp-config` — the DSP's **own state**.
+  - `not-configured` — a chain that **exists with nothing behind it**. Reported
+    present-but-unconfigured rather than omitted, and deliberately **without**
+    the configuration fields, so there are no stale or default values to
+    mistake for a real setting: a receiver with no channel behind it, or a
+    transmit chain that has never been configured, refused its `configure()`, or
+    been torn down by a disconnect, is exactly the state worth seeing.
+- **`dsp-config` describes the DSP, not the wire.** It is not liveness and not
+  keying. Normal unkeying and transient link loss retain the applied
+  configuration and still report `dsp-config`; for link state read
+  [`connectState`](#connectstate) on `get radio`.
+- **`backend` is absent entirely when the gather is empty.** No backend
+  attached, a backend that does not implement the read-back, and a gather that
+  could not be made all produce **no `backend` key at all** — never an empty
+  object and never an empty `chains` list, because an empty object would read as
+  "we asked, and the answer is nothing". `get dsp backend` errors with
+  `unknown property 'backend' for dsp` in exactly the cases the bare form omits
+  it. **A caller must not read the absence as "this radio has no chains"** — it
+  means the question went unanswered, which is a different fact. Both directions
+  are pinned by `tests/automation_dsp_backend_readback_test.cpp`.
+- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`, and
+  `get dsp backend` returns the identical object the bare form reports. The
+  read-back is merged into the snapshot **before** the property branch for that
+  reason: `assert_state` and `wait_for` only ever issue property reads, so a
+  field reachable only from the bare form is a field no automation client can
+  assert on.
 
 ### `get wavestats`
 Per-scope paint/append counters from every `WaveformWidget` instance — the
@@ -1475,6 +1545,24 @@ re-poll `get slices`.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+For a manual SQL band/profile-restore check, compare `get slice`'s
+`squelch`/`squelchLevel` with `dumpTree`'s **RX applet → Squelch threshold**
+and the VFO SQL control immediately after the transition. A radio-driven
+Off → Manual transition must adopt the incoming threshold before refreshing
+the controls (#5501). Use distinct thresholds on the two bands and retain
+each checkpoint: a later mode change can conceal a stale slider by causing
+another status update. In Auto, the slider is the margin, so it is not
+expected to equal the radio's computed threshold. Passive command suppression
+is covered by the socket-free `rx_applet_squelch_reconciliation_test`; a live
+snapshot alone cannot prove that no command was sent.
+
+A full SQL-on report after leaving Auto is adopted as current radio state,
+even when its threshold matches an earlier Auto calculation. The report
+does not identify whether it is a delayed echo or a restore. A later Off
+acknowledgement supersedes it; neither passive report triggers a SQL write.
+The socket-free regression pins both operator-driven and radio-driven Off
+sequences. It does not establish their occurrence on particular firmware.
 
 ### `notch`
 
@@ -2272,14 +2360,38 @@ at all), so a caller that wants strictness compares it against `"family"` and de
 itself, while a caller working around a wrong discovery entry still gets through. The
 mismatch is also logged.
 
+<a id="connectstate"></a>
+**`radio.connectState`** — `"idle"`, `"connecting"` or `"connected"`. The
+`connected` bool is unchanged and existing scripts need no edit; this is a third
+value beside it, because the bool cannot express the middle state. A caller that
+issues `connect ip` and then reads `connected: false` gets the same answer
+whether the connect is still working or nothing is happening at all, which is
+the whole of #5413 item 3.
+
+It is derived from the same model lifecycle as `connect wait`'s `phase`
+below — set when RadioModel starts a connection attempt (for example, in
+`connectToRadio()`), cleared when it lands, fails or is abandoned. `connected` wins whenever the link is up,
+whatever order the underlying edges arrive in.
+
+The field describes the model's current attempt, not every part of an accepted
+connect command: address probing before `connectToRadio()` may still report
+`idle`. Retry backoff after a failed attempt also reports `idle`; the flag is
+re-armed when the retry starts. An `idle` reading therefore does not by itself
+prove that the deferred command has failed or that no retry is scheduled.
+
+This is the polling form of what `connect wait` blocks for: use `wait` when you
+can hold a request open, and `assert_state` / `wait_for` on
+`radio.connectState` when you cannot.
+
 `connect wait <timeout_ms>` holds that request's response until the radio
 connects, the connect fails, or the timeout expires — the preferred unattended
 "request then assert" flow.
 
 A reply that is not `connected` carries `"phase"`: `"connecting"` means an
-attempt is still in flight and waiting again is the right move, `"idle"` means
-nothing is pending and another wait will time out identically. **This matters on
-the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+attempt is still in flight and waiting again is the right move; `"idle"` means
+no model attempt is currently active, including the probing and retry-backoff
+windows described above. **This matters on the HL2**, which queues a connect
+behind its DSP open and re-drives it later, so
 a wait can legitimately expire on a connect that then succeeds. A connect that
 fails outright returns immediately with the backend's own message instead of
 running out the clock.
@@ -2410,9 +2522,31 @@ Observe only mode. A successful stop reports `restorationStatus:"success"`,
 `systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
 
 The read-only diagnostic is available in **Observe only** mode; none of these
-actions keys the transmitter. On non-macOS platforms it returns
-`supported:false` because those backends do not use the affected IOKit claim
-path.
+actions keys the transmitter.
+
+On **Linux and Windows** the snapshot and the lifecycle actions answer
+differently, because only the snapshot is macOS-specific:
+
+- A bare `devices ulanzi` query returns `ok:false` with `supported:false` and
+  an `error` naming what is available instead. Those backends have no
+  `diagnostics()`, so the question cannot be answered here -- it is reported as
+  a refusal rather than as a success carrying no data.
+- `devices ulanzi-start` and `devices ulanzi-stop` **do** run on these
+  platforms and return `ok:true` with `operation`, `enabled`, and `queued`.
+  No `supported` field appears on a lifecycle reply: no snapshot was asked
+  for, so there is nothing for it to describe.
+
+`queued` is present on every platform and reports whether the call was posted
+to another thread rather than run inline. It is `true` on Linux and Windows,
+where the backend lives on the ExtControllers thread, so the reply is an
+acknowledgement that the request was accepted -- not a statement that it has
+completed. On macOS the backend stays on the main thread alongside the bridge
+handler, so the call runs inline, `queued` is `false`, and the returned
+snapshot reflects the state *after* it. A lifecycle request is refused with
+`ok:false` and `queued:false` when the backend thread is absent or stopped.
+A build without a concrete backend (for example Windows without HIDAPI) also
+refuses lifecycle requests with `ok:false` and `supported:false`. A queued
+acknowledgement does not guarantee delivery if the thread subsequently exits.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak

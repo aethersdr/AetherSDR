@@ -8,6 +8,7 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
+#include "models/ConnectStatePolicy.h"
 #include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
 #include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
@@ -606,7 +607,7 @@ void RadioModel::requestGpsNtpSync()
                                QStringLiteral("gps.ntp.sync"), 0, {});
 }
 
-void RadioModel::handRestoredStateToBackend(const QString& serial)
+void RadioModel::handRestoredStateToBackend()
 {
     if (!m_backend) {
         return;
@@ -623,7 +624,7 @@ void RadioModel::handRestoredStateToBackend(const QString& serial)
     m_operatingStateMaxWaitTimer.stop();
 
     const RestoredRadioState state =
-        RadioStateMemory::load(RadioSettingsScope(m_family, serial), caps);
+        RadioStateMemory::load(settingsScope(), caps);
     if (caps.clientSettingsDomains.testFlag(
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         restoreClientOwnedCwState(state);
@@ -2575,11 +2576,12 @@ RadioModel::RadioModel(QObject* parent)
                 req.host   = m_lastInfo.address.toString();
                 req.port   = m_lastInfo.port;
                 req.serial = m_lastInfo.serial;
+                req.serialIdentity = m_lastInfo.serialIdentity;
                 // The RECONNECT path needs these too. Populating only the
                 // initial connect gives a session that authenticates once and
                 // then fails every automatic retry.
                 populateFamilyParams(req, m_family);
-                handRestoredStateToBackend(req.serial);
+                handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }
         } else {
@@ -2645,6 +2647,19 @@ QString RadioModel::digitalVoiceWaveformHealthName() const
 QString RadioModel::digitalVoiceWaveformHealthDetail() const
 {
     return DigitalVoiceWaveformProcess::instance().healthDetail();
+}
+
+QString RadioModel::connectState() const
+{
+    // The bool stays exactly as it was — existing scripts read `connected` and
+    // must not change meaning. This is the third value beside it.
+    //
+    // Derived from THE ATTEMPT, not from the DSP sub-phase. m_connectAttemptActive
+    // already spans the whole thing #5413 asks about: set at the request edge in
+    // connectToRadio(), cleared when the attempt lands, fails, or is abandoned.
+    // See connectStateFor() for what a DSP-only flag got wrong here.
+    return QString::fromLatin1(AetherSDR::connectStateName(
+        AetherSDR::connectStateFor(isConnected(), m_connectAttemptActive)));
 }
 
 bool RadioModel::isConnected() const
@@ -3515,6 +3530,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // family for the whole process. Same-family reconnects rebuild nothing.
     const QString wantFamily = info.family.isEmpty() ? QStringLiteral("flex")
                                                      : info.family.toLower();
+    // RTL has no persistent radio memory. Finish its old session before the
+    // discovery identity or preconnect restore is replaced, including swaps
+    // within the same family. Its disconnect flush still sees the old scope.
+    if (m_family == QLatin1String("rtl") && m_backend && isConnected()) {
+        flushPendingOperatingState();
+        m_backend->disconnectRadio();
+    }
     if (wantFamily != m_family || !m_backend) {
         qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
                            << "->" << wantFamily << "for" << info.address.toString();
@@ -3611,8 +3633,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.host   = info.address.toString();
         req.port   = info.port;
         req.serial = info.serial;
+        req.serialIdentity = info.serialIdentity;
         populateFamilyParams(req, info.family);
-        handRestoredStateToBackend(req.serial);
+        handRestoredStateToBackend();
         m_backend->connectRadio(req);
     }
 }
@@ -9151,6 +9174,20 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
             [this, s]() {
         if (m_backend) m_backend->setActiveSlice(s->sliceId());
     });
+}
+
+void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
+                                   const QString& family)
+{
+    // THROUGH teardownBackend(), not over the top of the previous pointer.
+    // A bare `m_backend = std::move(...)` destroys the old backend while this
+    // model still holds the aliases and connections that were made for it, and
+    // the destructor's disconnect then runs against freed memory — which is
+    // exactly what a second call to this helper produced (SIGSEGV in
+    // QObject::disconnect at teardown, all checks having passed).
+    teardownBackend();
+    m_backend = std::move(backend);
+    m_family = family;
 }
 
 QString RadioModel::neutralPanIdStringForTest(int panIdx)

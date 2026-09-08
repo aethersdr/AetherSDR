@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -742,6 +742,7 @@ set(CORE_SOURCES
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
+    src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -757,6 +758,7 @@ set(CORE_SOURCES
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
+    src/core/SharedCapturePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
@@ -994,13 +996,19 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/CityLightsItem.cpp
+    src/gui/map/CityLightsSource.cpp
     src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp
     src/gui/map/MapTerminatorItem.cpp
+    src/gui/map/WeatherRadarPlaybackItem.cpp
+    src/gui/map/WeatherRadarSource.cpp
+    src/gui/map/WeatherRadarTileLayer.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
