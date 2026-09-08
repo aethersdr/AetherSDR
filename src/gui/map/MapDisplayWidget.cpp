@@ -310,6 +310,15 @@ void MapDisplayWidget::setCityLightsFaintLights(int percent)
     }
 }
 
+void MapDisplayWidget::setBasemapBrightness(int percent)
+{
+    m_basemapBrightness = std::clamp(percent, 20, 100);
+    m_flatView->setBasemapBrightness(m_basemapBrightness);
+    if (m_globeView != nullptr) {
+        m_globeView->setBasemapBrightness(m_basemapBrightness);
+    }
+}
+
 void MapDisplayWidget::setCityLightsBrightness(int percent)
 {
     m_cityLightsBrightness = std::clamp(percent, 0, 100);
@@ -1989,6 +1998,7 @@ void MapDisplayWidget::ensureGlobeView()
     connect(m_globeView, &GlobeMapView::weatherRadarPlaybackPresented,
             this, &MapDisplayWidget::handleWeatherRadarPlaybackPresented,
             Qt::QueuedConnection);
+    m_globeView->setBasemapBrightness(m_basemapBrightness);
     m_globeView->setHomeSpanDegrees(m_homeSpanDegrees);
     if (m_hasHome) {
         m_globeView->setHomePosition(m_homeLat, m_homeLon, m_homeLabel,
@@ -2032,6 +2042,7 @@ void MapDisplayWidget::synchronizeGlobeView()
     if (!m_globeViewDirty) {
         return;
     }
+    m_globeView->setBasemapBrightness(m_basemapBrightness);
     m_globeView->setHomeSpanDegrees(m_homeSpanDegrees);
     if (m_hasHome) {
         m_globeView->setHomePosition(m_homeLat, m_homeLon, m_homeLabel,

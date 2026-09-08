@@ -13,6 +13,8 @@
 #include "core/ThemeManager.h"
 
 #include <QGeoView/QGVCamera.h>
+#include <QGeoView/QGVDrawItem.h>
+#include <QGeoView/QGVMapQGItem.h>
 #include <QGeoView/QGVLayer.h>
 #include <QGeoView/QGVLayerOSM.h>
 #include <QGeoView/QGVMap.h>
@@ -23,6 +25,8 @@
 #include <QCoreApplication>
 #include <QAbstractAnimation>
 #include <QDateTime>
+#include <QGraphicsScene>
+#include <QPainter>
 #include <QCursor>
 #include <QDir>
 #include <QEasingCurve>
@@ -49,6 +53,45 @@ namespace AetherSDR {
 Q_LOGGING_CATEGORY(lcFlatMapRendering, "aether.map.flat.rendering")
 
 namespace {
+// Black alpha compositing implements RGB multiplication, independent of the
+// app theme. This viewport-sized layer sits below every data overlay.
+class BasemapDimmer final : public QGVDrawItem {
+public:
+    BasemapDimmer() { setSelectable(false); }
+    QPainterPath projShape() const override
+    {
+        QPainterPath path;
+        path.addRect(m_rect);
+        return path;
+    }
+    void projPaint(QPainter* painter) override
+    {
+        painter->fillRect(m_rect, Qt::black);
+    }
+protected:
+    void onProjection(QGVMap* map) override
+    {
+        QGVDrawItem::onProjection(map);
+        resetBoundary();
+        m_rect = map->getCamera().projRect().normalized();
+        for (QGraphicsItem* item : map->geoView()->scene()->items()) {
+            if (QGVMapQGItem::geoObjectFromQGItem(item) == this) {
+                item->setCacheMode(QGraphicsItem::NoCache);
+                break;
+            }
+        }
+        refresh();
+    }
+    void onCamera(const QGVCameraState& oldState, const QGVCameraState& newState) override
+    {
+        resetBoundary();
+        m_rect = newState.projRect().normalized();
+        refresh();
+        QGVDrawItem::onCamera(oldState, newState);
+    }
+private:
+    QRectF m_rect;
+};
 constexpr int kWeatherRadarTransitionMs = 260;
 // Initial view when no home position is known yet: whole world.
 const QGV::GeoRect kWorldRect{ 70.0, -170.0, -60.0, 170.0 };
@@ -150,6 +193,10 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     // ordering the playback composite is painted underneath the OSM tiles.
     osmLayer->sendToBack();
     m_map->addItem(osmLayer);
+    m_basemapDimmer = new BasemapDimmer();
+    m_basemapDimmer->setZValue(-32200);
+    m_basemapDimmer->setOpacity(0.0);
+    m_map->addItem(m_basemapDimmer);
     m_map->geoView()->setHorizontalWrapEnabled(true);
     m_map->geoView()->setVerticalBoundsEnabled(true);
 
@@ -738,6 +785,11 @@ void MapView::setCityLightsVisible(bool visible)
 void MapView::setCityLightsImage(const QImage& image, const QRectF& bounds)
 {
     m_cityLightsItem->setImage(image, bounds);
+}
+
+void MapView::setBasemapBrightness(int percent)
+{
+    m_basemapDimmer->setOpacity(1.0 - std::clamp(percent, 20, 100) / 100.0);
 }
 
 void MapView::setCityLightsBrightness(int percent)

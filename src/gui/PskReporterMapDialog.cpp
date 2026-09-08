@@ -710,6 +710,24 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     mapForm->addRow(m_globeCheck);
     mapForm->addRow(m_pathsCheck);
     mapForm->addRow(m_terminatorCheck);
+    auto* basemapBrightness = new GuardedSlider(Qt::Horizontal, mapBox);
+    basemapBrightness->setObjectName(QStringLiteral("pskReporterBasemapBrightness"));
+    basemapBrightness->setAccessibleName(tr("Map brightness"));
+    basemapBrightness->setAccessibleDescription(tr(
+        "Dim the basemap without dimming city lights, radar, or reports. "
+        "This does not change the actual day/night boundary."));
+    basemapBrightness->setToolTip(basemapBrightness->accessibleDescription());
+    basemapBrightness->setRange(20, 100);
+    basemapBrightness->setFocusPolicy(Qt::StrongFocus);
+    basemapBrightness->setValue(std::clamp(
+        pskSettings().value("basemapBrightness").toInt(100), 20, 100));
+    auto* basemapValue = new QLabel(tr("%1%").arg(basemapBrightness->value()), mapBox);
+    auto* basemapRow = new QHBoxLayout();
+    basemapRow->addWidget(basemapBrightness, 1);
+    basemapRow->addWidget(basemapValue);
+    auto* basemapLabel = new QLabel(tr("Map brightness:"), mapBox);
+    basemapLabel->setBuddy(basemapBrightness);
+    mapForm->addRow(basemapLabel, basemapRow);
     sections->addWidget(mapBox);
 
     const auto sliderRow = [](QSlider* slider, QLabel* value) {
@@ -744,7 +762,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     sidebar->setWidget(controls);
 
     auto* wheelGuard = new SidebarValueWheelGuard(sidebar);
-    for (QWidget* control : QList<QWidget*>{m_beaconTone, m_beaconLevel,
+    for (QWidget* control : QList<QWidget*>{m_beaconTone, m_beaconLevel, basemapBrightness,
              m_cityLightsBrightness, m_cityLightsFaintLights, m_cityLightsWarmth,
              m_weatherRadarSpeedSlider}) {
         wheelGuard->guard(control);
@@ -760,7 +778,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         m_beaconCallsign, m_beaconGrid, m_beaconBand, m_beaconPower,
         m_beaconTone, m_beaconLevel, m_beaconButton, m_queryCallsign,
         m_bandCombo, m_modeCombo, m_lookbackCombo, m_allCallsignsCheck,
-        m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck,
+        m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck, basemapBrightness,
         m_cityLightsCheck, m_cityLightsBrightness, m_cityLightsFaintLights,
         m_cityLightsWarmth, m_weatherRadarCheck, m_weatherRadarPlayButton,
         m_weatherRadarHistoryCombo, m_weatherRadarSpeedSlider};
@@ -781,6 +799,13 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     root->addWidget(splitter, 1);
 
     m_mapView = new MapDisplayWidget(bodyWidget());
+    m_mapView->setBasemapBrightness(basemapBrightness->value());
+    connect(basemapBrightness, &QSlider::valueChanged, this,
+            [this, basemapValue](int value) {
+                basemapValue->setText(tr("%1%").arg(value));
+                m_mapView->setBasemapBrightness(value);
+                writePskSetting("basemapBrightness", value);
+            });
     m_mapView->setObjectName(QStringLiteral("pskReporterMap"));
     m_mapView->setAccessibleName(tr("PSK Reporter map"));
     connect(m_mapView, &MapDisplayWidget::globeAvailabilityChanged,

@@ -354,8 +354,10 @@ void GlobeMapView::initializeGL()
         uniform highp vec3 sunDirection;
         uniform lowp vec4 nightColor;
         uniform lowp float terminatorEnabled;
+        uniform lowp float basemapBrightness;
         void main() {
             lowp vec4 mapColor = texture2D(atlas, uv);
+            mapColor.rgb *= basemapBrightness;
             highp float daylight = smoothstep(-0.018, 0.018,
                 dot(normalize(earthNormal), normalize(sunDirection)));
             lowp float nightAmount = (1.0 - daylight)
@@ -558,6 +560,7 @@ void GlobeMapView::paintGL()
         night.redF(), night.greenF(), night.blueF(), 0.62F));
     m_program->setUniformValue("terminatorEnabled",
                                m_terminatorVisible ? 1.0F : 0.0F);
+    m_program->setUniformValue("basemapBrightness", m_basemapBrightness / 100.0F);
     m_program->setUniformValue("atlas", 0);
     m_texture->bind(0);
     m_vertexBuffer.bind();
@@ -1821,6 +1824,12 @@ void GlobeMapView::setCityLightsWarmth(int percent)
 void GlobeMapView::setCityLightsFaintLights(int percent)
 {
     m_cityLightsGamma = float(CityLightsShading::faintLightsGamma(percent));
+    update();
+}
+
+void GlobeMapView::setBasemapBrightness(int percent)
+{
+    m_basemapBrightness = std::clamp(percent, 20, 100);
     update();
 }
 

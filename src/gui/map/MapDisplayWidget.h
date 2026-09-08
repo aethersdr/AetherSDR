@@ -62,6 +62,7 @@ public:
     bool dayNightTerminatorVisible() const;
     void setCityLightsVisible(bool visible);
     bool cityLightsVisible() const { return m_cityLightsVisible; }
+    void setBasemapBrightness(int percent);
     void setCityLightsBrightness(int percent);
     void setCityLightsFaintLights(int percent);
     void setCityLightsWarmth(int percent);
@@ -161,6 +162,7 @@ private:
 
     CityLightsSource* m_cityLightsSource{nullptr};
     bool m_cityLightsVisible{false};
+    int m_basemapBrightness{100};
     int m_cityLightsBrightness{CityLightsShading::kDefaultBrightness};
     int m_cityLightsFaintLights{CityLightsShading::kDefaultFaintLights};
     int m_cityLightsWarmth{CityLightsShading::kDefaultWarmth};

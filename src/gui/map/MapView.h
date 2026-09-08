@@ -11,6 +11,7 @@
 #include <QGeoView/QGVGlobal.h>
 
 class QGVMap;
+class QGVItem;
 class QGVLayer;
 class QAbstractAnimation;
 class QLabel;
@@ -96,6 +97,7 @@ public:
     bool dayNightTerminatorVisible() const;
     void setCityLightsVisible(bool visible);
     void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setBasemapBrightness(int percent);
     void setCityLightsBrightness(int percent);
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const;
@@ -178,6 +180,7 @@ private:
     void updateAttributionStyle();
     void updateMapAttribution();
 
+    QGVItem* m_basemapDimmer{nullptr};
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
     QGVLayer* m_terminatorLayer{nullptr};
