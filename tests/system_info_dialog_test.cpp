@@ -612,6 +612,13 @@ int main(int argc, char** argv)
         auto* lagCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardTickLag"));
         report("the four cards exist",
                cpuCard != nullptr && maxCard != nullptr && memCard != nullptr && lagCard != nullptr);
+        // The 2 × 2 grid must not raise the dialog's minimum above its own
+        // 900 × 600 default, or the default and any saved geometry never
+        // apply (#5427 review: 696 px with the graphs at their 220 px floor).
+        const int minimumHeight = ov.minimumSizeHint().height();
+        std::printf("  Overview dialog minimum height: %d px\n", minimumHeight);
+        report("the Overview tab leaves the dialog's minimum height under its 600 px default",
+               minimumHeight < 600);
         report("cards start as a dash, not zero",
                cpuCard != nullptr && cpuCard->text() == QStringLiteral("\u2014")
                    && cpuCard->property("level").toString() == QLatin1String("normal"));
