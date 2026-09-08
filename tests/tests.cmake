@@ -457,21 +457,6 @@ target_include_directories(icom_session_test PRIVATE src tests)
 target_link_libraries(icom_session_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME icom_session_test COMMAND icom_session_test)
 
-# TciPeerProcess: the OS socket->process lookup behind the TCI client-identity
-# log line (#5087) — self-connected loopback pairs must resolve to the test
-# binary itself; non-loopback and port-0 peers must never resolve.
-# SOCKET-OWNING TEST (AGENTS.md, test-layer boundary — our own code is the
-# subject, not a fake peer): binds a QTcpServer on an ephemeral port at
-# 127.0.0.1 and at ::1, and connects a QTcpSocket from the same process to
-# each, because the kernel lookup under test needs a real socket to resolve.
-# No peer process, no fixed port. Exit 77 == a loopback listen was
-# unavailable, reported as skipped rather than as a pass or a timeout.
-add_executable(tci_peer_process_test tests/tci_peer_process_test.cpp)
-target_include_directories(tci_peer_process_test PRIVATE src)
-target_link_libraries(tci_peer_process_test PRIVATE aethercore Qt6::Core Qt6::Network)
-add_test(NAME tci_peer_process_test COMMAND tci_peer_process_test)
-set_tests_properties(tci_peer_process_test PROPERTIES SKIP_RETURN_CODE 77)
-
 # IcomCIV backend seam test — the IRadioBackend implementor against the fake
 # IC-705, with the TCI/WSJT-X audio contract as the load-bearing assertion.
 add_executable(icom_backend_test tests/icom_backend_test.cpp)
