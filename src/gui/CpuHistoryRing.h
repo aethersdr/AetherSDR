@@ -98,7 +98,12 @@ public:
 
     // Chart points for one scalar field over the last `rangeSeconds` ending at
     // `nowMs`; x in seconds since the cutoff. Same slicing as the memory ring:
-    // raw up to five minutes, bucket averages at the bucket centre beyond.
+    // raw up to five minutes, one point per bucket at the bucket centre beyond.
+    // A bucket's point is the mean of its records — except for TickLagMax,
+    // which is already a per-tick maximum: averaging it would plot a 400 ms
+    // stall inside one tick as 50–130 ms on the 15 min / 1 h ranges while the
+    // card, reading the raw newest record, still said 400 ms (#5427 review).
+    // A max field buckets by max.
     QVector<QPointF> series(Field field, int rangeSeconds, qint64 nowMs) const
     {
         QVector<QPointF> points;
@@ -106,10 +111,12 @@ public:
                       [field](const Record& s) { return plottable(s, field); },
                       [&](double xSeconds, const QVector<const Record*>& bucket) {
                           double sum = 0.0;
+                          double worst = 0.0;
                           for (const Record* s : bucket) {
                               sum += valueOf(*s, field);
+                              worst = std::max(worst, valueOf(*s, field));
                           }
-                          points.push_back(QPointF(xSeconds, sum / bucket.size()));
+                          points.push_back(QPointF(xSeconds, field == Field::TickLagMax ? worst : sum / bucket.size()));
                       });
         return points;
     }

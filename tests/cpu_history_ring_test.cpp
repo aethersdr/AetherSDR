@@ -109,6 +109,26 @@ int main(int argc, char** argv)
         EXPECT_EQ(pts.size(), 1);
         EXPECT_TRUE(pts.size() == 1 && near(pts[0].y(), 20.0), "two records in one bucket average to 20 %");
         EXPECT_TRUE(pts.size() == 1 && near(pts[0].x(), 3600.0 - 6.0), "bucket point sits at the bucket centre");
+
+        // TickLagMax is already a per-tick maximum, so its bucket point is the
+        // bucket's max, not its mean (#5427 review); TickLagMean still averages.
+        CpuHistoryRing lagRing;
+        CpuHistoryRing::Record quiet = at(start + 1000, 5.0);
+        quiet.tickCount = 30;
+        quiet.tickLagMaxMs = 12.5;
+        quiet.tickLagMeanMs = 1.0;
+        CpuHistoryRing::Record stalled = at(start + 2500, 5.0);
+        stalled.tickCount = 30;
+        stalled.tickLagMaxMs = 40.0;
+        stalled.tickLagMeanMs = 3.0;
+        lagRing.push(quiet);
+        lagRing.push(stalled);
+        const auto worst = lagRing.series(Field::TickLagMax, 3600, nowAligned);
+        const auto mean = lagRing.series(Field::TickLagMean, 3600, nowAligned);
+        EXPECT_EQ(worst.size(), 1);
+        EXPECT_TRUE(worst.size() == 1 && near(worst[0].y(), 40.0),
+                    "a bucket's worst tick lag is its max (40), not its mean (26.25)");
+        EXPECT_TRUE(mean.size() == 1 && near(mean[0].y(), 2.0), "mean tick lag still averages across the bucket");
     }
 
     // 5. Tick-lag fields plot only when the meter was read (tickCount > 0).
