@@ -17,6 +17,7 @@
 #include <sys/proc_info.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <unistd.h>
 #include <QSettings>
 #include <vector>
 #elif defined(Q_OS_WIN)
@@ -236,10 +237,16 @@ QHostAddress sockinfoLocalAddress(const in_sockinfo& ini)
 TciPeerProcessInfo resolveMac(const QHostAddress& peer, quint16 port)
 {
     TciPeerProcessInfo info;
-    int bytes = proc_listpids(PROC_ALL_PIDS, 0, nullptr, 0);
+    // This user's processes only, by construction: a client the operator
+    // started is the case #5087 is about, and other users' processes would
+    // refuse the fd listing anyway. Listing by uid keeps the sweep to what
+    // it can read and says so in the code (maintainer ruling on #5130); the
+    // Linux sweep is same-user by the same effect (unprivileged readlink).
+    const uid_t uid = getuid();
+    int bytes = proc_listpids(PROC_UID_ONLY, uid, nullptr, 0);
     if (bytes <= 0) return info;
     std::vector<pid_t> pids(static_cast<size_t>(bytes) / sizeof(pid_t) + 16);
-    bytes = proc_listpids(PROC_ALL_PIDS, 0, pids.data(),
+    bytes = proc_listpids(PROC_UID_ONLY, uid, pids.data(),
                           static_cast<int>(pids.size() * sizeof(pid_t)));
     if (bytes <= 0) return info;
     const size_t count = static_cast<size_t>(bytes) / sizeof(pid_t);
@@ -248,8 +255,6 @@ TciPeerProcessInfo resolveMac(const QHostAddress& peer, quint16 port)
     for (size_t i = 0; i < count; ++i) {
         const pid_t pid = pids[i];
         if (pid <= 0) continue;
-        // Other users' processes refuse the fd listing (EPERM) and simply
-        // contribute nothing — same-user clients are the normal case.
         const int fdBytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nullptr, 0);
         if (fdBytes <= 0) continue;
         fds.resize(static_cast<size_t>(fdBytes) / sizeof(proc_fdinfo) + 8);
