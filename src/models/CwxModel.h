@@ -45,6 +45,9 @@ public:
     // active (the radio would key it at TUNE power). Unset = always admitted.
     using SendAdmission = std::function<bool()>;
     void setSendAdmission(SendAdmission admission) { m_sendAdmission = std::move(admission); }
+    // Ask before committing anything (history bubble, editor clear, speed
+    // changes): true when a send would be admitted right now. (#5422)
+    bool canSend() const { return !m_sendAdmission || m_sendAdmission(); }
 
     // Actions
     void send(const QString& text);      // Send mode: full string

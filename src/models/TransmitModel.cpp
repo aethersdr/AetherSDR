@@ -891,6 +891,8 @@ void TransmitModel::setTuneAdmission(TuneAdmission admission)
 
 bool TransmitModel::tuneAdmitted()
 {
+    if (m_tune)
+        return true;   // already tuning: a repeated start is not a new admission
     if (!m_tuneAdmission)
         return true;
     const QString message = m_tuneAdmission().trimmed();

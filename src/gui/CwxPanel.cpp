@@ -650,6 +650,9 @@ void CwxPanel::sendBuffer()
     if (!m_model || !m_textEdit) return;
     QString text = m_textEdit->toPlainText().trimmed();
     if (text.isEmpty()) return;
+    // TUNE active: the model would refuse the send, so touch nothing — the
+    // text stays in the editor and no "sent" bubble is painted. (#5422)
+    if (!m_model->canSend()) return;
 
     // appendHistoryBubble paints the modifier-stripped text (so the bubble's
     // char count matches the radio's sent=N counter) while retaining the raw
@@ -795,6 +798,7 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
 void AetherSDR::CwxPanel::resendText(const QString& text)
 {
     if (!m_model || !m_historyLayout || text.isEmpty()) { return; }
+    if (!m_model->canSend()) { return; }   // TUNE active (#5422)
     appendHistoryBubble(text);
     m_model->send(text);
 }

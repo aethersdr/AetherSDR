@@ -4187,6 +4187,7 @@ void MainWindow::cancelTransmitFromIndicator()
     m_cwStraightKeyActive = false;
     m_cwLeftPaddleActive = false;
     m_cwRightPaddleActive = false;
+    m_radioModel.setCwPaddleHeld(false);   // bypasses pushCwPaddleState, so reset here too (#5422)
     m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
     m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);
 

@@ -2443,7 +2443,7 @@ void MainWindow::wireExternalControllers()
     });
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
             this, [this](bool down) {
-        m_radioModel.sendCwKey(down);
+        m_radioModel.sendCwKey(down, QStringLiteral("serial:cwkey"));
     });
     connect(m_serialPort, &SerialPortController::cwPaddleChanged,
             this, [this](bool dit, bool dah) {
