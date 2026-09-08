@@ -2432,10 +2432,6 @@ RadioModel::RadioModel(QObject* parent)
     });
     // No CWX text while TUNE is active (#5422): the radio keys it at TUNE power.
     m_cwxModel.setSendAdmission([this] { return m_transmitModel.admitsCwxSend(); });
-    connect(&m_cwxModel, &CwxModel::sendRefused, this, [this](const QString& reason) {
-        emit radioMessageReceived(tr("CW text not sent: %1").arg(reason),
-                                  MessageSeverity::Warning);
-    });
     connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
         // Non-Flex text keyers consume the neutral transmissionRequested /
         // transmissionCancelled signals below. Do not feed their operation

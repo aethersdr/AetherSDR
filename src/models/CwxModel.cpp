@@ -144,7 +144,6 @@ bool CwxModel::sendAdmitted()
 {
     if (m_sendAdmission && !m_sendAdmission()) {
         qCWarning(lcCw) << "CWX send refused: TUNE is active (#5422)";
-        emit sendRefused(tr("TUNE is active"));
         return false;
     }
     return true;

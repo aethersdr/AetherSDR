@@ -118,11 +118,10 @@ signals:
     // self-contained even if speed changes mid-transmission.
     void transmissionRequested(const QString& text, int wpm);
     void transmissionCancelled();        // erase / clearBuffer / interrupt
-    void sendRefused(const QString& reason); // text not queued: TUNE active (#5422)
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
-    bool sendAdmitted();   // #5422: false (and sendRefused emitted) while TUNE is active
+    bool sendAdmitted();   // #5422: false (logged) while TUNE is active
     void emitExpandedSend(const QVector<SpeedSegment>& segs);
 
     int     m_speed{20};
