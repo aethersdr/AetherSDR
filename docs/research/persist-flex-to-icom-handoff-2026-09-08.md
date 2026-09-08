@@ -1,9 +1,11 @@
-# Persist handoff: Flex round complete, IC-7300MK2 next
+# Persist handoff: Flex findings and IC-7300MK2 measurement plan
 
 This is the handoff for PR #5500, not a new radio certification. The Flex
-squelch repair remains in #5508. The IC-7300MK2 round has **not started**.
-The operator is preparing the radio; no Icom transmit authorization is implied
-by the earlier Flex authorization.
+squelch repair remains in #5508. The initial IC-7300MK2 round is now recorded in the
+[Icom run report](persist-icom7300mk2-first-run-2026-09-08.md), including
+confirmation ages, successful retention trials, identity failures, bounded TX
+and restoration. It used separate explicit Icom authorization. The plan below
+remains the broader coverage checklist; the report states what actually ran.
 
 ## Evidence to carry forward
 
@@ -64,8 +66,9 @@ cleanup for inspection rather than restoring blindly.
 1. Confirm the exact connected model, firmware, identity and transport, check
    the radio lock and existing clients, then acquire exclusive use. Use a
    dedicated Icom settings profile and record the app commit/binary hash and
-   runner sources. Keep credentials in `IcomCredentials`/Keychain; never put
-   passwords or credential-bearing profiles in evidence or a PR.
+   runner sources. Use `IcomCredentials` with Keychain or operator-authorized session-only
+   credentials; never put passwords or credential-bearing profiles in evidence
+   or a PR.
 2. Start receive-only with TX permission disabled. Inventory live capabilities,
    model fields, actual widgets, CI-V polling cadence and raw replies before
    changing anything. Use the model-specific official CI-V guide as authority.
@@ -193,3 +196,9 @@ are already observable; add the smallest backend-neutral diagnostic seam for
 missing stages, with injected-clock/transport tests for stale replies, context
 changes and non-events. Then use live Persist for positive convergence and
 measured distributions. No current refresh constants are changed here.
+
+The first live round confirms the measurement gap: periodic reads reuse request
+generations, so generation/key deduplication does not identify unique completed
+transactions. Use a stable event sequence before computing a full scheduler
+latency distribution. The [run report](persist-icom7300mk2-first-run-2026-09-08.md)
+records this collector correction and the observed startup-default interval.
