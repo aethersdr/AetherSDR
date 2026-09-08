@@ -6,6 +6,28 @@ Qt 6.12; the local macOS SDK is the official 6.12.0 preview package dated
 toolchains and cannot build this branch unchanged. Do not publish it as a
 release-ready, cross-platform-verified migration.
 
+## Scope after the applet-picker split
+
+This branch contains the unified window chrome and **radio** switcher only.
+The grouped **applet** picker, brighter category headings, and pinned S-Meter
+alignment are developed independently on
+[`aether/applet-picker`](https://github.com/jensenpat/AetherSDR/tree/aether/applet-picker),
+based on upstream main without the Qt 6.12 requirement. The chrome branch
+retains its existing applet buttons and pinned-meter layout.
+
+The latest laptop package, `AetherSDR qt612-applet-picker-0de5a2b6-dirty 1748.app`,
+was intentionally built with both changes before this split. Its 5/5 focused
+test result and native picker checks are combined-build evidence, not a claim
+that either standalone PR was rebuilt or independently certified. The combined
+source is preserved locally on `aether/applet-picker-integration`; the earlier
+chrome-only and caption-spacing evidence below remains attributed to its
+original source/build identity.
+
+That package passed a 125-Mach-O dependency audit, file-hash/symlink/signature
+verification after SFTP, quarantine removal, and an isolated loader check on
+the test Mac. It remains an ad-hoc-signed preview build with session-only
+credentials; native tiling acceptance and Windows/Linux validation remain open.
+
 ## One shared bar, Qt-owned frames
 
 `src/gui/WindowChrome.h` chooses the Qt window policy. Cocoa and Windows use
