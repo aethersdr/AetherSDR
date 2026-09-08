@@ -983,12 +983,26 @@ void MainWindow::showFreeDvReporter()
             if (tuneBlockedByGuards(sl))
                 return;
             applyTuneRequest(sl, freqMhz, TuneIntent::AbsoluteJump, "freedv-reporter");
+#ifdef HAVE_RADE
+            // Without HAVE_RADE the build can't run the modem, so there is
+            // no activateRADE() to call — same reasoning as the FreeDV
+            // spot-click path in MainWindow_Wiring.cpp (#1846).
+            //
+            // Only a family with a PanadapterStream (Flex) can actually run
+            // RADE; activateRADE() otherwise declines with a blocking
+            // QMessageBox::warning, which would pop on every double-click
+            // here even though the gesture has nothing to do with RADE.
+            // Skip the call on those families instead of surfacing that
+            // modal (#4125 review).
+            //
             // Reuse the same auto-switch gate DX Cluster uses for its
             // CW/SSB mode-follow (#2298), so one setting controls "does
             // double-click-to-tune also change what the radio is doing"
             // everywhere (#4125).
-            if (AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True")
+            if (m_radioModel.panStream()
+                    && AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True")
                 activateRADE(sl->sliceId());
+#endif
         });
         // Seed: reporting may already be on when the dialog is first opened.
         m_freedvReporterDialog->setReportingActive(
