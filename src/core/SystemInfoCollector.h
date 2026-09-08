@@ -46,6 +46,9 @@ struct CpuSample {
     qint64  wallMs{0};                       // QDateTime::currentMSecsSinceEpoch() at capture
     int     coreCount{0};                    // QThread::idealThreadCount() — the footer's divisor
     double  processPercentOfCapacity{0.0};   // 0..100 of the whole machine (whole-process counter)
+    // false = no per-thread reading on this tick; the three busiest* fields
+    // below are then defaults, not a measurement of an unnamed thread at 0 %.
+    bool    hasBusiest{false};
     quint64 busiestTid{0};
     QString busiestName;                     // empty when the busiest thread has no name
     double  busiestPercentOfCore{0.0};       // 0..100 of one core

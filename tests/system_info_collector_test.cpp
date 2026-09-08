@@ -135,6 +135,7 @@ int main(int argc, char** argv)
                     cpu.processPercentOfCapacity, churnFloorPercent, churnWorkers, cores);
         EXPECT_TRUE(cpu.processPercentOfCapacity >= churnFloorPercent,
                     "the process total counts workers that exited before the tick (#5427 review)");
+        EXPECT_TRUE(cpu.hasBusiest, "a tick built from a non-empty thread table names a busiest thread");
         EXPECT_TRUE(cpu.busiestPercentOfCore >= 0.0 && cpu.busiestPercentOfCore <= 100.0,
                     "busiest thread percent of one core is within 0..100");
         EXPECT_TRUE(cpu.wallMs >= before, "wallMs is a capture-time wall clock reading");

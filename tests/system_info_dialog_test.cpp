@@ -624,6 +624,7 @@ int main(int argc, char** argv)
         s.wallMs = 1'700'000'000'000;
         s.coreCount = 8;
         s.processPercentOfCapacity = 12.34;
+        s.hasBusiest = true;
         s.busiestTid = 7;
         s.busiestName = QStringLiteral("AudioEngine");
         s.busiestPercentOfCore = 42.0;
@@ -684,6 +685,7 @@ int main(int argc, char** argv)
         meter.tickAt(120 * 1'000'000);  // on time
         SystemInfoDialog ov(nullptr, nullptr, &meter);
         auto* lagCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardTickLag"));
+        auto* maxCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMaxThread"));
         CpuSample s;
         s.wallMs = 1'700'000'000'000;
         s.coreCount = 8;
@@ -691,6 +693,11 @@ int main(int argc, char** argv)
                                   Q_ARG(AetherSDR::CpuSample, s));
         report("the tick-lag card reads the worst lag since the meter was last read",
                lagCard != nullptr && lagCard->text() == QStringLiteral("20.0 ms"));
+        // This sample carries no per-thread reading (hasBusiest false): the
+        // Max Thread card must say so with the dash, not "(unnamed)" at 0.0 %
+        // (#5427 review).
+        report("a sample with no busiest thread leaves the Max Thread card at the dash",
+               maxCard != nullptr && maxCard->text() == QStringLiteral("\u2014"));
         report("reading the meter resets it", meter.take().tickCount == 0);
     }
 

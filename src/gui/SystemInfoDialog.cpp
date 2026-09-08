@@ -917,6 +917,7 @@ void SystemInfoDialog::applyCpuSample(const CpuSample& sample)
     record.valid = true;
     record.coreCount = sample.coreCount;
     record.processPercentOfCapacity = sample.processPercentOfCapacity;
+    record.busiestValid = sample.hasBusiest;
     record.busiestTid = sample.busiestTid;
     record.busiestName = sample.busiestName;
     record.busiestPercentOfCore = sample.busiestPercentOfCore;
@@ -965,7 +966,9 @@ void SystemInfoDialog::refreshOverview()
         announce(m_cardCpuValue, QStringLiteral("CPU total"));
     }
     if (m_cardMaxThreadValue != nullptr) {
-        const bool have = cpu != nullptr && cpu->valid;
+        // A tick with no per-thread reading shows the dash, as the Memory tab
+        // does for a field the platform left unset — not "(unnamed) at 0.0 %".
+        const bool have = cpu != nullptr && cpu->valid && cpu->busiestValid;
         m_cardMaxThreadValue->setText(have ? QStringLiteral("%1 %").arg(cpu->busiestPercentOfCore, 0, 'f', 1) : dash);
         setCardLevel(m_cardMaxThreadValue, have ? SystemInfo::cardLevel(cpu->busiestPercentOfCore,
                                                                           kMaxThreadWarnPercent, kMaxThreadDangerPercent)

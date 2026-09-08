@@ -138,6 +138,7 @@ void SystemInfoCollector::sampleOnce()
                 static_cast<quint64>(elapsedUsecs), cpu.coreCount);
         }
         if (busiest >= 0) {
+            cpu.hasBusiest = true;
             cpu.busiestTid = samples.at(busiest).tid;
             cpu.busiestName = samples.at(busiest).name;
             cpu.busiestPercentOfCore = samples.at(busiest).cpuPercentOfCore;

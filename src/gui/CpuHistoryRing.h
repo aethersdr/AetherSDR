@@ -57,6 +57,7 @@ public:
         bool    valid{false};                 // false = no interval yet, or enumeration failed
         int     coreCount{0};
         double  processPercentOfCapacity{0.0};   // 0..100 of the whole machine
+        bool    busiestValid{false};             // false = the busiest* fields are defaults, not a reading
         quint64 busiestTid{0};
         QString busiestName;
         double  busiestPercentOfCore{0.0};       // 0..100 of one core
@@ -195,6 +196,10 @@ public:
         // Tick lag is measured only when the meter was read on this tick.
         if (field == Field::TickLagMax || field == Field::TickLagMean) {
             return s.tickCount > 0;
+        }
+        // A tick with no per-thread reading has no busiest thread to plot.
+        if (field == Field::BusiestPercent) {
+            return s.busiestValid;
         }
         return true;
     }

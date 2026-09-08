@@ -43,6 +43,7 @@ static CpuHistoryRing::Record at(qint64 wallMs, double processPercent,
     for (const auto& t : threads) {
         r.threads.push_back(t);
         if (t.percentOfCore > r.busiestPercentOfCore) {
+            r.busiestValid = true;
             r.busiestPercentOfCore = t.percentOfCore;
             r.busiestTid = t.tid;
             r.busiestName = t.name;
