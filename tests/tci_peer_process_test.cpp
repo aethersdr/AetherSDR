@@ -1,6 +1,13 @@
 // TciPeerProcess: the OS socket->process lookup behind the TCI
 // client-identity log line (#5087).  A self-connected TCP pair must resolve
 // to THIS test binary; a non-loopback peer must not resolve at all.
+//
+// Socket-owning test (AGENTS.md, test-layer boundary): the lookup under test
+// asks the kernel which process owns a socket, so it needs a real one — this
+// binary listens on an ephemeral loopback port and connects to itself.  No
+// peer process, no fake firmware.  A loopback listen that fails is reported
+// and the run exits 77 (ctest "skipped"), never a silent pass and never a
+// wait on the timeout.
 
 #include "core/TciPeerProcess.h"
 
@@ -22,12 +29,17 @@ bool expect(bool condition, const char* label)
     return condition;
 }
 
-bool selfConnectResolves(const QHostAddress& listenOn, const char* tag)
+constexpr int kExitSkip = 77;   // tests.cmake: SKIP_RETURN_CODE 77
+
+// Returns true on pass; sets *skipped (and returns true) when the loopback
+// listen itself is unavailable, so the caller can exit 77 instead of 0.
+bool selfConnectResolves(const QHostAddress& listenOn, const char* tag, bool* skipped)
 {
     QTcpServer server;
     if (!server.listen(listenOn, 0)) {
         std::cout << "[SKIP] " << tag << ": cannot listen ("
                   << server.errorString().toStdString() << ")\n";
+        *skipped = true;
         return true;
     }
     QTcpSocket client;
@@ -61,9 +73,10 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     bool ok = true;
+    bool skipped = false;
 
-    ok &= selfConnectResolves(QHostAddress(QHostAddress::LocalHost), "ipv4 loopback");
-    ok &= selfConnectResolves(QHostAddress(QHostAddress::LocalHostIPv6), "ipv6 loopback");
+    ok &= selfConnectResolves(QHostAddress(QHostAddress::LocalHost), "ipv4 loopback", &skipped);
+    ok &= selfConnectResolves(QHostAddress(QHostAddress::LocalHostIPv6), "ipv6 loopback", &skipped);
 
     const TciPeerProcessInfo remote =
         resolveLoopbackPeerProcess(QHostAddress(QStringLiteral("192.0.2.1")), 50001);
@@ -72,5 +85,10 @@ int main(int argc, char** argv)
         resolveLoopbackPeerProcess(QHostAddress(QHostAddress::LocalHost), 0);
     ok &= expect(!noPort.resolved, "port 0 never resolves");
 
-    return ok ? 0 : 1;
+    if (!ok) return 1;
+    if (skipped) {
+        std::cout << "[SKIP] a loopback listen was unavailable; exiting " << kExitSkip << '\n';
+        return kExitSkip;
+    }
+    return 0;
 }
