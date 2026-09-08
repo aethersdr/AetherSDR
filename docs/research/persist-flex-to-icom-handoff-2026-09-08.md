@@ -4,8 +4,12 @@ This is the handoff for PR #5500, not a new radio certification. The Flex
 squelch repair remains in #5508. The initial IC-7300MK2 round is now recorded in the
 [Icom run report](persist-icom7300mk2-first-run-2026-09-08.md), including
 confirmation ages, successful retention trials, identity failures, bounded TX
-and restoration. It used separate explicit Icom authorization. The plan below
-remains the broader coverage checklist; the report states what actually ran.
+and restoration. It used separate explicit Icom authorization. The subsequent [expanded Icom matrix and combined findings](persist-icom7300mk2-expanded-run-2026-09-08.md)
+records four process retention restarts, six reconnect trials, mode/band/filter/
+VFO/display/antenna/TX-control coverage and the remaining gaps. Its filter-bank
+restoration limitation is explicit: factory preset recalls changed hidden
+definitions whose pre-recall values were not all captured. The plan below
+remains a checklist; the two reports state what actually ran.
 
 ## Evidence to carry forward
 
