@@ -1187,6 +1187,17 @@ DSP, memory banks and layout/audio-device scenarios remain explicit gaps for
 subsequent iterations. The broader issue table and proposed contracts are in
 [the persistence research](research/radiocert-persist-research-2026-09-07.md).
 
+The two-slice runner also tracks `flexAgcOffLevel` independently from AGC
+threshold, selects AGC Off before and after restart to check the shared RX
+slider, and records each slice's FM entry/return before explicit cleanup.
+Stable AGC/filter changes may be restored only after recording the original
+retention result; peer changes, missing fields and unrelated drift stop the
+run. The expanded FM/AGC matrix is locally policy-tested but awaits a live run.
+See the [Flex-to-Icom handoff](research/persist-flex-to-icom-handoff-2026-09-08.md)
+for completed evidence, remaining gaps and the IC-7300MK2 receive-only plan.
+These mutation runners remain Flex-only; Icom AGC modes do not imply support
+for Flex's AGC threshold/off-level controls.
+
 ### `get display`
 Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
 / WATERFALL / BACKGROUND / APPEARANCE / 3D VIEW groups own, as one flat object

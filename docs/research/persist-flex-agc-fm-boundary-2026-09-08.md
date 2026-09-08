@@ -42,7 +42,7 @@ The final repeat explicitly issued **`sub slice all` again two seconds after res
 ## Practical conclusion and next steps
 
 1. Retain this as a Flex FM-boundary reset/retention finding. Provide the minimal mode-only reproduction and firmware version in an upstream report; compare with the SmartSDR GUI to determine whether it adds an intentional restore convention.
-2. Extend the persistence test matrix through FM and include **both** AGC threshold and AGC-off level as distinct fields. The earlier USB/LSB-only multislice checks cannot cover this transition.
+2. The two-slice runner now includes FM entry/return and **both** AGC threshold and AGC-off level as distinct fields, with mode-dependent slider checks and guarded cleanup. This expansion awaits a live run; the earlier USB/LSB-only multislice results cannot cover it. See the [handoff](persist-flex-to-icom-handoff-2026-09-08.md).
 3. The TX sweep cleanup initially omitted these receive-state side effects. Its full final comparison caught the omission, and explicit RX-only cleanup restored them. Capture and guard their restoration in future full-mode sweeps.
 4. Do not add a client-side automatic AGC replay solely to mask the observed reset. That would need a documented Flex behavior contract and maintainer review, because the radio currently publishes 50/50 as authoritative state.
 

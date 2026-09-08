@@ -15,7 +15,7 @@ from pathlib import Path
 from radiocert_persist import Journal, Run, StopRun, Supervisor, compare, ready
 from radiocert_persist_applets import widgets, widget_value
 
-FIELDS = ('frequency', 'mode', 'filterLow', 'filterHigh', 'agcMode', 'agcThreshold',
+FIELDS = ('frequency', 'mode', 'filterLow', 'filterHigh', 'agcMode', 'agcThreshold', 'flexAgcOffLevel',
           'audioGain', 'audioPan', 'audioMute', 'squelch', 'squelchLevel', 'manualSquelchLevel')
 SENTINELS = ('rxAntenna', 'txAntenna', 'txSlice', 'ritOn', 'ritFreq', 'xitOn', 'xitFreq')
 PAN_FIELDS = ('centerMhz', 'bandwidthMhz', 'minDbm', 'maxDbm', 'average', 'fps', 'rxAntenna', 'rfGain')
@@ -28,6 +28,8 @@ def plan():
     return {'phase': 'persist-multislice', 'scope': 'one client, two owned slices, one pan; RX-only',
             'scenarios': ['distinct SQL/AGC/filter/audio per slice', 'active slice A/B/A',
                           'SQL Manual/off transitions with distinct slice levels', 'independent mode round trips',
+                          'AGC Off slider and distinct off levels before/after restart',
+                          'per-slice FM entry/exit retention before explicit cleanup',
                           'normal Quit/relaunch with both slices present',
                           'remove/reopen only test-created slice', 'guarded restoration'],
             'notRun': ['multiple panadapters', 'MultiFlex', 'band-stack topology recall',
@@ -58,6 +60,41 @@ def pan_state(pan):
 def restoration_conflicts(current, expected):
     """Compare every owned field, preserving type and missing-value failures."""
     return compare(expected, [slice_state(current)])
+
+
+def agc_slider_field(state):
+    return 'flexAgcOffLevel' if state['agcMode'] == 'off' else 'agcThreshold'
+
+
+def fm_cleanup_state(before, samples, letter):
+    """Authorize cleanup of only stable AGC/filter consequences of our FM trip.
+
+    This is not a retention result. The original comparison must be journaled
+    first. Never accept missing values, peer changes or unrelated side effects.
+    """
+    allowed = {'agcMode', 'agcThreshold', 'flexAgcOffLevel', 'filterLow', 'filterHigh'}
+    if not samples:
+        raise StopRun('FM cleanup has no observations')
+    last = samples[-1]
+    if set(last) != set(before):
+        raise StopRun('FM cleanup slice identities changed')
+    for identity, baseline in before.items():
+        state = last[identity]
+        if (state.get('agcMode') not in ('off', 'slow', 'med', 'fast')
+                or any(type(state.get(k)) is not int or not 0 <= state[k] <= 100
+                       for k in ('agcThreshold', 'flexAgcOffLevel'))):
+            raise StopRun('FM cleanup AGC values are invalid')
+        for key, value in baseline.items():
+            observed = last[identity].get(key)
+            if value is None or observed is None or type(observed) is not type(value):
+                raise StopRun('FM cleanup state missing or mistyped')
+            if (identity != letter or key not in allowed) and observed != value:
+                raise StopRun('FM changed peer or unrelated state; inspect before cleanup')
+        for sample in samples:
+            if (set(sample) != set(before)
+                    or compare(last[identity], [sample.get(identity, {})])['outcome'] != 'ESTABLISHED'):
+                raise StopRun('FM cleanup state is not stable')
+    return {identity: state.copy() for identity, state in last.items()}
 
 
 class MultiSliceRun(Run):
@@ -139,7 +176,14 @@ class MultiSliceRun(Run):
         self.wait_ready(mode=state['mode'])
         self.action({'cmd': 'slice', 'action': 'filter',
                      'value': f"{state['filterLow']} {state['filterHigh']}"}, 'set slice passband')
-        for field in UI:
+        # One visible slider has two meanings. Set the threshold with AGC on,
+        # then the off level with AGC off, finally restore the requested mode.
+        self.widget('agcMode', 'med')
+        self.widget('agcThreshold', state['agcThreshold'])
+        self.widget('agcMode', 'off')
+        self.widget('agcThreshold', state['flexAgcOffLevel'])
+        self.widget('agcMode', state['agcMode'])
+        for field in ('audioGain', 'audioPan', 'audioMute'):
             self.widget(field, state[field])
         self.sql(state['squelch'], state['squelchLevel'])
         self.wait_ready()
@@ -161,8 +205,9 @@ class MultiSliceRun(Run):
                 value = widget_value(matches[0], action) if len(matches) == 1 else None
                 if field == 'agcMode' and isinstance(value, str):
                     value = value.lower()
-                observed[f'ui.{letter}.{field}'] = value
-                wanted[f'ui.{letter}.{field}'] = expected[letter][field]
+                semantic = agc_slider_field(expected[letter]) if field == 'agcThreshold' else field
+                observed[f'ui.{letter}.{semantic}'] = value
+                wanted[f'ui.{letter}.{semantic}'] = expected[letter][semantic]
             mode = self.applets.sql_mode()
             observed[f'ui.{letter}.sqlMode'] = mode
             wanted[f'ui.{letter}.sqlMode'] = 'manual' if expected[letter]['squelch'] else 'off'
@@ -174,6 +219,62 @@ class MultiSliceRun(Run):
             samples.append(observed)
             time.sleep(.2)
         return self.journal.result(name, wanted, samples)
+
+    def off_roundtrip(self, letter, phase):
+        self.select(letter)
+        mode = self.expected[letter]['agcMode']
+        self.widget('agcMode', 'off')
+        self.wait_ready()
+        self.expected[letter]['agcMode'] = 'off'
+        result = self.observe(phase + ' AGC Off slider ' + letter)
+        if result['outcome'] != 'ESTABLISHED':
+            raise StopRun('AGC Off model/slider disagreement; inspect before continuing')
+        self.widget('agcMode', mode)
+        self.expected[letter]['agcMode'] = mode
+        self.wait_ready()
+        if self.observe(phase + ' AGC enabled slider ' + letter)['outcome'] != 'ESTABLISHED':
+            raise StopRun('AGC enabled model/slider disagreement')
+
+    def fm_roundtrip(self, letter):
+        self.select(letter)
+        before = {identity: state.copy() for identity, state in self.expected.items()}
+        if self.observe('before FM ' + letter)['outcome'] != 'ESTABLISHED':
+            raise StopRun('FM baseline disagrees; refusing transition')
+        self.action({'cmd': 'slice', 'action': 'mode', 'value': 'FM'}, 'enter FM without AGC replay')
+        self.wait_ready(mode='FM')
+        for _ in range(4):
+            snapshot = self.snapshot()
+            self.assert_ready(snapshot)
+            self.journal.event('FM-entry-observation', letter=letter, snapshot=snapshot,
+                               tree=self.supervisor.request({'cmd': 'dumpTree'}))
+            time.sleep(.2)
+        self.action({'cmd': 'slice', 'action': 'mode', 'value': before[letter]['mode']},
+                    'leave FM without AGC replay')
+        self.wait_ready(mode=before[letter]['mode'])
+        # Keep the retention concern even when later cleanup succeeds.
+        self.observe('FM return retention ' + letter, before)
+        samples = []
+        for _ in range(4):
+            snapshot = self.snapshot()
+            self.assert_ready(snapshot)
+            samples.append({identity: slice_state(item) for identity, item in by_letter(snapshot).items()})
+            self.journal.event('FM-cleanup-observation', letter=letter, snapshot=snapshot)
+            time.sleep(.2)
+        cleanup_expected = fm_cleanup_state(before, samples, letter)
+        self.journal.event('FM-cleanup-intent', retentionExpected=before, observed=cleanup_expected,
+                           reason='explicit test cleanup; never a production AGC replay')
+        self.expected = cleanup_expected
+        # Close the observation/action gap as far as the bridge permits.
+        current = {identity: slice_state(item) for identity, item in by_letter(self.wait_ready()).items()}
+        if current != cleanup_expected:
+            raise StopRun('state changed before FM cleanup; refusing overwrite')
+        self.set_state(letter, before[letter])
+        self.expected = before
+        result = self.observe('explicit FM cleanup ' + letter)
+        self.journal.data['cleanup'].append({'fmSlice': letter, **result})
+        self.journal.save()
+        if result['outcome'] != 'ESTABLISHED':
+            raise StopRun('FM cleanup did not converge')
 
     def add_extra(self):
         before = self.wait_ready()
@@ -261,6 +362,7 @@ class MultiSliceRun(Run):
                      'filterLow': 150 if index == 0 else -2650,
                      'filterHigh': 2450 if index == 0 else -250,
                      'agcMode': 'fast' if index == 0 else 'slow', 'agcThreshold': 43 + index * 18,
+                     'flexAgcOffLevel': 17 + index * 12,
                      'audioGain': 23 + index * 18, 'audioPan': 25 + index * 50,
                      'audioMute': False, 'squelch': True, 'squelchLevel': 26 + index * 13,
                      'manualSquelchLevel': 26 + index * 13}
@@ -272,6 +374,8 @@ class MultiSliceRun(Run):
             self.expected[letter] = state
             if self.observe('seed ' + letter)['outcome'] != 'ESTABLISHED':
                 raise StopRun('seed disagreement; retention cannot be inferred')
+        for letter in (self.original, self.extra):
+            self.off_roundtrip(letter, 'seeded')
         for letter in (self.original, self.extra, self.original):
             self.select(letter)
             self.observe('active selection ' + letter)
@@ -303,6 +407,9 @@ class MultiSliceRun(Run):
         for letter in (self.extra, self.original):
             self.select(letter)
             self.observe('post-restart selected ' + letter)
+        for letter in (self.original, self.extra):
+            self.off_roundtrip(letter, 'post-restart')
+            self.fm_roundtrip(letter)
         self.restore(self.extra)
         self.remove_extra()
         self.observe('original survives removal')

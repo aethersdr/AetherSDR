@@ -361,5 +361,91 @@ class MultiSlicePolicyTest(unittest.TestCase):
         data['transmit']['tuning'] = True
         with self.assertRaises(StopRun):ready(data, 'test', tx_permission=True)
 
+class FmAgcPolicyTest(unittest.TestCase):
+    def states(self):
+        return {'A': {'mode': 'USB', 'agcMode': 'fast', 'agcThreshold': 43,
+                      'flexAgcOffLevel': 17, 'filterLow': 150, 'squelch': True},
+                'B': {'mode': 'LSB', 'agcMode': 'slow', 'agcThreshold': 61,
+                      'flexAgcOffLevel': 29, 'filterLow': -2650, 'squelch': False}}
+
+    def test_slider_selects_off_level_only_when_agc_is_off(self):
+        from radiocert_persist_multislice import agc_slider_field
+        state = self.states()['A']
+        self.assertEqual(state[agc_slider_field(state)], 43)
+        state['agcMode'] = 'off'
+        self.assertEqual(state[agc_slider_field(state)], 17)
+
+    def test_off_level_is_part_of_retention_and_restoration(self):
+        from radiocert_persist_multislice import slice_state, restoration_conflicts
+        state = self.states()['A']
+        self.assertEqual(slice_state(state)['flexAgcOffLevel'], 17)
+        self.assertEqual(restoration_conflicts({**state, 'flexAgcOffLevel': 50}, state)['outcome'], 'CONCERN')
+        del state['flexAgcOffLevel']
+        self.assertEqual(restoration_conflicts(state, self.states()['A'])['outcome'], 'INCONCLUSIVE')
+
+    def test_stable_fm_reset_is_cleanup_input_not_retention_success(self):
+        from radiocert_persist_multislice import fm_cleanup_state
+        before = self.states(); after = copy.deepcopy(before)
+        after['A'].update(agcMode='med', agcThreshold=50, flexAgcOffLevel=50)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Journal(Path(directory)/'j.json', {})
+            journal.result('FM retention', flatten(before), [flatten(after)])
+            self.assertEqual(fm_cleanup_state(before, [after, after], 'A'), after)
+            journal.result('cleanup', flatten(before), [flatten(before)])
+            self.assertEqual(journal.data['results'][0]['outcome'], 'CONCERN')
+
+    def test_cleanup_refuses_missing_mistyped_peer_unrelated_and_unstable_changes(self):
+        from radiocert_persist_multislice import fm_cleanup_state
+        before = self.states()
+        mutations = [lambda d: d['A'].pop('flexAgcOffLevel'),
+                     lambda d: d['A'].update(flexAgcOffLevel=True),
+                     lambda d: d['B'].update(flexAgcOffLevel=50),
+                     lambda d: d['A'].update(squelch=False),
+                     lambda d: d.pop('B'),
+                     lambda d: d['A'].update(agcMode='unknown'),
+                     lambda d: d['A'].update(flexAgcOffLevel=101)]
+        for mutate in mutations:
+            after = copy.deepcopy(before); mutate(after)
+            with self.subTest(after=after), self.assertRaises(StopRun):
+                fm_cleanup_state(before, [after, after], 'A')
+        changed = copy.deepcopy(before); changed['A']['flexAgcOffLevel'] = 50
+        with self.assertRaises(StopRun):
+            fm_cleanup_state(before, [changed, before], 'A')
+
+    def test_set_state_sets_both_slider_meanings_even_with_final_agc_off(self):
+        from radiocert_persist_multislice import MultiSliceRun
+        with tempfile.TemporaryDirectory() as directory:
+            run = MultiSliceRun(Mock(), 'test', Journal(Path(directory)/'j.json', {}))
+            run.select = Mock(); run.action = Mock(); run.wait_ready = Mock()
+            run.widget = Mock(); run.sql = Mock()
+            state = {**self.states()['A'], 'frequency': 14.18, 'filterHigh': 2450,
+                     'audioGain': 23, 'audioPan': 25, 'audioMute': False, 'squelchLevel': 26,
+                     'agcMode': 'off'}
+            run.set_state('A', state)
+            self.assertEqual([c.args for c in run.widget.call_args_list[:5]],
+                             [('agcMode', 'med'), ('agcThreshold', 43), ('agcMode', 'off'),
+                              ('agcThreshold', 17), ('agcMode', 'off')])
+
+    def test_fm_only_sends_mode_until_retention_is_recorded(self):
+        from radiocert_persist_multislice import MultiSliceRun
+        with tempfile.TemporaryDirectory() as directory:
+            run = MultiSliceRun(Mock(), 'test', Journal(Path(directory)/'j.json', {}))
+            run.expected = self.states(); run.select = Mock(); run.action = Mock()
+            run.wait_ready = Mock(); run.snapshot = Mock(return_value={})
+            run.supervisor.request.return_value = {}
+            run.assert_ready = Mock()
+            run.set_state = Mock()
+            def observe(name, *args):
+                if name.startswith('FM return'):
+                    raise StopRun('stop at retention boundary')
+                return {'outcome': 'ESTABLISHED'}
+            run.observe = Mock(side_effect=observe)
+            with patch('radiocert_persist_multislice.time.sleep'), self.assertRaises(StopRun):
+                run.fm_roundtrip('A')
+            self.assertEqual([c.args[0] for c in run.action.call_args_list],
+                             [{'cmd': 'slice', 'action': 'mode', 'value': 'FM'},
+                              {'cmd': 'slice', 'action': 'mode', 'value': 'USB'}])
+            run.set_state.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
