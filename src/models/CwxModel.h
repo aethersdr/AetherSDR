@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -38,6 +39,12 @@ public:
     // recognised as stale and ignored rather than re-arming the watch. (#3949)
     int   drainEpoch()  const { return m_drainEpoch; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
+
+    // TX admission for text keying (#5422). RadioModel wires this to
+    // TransmitModel::admitsCwxSend() so no text is queued while TUNE is
+    // active (the radio would key it at TUNE power). Unset = always admitted.
+    using SendAdmission = std::function<bool()>;
+    void setSendAdmission(SendAdmission admission) { m_sendAdmission = std::move(admission); }
 
     // Actions
     void send(const QString& text);      // Send mode: full string
@@ -111,9 +118,11 @@ signals:
     // self-contained even if speed changes mid-transmission.
     void transmissionRequested(const QString& text, int wpm);
     void transmissionCancelled();        // erase / clearBuffer / interrupt
+    void sendRefused(const QString& reason); // text not queued: TUNE active (#5422)
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
+    bool sendAdmitted();   // #5422: false (and sendRefused emitted) while TUNE is active
     void emitExpandedSend(const QVector<SpeedSegment>& segs);
 
     int     m_speed{20};
@@ -128,6 +137,7 @@ private:
     bool    m_qsk{false};
     bool    m_live{false};
     bool    m_speedModifiersEnabled{true};
+    SendAdmission m_sendAdmission;   // #5422
     int     m_sentIndex{-1};
     int     m_nextBlock{1};
     int     m_cwxEndIndex{-1};   // radio_index to watch for; -1 = not tracking

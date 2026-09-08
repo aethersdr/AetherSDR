@@ -4276,6 +4276,17 @@ void MainWindow::pushCwPaddleState(const QString& source,
             << " localIambic=" << (m_iambicKeyer && m_iambicKeyer->isRunning());
     }
 
+    // No CW while TUNE is active (#5422): a press is dropped here so the
+    // local keyer is never started against a tune carrier; a release (both
+    // paddles up) still flows so nothing is left keyed. sendCwKey and
+    // sendCwKeyEdge carry the same rule as the backstop for every caller.
+    if ((m_cwLeftPaddleActive || m_cwRightPaddleActive)
+        && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
+        qCWarning(lcCw).noquote() << "CW paddle press refused: TUNE is active (#5422) source="
+                                  << actionSource;
+        return;
+    }
+
     if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
         m_iambicKeyer->setPaddleState(m_cwLeftPaddleActive, m_cwRightPaddleActive);
     } else {

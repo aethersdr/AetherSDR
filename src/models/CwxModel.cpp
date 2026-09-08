@@ -140,8 +140,20 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
     }
 }
 
+bool CwxModel::sendAdmitted()
+{
+    if (m_sendAdmission && !m_sendAdmission()) {
+        qCWarning(lcCw) << "CWX send refused: TUNE is active (#5422)";
+        emit sendRefused(tr("TUNE is active"));
+        return false;
+    }
+    return true;
+}
+
 void CwxModel::send(const QString& text)
 {
+    if (!sendAdmitted())
+        return;
     if (text.isEmpty()) {
         return;
     }
@@ -154,6 +166,8 @@ void CwxModel::send(const QString& text)
 
 void CwxModel::sendChar(const QString& ch)
 {
+    if (!sendAdmitted())
+        return;
     if (ch.isEmpty()) return;
     QString encoded = ch;
     encoded.replace(' ', QChar(0x7f));
@@ -169,6 +183,8 @@ void CwxModel::sendChar(const QString& ch)
 
 void CwxModel::sendMacro(int idx)
 {
+    if (!sendAdmitted())
+        return;
     if (idx < 1 || idx > 12) return;
     const QString text = m_macros[idx - 1];
     if (text.isEmpty()) {

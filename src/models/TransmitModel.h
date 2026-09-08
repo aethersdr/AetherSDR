@@ -45,6 +45,18 @@ public:
     int     rfPower()       const { return m_rfPower; }
     int     tunePower()     const { return m_tunePower; }
     bool    isTuning()      const { return m_tune; }
+    // CW admission while TUNE is active (#5422). Measured on a FLEX-8400 fw
+    // 4.2.20: a `cw key 1` that arrives while the radio holds a tune carrier
+    // keys the transmitter at TUNE power (the CW RF power setting is ignored),
+    // and on key-up the radio stays in TX with no carrier and tune=1 until
+    // TUNE is pressed off. CWX text keys at TUNE power the same way. So no CW
+    // source keys while tuning: key-down is refused, key-up is never refused
+    // (a guard that flips while a key is held must not strand a keyed
+    // transmitter — fail closed is key UP). m_tune is optimistic from
+    // startTune() and reconciled from radio status, so the guard closes from
+    // the TUNE click itself, not after the round trip.
+    bool    admitsCwKeyEdge(bool down) const { return !down || !m_tune; }
+    bool    admitsCwxSend() const { return !m_tune; }
     bool    isMox()         const { return m_mox; }
     bool    isTransmitting() const { return m_transmitting; }
     double  transmitFreq()  const { return m_transmitFreq; }  // MHz, from "transmit freq=..."
