@@ -51,10 +51,10 @@ reuse when the map is reopened.
   geographic surface normal; no lights are projected onto the far hemisphere.
 - Download limit: 16 MiB, 15-second timeout, one active HTTP request. PNG
   dimensions are checked before decoding. Failures retain the previous image
-  and retry no sooner than one minute after a failure. The dedicated HTTP disk cache is bounded to
-  64 MiB and follows response cache headers. CPU image work uses the existing
-  Qt global worker pool, with at most one twilight-mask job plus a coalesced
-  follow-up.
+  and retry after 66 seconds (or later while the provider cooldown remains).
+  The dedicated HTTP disk cache is bounded to 64 MiB and follows response cache
+  headers. CPU image work uses the existing Qt global worker pool, with at most
+  one twilight-mask job plus a coalesced follow-up.
 
 References:
 - [GIBS available visualizations](https://nasa-gibs.github.io/gibs-api-docs/available-visualizations/)

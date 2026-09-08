@@ -1,4 +1,5 @@
 #include "gui/map/MapDisplayWidget.h"
+#include "gui/map/MapProviderNetworkAccessManager.h"
 #include "gui/map/CityLightsItem.h"
 #include "gui/map/GlobeMapView.h"
 #include "gui/map/WeatherRadarTexture.h"
@@ -444,15 +445,87 @@ private slots:
         for (int i = 0; i < replies.size(); ++i) {
             replies.at(i)->complete(i == 0);
         }
-        layer->checkReadiness(59999);
+        layer->checkReadiness(999, 999);
         QCOMPARE(network.allReplies.size(), requests);
-        layer->checkReadiness(60000);
+        layer->checkReadiness(5000, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(network.allReplies.size(), requests + 1, 3000);
         QVERIFY(ready.isEmpty());
         network.allReplies.last()->complete();
         QTRY_COMPARE(ready.size(), 1);
         QVERIFY(!layer->loadFailed());
         QCOMPARE(layer->pendingRequestCount(), 0);
+        layer->setEnabled(false);
+        QGV::setNetworkManager(nullptr);
+    }
+
+    void liveTilesRetryDuringCameraMovement()
+    {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        QGVMap map;
+        map.resize(600, 400);
+        map.show();
+        QTest::qWait(20);
+        map.cameraTo(QGVCameraActions(&map).scaleTo(.0001)
+            .moveTo(QPointF(-1.05e7, -4.0e6)), false);
+        QCoreApplication::processEvents();
+        auto* layer = new WeatherRadarTileLayer();
+        layer->setEnabled(false);
+        map.addItem(layer);
+        QSignalSpy ready(layer, &WeatherRadarTileLayer::frameReady);
+        layer->setEnabled(true);
+        QTRY_VERIFY(!network.allReplies.isEmpty());
+        QTest::qWait(200);
+        const int requests = network.allReplies.size();
+        const auto replies = network.allReplies;
+        for (int i = 0; i < replies.size(); ++i) {
+            replies.at(i)->complete(i == 0);
+        }
+        // Real camera events repeatedly reset the readiness settle clock, but
+        // must not reset the independent retry clock. Stay within the same tiles.
+        for (int i = 0; i < 12; ++i) {
+            map.cameraTo(QGVCameraActions(&map)
+                .moveTo(QPointF(-1.05e7 + (i % 2) * 10000, -4.0e6)), false);
+            QTest::qWait(150);
+        }
+        QCOMPARE(network.allReplies.size(), requests + 1);
+        network.allReplies.last()->complete();
+        QTRY_COMPARE(ready.size(), 1);
+        layer->setEnabled(false);
+        QGV::setNetworkManager(nullptr);
+    }
+
+    void completedCoverageDoesNotWaitForOldFailures()
+    {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        QGVMap map;
+        map.resize(600, 400);
+        map.show();
+        QTest::qWait(20);
+        map.cameraTo(QGVCameraActions(&map).scaleTo(.0001)
+            .moveTo(QPointF(-1.05e7, -4.0e6)), false);
+        QCoreApplication::processEvents();
+        auto* layer = new WeatherRadarTileLayer();
+        layer->setEnabled(false);
+        map.addItem(layer);
+        QSignalSpy ready(layer, &WeatherRadarTileLayer::frameReady);
+        layer->setEnabled(true);
+        QTRY_VERIFY(!network.allReplies.isEmpty());
+        QTest::qWait(200);
+        const int requests = network.allReplies.size();
+        const auto replies = network.allReplies;
+        for (int i = 0; i < replies.size(); ++i) {
+            replies.at(i)->complete(i == 0);
+        }
+        // Recover the tile outside the readiness callback, leaving its old
+        // failure count intact. Completed current coverage must win immediately.
+        layer->retryUnfinishedTiles();
+        QCOMPARE(network.allReplies.size(), requests + 1);
+        network.allReplies.last()->complete();
+        QVERIFY(layer->currentTilesComplete());
+        layer->checkReadiness(300, 0);
+        QCOMPARE(ready.size(), 1);
         layer->setEnabled(false);
         QGV::setNetworkManager(nullptr);
     }
@@ -491,7 +564,7 @@ private slots:
                     reply->complete(true);
                 }
             }
-            layer->checkReadiness(60000); // Advance retry time without sleeping a minute.
+            layer->checkReadiness(5000, 5000); // Advance retry time without sleeping.
             QTest::qWait(25);
         }
         QCOMPARE(failures.size(), 1);
@@ -843,8 +916,10 @@ private slots:
         QVERIFY(map.m_weatherRadarTimelineFailed);
         QVERIFY(map.m_weatherRadarRebufferTimer->isActive());
         QVERIFY(errors.isEmpty());
+        QCOMPARE(map.m_weatherRadarRebufferTimer->interval(), MapProviderRetryPolicy::kConsumerRetryMs);
+        QCOMPARE(map.m_weatherRadarRebufferTimer->timerType(), Qt::PreciseTimer);
         map.m_weatherRadarRebufferTimer->stop();
-        map.rebufferWeatherRadarPlayback(); // Same callback as the one-minute retry.
+        map.rebufferWeatherRadarPlayback(); // Same callback as the jitter-aware retry.
         QVERIFY(map.m_weatherRadarTimelineReply);
         QCOMPARE(map.m_weatherRadarTimelineReply->url(), WeatherRadarSource::noaaTimelineUrl());
         map.stopWeatherRadarAnimation();

@@ -1,6 +1,8 @@
 #include "gui/map/MapProviderNetworkAccessManager.h"
 
 #include <QNetworkReply>
+#include <QNetworkDiskCache>
+#include <QTemporaryDir>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -51,6 +53,25 @@ protected:
         return reply;
     }
 };
+// Qt may only execute cache-only requests in this fixture. Even a broken guard
+// cannot contact a provider: any attempted wire operation becomes an inert reply.
+class CacheOnlyNetwork final : public MapProviderNetworkAccessManager {
+public:
+    using MapProviderNetworkAccessManager::MapProviderNetworkAccessManager;
+    int wireAttempts{0};
+protected:
+    QNetworkReply* sendRequest(Operation operation, const QNetworkRequest& request,
+                              QIODevice* data) override
+    {
+        if (request.attribute(QNetworkRequest::CacheLoadControlAttribute).toInt()
+            != QNetworkRequest::AlwaysCache) {
+            ++wireAttempts;
+            return new Reply(request, this);
+        }
+        return MapProviderNetworkAccessManager::sendRequest(operation, request, data);
+    }
+};
+
 }
 
 class MapProviderRetryTest final : public QObject {
@@ -65,7 +86,9 @@ private slots:
         for (const QByteArray text : {QByteArray(), QByteArray("-1"), QByteArray("broken"), QByteArray("1.5")}) {
             QCOMPARE(MapProviderRetryPolicy::retryAfterMs(text, now), 0);
         }
-        QVERIFY(MapProviderRetryPolicy::retryAfterMs("99999999999999999999999999999", now) > 86400000);
+        QCOMPARE(MapProviderRetryPolicy::retryAfterMs("99999999999999999999999999999", now), 86400000);
+        QCOMPARE(MapProviderRetryPolicy::retryAfterMs("86401", now), 86400000);
+        QCOMPARE(MapProviderRetryPolicy::retryAfterMs("Wed, 09 Sep 2026 12:00:00 GMT", now), 86400000);
     }
 
     void cooldownEscalatesAndOldSuccessCannotClearIt()
@@ -184,6 +207,91 @@ private slots:
         QVERIFY(policy->admit(nws).delayMs > 0);
         network.sent.last()->finish(200);
         QVERIFY(!policy->admit(nws).probe);
+    }
+
+    void simultaneousFailuresCountOnceAndConsumerTimerCoversJitter()
+    {
+        qint64 time = 0;
+        MapProviderRetryPolicy policy([&time] { return time; });
+        QList<MapProviderRetryPolicy::Admission> admitted;
+        for (int i = 0; i < 20; ++i) {
+            admitted.append(policy.admit(nws));
+        }
+        for (const auto admission : admitted) {
+            policy.complete(nws, admission, true, false);
+        }
+        const qint64 delay = policy.admit(nws).delayMs;
+        QVERIFY(delay >= 60000 && delay <= 66000);
+        QVERIFY(MapProviderRetryPolicy::kConsumerRetryMs >= 66000);
+        time = MapProviderRetryPolicy::kConsumerRetryMs;
+        const auto recovery = policy.admit(nws);
+        QCOMPARE(recovery.delayMs, 0);
+        QVERIFY(recovery.probe);
+    }
+
+    void lateServerDeadlineIsHonoredWithoutMultiplyingBackoff()
+    {
+        qint64 time = 0;
+        MapProviderRetryPolicy policy([&time] { return time; });
+        const auto first = policy.admit(nws);
+        const auto late = policy.admit(nws);
+        policy.complete(nws, first, true, false);
+        time = 10000;
+        policy.complete(nws, late, true, false, "3600");
+        QCOMPARE(policy.admit(nws).delayMs, 3600000);
+        time += 3600000;
+        const auto probe = policy.admit(nws);
+        policy.complete(nws, probe, true, false);
+        const qint64 delay = policy.admit(nws).delayMs;
+        QVERIFY(delay >= 120000 && delay <= 126000);
+    }
+
+    void diskCacheRemainsAvailableDuringCooldown()
+    {
+        qint64 time = 0;
+        auto policy = std::make_shared<MapProviderRetryPolicy>([&time] { return time; });
+        CacheOnlyNetwork network(nullptr, policy);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto* cache = new QNetworkDiskCache(&network);
+        cache->setCacheDirectory(directory.path());
+        network.setCache(cache);
+        QNetworkCacheMetaData metadata;
+        metadata.setUrl(nws);
+        metadata.setSaveToDisk(true);
+        metadata.setExpirationDate(QDateTime::currentDateTimeUtc().addDays(1));
+        metadata.setRawHeaders({{"Content-Type", "image/png"}, {"Cache-Control", "max-age=86400"}});
+        QIODevice* data = cache->prepare(metadata);
+        QVERIFY(data != nullptr);
+        data->write("cached-image");
+        cache->insert(data);
+        const auto admitted = policy->admit(nws);
+        policy->complete(nws, admitted, true, false, "180");
+        for (const auto mode : {QNetworkRequest::PreferCache, QNetworkRequest::AlwaysCache}) {
+            QNetworkRequest request(nws);
+            request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, mode);
+            QNetworkReply* reply = network.get(request);
+            QSignalSpy done(reply, &QNetworkReply::finished);
+            QTRY_COMPARE(done.size(), 1);
+            QCOMPARE(reply->error(), QNetworkReply::NoError);
+            QVERIFY(reply->attribute(QNetworkRequest::SourceIsFromCacheAttribute).toBool());
+            QCOMPARE(reply->readAll(), QByteArray("cached-image"));
+            QCOMPARE(policy->admit(nws).delayMs, 180000);
+            delete reply;
+        }
+        // A miss and an explicit network-only load are denied locally.
+        for (const auto mode : {QNetworkRequest::PreferCache, QNetworkRequest::AlwaysNetwork}) {
+            QNetworkRequest request(mode == QNetworkRequest::AlwaysNetwork ? nws
+                : QUrl(nws.toString() + "/missing"));
+            request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, mode);
+            QNetworkReply* reply = network.get(request);
+            QSignalSpy done(reply, &QNetworkReply::finished);
+            QTRY_COMPARE(done.size(), 1);
+            QVERIFY(reply->error() != QNetworkReply::NoError);
+            QCOMPARE(policy->admit(nws).delayMs, 180000);
+            delete reply;
+        }
+        QCOMPARE(network.wireAttempts, 0);
     }
 
     void canceledAndDestroyedProbeCanBeRetried()

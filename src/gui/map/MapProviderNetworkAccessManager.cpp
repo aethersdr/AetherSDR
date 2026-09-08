@@ -1,6 +1,8 @@
 #include "MapProviderNetworkAccessManager.h"
 
 #include <QMutexLocker>
+#include <QCoreApplication>
+#include <QAbstractNetworkCache>
 #include <QLocale>
 #include <QTimeZone>
 #include <QNetworkReply>
@@ -8,15 +10,13 @@
 #include <QTimer>
 
 #include <algorithm>
-#include <limits>
 
 namespace AetherSDR {
 namespace {
 constexpr qint64 kMinimumRetryMs = 60000;
 constexpr qint64 kMaximumBackoffMs = 15 * 60000;
-// Saturation prevents hostile Retry-After values overflowing arithmetic.
-// Do not cap a valid server cooldown at our shorter exponential-backoff cap.
-constexpr qint64 kMaximumDelayMs = std::numeric_limits<qint64>::max() / 4;
+// Bound malformed server values while allowing longer-than-backoff cooldowns.
+constexpr qint64 kMaximumDelayMs = 24 * 60 * 60000;
 
 class CooldownReply final : public QNetworkReply {
 public:
@@ -31,10 +31,15 @@ public:
         open(QIODevice::ReadOnly | QIODevice::Unbuffered);
         QTimer::singleShot(0, this, [this] {
             finish(QNetworkReply::TemporaryNetworkFailureError,
-                   tr("Map provider cooling down; cached imagery remains available"));
+                   QCoreApplication::translate("MapProviderNetworkAccessManager",
+                       "Map provider cooling down; cached imagery remains available"));
         });
     }
-    void abort() override { finish(OperationCanceledError, tr("Canceled")); }
+    void abort() override
+    {
+        finish(OperationCanceledError,
+               QCoreApplication::translate("MapProviderNetworkAccessManager", "Canceled"));
+    }
 protected:
     qint64 readData(char*, qint64) override { return -1; }
 private:
@@ -161,6 +166,8 @@ void MapProviderRetryPolicy::complete(const QUrl& url, Admission admission,
         const qint64 jitter = QRandomGenerator::global()->bounded(6001);
         state.until = time + backoff + jitter;
     }
+    // Even an older failed request may carry a newer server deadline. Honor it
+    // conservatively (within the one-day cap); only successes are generation-gated.
     state.until = std::max(state.until, time + retryAfterMs(retryAfter, wallNow));
 }
 
@@ -184,6 +191,17 @@ QNetworkReply* MapProviderNetworkAccessManager::createRequest(Operation operatio
     }
     const MapProviderRetryPolicy::Admission admission = m_policy->admit(request.url());
     if (admission.delayMs > 0) {
+        const int control = request.attribute(QNetworkRequest::CacheLoadControlAttribute,
+                                              QNetworkRequest::PreferNetwork).toInt();
+        if (cache() != nullptr && control != QNetworkRequest::AlwaysNetwork
+            && cache()->metaData(request.url()).isValid()) {
+            // PreferCache can go to the wire on a miss. AlwaysCache cannot,
+            // even if the entry disappears between this lookup and Qt's read.
+            QNetworkRequest cached(request);
+            cached.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
+                                QNetworkRequest::AlwaysCache);
+            return sendRequest(operation, cached, outgoingData);
+        }
         return new CooldownReply(request, operation, admission.delayMs, this);
     }
     QNetworkReply* reply = sendRequest(operation, request, outgoingData);

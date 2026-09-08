@@ -33,12 +33,13 @@ protected:
 
 private:
     friend class WeatherRadarLoadingTest;
-    void checkReadiness(qint64 elapsedMs);
+    void checkReadiness(qint64 elapsedMs, qint64 retryElapsedMs);
     void beginReadinessCheck();
 
     WeatherRadarSource m_source;
     QTimer m_readinessTimer;
     QElapsedTimer m_readinessElapsed;
+    QElapsedTimer m_retryElapsed;
     QString m_readyFrameId;
     quint64 m_failureBaseline{0};
     int m_retryCount{0};

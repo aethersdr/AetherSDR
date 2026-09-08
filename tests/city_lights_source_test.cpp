@@ -1,9 +1,12 @@
 #include "gui/map/CityLightsShading.h"
 #include "gui/map/CityLightsSource.h"
+#include "gui/map/MapProviderNetworkAccessManager.h"
 #include "gui/map/SolarTerminator.h"
 
 #include <QBuffer>
 #include <QNetworkReply>
+#include <QNetworkDiskCache>
+#include <QTemporaryDir>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUrlQuery>
@@ -48,6 +51,14 @@ public:
             emit readyRead();
         }
         setFinished(true);
+        emit finished();
+    }
+    void completeInvalidImage()
+    {
+        m_bytes = "not a PNG";
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 200);
+        setFinished(true);
+        emit readyRead();
         emit finished();
     }
     qint64 bytesAvailable() const override { return m_bytes.size() + QIODevice::bytesAvailable(); }
@@ -198,6 +209,45 @@ private slots:
         };
         QCOMPARE(polar(1.9e7), 0);
         QCOMPARE(polar(-1.9e7), 255);
+    }
+
+    void transportFailurePreservesCacheButInvalidPayloadIsEvicted()
+    {
+        LightsNetwork network;
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto* cache = new QNetworkDiskCache(&network);
+        cache->setCacheDirectory(directory.path());
+        network.setCache(cache);
+        const WeatherRadarViewGeometry view{QRectF(-1e7, 2e6, 1e6, 1e6), QSize(32, 32)};
+        const auto bounded = CityLightsSource::boundedView(view);
+        const QUrl url = CityLightsSource::imageUrl(bounded);
+        QNetworkCacheMetaData metadata;
+        metadata.setUrl(url);
+        metadata.setExpirationDate(QDateTime::currentDateTimeUtc().addDays(1));
+        metadata.setSaveToDisk(true);
+        QIODevice* data = cache->prepare(metadata);
+        QVERIFY(data != nullptr);
+        QImage image(bounded.size, QImage::Format_ARGB32);
+        image.fill(Qt::white);
+        QVERIFY(image.save(data, "PNG"));
+        cache->insert(data);
+        CityLightsSource source(nullptr, &network);
+        source.setView(view);
+        source.setEnabled(true);
+        QTRY_COMPARE(network.requests.size(), 1);
+        QSignalSpy statuses(&source, &CityLightsSource::statusChanged);
+        network.requests.last()->complete(true);
+        QTRY_VERIFY(!statuses.isEmpty());
+        QVERIFY(cache->metaData(url).isValid());
+        source.setEnabled(false);
+        source.setEnabled(true);
+        QTRY_COMPARE(network.requests.size(), 2);
+        // A successful HTTP response with invalid image bytes must still
+        // evict its payload.
+        network.requests.last()->completeInvalidImage();
+        statuses.clear();
+        QTRY_VERIFY(!cache->metaData(url).isValid());
     }
 
     void loadingCancellationRetentionAndReuse()

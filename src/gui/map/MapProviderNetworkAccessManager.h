@@ -15,6 +15,8 @@ namespace AetherSDR {
 // sockets or timers: tests inject monotonic time instead of waiting minutes.
 class MapProviderRetryPolicy {
 public:
+    // Consumer timers must cover the initial cooldown including positive jitter.
+    static constexpr int kConsumerRetryMs = 66000;
     struct Admission {
         qint64 delayMs{0};
         quint64 generation{0};

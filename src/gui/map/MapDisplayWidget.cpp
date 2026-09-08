@@ -136,6 +136,8 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     connect(m_weatherRadarPlaybackTimer, &QTimer::timeout,
             this, &MapDisplayWidget::updateWeatherRadarPlayback);
     m_weatherRadarRebufferTimer = new QTimer(this);
+    // Recovery must not fire early inside the provider cooldown plus jitter.
+    m_weatherRadarRebufferTimer->setTimerType(Qt::PreciseTimer);
     m_weatherRadarRebufferTimer->setSingleShot(true);
     m_weatherRadarRebufferTimer->setInterval(350);
     connect(m_weatherRadarRebufferTimer, &QTimer::timeout,
@@ -513,7 +515,7 @@ void MapDisplayWidget::retryWeatherRadarHistory()
     emit weatherRadarTimelineLoadingChanged(false);
     m_weatherRadarTimelineCache.clear();
     m_weatherRadarTimelineCachedAt = {};
-    m_weatherRadarRebufferTimer->start(60000);
+    m_weatherRadarRebufferTimer->start(MapProviderRetryPolicy::kConsumerRetryMs);
     updateWeatherRadarLoadingStatus();
 }
 
@@ -1145,7 +1147,7 @@ void MapDisplayWidget::finishWeatherRadarDownloadBatch()
         // No timeline/cadence reset on a zoom. Failed detail keeps that frame's
         // older image; retry only the missing upgrades after a bounded delay.
         if (!m_weatherRadarDownloadFailed.isEmpty()) {
-            m_weatherRadarRebufferTimer->start(60000);
+            m_weatherRadarRebufferTimer->start(MapProviderRetryPolicy::kConsumerRetryMs);
         }
         if (m_weatherRadarPlayableFrameCount != m_weatherRadarFrames.size()
             || std::any_of(m_weatherRadarFrames.cbegin(), m_weatherRadarFrames.cend(),
@@ -1313,7 +1315,7 @@ void MapDisplayWidget::applyFinalizedWeatherRadarBuffering()
     }
     m_weatherRadarBufferFinalizationPending = false;
     if (!m_weatherRadarRetryFrames.isEmpty()) {
-        m_weatherRadarRebufferTimer->start(60000);
+        m_weatherRadarRebufferTimer->start(MapProviderRetryPolicy::kConsumerRetryMs);
     }
     if (m_weatherRadarFrames.size() < 2) {
         resetWeatherRadarAnimation(true);
