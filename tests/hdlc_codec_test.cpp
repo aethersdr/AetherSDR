@@ -246,7 +246,6 @@ void testLongPayload()
     report("long payload: decoded", r.goodFcs == 1);
 }
 
-} // namespace
 
 // ── Back-to-back frame regression helpers  ──────────────────────────────────────────────────────────────────
 
@@ -381,6 +380,8 @@ void testBackToBackFramesTwoSeparatingFlags()
     const int good = decodeGoodFrames(nrziEncode(bits));
     report("back-to-back frames with two separating flags both decode", good == 2);
 }
+
+} // namespace
 
 int main()
 {

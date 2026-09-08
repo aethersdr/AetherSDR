@@ -2980,6 +2980,7 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/KissFraming.cpp
