@@ -2694,6 +2694,14 @@ MainWindow::~MainWindow()
     ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
 
+    // The Runtime Monitor reads m_memoryHistory, m_cpuHistory and
+    // m_uiTickLagMeter, which are unique_ptr members and so are gone before
+    // ~QObject deletes the dialog (a WA_DeleteOnClose child). Its destructor
+    // does not touch them today; take the dialog down first so that a future
+    // line in ~SystemInfoDialog() cannot turn into a use-after-free at exit
+    // (#5427 review).
+    delete m_systemInfoDialog;
+
     // The qApp::focusChanged lambda (MainWindow_Shortcuts.cpp) runs
     // releaseSliderShortcutLease(), which touches m_shortcutManager and the
     // m_sliderShortcutLease* members. Those are value members, so they are gone
