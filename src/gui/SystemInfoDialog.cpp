@@ -28,6 +28,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <iterator>
+
 // The gui-side ring repeats the collector's cadence rather than including the
 // core header (aetherd touchpoint burndown); this is where the two are pinned.
 static_assert(AetherSDR::MemoryHistoryRing::kSampleIntervalMs
@@ -915,6 +917,11 @@ void SystemInfoDialog::setCardLevel(QLabel* value, SystemInfo::CardLevel level)
         token = "{{color.accent.warning}}";
         name = "warning";
     }
+    // applyStyleSheet() is an unpolish/polish of the label; pay it only when
+    // the band actually moves, not on every refresh (#5427 review).
+    if (value->property("level").toString() == QLatin1String(name)) {
+        return;
+    }
     ThemeManager::instance().applyStyleSheet(
         value, QStringLiteral("QLabel { color: %1; font-weight: 700; font-size: 18px; "
                               "background: transparent; }")
@@ -1062,7 +1069,8 @@ void SystemInfoDialog::refreshOverview()
             for (int i = 0; i < top.size(); ++i) {
                 const CpuHistoryRing::ThreadSeries& ts = top.at(i);
                 TimeSeriesGraphWidget::Series s{threadLabel(ts, nameCount.value(ts.name) > 1),
-                                                theme.color(kThreadTokens[i % 5]), ts.points,
+                                                theme.color(kThreadTokens[i % static_cast<int>(std::size(kThreadTokens))]),
+                                                ts.points,
                                                 QStringLiteral("%")};
                 s.maxConnectGapSeconds = gapSeconds;
                 lines.push_back(s);

@@ -4598,7 +4598,7 @@ target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
 add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
 
 # #2554 (Overview tab): the CPU counterpart of the memory ring — retention, the
-# shared bucket rule, and the window-level top-N selection behind the stacked
+# shared bucket rule, and the window-level top-N selection behind the per-line
 # "top threads" chart. Header-only; pure logic, constructed samples; no widget,
 # no socket.
 add_executable(cpu_history_ring_test

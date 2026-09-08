@@ -142,6 +142,11 @@ public:
                               ++validRecords;
                               for (const ThreadShare& t : s->threads) {
                                   sumByTid[t.tid] += t.percentOfCore;
+                                  // Last write wins: a series is labelled with the
+                                  // newest name seen for its tid. If the OS recycled a
+                                  // tid inside the window, the dead thread's points
+                                  // carry the new thread's name — the series would be
+                                  // numerically meaningless in that case anyway.
                                   nameByTid.insert(t.tid, t.name);
                               }
                           }
