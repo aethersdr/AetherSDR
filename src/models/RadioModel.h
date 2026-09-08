@@ -1303,8 +1303,11 @@ public:
     // HL2 MAC); an unconnected model yields a family-wide scope.
     RadioSettingsScope settingsScope() const
     {
-        return RadioSettingsScope(m_family, settingsRadioId(
-            m_family, serial(), m_lastInfo.serialIdentity));
+        const QString radioId = settingsRadioId(m_family, serial(), m_lastInfo.serialIdentity);
+        if (m_family == QLatin1String("rtl") && radioId.isEmpty() && isConnected()) {
+            return RadioSettingsScope::anonymousRadio(m_family);
+        }
+        return RadioSettingsScope(m_family, radioId);
     }
 
     // Fire a vendor-extension verb at the connected backend (IRadioBackend

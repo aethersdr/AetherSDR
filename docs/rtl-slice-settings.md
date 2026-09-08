@@ -49,6 +49,21 @@ anonymous persistence to prevent family sharing. Those are policy changes to
 the explicitly approved identity rule. F3a retains that rule and documents/tests
 its consequences; it does not claim to eliminate cross-device fallback.
 
+## Band Stack bookmarks
+
+Band Stack uses the same model scope. A connected anonymous RTL radio explicitly
+marks that scope as an anonymous identity, so manual and automatic bookmarks can
+read and write the RTL family row. An ordinary empty-ID scope remains unknown
+and is refused; a disconnected anonymous model does not grant bookmark access.
+Identified radios retain exact-row bookmark reads and writes (Band Stack does
+not adopt OperatingState's family fallback). Anonymous dongles share their
+bookmark row; duplicate reported serials share their exact bookmark row.
+
+Old locator-keyed Band Stack documents remain intact but unclaimed, just like
+the old OperatingState documents. No USB index can prove which dongle owns them.
+Anonymous bookmark access never imports a legacy side-file section, and this
+change provides no automatic recovery of ambiguous old bookmarks.
+
 ## RtlSlices owner and staged cutover
 
 `RtlSliceSettings` compiles into the engine as the sole owner of feature

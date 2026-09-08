@@ -24,6 +24,16 @@ public:
     {
     }
 
+    // Explicit provenance for a connected radio whose identity policy chooses
+    // the family row. An ordinary empty ID still means identity is unknown.
+    static RadioSettingsScope anonymousRadio(QString family)
+    {
+        RadioSettingsScope scope(std::move(family), {});
+        scope.m_anonymousRadio = true;
+        return scope;
+    }
+    bool hasRadioIdentity() const { return !m_radioId.isEmpty() || m_anonymousRadio; }
+
     bool isValid() const { return !m_family.isEmpty(); }
     QString family() const { return m_family; }
     QString radioId() const { return m_radioId; }
@@ -73,6 +83,7 @@ public:
 private:
     QString m_family;
     QString m_radioId;
+    bool m_anonymousRadio = false;
 };
 
 } // namespace AetherSDR

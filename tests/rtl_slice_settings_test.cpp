@@ -1,11 +1,14 @@
 #include "TestSettingsProfile.h"
 #include "core/RtlSliceSettings.h"
+#include "core/BandStackSettings.h"
 #include "core/RadioStateMemory.h"
 #include "core/SettingsDatabase.h"
 #include "core/SettingsPaths.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QJsonArray>
 #include <QJsonDocument>
 
 #include <iostream>
@@ -367,6 +370,45 @@ int main(int argc, char** argv)
         next.serialIdentity = {};
         model.connectToRadio(next);
         check(model.settingsScope().radioId().isEmpty(), "unidentified production session uses RTL family scope");
+        BandStackSettings& bookmarks = BandStackSettings::instance();
+        BandStackEntry manual;
+        manual.frequencyMhz = 100.1;
+        manual.mode = QStringLiteral("WFM");
+        const RadioSettingsScope oldBookmarks("rtl", "rtl:2");
+        bookmarks.addEntry(oldBookmarks, manual);
+        bookmarks.addEntry(model.settingsScope(), manual);
+        check(bookmarks.entries(model.settingsScope()).size() == 1,
+              "connected anonymous RTL accepts a manual bookmark");
+        BandStackEntry automatic = manual;
+        automatic.autoSaved = true;
+        automatic.createdAtMs = QDateTime::currentMSecsSinceEpoch() - 60'000;
+        bookmarks.addEntry(model.settingsScope(), automatic);
+        check(bookmarks.entries(model.settingsScope()).size() == 2,
+              "connected anonymous RTL accepts an automatic bookmark");
+        settings.reset();
+        settings.load();
+        check(bookmarks.entries(model.settingsScope()).size() == 2,
+              "anonymous bookmarks survive database reopen");
+        check(bookmarks.removeExpiredEntries(model.settingsScope(), 1000) == 1
+                  && bookmarks.entries(model.settingsScope()).size() == 1,
+              "anonymous automatic bookmark expires without removing manual entry");
+        check(bookmarks.entries(oldBookmarks).size() == 1,
+              "anonymous writes leave old locator bookmarks intact and unclaimed");
+        injected->disconnectRadio();
+        bookmarks.addEntry(model.settingsScope(), manual);
+        bookmarks.clearAllEntries(model.settingsScope());
+        check(!model.settingsScope().hasRadioIdentity()
+                  && bookmarks.entries(model.settingsScope()).isEmpty()
+                  && family.featureExact(BandStackSettings::featureName())
+                         .value("entries").toArray().size() == 1,
+              "disconnected anonymous model cannot read add or clear family bookmarks");
+        model.connectToRadio(next);
+        check(bookmarks.entries(model.settingsScope()).size() == 1,
+              "anonymous reconnect recovers shared bookmarks");
+        bookmarks.removeEntry(model.settingsScope(), 0);
+        check(bookmarks.entries(model.settingsScope()).isEmpty(),
+              "anonymous bookmark removal writes through");
+
         check(injected->restored.rfFrequencyHz == 0
                   && injected->restored.mode.isEmpty()
                   && injected->restored.filterLowHz == 0
@@ -458,6 +500,19 @@ int main(int argc, char** argv)
         check(index.featureExact(RadioStateMemory::featureName()) == legacy()
                   && index.featureExact(feature).isEmpty(),
               "old locator row stays preserved and unclaimed after all model saves and swaps");
+    }
+    {
+        BandStackSettings& bookmarks = BandStackSettings::instance();
+        BandStackEntry entry;
+        entry.frequencyMhz = 101.5;
+        const RadioSettingsScope identified("rtl", "bookmark-identified");
+        bookmarks.addEntry(identified, entry);
+        bookmarks.addEntry(RadioSettingsScope("rtl", ""), entry);
+        bookmarks.addEntry(RadioSettingsScope("flex", ""), entry);
+        check(bookmarks.entries(identified).size() == 1
+                  && bookmarks.entries(RadioSettingsScope("rtl", "")).isEmpty()
+                  && bookmarks.entries(RadioSettingsScope("flex", "")).isEmpty(),
+              "identified bookmark scope works and ordinary empty scopes still refuse");
     }
     return failures == 0 ? 0 : 1;
 }
