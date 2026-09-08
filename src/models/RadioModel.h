@@ -914,6 +914,7 @@ public:
     // `wfRate` is the 1..100 waterfall RATE control value, low slow / high
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
+    bool requestPanAverage(const QString& panId, int average);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 

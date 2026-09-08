@@ -3187,12 +3187,10 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // A pan applet exists before the radio hands back its id (setPanId()
         // runs after creation), so a clone racing pan creation would put
         // `display pan set  average=0` — double space, no id — on the wire.
-        // requestPanDisplayRates() already returns early on an empty id; these
-        // two raw sendCommand() calls are the exposed pair.
+        // requestPanAverage()/requestPanDisplayRates() reject an empty id;
+        // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
-            m_radioModel.sendCommand(QString("display pan set %1 average=%2")
-                                         .arg(targetPanId)
-                                         .arg(src->fftAverage()));
+            m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
             m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
                                          .arg(targetPanId)
                                          .arg(src->fftWeightedAvg() ? 1 : 0));
@@ -4475,8 +4473,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftAverageChanged,
             this, [this, applet, sw](int v) {
         sw->setFftAverage(v);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 average=%2").arg(applet->panId()).arg(v));
+        m_radioModel.requestPanAverage(applet->panId(), v);
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
@@ -4766,8 +4763,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so the reset doesn't fight the congestion-aware cap. The SpectrumWidget
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
-        m_radioModel.sendCommand(
-            QString("display pan set %1 average=0").arg(applet->panId()));
+        m_radioModel.requestPanAverage(applet->panId(), 0);
         m_radioModel.sendCommand(
             QString("display pan set %1 weighted_average=0").arg(applet->panId()));
         // fps + line_duration go through the dispatcher rather than as Flex wire

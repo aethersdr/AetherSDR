@@ -1046,6 +1046,120 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+### `radiocert persist`
+
+`radiocert persist` returns a **read-only persistence snapshot**, also allowed in
+observe-only bridge mode. It does not enter the in-process tune/RX/TX runner,
+change settings, force a save, or require an audio engine. It accepts no arguments.
+
+The version-1 snapshot includes process/GUIClientID identity, settings-directory
+identity, family and declared client-settings domain mask, radio/slice/pan state,
+Display-panel presentation, client ownership and VFO attachment observations.
+Display rows now carry `panId` so they can be joined to the live pan after a band
+or session recreates objects. Pan snapshots also expose FFT average, weighted
+average (with its known flag), waterfall rate (legacy name
+`waterfallLineDuration`, **1..100, not milliseconds**, -1 unknown), center-known,
+WNB and available RX antennas.
+
+The snapshot explicitly identifies its evidence as **client model and
+presentation**. Some model setters update optimistically. Equality here alone
+is neither independent wire readback nor proof of a durable disk commit.
+
+The external supervisor runs the first receive-only Flex scenario set:
+
+```sh
+python3 tools/radiocert_persist.py plan
+python3 tools/radiocert_persist.py run --app build/AetherSDR.app \
+  --profile /tmp/persist-flex-profile --output /tmp/persist-flex-evidence \
+  --serial EXACT_DISCOVERY_SERIAL --rx-antennas ANT1 ANT2
+```
+
+Use new, separate profile and output directories. The supervisor initializes
+`AutoConnectToLastRadio=False` through the normal `--config` CLI before the first
+GUI launch, selects the exact discovered serial, requires Available status and
+one owned slice/pan with no other clients, and checks TX/ownership before every
+mutation. The profile remains the same for the whole run; its deterministic
+GUIClientID remains the same while the process PID and bridge endpoint change.
+No settings CLI operation or forced save occurs between Quit and relaunch.
+`AETHER_SETTINGS_DIR` also isolates legacy preference migration: it cannot
+import native user preferences or move the ordinary profile's legacy XML.
+
+The current plan seeds distinct 20m/40m FFT average/FPS and mode/filter tuples,
+changes Grid and waterfall palette through real Display controls, checks mode
+and BAND round trips, quits via the production Quit action, waits for process
+exit, relaunches, and checks the entry context **before** revisiting both bands.
+The optional `--rx-antennas ANT1 ANT2` explicitly authorizes receive-port changes:
+seed different RX ports on each band, check retention across band/restart, and
+exercise ANT1→ANT2→ANT1 on 20m. Omit it to keep RX antennas untouched. Both ports
+must appear in the radio's published antenna list. TX antenna is an untouched sentinel. Slice mute has its own applet contract. A disconnected receive port is expected to be quiet; audio
+liveness is not a persistence assertion. It samples 11 observations
+across five seconds after readiness; any sampled mismatch remains a CONCERN even
+if a later sample recovers. This is bounded evidence, not a promise that later
+overwrites cannot happen.
+
+`persist.json` is an atomic, write-ahead journal: pending actions and full
+before-state are durable before sending commands, and ambiguous replies stop the
+run without retrying a mutation. `persist.md` provides a scenario table. Outcomes
+are ESTABLISHED at the named evidence layer, CONCERN, or INCONCLUSIVE; unfinished
+scenarios remain listed as not run. The exit status reports runner completion
+(0) or interruption (2), not a radio pass/fail grade.
+
+Live Flex findings refined the supervisor: command/status logging starts before
+connecting and is captured by process and sequence number alongside observations.
+Any detected log gap is recorded explicitly; a gap cannot support a claim that
+no intermediate write occurred. A seed model/presentation mismatch is retained
+while independent transitions continue. Later matching samples remain
+INCONCLUSIVE as a retention verdict until the seed/observation discrepancy is
+resolved; their matching observation is recorded separately. A safety, identity,
+ownership, topology or ambiguous-command failure still stops mutations.
+Owned app processes run in their own process session so the shell completing a
+report does not inadvertently terminate the client left open for inspection.
+
+Cleanup restores seeded fields only when the current tested values still match
+the last test intent. It restores a custom filter in the mode that was edited
+before returning to the original mode. Mismatches are preserved for inspection,
+not overwritten. Band-stack, frequency/span and other contextual side effects
+are captured but are **not automatically undone** in v1. On interruption, inspect
+`action-pending`, `band-baseline`, `mode-baseline` and the last snapshot before
+manual recovery; the owned client may still be open. The runner never kills an
+unresponsive client or falls back to another radio.
+
+The expanded applet catalogue (`tools/radiocert_persist_applets.py`) exercises
+40 non-keying setting contracts through scoped real widgets: RF/Tune setpoints,
+slice volume/pan/mute, manual SQL intent, AGC mode/threshold, mic gain, processor,
+phone monitor, AM carrier, VOX threshold/delay, downward expander, separate CW
+monitor/delay/speed, and both complete eight-band radio EQ curves and enables.
+Earlier seeds remain sentinels while later controls change. Band/mode/antenna
+round trips, normal restart and guarded cleanup have separate observations.
+A mode-specific or disabled control is an explicit coverage gap, never silently
+force-enabled. VOX enable, tuning, MOX and transmitting must all be known false
+before any mutation. Profile loads and keying/arming actions are excluded.
+
+The `persist` snapshot additionally includes `transmit`, `equalizer`, `audio`
+and `dsp` resources. Slice snapshots include manual SQL threshold, tuning step,
+RIT/XIT and DAX channel; transmit snapshots include boost/bias and accessory/TX
+delays. Observation does not imply that the corresponding UI scenario ran.
+The JSON contains per-setting inventory, observability, action, widget-readback,
+transition and cleanup evidence, plus explicit remaining domain gaps.
+
+Pan snapshots distinguish dispatched FFT requests (`averageIsRequest`,
+`fpsIsRequest`) from the last valid radio publications (`radioReportedAverage`,
+`radioReportedFps`, -1 until published). Flex 4.2.18 can acknowledge these setters
+without echoing status to the setting client. The model follows FlexLib's local
+update on dispatch and always yields to subsequent radio status, including the
+previous value. No timer or persistence replays the request. A dispatched value
+is not a radio-confirmed value; the runner requires the radio-published FFT
+values on context revisit and restart, including cleanup revisits.
+
+A real-app, no-radio restart smoke check is available with `smoke` instead of
+`run` (omit `--serial`); it uses Qt offscreen. The policy test
+`radiocert_persist_policy` uses only in-process data fixtures and no radio peer.
+Process supervision currently supports macOS/Linux. Icom mutation contracts,
+additional antenna types, multiple slices/pans, MultiFlex, crash/power-cycle recovery,
+DSP, memory banks and layout/audio-device scenarios remain explicit gaps for
+subsequent iterations. The broader issue table and proposed contracts are in
+[the persistence research](research/radiocert-persist-research-2026-09-07.md).
+
 ### `get display`
 Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
 / WATERFALL / BACKGROUND / APPEARANCE / 3D VIEW groups own, as one flat object
@@ -4016,7 +4130,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
-| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] — bring-up diagnostic; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

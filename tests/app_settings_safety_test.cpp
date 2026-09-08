@@ -870,6 +870,16 @@ int main(int argc, char** argv)
         testSaveBeforeLoad();
     } else if (scenario == QStringLiteral("xml-import-parity")) {
         testXmlImportParity();
+    } else if (scenario == QStringLiteral("isolated-legacy-import")) {
+        const QString localLegacy = SettingsPaths::configDir()
+            + QStringLiteral("/legacy-qsettings.ini");
+        expect(writeFile(localLegacy, "[General]\nlastRadioSerial=PROFILE-SENTINEL\n"),
+               "write legacy fixture inside explicit profile");
+        AppSettings::instance().load();
+        expect(AppSettings::instance().value("LastConnectedRadioSerial").toString()
+                   == QStringLiteral("PROFILE-SENTINEL"),
+               "explicit profile imports only its own legacy preferences");
+        expect(QFile::exists(localLegacy), "local legacy source stays frozen");
     } else if (scenario == QStringLiteral("first-run")) {
         testFirstRunInitialization();
     } else if (scenario == QStringLiteral("database-file-permissions")) {
