@@ -178,6 +178,7 @@ private:
     void updateFilterButtons();
     void refreshFilterWidth();   // "AUTO" while adaptive is live, else the width
     void updateModeSettings(const QString& mode);
+    bool squelchAvailableInMode(const QString& mode) const;
     void rebuildFilterButtons();
 public:
     // Narrow the filter buttons to the widths a radio can actually reach.

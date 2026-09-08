@@ -4417,6 +4417,33 @@ target_link_libraries(amp_applet_test PRIVATE
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
 
+# Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
+# No RadioModel instance, radio connection, or firmware peer is constructed.
+add_executable(rx_applet_squelch_reconciliation_test
+    tests/rx_applet_squelch_reconciliation_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(rx_applet_squelch_reconciliation_test PRIVATE src)
+target_link_libraries(rx_applet_squelch_reconciliation_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME rx_applet_squelch_reconciliation_test
+         COMMAND rx_applet_squelch_reconciliation_test)
+set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -4588,6 +4615,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test

@@ -1546,6 +1546,17 @@ re-poll `get slices`.
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
 
+For a manual SQL band/profile-restore check, compare `get slice`'s
+`squelch`/`squelchLevel` with `dumpTree`'s **RX applet → Squelch threshold**
+and the VFO SQL control immediately after the transition. A radio-driven
+Off → Manual transition must adopt the incoming threshold before refreshing
+the controls (#5501). Use distinct thresholds on the two bands and retain
+each checkpoint: a later mode change can conceal a stale slider by causing
+another status update. In Auto, the slider is the margin, so it is not
+expected to equal the radio's computed threshold. Passive command suppression
+is covered by the socket-free `rx_applet_squelch_reconciliation_test`; a live
+snapshot alone cannot prove that no command was sent.
+
 ### `notch`
 
 Manual notch filters — a Flex TNF, or the WDSP null that stands in for one on a
