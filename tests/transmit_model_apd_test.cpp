@@ -2,6 +2,7 @@
 // parsing, sampler-port commands, equalizer reset, and idempotency.
 
 #include "models/TransmitModel.h"
+#include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -175,6 +176,22 @@ void testResetStateClearsSamplers()
 
 int main(int argc, char** argv)
 {
+    // ISOLATE THE SETTINGS HOME BEFORE ANY MODEL IS CONSTRUCTED.
+    //
+    // TransmitModel's constructor now restores PhoneMicLevel through
+    // AppSettings::instance(), so merely constructing one reaches the real
+    // settings home -- mkpath and migrateSettingsPath()'s rename included.
+    // A unit test must not touch the developer's own profile, and before the
+    // persistence landed this test had no reason to care.
+    //
+    // Must precede the first AppSettings::instance() call, which is why it is
+    // the first statement in main rather than beside the model.
+    TestSettingsProfile profile(QStringLiteral("aether-transmit-model-apd-test"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "[FAIL] could not create temporary settings profile\n");
+        return 1;
+    }
+
     QCoreApplication app(argc, argv);
 
     testSamplerStatusPopulatesAvailableAndSelected();

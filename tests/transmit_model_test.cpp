@@ -1,8 +1,11 @@
 #include "models/TransmitModel.h"
+#include "TestSettingsProfile.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/ClientQuindarTone.h"
 
 #include <QCoreApplication>
+
+#include <cstdio>
 #include <QObject>
 #include <QStringList>
 
@@ -33,6 +36,22 @@ TransmitDelta td(F&& build)
 
 int main(int argc, char** argv)
 {
+    // ISOLATE THE SETTINGS HOME BEFORE ANY MODEL IS CONSTRUCTED.
+    //
+    // TransmitModel's constructor now restores PhoneMicLevel through
+    // AppSettings::instance(), so merely constructing one reaches the real
+    // settings home -- mkpath and migrateSettingsPath()'s rename included.
+    // A unit test must not touch the developer's own profile, and before the
+    // persistence landed this test had no reason to care.
+    //
+    // Must precede the first AppSettings::instance() call, which is why it is
+    // the first statement in main rather than beside the model.
+    TestSettingsProfile profile(QStringLiteral("aether-transmit-model-test"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "[FAIL] could not create temporary settings profile\n");
+        return 1;
+    }
+
     QCoreApplication app(argc, argv);
 
     TransmitModel tx;

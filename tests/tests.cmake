@@ -4272,7 +4272,7 @@ add_executable(transmit_model_apd_test
     src/core/LogManager.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(transmit_model_apd_test PRIVATE src)
+target_include_directories(transmit_model_apd_test PRIVATE src tests)
 target_link_libraries(transmit_model_apd_test PRIVATE Qt6::Core Qt6::Test)
 if(UNIX)
     target_link_libraries(transmit_model_apd_test PRIVATE pthread)
@@ -4589,7 +4589,7 @@ add_executable(transmit_model_test
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
 )
-target_include_directories(transmit_model_test PRIVATE src)
+target_include_directories(transmit_model_test PRIVATE src tests)
 target_link_libraries(transmit_model_test PRIVATE Qt6::Core)
 if(UNIX)
     target_link_libraries(transmit_model_test PRIVATE pthread)
