@@ -336,6 +336,8 @@ void TransmitModel::startTune(PttSource source)
     }
     if (!runPttPreflight(source, false))
         return;
+    if (!tuneAdmitted())
+        return;
 
     // Tag the initiating source so the status-bar operator TX timer can exclude
     // local TUNE carriers as well as TCI/DAX-initiated tune (the radio reports
@@ -365,6 +367,8 @@ void TransmitModel::startTwoToneTune(PttSource source)
         return;
     }
     if (!runPttPreflight(source, false))
+        return;
+    if (!tuneAdmitted())
         return;
 
     m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
@@ -878,6 +882,23 @@ void TransmitModel::setTxModeGetter(TxModeGetter getter)
 void TransmitModel::setPttPreflight(PttPreflight preflight)
 {
     m_pttPreflight = std::move(preflight);
+}
+
+void TransmitModel::setTuneAdmission(TuneAdmission admission)
+{
+    m_tuneAdmission = std::move(admission);
+}
+
+bool TransmitModel::tuneAdmitted()
+{
+    if (!m_tuneAdmission)
+        return true;
+    const QString message = m_tuneAdmission().trimmed();
+    if (message.isEmpty())
+        return true;
+    emit pttBlocked(message);
+    emit tuneChanged(m_tune);   // a TUNE toggle may have flipped before calling
+    return false;
 }
 
 void TransmitModel::setPttOffHook(PttOffHook hook)

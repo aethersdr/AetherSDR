@@ -247,6 +247,15 @@ public:
     void setTxModeGetter(TxModeGetter getter);
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
+    // TUNE admission (#5422). RadioModel returns a non-empty message while a
+    // client CW source is keying (key edge down, paddle held, CWX in flight);
+    // startTune()/startTwoToneTune() are then refused and pttBlocked() carries
+    // the message. Measured on a FLEX-8400 fw 4.2.20: TUNE started on top of
+    // active CW keying comes up with no carrier and leaves the radio in TX with
+    // tune=1 — the same latched state as a key edge during TUNE, from the
+    // other direction. Unset = always admitted.
+    using TuneAdmission = std::function<QString()>;
+    void setTuneAdmission(TuneAdmission admission);
 
     // Pre-unkey hook: when set, requestPttOff() calls hook() instead of
     // setMox(false) directly. Hook MUST eventually release PTT via setTransmit(false).
@@ -423,6 +432,7 @@ private:
     static ATUStatus parseAtuTuneStatus(const QString& s);
     bool isPhoneModeForQuindar() const;
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
+    bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
     void dispatchMoxOff();
 
@@ -430,6 +440,7 @@ private:
     class ClientQuindarTone* m_quindarTone{nullptr};
     TxModeGetter             m_txModeGetter;
     PttPreflight             m_pttPreflight;
+    TuneAdmission            m_tuneAdmission;   // #5422
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
     PttOffHook               m_pttOffHook;

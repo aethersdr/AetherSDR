@@ -2292,6 +2292,13 @@ RadioModel::RadioModel(QObject* parent)
         m_pendingTransmitPreflightSource = source;
         return localPttInterlockMessage(source);
     });
+    // No TUNE start while a client CW source is keying (#5422): the radio
+    // would come up with no carrier and stay in TX with tune=1.
+    m_transmitModel.setTuneAdmission([this]() -> QString {
+        if (m_cwKeyActive || m_cwPaddleHeld || m_cwxActive)
+            return tr("TUNE not started: CW is keyed");
+        return {};
+    });
     connect(&m_transmitModel, &TransmitModel::pttBlocked,
             this, [this](const QString& message) {
         m_pendingTransmitPreflightSource = TransmitModel::PttSource::Mox;

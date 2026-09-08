@@ -4280,6 +4280,7 @@ void MainWindow::pushCwPaddleState(const QString& source,
     // local keyer is never started against a tune carrier; a release (both
     // paddles up) still flows so nothing is left keyed. sendCwKey and
     // sendCwKeyEdge carry the same rule as the backstop for every caller.
+    m_radioModel.setCwPaddleHeld(m_cwLeftPaddleActive || m_cwRightPaddleActive);
     if ((m_cwLeftPaddleActive || m_cwRightPaddleActive)
         && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
         qCWarning(lcCw).noquote() << "CW paddle press refused: TUNE is active (#5422) source="

@@ -2455,6 +2455,7 @@ void MainWindow::wireExternalControllers()
         // decides whether those edges use a radio-side keyer or host IQ.
         // No CW while TUNE is active (#5422): drop the press before the
         // keyer starts; a release still flows. See pushCwPaddleState().
+        m_radioModel.setCwPaddleHeld(dit || dah);
         if ((dit || dah) && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
             qCWarning(lcCw) << "CW paddle press refused: TUNE is active (#5422) source=serial";
             return;

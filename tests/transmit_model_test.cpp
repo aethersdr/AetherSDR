@@ -194,6 +194,25 @@ int main(int argc, char** argv)
     ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend(),
                  "radio tune=0 re-admits CW keying and CWX text");
 
+    // #5422, other direction: TUNE must not start while a CW source is keying
+    // (measured: it comes up with no carrier and leaves the radio in TX).
+    QString tuneBlock;
+    tx.setTuneAdmission([&tuneBlock] { return tuneBlock; });
+    tuneBlock = QStringLiteral("CW is keyed");
+    commands.clear();
+    blockedMessages.clear();
+    tx.startTune();
+    ok &= expect(commands.isEmpty() && !tx.isTuning()
+                     && blockedMessages == QStringList({"CW is keyed"}),
+                 "TUNE start is refused while CW is keyed");
+    tuneBlock.clear();
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands == QStringList({"transmit tune 1"}) && tx.isTuning(),
+                 "TUNE starts again once CW is released");
+    tx.stopTune();
+    tx.setTuneAdmission({});
+
     commands.clear();
     tx.setTuneMode("single_tone");
     ok &= expect(commands == QStringList({"transmit set tune_mode=single_tone"}),
