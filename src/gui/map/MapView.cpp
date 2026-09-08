@@ -962,16 +962,37 @@ void MapView::layoutOverlayButtons()
         btn->raise();
         y += btn->height() + kGap;
     }
-    if (m_legend != nullptr) {
-        m_legend->move(kMargin, height() - m_legend->height() - kMargin);
-        m_legend->raise();
-    }
     if (m_attribution != nullptr) {
+        m_attribution->setWordWrap(false);
+        m_attribution->setMinimumWidth(0);
+        m_attribution->setMaximumWidth(std::max(1, width() - 2 * kMargin));
+        m_attribution->adjustSize();
+        m_attribution->setFixedWidth(m_attribution->width());
+        m_attribution->setWordWrap(true);
         m_attribution->adjustSize();
         m_attribution->move(
             width() - m_attribution->width() - kMargin,
             height() - m_attribution->height() - kMargin);
         m_attribution->raise();
+    }
+    if (m_legend != nullptr) {
+        m_legend->setWordWrap(false);
+        m_legend->setMinimumWidth(0);
+        m_legend->setMaximumWidth(std::max(1, width() - 2 * kMargin));
+        m_legend->adjustSize();
+        m_legend->setFixedWidth(m_legend->width());
+        m_legend->setWordWrap(true);
+        m_legend->adjustSize();
+        int bottom = height() - kMargin;
+        // The sidebar leaves less map width: stack the legend above the
+        // attribution when the two no longer fit beside each other.
+        if (m_attribution != nullptr
+            && m_legend->width() + m_attribution->width() + kGap
+                   > width() - 2 * kMargin) {
+            bottom -= m_attribution->height() + kGap;
+        }
+        m_legend->move(kMargin, bottom - m_legend->height());
+        m_legend->raise();
     }
 }
 
