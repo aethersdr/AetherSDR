@@ -759,10 +759,14 @@ void TciServer::resolvePeerProcess(QWebSocket* ws)
             cs.processName    = info.name;
             cs.processExe     = info.exePath;
             cs.processVersion = info.version;
+            // Name and version only. The executable path stays in memory for
+            // the Network Diagnostics tooltip but is never logged: a per-user
+            // install path carries the OS account name into a support bundle,
+            // and the path adds nothing to "which client, which version"
+            // (maintainer ruling on #5130).
             qCInfo(lcCat).noquote().nospace()
                 << "TciServer: client " << peerAddr.toString() << ':' << peerPort
                 << " process=\"" << info.name << "\""
-                << " exe=\"" << info.exePath << "\""
                 << (info.version.isEmpty()
                         ? QString()
                         : QStringLiteral(" version=\"%1\"").arg(info.version));
