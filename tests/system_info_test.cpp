@@ -8,6 +8,7 @@
 // values that would differ between them.
 
 #include "core/SystemInfo.h"
+#include "MeasuredCpuWorkers.h"
 #include "core/ThreadCpuRing.h"
 
 #include <QCoreApplication>
@@ -18,11 +19,8 @@
 #include <QThread>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdio>
 #include <optional>
-#include <thread>
-#include <vector>
 
 using namespace AetherSDR;
 
@@ -404,39 +402,6 @@ void testOverviewMaths()
     report("far above both is Danger",          SystemInfo::cardLevel(100.0, 50.0, 80.0) == Level::Danger);
 }
 
-// Keeps `count` threads busy until told to stop. std::thread rather than
-// QThread on purpose: these stand for the raw workers and framework callback
-// threads that come and go outside Qt's knowledge.
-class BusyWorkers {
-public:
-    explicit BusyWorkers(int count)
-    {
-        for (int i = 0; i < count; ++i) {
-            m_threads.emplace_back([this]() {
-                volatile quint64 sink = 0;
-                while (!m_stop.load(std::memory_order_relaxed)) {
-                    sink = sink * 6364136223846793005ULL + 1442695040888963407ULL;
-                }
-            });
-        }
-    }
-    ~BusyWorkers() { stop(); }
-    void stop()
-    {
-        m_stop.store(true, std::memory_order_relaxed);
-        for (std::thread& t : m_threads) {
-            if (t.joinable()) {
-                t.join();
-            }
-        }
-        m_threads.clear();
-    }
-
-private:
-    std::atomic<bool> m_stop{false};
-    std::vector<std::thread> m_threads;
-};
-
 // The sum of the per-thread deltas over `elapsedUsecs` — the formula the
 // Overview card used before the #5427 review, kept here as the thing the
 // regression has to be BETTER than, not as production code.
@@ -475,8 +440,7 @@ Snapshot snapshotNow()
 void testProcessTotalSurvivesThreadChurn()
 {
     const int cores = QThread::idealThreadCount();
-    // Enough workers to be unmistakable against a busy CI host, few enough not
-    // to starve one: each burns ~200 ms of core time in the ~200 ms window.
+    // Each worker measures 50 ms of actual CPU time, regardless of host load.
     const int workers = std::max(2, std::min(4, cores));
 
     // Churn arm: the workers live and die entirely inside the interval.
@@ -484,9 +448,11 @@ void testProcessTotalSurvivesThreadChurn()
         const Snapshot before = snapshotNow();
         QElapsedTimer clock;
         clock.start();
+        quint64 measuredCpuUsecs = 0;
         {
-            BusyWorkers busy(workers);
-            QThread::msleep(200);
+            MeasuredCpuWorkers busy(workers);
+            report("churn workers complete bounded measured CPU work", busy.run());
+            measuredCpuUsecs = busy.cpuUsecs();
         }  // joined here: gone before the second snapshot
         const Snapshot after = snapshotNow();
         const quint64 elapsed = static_cast<quint64>(clock.nsecsElapsed() / 1000);
@@ -496,9 +462,9 @@ void testProcessTotalSurvivesThreadChurn()
             const double whole = SystemInfo::processPercentOfCapacity(
                 before.processCpuUsecs, after.processCpuUsecs, elapsed, cores);
             const double summed = perThreadSumPercent(before.threads, after.threads, elapsed, cores);
-            // `workers` cores' worth of time over the window, minus scheduling
-            // slack: half of the ideal share is a floor a loaded host still clears.
-            const double floorPercent = 0.5 * 100.0 * workers / cores;
+            // Allow native counter granularity; the floor follows measured CPU
+            // work, not a promise about how much scheduling time CI grants us.
+            const double floorPercent = 0.75 * 100.0 * measuredCpuUsecs / elapsed / cores;
             std::printf("  churn: whole-process=%.2f%% per-thread-sum=%.2f%% floor=%.2f%% "
                         "(workers=%d cores=%d elapsed=%llu us)\n",
                         whole, summed, floorPercent, workers, cores,
@@ -506,7 +472,7 @@ void testProcessTotalSurvivesThreadChurn()
             report("whole-process counter sees the exited workers' CPU time",
                    whole >= floorPercent);
             report("the per-thread sum does not (the defect, pinned as the contrast)",
-                   summed < floorPercent);
+                   whole - summed >= floorPercent);
         }
     }
 
@@ -514,12 +480,11 @@ void testProcessTotalSurvivesThreadChurn()
     // formulas see the work, so a regression that broke the divisor or the
     // interval would show as disagreement rather than hide behind churn.
     {
-        BusyWorkers busy(workers);
-        QThread::msleep(50);  // let every worker be scheduled once before the baseline
+        MeasuredCpuWorkers busy(workers);  // every worker is parked before the baseline
         const Snapshot before = snapshotNow();
         QElapsedTimer clock;
         clock.start();
-        QThread::msleep(200);
+        report("control workers complete bounded measured CPU work", busy.run());
         const Snapshot after = snapshotNow();
         const quint64 elapsed = static_cast<quint64>(clock.nsecsElapsed() / 1000);
         busy.stop();
@@ -529,7 +494,7 @@ void testProcessTotalSurvivesThreadChurn()
             const double whole = SystemInfo::processPercentOfCapacity(
                 before.processCpuUsecs, after.processCpuUsecs, elapsed, cores);
             const double summed = perThreadSumPercent(before.threads, after.threads, elapsed, cores);
-            const double floorPercent = 0.5 * 100.0 * workers / cores;
+            const double floorPercent = 0.75 * 100.0 * busy.cpuUsecs() / elapsed / cores;
             std::printf("  control: whole-process=%.2f%% per-thread-sum=%.2f%% floor=%.2f%%\n",
                         whole, summed, floorPercent);
             report("control: whole-process counter sees the persistent workers",

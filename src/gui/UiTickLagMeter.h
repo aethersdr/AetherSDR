@@ -53,7 +53,7 @@ public:
     }
 
     // The arithmetic, with the clock injected. The first tick after
-    // construction or take() establishes the baseline and records no lag: a
+    // construction or reset() establishes the baseline and records no lag: a
     // gap measured against "when was the meter created" is not a tick interval.
     void tickAt(qint64 nowNs)
     {

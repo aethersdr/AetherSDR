@@ -13,6 +13,7 @@
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include "core/ThreadCpuRing.h"
+#include "core/ThemeManager.h"
 #include "gui/SparklineDelegate.h"
 #include "gui/SystemInfoDialog.h"
 
@@ -27,6 +28,7 @@
 #include <QFile>
 #include <QLocale>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QStyledItemDelegate>
 #include <QTemporaryDir>
 #include <QPainter>
@@ -595,6 +597,59 @@ int main(int argc, char** argv)
                    && priv->text() == QStringLiteral("\u2014") && virt->text() == QStringLiteral("\u2014"));
         report("an invalid sample's summary names no metric",
                summary != nullptr && summary->text() == QStringLiteral("Process memory: not available on this platform"));
+    }
+
+    // Reproduce #5427 with populated, disambiguated thread labels. Five
+    // wrapped legend rows used to consume the entire 150 px graph, hiding
+    // both the data and the legend at an otherwise valid dialog size.
+    {
+        CpuHistoryRing ring;
+        for (int i = 0; i < 10; ++i) {
+            CpuHistoryRing::Record record;
+            record.wallMs = 1'700'000'000'000LL + i * 1500;
+            record.valid = true;
+            record.busiestValid = true;
+            record.coreCount = 8;
+            record.processPercentOfCapacity = 10.0;
+            record.busiestPercentOfCore = 60.0;
+            for (int j = 0; j < CpuHistoryRing::kTopThreads; ++j) {
+                record.threads.push_back({quint64(100000 + j),
+                    QStringLiteral("PanadapterStream"), double(60 - 10 * j + i)});
+            }
+            ring.push(record);
+        }
+        SystemInfoDialog populated(nullptr, &ring);
+        populated.show();
+        populated.resize(750, 480);
+        app.processEvents();
+        auto* graph = populated.findChild<QWidget*>(QStringLiteral("systemInfoOverviewThreadsGraph"));
+        auto* scroll = populated.findChild<QScrollArea*>(QStringLiteral("systemInfoOverviewScroll"));
+        report("populated overview still fits below the 600 px default", populated.height() < 600);
+        report("small overview can scroll to the lower charts",
+               scroll != nullptr && scroll->verticalScrollBar()->maximum() > 0);
+        if (graph != nullptr) {
+            if (scroll != nullptr) {
+                scroll->ensureWidgetVisible(graph);
+            }
+            const QImage pixels = graph->grab().toImage().convertToFormat(QImage::Format_RGB32);
+            const char* tokens[] = {"color.accent", "color.accent.success", "color.accent.warning",
+                                    "color.accent.bright", "color.accent.danger"};
+            for (const char* token : tokens) {
+                const QRgb color = ThemeManager::instance().color(token).rgb();
+                int count = 0;
+                for (int y = 0; y < pixels.height(); ++y) {
+                    for (int x = 0; x < pixels.width(); ++x) {
+                        if (pixels.pixel(x, y) == color) {
+                            ++count;
+                        }
+                    }
+                }
+                report("each populated thread series is painted at the small dialog size", count > 0);
+            }
+        } else {
+            report("the populated thread graph exists", false);
+        }
+        populated.hide();
     }
 
     // ── Overview tab (#2554: cards + charts; acceptance criterion 3's colour) ──

@@ -22,6 +22,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QThread>
@@ -871,18 +872,9 @@ QWidget* SystemInfoDialog::buildOverviewTab()
                        "worst and the mean lag per sampling interval. A busy "
                        "event loop shows here before it shows as a stalled "
                        "window."));
-    // The graph widget's own floor is 220 px, sized for one chart per page.
-    // Four of them in a 2 × 2 grid under the card row pushed the whole
-    // dialog's minimum to ~696 px (QTabWidget takes the max over its pages,
-    // so the Threads and Logs tabs inherited it too), which overrode both
-    // the 900 × 600 default below and a user's saved geometry on every open,
-    // and filled a 768 px display (#5427 review). 150 px keeps each plot
-    // well clear of the widget's 20 px guard; the Network dialog goes lower
-    // still for its throttle graph.
-    for (TimeSeriesGraphWidget* graph :
-         {m_overviewCpuGraph, m_overviewMemoryGraph, m_overviewThreadsGraph, m_overviewTickGraph}) {
-        graph->setMinimumHeight(150);
-    }
+    // Keep the graph's 220 px floor: five wrapped thread labels need space
+    // below the plot. The page scrolls instead of shrinking populated charts
+    // or forcing every tab (and restored dialog geometry) above screen height.
     grid->addWidget(m_overviewCpuGraph, 0, 0);
     grid->addWidget(m_overviewMemoryGraph, 0, 1);
     grid->addWidget(m_overviewThreadsGraph, 1, 0);
@@ -892,7 +884,13 @@ QWidget* SystemInfoDialog::buildOverviewTab()
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
     layout->addLayout(grid, 1);
-    return page;
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName(QStringLiteral("systemInfoOverviewScroll"));
+    scroll->setAccessibleName(QStringLiteral("Runtime overview"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setWidget(page);
+    return scroll;
 }
 
 int SystemInfoDialog::selectedOverviewRangeSeconds() const

@@ -9,6 +9,9 @@
 // the precedent memory_telemetry_test sets); nothing here is constructed. No
 // socket, no radio, no widget.
 #include "core/SystemInfoCollector.h"
+#include "MeasuredCpuWorkers.h"
+
+#include <QElapsedTimer>
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -18,10 +21,7 @@
 #include <QThread>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdio>
-#include <thread>
-#include <vector>
 
 using namespace AetherSDR;
 
@@ -51,41 +51,31 @@ int main(int argc, char** argv)
     EXPECT_TRUE(cpuSpy.isValid(), "cpuSampleReady is a registered, connectable signal");
 
     const qint64 before = QDateTime::currentMSecsSinceEpoch();
-    worker.start();
+    QElapsedTimer intervalUpperBound;
+    intervalUpperBound.start();
 
-    // #5427 review: workers that start AND exit between the collector's seed
-    // and its first tick must still show in the process total. init() seeds on
-    // QThread::started, microseconds after start(); the 100 ms wait puts the
-    // whole burn inside the first 1.5 s interval. Four busy threads for 400 ms
-    // is (workers * 0.4 / 1.5) cores of the interval; half of that share is the
-    // floor, so a loaded host still clears it, and the per-thread sum the card
-    // used to take reads ~0 for threads on neither snapshot.
+    // A job queued before start follows init() on the collector thread, so the seed exists
+    // before any churn worker starts. Keeping that event loop occupied until
+    // they join also prevents a timer tick from splitting the measured work.
+    // The next real timer tick still tests delivery and the production cadence.
+    quint64 churnCpuUsecs = 0;
+    bool churnComplete = false;
     const int cores = QThread::idealThreadCount();
     const int churnWorkers = std::max(2, std::min(4, cores));
-    QThread::msleep(100);
-    {
-        std::atomic<bool> stop{false};
-        std::vector<std::thread> busy;
-        for (int i = 0; i < churnWorkers; ++i) {
-            busy.emplace_back([&stop]() {
-                volatile quint64 sink = 0;
-                while (!stop.load(std::memory_order_relaxed)) {
-                    sink = sink * 6364136223846793005ULL + 1442695040888963407ULL;
-                }
-            });
-        }
-        QThread::msleep(400);
-        stop.store(true, std::memory_order_relaxed);
-        for (std::thread& t : busy) {
-            t.join();
-        }
-    }  // all gone before the first tick at ~1.5 s
-    const double churnFloorPercent = 0.5 * 100.0 * churnWorkers * 0.4 / 1.5 / cores;
+    QMetaObject::invokeMethod(collector, [&]() {
+        MeasuredCpuWorkers busy(churnWorkers);
+        churnComplete = busy.run();
+        churnCpuUsecs = busy.cpuUsecs();
+    }, Qt::QueuedConnection);
+    worker.start();
+    // Queue order makes this a completion barrier for the work above.
+    QMetaObject::invokeMethod(collector, []() {}, Qt::BlockingQueuedConnection);
+    EXPECT_TRUE(churnComplete, "churn workers complete bounded measured CPU work");
 
     // 1. The first tick already carries a memory sample: 1.5 s cadence, so
     //    one sample well inside 5 s means the tick fired and the queued copy
     //    reached this thread.
-    const bool arrived = memorySpy.wait(5000);
+    const bool arrived = !memorySpy.isEmpty() || memorySpy.wait(5000);
     EXPECT_TRUE(arrived, "a memory sample arrives on the GUI thread within 5 s");
 
     if (arrived) {
@@ -130,10 +120,18 @@ int main(int argc, char** argv)
                     "coreCount is idealThreadCount(), the status bar's own divisor");
         EXPECT_TRUE(cpu.processPercentOfCapacity >= 0.0 && cpu.processPercentOfCapacity <= 100.0,
                     "process percent of capacity is within 0..100");
+        // Start-before-init to receive-after-sample bounds the collector's
+        // interval from above, hence this is a conservative measured floor.
+        const double churnFloorPercent = 0.75 * 100.0 * churnCpuUsecs
+            / (intervalUpperBound.nsecsElapsed() / 1000.0) / cores;
         std::printf("  first tick: process=%.2f%% of capacity, churn floor=%.2f%% "
                     "(workers=%d cores=%d)\n",
                     cpu.processPercentOfCapacity, churnFloorPercent, churnWorkers, cores);
-        EXPECT_TRUE(cpu.processPercentOfCapacity >= churnFloorPercent,
+        double liveThreadPercent = 0.0;
+        for (const ThreadCpuSample& thread : cpu.busyThreads) {
+            liveThreadPercent += thread.cpuPercentOfCore / cores;
+        }
+        EXPECT_TRUE(cpu.processPercentOfCapacity - liveThreadPercent >= churnFloorPercent,
                     "the process total counts workers that exited before the tick (#5427 review)");
         EXPECT_TRUE(cpu.hasBusiest, "a tick built from a non-empty thread table names a busiest thread");
         EXPECT_TRUE(cpu.busiestPercentOfCore >= 0.0 && cpu.busiestPercentOfCore <= 100.0,
