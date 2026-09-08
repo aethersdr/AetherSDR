@@ -2303,19 +2303,13 @@ endif()
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_link_libraries(AetherSDR PRIVATE dwmapi)
 endif()
 
 # macOS app bundle
 if(APPLE)
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
-    # Unified-title-bar chrome: the window is frameless on macOS too, so this
-    # restores the rounded corners, drop shadow and native edge resize that
-    # NSWindowStyleMaskBorderless gives up.  The traffic lights are ours
-    # (WindowCaptionButtons) — see gui/mac/WindowChrome.h for why keeping the
-    # real NSWindow title bar was tried and abandoned.
-    target_sources(AetherSDR PRIVATE src/gui/mac/WindowChrome.mm)
-    target_link_libraries(AetherSDR PRIVATE "-framework AppKit" "-framework QuartzCore")
+    target_sources(AetherSDR PRIVATE src/gui/mac/NativeWindowTitle.mm)
+    target_link_libraries(AetherSDR PRIVATE "-framework AppKit")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"

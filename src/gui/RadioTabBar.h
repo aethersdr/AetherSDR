@@ -27,6 +27,8 @@ QString radioTabStatusText(RadioTabStatus status);
 
 // One entry in the title bar's radio strip.
 struct RadioTabEntry {
+    bool           canRename{false};
+    bool           visibleInTabs{true};
     QString        id;         // stable key — serial, or family:address for HL2
     QString        name;       // "Hermes-Lite 2", "FLEX-6600"
     QString        detail;     // free text appended after the status, e.g. a callsign
@@ -36,7 +38,8 @@ struct RadioTabEntry {
     bool operator==(const RadioTabEntry& o) const
     {
         return id == o.id && name == o.name && detail == o.detail
-            && transport == o.transport && status == o.status;
+            && transport == o.transport && status == o.status
+            && canRename == o.canRename && visibleInTabs == o.visibleInTabs;
     }
 };
 
@@ -160,6 +163,8 @@ public:
 
 signals:
     void radioActivated(const QString& id);
+    void radioActionRequested(const QString& id, const QString& action);
+    void rescanRequested();
     void discoveryPopoverRequested();
     void connectManuallyRequested();
 

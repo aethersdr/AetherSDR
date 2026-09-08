@@ -1,7 +1,7 @@
 #include "TitleBar.h"
 #include "BrandMark.h"
 #include "FramelessMessageBox.h"
-#include "FramelessMoveHelper.h"
+#include "WindowChrome.h"
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
 #include "RadioTabBar.h"
@@ -20,6 +20,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QScopedValueRollback>
 #include <QSizePolicy>
 #include <QSlider>
 #include <QLabel>
@@ -40,13 +41,6 @@
 #include <QJsonObject>
 #include "core/VersionNumber.h"
 #include "core/ThemeManager.h"
-
-#ifdef Q_OS_WIN
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace AetherSDR {
 
@@ -219,23 +213,6 @@ TitleBar::TitleBar(QWidget* parent)
     // Load persisted blink preference (default: enabled)
     m_blinkEnabled = AppSettings::instance()
         .value("HeartbeatBlinkEnabled", "True").toString() == "True";
-
-    // ── 1. Window controls ──────────────────────────────────────────────────
-    // The window is frameless on every platform, so the controls are always
-    // ours.  macOS and Linux put them at the left of the bar (traffic lights
-    // and chips respectively); Windows puts its caption buttons at the far
-    // right instead, so nothing goes in this slot there.
-#if defined(Q_OS_MAC)
-    m_captionButtons = new WindowCaptionButtons(CaptionStyle::MacTrafficLights, this);
-    m_hbox->addWidget(m_captionButtons);
-    // The platform sets its lights ~20 px in from the window edge; the layout's
-    // own 16 px margin covers most of that, so add the remainder as spacing
-    // rather than special-casing the margin.
-    m_hbox->addSpacing(4);
-#elif !defined(Q_OS_WIN)
-    m_captionButtons = new WindowCaptionButtons(CaptionStyle::LinuxChips, this);
-    m_hbox->addWidget(m_captionButtons);
-#endif
 
     // ── 2. Brand ────────────────────────────────────────────────────────────
     m_brand = new BrandMark(this);
@@ -582,25 +559,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_popOutLbl->installEventFilter(this);
     m_hbox->addWidget(m_popOutLbl);
 
-#if defined(Q_OS_WIN)
-    // Trailing separator only where something follows it.  Windows keeps its
-    // caption buttons at the right, so the rule divides the pane controls from
-    // them; on macOS and Linux the controls are at the far left and this rule
-    // would just hang off the end of the row with nothing to separate.
-    m_dockSep = new QFrame;
-    m_dockSep->setFixedSize(1, 20);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_dockSep, "QFrame { background: {{color.background.2}}; border: none; }");
-    markDragHandle(m_dockSep);
-    m_hbox->addWidget(m_dockSep);
-
-
-    // Design 1e: the caption cluster is flush to the right window edge and runs
-    // the full 52 px, so it cancels the layout's right margin and gap.
-    m_captionButtons = new WindowCaptionButtons(CaptionStyle::WindowsCaption, this);
+    m_captionButtons = new WindowCaptionButtons(this);
     m_hbox->addWidget(m_captionButtons);
-    m_hbox->setContentsMargins(16, 0, 0, 0);
-    m_hbox->setStretchFactor(m_captionButtons, 0);
-#endif
 
     if (m_captionButtons) {
         connect(m_captionButtons, &WindowCaptionButtons::minimizeRequested,
@@ -637,11 +597,7 @@ TitleBar::TitleBar(QWidget* parent)
 
 void TitleBar::applyBarStyle()
 {
-#ifdef Q_OS_MAC
-    const QString backgroundToken = QStringLiteral("color.titlebar.background.mac");
-#else
     const QString backgroundToken = QStringLiteral("color.titlebar.background");
-#endif
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         this,
         QStringLiteral("TitleBar { background: {{%1}};"
@@ -657,7 +613,36 @@ void TitleBar::showEvent(QShowEvent* ev)
     if (auto* w = window()) {
         w->installEventFilter(this);
         updateMaximizeIcon();
+        updateChromeLayout();
+        if (QWindow* handle = w->windowHandle(); handle != m_chromeWindow) {
+            if (m_chromeWindow) {
+                disconnect(m_chromeWindow, nullptr, this, nullptr);
+            }
+            m_chromeWindow = handle;
+            if (handle) {
+                connect(handle, &QWindow::safeAreaMarginsChanged,
+                        this, &TitleBar::updateChromeLayout);
+            }
+        }
+        QTimer::singleShot(0, this, &TitleBar::updateChromeLayout);
     }
+}
+
+void TitleBar::updateChromeLayout()
+{
+    if (m_updatingChromeLayout) {
+        return;
+    }
+    const QScopedValueRollback<bool> updating(m_updatingChromeLayout, true);
+    QWidget* host = window();
+#ifdef Q_OS_MAC
+    mac::updateNativeTitleVisibility(host);
+#endif
+    const QMargins insets = WindowChrome::contentInsets(host);
+    m_captionButtons->setVisible(!WindowChrome::usesNativeCaption(host));
+    m_hbox->setContentsMargins(16 + insets.left(), insets.top(),
+                               16 + insets.right(), 0);
+    setFixedHeight(kHeight + insets.top());
 }
 
 void TitleBar::setRadioTabs(const QList<RadioTabEntry>& radios)
@@ -696,12 +681,20 @@ QVariantMap TitleBar::barState() const
     };
 
     QVariantMap chrome{
+        {QStringLiteral("qtVersion"), QString::fromLatin1(qVersion())},
+        {QStringLiteral("nativeCaption"), WindowChrome::usesNativeCaption(window())},
+        {QStringLiteral("expandedClientArea"), window()->windowFlags().testFlag(Qt::ExpandedClientAreaHint)},
         {QStringLiteral("frameless"),
          window() && window()->windowFlags().testFlag(Qt::FramelessWindowHint)},
     };
     if (m_captionButtons) {
         chrome.insert(QStringLiteral("captionButtons"), m_captionButtons->state());
     }
+#ifdef Q_OS_MAC
+    const QRectF nativeBounds = mac::nativeCaptionBounds(window());
+    chrome.insert(QStringLiteral("nativeCaptionRect"),
+                  QVariantList{nativeBounds.x(), nativeBounds.y(), nativeBounds.width(), nativeBounds.height()});
+#endif
 
     const QRect screen(mapToGlobal(QPoint(0, 0)), size());
     return QVariantMap{
@@ -722,6 +715,9 @@ QVariantMap TitleBar::barState() const
               m_brand ? m_brand->wordmarkText() : QString()},
              {QStringLiteral("logoLoaded"), m_brand && m_brand->hasLogo()},
              {QStringLiteral("visible"), m_brand && m_brand->isVisible()},
+             {QStringLiteral("rect"), m_brand
+                  ? QVariantList{m_brand->x(), m_brand->y(), m_brand->width(), m_brand->height()}
+                  : QVariantList{}},
          }},
         {QStringLiteral("radios"), m_radioTabs ? m_radioTabs->state() : QVariantMap{}},
         {QStringLiteral("audio"), audio},
@@ -770,7 +766,7 @@ bool TitleBar::isSystemMoveAreaAt(const QPoint& globalPos) const
     return false;
 }
 
-bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
+bool TitleBar::startWindowMove(QMouseEvent* ev)
 {
     if (!ev || ev->button() != Qt::LeftButton)
         return false;
@@ -779,82 +775,11 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
     if (!w)
         return false;
 
-    if (useSystemMove) {
-#ifdef Q_OS_WIN
-        HWND hwnd = reinterpret_cast<HWND>(w->winId());
-        if (hwnd) {
-            const QPoint globalPos = ev->globalPosition().toPoint();
-            ReleaseCapture();
-            SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
-                         MAKELPARAM(globalPos.x(), globalPos.y()));
-            ev->accept();
-            return true;
-        }
-#else
-        // startSystemMove() reports success on xcb but the WM-driven drag it
-        // hands off to is unreliable there (QTBUG-69716) — under Mutter/
-        // XWayland (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland
-        // desktop) the press is swallowed and the window just never follows
-        // the pointer (#4827). Skip straight to the manual-move path below,
-        // same rule Qt's own QSizeGrip::usePlatformSizeGrip() applies.
-        if (!FramelessMoveHelper::systemMoveResizeUnreliable(w)) {
-            if (auto* h = w->windowHandle())
-                if (h->startSystemMove()) {
-                    m_windowMoveActive = true;
-                    m_windowMoveUsesSystem = true;
-                    ev->accept();
-                    return true;
-                }
-        }
-#endif
-    }
-
-    // Manual-move path: when a child-widget eventFilter consumes the press
-    // (returns true), Qt never establishes an implicit grab on the child,
-    // so subsequent mouse-move events stop reaching us as soon as the
-    // cursor leaves the widget that was clicked.  Explicitly grab on
-    // TitleBar so all moves/releases route to our handlers.
-    m_windowMoveActive = true;
-    m_windowMoveUsesSystem = false;
-    m_windowMovePressGlobal = ev->globalPosition().toPoint();
-    m_windowMoveStartPos = w->pos();
-    grabMouse();
-
-    ev->accept();
-    return true;
-}
-
-bool TitleBar::continueWindowMove(QMouseEvent* ev)
-{
-    if (!m_windowMoveActive || !ev)
+    QWindow* handle = w->windowHandle();
+    if (!handle || !handle->startSystemMove()) {
         return false;
-
-    if (!(ev->buttons() & Qt::LeftButton))
-        return finishWindowMove(ev);
-
-    if (!m_windowMoveUsesSystem) {
-        if (auto* w = window()) {
-            const QPoint delta = ev->globalPosition().toPoint() - m_windowMovePressGlobal;
-            w->move(m_windowMoveStartPos + delta);
-        }
     }
-
     ev->accept();
-    return true;
-}
-
-bool TitleBar::finishWindowMove(QMouseEvent* ev)
-{
-    if (!m_windowMoveActive)
-        return false;
-
-    const bool wasManual = !m_windowMoveUsesSystem;
-    m_windowMoveActive = false;
-    m_windowMoveUsesSystem = false;
-    if (wasManual)
-        releaseMouse();
-    if (ev)
-        ev->accept();
     return true;
 }
 
@@ -891,15 +816,10 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
 {
     if (obj == window() && ev->type() == QEvent::WindowStateChange) {
         updateMaximizeIcon();
+        updateChromeLayout();
         return QWidget::eventFilter(obj, ev);
     }
 
-    if (m_windowMoveActive) {
-        if (ev->type() == QEvent::MouseMove)
-            return continueWindowMove(static_cast<QMouseEvent*>(ev));
-        if (ev->type() == QEvent::MouseButtonRelease)
-            return finishWindowMove(static_cast<QMouseEvent*>(ev));
-    }
 
     if (obj == m_menuBar) {
         if (ev->type() == QEvent::MouseButtonDblClick) {
@@ -914,16 +834,6 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
                 return startWindowMove(me);
         }
     }
-
-    // Drag-handle press / double-click: do NOT intercept here.  Letting
-    // the event bubble to TitleBar's own mousePressEvent /
-    // mouseDoubleClickEvent gives us a working startSystemMove path with
-    // proper grab semantics (intercepting from a child eventFilter does
-    // not establish an implicit grab, so manual w->move() loses the
-    // cursor as soon as it leaves the originally-pressed widget).  The
-    // markDragHandle() cursor change still applies for the affordance
-    // hint, and the m_windowMoveActive branch above still routes
-    // child-widget mouse moves during an in-progress drag.
 
     if (ev->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(ev);
@@ -967,7 +877,7 @@ void TitleBar::setAppletDockState(bool visible, bool left)
 void TitleBar::updateMaximizeIcon()
 {
     if (!m_captionButtons) {
-        return;   // macOS — AppKit owns the traffic lights' own glyphs.
+        return;
     }
     auto* w = window();
     // In minimal mode the control leaves minimal mode rather than restoring, so
@@ -986,15 +896,11 @@ void TitleBar::mousePressEvent(QMouseEvent* ev)
 
 void TitleBar::mouseMoveEvent(QMouseEvent* ev)
 {
-    if (continueWindowMove(ev))
-        return;
     QWidget::mouseMoveEvent(ev);
 }
 
 void TitleBar::mouseReleaseEvent(QMouseEvent* ev)
 {
-    if (finishWindowMove(ev))
-        return;
     QWidget::mouseReleaseEvent(ev);
 }
 
