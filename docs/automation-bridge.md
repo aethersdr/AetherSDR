@@ -1557,6 +1557,13 @@ expected to equal the radio's computed threshold. Passive command suppression
 is covered by the socket-free `rx_applet_squelch_reconciliation_test`; a live
 snapshot alone cannot prove that no command was sent.
 
+A full SQL-on report after leaving Auto is adopted as current radio state,
+even when its threshold matches an earlier Auto calculation. The report
+does not identify whether it is a delayed echo or a restore. A later Off
+acknowledgement supersedes it; neither passive report triggers a SQL write.
+The socket-free regression pins both operator-driven and radio-driven Off
+sequences. It does not establish their occurrence on particular firmware.
+
 ### `notch`
 
 Manual notch filters — a Flex TNF, or the WDSP null that stands in for one on a

@@ -175,6 +175,64 @@ private slots:
         QCOMPARE(slider->value(), 45);
     }
 
+    void fullOnReportAfterAuto_data()
+    {
+        QTest::addColumn<bool>("operatorTurnsOff");
+        QTest::newRow("operator-off-late-auto-report") << true;
+        QTest::newRow("radio-off-then-on-report") << false;
+    }
+
+    void fullOnReportAfterAuto()
+    {
+        QFETCH(bool, operatorTurnsOff);
+        SliceModel slice(0);
+        status(slice, true, 45, QStringLiteral("USB"));
+        RxApplet rx;
+        rx.setSlice(&slice);
+        VfoWidget vfo;
+        vfo.setSlice(&slice);
+        vfo.setRxApplet(&rx);
+        QSlider* slider = control<QSlider>(rx, QStringLiteral("Squelch threshold"));
+        QSlider* mirror = control<QSlider>(vfo, QStringLiteral("Squelch threshold"));
+        QVERIFY(slider);
+        QVERIFY(mirror);
+
+        rx.cycleSqlModeExternal(); // Manual -> Auto
+        slice.setSquelch(true, 8); // production algorithm's entry point
+        if (operatorTurnsOff) {
+            rx.cycleSqlModeExternal(); // requests Off with manual 45
+        } else {
+            status(slice, false, 8); // radio-driven Off retains computed 8
+        }
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        QCOMPARE(slice.manualSquelchLevel(), 45);
+        QSignalSpy commands(&slice, &SliceModel::commandReady);
+        QSignalSpy intents(&slice, &SliceModel::squelchCommandIssued);
+
+        // A full on-report has no provenance that distinguishes a delayed
+        // Auto echo from a radio restore. Reconcile to its reported state
+        // (Principle II), including the manual cache, without writing back.
+        status(slice, true, 8);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        QCOMPARE(slice.squelchLevel(), 8);
+        QCOMPARE(slice.manualSquelchLevel(), 8);
+        QCOMPARE(slider->value(), 8);
+        QCOMPARE(mirror->value(), 8);
+        QVERIFY(commands.isEmpty());
+        QVERIFY(intents.isEmpty());
+
+        if (operatorTurnsOff) {
+            // The later acknowledgement of the operator's Off/45 request
+            // supersedes that report and restores the retained manual value.
+            status(slice, false, 45);
+            QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+            QCOMPARE(slice.squelchLevel(), 45);
+            QCOMPARE(slice.manualSquelchLevel(), 45);
+            QVERIFY(commands.isEmpty());
+            QVERIFY(intents.isEmpty());
+        }
+    }
+
     void detachedSlicesRemainIndependent()
     {
         SliceModel first(0);
