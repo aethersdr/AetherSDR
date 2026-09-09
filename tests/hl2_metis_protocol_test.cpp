@@ -810,6 +810,54 @@ int main()
                              "      gate is %d, criterion needs %d (worst error at the gate: %.3f)\n",
                              kMinForwardCountsForSwr, firstUsable,
                              worstErrorAt(kMinForwardCountsForSwr));
+
+            // ---- the OFFSET criterion, which the bench added (#4578, D89) ----
+            //
+            // The sweep above perturbs both channels symmetrically about a
+            // reverse count that is CORRECT for the true SWR being tested. That
+            // is the right question about quantisation and it cannot see a
+            // BIAS: a reverse channel that reads ~3.4 counts with no reflected
+            // power at all shifts every reading one way, and no symmetric
+            // perturbation of a correct value expresses that.
+            //
+            // So this is a second, independent criterion on the same constant,
+            // and it is the one the measurement produced. Into a load whose
+            // true SWR is 1.0, with the reverse channel sitting at its measured
+            // floor, the gate must not admit a reading further than the same
+            // 0.25 from the truth.
+            //
+            // It is RUN, not restated: it reads kMeasuredReverseFloorCounts and
+            // calls the shipped swrFromRaw, so replacing the calibration curve
+            // or lowering the gate re-derives it. At the previous value of 96
+            // this fails at 1.40 — which is how the bench found that 96, itself
+            // a six-fold raise from 16, was still not enough.
+            {
+                const auto atGate = swrFromRaw(
+                    kMinForwardCountsForSwr,
+                    static_cast<int>(kMeasuredReverseFloorCounts + 0.5));
+                check(atGate.has_value(),
+                      "the gate's own forward count must produce a reading at all");
+                check(atGate && std::fabs(*atGate - 1.0) < kTol,
+                      "at the publish gate, a MATCHED load with the measured "
+                      "reverse-channel floor reads within 0.25 of 1.0");
+                if (atGate && std::fabs(*atGate - 1.0) >= kTol)
+                    std::fprintf(stderr,
+                                 "      gate is %d; a matched load with the measured "
+                                 "reverse floor %.2f counts reads %.3f, off by %.3f\n",
+                                 kMinForwardCountsForSwr,
+                                 kMeasuredReverseFloorCounts, *atGate,
+                                 std::fabs(*atGate - 1.0));
+
+                // AND THE DIRECTION, because it decides whether this is a
+                // safety problem or a nuisance: the offset makes the reading
+                // read HIGH on a matched load, which is the SAFE direction for
+                // a mismatch warning and the opposite of half A's under-read.
+                // Pinning it stops a future "fix" from turning an over-read
+                // into an under-read while still satisfying the bound above.
+                check(!atGate || *atGate >= 1.0,
+                      "the reverse-channel offset makes a matched load read "
+                      "HIGH, never low — the safe direction");
+            }
         }
     }
 

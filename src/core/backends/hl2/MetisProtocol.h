@@ -558,10 +558,13 @@ double detectorVolts(int raw) noexcept;
 //     forward counts    16     32     64     96    128    256    512
 //     worst SWR error  0.85   0.50   0.30   0.20   0.16   0.10   0.05
 //
-// 96 is the smallest count at and above which the criterion holds. That is
-// ~12 mW forward on the reference curve, against ~1.6 mW at 16 — so the cost is
-// SWR reading "absent" between 1.6 and 12 mW, which is the right trade for a
-// number that could not tell 1.5 from 2.35 down there.
+// 96 is the smallest count at and above which the criterion holds UNDER THE
+// ONE-COUNT MODEL. That model was subsequently measured and found wrong; the
+// paragraph beginning "and then it WAS measured" below carries the correction
+// and the value this constant actually holds. The sweep is kept because it is
+// still the right arithmetic for the question it asks, and because the two
+// derivations agreeing where they overlap is what makes the correction
+// credible rather than a second opinion.
 //
 // NOT ~1200, which #4578 suggested. Gating on FORWARD counts does nothing to
 // lift the REVERSE channel out of the knee: at a true 1.5 the reverse sits a
@@ -570,12 +573,100 @@ double detectorVolts(int raw) noexcept;
 // produces. At 1200 forward counts a true 2.0 still displayed 1.76 under the
 // old raw ratio. It buys nothing and costs SWR below ~0.67 W.
 //
-// DERIVED ANALYTICALLY FROM THE REFERENCE CURVE — NOT MEASURED ON HARDWARE. It
-// assumes the channel-to-channel disagreement at the floor is one count, which
-// is what the field report describes and what nobody has yet measured on a
-// bench. If the real noise amplitude is larger than one count, 96 is still too
-// low. hl2_metis_protocol_test runs this derivation rather than restating it.
-inline constexpr int kMinForwardCountsForSwr = 96;
+// ---- and then it WAS measured, and 96 was too low (bench run D89) ----
+//
+// The paragraph that used to end this comment said 96 was derived analytically,
+// that it assumed a ONE-COUNT channel-to-channel disagreement nobody had put an
+// instrument on, and that if the real disagreement were larger then 96 was
+// still too low. That measurement has now been made, on a Hermes-Lite 2 into a
+// dummy load, reading fwd_pwr and rev_pwr straight out of the response
+// registers with no client application in the path. The prediction was right
+// and the direction was the unfavourable one.
+//
+// TWO THINGS WERE MEASURED THAT THE ONE-COUNT MODEL CANNOT EXPRESS.
+//
+// (1) NOISE, and it is not one count. With RF in the load the reverse channel
+//     has a standard deviation of 2.73 counts and a full range of 0..12 counts
+//     (2311 settled samples over 15 drive levels). It does not shrink at low
+//     drive, because it does not come from the signal: with the PA keyed and
+//     the drive register at zero the same channel reads 0.67, and unkeyed it
+//     reads 0.63..0.70 (6418 samples over 300 s). The forward channel's
+//     residual standard deviation is 3.77 counts.
+//
+// (2) OFFSET, which is not noise at all and which the criterion above has no
+//     term for. Fitting the reverse channel against the forward one across 16
+//     legs spanning 1.3 to 822 forward counts gives
+//
+//         rev = 3.41 + 0.00097 * fwd        (residual sd 0.21 counts)
+//
+//     so with NO reflected power the reverse channel still reads ~3.4 counts.
+//     That is a bias. Averaging does not remove it and a gate does not remove
+//     it either — a gate only shrinks its weight against a growing forward
+//     reading. The intercept was stable to 0.05 counts across seven captures
+//     over forty minutes and is identical keyed and unkeyed, so it is the
+//     converter and not the PA.
+//
+// WHAT THAT DOES TO THE READING. On a dummy load the true answer is known and
+// near 1.0, so every departure IS the instrument. At 96 forward counts this
+// radio's reverse channel is ~97% offset, and the linearized form reports
+//
+//     gate 96 -> 1.40      gate 160 -> 1.25      gate 320 -> 1.14
+//
+// against a load measured at 1.03..1.06 by the same instrument where it is
+// trustworthy. 0.40 of error at 96 counts is 1.6x the 0.25 the criterion above
+// was chosen to hold, and the empirical settling curve agrees: pooling every
+// keyed sample and binning by forward count, the linearized median first comes
+// within 0.25 of the truth in the 200..260 bin and its 95th percentile in the
+// 260..340 bin.
+//
+// SO THE CRITERION IS UNCHANGED AND ITS ANSWER MOVED. Re-derived by resampling
+// the MEASURED distributions rather than perturbing by an assumed count:
+//
+//     forward counts        16     32     64     96    160    256    320
+//     p95 error (measured) 6.35   1.95   0.91   0.65   0.38   0.26   0.20
+//     p95 error (1-count)  1.57   0.50   0.30   0.20    ...    ...   ...
+//
+// The second row is the old model and is reproduced exactly by the new tool
+// where the two overlap, which is why the first row is a correction and not a
+// disagreement. 320 is the smallest gridded count whose 95th-percentile error
+// stays within 0.25 everywhere above it. 256 misses by 0.008 and is a
+// defensible round alternative; 160 is the answer if the criterion is read at
+// the MEDIAN rather than as the worst case its wording states.
+//
+// THE COST, which is the real argument against going further: SWR reads absent
+// below ~74 mW forward on the reference curve, 1.5% of the HL2's rated 5 W and
+// 18 dB down, against ~12 mW at 96 and ~1.6 mW at 16.
+//
+// STILL NOT MEASURED, and it bounds what the above is worth: this is ONE radio,
+// one coupler and one dummy load. The offset is a per-unit property of a diode
+// detector and there is no reason to expect 3.4 counts on another board — only
+// to expect that it is not zero, which is the part the one-count model got
+// wrong. A per-unit calibration would replace this constant along with the
+// curve. See also kMeasuredReverseFloorCounts below, which the test uses to run
+// the offset criterion rather than restate it.
+//
+// A BETTER FIX THAN A GATE EXISTS AND IS NOT DONE HERE. Both channels are
+// readable while unkeyed and their floors are stable, so sampling them just
+// before a transmission and subtracting would remove the bias outright. On the
+// measured distributions that drops the gate this criterion needs from 320 to
+// 200 at the 95th percentile and from 160 to 16 at the median. It is a larger
+// change than raising a constant, it needs a place to hold the floor and a
+// policy for when to re-measure it, and it is recorded rather than attempted.
+inline constexpr int kMinForwardCountsForSwr = 320;
+
+// The reverse channel's reading with NO reflected power, in counts — the
+// intercept of rev = 3.41 + 0.00097*fwd fitted across bench run D89's 16 legs.
+//
+// Here so that hl2_metis_protocol_test can RUN the offset criterion instead of
+// restating it, exactly as it already runs the quantisation one: if a future
+// per-unit calibration replaces the curve, or if anyone lowers the gate, the
+// assertion re-derives rather than inheriting a stale comment.
+//
+// MEASURED ON ONE RADIO (Hermes-Lite 2, gateware v74, N2ADR filter board, into
+// a dummy load at 7.1 MHz). It is NOT a constant of the design and nothing may
+// use it to correct a reading — it is a lower bound on what the gate has to
+// tolerate, and it is used for exactly that.
+inline constexpr double kMeasuredReverseFloorCounts = 3.41;
 
 // Standing-wave ratio from raw forward/reverse counts.
 //
