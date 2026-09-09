@@ -372,6 +372,23 @@ public:
     // Default no-op behind the same capability flag as setAutoRfGain.
     virtual void setAutoRfGainFloorDb(int floorDb) { Q_UNUSED(floorDb); }
 
+    // Which control law that loop runs. A backend may offer more than one --
+    // the HL2's release condition is a genuinely open question (#5535) and the
+    // bench has to be able to argue with the answer without a rebuild.
+    //
+    // A STRING RATHER THAN AN ENUM ON PURPOSE: the set of laws is a backend's
+    // private business, this seam carries no opinion about it, and a backend
+    // that does not recognise the name leaves its law alone and says so.
+    //
+    // Default no-op behind the same capability flag as setAutoRfGain.
+    // Returns false, and changes nothing, when the name is not one this
+    // backend has a law for. Callers report that rather than guessing.
+    virtual bool setAutoRfGainMode(const QString& mode)
+    {
+        Q_UNUSED(mode);
+        return false;
+    }
+
     // The discrete front-end stages above. `step` indexes the label list the
     // backend published; a backend clamps rather than refuses, exactly as
     // setPanRfGain does.

@@ -4384,6 +4384,14 @@ void RadioModel::setAutoRfGainFloorDb(int floorDb)
     m_backend->setAutoRfGainFloorDb(floorDb);
 }
 
+bool RadioModel::setAutoRfGainMode(const QString& mode)
+{
+    if (!m_backend) {
+        return false;
+    }
+    return m_backend->setAutoRfGainMode(mode);
+}
+
 bool RadioModel::hasHostNoiseBlanker() const
 {
     // NOT permissive, for the same reason hasManualNotch() is not: this flag

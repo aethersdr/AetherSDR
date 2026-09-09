@@ -147,6 +147,58 @@ struct AutoGainConfig {
     std::int64_t releaseIntervalMs = 500;
     std::int64_t releaseDwellMs = 3000;
 
+    // ---- PROBING RELEASE ---------------------------------------------------
+    //
+    // THE RELEASE CONDITION IS THE HARD PART, AND NOTHING ON THIS RADIO
+    // MEASURES HEADROOM. The clip flag is an honest "you are too high" sensor
+    // and nothing else: it says the converter railed, never how much room is
+    // left below the rails. `RXA_ADC_PK` cannot stand in for it, because it
+    // measures the post-DDC slice while the flag measures the pre-DDC full
+    // spectrum -- a quiet 48 kHz slice reads as headroom while a broadcast
+    // station saturates the converter (docs/HERMES.md 12.5).
+    //
+    // So the only way to find out whether the gain can come back is TO TRY IT
+    // AND SEE. A release is therefore not a decision, it is a PROBE, and it can
+    // fail. `probeConfirmMs` is how long the answer has to stay clean before
+    // the probe is believed:
+    //
+    //   - a clip INSIDE that period is a FAILED probe. The attack branch puts
+    //     the step straight back and, because the loop had released since its
+    //     last trip, treats the clip as a REPEAT: the dwell -- which is what
+    //     paces the next probe -- DOUBLES, up to `dwellBackoffMaxMs`.
+    //   - a probe that survives it is believed: the interval goes back to base
+    //     and `releasedSinceTrip` is cleared, so the NEXT clip is a fresh trip
+    //     paced from base rather than a continuation of a backoff that belonged
+    //     to a different hour of the day.
+    //
+    // THAT IS THE ASYMMETRY, AND IT IS THE POINT. While conditions are genuinely
+    // hot the probes fail, the interval doubles, and the loop goes quiet. The
+    // moment there is real headroom the first probe survives, the interval
+    // collapses to base -- and because `cleanMs` is by then far past the dwell,
+    // successive steps come one per `releaseIntervalMs`. Slow to give up on a
+    // hot band; fast to reclaim gain once the band has actually gone quiet.
+    //
+    // ZERO DISABLES IT, which is the default: with `probeConfirmMs == 0` a
+    // release is never confirmed, nothing resets the interval, and this law is
+    // exactly the one that shipped before probing existed.
+    std::int64_t probeConfirmMs = 0;
+
+    // Whether the per-band trip memory binds the RELEASE FLOOR as well as the
+    // backoff. True is the original behaviour: the loop will not return below
+    // `tripOffsetDb + tripMarginDb`, which converges a hunt on a plant whose
+    // knee sits still.
+    //
+    // PROBING SETS IT FALSE, AND THAT IS FORCED RATHER THAN CHOSEN. ON8ST's
+    // diurnal objection on #5535 is that the knee MOVES -- 10-20 dB predicted
+    // between a quiet afternoon and a loud evening. A remembered offset that
+    // permanently floors the release is exactly the lookup table that objection
+    // destroys: dig 18 dB out of an evening and the loop can never return below
+    // 12 dB again, so it is deaf at lunchtime. With the floor off, what stops
+    // the loop hunting is the widening probe interval and the bounded cost of a
+    // failed probe -- a memory in TIME rather than in decibels, which is the
+    // only kind that survives a knee that moves.
+    bool tripFloorBindsRelease = true;
+
     // ---- range ----
     // How deaf the loop may make the receiver. The operator owns this number
     // and the on/off switch; nothing else here is theirs to set.
@@ -222,6 +274,134 @@ struct AutoGainConfig {
     // The hold is the whole mechanism, so the backoff cap has to be at least
     // the hold or a repeat trip would SHORTEN it.
     c.dwellBackoffMaxMs = holdMs;
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// PROBING RELEASE, as one particular AutoGainConfig
+// ---------------------------------------------------------------------------
+//
+// Every constant below is a choice, and every choice is answerable to a
+// measurement or to a stated piece of arithmetic. None of them is Zeus's --
+// that client's plant is a different converter behind a different front end,
+// and its numbers were never measured here.
+//
+// THE DETECTION WINDOW IS NOT A CHOICE AT ALL; IT IS READ OUT OF THE CODE, and
+// the whole scheme rests on it. The overload bit rides the EP6 C&C bytes, which
+// `MetisClient`'s receive loop parses on every datagram and accumulates into
+// `Hl2Telemetry::adcSamples` / `adcOverloadSamples`; it publishes them on
+// `telemetryUpdated`, coalesced by `MetisClient::kTelemetryMinIntervalMs`, and
+// `Hl2Backend::publishTelemetry` evaluates THIS FUNCTION on that publish and no
+// other clock. So:
+//
+//     ONE DETECTION WINDOW = kTelemetryMinIntervalMs = 100 ms.
+//
+// Response address 0 arrives once every two EP6 datagrams, which at 48 kHz with
+// one receiver is ~190 a second -- ~19 per window, and ~9 in the worst case
+// where the radio displaces every other classic slot with a command ACK. Both
+// are comfortably above `minSamples`, so the window is a real denominator and
+// not a thin one. Higher sample rates and more receivers only raise it.
+//
+// THE COST OF A FAILED PROBE IS THEREFORE ONE WINDOW: the step goes on at the
+// end of window N, the clip is observed across window N+1, and the step comes
+// back off at its end. Roughly 100 ms of a railed converter, plus the few
+// milliseconds it takes the gain bank to come round in `MetisClient`'s C&C
+// rotation. That is the number the rest of this scheme is sized against.
+//
+//   probeStepDb = 6
+//       The clean->clipping transition measured 3-5 dB wide, median 4, on
+//       ON8ST's station (`d92-clip-observability`). One 6 dB move clears the
+//       knee outright and cannot stall inside it, where a 3 dB move can
+//       oscillate on the same edge. It is also the step the attack already
+//       uses, and a probe that does not undo exactly one attack step is not a
+//       probe of anything.
+//
+//   maxOffsetDb = 24
+//       Four whole probe steps. Chosen so that EVERY move the loop makes is a
+//       full 6 dB and never a remainder truncated against the ceiling -- a 2 dB
+//       remainder is narrower than the measured knee and could stall inside it.
+//       24 dB also covers the 10-20 dB diurnal excursion ON8ST predicts on
+//       #5535 with one step in hand. The operator owns this number.
+//
+//   baseProbeIntervalMs = 30000
+//       The floor on it is the cost: one failed probe per interval is 100 ms of
+//       clipping per interval, so 30 s is a duty cycle of 0.33 % -- one clipped
+//       window in three hundred -- BEFORE the backoff, which only lowers it.
+//       The ceiling on it is the thing being tracked: the knee moves 10-20 dB
+//       across a dawn or dusk transition lasting tens of minutes, so 30 s is
+//       two orders of magnitude faster than the drift and cannot lag it. The
+//       shipped default of 3000 is wrong here by exactly that argument: a
+//       deliberate clip every three seconds all night is not a feature.
+//
+//   maxProbeIntervalMs = 480000
+//       Four doublings from base (30 -> 60 -> 120 -> 240 -> 480 s). It is the
+//       worst-case latency with which the loop can notice that the band has
+//       gone quiet, so it has to be comfortably shorter than the transition it
+//       must not sleep through; eight minutes against a dawn that takes tens of
+//       minutes has the margin. It bounds the steady-state cost too: an eight
+//       hour night spent entirely at the cap is ~60 probes, ~6 s of clipping in
+//       28800 s, 0.02 %.
+//
+//   probeConfirmMs = 3000
+//       How long a probe has to survive to be believed. It cannot be short:
+//       `d92`'s same-gain negative control alternated 3 s blocks AT A FIXED
+//       GAIN and saw the observed clip rate swing 0 % -> 90 % between them, so
+//       a confirmation shorter than one of those blocks can sit entirely inside
+//       a lull and call it headroom. 3 s is one such block -- the shortest
+//       period the bench has any evidence about at all. It is 30 detection
+//       windows.
+//
+//   releaseIntervalMs = 3000
+//       Deliberately the same number, so that once a probe is confirmed the
+//       next one follows immediately: the reclaim rate is one 6 dB step per
+//       confirmation period, and the full 24 dB comes back in about twelve
+//       seconds if the band allows it. This is the fast half of the asymmetry.
+//
+//   attackCooldownMs, minSamples, unkeyHoldoffMs, warmupWindows, stalenessMs
+//       Left at the defaults, which were argued elsewhere in this header and
+//       are not probing's to re-open. The 200 ms cooldown is two detection
+//       windows, so the loop must see a clip persist into a fresh window before
+//       taking a second step, and still digs the full 24 dB out in ~0.8 s.
+//
+//   tripBackoffWindowMs = 2 * maxProbeIntervalMs
+//       A bookkeeping consequence, not a control choice: a failed probe taken
+//       at the cap arrives `maxProbeIntervalMs` after the trip it is probing
+//       from, and it has to still count as a repeat or the backoff would stop
+//       compounding exactly where it matters most.
+//
+//   tripForgetMs = 3600000
+//       Also bookkeeping. Forgetting a trip resets the interval to base, and
+//       nothing may do that except a CONFIRMED PROBE, a band change, or the
+//       operator. An hour is beyond any interval the backoff can reach, so in
+//       this configuration probing supersedes forgetting rather than racing it.
+[[nodiscard]] constexpr AutoGainConfig probingReleaseConfig(
+    std::int64_t baseProbeIntervalMs = 30000,
+    std::int64_t maxProbeIntervalMs = 480000,
+    std::int64_t probeConfirmMs = 3000) noexcept
+{
+    AutoGainConfig c;
+    // One quantum, both directions. A probe undoes exactly one attack step.
+    c.firstStepHotDb = 6;
+    c.firstStepMarginalDb = 6;
+    c.attackStepDb = 6;
+    c.releaseStepDb = 6;
+    c.maxOffsetDb = 24;
+
+    // The dwell IS the probe interval: `cleanMs` has to reach it before the
+    // loop will try more gain, and the repeat-trip backoff already doubles it.
+    c.releaseDwellMs = baseProbeIntervalMs;
+    c.dwellBackoffMaxMs = maxProbeIntervalMs;
+    c.probeConfirmMs = probeConfirmMs;
+    c.releaseIntervalMs = probeConfirmMs;
+
+    // A moving knee cannot be remembered in decibels; see tripFloorBindsRelease.
+    c.tripFloorBindsRelease = false;
+    c.tripMarginDb = 0;
+    c.tripMarginGrowthDb = 0;
+    c.tripMarginMaxDb = 0;
+
+    c.tripBackoffWindowMs = maxProbeIntervalMs * 2;
+    c.tripForgetMs = 3600000;
     return c;
 }
 
@@ -540,6 +720,38 @@ constexpr int clampInt(int lo, int v, int hi) noexcept
         next.releasedSinceTrip = false;
     }
 
+    // ---- a probe in flight is believed, or it is not ----
+    //
+    // A release is the loop ASKING whether the headroom it has no way to
+    // measure has come back. `probeConfirmMs` is how long the answer has to
+    // stay clean before the question counts as answered:
+    //
+    //   - a clip before then never reaches here. It takes the attack branch
+    //     above, which sees `releasedSinceTrip` still set, calls the trip a
+    //     REPEAT, and doubles the interval that paces the next probe.
+    //   - reaching here with the period elapsed is the probe SURVIVING. The
+    //     interval goes back to base and the flag clears, so the next clip is a
+    //     fresh trip rather than the continuation of a backoff that was earned
+    //     under conditions that have since changed.
+    //
+    // BOTH CLOCKS ARE REQUIRED, and they are not the same clock.
+    // `sinceReleaseMs` says the probe has been in flight long enough;
+    // `cleanMs` says that whole time was spent OBSERVING a clean converter, and
+    // it is reset by keying, by the post-unkey hold-off and by warmup. Without
+    // the second, a transmission in the middle of a probe would let wall time
+    // confirm a probe that was never watched.
+    //
+    // THIS RUNS BEFORE THE ZERO-OFFSET RETURN BELOW ON PURPOSE. A probe that
+    // takes the offset all the way back to the operator's baseline is the one
+    // most worth confirming, and returning Idle first would leave the loop
+    // carrying a stale backoff forever.
+    if (cfg.probeConfirmMs > 0 && next.releasedSinceTrip
+        && next.sinceReleaseMs >= cfg.probeConfirmMs
+        && next.cleanMs >= cfg.probeConfirmMs) {
+        next.releasedSinceTrip = false;
+        next.dwellRequiredMs = 0;
+    }
+
     if (next.offsetDb <= 0) {
         out.next = next;
         out.reason = AutoGainReason::Idle;
@@ -547,7 +759,12 @@ constexpr int clampInt(int lo, int v, int hi) noexcept
         return out;
     }
 
-    const int releaseFloor = next.tripOffsetDb >= 0
+    // WHERE THE REMEMBERED TRIP IS ALLOWED TO STOP A RELEASE, and where it is
+    // not. With `tripFloorBindsRelease` the memory is a decibel and the loop
+    // will not return below it; without it the memory is the widening probe
+    // interval instead, and the only floor is the operator's own baseline. See
+    // the field's comment: a knee that moves cannot be remembered in decibels.
+    const int releaseFloor = (cfg.tripFloorBindsRelease && next.tripOffsetDb >= 0)
                                ? next.tripOffsetDb + next.tripMarginDb : 0;
     if (next.offsetDb <= releaseFloor) {
         out.next = next;

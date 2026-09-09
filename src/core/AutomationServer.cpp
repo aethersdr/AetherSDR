@@ -3364,7 +3364,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("pan", {},
             "pan <create|add|remove|close|center|rfgain|autorfgain|float|dock> [value] — "
             "float/dock drive PanadapterStack's real reparent path (#4864); "
-            "autorfgain takes on|off, or 'floor <dB>' for how far below the "
+            "autorfgain takes on|off, 'mode <ramp|probe|binary>' for which "
+            "control law, or 'floor <dB>' for how far below the "
             "operator's own RF gain an automatic control may go",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
@@ -10737,6 +10738,37 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                                {QStringLiteral("floorDb"), floorDb},
                                {QStringLiteral("requested"), true}};
         }
+        // `pan autorfgain mode <ramp|probe|binary>` -- WHICH CONTROL LAW.
+        //
+        // Here for the same reason `floor` is: the release condition on this
+        // radio is an open question (#5535), the three laws are the same pure
+        // function with different numbers, and a bench that cannot switch
+        // between them without a rebuild cannot answer the question. There is
+        // no GUI control and deliberately so -- this is a bench affordance, not
+        // an operator one.
+        if (raw.startsWith(QLatin1String("mode"), Qt::CaseInsensitive)) {
+            const QStringList mp = raw.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (!radio->hasAutoRfGain()) {
+                return err(QStringLiteral(
+                    "pan autorfgain: this radio has no automatic RF gain control"));
+            }
+            if (mp.size() < 2) {
+                return err(QStringLiteral(
+                    "pan autorfgain mode requires a law name: ramp, probe or binary"));
+            }
+            const QString name = mp.at(1);
+            if (!radio->setAutoRfGainMode(name)) {
+                return err(QStringLiteral(
+                               "pan autorfgain mode: this radio has no law called "
+                               "\"%1\". Nothing was changed.").arg(name));
+            }
+            // As with `on|off`: what the backend actually installed is a
+            // `health` row, not this echo.
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("pan"), QStringLiteral("autorfgain")},
+                               {QStringLiteral("mode"), name},
+                               {QStringLiteral("requested"), true}};
+        }
         const QString v = raw.toLower();
         if (v.isEmpty()) {
             return QJsonObject{{QStringLiteral("ok"), true},
@@ -10749,7 +10781,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         const bool off = (v == QLatin1String("off") || v == QLatin1String("false")
                           || v == QLatin1String("0"));
         if (!on && !off)
-            return err(QStringLiteral("pan autorfgain takes on|off, or nothing to report"));
+            return err(QStringLiteral("pan autorfgain takes on|off, "
+                                      "mode <ramp|probe|binary>, floor <dB>, "
+                                      "or nothing to report"));
         if (!radio->hasAutoRfGain()) {
             return err(QStringLiteral(
                 "pan autorfgain: this radio has no automatic RF gain control"));
