@@ -242,6 +242,13 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
     m_range->addItem(QStringLiteral("15 minutes"), 15 * 60);
     m_range->addItem(QStringLiteral("1 hour"), 60 * 60);
     m_range->setCurrentIndex(1);   // 5 minutes: 200 points at 1.5 s
+    // Hidden, not removed: the row keeps its height while Threads or Logs is
+    // current, so the tab strip does not jump under the pointer.
+    for (QWidget* w : {static_cast<QWidget*>(m_rangeLabel), static_cast<QWidget*>(m_range)}) {
+        QSizePolicy policy = w->sizePolicy();
+        policy.setRetainSizeWhenHidden(true);
+        w->setSizePolicy(policy);
+    }
     // Both refreshes, not only the current tab's: switching tabs must never
     // show a chart still drawn to the previous range.
     connect(m_range, &QComboBox::currentIndexChanged, this,
