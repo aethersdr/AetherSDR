@@ -248,8 +248,8 @@ void MainWindow::refreshRttyDecodeState()
     // those signals would be confusing.  Users who do FSK on DIGL can open
     // the panel manually via the slice context menu (future work).
     //
-    // Mode availability and operator intent are separate gates, exactly as
-    // refreshCwDecodeState() treats isCw vs. the CwDecodeSettings toggles:
+    // Mode availability and operator intent are separate gates. The CW
+    // decoder also has enable gates, but does not persist pane dismissal.
     // an RTTY slice makes the decoder *available*, the persisted enable
     // flag decides whether the operator actually wants it (#5353).  The
     // flag defaults to True, so a session that never closes the pane

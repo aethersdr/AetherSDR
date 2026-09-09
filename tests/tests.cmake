@@ -2813,7 +2813,7 @@ add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_tes
 # object with.
 add_executable(rtty_decode_settings_test tests/rtty_decode_settings_test.cpp)
 target_include_directories(rtty_decode_settings_test PRIVATE src tests)
-target_link_libraries(rtty_decode_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+target_link_libraries(rtty_decode_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtty_decode_settings_test COMMAND rtty_decode_settings_test)
 
 add_executable(cwx_local_keyer_drift_test
