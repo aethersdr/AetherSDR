@@ -297,7 +297,7 @@ int testApplyResultRefusesLoudlyRatherThanSilently()
     // return this replaced let `droopcal apply` answer ok:true, because
     // AutomationServer's apply branch reports a failure only when error()
     // fires.
-    AnanDroopCalibrator cal(nullptr);
+    AnanDroopCalibrator cal;
     QString reason;
     int errors = 0;
     QObject::connect(&cal, &AnanDroopCalibrator::error, &cal,
@@ -316,6 +316,38 @@ int testApplyResultRefusesLoudlyRatherThanSilently()
     return 0;
 }
 
+int testBackendHooksAndDisconnect()
+{
+    bool available = false;
+    QVector<int> rates;
+    QVector<bool> bypasses;
+    AnanDroopCalibrator cal({[&] { return available; },
+        [&](int rate) { rates.append(rate); },
+        [&](bool bypass) { bypasses.append(bypass); }, {}});
+    cal.setLandedRate(192);
+    cal.start();
+    if (cal.isRunning() || !rates.isEmpty() || !bypasses.isEmpty()) {
+        return fail("unavailable backend must not start, bypass or change rate");
+    }
+    available = true;
+    cal.start();
+    if (!cal.isRunning() || rates != QVector<int>{48} || bypasses != QVector<bool>{true}) {
+        return fail("start must bypass correction then request the first ANAN rate");
+    }
+    cal.stop();
+    if (cal.isRunning() || rates != QVector<int>({48, 192}) || bypasses.last()) {
+        return fail("operator stop restores the original rate and correction");
+    }
+    cal.start();
+    const int count = rates.size();
+    available = false;
+    cal.stop(false);
+    if (cal.isRunning() || rates.size() != count || bypasses.last()) {
+        return fail("disconnect stops without issuing another rate request");
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -327,6 +359,8 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
 
+    if (const int result = testBackendHooksAndDisconnect(); result != 0)
+        return result;
     if (const int result = testMedianPowerCurveRejectsAStrayOutlierCapture(); result != 0)
         return result;
     if (const int result = testMedianPowerCurveEmptyIsAllZero(); result != 0)

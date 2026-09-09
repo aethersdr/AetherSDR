@@ -1,3 +1,4 @@
+#include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
@@ -797,14 +798,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     });
     // Droop Correction page — mirrors the Calibration page immediately above:
     // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
-    // ANAN-G2 today), not the family name.
+    // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
     QTreeWidgetItem* droopItem = addPage(radioCategory, QStringLiteral("Droop Correction"),
         QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
         [this] { return buildDroopCalibrationTab(); });
     m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
-    droopItem->setHidden(!m_model->backendCapabilities().hostDroopCalibration);
+    droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, droopItem] {
-        droopItem->setHidden(!m_model->backendCapabilities().hostDroopCalibration);
+        droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
         if (m_droopReseed)
             m_droopReseed();
     });
@@ -842,6 +843,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     connect(m_navigation, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem* previous) {
         if (!current) {
+            return;
+        }
+        if (!isCapabilityPageAvailable(current)) {
+            selectTab(QStringLiteral("Radio"));
             return;
         }
         if (!current->parent()) {
@@ -890,7 +895,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
-                    || (droopRow && !m_model->backendCapabilities().hostDroopCalibration);
+                    || (droopRow && !droopCalibrationAvailable(m_model->backend()));
                 if (!gated) {
                     item->setHidden(!matches);
                 }
@@ -980,10 +985,16 @@ bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
 
 bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) const
 {
-    if (!m_model || !item || !m_model->isConnected()) {
-        return true;
+    if (!m_model || !item) {
+        return false;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
+    if (index == m_droopCalibrationPageIndex) {
+        return droopCalibrationAvailable(m_model->backend());
+    }
+    if (!m_model->isConnected()) {
+        return true;
+    }
     const RadioCapabilities caps = m_model->backendCapabilities();
     if (index == m_filtersPageIndex) {
         return caps.hasSharpFilters;
@@ -1112,8 +1123,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
 
     const bool currentPageUnavailable = m_navigation
-        && ((!isCapabilityPageAvailable(m_navigation->currentItem())
-             && isFlexOnlyPage(m_navigation->currentItem()))
+        && (!isCapabilityPageAvailable(m_navigation->currentItem())
             || (!isGpsSetupAvailable()
                 && isGpsPage(m_navigation->currentItem())));
     if (currentPageUnavailable) {
@@ -3595,131 +3605,71 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
 
     vbox->addWidget(group);
 
-    AnanDroopCalibrator& cal = m_model->droopCalibrator();
-
-    auto refreshSummary = [summaryLbl, &cal] {
-        const auto& tables = cal.measuredTables();
-        if (tables.isEmpty()) {
-            summaryLbl->clear();
-            return;
+    auto update = [this, startStopBtn, progressBar, statusLbl, summaryLbl,
+                   applyBtn, cancelBtn, noRadioLbl](const QVariantMap& state) {
+        const bool available = droopCalibrationAvailable(m_model->backend());
+        const bool running = available && state.value(QStringLiteral("running")).toBool();
+        const bool hasResult = available && state.value(QStringLiteral("hasResult")).toBool();
+        startStopBtn->setEnabled(available);
+        startStopBtn->setText(running ? QStringLiteral("Stop") : QStringLiteral("Start Sweep"));
+        startStopBtn->setProperty("droopRunning", running);
+        applyBtn->setEnabled(hasResult && !running);
+        cancelBtn->setEnabled(hasResult && !running);
+        noRadioLbl->setVisible(!available);
+        progressBar->setValue(available ? state.value(QStringLiteral("percent")).toInt() : 0);
+        QString message = state.value(QStringLiteral("message")).toString();
+        if (state.contains(QStringLiteral("error"))) {
+            message = state.value(QStringLiteral("error")).toString();
         }
+        statusLbl->setText(message.isEmpty()
+            ? QStringLiteral("Idle — no sweep has been run this session.") : message);
         QStringList lines;
-        for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
-            const auto [minIt, maxIt] = std::minmax_element(it.value().begin(), it.value().end());
-            lines << QStringLiteral("%1 ksps: %2–%3 dB correction")
-                         .arg(it.key())
-                         .arg(*minIt, 0, 'f', 1)
-                         .arg(*maxIt, 0, 'f', 1);
+        if (available) {
+            const QVariantList corrections = state.value(QStringLiteral("corrections")).toList();
+            for (const QVariant& value : corrections) {
+                const QVariantMap correction = value.toMap();
+                lines << QStringLiteral("%1 ksps: %2–%3 dB correction")
+                    .arg(correction.value(QStringLiteral("rateKsps")).toInt())
+                    .arg(correction.value(QStringLiteral("minDb")).toDouble(), 0, 'f', 1)
+                    .arg(correction.value(QStringLiteral("maxDb")).toDouble(), 0, 'f', 1);
+            }
         }
         summaryLbl->setText(lines.join(QStringLiteral("\n")));
     };
-
-    QPointer<QPushButton> startStopGuard(startStopBtn);
-    QPointer<QProgressBar> progressGuard(progressBar);
-    QPointer<QLabel> statusGuard(statusLbl);
-    QPointer<QPushButton> applyGuard(applyBtn);
-    QPointer<QPushButton> cancelGuard(cancelBtn);
-
-    // error() is always followed by finished(false) — an aborted sweep and a
-    // refused Apply both report the reason and then wind down. Without this
-    // latch the finished handler's generic text overwrites the specific
-    // reason the operator actually needs, so "Error: no spectrum frame at 768
-    // ksps…" would flash and be replaced by "Sweep complete — review the
-    // result below". Cleared wherever a new operation starts.
-    auto errorLatch = std::make_shared<bool>(false);
-
-    connect(&cal, &AnanDroopCalibrator::started, this,
-        [startStopGuard, statusGuard, errorLatch, &cal] {
-            *errorLatch = false;
-            if (startStopGuard)
-                startStopGuard->setText(QStringLiteral("Stop"));
-            if (statusGuard)
-                statusGuard->setText(QStringLiteral("Sweeping — rate 1 of %1…")
-                                         .arg(cal.totalRates()));
-        });
-    connect(&cal, &AnanDroopCalibrator::progress, this,
-        [progressGuard, statusGuard](int rateIndex, int totalRates, int percent) {
-            if (progressGuard)
-                progressGuard->setValue(std::clamp(percent, 0, 100));
-            if (statusGuard) {
-                statusGuard->setText(QStringLiteral("Sweeping — rate %1 of %2…")
-                                         .arg(rateIndex + 1).arg(totalRates));
-            }
-        });
-    connect(&cal, &AnanDroopCalibrator::finished, this,
-        [startStopGuard, statusGuard, applyGuard, cancelGuard, refreshSummary, errorLatch,
-         &cal](bool applied) {
-            if (startStopGuard)
-                startStopGuard->setText(QStringLiteral("Start Sweep"));
-            // "live and saved" only when the backend confirmed BOTH — see
-            // AnanDroopCalibrator::applyResult(), which no longer reports
-            // success for a radio that went away or a write the store refused.
-            if (statusGuard && !*errorLatch) {
-                statusGuard->setText(applied
-                    ? QStringLiteral("Applied — the measured correction is now live and saved.")
-                    : (cal.hasResult()
-                          ? QStringLiteral("Sweep complete — review the result below, then Apply or Discard.")
-                          : QStringLiteral("Sweep stopped — no result to apply.")));
-            }
-            if (applyGuard)
-                applyGuard->setEnabled(cal.hasResult());
-            if (cancelGuard)
-                cancelGuard->setEnabled(cal.hasResult());
-            refreshSummary();
-        });
-    connect(&cal, &AnanDroopCalibrator::error, this,
-        [statusGuard, errorLatch](const QString& reason) {
-            *errorLatch = true;
-            if (statusGuard)
-                statusGuard->setText(QStringLiteral("Error: %1").arg(reason));
-        });
-
-    connect(startStopBtn, &QPushButton::clicked, this, [&cal, errorLatch] {
-        *errorLatch = false;
-        if (cal.isRunning())
-            cal.stop();
-        else
-            cal.start();
+    auto request = [this, update](const QString& action) {
+        update(requestDroopCalibration(m_model->backend(), action));
+    };
+    connect(startStopBtn, &QPushButton::clicked, this, [startStopBtn, request] {
+        request(startStopBtn->property("droopRunning").toBool()
+                    ? QStringLiteral("stop") : QStringLiteral("start"));
     });
-    connect(applyBtn, &QPushButton::clicked, this, [&cal, errorLatch] {
-        *errorLatch = false;
-        cal.applyResult();
+    connect(applyBtn, &QPushButton::clicked, this, [request] {
+        request(QStringLiteral("apply"));
     });
-    connect(cancelBtn, &QPushButton::clicked, this,
-        [&cal, applyGuard, cancelGuard, refreshSummary, statusGuard] {
-            cal.clear();
-            if (applyGuard)
-                applyGuard->setEnabled(false);
-            if (cancelGuard)
-                cancelGuard->setEnabled(false);
-            if (statusGuard)
-                statusGuard->setText(QStringLiteral("Discarded — no sweep result staged."));
-            refreshSummary();
-        });
+    connect(cancelBtn, &QPushButton::clicked, this, [request] {
+        request(QStringLiteral("discard"));
+    });
 
-    // Same reason as m_calibrationReseed: the page is built once per process,
-    // so anything that changed while it was closed (a different radio, a
-    // `droopcal` bridge call) has to be re-read here.
-    QList<QPointer<QWidget>> droopControls{startStopBtn};
-    m_droopReseed = [this, noRadioGuard = QPointer<QLabel>(noRadioLbl),
-                    droopControls, statusGuard, applyGuard, cancelGuard, refreshSummary, &cal] {
-        const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
-        for (const QPointer<QWidget>& w : droopControls) {
-            if (w)
-                w->setEnabled(haveRadio);
+    // Rebind to the current neutral backend on reconnect. No captured ANAN
+    // object survives a family switch; both entry points re-check capability.
+    m_droopReseed = [this, update] {
+        QObject::disconnect(m_droopStatusConnection);
+        IRadioBackend* backend = m_model->backend();
+        if (backend && backend->capabilities().family == QLatin1String("anan")
+            && backend->capabilities().hostDroopCalibration) {
+            m_droopStatusConnection = connect(backend, &IRadioBackend::extensionStatus, this,
+                [this, backend, update](const QString& ns, const QString& kind,
+                                        const QVariantMap& state) {
+                    if (m_model->backend() == backend && ns == QLatin1String("anan")
+                        && kind == QLatin1String("droop")) {
+                        update(state);
+                    }
+                });
+            update(droopCalibrationAvailable(backend)
+                ? requestDroopCalibration(backend, QStringLiteral("status")) : QVariantMap{});
+        } else {
+            update({});
         }
-        if (noRadioGuard)
-            noRadioGuard->setVisible(!haveRadio);
-        if (applyGuard)
-            applyGuard->setEnabled(haveRadio && cal.hasResult());
-        if (cancelGuard)
-            cancelGuard->setEnabled(haveRadio && cal.hasResult());
-        if (!cal.isRunning() && statusGuard) {
-            statusGuard->setText(cal.hasResult()
-                ? QStringLiteral("A measured result is staged — Apply or Discard.")
-                : QStringLiteral("Idle — no sweep has been run this session."));
-        }
-        refreshSummary();
     };
     m_droopReseed();
 
@@ -8804,7 +8754,7 @@ void RadioSetupDialog::selectTab(const QString& tabName)
     const QString pageName = kLegacyPageNames.value(tabName, tabName);
     const int index = m_pageIndexes.value(pageName, -1);
     if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
-        if (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item)) {
+        if (!isCapabilityPageAvailable(item)) {
             return;
         }
         if (isGpsPage(item) && !isGpsSetupAvailable()) {

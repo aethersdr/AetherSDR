@@ -4997,3 +4997,10 @@ foreach(_aether_test IN LISTS _aether_registered_tests)
         set_tests_properties(${_aether_test} PROPERTIES TIMEOUT 300)
     endif()
 endforeach()
+
+# Socket-free capability/extension tests: injected transport, no QLocalServer
+# and no radio connect. Exercises the same dispatcher used by the bridge.
+add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp)
+target_include_directories(droop_calibration_seam_test PRIVATE src tests)
+target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
+add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)

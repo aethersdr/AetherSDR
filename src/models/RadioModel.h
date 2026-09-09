@@ -9,11 +9,6 @@
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
-#include "core/backends/anan/AnanDroopCalibrator.h" // droopCalibrator() -- family-agnostic
-                                                      // mechanically (panFeedSpectrumReady +
-                                                      // setPanBandwidth only), gated by
-                                                      // hostDroopCalibration; owned here for
-                                                      // the same reason TransmitModel is
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -143,7 +138,6 @@ public:
     [[nodiscard]] DataLiveness dataLiveness() const;
     TunerModel&       tunerModel()       { return m_tunerModel; }
     TransmitModel&    transmitModel()    { return m_transmitModel; }
-    AnanDroopCalibrator& droopCalibrator() { return m_droopCalibrator; }
     EqualizerModel&   equalizerModel()   { return m_equalizerModel; }
     TnfModel&         tnfModel()         { return m_tnfModel; }
     SpotModel&        spotModel()        { return m_spotModel; }
@@ -1716,7 +1710,6 @@ private:
     qint64 m_lastAudioMs{0};
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
-    AnanDroopCalibrator m_droopCalibrator;   // see droopCalibrator()'s own comment above
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;

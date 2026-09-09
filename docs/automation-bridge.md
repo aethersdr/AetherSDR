@@ -4124,6 +4124,24 @@ receiver capacity. It never enables transmit and remains available without
 
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
+### ANAN droop calibration
+
+`droopcal status|start|stop|apply|discard` requires a connected ANAN backend
+with `hostDroopCalibration`. Other families refuse the request before any
+backend call. `start` measures the receiver noise floor across ANAN's six
+DDC0 rates; use an antenna termination as described in Radio Setup → Droop
+Correction. `stop` keeps the partial result, `apply` installs and saves it,
+and `discard` drops the staged measurements.
+
+The calibrator is owned by `AnanBackend`, not shared `RadioModel`. The dialog
+and bridge use `invokeExtension("anan", "droop.<action>")`; synchronous replies
+carry `running`, `rateIndex`, `totalRates`, `hasResult`, `percent`, `message`,
+and `corrections` (per-rate `rateKsps`, `minDb`, `maxDb`). Progress uses
+`extensionStatus("anan", "droop", fields)` with the same fields. Disconnect
+stops the sweep without issuing a restoration rate change. No calibration
+code changes RX audio or keys TX. Physical-radio persistence validation is
+still a separate radiocert task.
+
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
 <!-- Do not edit by hand — run tools/gen_bridge_docs.py. 73 verbs. -->
 
@@ -4163,7 +4181,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
-| `droopcal` | — | droopcal [status\|start\|stop\|apply] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
+| `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |

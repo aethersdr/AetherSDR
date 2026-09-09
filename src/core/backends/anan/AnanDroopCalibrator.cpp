@@ -1,8 +1,5 @@
 #include "core/backends/anan/AnanDroopCalibrator.h"
 
-#include "core/backends/IRadioBackend.h"
-#include "models/PanadapterModel.h"
-#include "models/RadioModel.h"
 
 #include "core/AppSettings.h"
 
@@ -35,8 +32,8 @@ float medianOf(std::vector<float> values)
 
 }  // namespace
 
-AnanDroopCalibrator::AnanDroopCalibrator(RadioModel* radio, QObject* parent)
-    : QObject(parent), m_radio(radio)
+AnanDroopCalibrator::AnanDroopCalibrator(Hooks hooks, QObject* parent)
+    : QObject(parent), m_hooks(std::move(hooks))
 {
     m_pollTimer.setInterval(kPollIntervalMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &AnanDroopCalibrator::advance);
@@ -170,30 +167,21 @@ void AnanDroopCalibrator::start()
 {
     if (isRunning())
         return;
-    if (!m_radio) {
-        emit error(QStringLiteral("no radio model"));
+    if (!m_hooks.available || !m_hooks.available() || m_landedRateKsps <= 0) {
+        emit error(QStringLiteral("connect an ANAN with an active panadapter before calibrating"));
         return;
     }
-    PanadapterModel* pan = m_radio->activePanadapter();
-    if (!pan) {
-        qCWarning(lcAnanDroopCal) << "start() with no active panadapter";
-        emit error(QStringLiteral("no active panadapter to sweep"));
-        return;
-    }
-
-    m_originalRateKsps = static_cast<int>(std::lround(pan->bandwidthMhz() * 1000.0));
+    m_originalRateKsps = m_landedRateKsps;
     m_measuredTables.clear();
     m_pendingCaptures.clear();
     m_haveLatestFrame = false;
     m_rateIdx = 0;
 
-    // BEFORE the tap is connected and before the first rate is requested:
+    // Before the first rate is requested:
     // every frame this sweep ever sees must be uncorrected.
     setDspBypass(true);
 
     m_clock.start();
-    m_spectrumConn = connect(m_radio, &RadioModel::panFeedSpectrumReady,
-                             this, &AnanDroopCalibrator::onSpectrumFrame);
     m_pollTimer.start();
     m_phaseStartedAtMs = m_clock.elapsed();
     m_phase = Phase::WaitingForRateLanded;
@@ -203,27 +191,18 @@ void AnanDroopCalibrator::start()
     emit progress(0, totalRates(), 0);
 }
 
-void AnanDroopCalibrator::stop()
+void AnanDroopCalibrator::stop(bool restoreRate)
 {
     if (!isRunning())
         return;
-    finishSweep(false);
+    finishSweep(false, restoreRate);
 }
 
 void AnanDroopCalibrator::applyResult()
 {
-    // Every refusal below is LOUD. The single silent `return` these replaced
-    // covered three quite different states and told nobody about any of them:
-    // `droopcal apply` answered ok:true for a correction that was never
-    // applied or saved (AutomationServer's apply branch reports a failure
-    // only when error() fires), and the dialog's Apply button did nothing
-    // visible. Same #5263 loud-drop reasoning as start()'s own refusals, and
-    // as the "radio went away" case immediately below -- which was already
-    // loud, which is what made the silence here look accidental.
+    // The backend relays every refusal to both the UI and automation.
     if (isRunning()) {
-        // error() only, no finished(): the sweep really is still running, and
-        // the dialog's finished handler unconditionally relabels the button
-        // "Start Sweep", which would be a lie while it is mid-sweep.
+        // Refusing Apply must not end a sweep that is still running.
         emit error(QStringLiteral("a sweep is still running -- stop it before applying "
                                   "the measured correction"));
         return;
@@ -233,69 +212,12 @@ void AnanDroopCalibrator::applyResult()
         emit finished(false);
         return;
     }
-    if (!m_radio) {
-        emit error(QStringLiteral("no radio model -- the measured correction was not "
-                                  "applied or saved"));
+    if (!m_hooks.available || !m_hooks.available() || !m_hooks.apply) {
+        emit error(QStringLiteral("no ANAN connected -- the measured correction was not applied or saved"));
         emit finished(false);
         return;
     }
-
-    IRadioBackend* backend = m_radio->backend();
-    if (!backend) {
-        // invokeBackendExtension() is a documented no-op with nothing
-        // connected, so this is the exact case that used to print
-        // "Applied -- the measured correction is now live and saved" over a
-        // radio that had gone away. The measurements are KEPT: reconnecting
-        // and pressing Apply again is a real recovery.
-        emit error(QStringLiteral("no radio connected -- the measured correction "
-                                  "was not applied or saved"));
-        emit finished(false);
-        return;
-    }
-
-    QVariantMap byRate;
-    for (auto it = m_measuredTables.constBegin(); it != m_measuredTables.constEnd(); ++it) {
-        QVariantList list;
-        list.reserve(static_cast<int>(it.value().size()));
-        for (const float v : it.value())
-            list.append(static_cast<double>(v));
-        byRate.insert(QString::number(it.key()), list);
-    }
-
-    // Correlated, not fire-and-forget. AnanBackend's droop.apply handler
-    // completes LOCALLY -- no device round trip, same as Hl2Backend's
-    // freqcal.set -- so it emits its reply synchronously, inside the invoke
-    // below, over a same-thread direct connection. Connecting first and
-    // reading the flags after the call returns is therefore deterministic
-    // rather than a race, and needs no timer: if nothing answered, the seam
-    // did not behave as documented and that is itself reportable. The id only
-    // has to be unique within that one synchronous window.
-    const quint64 requestId = ++m_applyRequestId;
-    bool replied = false;
-    QString failure;
-    const QMetaObject::Connection okConn = connect(
-        backend, &IRadioBackend::extensionResult, this,
-        [&replied, requestId](quint64 id, const QVariant&) {
-            if (id == requestId)
-                replied = true;
-        });
-    const QMetaObject::Connection errConn = connect(
-        backend, &IRadioBackend::extensionError, this,
-        [&replied, &failure, requestId](quint64 id, const QString& reason) {
-            if (id == requestId) {
-                replied = true;
-                failure = reason;
-            }
-        });
-
-    m_radio->invokeBackendExtension(QStringLiteral("anan"), QStringLiteral("droop.apply"),
-                                    requestId, QVariant(byRate));
-
-    QObject::disconnect(okConn);
-    QObject::disconnect(errConn);
-
-    if (!replied)
-        failure = QStringLiteral("the backend did not answer the apply request");
+    const QString failure = m_hooks.apply(m_measuredTables);
     if (!failure.isEmpty()) {
         emit error(failure);
         emit finished(false);
@@ -316,21 +238,16 @@ void AnanDroopCalibrator::clear()
 
 void AnanDroopCalibrator::setDspBypass(bool bypassed)
 {
-    if (!m_radio)
-        return;
-    // Fire-and-forget (requestId 0): the handler completes locally and there
-    // is nothing to await. AnanBackend also clears the flag on disconnect, so
-    // a radio that vanishes mid-sweep -- where this call reaches nothing --
-    // still comes back with correction live.
-    m_radio->invokeBackendExtension(QStringLiteral("anan"),
-                                    QStringLiteral("droop.bypass"), 0, bypassed);
+    if (m_hooks.bypass) {
+        m_hooks.bypass(bypassed);
+    }
 }
 
 void AnanDroopCalibrator::requestCurrentRate()
 {
-    if (!m_radio)
-        return;
-    m_radio->setPanBandwidth(currentTargetRateKsps() / 1000.0);
+    if (m_hooks.requestRate) {
+        m_hooks.requestRate(currentTargetRateKsps());
+    }
 }
 
 int AnanDroopCalibrator::currentTargetRateKsps() const
@@ -340,9 +257,8 @@ int AnanDroopCalibrator::currentTargetRateKsps() const
         : 0;
 }
 
-void AnanDroopCalibrator::finishSweep(bool applied)
+void AnanDroopCalibrator::finishSweep(bool applied, bool restoreRate)
 {
-    QObject::disconnect(m_spectrumConn);
     m_pollTimer.stop();
     // Every exit from a sweep comes through here -- completion, stop(), and
     // abortSweep() alike -- so the correction is restored on all of them.
@@ -350,8 +266,9 @@ void AnanDroopCalibrator::finishSweep(bool applied)
     // overwritten, so there is nothing to restore FROM and no window in which
     // a crash could lose them.
     setDspBypass(false);
-    if (m_radio && m_originalRateKsps > 0)
-        m_radio->setPanBandwidth(m_originalRateKsps / 1000.0);   // best-effort, fire-and-forget
+    if (restoreRate && m_hooks.requestRate && m_originalRateKsps > 0) {
+        m_hooks.requestRate(m_originalRateKsps);
+    }
     m_phase = Phase::Idle;
     m_pendingCaptures.clear();
     m_haveLatestFrame = false;
@@ -369,8 +286,7 @@ void AnanDroopCalibrator::advance()
 {
     if (m_phase == Phase::Idle)
         return;
-    PanadapterModel* pan = m_radio ? m_radio->activePanadapter() : nullptr;
-    if (!pan) {
+    if (m_landedRateKsps <= 0) {
         abortSweep(QStringLiteral("panadapter disappeared mid-sweep"));
         return;
     }
@@ -381,8 +297,7 @@ void AnanDroopCalibrator::advance()
         return;
 
     case Phase::WaitingForRateLanded: {
-        const double targetMhz = currentTargetRateKsps() / 1000.0;
-        if (std::abs(pan->bandwidthMhz() - targetMhz) < 1.0e-6) {
+        if (m_landedRateKsps == currentTargetRateKsps()) {
             m_phase = Phase::Settling;
             m_phaseStartedAtMs = now;
         } else if (now - m_phaseStartedAtMs >= kRateWaitTimeoutMs) {
@@ -418,11 +333,11 @@ void AnanDroopCalibrator::advance()
         // different door. The sweep drives the rate itself, so anything else
         // moving it mid-measurement is a genuine conflict, not a race to
         // absorb: abort loudly and keep the rates already measured.
-        if (std::abs(pan->bandwidthMhz() - currentTargetRateKsps() / 1000.0) >= 1.0e-6) {
+        if (m_landedRateKsps != currentTargetRateKsps()) {
             abortSweep(QStringLiteral("the panadapter rate changed to %1 ksps while "
                                       "measuring %2 ksps -- nothing else may drive the "
                                       "rate while a sweep runs")
-                          .arg(std::lround(pan->bandwidthMhz() * 1000.0))
+                          .arg(m_landedRateKsps)
                           .arg(currentTargetRateKsps()));
             break;
         }
@@ -475,11 +390,8 @@ void AnanDroopCalibrator::advance()
     }
 }
 
-void AnanDroopCalibrator::onSpectrumFrame(quint32 streamId, const QVector<float>& binsDbm,
-                                          qint64 emittedNs)
+void AnanDroopCalibrator::onSpectrumFrame(const std::vector<float>& binsDbm)
 {
-    Q_UNUSED(streamId);
-    Q_UNUSED(emittedNs);
     if (m_phase == Phase::Idle)
         return;
     if (binsDbm.size() != static_cast<int>(anan::kDroopCorrectionFftSize))

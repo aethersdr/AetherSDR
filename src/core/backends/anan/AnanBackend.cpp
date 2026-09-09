@@ -13,6 +13,7 @@
 #include <QVariantMap>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -99,8 +100,49 @@ double AnanBackend::cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept
     return 0.0;
 }
 
-AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
+AnanBackend::AnanBackend(QObject* parent)
+    : IRadioBackend(parent)
+    , m_droopCalibrator(AnanDroopCalibrator::Hooks{
+        [this] { return m_connected && !m_radioSerial.isEmpty()
+                         && capabilities().hostDroopCalibration; },
+        [this](int rateKsps) { setPanBandwidth(kPanId, rateKsps * 1000.0); },
+        [this](bool bypass) {
+            if (m_dsp) {
+                QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionBypassed",
+                    Qt::QueuedConnection, Q_ARG(bool, bypass));
+            }
+        },
+        [this](const QMap<int, DroopCorrectionTable>& tables) {
+            return applyDroopTables(tables);
+        }})
 {
+    connect(&m_droopCalibrator, &AnanDroopCalibrator::started, this, [this] {
+        m_droopMessage = QStringLiteral("Sweeping");
+        m_droopPercent = 0;
+        publishDroopStatus();
+    });
+    connect(&m_droopCalibrator, &AnanDroopCalibrator::progress, this,
+            [this](int rateIndex, int totalRates, int percent) {
+        m_droopPercent = percent;
+        m_droopMessage = QStringLiteral("Sweeping — rate %1 of %2…")
+                            .arg(rateIndex + 1).arg(totalRates);
+        publishDroopStatus();
+    });
+    connect(&m_droopCalibrator, &AnanDroopCalibrator::error, this,
+            [this](const QString& reason) {
+        m_droopMessage = QStringLiteral("Error: %1").arg(reason);
+        publishDroopStatus();
+    });
+    connect(&m_droopCalibrator, &AnanDroopCalibrator::finished, this, [this](bool applied) {
+        if (!m_droopMessage.startsWith(QLatin1String("Error:"))) {
+            m_droopMessage = applied
+                ? QStringLiteral("Applied — the measured correction is now live and saved.")
+                : (m_droopCalibrator.hasResult()
+                    ? QStringLiteral("Sweep stopped — review the result, then Apply or Discard.")
+                    : QStringLiteral("Sweep stopped — no result to apply."));
+        }
+        publishDroopStatus();
+    });
     m_client = new P2Client(nullptr);   // nullptr parent: moveToThread requires it
     m_dsp = new AnanRxDsp(nullptr);
 
@@ -158,6 +200,9 @@ AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
             emit connected();
         emitSliceState();
         emitPanState();
+        // A rate change suppresses connected(), but a page opened during
+        // its brief link restart still needs the fresh calibration status.
+        publishDroopStatus();
         // Real limits, not a guess -- HERMES.md §15.1: without this, the GUI
         // clamps the zoom control against a FlexLib model-name table that
         // falls through to 5.4 MHz for "ANAN-G2" (which it does not
@@ -202,8 +247,11 @@ AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
     });
     connect(m_client, &P2Client::linkDown, this, [this] {
         m_connected = false;
-        if (!m_rateChanging)
+        if (!m_rateChanging) {
+            m_droopCalibrator.stop(false);
+            m_droopCalibrator.setLandedRate(0);
             emit disconnected();
+        }
     });
     connect(m_client, &P2Client::connectionError, this,
             [this](const QString& reason) { emit connectionError(reason); });
@@ -239,6 +287,7 @@ AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
         std::vector<float> dbm(binsDbfs.size());
         for (std::size_t i = 0; i < binsDbfs.size(); ++i)
             dbm[i] = binsDbfs[i] + kUncalibratedDbfsToDbmOffset;
+        m_droopCalibrator.onSpectrumFrame(dbm);
         emit spectrumFrameReady(kSliceId, floatBytes(dbm));
     });
     // Deliberately do not publish AnanRxDsp::meterUpdate yet. It is WDSP
@@ -248,6 +297,7 @@ AnanBackend::AnanBackend(QObject* parent) : IRadioBackend(parent)
 
 AnanBackend::~AnanBackend()
 {
+    m_droopCalibrator.stop(false);
     ++m_connectGeneration;   // orphan any in-flight finishDspSetup/rebuild callback
 
     // Join the build thread BEFORE touching m_dsp/m_client, not after.
@@ -540,6 +590,8 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
+    m_droopCalibrator.stop(false);
+    m_droopCalibrator.setLandedRate(0);
     ++m_connectGeneration;   // orphan any in-flight finishDspSetup callback
     // Blocking, not fire-and-forget: matches ~AnanBackend()'s own stop() call
     // and every other worker-thread stop closeEvent() performs (dxCluster,
@@ -574,7 +626,7 @@ void AnanBackend::disconnectRadio()
     // as before connectRadio()'s seed) means a disconnected session cannot
     // leave a stale correction armed for whatever connects next, by any path.
     // The bypass flag is cleared too: a disconnect mid-sweep stops the
-    // calibrator (RadioModel's own connectionStateChanged handler) but its
+    // calibrator (the backend's disconnect handler) but its
     // finishSweep() cannot reach a backend that is already gone.
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "clearDroopCorrectionTables",
@@ -959,83 +1011,96 @@ QString AnanBackend::persistDroopTables(const QMap<int, anan::DroopCorrectionTab
         RadioSettingsScope(QStringLiteral("anan"), m_radioSerial), tables);
 }
 
+QVariantMap AnanBackend::droopStatus() const
+{
+    QVariantList corrections;
+    const auto& tables = m_droopCalibrator.measuredTables();
+    for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
+        const auto [lo, hi] = std::minmax_element(it.value().begin(), it.value().end());
+        corrections.append(QVariantMap{{QStringLiteral("rateKsps"), it.key()},
+                                      {QStringLiteral("minDb"), *lo},
+                                      {QStringLiteral("maxDb"), *hi}});
+    }
+    return {{QStringLiteral("running"), m_droopCalibrator.isRunning()},
+            {QStringLiteral("rateIndex"), m_droopCalibrator.rateIndex()},
+            {QStringLiteral("totalRates"), m_droopCalibrator.totalRates()},
+            {QStringLiteral("hasResult"), m_droopCalibrator.hasResult()},
+            {QStringLiteral("percent"), m_droopPercent},
+            {QStringLiteral("message"), m_droopMessage},
+            {QStringLiteral("corrections"), corrections}};
+}
+
+void AnanBackend::publishDroopStatus()
+{
+    emit extensionStatus(QStringLiteral("anan"), QStringLiteral("droop"), droopStatus());
+}
+
+QString AnanBackend::applyDroopTables(const QMap<int, DroopCorrectionTable>& tables)
+{
+    // Preserve the existing apply/persist behavior. The sweep and its data
+    // stay below the seam; clients can apply a result, never inject tables.
+    for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
+        if (m_dsp) {
+            QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable", Qt::QueuedConnection,
+                Q_ARG(int, it.key()), Q_ARG(std::vector<float>,
+                    std::vector<float>(it.value().begin(), it.value().end())));
+        }
+    }
+    return persistDroopTables(tables);
+}
+
 void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
-    if (ns == QLatin1String("anan")) {
-        // Droop-correction calibration. Completes LOCALLY -- like Hl2Backend's
-        // freqcal.set, there is no device round trip to await: the tables are
-        // host-side data pushed straight to AnanRxDsp, and persistence + live
-        // application happen in exactly this one place, never duplicated
-        // between AnanDroopCalibrator's own caller (a UI tab or the
-        // `droopcal` bridge verb) and this handler.
-        // Suspends/restores droop correction for the duration of a sweep, so
-        // the calibrator measures the radio rather than its own corrected
-        // output -- see AnanRxDsp::setDroopCorrectionBypassed(). Routed
-        // through this seam, not called on m_dsp directly, because m_dsp
-        // lives on another thread and the calibrator has no handle on it.
-        if (verb == QLatin1String("droop.bypass")) {
-            if (m_dsp) {
-                QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionBypassed",
-                    Qt::QueuedConnection, Q_ARG(bool, arg.toBool()));
-            }
-            if (requestId != 0)
-                emit extensionResult(requestId, true);
+    Q_UNUSED(arg);
+    if (ns == QLatin1String("anan") && verb.startsWith(QLatin1String("droop."))) {
+        if (!capabilities().hostDroopCalibration || !m_connected || m_radioSerial.isEmpty()) {
+            emit extensionError(requestId, QStringLiteral("connect an ANAN before calibrating"));
             return;
         }
-
-        if (verb == QLatin1String("droop.apply")) {
-            const QVariantMap byRate = arg.toMap();
-
-            // Validate EVERYTHING before touching either the DSP or the
-            // store, so a half-malformed request cannot leave the live tables
-            // and the persisted ones disagreeing about which rates are good.
-            QMap<int, DroopCorrectionTable> accepted;
-            for (auto it = byRate.constBegin(); it != byRate.constEnd(); ++it) {
-                bool okRate = false;
-                const int rateKsps = it.key().toInt(&okRate);
-                const QVariantList list = it.value().toList();
-                if (!okRate || list.size() != kDroopCorrectionFftSize)
-                    continue;   // malformed entry -- skip, do not corrupt the rest
-                DroopCorrectionTable table{};
-                for (int i = 0; i < list.size(); ++i)
-                    table[static_cast<std::size_t>(i)] = list[i].toFloat();
-                accepted.insert(rateKsps, table);
-            }
-
-            for (auto it = accepted.constBegin(); it != accepted.constEnd(); ++it) {
-                if (m_dsp) {
-                    QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable",
-                        Qt::QueuedConnection, Q_ARG(int, it.key()),
-                        Q_ARG(std::vector<float>,
-                              std::vector<float>(it.value().begin(), it.value().end())));
-                }
-            }
-
-            const QString failure = persistDroopTables(accepted);
-            if (!failure.isEmpty()) {
-                // AGENTS.md / PR #4621: a mutation that silently does not
-                // persist while the UI repaints from the store is the worst
-                // failure shape. Loud here, AND reported back -- the dialog
-                // used to print "live and saved" unconditionally.
-                qWarning("AnanBackend: droop calibration not saved -- %s",
-                         qUtf8Printable(failure));
-                if (requestId != 0)
-                    emit extensionError(requestId, failure);
-                return;
-            }
-            if (requestId != 0) {
-                emit extensionResult(requestId, QVariantMap{
-                    {QStringLiteral("applied"), accepted.size()},
-                    {QStringLiteral("persisted"), true}});
-            }
+        const QString action = verb.mid(6);
+        if (action == QLatin1String("status")) {
+            emit extensionResult(requestId, droopStatus());
             return;
         }
+        if (action != QLatin1String("start") && action != QLatin1String("stop")
+            && action != QLatin1String("apply") && action != QLatin1String("discard")) {
+            emit extensionError(requestId, QStringLiteral("unknown droop calibration action"));
+            return;
+        }
+        if (m_droopCalibrator.isRunning() && action != QLatin1String("stop")) {
+            emit extensionError(requestId, QStringLiteral("a sweep is already running -- stop it first"));
+            return;
+        }
+        QString failure;
+        const QMetaObject::Connection errorConnection = connect(
+            &m_droopCalibrator, &AnanDroopCalibrator::error, this,
+            [&failure](const QString& reason) { failure = reason; });
+        m_droopMessage.clear();
+        if (action == QLatin1String("start")) {
+            m_droopCalibrator.start();
+        } else if (action == QLatin1String("stop")) {
+            m_droopCalibrator.stop();
+        } else if (action == QLatin1String("apply")) {
+            m_droopCalibrator.applyResult();
+        } else {
+            m_droopCalibrator.clear();
+            m_droopPercent = 0;
+            m_droopMessage = QStringLiteral("Discarded — no sweep result staged.");
+        }
+        QObject::disconnect(errorConnection);
+        publishDroopStatus();
+        if (!failure.isEmpty()) {
+            emit extensionError(requestId, failure);
+        } else {
+            emit extensionResult(requestId, droopStatus());
+        }
+        return;
     }
-    // No other ANAN extension verbs; honor the async contract without hanging.
-    if (requestId != 0)
+    if (requestId != 0) {
         emit extensionError(requestId, QStringLiteral("ANAN: unknown extension verb '%1.%2'")
                                            .arg(ns, verb));
+    }
 }
 
 void AnanBackend::emitSliceState()
@@ -1073,6 +1138,7 @@ void AnanBackend::emitPanState()
     // zoom-out silently stopped doing anything (bench-confirmed). Reporting
     // the true rate keeps the zoom math and the pan geometry using the same
     // number; the roll-off is visible again, same as before that attempt.
+    m_droopCalibrator.setLandedRate(static_cast<int>(sampleRateHz / 1000.0));
     emit panCenterBandwidthChanged(kPanId, m_sliceFreqHz / 1.0e6, sampleRateHz / 1.0e6);
 }
 

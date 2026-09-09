@@ -2,6 +2,7 @@
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/anan/AnanRxDsp.h"
+#include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/P2Client.h"
 
 #include <QMap>
@@ -282,6 +283,13 @@ private:
     // `start` action guards on settingsScope().radioId().isEmpty()
     // explicitly, matching freqcal's own guard, rather than trusting isValid().
     QString m_radioSerial;
+    AnanDroopCalibrator m_droopCalibrator;
+    QString m_droopMessage;
+    int m_droopPercent = 0;
+    QVariantMap droopStatus() const;
+    void publishDroopStatus();
+    QString applyDroopTables(const QMap<int, DroopCorrectionTable>& tables);
+
 
     // The DDC0 rate actually running, captured at the top of
     // beginRateChange() before the pending fields are overwritten, so

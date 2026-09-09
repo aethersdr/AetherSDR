@@ -12,37 +12,27 @@
 #include <QVector>
 
 #include <array>
+#include <functional>
+#include <utility>
 
 namespace AetherSDR {
 
-class RadioModel;
-
-// Live, in-app calibration for the ANAN-G2's real DDC0 CIC/decimation droop
-// (see AnanDroopCorrection.h for what the droop is and why it exists).
-//
-// Modeled on this codebase's own established conventions rather than
-// invented fresh: the sweep-engine shape (headless QObject; steps a
-// control, samples a live response, builds a curve, computes and applies a
-// result; started/progress/finished signal vocabulary) mirrors
-// AgcTCalibrator. The per-radio persistence shape (RadioSettingsScope
-// feature document, kFeature/kSchemaVersion, a pure static load function)
-// mirrors Hl2FreqCal. Family-agnostic mechanically -- it drives
-// RadioModel::setPanBandwidth() and taps RadioModel::panFeedSpectrumReady
-// only, both generic RadioModel surfaces -- and is exposed only for ANAN
-// via RadioCapabilities::hostDroopCalibration.
-//
-// Owned by RadioModel (RadioModel::droopCalibrator()), not dialog-
-// constructed like AgcTCalibrator: invokeBackendExtension() is a
-// synchronous, fire-and-forget call correlated only by requestId (confirmed
-// against Hl2Backend::invokeExtension()), which cannot deliver a
-// multi-minute sweep's live progress to a UI. A persistent, directly
-// reachable instance lets a UI tab and the `droopcal` bridge verb observe
-// and drive the SAME sweep without fighting over or duplicating it.
+// Backend-owned sweep engine. Hooks are an injectable, socket-free boundary to
+// ANAN's rate control, DSP bypass and persistence. No shared RadioModel or GUI
+// object participates in the sweep; only AnanBackend feeds its spectrum/rate.
 class AnanDroopCalibrator : public QObject {
     Q_OBJECT
 
 public:
-    explicit AnanDroopCalibrator(RadioModel* radio, QObject* parent = nullptr);
+    struct Hooks {
+        std::function<bool()> available;
+        std::function<void(int)> requestRate;
+        std::function<void(bool)> bypass;
+        std::function<QString(const QMap<int, anan::DroopCorrectionTable>&)> apply;
+    };
+    explicit AnanDroopCalibrator(Hooks hooks = {}, QObject* parent = nullptr);
+    void setLandedRate(int rateKsps) { m_landedRateKsps = rateKsps; }
+    void onSpectrumFrame(const std::vector<float>& binsDbm);
 
     enum class Phase { Idle, WaitingForRateLanded, Settling, Sampling };
 
@@ -126,7 +116,7 @@ public:
     // dialog and the bridge.
     //
     // Still exactly one CALLER: AnanBackend::invokeExtension()'s
-    // "anan"/"droop.apply" handler, never duplicated between the UI tab and
+    // applyDroopTables() method, never duplicated between the UI tab and
     // the bridge verb.
     [[nodiscard]] static QString saveTables(
         const RadioSettingsScope& scope,
@@ -137,27 +127,18 @@ public slots:
     // radio has no active panadapter yet.
     void start();
 
-    // Aborts a running sweep: disconnects the spectrum tap, stops the poll
+    // Aborts a running sweep: stops accepting spectrum frames and stops the poll
     // timer (the entire cancellation -- nothing else is awaited, since a
     // rate-change confirmation is only ever polled, never blocked on),
     // lifts the DSP correction bypass, best-effort restores the pre-sweep
-    // rate, and returns to Idle.
+    // rate, and returns to Idle. Disconnect/destruction pass restoreRate=false.
     // Whatever rates were already measured before stopping are KEPT (not
     // cleared) -- a partial table set is a safe, real partial improvement,
     // not corrupt data; hasResult()/applyResult() work with it as-is.
-    void stop();
+    void stop(bool restoreRate = true);
 
-    // Pushes every measured table live to AnanRxDsp and persists them, via
-    // exactly one call into AnanBackend::invokeExtension()'s "droop.apply"
-    // handler -- mirrors Hl2Backend's applyFreqCalPpb() discipline of one
-    // apply path, never duplicated. No-op if hasResult() is false.
-    //
-    // Emits finished(true) ONLY when the backend confirms both the live push
-    // and the write; otherwise error(reason) then finished(false). This used
-    // to report success unconditionally, so a radio dropped between the sweep
-    // and Apply -- which makes invokeBackendExtension() a documented no-op --
-    // still printed "live and saved" in the dialog and returned ok:true to
-    // the bridge.
+    // Applies and persists the staged result through the owning backend.
+    // Emits error(reason) on refusal and finished(true) only on success.
     void applyResult();
 
     // Drops any measured (but not yet applied) tables. No-op while running.
@@ -172,22 +153,15 @@ signals:
 
 private slots:
     void advance();   // one poll tick of the phase state machine
-    void onSpectrumFrame(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs);
 
 private:
     void requestCurrentRate();
-    void finishSweep(bool applied);
+    void finishSweep(bool applied, bool restoreRate = true);
     void abortSweep(const QString& reason);
     [[nodiscard]] int currentTargetRateKsps() const;
 
-    // Suspends (true) / restores (false) AnanRxDsp's droop correction for the
-    // duration of the sweep, through the same backend seam applyResult()
-    // uses. WITHOUT this the sweep taps panFeedSpectrumReady downstream of
-    // the correction it is trying to measure: the second sweep an operator
-    // runs sees an already-flat curve, computes a near-zero table, and Apply
-    // persists that over the good one -- with the synthetic edge fade baked
-    // in as if it were hardware. See
-    // AnanRxDsp::setDroopCorrectionBypassed().
+    // Bypass both correction and cosmetic edge fade while measuring the
+    // backend's spectrum. The ANAN owner queues this before requesting a rate.
     void setDspBypass(bool bypassed);
 
     // The sweep covers every rate the radio has, in the order it has them --
@@ -207,7 +181,8 @@ private:
     // spectrum FPS while still failing in seconds rather than never.
     static constexpr int kSampleStallTimeoutMs = 15'000;
 
-    RadioModel* m_radio = nullptr;   // not QPointer: RadioModel outlives this (owned member)
+    Hooks m_hooks;
+    int m_landedRateKsps = 0;
     QTimer m_pollTimer;
     Phase m_phase = Phase::Idle;
     int m_rateIdx = -1;
@@ -216,12 +191,10 @@ private:
     QElapsedTimer m_clock;
     int m_originalRateKsps = 0;
 
-    quint64 m_applyRequestId = 0;   // correlates applyResult()'s one reply
     bool m_haveLatestFrame = false;
     Curve m_latestFrame{};
     QVector<Curve> m_pendingCaptures;
     QMap<int, anan::DroopCorrectionTable> m_measuredTables;
-    QMetaObject::Connection m_spectrumConn;
 };
 
 }  // namespace AetherSDR

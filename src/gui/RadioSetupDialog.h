@@ -260,6 +260,7 @@ private:
     int                       m_droopCalibrationPageIndex{-1};
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
+    QMetaObject::Connection   m_droopStatusConnection;
     QHash<QString, QComboBox*> m_apdSamplerCombos;
 
     // Peripherals tab — savers run on dialog close to persist field edits
