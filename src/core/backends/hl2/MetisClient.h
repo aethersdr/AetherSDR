@@ -751,6 +751,19 @@ private:
     // publishTelemetry() does not flood the GUI thread. (#4449 review)
     QElapsedTimer m_telemetryEmitClock;
     static constexpr qint64 kTelemetryMinIntervalMs = 100;
+    // ADC-overload numerator and denominator for the CURRENT publish window.
+    //
+    // They live here rather than in Hl2Telemetry because they are window
+    // accumulators owned by this loop, while Hl2Telemetry::apply() is a
+    // per-response merge that has no idea where a window begins. They are
+    // stamped onto the telemetry struct and zeroed at each emit.
+    //
+    // THIS IS THE ONLY PLACE THE RATE STILL EXISTS. Everything downstream sees
+    // the coalesced ~10 Hz emit, which samples a bit that cycles up to ~190
+    // times a second -- so a consumer that counted overloads there would be
+    // measuring its own sampling phase. See Hl2Telemetry's own comment.
+    int m_adcWindowSamples = 0;
+    int m_adcWindowOverload = 0;
 
     // ---- transport counters (see LinkCounters) ----
     LinkCounters  m_link;

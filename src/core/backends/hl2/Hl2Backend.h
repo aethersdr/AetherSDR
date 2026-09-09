@@ -897,6 +897,34 @@ private:
     QElapsedTimer m_adcOverloadClock;
     int m_adcOverloadAssertions = 0;
     static constexpr qint64 kAdcOverloadWarnIntervalMs = 10000;
+
+    // ---- THE CLIP RATE, WITH ITS DENOMINATOR (see Hl2Telemetry) ----
+    //
+    // The per-window pair as MetisClient accumulated it, plus a running total
+    // since connect. Both are published in healthSnapshot(); neither drives
+    // anything here.
+    //
+    // The session totals exist because a single 100 ms window is a jittery
+    // thing to read off a screen while turning a knob, and because a rate
+    // needs enough denominator to mean anything. What an operator watching a
+    // live antenna actually wants is "of the twelve thousand observations
+    // since I connected, how many railed" -- and the answer has to arrive with
+    // the twelve thousand attached.
+    //
+    // WHAT THESE CANNOT SEE, stated where it will be read: the gateware clears
+    // the counter behind this bit only in the EP6 response cycle, which runs
+    // only while the radio is streaming. There is no idle poll. So these stop
+    // updating when the stream stops, and m_adcWindowClock is how far back the
+    // last real observation was -- because a stale reading of zero is not a
+    // quiet band.
+    int m_adcWindowSamples = 0;
+    int m_adcOverloadWindowSamples = 0;
+    int m_adcWindowMs = 0;
+    quint64 m_adcTotalSamples = 0;
+    quint64 m_adcTotalOverloadSamples = 0;
+    QElapsedTimer m_adcWindowClock;
+    // Below this many observations a window has no rate, only a numerator.
+    static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
     bool m_tuning = false;
     bool m_cwAutoKeyed = false;

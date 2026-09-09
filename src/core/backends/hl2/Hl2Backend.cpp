@@ -4731,6 +4731,59 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("lnaBaselineDb", QStringLiteral("LNA baseline (dB, operator)"), m_lnaGainDb);
     put("lnaAutoOffsetDb", QStringLiteral("LNA auto offset (dB below baseline)"),
         m_lnaAutoOffsetDb);
+    // THE CLIP RATE, AND ITS DENOMINATOR BESIDE IT ON PURPOSE.
+    //
+    // "ADC overload" above is one bit, sampled at 10 Hz, from a flag that
+    // cycles up to ~190 times a second: it answers "was it railing at the
+    // instant we last looked", which on a dithering band is nearly a coin
+    // toss. These rows answer "how often is it railing, out of how many
+    // chances" -- the question an operator turning the RF Gain slider on a
+    // live antenna is actually asking.
+    //
+    // The percentage row is ABSENT rather than zero whenever the window
+    // carried too few observations to have a rate. That is the same rule the
+    // `values`-omission above encodes and it is load-bearing here: three of
+    // three responses railing is not 100 %, and none of two is not 0 %.
+    //
+    // AND THE WHOLE SECTION GOES QUIET WHEN THE RADIO STOPS STREAMING. The
+    // gateware clears the counter behind this bit only inside the EP6
+    // response cycle, so there is no idle poll for it -- unlike temperature,
+    // power and PTT, which do keep converting at idle. "Observed" says how
+    // long ago the last window with any observations in it arrived, so a
+    // frozen zero cannot be read as a quiet band.
+    put("adcClipWindowSamples", QStringLiteral("ADC observations (last window)"),
+        m_adcWindowSamples > 0 ? QVariant(m_adcWindowSamples) : QVariant());
+    put("adcClipWindowOverload", QStringLiteral("ADC clipped observations (last window)"),
+        m_adcWindowSamples > 0 ? QVariant(m_adcOverloadWindowSamples) : QVariant());
+    {
+        const auto pct = AetherSDR::hl2::adcClipRatePercent(
+            m_adcWindowSamples, m_adcOverloadWindowSamples, kAdcMinWindowSamples);
+        put("adcClipWindowPct", QStringLiteral("ADC clip rate (last window, %)"),
+            pct ? QVariant(*pct) : QVariant());
+    }
+    put("adcClipWindowMs", QStringLiteral("Window length (ms)"),
+        m_adcWindowMs > 0 ? QVariant(m_adcWindowMs) : QVariant());
+    put("adcClipTotalSamples", QStringLiteral("ADC observations (since connect)"),
+        m_adcTotalSamples > 0 ? QVariant(m_adcTotalSamples) : QVariant());
+    put("adcClipTotalOverload", QStringLiteral("ADC clipped observations (since connect)"),
+        m_adcTotalSamples > 0 ? QVariant(m_adcTotalOverloadSamples) : QVariant());
+    {
+        // Deliberately computed through the SAME function as the window row,
+        // so the two can never disagree about what a rate is or when there
+        // isn't one. int is safe: the totals are clamped into it only for the
+        // ratio, and a session would need billions of observations to matter.
+        const auto pct = AetherSDR::hl2::adcClipRatePercent(
+            static_cast<int>(m_adcTotalSamples > 1'000'000'000u
+                                 ? 1'000'000'000u : m_adcTotalSamples),
+            static_cast<int>(m_adcTotalOverloadSamples > 1'000'000'000u
+                                 ? 1'000'000'000u : m_adcTotalOverloadSamples),
+            kAdcMinWindowSamples);
+        put("adcClipSessionPct", QStringLiteral("ADC clip rate (since connect, %)"),
+            pct ? QVariant(*pct) : QVariant());
+    }
+    put("adcObservedMsAgo", QStringLiteral("ADC last observed (ms ago)"),
+        m_adcWindowClock.isValid() ? QVariant(qint64(m_adcWindowClock.elapsed()))
+                                   : QVariant());
 
     section("txInhibited", QStringLiteral("Transmit"));
     // The register bit is ACTIVE LOW and MetisProtocol already decodes it, so
@@ -5101,6 +5154,14 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // radio B must not come up attenuated by a decision taken about radio A's
     // antenna. (Hl2GainSplit.h)
     m_lnaAutoOffsetDb = 0;
+    // The clip totals are a per-session denominator and must not carry radio
+    // A's observations into radio B's rate.
+    m_adcWindowSamples = 0;
+    m_adcOverloadWindowSamples = 0;
+    m_adcWindowMs = 0;
+    m_adcTotalSamples = 0;
+    m_adcTotalOverloadSamples = 0;
+    m_adcWindowClock.invalidate();
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
@@ -6042,6 +6103,23 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     }
 
     m_telemetry = t;
+    // THE RATE, ACCUMULATED RATHER THAN SAMPLED. The edge counter below sees
+    // this flag at 10 Hz; these two came off every EP6 frame in MetisClient's
+    // receive loop, which is the only place the ~190 Hz observation still
+    // exists. Nothing here drives anything -- they are published and that is
+    // all -- but they are what an operator needs to watch the input on a live
+    // antenna before deciding whether an automatic loop is worth arming.
+    m_adcWindowSamples = t.adcSamples;
+    m_adcOverloadWindowSamples = t.adcOverloadSamples;
+    m_adcWindowMs = t.adcWindowMs;
+    if (t.adcSamples > 0) {
+        m_adcTotalSamples += static_cast<quint64>(t.adcSamples);
+        m_adcTotalOverloadSamples += static_cast<quint64>(t.adcOverloadSamples);
+        // Restarted only on a window that CARRIED observations. A telemetry
+        // update with an empty denominator is not evidence that the converter
+        // was looked at, so it must not refresh the age of the last look.
+        m_adcWindowClock.start();
+    }
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)

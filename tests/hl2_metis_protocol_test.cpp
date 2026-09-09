@@ -1062,6 +1062,53 @@ int main()
               "all 40 bits reach the wire");
     }
 
+    // ---- adcClipRatePercent: NULL AND ZERO ARE DIFFERENT FACTS ------------
+    //
+    // The clip evidence is one bit sampled ~190 times a second and coalesced to
+    // ~10 Hz, so what a consumer gets is a numerator over a denominator that
+    // varies with the sample rate, the receiver count and whether the
+    // application happens to be issuing commands. The denominator is therefore
+    // not something a reader may assume, and a window that did not carry enough
+    // of it has NO RATE -- not a rate of zero, and not a rate of one hundred.
+    //
+    // Getting that wrong in either direction is the worst thing this row can
+    // do: "three of three railed" rendered as 100 % is the most alarming
+    // reading available, produced by three observations; "none of two" rendered
+    // as 0 % is a clean converter reported from nothing at all.
+    {
+        check(!adcClipRatePercent(0, 0).has_value(),
+              "an empty window has no clip rate");
+        check(!adcClipRatePercent(3, 3).has_value(),
+              "three of three is NOT 100 % -- it is three observations");
+        check(!adcClipRatePercent(2, 0).has_value(),
+              "none of two is NOT 0 % -- it is two observations");
+        check(adcClipRatePercent(4, 0).value_or(-1) == 0,
+              "at the minimum denominator a clean window really is 0 %");
+        check(adcClipRatePercent(4, 4).value_or(-1) == 100,
+              "and a fully railed one really is 100 %");
+        check(adcClipRatePercent(19, 0).value_or(-1) == 0,
+              "0 of 19 is 0 %");
+        check(adcClipRatePercent(19, 19).value_or(-1) == 100,
+              "19 of 19 is 100 %");
+        // Rounded to nearest whole percent: this observation does not have two
+        // significant figures in it, and a nearest-integer rule is one a reader
+        // can reproduce in their head.
+        check(adcClipRatePercent(19, 9).value_or(-1) == 47, "9 of 19 rounds to 47 %");
+        check(adcClipRatePercent(19, 10).value_or(-1) == 53, "10 of 19 rounds to 53 %");
+        check(adcClipRatePercent(7, 6).value_or(-1) == 86,
+              "6 of 7 is 86 % -- the figure ON8ST's own sweep reports at 0 dB LNA");
+        // Nonsense in, bounded out: a numerator above its own denominator is a
+        // decode fault, and 100 % is the honest reading of it rather than a
+        // number above full scale.
+        check(adcClipRatePercent(10, 50).value_or(-1) == 100,
+              "a numerator above its denominator clamps at 100 rather than exceeding it");
+        check(adcClipRatePercent(10, -3).value_or(-1) == 0,
+              "and a negative one clamps at 0");
+        // The gate is settable, because the denominator is not a constant.
+        check(!adcClipRatePercent(19, 19, 20).has_value(),
+              "a caller with a stricter minimum gets nothing rather than a rate");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_metis_protocol_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
