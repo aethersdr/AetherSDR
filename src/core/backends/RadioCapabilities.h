@@ -466,6 +466,20 @@ struct RadioCapabilities {
     // to, and must leave this false.
     bool hasHostNoiseBlanker = false;
 
+    // The backend can drive its own receive RF gain from an ADC-overload
+    // observation, and offers an on/off switch for it.
+    //
+    // NARROWER THAN "the radio has AGC", deliberately, and it is not the audio
+    // AGC: this is RF gain ahead of every DDC, driven by converter saturation
+    // across the whole receive span, which is a different axis from anything a
+    // demodulated slice can see.
+    //
+    // NOT PERMISSIVE ON DISCONNECT, for the same reason hasHostNoiseBlanker is
+    // not: it can only ever ADD a control, so answering true with no backend
+    // attached would show an Auto checkbox on every family that never claims
+    // it. RadioModel::hasAutoRfGain() encodes that.
+    bool hasAutoRfGain = false;
+
     // The radio has ONE operator-placed notch in its own DSP: an enable and a
     // position within the passband. The IC-705 spends 16 48 on the enable and
     // 14 0D on the position (0000..0255 across the passband), with 16 57

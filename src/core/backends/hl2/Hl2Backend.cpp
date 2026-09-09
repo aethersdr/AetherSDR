@@ -1672,6 +1672,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
     // not implemented, not because they could not be.
     c.hasHostNoiseBlanker = true;
+    // The receive-gain control this backend owns (Hl2AutoGainPolicy.h). Off by
+    // default; the capability only says the switch exists.
+    c.hasAutoRfGain = true;
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -3537,6 +3540,14 @@ void Hl2Backend::setKeying(bool key)
     }
 
     const bool keyChanged = m_keyed != key;
+    // The receive path keeps describing the operator's own transmission for a
+    // measured 178-285 ms after this point (FINDINGS.md FIND-16, run
+    // d83-unkey-transient), so anything the converter reports inside that
+    // window is about the transmitter rather than the antenna. The automatic
+    // gain control reads this; nothing else does.
+    if (keyChanged && !key) {
+        m_sinceUnkey.start();
+    }
     m_keyed = key;
     if (keyChanged) {
         // Manual PTT is already mirrored optimistically by RadioModel, but CW
@@ -4501,6 +4512,33 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         emit extensionError(requestId, QStringLiteral("hl2: no extension verbs implemented"));
 }
 
+namespace {
+// The control law's reason enum in the operator's words. Kept here rather than
+// in the policy header so the header stays free of anything presentational --
+// it has no Qt and no strings, and a health row is not a control decision.
+const char* autoGainReasonText(AetherSDR::hl2::AutoGainReason r)
+{
+    using R = AetherSDR::hl2::AutoGainReason;
+    switch (r) {
+    case R::Disarmed:       return "off";
+    case R::Warmup:         return "warming up";
+    case R::Keyed:          return "held — transmitting";
+    case R::UnkeyHoldoff:   return "held — settling after unkey";
+    case R::Void:           return "waiting — too few observations";
+    case R::Stale:          return "held — no observations (is the radio streaming?)";
+    case R::Cooldown:       return "clipping — waiting out the attack cooldown";
+    case R::AttackHot:      return "reducing gain — clipping most of the time";
+    case R::AttackMarginal: return "reducing gain — clipping occasionally";
+    case R::AtFloor:        return "AT FLOOR and still clipping";
+    case R::Dwell:          return "clean — waiting before giving gain back";
+    case R::ReleaseHold:    return "clean — holding at this band's known limit";
+    case R::Release:        return "giving gain back";
+    case R::Idle:           return "clean — nothing held";
+    }
+    return "unknown";
+}
+}  // namespace
+
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 {
     HealthSnapshot h;
@@ -4784,6 +4822,14 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("adcObservedMsAgo", QStringLiteral("ADC last observed (ms ago)"),
         m_adcWindowClock.isValid() ? QVariant(qint64(m_adcWindowClock.elapsed()))
                                    : QVariant());
+    put("autoRfGain", QStringLiteral("Auto RF gain"), m_autoRfGainEnabled);
+    put("autoRfGainFloorDb", QStringLiteral("Auto RF gain floor (dB below baseline)"),
+        m_autoGainConfig.maxOffsetDb);
+    // What the loop is doing THIS INSTANT, in the operator's words rather than
+    // the enum's. Reported even while disarmed, because "disarmed" is the
+    // answer to "why is nothing happening" as much as "stale" is.
+    put("autoRfGainState", QStringLiteral("Auto RF gain state"),
+        QString::fromLatin1(autoGainReasonText(m_autoGainReason)));
 
     section("txInhibited", QStringLiteral("Transmit"));
     // The register bit is ACTIVE LOW and MetisProtocol already decodes it, so
@@ -5154,6 +5200,16 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // radio B must not come up attenuated by a decision taken about radio A's
     // antenna. (Hl2GainSplit.h)
     m_lnaAutoOffsetDb = 0;
+    // A radio swap ends the session, and an automatic control armed about radio
+    // A's antenna has nothing to say about radio B's.
+    m_autoRfGainEnabled = false;
+    m_autoGainState = AetherSDR::hl2::AutoGainState{};
+    m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
+    m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
+    m_autoGainBandKey.clear();
+    m_autoGainBaselineDb = 0;
+    m_autoGainSampleRateHz = 0;
+    m_sinceUnkey.invalidate();
     // The clip totals are a per-session denominator and must not carry radio
     // A's observations into radio B's rate.
     m_adcWindowSamples = 0;
@@ -5590,6 +5646,121 @@ void Hl2Backend::setLnaAutoOffsetDb(int offsetDb)
 // noise floor drop and read it as the band going quiet. That argument applies
 // to an automatic step exactly as it does to a manual one, which is why the
 // offset goes through here rather than round it.
+// Arm or disarm the automatic control. RADIO-WIDE: there is one AD9866.
+void Hl2Backend::setAutoRfGain(bool on)
+{
+    if (on == m_autoRfGainEnabled) {
+        return;
+    }
+    if (on) {
+        // REFUSED, NOT CLAMPED. See kAutoRfGainMaxBaselineDb. Moving the
+        // operator's own number so the feature could be switched on would be a
+        // UI reporting one value while the wire carried another.
+        if (m_lnaGainDb > kAutoRfGainMaxBaselineDb) {
+            qWarning().noquote()
+                << QStringLiteral(
+                       "Hl2Backend: auto RF gain declined — the RF Gain baseline is "
+                       "%1 dB and this radio's gain axis is not trusted above %2 dB "
+                       "(#5354: +48 dB measures like +18 dB). Lower RF Gain to %2 dB "
+                       "or below and try again. Your setting has not been changed.")
+                       .arg(m_lnaGainDb)
+                       .arg(kAutoRfGainMaxBaselineDb);
+            return;
+        }
+        m_autoGainState = AetherSDR::hl2::AutoGainState{};
+        m_autoGainBandKey = m_currentBandKey;
+        m_autoGainBaselineDb = m_lnaGainDb;
+        m_autoGainSampleRateHz = m_sampleRateHz;
+        m_autoGainReason = AetherSDR::hl2::AutoGainReason::Warmup;
+        // Not keyed since arming. A stale unkey stamp from earlier in the
+        // session would hold the loop off for no reason, or -- worse -- fail to.
+        m_sinceUnkey.invalidate();
+        m_autoRfGainEnabled = true;
+        qCInfo(lcHl2) << "HL2 auto RF gain: ARMED at baseline" << m_lnaGainDb
+                      << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
+    } else {
+        m_autoRfGainEnabled = false;
+        m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
+        m_autoGainState = AetherSDR::hl2::AutoGainState{};
+        // ONE ACTION, from any state. A switch that left the radio attenuated
+        // after being turned off would be a control that does not undo itself.
+        setLnaAutoOffsetDb(0);
+        qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
+                      << "dB restored";
+    }
+}
+
+// The operator's floor. Applied live: pulling it in while the loop is holding
+// more than the new floor makes the policy surrender the excess on its next
+// evaluation, in one step rather than at the release rate, because that is a
+// bound being enforced rather than the loop deciding to release.
+void Hl2Backend::setAutoRfGainFloorDb(int floorDb)
+{
+    const int clamped = floorDb < 0 ? 0
+                      : (floorDb > kAutoRfGainFloorMaxDb ? kAutoRfGainFloorMaxDb
+                                                         : floorDb);
+    if (clamped == m_autoGainConfig.maxOffsetDb) {
+        return;
+    }
+    m_autoGainConfig.maxOffsetDb = clamped;
+    qCInfo(lcHl2) << "HL2 auto RF gain: floor set to" << clamped
+                  << "dB below the operator's baseline";
+}
+
+// One evaluation of the control law, on the telemetry publish that carried the
+// observation. Every decision is in Hl2AutoGainPolicy.h; this function only
+// gathers the inputs, applies the instruction, and owns the clocks.
+void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
+{
+    using namespace AetherSDR::hl2;
+    if (!m_autoRfGainEnabled) {
+        return;
+    }
+    AutoGainObservation obs;
+    obs.samples = t.adcSamples;
+    obs.overloadSamples = t.adcOverloadSamples;
+    // The window length is an INPUT, not an assumption. The publish interval is
+    // a floor rather than a period -- a late I/O thread makes it longer -- and a
+    // cooldown measured in windows rather than milliseconds would drift with it.
+    obs.elapsedMs = t.adcWindowMs > 0 ? t.adcWindowMs : 0;
+    // Both keying sources. The application's own m_keyed covers the instant
+    // before the radio has echoed anything back; the radio's PTT bit covers a
+    // key this application did not originate.
+    obs.keyed = m_keyed || t.ptt;
+    obs.msSinceUnkey = m_sinceUnkey.isValid() ? m_sinceUnkey.elapsed() : -1;
+    // How much attenuation physically exists below the operator's baseline. The
+    // policy does not know the register geometry and must not.
+    obs.availableOffsetDb = m_lnaGainDb - kLnaGainMinDb;
+    obs.bandChanged = (m_currentBandKey != m_autoGainBandKey);
+    obs.baselineMoved = (m_lnaGainDb != m_autoGainBaselineDb);
+    // The denominator changed, so the old windows are not comparable.
+    obs.resetWarmup = obs.bandChanged || obs.baselineMoved
+                   || (m_sampleRateHz != m_autoGainSampleRateHz);
+    m_autoGainBandKey = m_currentBandKey;
+    m_autoGainBaselineDb = m_lnaGainDb;
+    m_autoGainSampleRateHz = m_sampleRateHz;
+
+    const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
+    m_autoGainState = a.next;
+    m_autoGainReason = a.reason;
+    if (a.warnFloorOnce) {
+        qWarning().noquote()
+            << QStringLiteral(
+                   "Hl2Backend: auto RF gain is at its floor (%1 dB below your "
+                   "setting) and the converter is STILL clipping. No amount of LNA "
+                   "will fix this — the front end needs attenuation ahead of the "
+                   "radio, or a band-pass filter for whatever is outside the "
+                   "passband.")
+                   .arg(m_autoGainState.offsetDb);
+    }
+    if (a.deltaDb != 0) {
+        setLnaAutoOffsetDb(m_autoGainState.offsetDb);
+        qCDebug(lcHl2) << "HL2 auto RF gain:" << (a.deltaDb > 0 ? "attack" : "release")
+                       << a.deltaDb << "dB -> offset" << m_autoGainState.offsetDb
+                       << "dB, window" << obs.overloadSamples << "/" << obs.samples;
+    }
+}
+
 void Hl2Backend::pushEffectiveLnaGain()
 {
     const int effective = lnaEffectiveDb();
@@ -6120,6 +6291,11 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
         // was looked at, so it must not refresh the age of the last look.
         m_adcWindowClock.start();
     }
+    // THE CONTROL LAW, on the tick that carried the observation. Deliberately
+    // above the warning below rather than beside it: the warning reports what
+    // was seen, the loop acts on it, and an operator reading the log should see
+    // the action attributed to the window that caused it.
+    stepAutoGain(t);
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)

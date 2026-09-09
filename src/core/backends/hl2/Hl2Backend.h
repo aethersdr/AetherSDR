@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
+#include "core/backends/hl2/Hl2AutoGainPolicy.h"
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
@@ -91,6 +92,7 @@ public:
                       PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
+    void setAutoRfGain(bool on) override;
 
 private:
     // The actual span change, after the throttle above has settled. The DDC rate
@@ -149,6 +151,44 @@ public:
     [[nodiscard]] int lnaAutoOffsetDb() const noexcept { return m_lnaAutoOffsetDb; }
     [[nodiscard]] int lnaBaselineDb() const noexcept { return m_lnaGainDb; }
     [[nodiscard]] int lnaEffectiveDb() const noexcept;
+    [[nodiscard]] bool autoRfGainEnabled() const noexcept { return m_autoRfGainEnabled; }
+
+    // HOW DEAF THE LOOP MAY MAKE THE RECEIVER, in dB below the operator's
+    // baseline. The second of exactly two numbers the operator owns; the first
+    // is the on/off switch.
+    //
+    // DEFAULT 26 dB, a CHOSEN value inside a MEASURED bound. From the stock
+    // +20 dB baseline it reaches -6 dB, which is the gain
+    // aethersdr/AetherSDR#5354's own sweep measures as the first clean one on
+    // this station. The bound is that measurement; the choice is here. Anything
+    // deeper reaches past what the measurement supports and into a range where
+    // the receiver is internally noise-limited on a quiet band for no evidence
+    // at all.
+    //
+    // Everything else in Hl2AutoGainPolicy.h is deliberately NOT operator-
+    // settable. Nine knobs is nine ways to build a loop that hunts, and none of
+    // them is a decision an operator has the evidence to make.
+    void setAutoRfGainFloorDb(int floorDb);
+    [[nodiscard]] int autoRfGainFloorDb() const noexcept
+    {
+        return m_autoGainConfig.maxOffsetDb;
+    }
+    static constexpr int kAutoRfGainFloorMaxDb = 31;
+
+    // The highest baseline from which the automatic control will arm.
+    //
+    // Above this the AD9866's gain axis is not trustworthy on this hardware:
+    // aethersdr/AetherSDR#5354 records +48 dB measuring identically to +18 dB
+    // on a Hermes-Lite 2, and neither the gateware decode nor the AD9866's
+    // stated -12..+48 dB / 1 dB / 6-bit geometry accounts for it.
+    //
+    // A REFUSAL, NOT A CLAMP. The control declines to arm and says why, rather
+    // than moving the operator's number to somewhere it will work -- a UI
+    // reporting one value while the wire carries another is the defect #5395
+    // was closed over. Note this bounds where the loop may START, not where it
+    // may go: the axis only ever attenuates, so from a baseline at or below
+    // this the fold region is unreachable by construction (Hl2GainSplit.h).
+    static constexpr int kAutoRfGainMaxBaselineDb = 19;
 
     // dspChains()' gather, over the two things it may read.
     //
@@ -808,6 +848,36 @@ private:
     // session that produced it would be indistinguishable, next launch, from a
     // gain the operator chose. Reset to 0 by resetPersistedState().
     int m_lnaAutoOffsetDb = 0;
+    // ---- the automatic control (Hl2AutoGainPolicy.h) ----
+    //
+    // OFF BY DEFAULT, and with evidence rather than caution. The prior art
+    // ships its equivalent ON, from a baseline that maps to +19 dB LNA on this
+    // radio -- the row in #5354's own table that reads 100 % clip rate. On that
+    // antenna it would start saturated on every connect and spend the first
+    // second digging out, and the operator's first impression of the band would
+    // be intermodulation. A shipped default this loop cannot verify before it
+    // acts is a worse first impression than the status quo.
+    //
+    // NO TIMER. The policy is evaluated on the existing telemetry publish,
+    // which is where the observation arrives; the window length is an input
+    // rather than an assumption. A consequence worth stating: when the radio
+    // stops streaming this stops being called at all, so the offset simply
+    // HOLDS -- which is the correct behaviour, because the clip evidence has no
+    // idle path and silence is not a clean converter.
+    bool m_autoRfGainEnabled = false;
+    AetherSDR::hl2::AutoGainState m_autoGainState;
+    AetherSDR::hl2::AutoGainConfig m_autoGainConfig;
+    // Band and baseline as the loop last saw them, so a change in either
+    // reaches the policy as the input it is rather than as a surprise.
+    QString m_autoGainBandKey;
+    int m_autoGainBaselineDb = 0;
+    int m_autoGainSampleRateHz = 0;
+    AetherSDR::hl2::AutoGainReason m_autoGainReason =
+        AetherSDR::hl2::AutoGainReason::Disarmed;
+    // Restarted on every unkey. The policy's post-unkey hold-off is measured
+    // from here; invalid means "not keyed since this control was armed".
+    QElapsedTimer m_sinceUnkey;
+    void stepAutoGain(const Hl2Telemetry& t);
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
     // meaning "every relay released", so it cannot double as the sentinel.
