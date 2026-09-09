@@ -1945,6 +1945,50 @@ platform does not run Qt's built-in tooltip timer under automation.
 
 Use `{"cmd":"tooltip","target":"E","action":"hide"}` to dismiss it.
 
+Item views keep their tips on the items, not the widget, so the form above
+answers `target has no tooltip` for any table. The cell form sends the same
+help event at one cell's rectangle, to the view's viewport, which is what a
+real hover does:
+
+```text
+→ tooltip networkDiagnosticsTciClients cell 0 0
+← {"ok":true,"target":"networkDiagnosticsTciClients","class":"QTableWidget",
+   "row":0,"col":0,"text":"Your own label for this client (saved locally, keyed by IP)",
+   "accepted":true,"grabHint":"QTipLabel", ...}
+→ {"cmd":"tooltip","target":"networkDiagnosticsTciClients","action":"cell","value":"0 0"}
+```
+
+The row is scrolled into view first. A cell whose `Qt::ToolTipRole` is empty
+answers `cell has no tooltip`; a row or column the view hides (a search
+filter, `setColumnHidden`) answers `cell is not visible (hidden row or
+column)`; a target that is not a `QAbstractItemView` answers `target is not
+an item view`; the text form with anything other than exactly `<row> <col>`
+after `cell` answers `tooltip cell takes exactly <row> <col>` (an override
+that literally starts with "cell" goes through the JSON `value` field, as
+for `hide`). Rows are top-level only — a tree's children are not addressable
+by a flat row number.
+
+### `cell`
+Read one item-view cell as data — no hover, no timing. Works for any
+`QAbstractItemView` (`QTableWidget`, `QTreeWidget`, `QListWidget`, model
+views) because it reads the model's roles rather than `QTableWidget::item()`.
+`toolTip` is the item's `Qt::ToolTipRole`, the same text a hover would raise,
+so a per-cell tip is assertable in one round trip.
+
+```text
+→ cell networkDiagnosticsTciClients 0 1
+← {"ok":true,"target":"networkDiagnosticsTciClients","class":"QTableWidget",
+   "row":0,"col":1,"text":"127.0.0.1:56564","toolTip":"","accessibleText":"",
+   "selected":false,"rows":1,"cols":7}
+→ {"cmd":"cell","target":"networkDiagnosticsTciClients","value":"0 1"}
+```
+
+`rows`/`cols` report the model's extent so a driver can iterate. Out-of-range
+indices answer `row N out of range [0,R)` / `column N out of range [0,C)`;
+a non-view target answers `target is not an item view`. Rows are top-level
+only — a tree's children are not addressable by a flat row number in this
+version.
+
 ### `scrollTo` (alias `ensureVisible`)
 Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the
 viewport. Widgets parked below the fold of a scroll area receive **no paint
@@ -4125,7 +4169,7 @@ receiver capacity. It never enables transmit and remains available without
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 72 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 73 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4138,6 +4182,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `close` | — | close <target> — close the target's top-level window |
 | `hover` | — | hover <target> [leave] — synthetic mouse hover |
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
+| `cell` | — | cell <target> <row> <col> — read an item-view cell: text, tooltip, selection |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
 | `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event (positive steps = scroll up); drives wheel VFO tuning |

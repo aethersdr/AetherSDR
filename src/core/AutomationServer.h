@@ -26,6 +26,8 @@ class QWebSocket;
 class QLocalServer;
 class QLocalSocket;
 class QWidget;
+class QAbstractItemView;
+class QModelIndex;
 class QTimer;
 
 namespace AetherSDR {
@@ -455,6 +457,17 @@ private:
     QJsonObject doTooltip(const QString& target,
                           const QString& action,
                           const QString& value) const;
+    // cell <target> <row> <col>: read one item-view cell as data — display
+    // text, Qt::ToolTipRole tip, accessible text, selection (#5503). Item
+    // tips live on the item, not the widget, so `tooltip <target>` cannot
+    // reach them; this verb reads the role directly, no hover involved.
+    QJsonObject doCell(const QString& target, const QString& value) const;
+    // Shared resolver for the cell verbs: the target must be a
+    // QAbstractItemView with a model, `value` is "row col", both bounds-
+    // checked. Returns an empty object on success with `view`/`index` set,
+    // otherwise the error to hand back.
+    QJsonObject resolveCell(const QString& target, const QString& value,
+                            QAbstractItemView*& view, QModelIndex& index) const;
     // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
     // ancestor so the target widget sits in its viewport. Widgets parked below
     // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)

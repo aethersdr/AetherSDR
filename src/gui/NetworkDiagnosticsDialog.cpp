@@ -791,6 +791,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         audioLayout->insertWidget(0, audioNote);
 
         m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
+        m_audioStreamsTable->setObjectName(QStringLiteral("networkDiagnosticsAudioStreams"));
         m_audioStreamsTable->setHorizontalHeaderLabels({
             "Stream", "Source", "Format", "Rate", "Slow Delivery",
             "Late", "Packet Gaps", "Worst Gap", "Last Packet"
@@ -1082,6 +1083,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     layout->addWidget(m_tciClientSummary);
 
     m_tciClientTable = new QTableWidget(0, 7, this);
+    m_tciClientTable->setObjectName(QStringLiteral("networkDiagnosticsTciClients"));
     m_tciClientTable->setHorizontalHeaderLabels(
         {QStringLiteral("Name"), QStringLiteral("Endpoint"),
          QStringLiteral("Likely role"),
@@ -1209,6 +1211,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     }
 
     m_tciLogTable = new QTableWidget(0, 3, this);
+    m_tciLogTable->setObjectName(QStringLiteral("networkDiagnosticsTciLog"));
     m_tciLogTable->setHorizontalHeaderLabels(
         {QStringLiteral("Time"), QStringLiteral("Dir/Cmd"),
          QStringLiteral("Message")});

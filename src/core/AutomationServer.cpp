@@ -2992,6 +2992,19 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                             "tooltip hide takes no extra arguments"));
                     }
                     a.action = QStringLiteral("hide");
+                } else if (vtok(p, 2) == QLatin1String("cell")) {
+                    // Item-view form: "tooltip <view> cell <row> <col>" (#5503).
+                    // Wrong arity is an error, as for "hide" above — it must not
+                    // degrade into an override that force-SHOWS a tip reading
+                    // "cell …". An override literally starting with "cell" is
+                    // available via the JSON form's explicit value field; the
+                    // JSON cell form is action:"cell" with value:"<row> <col>".
+                    if (p.size() != 5) {
+                        return err(QStringLiteral(
+                            "tooltip cell takes exactly <row> <col>"));
+                    }
+                    a.action = QStringLiteral("cell");
+                    a.value = vtok(p, 3) + QLatin1Char(' ') + vtok(p, 4);
                 } else {
                     a.value = vjoin(p, 2);
                 }
@@ -3001,6 +3014,14 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.target.isEmpty())
                     return err(QStringLiteral("tooltip requires a target widget"));
                 return s.doTooltip(a.target, a.action, a.value);
+            });
+
+        add("cell", {}, "cell <target> <row> <col> — read an item-view cell: text, tooltip, selection",
+            parseTargetXY,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.target.isEmpty())
+                    return err(QStringLiteral("cell requires a target item view"));
+                return s.doCell(a.target, a.value);
             });
 
         add("scrollTo", {QStringLiteral("ensureVisible")},
@@ -9879,6 +9900,76 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
                            {QStringLiteral("hidden"), hidden}};
     }
 
+    if (action == QLatin1String("cell")) {
+        // An item view's tips are per item (Qt::ToolTipRole), resolved by the
+        // viewport's help-event handler from the event position — the widget
+        // form below never reaches them (#5503). Send the same event a real
+        // hover would, at the cell's rect, to the viewport.
+        QAbstractItemView* view = nullptr;
+        QModelIndex index;
+        const QJsonObject failure = resolveCell(target, value, view, index);
+        if (!failure.isEmpty()) {
+            return failure;
+        }
+        if (!view->isVisible()) {
+            return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+        }
+        const QString text = view->model()->data(index, Qt::ToolTipRole).toString();
+        if (text.isEmpty()) {
+            return err(QStringLiteral("cell has no tooltip: %1 row %2 col %3")
+                           .arg(target).arg(index.row()).arg(index.column()));
+        }
+        // A scrolled-out row has an empty visualRect; bring it on screen first.
+        // A row or column hidden by the view (a filter, setColumnHidden) stays
+        // empty after that — the event would land at the viewport origin on
+        // whatever cell sits there, so refuse rather than report the wrong tip.
+        view->scrollTo(index);
+        const QRect cellRect = view->visualRect(index);
+        if (cellRect.isEmpty()) {
+            return err(QStringLiteral("cell is not visible (hidden row or column): %1 row %2 col %3")
+                           .arg(target).arg(index.row()).arg(index.column()));
+        }
+        const QString className = shortClassName(view);
+        const int row = index.row();
+        const int col = index.column();
+        // QPointer guards (#4122 review): a ToolTip handler that rebuilds UI
+        // can destroy the view during sendEvent — nothing below touches the
+        // raw pointers after the event.
+        QPointer<QAbstractItemView> viewGuard = view;
+        QPointer<QWidget> viewport = view->viewport();
+        const QPoint local = cellRect.center();
+        const QPoint global = viewport->mapToGlobal(local);
+        QHelpEvent event(QEvent::ToolTip, local, global);
+        QCoreApplication::sendEvent(viewport, &event);
+        const bool accepted = event.isAccepted();
+        if (viewGuard.isNull() || viewport.isNull()) {
+            return QJsonObject{
+                {QStringLiteral("ok"), true},
+                {QStringLiteral("target"), target},
+                {QStringLiteral("row"), row},
+                {QStringLiteral("col"), col},
+                {QStringLiteral("text"), text},
+                {QStringLiteral("accepted"), accepted},
+                {QStringLiteral("targetDestroyed"), true},
+                {QStringLiteral("grabHint"), QStringLiteral("QTipLabel")},
+            };
+        }
+        qCInfo(lcAutomation).noquote()
+            << "tooltip" << target << "cell" << row << col << "at" << global << text;
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("target"), target},
+            {QStringLiteral("class"), className},
+            {QStringLiteral("row"), row},
+            {QStringLiteral("col"), col},
+            {QStringLiteral("text"), text},
+            {QStringLiteral("x"), global.x()},
+            {QStringLiteral("y"), global.y()},
+            {QStringLiteral("accepted"), accepted},
+            {QStringLiteral("grabHint"), QStringLiteral("QTipLabel")},
+        };
+    }
+
     QPointer<QWidget> w = resolveWidget(target);
     if (!w) {
         return err(QStringLiteral("widget or window not found: ") + target);
@@ -9934,6 +10025,74 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
         {QStringLiteral("y"), global.y()},
         {QStringLiteral("accepted"), accepted},
         {QStringLiteral("grabHint"), QStringLiteral("QTipLabel")},
+    };
+}
+
+// Shared by `cell` and the cell form of `tooltip` (#5503): resolve the
+// target to an item view with a model and "row col" to a bounds-checked
+// index. Top-level rows only — a tree's children are not addressable by a
+// flat row number in this version.
+QJsonObject AutomationServer::resolveCell(const QString& target, const QString& value,
+                                          QAbstractItemView*& view, QModelIndex& index) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w) {
+        return err(QStringLiteral("widget or window not found: ") + target);
+    }
+    view = qobject_cast<QAbstractItemView*>(w);
+    if (!view) {
+        return err(QStringLiteral("target is not an item view: ") + target
+                   + QStringLiteral(" (") + shortClassName(w) + QLatin1Char(')'));
+    }
+    QAbstractItemModel* m = view->model();
+    if (!m) {
+        return err(QStringLiteral("view has no model"));
+    }
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    bool okRow = false;
+    bool okCol = false;
+    const int row = parts.size() >= 1 ? parts.at(0).toInt(&okRow) : -1;
+    const int col = parts.size() >= 2 ? parts.at(1).toInt(&okCol) : -1;
+    if (parts.size() != 2 || !okRow || !okCol) {
+        return err(QStringLiteral("cell needs integer row and column indices"));
+    }
+    const int rows = m->rowCount();
+    const int cols = m->columnCount();
+    if (row < 0 || row >= rows) {
+        return err(QStringLiteral("row %1 out of range [0,%2)").arg(row).arg(rows));
+    }
+    if (col < 0 || col >= cols) {
+        return err(QStringLiteral("column %1 out of range [0,%2)").arg(col).arg(cols));
+    }
+    index = m->index(row, col);
+    return {};
+}
+
+// cell <target> <row> <col>: the cell as data. Reads the model roles, not
+// QTableWidget::item(), so any QAbstractItemView answers. `rows`/`cols` let
+// a driver iterate without guessing.
+QJsonObject AutomationServer::doCell(const QString& target, const QString& value) const
+{
+    QAbstractItemView* view = nullptr;
+    QModelIndex index;
+    const QJsonObject failure = resolveCell(target, value, view, index);
+    if (!failure.isEmpty()) {
+        return failure;
+    }
+    const QAbstractItemModel* m = view->model();
+    const QItemSelectionModel* sm = view->selectionModel();
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(view)},
+        {QStringLiteral("row"), index.row()},
+        {QStringLiteral("col"), index.column()},
+        {QStringLiteral("text"), m->data(index, Qt::DisplayRole).toString()},
+        {QStringLiteral("toolTip"), m->data(index, Qt::ToolTipRole).toString()},
+        {QStringLiteral("accessibleText"), m->data(index, Qt::AccessibleTextRole).toString()},
+        {QStringLiteral("selected"), sm != nullptr && sm->isSelected(index)},
+        {QStringLiteral("rows"), m->rowCount()},
+        {QStringLiteral("cols"), m->columnCount()},
     };
 }
 
