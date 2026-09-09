@@ -596,6 +596,38 @@ struct Hl2Telemetry {
     std::optional<int>  biasCurrentRaw;
     bool ptt = false;
 
+    // ---- ADC OVERLOAD AS A RATE, WITH ITS DENOMINATOR --------------------
+    //
+    // `adcOverload` above is the LAST value seen. That is a ~10 Hz sample of a
+    // bit the radio sets and clears up to ~190 times a second, because
+    // MetisClient coalesces telemetryUpdated at kTelemetryMinIntervalMs -- so
+    // as a measure of how hard the front end is being hit it is decimated
+    // roughly 19:1 and always was.
+    //
+    // These three are accumulated by MetisClient's receive loop across the
+    // publish interval, which is the only place the per-frame rate still
+    // exists. `adcSamples` counts response-address-0 responses actually seen;
+    // `adcOverloadSamples` counts how many of those carried the bit.
+    //
+    // THE DENOMINATOR IS NOT A CONSTANT AND MUST BE CARRIED. It varies with the
+    // sample rate and the receiver count, and the radio also DISPLACES the slot
+    // that carries this response whenever it has a command response to send --
+    // at up to half of them -- so it varies with what the application is doing
+    // too. A numerator without it is not a rate.
+    //
+    // A WINDOW WITH TOO FEW OBSERVATIONS IS NOT A CLEAN ONE. See
+    // adcClipRatePercent below: it returns nothing rather than zero, and the
+    // difference is the whole value of the reading.
+    //
+    // And note what these can and cannot see: the counter behind this bit is
+    // cleared only by the EP6 response cycle, which runs only while the radio
+    // is streaming. There is no idle poll for it. When the stream stops these
+    // simply stop arriving -- which is honest, and is why nothing downstream
+    // may read their absence as "clean".
+    int adcSamples = 0;
+    int adcOverloadSamples = 0;
+    int adcWindowMs = 0;
+
     // Merge a decoded response in, leaving untouched fields alone.
     //
     // IGNORES ACK responses apart from their PTT bit, and that is load-bearing
@@ -771,6 +803,29 @@ inline constexpr int kMinForwardCountsForSwr = 320;
 // use it to correct a reading — it is a lower bound on what the gate has to
 // tolerate, and it is used for exactly that.
 inline constexpr double kMeasuredReverseFloorCounts = 3.41;
+
+// The clip rate for a window, as a whole percent, or NOTHING when the window
+// did not carry enough observations to have a rate at all.
+//
+// The nullopt is the point. "Three of three responses carried the overload bit"
+// is not 100 % clipping, it is three responses; reporting it as 100 would turn
+// a thin window into the most alarming reading the row can produce. Returning
+// nothing renders as "not reported", which is the same distinction the health
+// snapshot already makes between "the radio never told us" and "the value is
+// zero" -- and the same one that stops a control loop releasing gain into a
+// stalled stream.
+[[nodiscard]] constexpr std::optional<int> adcClipRatePercent(
+    int samples, int overloadSamples, int minSamples = 4) noexcept
+{
+    if (samples <= 0 || samples < minSamples) {
+        return std::nullopt;
+    }
+    const int over = overloadSamples < 0 ? 0
+                   : (overloadSamples > samples ? samples : overloadSamples);
+    // Rounded to nearest, in integer arithmetic: a rate quoted to two
+    // significant figures would be precision this observation does not have.
+    return (over * 200 + samples) / (samples * 2);
+}
 
 // Standing-wave ratio from raw forward/reverse counts.
 //
