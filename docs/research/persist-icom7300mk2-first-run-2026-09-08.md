@@ -160,8 +160,11 @@ also observed the actual gauge rise from zero through approximately 1.05–2.27 
 while keyed. Earlier windows captured producer/model meters plus pre/post
 widgets; they did not sample the actual widget throughout keying.
 
-The Tune waveform selection can persist after two-tone, so later DIGL/RTTY
-TUNE button results must not be labeled proven single-tone tests. They show
+P1 source review corrected the waveform interpretation: Icom's `setTune()`
+generates one sine wave; the Flex `tune_mode` command has no Icom route. The rows
+labeled Two-tone above describe the requested bridge action, not a proven
+waveform. Their RF observations remain valid, but none proves two-tone/IMD.
+The updated bridge refuses that misleading Icom request. These windows show
 the requested TUNE path produced reported RF in those radio modes.
 
 Both DATA and non-DATA modulation sources already replied LAN (`1a 05 00 85 05`
@@ -205,7 +208,11 @@ are also retained. These are harness findings, not successful radio tests.
 Diagnostic logging was reset, the final client exited normally, and the radio
 lock was released. Final state: **one slice, transmitting false**.
 
-## Concrete next work
+## Concrete next work recorded at the first run
+
+The [P1 follow-up](persist-icom7300mk2-p1-followup-2026-09-08.md) now implements
+bounded freshness/event diagnostics and corrects the TX/meter harness. The list
+below records the original findings; remaining limits are updated in that report.
 
 1. Add a stable transaction event sequence and bounded export/coverage counters
    so queue/response distributions can be measured without duplicate loss.

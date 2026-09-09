@@ -37,6 +37,19 @@ struct IcomCivBackendTestAccess {
         backend.onCivFrame(frame, generation);
     }
 
+    static QVariantMap freshness(const IcomCivBackend& backend)
+    {
+        return backend.stateFreshness();
+    }
+    static void age(IcomCivBackend& backend, const QString& key)
+    {
+        backend.m_confirmedState[key].atMs = backend.nowMs() - 6000;
+    }
+    static void intent(IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        backend.queueWrite(frame, {}, IcomCivScheduler::Priority::Operator, true, true);
+    }
+    static void identify(IcomCivBackend& backend) { backend.m_civReported = 0xA4; }
     static QVariantMap incident(const IcomCivBackend& backend)
     {
         return backend.m_lastIncident;
@@ -141,5 +154,69 @@ int main(int argc, char** argv)
     check(confirmations.size() == 1 && !confirmations.front(),
           "only an accepted CI-V PTT-off readback publishes confirmation");
 
+    IcomCivBackend freshBackend;
+    IcomCivBackendTestAccess::prepareAcceptedPttRead(freshBackend, *ic705, kGeneration);
+    IcomCivBackendTestAccess::identify(freshBackend);
+    const auto snapshot = [&]() { return IcomCivBackendTestAccess::freshness(freshBackend); };
+    const auto field = [&](const char* name) {
+        return snapshot().value("fields").toMap().value(QLatin1String(name)).toMap();
+    };
+    check(!snapshot().value("trackedStateReady").toBool()
+              && field("squelchPercent").value("status") == "never-confirmed",
+          "transport and identity do not bless construction defaults");
+    const auto deliver = [&](std::uint8_t command, bool hasSub, std::uint8_t sub,
+                             std::vector<std::uint8_t> data, std::uint64_t generation = 1) {
+        IcomCivBackendTestAccess::deliver(freshBackend,
+            CivFrame{kControllerAddress, ic705->civAddress, command, hasSub, sub, data}, generation);
+    };
+    deliver(0x14, true, 0x03, {0xFA});
+    deliver(0x14, true, 0x03, {0x00, 0x50}, 99);
+    check(field("squelchPercent").value("status") == "never-confirmed",
+          "malformed and previous-session frames cannot establish freshness");
+    deliver(0x14, true, 0x03, {0x00, 0x51});
+    check(field("squelchPercent").value("value").toInt() == 20
+              && field("squelchPercent").value("status") == "confirmed",
+          "decoded SQL reply confirms the radio value");
+    IcomCivBackendTestAccess::age(freshBackend, QStringLiteral("civ.20.3"));
+    check(field("squelchPercent").value("status") == "stale",
+          "unchanged values still age out");
+    deliver(0x14, true, 0x03, {0x00, 0x51});
+    check(field("squelchPercent").value("status") == "confirmed",
+          "unchanged valid replies refresh their own field");
+    IcomCivBackendTestAccess::intent(freshBackend, cmdSetLevel(ic705->civAddress, level::kSquelch, 60));
+    check(field("squelchPercent").value("status") == "pending",
+          "write intent cannot masquerade as radio confirmation");
+    deliver(0xFB, false, 0, {});
+    check(field("squelchPercent").value("status") == "pending",
+          "generic ACK cannot confirm a state value");
+    deliver(0x14, true, 0x03, {0x00, 0x60});
+    deliver(0x03, false, 0, {0x00, 0x00, 0x20, 0x07, 0x00});
+    deliver(0x26, true, 0, {0x01, 0x00, 0x01});
+    deliver(0x16, true, 0x12, {0x02});
+    deliver(0x14, true, 0x0A, {0x00, 0x13});
+    deliver(0x1C, true, 0, {0});
+    check(snapshot().value("trackedStateReady").toBool(),
+          "all six decoded fields establish bounded diagnostic readiness");
+    deliver(0x26, true, 0, {0x02, 0x00, 0x01});
+    check(!snapshot().value("trackedStateReady").toBool()
+              && field("agcCode").value("status") == "previous-context",
+          "radio-originated mode change invalidates old-context controls");
+    deliver(0x16, true, 0x12, {0xFF});
+    check(field("agcCode").value("status") == "previous-context",
+          "out-of-range AGC cannot refresh the context");
+    IcomCivBackendTestAccess::intent(freshBackend,
+        buildFrameSub(ic705->civAddress, 0x07, 0x01));
+    check(field("modeDataFilter").value("status") == "previous-context",
+          "outgoing VFO selection invalidates even an identical mode and frequency");
+    IcomCivBackend neverConfirmed;
+    IcomCivBackendTestAccess::intent(neverConfirmed,
+        cmdSetLevel(ic705->civAddress, level::kSquelch, 60));
+    const QVariantMap unknownSql = IcomCivBackendTestAccess::freshness(neverConfirmed)
+        .value("fields").toMap().value("squelchPercent").toMap();
+    check(unknownSql.value("status") == "pending" && !unknownSql.value("value").isValid(),
+          "a first write records pending intent without inventing a confirmed value");
+    check(!snapshot().value("backendInstanceId").toString().isEmpty()
+        && snapshot().value("backendInstanceId") != IcomCivBackendTestAccess::freshness(neverConfirmed).value("backendInstanceId"),
+          "backend replacement in one process has a distinct diagnostic ID namespace");
     return failures == 0 ? 0 : 1;
 }
