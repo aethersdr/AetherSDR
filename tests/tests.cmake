@@ -1932,6 +1932,15 @@ target_include_directories(kiwi_sdr_protocol_test PRIVATE src)
 target_link_libraries(kiwi_sdr_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_protocol_test COMMAND kiwi_sdr_protocol_test)
 
+add_executable(kiwi_sdr_waterfall_scale_test
+    tests/kiwi_sdr_waterfall_scale_test.cpp
+    src/core/KiwiSdrProtocol.cpp
+)
+target_include_directories(kiwi_sdr_waterfall_scale_test PRIVATE src)
+target_link_libraries(kiwi_sdr_waterfall_scale_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_sdr_waterfall_scale_test
+         COMMAND kiwi_sdr_waterfall_scale_test)
+
 add_executable(kiwi_sdr_manager_password_test
     tests/kiwi_sdr_manager_password_test.cpp
 )

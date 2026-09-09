@@ -52,7 +52,6 @@ constexpr int kWaterfallAutoMinRows = kWaterfallAutoHistoryRows;
 constexpr float kWaterfallAutoReuseToleranceDb = 5.0f;
 constexpr quint64 kMaxSequenceGapPaddingFrames = 8;
 constexpr int kWaterfallGuiMinIntervalMs = 33;
-constexpr double kWaterfallStartFixedPointScale = 16777216.0; // 2^24
 constexpr quint64 kWebSocketSessionIdBase = 1ULL << 62;
 constexpr const char* kSoundCompressionEnv = "AETHER_KIWI_SND_COMP";
 constexpr const char* kWaterfallCompressionEnv = "AETHER_KIWI_WF_COMP";
@@ -196,29 +195,6 @@ double waterfallZoomScale(int zoom)
 double waterfallRowSpanMhz(double fullBandwidthMhz, int zoom)
 {
     return fullBandwidthMhz / waterfallZoomScale(zoom);
-}
-
-quint32 waterfallStartFixedPoint(double fullLowMhz, double fullBandwidthMhz,
-                                 double rowLowMhz)
-{
-    const double requested = fullBandwidthMhz > 0.0
-        ? ((rowLowMhz - fullLowMhz) / fullBandwidthMhz)
-              * kWaterfallStartFixedPointScale
-        : 0.0;
-    return static_cast<quint32>(std::clamp(
-        std::isfinite(requested) ? std::round(requested) : 0.0,
-        0.0,
-        std::min(kWaterfallStartFixedPointScale - 1.0,
-                 static_cast<double>(std::numeric_limits<quint32>::max()))));
-}
-
-double waterfallStartFixedPointToLowMhz(double fullLowMhz,
-                                        double fullBandwidthMhz,
-                                        quint32 start)
-{
-    return fullLowMhz
-        + (static_cast<double>(start) / kWaterfallStartFixedPointScale)
-            * fullBandwidthMhz;
 }
 
 double waterfallMetadataValueToMhz(double value)
@@ -1478,6 +1454,10 @@ void KiwiSdrClient::sendWaterfallViewToServer()
     const double fullLowMhz = fullCenterMhz - fullBandwidthMhz * 0.5;
     const double fullHighMhz = fullCenterMhz + fullBandwidthMhz * 0.5;
     const int zoomCap = std::clamp(m_waterfallZoomCap, 0, 20);
+    // Server fixed-point scale: 1024 << the zoom_max the server advertised
+    // (KiwiSdrProtocol::waterfallStartFixedPointScale).
+    const double startScale =
+        KiwiSdrProtocol::waterfallStartFixedPointScale(zoomCap);
     const double halfBandwidthMhz = std::max(0.0005, viewBandwidthMhz * 0.5);
     const double viewLowMhz = std::clamp(viewCenterMhz - halfBandwidthMhz,
                                          fullLowMhz,
@@ -1506,10 +1486,11 @@ void KiwiSdrClient::sendWaterfallViewToServer()
             viewMidMhz - candidateRowSpanMhz * 0.5,
             fullLowMhz,
             std::max(fullLowMhz, fullHighMhz - candidateRowSpanMhz));
-        const quint32 candidateStart = waterfallStartFixedPoint(
-            fullLowMhz, fullBandwidthMhz, candidateLowMhz);
-        candidateLowMhz = waterfallStartFixedPointToLowMhz(
-            fullLowMhz, fullBandwidthMhz, candidateStart);
+        const quint32 candidateStart = KiwiSdrProtocol::waterfallStartFixedPoint(
+            fullLowMhz, fullBandwidthMhz, candidateLowMhz, startScale);
+        candidateLowMhz =
+            KiwiSdrProtocol::waterfallStartFixedPointToLowMhz(
+                fullLowMhz, fullBandwidthMhz, candidateStart, startScale);
         const double candidateHighMhz = candidateLowMhz
             + std::min(fullBandwidthMhz,
                        waterfallRowSpanMhz(fullBandwidthMhz, candidate));
@@ -1521,7 +1502,7 @@ void KiwiSdrClient::sendWaterfallViewToServer()
         // requested.
         const double coverEpsilonMhz = std::max(
             1.0e-9,
-            (fullBandwidthMhz / kWaterfallStartFixedPointScale) * 2.0);
+            (fullBandwidthMhz / startScale) * 2.0);
         if (candidateLowMhz <= viewLowMhz + coverEpsilonMhz
             && candidateHighMhz + coverEpsilonMhz >= viewHighMhz) {
             zoom = candidate;
@@ -1534,8 +1515,8 @@ void KiwiSdrClient::sendWaterfallViewToServer()
     }
     if (!selectedRequest) {
         zoom = 0;
-        start = waterfallStartFixedPoint(fullLowMhz, fullBandwidthMhz,
-                                         fullLowMhz);
+        start = KiwiSdrProtocol::waterfallStartFixedPoint(
+            fullLowMhz, fullBandwidthMhz, fullLowMhz, startScale);
         requestLowMhz = fullLowMhz;
         requestHighMhz = fullHighMhz;
     }
@@ -2282,8 +2263,13 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
             ? m_waterfallServerCenterMhz
             : kDefaultWaterfallCenterMhz;
         const double fullLowMhz = fullCenterMhz - fullBandwidthMhz * 0.5;
-        rowLowMhz = waterfallStartFixedPointToLowMhz(
-            fullLowMhz, fullBandwidthMhz, frameStart);
+        // The frame header start uses the same server fixed-point scale as
+        // the SET zoom/start request: 1024 << the zoom_max the server
+        // advertised (see sendWaterfallViewToServer).
+        const double headerScale =
+            KiwiSdrProtocol::waterfallStartFixedPointScale(m_waterfallZoomCap);
+        rowLowMhz = KiwiSdrProtocol::waterfallStartFixedPointToLowMhz(
+            fullLowMhz, fullBandwidthMhz, frameStart, headerScale);
         rowHighMhz = rowLowMhz
             + std::min(fullBandwidthMhz,
                        waterfallRowSpanMhz(fullBandwidthMhz, frameZoom));
