@@ -4755,6 +4755,13 @@ add_executable(hl2_gain_split_test
 target_include_directories(hl2_gain_split_test PRIVATE src tests)
 target_link_libraries(hl2_gain_split_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_split_test COMMAND hl2_gain_split_test)
+# The automatic-gain control law. Pure function, no link at all: no Qt, no
+# socket, no clock, and therefore nothing to link against.
+add_executable(hl2_auto_gain_policy_test
+    tests/hl2_auto_gain_policy_test.cpp
+)
+target_include_directories(hl2_auto_gain_policy_test PRIVATE src)
+add_test(NAME hl2_auto_gain_policy_test COMMAND hl2_auto_gain_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
