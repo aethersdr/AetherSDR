@@ -4745,6 +4745,16 @@ add_executable(hl2_band_memory_test
 )
 target_include_directories(hl2_band_memory_test PRIVATE src)
 add_test(NAME hl2_band_memory_test COMMAND hl2_band_memory_test)
+# The LNA baseline/effective split. Two halves in one binary: the pure
+# arithmetic (Hl2GainSplit.h, no link) and the backend behaviour that proves the
+# operator's persisted number does not move (needs aethercore + Qt, and the
+# TestSettingsProfile helper in tests/, exactly as hl2_gain_restore_test does).
+add_executable(hl2_gain_split_test
+    tests/hl2_gain_split_test.cpp
+)
+target_include_directories(hl2_gain_split_test PRIVATE src tests)
+target_link_libraries(hl2_gain_split_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_gain_split_test COMMAND hl2_gain_split_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -5155,6 +5165,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_gain_split_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
