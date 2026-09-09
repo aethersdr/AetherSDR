@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 214 touchpoint headers (183 core, 31 models) — 214/214 tagged, 0/214 converted.
+**Totals:** 215 touchpoint headers (184 core, 31 models) — 215/215 tagged, 0/215 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -54,6 +54,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/DigitalVoiceWaveformProcess.h` | 2 | mixed(flex) — Supervisor for the host-side DV waveform helper process (ThumbDV) — QProcess lifecycle plus a UDP control/data path. The supervision half is universal, but the health surface it publishes counts Flex VITA sequence gaps, so the header is not vendor-neutral as it stands. | unconverted |
 | `core/DigitalVoiceWaveformSettings.h` | 2 | ui-support — AppSettings-backed DV waveform configuration (backend selection, executable paths). Client-side persistence plumbing, not radio state. | unconverted |
 | `core/DisplayPresence.h` | 2 | ui-support — Host display-presence probe used to choose the desktop Qt platform before QApplication; startup/rendering plumbing, not radio state. | unconverted |
+| `core/DroopCalibration.h` | 1 | mixed(anan) — Capability-gated client for the ANAN calibration extension. Uses only IRadioBackend requests and replies; concrete calibration ownership, rate control and DSP stay below the backend seam. | unconverted |
 | `core/DvkWavTransfer.h` | 2 | vendor(flex) — DVK WAV upload/download via SmartSDR 'dvk' verbs + ad-hoc TCP port streaming; FlexLib 5MB limit baked in | unconverted |
 | `core/DxClusterClient.h` | 3 | universal — Telnet DX cluster spot client (Spider/AR/CC); emits radio-agnostic DxSpot on canonical freq state. | unconverted |
 | `core/DxccColorProvider.h` | 2 | universal — DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature | unconverted |
