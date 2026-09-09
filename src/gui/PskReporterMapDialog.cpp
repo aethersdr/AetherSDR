@@ -627,11 +627,61 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // the equivalent knob here had no UI at all, so an operator who came out
     // underdriven had nothing to reach for. Ceiling of -3 rather than 0 keeps a
     // little headroom ahead of the radio's own TX chain.
+    //
+    // THE DEFAULT IS BACKEND-DEPENDENT, AND ON A HOST-MODULATING RADIO THE
+    // -20 dBFS DEFAULT ONLY COSTS ANYTHING ONCE THE ALC STOPS ADDING MAKEUP.
+    //
+    // While Hl2TxDsp's ALC still has its makeup half, this spinbox is very
+    // nearly inert on the HL2: processAudioBlock() normalises anything from
+    // roughly -45 dBFS up to alcTargetPeak (0.85, -1.412 dBFS) onto that
+    // target, for any audio submitted with clientLeveled=false -- which the
+    // WSPR pump is, since AudioEngine::startWsprPump() reaches
+    // feedDaxTxAudioInternal() with markExternalSource=false. So -20 and -3
+    // go out at the SAME level today, and the knob added for the underdriven
+    // operator cannot help them. Measured: -1.412 dBFS on air from a
+    // -20.000 dBFS stimulus.
+    //
+    // Once the makeup half goes and the ALC becomes reduction-only, the
+    // setting is real -- the level set here is the level transmitted -- and
+    // -20 dBFS becomes 18.577 dB of unattended shortfall, measured against
+    // two binaries differing by that one change with the same stimulus and a
+    // txraw control at 0.000 dB.
+    //
+    // So a host-modulating backend generates near the top of the range,
+    // WSJT-X style, and the operator attenuates from there. A radio that
+    // modulates on ITS side (Flex, Icom) keeps -20: that audio never enters
+    // Hl2TxDsp, the radio applies its own mic gain and ALC, and raising the
+    // source 17 dB would overdrive an input the operator has already set up.
+    //
+    // THE PREDICATE IS hostModulates, NOT takesTxAudioOverSeam, AND THE TWO
+    // COME APART ON EXACTLY ONE BACKEND. IcomCivBackend sets
+    // takesTxAudioOverSeam=true with hostModulates=false -- its own comment
+    // says it: "The RADIO modulates ... but the host still SHIPS the audio."
+    // So AudioEngine::hostModulation(), which is
+    // takesTxAudioOverSeam && canTransmit, is TRUE on an Icom, and reading it
+    // here would hand an Icom the -3 dBFS default -- 17 dB into a modulator
+    // the operator has already levelled, which is the precise harm the
+    // paragraph above says this avoids. TransmitModel::hostModulation() is
+    // hostModulates && canTransmit, which is the question actually being
+    // asked: does OUR ALC see this audio.
+    //
+    // This moves only operators who never touched the control -- the spinbox
+    // writes beaconLevelDbFs on valueChanged, so a deliberate setting has a
+    // stored key and is read back below untouched.
+    //
+    // Read once, when the dialog is first constructed (MainWindow creates it
+    // lazily on first open). An operator who opens this window before
+    // connecting sees -20; the default is not re-evaluated on connect. That is
+    // a real limitation and not a good one, but a default that moved under a
+    // spinbox the operator was looking at would be worse.
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
     m_beaconLevel->setSuffix(tr(" dBFS"));
+    const bool hostModulates =
+        m_radioModel && m_radioModel->transmitModel().hostModulation();
+    const int defaultLevelDbFs = hostModulates ? -3 : -20;
     m_beaconLevel->setValue(
-        pskSettings().value("beaconLevelDbFs").toInt(-20));
+        pskSettings().value("beaconLevelDbFs").toInt(defaultLevelDbFs));
     m_beaconLevel->setAccessibleName(tr("WSPR transmit audio level"));
     m_beaconLevel->setAccessibleDescription(
         tr("Generated audio level in decibels full scale, from -60 to -3"));
