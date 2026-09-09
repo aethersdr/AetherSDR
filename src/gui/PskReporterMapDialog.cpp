@@ -1574,7 +1574,7 @@ void PskReporterMapDialog::restoreBorrowedTxState()
 void PskReporterMapDialog::scheduleBeacon()
 {
     if (m_beaconArmed || m_beaconTransmitting) {
-        stopBeacon(tr("Cancelled"));
+        stopBeacon(tr("Cancelled"), BeaconStopOutcome::Cancelled);
         return;
     }
     if (m_audioEngine == nullptr || m_radioModel == nullptr) {
@@ -1660,7 +1660,7 @@ void PskReporterMapDialog::setBeaconStatus(const QString& text, const char* colo
     }
 }
 
-void PskReporterMapDialog::stopBeacon(const QString& status)
+void PskReporterMapDialog::stopBeacon(const QString& status, BeaconStopOutcome outcome)
 {
     const bool ownedTransmit = m_beaconTransmitting;
     m_beaconTimer->stop();
@@ -1688,9 +1688,17 @@ void PskReporterMapDialog::stopBeacon(const QString& status)
     }
     m_beaconButton->setText(tr("Transmit once"));
     setBeaconControlsEnabled(true);
-    setBeaconStatus(status, status == tr("Complete") ? "color.accent.success"
-                           : status == tr("Cancelled") || status == tr("Stopped")
-                               ? "color.text.secondary" : "color.accent.warning");
+    switch (outcome) {
+    case BeaconStopOutcome::Completed:
+        setBeaconStatus(status, "color.accent.success");
+        break;
+    case BeaconStopOutcome::Cancelled:
+        setBeaconStatus(status, "color.text.secondary");
+        break;
+    case BeaconStopOutcome::Interrupted:
+        setBeaconStatus(status, "color.accent.warning");
+        break;
+    }
 }
 
 void PskReporterMapDialog::deferBeaconToNextSlot(const QString& reason)
@@ -1730,7 +1738,7 @@ void PskReporterMapDialog::updateBeaconState()
             return;
         }
         if (beacon->isComplete()) {
-            stopBeacon(tr("Complete"));
+            stopBeacon(tr("Complete"), BeaconStopOutcome::Completed);
             return;
         }
         const int symbol = std::max(0, beacon->currentSymbol());
@@ -2396,7 +2404,7 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
 void PskReporterMapDialog::closeEvent(QCloseEvent* event)
 {
     if (m_beaconArmed || m_beaconTransmitting) {
-        stopBeacon(tr("Stopped"));
+        stopBeacon(tr("Stopped"), BeaconStopOutcome::Cancelled);
     }
     // Stop hitting the network while the window is closed.
     m_client->stop();

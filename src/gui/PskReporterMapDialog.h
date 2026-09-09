@@ -54,7 +54,9 @@ private:
     void updateBandConditions();
     void updateConnectionIndicator();
     void scheduleBeacon();
-    void stopBeacon(const QString& status);
+    enum class BeaconStopOutcome { Completed, Cancelled, Interrupted };
+    void stopBeacon(const QString& status,
+                    BeaconStopOutcome outcome = BeaconStopOutcome::Interrupted);
     void updateBeaconState();
     void setBeaconStatus(const QString& text, const char* colourToken = "color.accent.warning");
     // Stay armed and roll to the following even UTC minute. Used when the slot
