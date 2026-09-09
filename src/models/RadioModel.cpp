@@ -6310,6 +6310,7 @@ void RadioModel::stageSessionModelsForReconnect()
 
     for (SliceModel* slice : m_slices) {
         if (slice) {
+            slice->invalidateSquelchState();
             m_staleSlices.insert(slice->sliceId(), slice);
         }
     }

@@ -315,6 +315,22 @@ int main(int argc, char** argv)
     }
     check(cmdReadRxAntenna(0xB6) == std::vector<std::uint8_t>({0xFE,0xFE,0xB6,0xE0,0x12,0xFD}),
           "MK2 antenna read uses observed bare 12 form");
+    for (const std::vector<uint8_t>& payload : {std::vector<uint8_t>{}, {2}, {0, 1}}) {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepareSession(backend, *modelForName("IC-7300MK2"));
+        const ControlSpec* antennaSpec = nullptr;
+        for (const auto& spec : controlSpecs()) {
+            if (spec.id == "rx.antenna") { antennaSpec = &spec; }
+        }
+        check(antennaSpec != nullptr, "antenna registry row exists");
+        if (antennaSpec) {
+            check(!backend.scrubDrive(*antennaSpec), "unread antenna cannot be scrubbed");
+            IcomCivBackendTestAccess::antennaReply(backend, 0, payload);
+            check(!backend.scrubDrive(*antennaSpec), "malformed first antenna reply cannot seed scrub");
+            check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
+                  "malformed antenna reply cannot cause a default antenna write");
+        }
+    }
     for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
         const auto* model = modelForName(name);
         check(model != nullptr, "antenna test model resolves");

@@ -56,6 +56,101 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void deferredWritesCoalesceAndFlush()
+    {
+        int writes = 0;
+        int value = 0;
+        {
+            AetherSDR::DeferredSettingsWrites pending;
+            for (int i = 0; i < 100; ++i) {
+                pending.schedule(QStringLiteral("a"), [&, i] { ++writes; value = i; });
+            }
+            QCOMPARE(writes, 0);
+            QTRY_COMPARE(writes, 1);
+            QCOMPARE(value, 99);
+            pending.schedule(QStringLiteral("a"), [&] { ++writes; });
+            pending.schedule(QStringLiteral("b"), [&] { ++writes; });
+            pending.flush();
+            QCOMPARE(writes, 3);
+            pending.schedule(QStringLiteral("c"), [&] { ++writes; });
+        }
+        QCOMPARE(writes, 4); // owner teardown flushes without a live model
+    }
+
+    void icomSliderBurstFlushesLatestIntentOnDisconnect()
+    {
+        RadioModel radio;
+        RadioModelWakeTestAccess::identity(radio, QStringLiteral("icom"), QStringLiteral("icom:batch"));
+        const RadioSettingsScope scope = radio.settingsScope();
+        QVERIFY(scope.setFeature(QStringLiteral("SquelchIntent"), 1,
+            {{QStringLiteral("manualLevel"), 10}, {QStringLiteral("autoEnabled"), false}}));
+        SliceModel slice(0);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setSlice(&slice);
+        status(slice, true, 26, QStringLiteral("USB"));
+        for (int level = 30; level < 100; ++level) {
+            rx.setSqlSliderValueExternal(level);
+        }
+        QCOMPARE(scope.featureExact(QStringLiteral("SquelchIntent"))
+                     .value(QStringLiteral("manualLevel")).toInt(), 10);
+        radio.connectionStateChanged(false);
+        QCOMPARE(scope.featureExact(QStringLiteral("SquelchIntent"))
+                     .value(QStringLiteral("manualLevel")).toInt(), 99);
+    }
+
+    void squelchReadbackValidityExcludesOptimisticState()
+    {
+        SliceModel slice(0);
+        QVERIFY(!slice.squelchStateKnown());
+        slice.setSquelch(true, 26);
+        QVERIFY(!slice.squelchStateKnown());
+        SliceDelta on;
+        on.squelchOn = true;
+        slice.applyChanges(on);
+        QVERIFY(!slice.squelchStateKnown());
+        SliceDelta level;
+        level.squelchLevel = 26;
+        slice.applyChanges(level);
+        QVERIFY(slice.squelchStateKnown());
+        slice.setSquelch(true, 30);
+        QVERIFY(!slice.squelchStateKnown());
+        level.squelchLevel = 30;
+        slice.applyChanges(level);
+        QVERIFY(slice.squelchStateKnown());
+        slice.invalidateSquelchState();
+        QVERIFY(!slice.squelchStateKnown());
+    }
+
+    void icomReattachUsesCurrentSessionReport()
+    {
+        RadioModel radio;
+        RadioModelWakeTestAccess::identity(radio, QStringLiteral("icom"), QStringLiteral("icom:reattach"));
+        SliceModel slice(0);
+        status(slice, true, 26, QStringLiteral("USB"));
+        QVERIFY(slice.squelchStateKnown());
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        QSignalSpy commands(&slice, &SliceModel::commandReady);
+        rx.setSlice(&slice);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        QCOMPARE(rx.sqlManualLevel(), 26);
+        rx.cycleSqlModeExternal();
+        status(slice, true, slice.squelchLevel()); // confirm the explicit Auto threshold
+        rx.setSlice(nullptr);
+        commands.clear();
+        rx.setSlice(&slice);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QVERIFY(commands.isEmpty());
+        rx.setSlice(nullptr);
+        slice.invalidateSquelchState(); // reclaimed model from a disconnected session
+        rx.setSlice(&slice);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        QVERIFY(!slice.squelchStateKnown());
+        status(slice, false, 0);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+    }
+
     void icomClientIntentSurvivesRecreation_data()
     {
         QTest::addColumn<bool>("automatic");
@@ -137,6 +232,7 @@ private slots:
         status(off, false, 0, QStringLiteral("USB"));
         QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off); // radio changed while disconnected
         QCOMPARE(rx.sqlManualLevel(), 43);
+        rx.setSlice(nullptr); // disconnect flushes the bounded pending write
         QVERIFY(!radio.settingsScope().featureExact(QStringLiteral("SquelchIntent"))
                      .value(QStringLiteral("autoEnabled")).toBool());
     }
@@ -155,6 +251,7 @@ private slots:
         QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
         QCOMPARE(rx.sqlManualLevel(), 39);
         rx.cycleSqlModeExternal();
+        rx.setSlice(nullptr); // exercise the deferred write before checking protection
         int version = 0;
         QCOMPARE(radio.settingsScope().featureExact(QStringLiteral("SquelchIntent"), &version), future);
         QCOMPARE(version, 2);

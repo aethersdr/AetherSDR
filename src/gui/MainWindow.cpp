@@ -3854,6 +3854,7 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    m_pendingDisplayWrites.flush();
     ShutdownTrace closeEventTrace("main_window.close_event");
 #ifdef Q_OS_MAC
     // Shared Ulanzi access temporarily remaps only the dial's system key

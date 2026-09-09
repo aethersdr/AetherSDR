@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DeferredSettingsWrites.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
 //     when genuinely cross-cutting — a feature's method bodies live in the
@@ -724,6 +726,8 @@ private:
     // SpectrumWidget setters that persist it, radio-authoritative values via the
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
+    AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    void scheduleClientWaterfallRateSave(int panIndex, int rate);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();

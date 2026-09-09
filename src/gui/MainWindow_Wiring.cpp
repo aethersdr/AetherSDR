@@ -2988,9 +2988,26 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 }
 
+void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    const bool shapedLocally = m_radioModel.shapesDisplayRatesLocally();
+    if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    // Include scope in the key so a radio switch cannot overwrite a pending edit.
+    const QString key = QString::number(scope.family().size()) + QLatin1Char(':') + scope.family()
+        + QString::number(scope.radioId().size()) + QLatin1Char(':') + scope.radioId()
+        + QLatin1Char(':') + QString::number(panIndex);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, shapedLocally, rate] {
+        ClientDisplaySettings::saveWaterfallRate(scope, panIndex, shapedLocally, rate);
+    });
+}
+
 void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                                       PanadapterModel* pan)
 {
+    m_pendingDisplayWrites.flush();
     if (!applet || !pan) {
         return;
     }
@@ -3252,8 +3269,7 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                                           AetherSDR::WaterfallRate::kMin,
                                           AetherSDR::WaterfallRate::kMax);
             dst->setWfLineDuration(wfRate);
-            ClientDisplaySettings::saveWaterfallRate(m_radioModel.settingsScope(),
-                dst->panIndex(), m_radioModel.shapesDisplayRatesLocally(), wfRate);
+            scheduleClientWaterfallRateSave(dst->panIndex(), wfRate);
             if (!m_adaptiveThrottleActive) {
                 m_radioModel.requestPanDisplayRates(targetPanId, /*fps=*/0,
                                                     wfRate);
@@ -4601,8 +4617,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfLineDuration(clampedRate);
-        ClientDisplaySettings::saveWaterfallRate(m_radioModel.settingsScope(),
-            sw->panIndex(), m_radioModel.shapesDisplayRatesLocally(), clampedRate);
+        scheduleClientWaterfallRateSave(sw->panIndex(), clampedRate);
         // Same reason as the FPS slider above: on a raw-spectrum backend this is
         // the engine's waterfall shaping target, not a radio setting.
         m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedRate);
@@ -4761,8 +4776,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackOffset(50);
         sw->setWfAutoBlackRadioSide(false);
         sw->setWfLineDuration(100);
-        ClientDisplaySettings::saveWaterfallRate(m_radioModel.settingsScope(),
-            sw->panIndex(), m_radioModel.shapesDisplayRatesLocally(), 100);
+        scheduleClientWaterfallRateSave(sw->panIndex(), 100);
         sw->setWfBlankerEnabled(false);
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);

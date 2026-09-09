@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include "DeferredSettingsWrites.h"
 #include <QVector>
 #include <QTimer>
 
@@ -328,6 +329,8 @@ private:
     bool m_clientSqlAwaitingReport{false};
     void loadClientSquelchIntent();
     void saveClientSquelchIntent();
+    AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
+    QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);

@@ -1774,6 +1774,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         }
     }
+    // Validate before retiring a read or marking the scrub mirror as known.
+    if (frame.cmd == cmd::kRxAntenna) {
+        const auto antenna = profileFor(*m_model).rxAntenna;
+        if (!antenna || !antenna->readbackAvailable || !frame.hasSub
+            || frame.sub != 0 || frame.data.size() != 1 || frame.data[0] > 1) {
+            return;
+        }
+    }
     const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
         && frame.cmd == cmd::kReadFreq
         && m_session && frame.from == m_session->civAddress();
@@ -2057,11 +2065,6 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
 
     case cmd::kRxAntenna: {
-        const auto antenna = profileFor(*m_model).rxAntenna;
-        if (!antenna || !antenna->readbackAvailable || !frame.hasSub
-            || frame.sub != 0 || frame.data.size() != 1 || frame.data[0] > 1) {
-            return;
-        }
         m_rxAntennaExternal = frame.data[0] == 1;
         SliceDelta delta;
         delta.rxAntenna = m_rxAntennaExternal ? QStringLiteral("RX-ANT")

@@ -1495,6 +1495,7 @@ void RxApplet::setSqlSliderValueExternal(int v)
 
 void RxApplet::loadClientSquelchIntent()
 {
+    m_pendingSquelchWrites.flush();
     m_clientSquelchScope = {};
     m_clientManualSqlLevel.reset();
     m_restoreAutoSql = false;
@@ -1519,7 +1520,10 @@ void RxApplet::loadClientSquelchIntent()
     const int level = manual.toInt(-1);
     if (manual.isDouble() && manual.toDouble() == level && level >= 0 && level <= 100) {
         m_clientManualSqlLevel = level;
-        m_slice->setManualSquelchLevel(level);
+        if (!m_slice->squelchStateKnown() || !m_slice->squelchOn()
+            || doc.value(QStringLiteral("autoEnabled")).toBool(false)) {
+            m_slice->setManualSquelchLevel(level);
+        }
     }
     m_restoreAutoSql = doc.value(QStringLiteral("autoEnabled")).toBool(false);
 }
@@ -1530,20 +1534,25 @@ void RxApplet::saveClientSquelchIntent()
         || usingExternalReceiveSquelch()) {
         return;
     }
-    int version = 0;
-    AppSettings::FeatureReadStatus status;
-    QJsonObject doc = m_clientSquelchScope.featureExact(
-        QStringLiteral("SquelchIntent"), &version, &status);
-    if (version > 1 || status == AppSettings::FeatureReadStatus::Corrupt
-        || status == AppSettings::FeatureReadStatus::Unavailable) {
-        qWarning() << "SquelchIntent: refusing to replace unreadable or newer settings";
-        return;
-    }
-    doc.insert(QStringLiteral("manualLevel"), sqlManualLevel());
-    doc.insert(QStringLiteral("autoEnabled"), m_sqlMode == SqlMode::Auto);
-    if (!m_clientSquelchScope.setFeature(QStringLiteral("SquelchIntent"), 1, doc)) {
-        qWarning() << "SquelchIntent: settings write did not persist";
-    }
+    const RadioSettingsScope scope = m_clientSquelchScope;
+    const int manualLevel = sqlManualLevel();
+    const bool autoEnabled = m_sqlMode == SqlMode::Auto;
+    m_pendingSquelchWrites.schedule(QStringLiteral("squelch"), [scope, manualLevel, autoEnabled] {
+        int version = 0;
+        AppSettings::FeatureReadStatus status;
+        QJsonObject doc = scope.featureExact(
+            QStringLiteral("SquelchIntent"), &version, &status);
+        if (version > 1 || status == AppSettings::FeatureReadStatus::Corrupt
+            || status == AppSettings::FeatureReadStatus::Unavailable) {
+            qWarning() << "SquelchIntent: refusing to replace unreadable or newer settings";
+            return;
+        }
+        doc.insert(QStringLiteral("manualLevel"), manualLevel);
+        doc.insert(QStringLiteral("autoEnabled"), autoEnabled);
+        if (!scope.setFeature(QStringLiteral("SquelchIntent"), 1, doc)) {
+            qWarning() << "SquelchIntent: settings write did not persist";
+        }
+    });
 }
 
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
@@ -1915,6 +1924,7 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
 
 void RxApplet::setSlice(SliceModel* slice)
 {
+    m_pendingSquelchWrites.flush();
     if (m_slice) disconnectSlice(m_slice);
     m_slice = slice;
     loadClientSquelchIntent();
@@ -1931,6 +1941,16 @@ void RxApplet::setAntennaList(const QStringList& ants)
 
 void RxApplet::setRadioModel(RadioModel* radioModel)
 {
+    m_pendingSquelchWrites.flush();
+    QObject::disconnect(m_squelchDisconnectConnection);
+    if (radioModel) {
+        m_squelchDisconnectConnection = connect(radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+                if (!connected) {
+                    m_pendingSquelchWrites.flush();
+                }
+            });
+    }
     if (m_radioModel) {
         releaseTransmitFrequencyCheck();
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
@@ -2559,6 +2579,9 @@ void RxApplet::connectSlice(SliceModel* s)
 
     auto applySquelchState = [this](bool on, int level, bool externalReceive) {
         if (!externalReceive && m_clientSqlAwaitingReport) {
+            if (!m_slice->squelchStateKnown()) {
+                return;
+            }
             m_clientSqlAwaitingReport = false;
             if (m_clientManualSqlLevel && (!on || m_restoreAutoSql)) {
                 m_slice->setManualSquelchLevel(*m_clientManualSqlLevel);
@@ -2639,13 +2662,20 @@ void RxApplet::connectSlice(SliceModel* s)
         } else if (m_clientSqlAwaitingReport) {
             // A previous radio/slice's Auto mode is not this radio's intent.
             // Wait for its first SQL report instead of starting on defaults.
-            mode = SqlMode::Off;
+            if (s->squelchStateKnown()) {
+                mode = s->squelchOn() && m_restoreAutoSql ? SqlMode::Auto : mode;
+            } else {
+                mode = SqlMode::Off;
+            }
         } else if (m_flexSqlMode == SqlMode::Auto) {
             mode = SqlMode::Auto;
         } else {
             m_flexSqlMode = mode;
         }
         setSqlMode(mode, /*propagateToRadio=*/false);
+    }
+    if (m_clientSqlAwaitingReport && s->squelchStateKnown()) {
+        applySquelchState(s->squelchOn(), s->squelchLevel(), false);
     }
     emit sqlModeChanged(static_cast<int>(m_sqlMode));
     emit sqlAutoChanged(m_sqlMode == SqlMode::Auto);
