@@ -321,8 +321,16 @@ void assignDiversityPairDirections(const QVector<VfoPos>& vfos,
         return vfos[lhs].sliceId < vfos[rhs].sliceId;
     });
 
-    dirMap[vfos[diversityIndices[0]].sliceId] = VfoWidget::LockLeft;
-    dirMap[vfos[diversityIndices[1]].sliceId] = VfoWidget::LockRight;
+    // After the sort, index 0 is the parent / master slice (the one DIV was
+    // enabled on, which SmartSDR tags "DIV") when the radio reports the
+    // diversity_parent / diversity_index metadata; absent that, diversityOrder-
+    // KeyForVfo falls back to slice ID and index 0 is the lower-numbered slice.
+    // diversityPairFlagDir locks index 0 RIGHT to match SmartSDR's layout and
+    // index 1 LEFT; see its comment for the fallback case.
+    dirMap[vfos[diversityIndices[0]].sliceId] =
+        VfoWidget::diversityPairFlagDir(0);
+    dirMap[vfos[diversityIndices[1]].sliceId] =
+        VfoWidget::diversityPairFlagDir(1);
 }
 
 void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& overlays,

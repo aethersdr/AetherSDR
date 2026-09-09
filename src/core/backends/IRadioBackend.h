@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/RadioSettingsIdentity.h"
+
 #include <QByteArray>
 #include <QMap>
 #include <QObject>
@@ -31,6 +33,7 @@ struct RadioConnectRequest {
     quint16 port = 0;
     QString serial;         // when a family identifies radios by serial
     QVariantMap params;     // family-specific extras (namespaced by the backend)
+    RadioSerialIdentity serialIdentity;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode

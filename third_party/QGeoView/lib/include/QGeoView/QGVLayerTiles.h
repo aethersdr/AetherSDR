@@ -37,6 +37,8 @@ public:
     void setVisibleZoomLayersAboveCurrent(size_t value);
     void setCameraUpdatesDuringAnimation(bool value);
     void setHorizontalWrapEnabled(bool enabled);
+    // AetherSDR: alpha overlays retain old zooms only in uncovered regions.
+    void setTransparentFallbackEnabled(bool enabled) { mTransparentFallbackEnabled = enabled; }
 
 protected:
     void onProjection(QGVMap* geoMap) override;
@@ -44,6 +46,11 @@ protected:
     void onUpdate() override;
     void onClean() override;
     void onTile(const QGV::GeoTilePos& tilePos, QGVDrawItem* tileObj);
+    bool transparentFallbackEnabled() const { return mTransparentFallbackEnabled; }
+    QPainterPath tileUncoveredPath(const QGV::GeoTilePos& tilePos) const;
+    // Opt-in retry; ordinary camera updates intentionally skip unchanged views.
+    void retryUnfinishedTiles();
+    bool currentTilesComplete() const;
 
     virtual int minZoomlevel() const = 0;
     virtual int maxZoomlevel() const = 0;
@@ -73,6 +80,7 @@ private:
     QElapsedTimer mLastAnimation;
     QTimer mCameraUpdateTimer;
     bool mHorizontalWrapEnabled = false;
+    bool mTransparentFallbackEnabled = false;
 
     struct
     {

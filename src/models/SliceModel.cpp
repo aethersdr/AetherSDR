@@ -664,6 +664,14 @@ void SliceModel::setSquelch(bool on, int level)
     const bool onChanged = (m_squelchOn != on);
     const bool levelChanged = (m_squelchLevel != level);
 
+    // Optimistic local changes are not fresh readback for a later reattach.
+    if (onChanged) {
+        m_squelchOnKnown = false;
+    }
+    if (levelChanged) {
+        m_squelchLevelKnown = false;
+    }
+
     m_squelchOn    = on;
     m_squelchLevel = level;
 
@@ -1559,6 +1567,8 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit agcOffLevelChanged(m_agcOffLevel);
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+        m_squelchOnKnown |= d.squelchOn.has_value();
+        m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())
             m_squelchOn = *d.squelchOn;
         if (d.squelchLevel.has_value()) {

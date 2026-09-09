@@ -22,9 +22,29 @@
 #include "QGVProjection.h"
 
 #include <limits>
+#include <functional>
+#include <QPainter>
 
 namespace {
 constexpr int kDecodedTileCacheBytes = 64 * 1024 * 1024;
+constexpr qint64 kMaximumEncodedTileBytes = 1024 * 1024;
+constexpr auto kSizeLimitAbortProperty = "qgvSizeLimitAbort";
+
+class TransparentFallbackTile final : public QGVImage {
+public:
+    explicit TransparentFallbackTile(std::function<QPainterPath()> clip)
+        : m_clip(std::move(clip)) { setCeilingOnScale(false); }
+
+    void projPaint(QPainter* painter) override
+    {
+        painter->save();
+        painter->setClipPath(m_clip(), Qt::IntersectClip);
+        QGVImage::projPaint(painter);
+        painter->restore();
+    }
+private:
+    std::function<QPainterPath()> m_clip;
+};
 }
 
 QGVLayerTilesOnline::QGVLayerTilesOnline()
@@ -35,6 +55,31 @@ QGVLayerTilesOnline::QGVLayerTilesOnline()
 QGVLayerTilesOnline::~QGVLayerTilesOnline()
 {
     qDeleteAll(mRequest);
+}
+
+int QGVLayerTilesOnline::pendingRequestCount() const
+{
+    return mRequest.size();
+}
+
+quint64 QGVLayerTilesOnline::decodedTileDeliveryCount() const
+{
+    return mDecodedTileDeliveryCount;
+}
+
+quint64 QGVLayerTilesOnline::failedTileRequestCount() const
+{
+    return mFailedTileRequestCount;
+}
+
+void QGVLayerTilesOnline::onClean()
+{
+    const QList<QGV::GeoTilePos> requests = mRequest.keys();
+    mWaiting.clear();
+    for (const QGV::GeoTilePos& tilePos : requests) {
+        removeReply(tilePos);
+    }
+    QGVLayerTiles::onClean();
 }
 
 // AetherSDR patch: the canonical (unwrapped) tile every repeated world copy
@@ -71,7 +116,10 @@ void QGVLayerTilesOnline::request(const QGV::GeoTilePos& tilePos)
     const QUrl url(tilePosToUrl(sourceTilePos));
 
     if (const QImage* cached = mDecodedTileCache.object(url)) {
-        auto* tile = new QGVImage();
+        ++mDecodedTileDeliveryCount;
+        QGVImage* tile = transparentFallbackEnabled()
+            ? new TransparentFallbackTile([this, tilePos] { return tileUncoveredPath(tilePos); })
+            : new QGVImage();
         tile->setGeometry(tileProjectionRect(tilePos));
         tile->loadImage(*cached);
         // AetherSDR patch: this re-enters onTile() SYNCHRONOUSLY, unlike every
@@ -107,11 +155,23 @@ void QGVLayerTilesOnline::request(const QGV::GeoTilePos& tilePos)
     request.setRawHeader("User-Agent", QGV::getTileUserAgent());
     request.setAttribute(QNetworkRequest::HttpPipeliningAllowedAttribute, true);
     request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::PreferCache);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::SameOriginRedirectPolicy);
 
     QNetworkReply* reply = QGV::getNetworkManager()->get(request);
 
+    connect(reply, &QNetworkReply::downloadProgress, reply,
+            [reply](qint64 received, qint64) {
+                if (received > kMaximumEncodedTileBytes) {
+                    // abort() may emit finished synchronously. Mark first so
+                    // size enforcement remains a failure, unlike view cleanup.
+                    reply->setProperty(kSizeLimitAbortProperty, true);
+                    reply->abort();
+                }
+            });
+
     mRequest[sourceTilePos] = reply;
-    connect(reply, &QNetworkReply::finished, reply,
+    connect(reply, &QNetworkReply::finished, this,
             [this, reply, sourceTilePos]() { onReplyFinished(reply, sourceTilePos); });
 
     qgvDebug() << "request" << url;
@@ -135,17 +195,39 @@ void QGVLayerTilesOnline::cancel(const QGV::GeoTilePos& tilePos)
 
 void QGVLayerTilesOnline::onReplyFinished(QNetworkReply* reply, const QGV::GeoTilePos& tilePos)
 {
+    // A queued completion from an old generation must not remove a newer
+    // request for this same canonical tile or inflate its failure count.
+    if (mRequest.value(tilePos, nullptr) != reply) {
+        return;
+    }
     if (reply->error() != QNetworkReply::NoError) {
         if (reply->error() != QNetworkReply::OperationCanceledError) {
             qgvCritical() << "ERROR" << reply->errorString();
+        }
+        if (reply->error() != QNetworkReply::OperationCanceledError
+            || reply->property(kSizeLimitAbortProperty).toBool()) {
+            ++mFailedTileRequestCount;
         }
         mWaiting.remove(tilePos);
         removeReply(tilePos);
         return;
     }
-    const QByteArray rawImage = reply->readAll();
+    if (reply->bytesAvailable() > kMaximumEncodedTileBytes) {
+        ++mFailedTileRequestCount;
+        mWaiting.remove(tilePos);
+        removeReply(tilePos);
+        return;
+    }
+    const QByteArray rawImage = reply->read(kMaximumEncodedTileBytes + 1);
+    if (rawImage.size() > kMaximumEncodedTileBytes) {
+        ++mFailedTileRequestCount;
+        mWaiting.remove(tilePos);
+        removeReply(tilePos);
+        return;
+    }
     QImage decodedImage;
     if (!decodedImage.loadFromData(rawImage)) {
+        ++mFailedTileRequestCount;
         qgvCritical() << "ERROR failed to decode tile" << reply->url();
         mWaiting.remove(tilePos);
         removeReply(tilePos);
@@ -156,6 +238,7 @@ void QGVLayerTilesOnline::onReplyFinished(QNetworkReply* reply, const QGV::GeoTi
         decodedBytes, std::numeric_limits<int>::max()));
     const QUrl url = reply->url();
     mDecodedTileCache.insert(url, new QImage(decodedImage), cacheCost);
+    ++mDecodedTileDeliveryCount;
 
     // Detach the waiter list and drop the reply BEFORE dispatching: onTile()
     // can re-enter removeTile() -> cancel(), which mutates mWaiting.
@@ -165,7 +248,9 @@ void QGVLayerTilesOnline::onReplyFinished(QNetworkReply* reply, const QGV::GeoTi
     for (const int copyX : copies) {
         const QGV::GeoTilePos copy(tilePos.zoom(),
                                    QPoint(copyX, tilePos.pos().y()));
-        auto* tile = new QGVImage();
+        QGVImage* tile = transparentFallbackEnabled()
+            ? new TransparentFallbackTile([this, copy] { return tileUncoveredPath(copy); })
+            : new QGVImage();
         tile->setGeometry(tileProjectionRect(copy));
         tile->loadImage(decodedImage);
         tile->setProperty("drawDebug",
@@ -185,6 +270,9 @@ void QGVLayerTilesOnline::removeReply(const QGV::GeoTilePos& tilePos)
         return;
     }
     mRequest.remove(tilePos);
+    // Retire before aborting: abort may synchronously invoke finished().
+    // Disconnect only layer callbacks; unrelated observers keep their signal.
+    disconnect(reply, nullptr, this, nullptr);
     reply->abort();
     reply->close();
     reply->deleteLater();
