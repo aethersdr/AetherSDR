@@ -1,11 +1,13 @@
 // Per-server waterfall start fixed-point scale (1024 << zoom_max, not a
 // universal 2^24). Socket-free regression guard for the band-switch
-// waterfall freeze on Kiwi-path servers with zoom_max < 24: starts encoded
+// waterfall freeze on Kiwi-path servers with zoom_max < 14: starts encoded
 // with the wrong scale are clamped by the server to MAX_START, pinning the
 // view at the band edge. Values mirror the live A/B proof on the
 // zoom_max=11 Web-888 at 192.168.0.71:8073 (old-scale start clamped by the
 // server to MAX_START(7)=2080768; per-server-scale start echoed back
-// unclamped). See docs/web888-cleanroom-design.md.
+// unclamped). Protocol source: RaspSDR/server rx/rx_waterfall.cpp,
+// revision 68a64e1b39a3f291762904576f47c9d437fd3509 (MAX_START, HZperStart):
+// https://github.com/RaspSDR/server/blob/68a64e1b39a3f291762904576f47c9d437fd3509/rx/rx_waterfall.cpp
 #include "core/KiwiSdrProtocol.h"
 
 #include <cmath>
