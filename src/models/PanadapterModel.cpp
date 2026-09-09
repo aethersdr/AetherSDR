@@ -282,6 +282,8 @@ void PanadapterModel::setRequestedFftSettings(int average, int fps)
     // Only call after dispatch. Do not emit *Reported, persist, or schedule a
     // replay. The next valid radio publication always supersedes this intent,
     // including a publication equal to the value before our request.
+    const bool provenanceChanged = (average >= 0 && average <= 100 && !m_averageIsRequest)
+        || (fps > 0 && fps <= 100 && !m_fpsIsRequest);
     if (average >= 0 && average <= 100) {
         m_averageIsRequest = true;
         if (m_average != average) {
@@ -295,6 +297,9 @@ void PanadapterModel::setRequestedFftSettings(int average, int fps)
             m_fps = fps;
             emit fpsChanged(fps);
         }
+    }
+    if (provenanceChanged) {
+        emit fftProvenanceChanged();
     }
 }
 

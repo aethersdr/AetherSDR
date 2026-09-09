@@ -2594,12 +2594,30 @@ void GlobeMapView::layoutOverlays()
         button->raise();
         y += button->height() + gap;
     }
+    m_attribution->setWordWrap(false);
+    m_attribution->setMinimumWidth(0);
+    m_attribution->setMaximumWidth(std::max(1, width() - 2 * margin));
+    m_attribution->adjustSize();
+    m_attribution->setFixedWidth(m_attribution->width());
+    m_attribution->setWordWrap(true);
     m_attribution->adjustSize();
     m_attribution->move(width() - m_attribution->width() - margin,
                         height() - m_attribution->height() - margin);
     m_attribution->raise();
     if (m_legend->isVisible()) {
-        m_legend->move(margin, height() - m_legend->height() - margin);
+        m_legend->setWordWrap(false);
+        m_legend->setMinimumWidth(0);
+        m_legend->setMaximumWidth(std::max(1, width() - 2 * margin));
+        m_legend->adjustSize();
+        m_legend->setFixedWidth(m_legend->width());
+        m_legend->setWordWrap(true);
+        m_legend->adjustSize();
+        int bottom = height() - margin;
+        if (m_legend->width() + m_attribution->width() + gap
+                > width() - 2 * margin) {
+            bottom -= m_attribution->height() + gap;
+        }
+        m_legend->move(margin, bottom - m_legend->height());
         m_legend->raise();
     }
 }

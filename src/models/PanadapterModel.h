@@ -233,6 +233,7 @@ signals:
     void wideChanged(bool active);
     void loopChanged(bool loopA, bool loopB);
     void fpsChanged(int fps);
+    void fftProvenanceChanged();
     void fpsReported(int fps);
     // Averaging is radio-authoritative (firmware runs it, echoes the level in
     // pan status). Reported fires every status cycle; Changed only on an actual

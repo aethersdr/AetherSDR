@@ -105,6 +105,8 @@
 #include "NetworkDiagnosticsDialog.h"
 #include "SystemInfoDialog.h"
 #include "MemoryHistoryRing.h"
+#include "CpuHistoryRing.h"
+#include "UiTickLagMeter.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -1224,9 +1226,21 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyDarkTheme();
 
+    // The Runtime Monitor's tick-lag meter measures THIS timer's cadence, so
+    // the nominal interval it subtracts is pinned to the interval set here.
+    static_assert(UiTickLagMeter::kNominalIntervalMs == 50.0,
+                  "UiTickLagMeter::kNominalIntervalMs must match the perf heartbeat interval");
+    m_uiTickLagMeter = std::make_unique<UiTickLagMeter>();
+    // Precise, not the default coarse type: with the default, an idle GUI
+    // thread on Windows 11 read the 50 ms heartbeat ~13 ms late on every tick
+    // (measured on #5427), so the Overview's tick-lag card had a floor that was
+    // timer scheduling, not event-loop load. The same timer drives
+    // PerfTelemetry::recordUiHeartbeat(), whose stall detection tightens with it.
+    m_perfHeartbeatTimer.setTimerType(Qt::PreciseTimer);
     m_perfHeartbeatTimer.setInterval(50);
-    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [] {
+    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [this] {
         PerfTelemetry::instance().recordUiHeartbeat();
+        m_uiTickLagMeter->tick();
     });
     m_perfHeartbeatTimer.start();
 
@@ -1429,6 +1443,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
     m_memoryHistory = std::make_unique<MemoryHistoryRing>();
+    m_cpuHistory = std::make_unique<CpuHistoryRing>();
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
             this, [this](const QString& message) {
         if (!message.isEmpty()) {
@@ -2684,6 +2699,14 @@ MainWindow::~MainWindow()
 {
     ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
+
+    // The Runtime Monitor reads m_memoryHistory, m_cpuHistory and
+    // m_uiTickLagMeter, which are unique_ptr members and so are gone before
+    // ~QObject deletes the dialog (a WA_DeleteOnClose child). Its destructor
+    // does not touch them today; take the dialog down first so that a future
+    // line in ~SystemInfoDialog() cannot turn into a use-after-free at exit
+    // (#5427 review).
+    delete m_systemInfoDialog;
 
     // The qApp::focusChanged lambda (MainWindow_Shortcuts.cpp) runs
     // releaseSliderShortcutLease(), which touches m_shortcutManager and the
@@ -4276,7 +4299,8 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get());
+    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
+                          m_uiTickLagMeter.get());
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)

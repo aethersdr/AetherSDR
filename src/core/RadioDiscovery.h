@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RadioSettingsIdentity.h"
+
 #include <QObject>
 #include <QUdpSocket>
 #include <QTimer>
@@ -58,6 +60,7 @@ struct RadioInfo {
     QString name;           // e.g. "FLEX-6600"
     QString model;
     QString serial;
+    RadioSerialIdentity serialIdentity; // Reported identity, independent of locator.
     QString version;
     // What the radio calls its version, when a bare number would not be
     // self-describing. The HL2 reports a gateware revision ("75"), which says

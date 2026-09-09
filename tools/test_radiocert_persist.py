@@ -160,6 +160,63 @@ class AppletPolicyTest(unittest.TestCase):
         self.assertNotIn('transmit.voxEnable', fields)
         self.assertNotIn('transmit.cwBreakIn', fields)
 
+class AppletEvidenceTest(unittest.TestCase):
+    def exercise(self, values, *, seed=False, prior=None, hidden=False):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        journal = Journal(Path(directory.name) / 'persist.json', {})
+        run = Mock(journal=journal)
+        applets = AppletRun(run)
+        applets.expected = {'slice.audioGain': 23}
+        applets.snapshot = Mock(return_value={'slices': [{'audioGain': 23}]})
+        if prior:
+            applets.coverage['slice.audioGain']['seedOutcome'] = prior
+        def tree(value):
+            return {'roots': [{'class': 'RxApplet', 'children': [{
+                'accessibleName': 'AF gain', 'value': str(value) if value is not None else None,
+                'range': {}, 'visible': not hidden, 'enabled': True}]}]}
+        run.supervisor.request.side_effect = [tree(value) for value in values]
+        name = 'set slice.audioGain' if seed else 'full client restart'
+        with patch('radiocert_persist_applets.time.sleep'):
+            result = applets.observe(name, samples=len(values))
+        journal.report()
+        return result, applets.coverage['slice.audioGain'], journal
+
+    def test_widget_mismatch_downgrades_result_and_markdown(self):
+        result, coverage, journal = self.exercise([99])
+        self.assertEqual(result['outcome'], 'CONCERN')
+        self.assertEqual(coverage['transitions']['full client restart'], 'CONCERN')
+        report = journal.path.with_suffix('.md').read_text()
+        self.assertIn('| applets: full client restart | CONCERN |', report)
+        self.assertIn('| slice.audioGain | False | CONCERN |', report)
+
+    def test_widget_recovery_does_not_hide_earlier_failure(self):
+        result, _, _ = self.exercise([23, 99, 23])
+        self.assertEqual(result['outcome'], 'CONCERN')
+        self.assertEqual(result['differences'][0]['sample'], 1)
+
+    def test_missing_widget_value_stays_inconclusive(self):
+        result, coverage, _ = self.exercise([None])
+        self.assertEqual(result['outcome'], 'INCONCLUSIVE')
+        self.assertEqual(coverage['transitions']['full client restart'], 'INCONCLUSIVE')
+
+    def test_hidden_widget_is_a_gap_without_selecting_or_repairing_it(self):
+        result, coverage, _ = self.exercise([23], hidden=True)
+        self.assertEqual(result['outcome'], 'INCONCLUSIVE')
+        self.assertEqual(coverage['widgetTransitions']['full client restart']['outcome'], 'INCONCLUSIVE')
+
+    def test_seed_widget_failure_prevents_later_retention_success(self):
+        _, seed, _ = self.exercise([99, 23], seed=True)
+        outcome = seed['transitions']['set slice.audioGain']
+        self.assertEqual(outcome, 'CONCERN')
+        result, coverage, _ = self.exercise([23], prior=outcome)
+        self.assertEqual(result['outcome'], 'INCONCLUSIVE')
+        self.assertEqual(coverage['transitions']['full client restart'], 'INCONCLUSIVE')
+
+    def test_matching_model_and_widget_establishes_observation(self):
+        result, _, _ = self.exercise([23, 23])
+        self.assertEqual(result['outcome'], 'ESTABLISHED')
+
 class JournalTest(unittest.TestCase):
     def test_markdown_report_is_written(self):
         with tempfile.TemporaryDirectory() as directory:

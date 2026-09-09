@@ -1052,8 +1052,10 @@ bool AppSettings::readStationRowFromDisk(const QString& key,
 QJsonObject AppSettings::radioFeatureExact(const QString& family,
                                            const QString& radioId,
                                            const QString& feature,
-                                           int* schemaVersionOut) const
+                                           int* schemaVersionOut,
+                                           FeatureReadStatus* statusOut) const
 {
+    if (statusOut) { *statusOut = FeatureReadStatus::Unavailable; }
     if (schemaVersionOut != nullptr) {
         *schemaVersionOut = 0;
     }
@@ -1063,9 +1065,13 @@ QJsonObject AppSettings::radioFeatureExact(const QString& family,
     }
     int version = 0;
     QString value;
-    if (!m_db->readRadioFeature(family, radioId, feature, version, value)) {
+    bool readFailed = false;
+    if (!m_db->readRadioFeature(family, radioId, feature, version, value, &readFailed)) {
+        if (statusOut && !readFailed) { *statusOut = FeatureReadStatus::Missing; }
         return {};
     }
+    if (schemaVersionOut) { *schemaVersionOut = version; }
+    if (statusOut) { *statusOut = FeatureReadStatus::Corrupt; }
     QJsonParseError parseError{};
     const QJsonDocument parsed =
         QJsonDocument::fromJson(value.toUtf8(), &parseError);
@@ -1078,6 +1084,7 @@ QJsonObject AppSettings::radioFeatureExact(const QString& family,
     if (schemaVersionOut != nullptr) {
         *schemaVersionOut = version;
     }
+    if (statusOut) { *statusOut = FeatureReadStatus::Present; }
     return parsed.object();
 }
 

@@ -124,7 +124,13 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing);
         painter.fillRect(rect(), QColor("#050b13"));
 
-        const QRectF plot = rect().adjusted(84, 30, -14, -42);
+        // The legend wraps onto further rows instead of dropping entries, and
+        // the plot gives up one row's height per extra row (#2554: a five-line
+        // chart needs every line named; the single row used to stop at
+        // width - 110 and leave the rest unnamed and unclickable).
+        const int legendRows = legendRowCount(QFontMetrics(font()));
+        const QRectF plot =
+            rect().adjusted(84, 30, -14, -42 - (legendRows - 1) * kLegendRowHeight);
         painter.setPen(QPen(QColor("#233246"), 1));
         painter.setBrush(Qt::NoBrush);
         painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 7, 7);
@@ -549,32 +555,66 @@ private:
         return suffix.isEmpty() ? m_suffix : suffix;
     }
 
-    void drawLegend(QPainter* painter, const QRectF& plot)
+    static constexpr int kLegendRowHeight = 18;
+
+    // One legend entry's placement: a 14 px dash, 4 px, the label, then a
+    // 30 px gap. An entry that would run past the plot's right edge starts
+    // the next row, unless it is the first on its row (a label wider than
+    // the widget still gets drawn, clipped, rather than skipped).
+    struct LegendSlot {
+        int           x{0};
+        int           row{0};
+        int           labelWidth{0};
+        const Series* series{nullptr};
+    };
+
+    QVector<LegendSlot> legendLayout(const QFontMetrics& fm) const
     {
-        m_legendHits.clear();
-        int x = static_cast<int>(plot.left());
-        int y = static_cast<int>(plot.bottom()) + 12;
-        const QFontMetrics fm(painter->font());
+        QVector<LegendSlot> entries;
+        const int left = 84;            // = the plot's left edge (rect().adjusted(84, …))
+        const int right = width() - 14; // = the plot's right edge
+        int x = left;
+        int row = 0;
         for (const Series& series : m_series) {
             if (series.points.isEmpty()) {
                 continue;
             }
+            const int labelWidth = fm.horizontalAdvance(series.label);
+            if (x != left && x + labelWidth + 26 > right) {
+                x = left;
+                ++row;
+            }
+            entries.push_back({x, row, labelWidth, &series});
+            x += 30 + labelWidth;
+        }
+        return entries;
+    }
+
+    int legendRowCount(const QFontMetrics& fm) const
+    {
+        const QVector<LegendSlot> entries = legendLayout(fm);
+        return entries.isEmpty() ? 1 : entries.last().row + 1;
+    }
+
+    void drawLegend(QPainter* painter, const QRectF& plot)
+    {
+        m_legendHits.clear();
+        const int top = static_cast<int>(plot.bottom()) + 12;
+        for (const LegendSlot& slot : legendLayout(QFontMetrics(painter->font()))) {
+            const Series& series = *slot.series;
+            const int x = slot.x;
+            const int y = top + slot.row * kLegendRowHeight;
             const bool selected = m_selectedLabels.isEmpty() || m_selectedLabels.contains(series.label);
             const QColor textColor = selected ? QColor("#d4deea") : QColor("#6e7a8d");
             const QColor lineColor = selected ? series.color : QColor("#25364d");
-            const int labelWidth = fm.horizontalAdvance(series.label);
-            const QRect hitRect(x, y, labelWidth + 24, 18);
+            const QRect hitRect(x, y, slot.labelWidth + 24, 18);
 
             painter->setPen(QPen(lineColor, selected ? 2 : 1));
             painter->drawLine(x, y + 7, x + 14, y + 7);
             painter->setPen(textColor);
-            painter->drawText(x + 18, y, labelWidth + 8, 16,
+            painter->drawText(x + 18, y, slot.labelWidth + 8, 16,
                               Qt::AlignLeft | Qt::AlignVCenter, series.label);
             m_legendHits.push_back({hitRect, series.label});
-            x += 30 + labelWidth;
-            if (x > width() - 110) {
-                break;
-            }
         }
     }
 

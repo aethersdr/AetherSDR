@@ -209,52 +209,69 @@ class AppletRun:
                          'value': ui_value}, reason)
 
     def observe(self, name, expected=None, samples=5, settling_field=None):
-        wanted = self.expected if expected is None else expected
+        from radiocert_persist import compare
+
+        wanted = dict(self.expected if expected is None else expected)
+        controls = [control for control in ALL_CONTROLS if control.field in wanted]
+        ui_expected = {'ui.' + c.field: wanted[c.field].title()
+                       if c.field == 'slice.agcMode' else wanted[c.field] for c in controls}
         observed = []
         for _ in range(samples):
             snapshot = self.snapshot()
-            observed.append(flatten({**snapshot, 'slice': snapshot['slices'][0]}))
+            sample = flatten({**snapshot, 'slice': snapshot['slices'][0]})
+            tree = self.run.supervisor.request({'cmd': 'dumpTree'})
+            rx = widgets(tree, 'EqApplet/RX equalizer')
+            selected_eq = ('rx' if rx[0].get('checked') is True else 'tx'
+                           if rx[0].get('checked') is False else None) if len(rx) == 1 else None
+            ui = {}
+            for control in controls:
+                matches = widgets(tree, control.target)
+                side = ('rx' if control.field.split('.')[1].startswith('rx') else 'tx') \
+                    if control.field.startswith('equalizer.') else None
+                available = (len(matches) == 1 and matches[0].get('visible')
+                             and matches[0].get('enabled') and (side is None or side == selected_eq))
+                # Do not switch pages or repair controls during observation.
+                # Unobserved presentation stays an explicit coverage gap.
+                value = widget_value(matches[0], control.action) if available else None
+                key = 'ui.' + control.field
+                sample[key] = value
+                ui[control.field] = {'expected': ui_expected[key], 'observed': value,
+                                     'outcome': compare({key: ui_expected[key]}, [{key: value}])['outcome']}
+            self.run.journal.event('applet-widget-observation', scenario=name, observations=ui,
+                                   limitation='Hidden, disabled, missing or unselected controls are not verified.')
+            observed.append(sample)
             time.sleep(.5)
+        # Settling applies to the model's leading baseline only. Always retain
+        # every widget sample, including a mismatch that later recovers.
         settled_after = initial_settling(wanted, observed, settling_field,
-                                          self.saved.get(settling_field)) if settling_field else 0
+                                        self.saved.get(settling_field)) if settling_field else 0
         if settled_after:
             self.run.journal.event('initial-settling', scenario=name, field=settling_field,
                                    leadingSamples=observed[:settled_after], settledAfterSample=settled_after)
+        combined = {**wanted, **ui_expected}
+        evidence = []
+        for index, sample in enumerate(observed):
+            evidence.append({**sample, **(wanted if index < settled_after else {})})
         prerequisites = {field: row['seedOutcome'] for field, row in self.coverage.items()
                          if field in wanted and row.get('seedOutcome') not in (None, 'ESTABLISHED')}
-        result = self.run.journal.result('applets: ' + name, wanted, observed[settled_after:],
-                                         prerequisites if not name.startswith('set ') and name != 'cleanup' else None)
+        retention = not name.startswith('set ') and name != 'cleanup'
+        result = self.run.journal.result('applets: ' + name, combined, evidence,
+                                         prerequisites if retention else None)
         if settled_after:
             self.run.journal.data['results'][-1]['initialSettlingSamples'] = settled_after
         for field in wanted:
-            if field in self.coverage:
-                differences = [d for d in result.get('differences', []) if d['field'] == field]
-                missing = [d for d in result.get('missing', []) if d['field'] == field]
-                self.coverage[field]['transitions'][name] = ('CONCERN' if differences else
-                                                            'INCONCLUSIVE' if missing else 'ESTABLISHED')
-        if not name.startswith('set '):
-            tree = self.run.supervisor.request({'cmd': 'dumpTree'})
-            rx = widgets(tree, 'EqApplet/RX equalizer')
-            selected_eq = 'rx' if len(rx) == 1 and rx[0].get('checked') else 'tx'
-            ui = {}
-            for control in ALL_CONTROLS:
-                if control.field not in wanted:
-                    continue
-                if control.field.startswith('equalizer.'):
-                    side = 'rx' if control.field.split('.')[1].startswith('rx') else 'tx'
-                    if side != selected_eq:
-                        continue  # Never change the selector to repair an observation.
-                matches = widgets(tree, control.target)
-                if len(matches) != 1 or not matches[0].get('visible') or not matches[0].get('enabled'):
-                    continue
-                actual = widget_value(matches[0], control.action)
-                want = wanted[control.field]
-                want = want.title() if control.field == 'slice.agcMode' else want
-                ui[control.field] = {'expected': want, 'observed': actual,
-                                     'outcome': 'ESTABLISHED' if type(actual) is type(want) and actual == want else 'CONCERN'}
-                self.coverage[control.field].setdefault('widgetTransitions', {})[name] = ui[control.field]
-            self.run.journal.event('applet-widget-observation', scenario=name, observations=ui,
-                                   limitation='Only the currently visible/enabled surfaces and selected EQ curve; no UI mutation.')
+            if field not in self.coverage:
+                continue
+            keys = (field, 'ui.' + field)
+            field_expected = {key: combined[key] for key in keys if key in combined}
+            outcome = compare(field_expected, evidence)['outcome']
+            if retention and field in prerequisites and outcome == 'ESTABLISHED':
+                outcome = 'INCONCLUSIVE'
+            self.coverage[field]['transitions'][name] = outcome
+            ui_key = 'ui.' + field
+            if ui_key in ui_expected:
+                self.coverage[field].setdefault('widgetTransitions', {})[name] = compare(
+                    {ui_key: ui_expected[ui_key]}, evidence)
         if 'slice.manualSquelchLevel' in wanted:
             mode = self.sql_mode()
             self.coverage['slice.manualSquelchLevel'].setdefault('intentObservations', {})[name] = mode
@@ -287,11 +304,7 @@ class AppletRun:
             # Assert earlier seeds too: unrelated status fan-out can reset them.
             self.observe('set ' + control.field, samples=5, settling_field=control.field)
             row['seedOutcome'] = row['transitions']['set ' + control.field]
-            after = widgets(self.run.supervisor.request({'cmd': 'dumpTree'}), control.target)
-            actual = widget_value(after[0], control.action) if len(after) == 1 else None
-            want_ui = value.title() if control.field == 'slice.agcMode' else value
-            row['widgetReadback'] = {'expected': want_ui, 'observed': actual,
-                                     'outcome': 'ESTABLISHED' if actual == want_ui else 'CONCERN'}
+            row['widgetReadback'] = row['widgetTransitions']['set ' + control.field]
             self.run.journal.save()
 
     def bypass_roundtrips(self):
