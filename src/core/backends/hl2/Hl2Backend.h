@@ -175,6 +175,25 @@ public:
     }
     static constexpr int kAutoRfGainFloorMaxDb = 31;
 
+    // Which of Hl2AutoGainPolicy.h's configurations the loop runs.
+    //
+    // "ramp"   -- the shipped default: 3-6 dB attack, 1 dB release on a dwell.
+    // "probe"  -- probingReleaseConfig(): the #5535 release condition. 6 dB
+    //             both ways; a release is a PROBE that can fail, and the
+    //             interval between probes doubles on failure and collapses on
+    //             success.
+    // "binary" -- binaryHighLowConfig(): the two-state per-band switch.
+    //
+    // ALL THREE ARE THE SAME FUNCTION AND THE SAME STATE MACHINE; only the
+    // numbers differ. That is the whole reason the law is parameterised, and
+    // this setter is what makes it a bench decision rather than a rebuild.
+    //
+    // Selecting a mode also installs that mode's floor, because the floor is
+    // part of the configuration; re-issue the floor afterwards to override it.
+    // Returns false and changes nothing if the name is not one of the three.
+    bool setAutoRfGainMode(const QString& mode) override;
+    [[nodiscard]] QString autoRfGainMode() const { return m_autoGainMode; }
+
     // The highest baseline from which the automatic control will arm.
     //
     // Above this the AD9866's gain axis is not trustworthy on this hardware:
@@ -867,6 +886,11 @@ private:
     bool m_autoRfGainEnabled = false;
     AetherSDR::hl2::AutoGainState m_autoGainState;
     AetherSDR::hl2::AutoGainConfig m_autoGainConfig;
+    // The name of the configuration above, for the health row and for the
+    // reset path. The config struct cannot answer "which law is this" -- it is
+    // just numbers -- and inferring it back from the numbers would be a second
+    // copy of the choice.
+    QString m_autoGainMode = QStringLiteral("ramp");
     // Band and baseline as the loop last saw them, so a change in either
     // reaches the policy as the input it is rather than as a surprise.
     QString m_autoGainBandKey;

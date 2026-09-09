@@ -418,6 +418,9 @@ public:
     // How deaf that control may make the receiver, in dB below the operator's
     // own gain setting.
     void setAutoRfGainFloorDb(int floorDb);
+    // Which control law that loop runs, by backend-defined name. The seam
+    // carries the string through unexamined; only the backend knows its laws.
+    bool setAutoRfGainMode(const QString& mode);
     // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a

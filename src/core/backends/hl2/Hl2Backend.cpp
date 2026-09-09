@@ -4825,6 +4825,17 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("autoRfGain", QStringLiteral("Auto RF gain"), m_autoRfGainEnabled);
     put("autoRfGainFloorDb", QStringLiteral("Auto RF gain floor (dB below baseline)"),
         m_autoGainConfig.maxOffsetDb);
+    // WHICH LAW, not which numbers. The rows above show what the loop is doing;
+    // this one shows which controller is doing it, and without it a bench
+    // reading a trace has no way to tell a slow ramp from a failed probe.
+    put("autoRfGainMode", QStringLiteral("Auto RF gain mode"), m_autoGainMode);
+    put("autoRfGainProbeIntervalMs",
+        QStringLiteral("Auto RF gain probe interval (ms, 0 = not probing)"),
+        m_autoGainConfig.probeConfirmMs > 0
+            ? QVariant(qint64(m_autoGainState.dwellRequiredMs > 0
+                                  ? m_autoGainState.dwellRequiredMs
+                                  : m_autoGainConfig.releaseDwellMs))
+            : QVariant(qint64(0)));
     // What the loop is doing THIS INSTANT, in the operator's words rather than
     // the enum's. Reported even while disarmed, because "disarmed" is the
     // answer to "why is nothing happening" as much as "stale" is.
@@ -5205,6 +5216,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_autoRfGainEnabled = false;
     m_autoGainState = AetherSDR::hl2::AutoGainState{};
     m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
+    m_autoGainMode = QStringLiteral("ramp");
     m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
     m_autoGainBandKey.clear();
     m_autoGainBaselineDb = 0;
@@ -5705,6 +5717,38 @@ void Hl2Backend::setAutoRfGainFloorDb(int floorDb)
     m_autoGainConfig.maxOffsetDb = clamped;
     qCInfo(lcHl2) << "HL2 auto RF gain: floor set to" << clamped
                   << "dB below the operator's baseline";
+}
+
+// Which of Hl2AutoGainPolicy.h's configurations the loop runs. Applied live:
+// the state is NOT reset, because the offset the radio is actually holding is
+// real whichever law asked for it, and the policy's own ceiling check gives
+// back any excess on its next evaluation, in one step.
+bool Hl2Backend::setAutoRfGainMode(const QString& mode)
+{
+    using namespace AetherSDR::hl2;
+    const QString m = mode.trimmed().toLower();
+    AutoGainConfig cfg;
+    if (m == QLatin1String("ramp") || m == QLatin1String("default")) {
+        cfg = AutoGainConfig{};
+    } else if (m == QLatin1String("probe") || m == QLatin1String("probing")) {
+        cfg = probingReleaseConfig();
+    } else if (m == QLatin1String("binary")) {
+        cfg = binaryHighLowConfig();
+    } else {
+        qWarning().noquote()
+            << QStringLiteral("Hl2Backend: auto RF gain mode \"%1\" is not one of "
+                              "ramp|probe|binary. The law has not been changed.")
+                   .arg(mode);
+        return false;
+    }
+    m_autoGainConfig = cfg;
+    m_autoGainMode = (m == QLatin1String("default")) ? QStringLiteral("ramp")
+                   : (m == QLatin1String("probing")) ? QStringLiteral("probe") : m;
+    qCInfo(lcHl2) << "HL2 auto RF gain: law set to" << m_autoGainMode
+                  << "- step" << m_autoGainConfig.attackStepDb
+                  << "dB, floor" << m_autoGainConfig.maxOffsetDb
+                  << "dB, probe confirm" << m_autoGainConfig.probeConfirmMs << "ms";
+    return true;
 }
 
 // One evaluation of the control law, on the telemetry publish that carried the

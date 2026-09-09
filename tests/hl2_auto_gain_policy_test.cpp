@@ -24,6 +24,7 @@ using AetherSDR::hl2::AutoGainState;
 using AetherSDR::hl2::AutoGainWindow;
 using AetherSDR::hl2::autoGainStep;
 using AetherSDR::hl2::binaryHighLowConfig;
+using AetherSDR::hl2::probingReleaseConfig;
 using AetherSDR::hl2::classifyWindow;
 
 namespace {
@@ -50,6 +51,114 @@ struct Plant {
         return offsetDb < clipBelowOffsetDb ? samplesPerWindow : 0;
     }
 };
+
+// A plant whose knee MOVES, which is the entire reason probing exists. Before
+// `dawnWindow` the converter rails unless the loop is holding at least
+// `eveningClipBelowOffsetDb`; after it, unless it is holding
+// `daytimeClipBelowOffsetDb`. ON8ST's #5535 objection predicts that difference
+// is 10-20 dB on a real antenna.
+struct DiurnalPlant {
+    int eveningClipBelowOffsetDb = 18;
+    int daytimeClipBelowOffsetDb = 0;
+    int dawnWindow = 1 << 30;
+    int samplesPerWindow = 19;   // ~19 raddr-0 observations per 100 ms at 48 kHz
+
+    [[nodiscard]] int clipBelow(int window) const
+    {
+        return window < dawnWindow ? eveningClipBelowOffsetDb
+                                   : daytimeClipBelowOffsetDb;
+    }
+    [[nodiscard]] int overloadFor(int window, int offsetDb) const
+    {
+        return offsetDb < clipBelow(window) ? samplesPerWindow : 0;
+    }
+};
+
+struct ProbeRun {
+    AutoGainState state;
+    int clippedWindows = 0;      // windows in which the CONVERTER actually railed
+    int probes = 0;              // releases issued
+    int failedProbes = 0;        // attacks that arrived while a probe was in flight
+    int windowsProbeInFlight = 0;  // how long the loop spent clipped after a probe
+    int firstZeroOffsetWindow = -1;
+    int firstProbeWindow = -1;
+    int windowsClippedAfter = 0;   // clipped windows at or after `countClipsFrom`
+    std::vector<std::int64_t> intervalAfterFailure;
+    std::vector<int> offsetTrace;
+};
+
+// Closed loop against a moving plant. `keyedPeriodWindows`/`keyedForWindows`
+// impose a transmit duty cycle so the post-unkey hold-off is exercised in the
+// same loop rather than in a separate hand-built state.
+struct ProbeDrive {
+    int windows = 1000;
+    std::int64_t windowMs = 100;
+    int ceiling = 24;
+    int keyedPeriodWindows = 0;   // 0 = never keyed
+    int keyedForWindows = 0;
+    int countClipsFrom = 0;
+};
+
+ProbeRun probeRun(const AutoGainConfig& cfg, const DiurnalPlant& plant,
+                  const ProbeDrive& drive, AutoGainState start = AutoGainState{})
+{
+    ProbeRun r;
+    AutoGainState st = start;
+    bool probeInFlight = false;
+    std::int64_t sinceUnkey = -1;
+    for (int i = 0; i < drive.windows; ++i) {
+        const bool keyed = drive.keyedPeriodWindows > 0
+                        && (i % drive.keyedPeriodWindows) >= (drive.keyedPeriodWindows
+                                                              - drive.keyedForWindows);
+        AutoGainObservation obs;
+        obs.samples = plant.samplesPerWindow;
+        // A keyed radio hears its own transmitter: the bit is slammed and says
+        // nothing about the antenna.
+        obs.overloadSamples = keyed ? plant.samplesPerWindow
+                                    : plant.overloadFor(i, st.offsetDb);
+        obs.elapsedMs = drive.windowMs;
+        obs.availableOffsetDb = drive.ceiling;
+        obs.resetWarmup = (i == 0);
+        obs.keyed = keyed;
+        obs.msSinceUnkey = sinceUnkey;
+        if (keyed) {
+            sinceUnkey = 0;
+        } else if (sinceUnkey >= 0) {
+            sinceUnkey += drive.windowMs;
+        }
+
+        if (!keyed && obs.overloadSamples > 0) {
+            ++r.clippedWindows;
+            if (i >= drive.countClipsFrom) ++r.windowsClippedAfter;
+            if (probeInFlight) ++r.windowsProbeInFlight;
+        }
+
+        const AutoGainAction a = autoGainStep(st, obs, cfg);
+        if (a.deltaDb < 0) {
+            ++r.probes;
+            if (r.firstProbeWindow < 0) r.firstProbeWindow = i;
+            probeInFlight = true;
+        } else if (a.deltaDb > 0) {
+            if (probeInFlight) {
+                ++r.failedProbes;
+                r.intervalAfterFailure.push_back(a.next.dwellRequiredMs);
+            }
+            probeInFlight = false;
+        }
+        // A probe that has been believed is no longer in flight.
+        if (probeInFlight && !a.next.releasedSinceTrip) {
+            probeInFlight = false;
+        }
+        st = a.next;
+        r.offsetTrace.push_back(st.offsetDb);
+        if (st.offsetDb == 0 && i >= drive.countClipsFrom
+            && r.firstZeroOffsetWindow < 0) {
+            r.firstZeroOffsetWindow = i;
+        }
+    }
+    r.state = st;
+    return r;
+}
 
 struct RunResult {
     AutoGainState state;
@@ -497,6 +606,335 @@ int main()
         const auto b = autoGainStep(st, obs, kDefault);
         check(b.next.tripOffsetDb < 0,
               "and the operator moving their own baseline supersedes it too");
+    }
+
+    // =====================================================================
+    // PROBING RELEASE (#5535). The clip flag says "too high" and nothing says
+    // "there is room", so a release is a PROBE and it can fail. Everything
+    // below is about what a failed probe costs and how the loop stops paying.
+    // =====================================================================
+
+    const AutoGainConfig kProbe = probingReleaseConfig();
+
+    // ---- 14. THE DEFAULTS ARE UNTOUCHED -----------------------------------
+    //
+    // Probing is opt-in through two config fields, both defaulting to the
+    // behaviour that shipped. If either default moves, every other property in
+    // this file is testing a different controller than the one the backend runs
+    // with no configuration.
+    {
+        check(kDefault.probeConfirmMs == 0,
+              "probing is off by default: a release is never confirmed");
+        check(kDefault.tripFloorBindsRelease,
+              "and the per-band trip memory still binds the release floor by "
+              "default");
+    }
+
+    // ---- 15. THE CONSTANTS ARE THE MEASURED ONES --------------------------
+    {
+        check(kProbe.attackStepDb == 6 && kProbe.releaseStepDb == 6
+                  && kProbe.firstStepHotDb == 6 && kProbe.firstStepMarginalDb == 6,
+              "one 6 dB quantum in both directions - the measured knee is 3-5 dB "
+              "wide, so one step clears it and cannot stall inside it");
+        check(kProbe.maxOffsetDb % kProbe.attackStepDb == 0,
+              "the ceiling is a whole number of steps, so no move is ever "
+              "truncated to less than the knee width");
+        check(kProbe.releaseDwellMs == 30000 && kProbe.dwellBackoffMaxMs == 480000,
+              "base probe interval 30 s, cap 8 min - four doublings apart");
+        check(kProbe.probeConfirmMs == 3000 && kProbe.releaseIntervalMs == 3000,
+              "a probe is believed after 3 s, and the next one follows at once");
+        check(kProbe.tripBackoffWindowMs > kProbe.dwellBackoffMaxMs,
+              "a failed probe taken AT the cap still counts as a repeat, or the "
+              "backoff would stop compounding exactly where it matters");
+        check(kProbe.tripForgetMs > kProbe.dwellBackoffMaxMs,
+              "and nothing forgets the trip before the backoff has run, because "
+              "forgetting resets the interval");
+    }
+
+    // ---- 16. A FAILED PROBE COSTS ONE DETECTION WINDOW --------------------
+    //
+    // THE NUMBER THE WHOLE SCHEME RESTS ON. The step goes on at the end of one
+    // window, the clip is observed across the next, and the step comes back off
+    // at its end. Not two windows, not a dwell.
+    {
+        DiurnalPlant hot;
+        hot.eveningClipBelowOffsetDb = 6;   // needs exactly one step, forever
+        const ProbeRun r = probeRun(kProbe, hot, ProbeDrive{4000, 100, 24});
+        check(r.probes >= 3, "the loop probes repeatedly on a permanently hot band");
+        check(r.failedProbes == r.probes,
+              "and on a band that has not improved, every probe fails");
+        check(r.windowsProbeInFlight == r.failedProbes,
+              "each failed probe rails the converter for EXACTLY ONE detection "
+              "window - 100 ms at MetisClient::kTelemetryMinIntervalMs");
+        std::printf("       [obs] %d probes, %d clipped windows in flight, "
+                    "%d clipped windows total over 400 s\n",
+                    r.probes, r.windowsProbeInFlight, r.clippedWindows);
+    }
+
+    // ---- 17. A FAILED PROBE IS UNDONE EXACTLY --------------------------------
+    {
+        AutoGainState st;
+        st.offsetDb = 6;
+        st.tripOffsetDb = 0;
+        st.warmupRemaining = 0;
+        st.cleanMs = 40000;          // past the base probe interval
+        st.sinceReleaseMs = 10000;
+        st.sinceAttackMs = 40000;
+        AutoGainObservation obs;
+        obs.samples = 19;
+        obs.overloadSamples = 0;
+        obs.elapsedMs = 100;
+        obs.availableOffsetDb = 24;
+        const auto probe = autoGainStep(st, obs, kProbe);
+        check(probe.deltaDb == -6 && probe.next.offsetDb == 0
+                  && probe.reason == AutoGainReason::Release,
+              "the probe removes exactly one 6 dB step");
+        check(probe.next.releasedSinceTrip,
+              "and marks itself in flight, so a clip now is a FAILED PROBE and "
+              "not an unrelated trip");
+        AutoGainObservation clip = obs;
+        clip.overloadSamples = 19;
+        const auto back = autoGainStep(probe.next, clip, kProbe);
+        check(back.deltaDb == 6 && back.next.offsetDb == 6,
+              "and one window later the same 6 dB is back, exactly");
+    }
+
+    // ---- 18. A FAILED PROBE DOUBLES THE INTERVAL, UP TO THE CAP -----------
+    {
+        DiurnalPlant hot;
+        hot.eveningClipBelowOffsetDb = 6;
+        const ProbeRun r = probeRun(kProbe, hot, ProbeDrive{30000, 100, 24});
+        const std::vector<std::int64_t>& iv = r.intervalAfterFailure;
+        bool ladder = iv.size() >= 5;
+        const std::int64_t want[5] = {60000, 120000, 240000, 480000, 480000};
+        for (std::size_t k = 0; ladder && k < 5; ++k) {
+            if (iv[k] != want[k]) ladder = false;
+        }
+        std::printf("       [obs] probe intervals after each failure:");
+        for (std::size_t k = 0; k < iv.size() && k < 8; ++k) {
+            std::printf(" %lld", static_cast<long long>(iv[k]));
+        }
+        std::printf(" ms\n");
+        check(ladder,
+              "each failed probe doubles the interval - 60, 120, 240, 480 s - "
+              "and then holds at the 8 min cap");
+        bool monotone = true;
+        for (std::size_t k = 1; k < iv.size(); ++k) {
+            if (iv[k] < iv[k - 1]) monotone = false;
+        }
+        check(monotone, "a backoff never SHORTENS the interval");
+    }
+
+    // ---- 19. THE COST SELF-LIMITS ----------------------------------------
+    //
+    // The asymmetry, as a number rather than an adjective: on a band that never
+    // improves, the deliberate clipping the loop causes gets rarer with time.
+    {
+        DiurnalPlant hot;
+        hot.eveningClipBelowOffsetDb = 6;
+        ProbeDrive early{6000, 100, 24};        // first 600 s
+        ProbeDrive late{36000, 100, 24};
+        late.countClipsFrom = 30000;            // the 3000 s - 3600 s slice
+        const ProbeRun a = probeRun(kProbe, hot, early);
+        const ProbeRun b = probeRun(kProbe, hot, late);
+        std::printf("       [obs] deliberate clips: %d in the first 600 s, "
+                    "%d in the 600 s an hour later\n",
+                    a.windowsProbeInFlight, b.windowsClippedAfter);
+        check(b.windowsClippedAfter < a.windowsProbeInFlight,
+              "an hour into a hot band the loop probes less often than it did in "
+              "the first ten minutes");
+        check(b.windowsClippedAfter <= 2,
+              "and at the cap it costs at most a couple of 100 ms windows per "
+              "ten minutes");
+    }
+
+    // ---- 20. A CONFIRMED PROBE RESETS THE INTERVAL TO BASE ----------------
+    //
+    // Without this the loop carries last night's backoff into this afternoon:
+    // the interval reached the cap while the band was hot and nothing ever puts
+    // it back, so the first failure of the NEW day starts from 8 min.
+    {
+        AutoGainState st;
+        st.offsetDb = 6;
+        st.tripOffsetDb = 0;
+        st.dwellRequiredMs = 480000;     // the cap, reached overnight
+        st.releasedSinceTrip = false;
+        st.warmupRemaining = 0;
+        DiurnalPlant quiet;
+        quiet.eveningClipBelowOffsetDb = 0;   // the band has gone quiet
+        const ProbeRun r = probeRun(kProbe, quiet, ProbeDrive{6000, 100, 24}, st);
+        std::printf("       [obs] after a confirmed probe: dwellRequiredMs=%lld, "
+                    "releasedSinceTrip=%d, offset=%d\n",
+                    static_cast<long long>(r.state.dwellRequiredMs),
+                    r.state.releasedSinceTrip ? 1 : 0, r.state.offsetDb);
+        check(r.state.dwellRequiredMs == 0,
+              "a probe that stays clean for the confirmation period resets the "
+              "interval to base");
+        check(!r.state.releasedSinceTrip,
+              "and is no longer in flight, so a clip an hour later is a FRESH "
+              "trip paced from base, not a continuation of last night's backoff");
+        check(r.state.offsetDb == 0,
+              "and the gain it reclaimed stays reclaimed");
+    }
+
+    // ---- 21. THE REMEMBERED OFFSET MUST NOT FLOOR THE RELEASE -------------
+    //
+    // The diurnal objection, as a test. A loop that remembers where it clipped
+    // in DECIBELS is a lookup table, and a knee that moves 18 dB destroys it.
+    {
+        DiurnalPlant diurnal;
+        diurnal.eveningClipBelowOffsetDb = 18;
+        diurnal.daytimeClipBelowOffsetDb = 0;
+        diurnal.dawnWindow = 20000;               // 2000 s in
+        ProbeDrive drive{40000, 100, 24};
+        drive.countClipsFrom = 20000;
+
+        AutoGainConfig floored = kProbe;
+        floored.tripFloorBindsRelease = true;     // the original memory
+        const ProbeRun stuck = probeRun(floored, diurnal, drive);
+        const ProbeRun free = probeRun(kProbe, diurnal, drive);
+        std::printf("       [obs] at dawn+2000 s: floor-bound offset %d dB, "
+                    "probing offset %d dB\n",
+                    stuck.state.offsetDb, free.state.offsetDb);
+        check(stuck.state.offsetDb > 0,
+              "with the trip memory binding the floor the loop is STRANDED "
+              "attenuated long after the band went quiet");
+        check(free.state.offsetDb == 0,
+              "probing walks the whole way back, because its memory is the "
+              "widening interval and not a remembered decibel");
+        check(free.firstZeroOffsetWindow >= 0
+                  && free.firstZeroOffsetWindow - drive.countClipsFrom < 6000,
+              "and it gets there inside ten minutes of the band going quiet - "
+              "one capped interval to the first confirmed probe, then 6 dB per "
+              "confirmation period");
+    }
+
+    // ---- 22. THE RECLAIM IS THE FAST HALF --------------------------------
+    {
+        AutoGainState st;
+        st.offsetDb = 24;
+        st.tripOffsetDb = 18;
+        st.warmupRemaining = 0;
+        st.cleanMs = 40000;
+        st.sinceAttackMs = 40000;
+        st.sinceReleaseMs = 40000;
+        DiurnalPlant quiet;
+        quiet.eveningClipBelowOffsetDb = 0;
+        const ProbeRun r = probeRun(kProbe, quiet, ProbeDrive{400, 100, 24}, st);
+        const int reclaimWindows = r.firstZeroOffsetWindow - r.firstProbeWindow;
+        std::printf("       [obs] first probe at window %d (%d ms after arming); "
+                    "24 dB reclaimed in %d windows (%d ms) from there\n",
+                    r.firstProbeWindow, r.firstProbeWindow * 100,
+                    reclaimWindows, reclaimWindows * 100);
+        // ARMING DOES NOT RECLAIM EAGERLY. `resetWarmup` clears `cleanMs`, so
+        // even a state that arrives holding 24 dB with a long clean history
+        // must earn a whole base probe interval of fresh observation before it
+        // asks for more gain. That is the timid half and it is deliberate.
+        check(r.firstProbeWindow >= 300,
+              "the FIRST probe after arming waits a whole base interval - a "
+              "loop that reclaimed on arrival would be reclaiming on evidence "
+              "it gathered under a denominator that has since changed");
+        check(reclaimWindows > 0 && reclaimWindows <= 130,
+              "but from that first probe the whole 24 dB comes back in about "
+              "twelve seconds - one 6 dB step per confirmation period");
+        check(r.clippedWindows == 0,
+              "and a reclaim into a genuinely quiet band costs no clipping at all");
+    }
+
+    // ---- 23. TRANSMIT DOES NOT PAY FOR THE PROBE -------------------------
+    //
+    // `cleanMs` is reset by keying and by the 300 ms post-unkey hold-off, so a
+    // probe cannot fire until the loop has had a whole uninterrupted probe
+    // interval of receive. THIS IS THE HONEST LIMIT: a probe cannot land in a
+    // short over, and it CAN land inside a long one.
+    {
+        DiurnalPlant hot;
+        hot.eveningClipBelowOffsetDb = 6;
+        ProbeDrive shortOvers{20000, 100, 24};
+        shortOvers.keyedPeriodWindows = 230;   // 20 s receive, 3 s transmit
+        shortOvers.keyedForWindows = 30;
+        const ProbeRun a = probeRun(kProbe, hot, shortOvers);
+        check(a.probes == 0,
+              "overs shorter than the probe interval never produce a probe - the "
+              "clean accumulator is reset by every unkey");
+
+        ProbeDrive longOvers{20000, 100, 24};
+        longOvers.keyedPeriodWindows = 630;    // 60 s receive, 3 s transmit
+        longOvers.keyedForWindows = 30;
+        const ProbeRun b = probeRun(kProbe, hot, longOvers);
+        std::printf("       [obs] probes in 2000 s: %d with 20 s overs, "
+                    "%d with 60 s overs\n", a.probes, b.probes);
+        check(b.probes > 0,
+              "an over longer than the probe interval CAN carry a deliberate "
+              "clip, and this test is where that is admitted");
+    }
+
+    // ---- 24. NOTHING PROBES INSIDE THE POST-UNKEY HOLD-OFF ---------------
+    {
+        bool probedInHoldoff = false;
+        for (std::int64_t sinceUnkey = 0; sinceUnkey < 600; sinceUnkey += 7) {
+            AutoGainState st;
+            st.offsetDb = 12;
+            st.tripOffsetDb = 0;
+            st.warmupRemaining = 0;
+            st.cleanMs = 600000;
+            st.sinceReleaseMs = 600000;
+            AutoGainObservation obs;
+            obs.samples = 19;
+            obs.overloadSamples = 0;
+            obs.elapsedMs = 100;
+            obs.availableOffsetDb = 24;
+            obs.msSinceUnkey = sinceUnkey;
+            const auto a = autoGainStep(st, obs, kProbe);
+            if (sinceUnkey < kProbe.unkeyHoldoffMs && a.deltaDb != 0) {
+                probedInHoldoff = true;
+            }
+        }
+        check(!probedInHoldoff,
+              "no probe is issued inside the measured 300 ms post-unkey window, "
+              "where the receive path is still describing our own transmitter");
+    }
+
+    // ---- 25. A BAND CHANGE TAKES THE PROBE INTERVAL WITH IT ---------------
+    {
+        AutoGainState st;
+        st.offsetDb = 12;
+        st.tripOffsetDb = 6;
+        st.dwellRequiredMs = 480000;
+        st.releasedSinceTrip = true;
+        st.warmupRemaining = 0;
+        AutoGainObservation obs;
+        obs.samples = 19;
+        obs.overloadSamples = 0;
+        obs.elapsedMs = 100;
+        obs.availableOffsetDb = 24;
+        obs.bandChanged = true;
+        const auto a = autoGainStep(st, obs, kProbe);
+        check(a.next.dwellRequiredMs == 0 && a.next.tripOffsetDb < 0
+                  && !a.next.releasedSinceTrip,
+              "a new band starts probing from base - the backoff described the "
+              "band we left");
+        obs.bandChanged = false;
+        obs.baselineMoved = true;
+        const auto b = autoGainStep(st, obs, kProbe);
+        check(b.next.dwellRequiredMs == 0 && !b.next.releasedSinceTrip,
+              "and so does the operator moving their own baseline");
+    }
+
+    // ---- 26. SAFETY STILL HOLDS UNDER PROBING -----------------------------
+    {
+        bool everOut = false;
+        for (int x = 0; x <= 30; ++x) {
+            DiurnalPlant p;
+            p.eveningClipBelowOffsetDb = x;
+            const ProbeRun r = probeRun(kProbe, p, ProbeDrive{3000, 100, 24});
+            for (const int o : r.offsetTrace) {
+                if (o < 0 || o > 24) everOut = true;
+            }
+        }
+        check(!everOut,
+              "over 31 plants x 300 s of probing the offset never leaves "
+              "[0, ceiling]");
     }
 
     // WHAT NO TEST HERE SUPPLIES: the plant. Property 7 tests the controller
