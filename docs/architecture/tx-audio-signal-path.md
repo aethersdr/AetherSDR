@@ -349,3 +349,15 @@ FWDPWR    ████████████████░░░░░░   8
 
 This would be invaluable for diagnosing TX audio issues — you can immediately
 see where in the chain the signal is being attenuated or clipped.
+
+## Backend capability changes (#5164)
+
+`MainWindow::applyTxAudioCapabilities` follows `RadioModel::capabilitiesChanged`,
+which includes connection, disconnection, and late model identification. It
+queues `AudioEngine::applyBackendAudioCapabilities` onto the audio thread so
+stream checks and starts are ordered. `takesTxAudioOverSeam && canTransmit`
+enables the PCM route only while connected; capability withdrawal disables it
+and stops seam-owned capture. Repeated notifications do not restart an open
+capture or RX sink. Flex stream lifecycle remains driven by its stream events.
+Client PC Audio state is reported to Icom for advice, never written to the
+radio's persistent modulation-input settings during identification.

@@ -201,6 +201,7 @@ void IcomSession::stop()
     m_renewRetries = 0;
     m_pendingRenewals.clear();
     m_haveRadioId = false;
+    m_advertisedCivAddress = 0;
     m_streamsRequested = false;
     m_streamGranted = false;
     m_connected = false;
@@ -387,6 +388,7 @@ void IcomSession::onControlPayload(const QByteArray& packet)
         qCInfo(lcIcom) << "got capabilities packet";
         if (parseCapabilities(pkt, m_radioId)) {
             m_haveRadioId = true;
+            m_advertisedCivAddress = parseCapabilitiesCivAddress(pkt);
             m_radioName = QString::fromStdString(parseCapabilitiesName(pkt));
             requestStreamsIfReady();
         }

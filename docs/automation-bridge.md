@@ -333,7 +333,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
-| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
+| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR), plus the backend's own DSP read-back. |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get gps`](#get) | GPS fix, location, satellite-count, time, course, and reference snapshot. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
@@ -708,8 +708,9 @@ connects).
 
 ```json
 → {"cmd":"get","model":"radio"}
-← {"ok":true,"model":"radio","radio":{"connected":true,"model":"FLEX-8400M",
-   "transmitting":false,"txPower":0,"sliceCount":1,"panCount":1, …}}
+← {"ok":true,"model":"radio","radio":{"connected":true,"connectState":"connected",
+   "model":"FLEX-8400M","transmitting":false,"txPower":0,"sliceCount":1,
+   "panCount":1, …}}
 
 → {"cmd":"get","model":"slice","selector":"active","property":"frequency"}
 ← {"ok":true,"model":"slice","property":"frequency","value":3.6}
@@ -718,8 +719,8 @@ connects).
 | `model` | `selector` | returns |
 |---|---|---|
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
-| `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
-| `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
+| `dsp` | — | client-side AetherDSP noise-reduction state, **plus a `backend` object** carrying the backend-owned DSP read-back (`family` and a `chains` list, each entry naming its `chain` and its `level`) when the active backend reports one — see [`get dsp`](#get-dsp) |
+| `radio` | — | radio snapshot (name, model, version, connected, **connectState**, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) — see [`connectState`](#connectstate) |
 | `gps` | — | GPS status, backend-normalized `positionValid` and `source`, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time and date, frequency error, the Flex-hosted `ntpServerAddress`, the radio-owned NTP client state (`ntpClientEnabled`, `ntpClientServer`, `gpsTimeCorrection`, `ntpSyncStatus` — IC-705), and oscillator-reference state. This authenticated diagnostic response contains precise location data; the compact status bar and tooltip do not. |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
@@ -1045,6 +1046,158 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+### `radiocert persist`
+
+`radiocert persist` returns a **read-only persistence snapshot**, also allowed in
+observe-only bridge mode. It does not enter the in-process tune/RX/TX runner,
+change settings, force a save, or require an audio engine. It accepts no arguments.
+
+The version-1 snapshot includes process/GUIClientID identity, settings-directory
+identity, family and declared client-settings domain mask, radio/slice/pan state,
+Display-panel presentation, client ownership and VFO attachment observations.
+Display rows now carry `panId` so they can be joined to the live pan after a band
+or session recreates objects. Pan snapshots also expose FFT average, weighted
+average (with its known flag), waterfall rate (legacy name
+`waterfallLineDuration`, **1..100, not milliseconds**, -1 unknown), center-known,
+WNB and available RX antennas.
+
+The snapshot explicitly identifies its evidence as **client model and
+presentation**. Some model setters update optimistically. Equality here alone
+is neither independent wire readback nor proof of a durable disk commit.
+
+The external supervisor runs the first receive-only Flex scenario set:
+
+```sh
+python3 tools/radiocert_persist.py plan
+python3 tools/radiocert_persist.py run --app build/AetherSDR.app \
+  --profile /tmp/persist-flex-profile --output /tmp/persist-flex-evidence \
+  --serial EXACT_DISCOVERY_SERIAL --rx-antennas ANT1 ANT2
+```
+
+A separate opt-in scenario exercises two slices on one panadapter:
+
+```sh
+python3 tools/radiocert_persist_multislice.py plan
+python3 tools/radiocert_persist_multislice.py run --app build/AetherSDR.app \
+  --profile /tmp/persist-two-slice-profile --output /tmp/persist-two-slice-evidence \
+  --serial EXACT_DISCOVERY_SERIAL
+```
+
+It starts with one owned USB/LSB slice and requires advertised capacity for two.
+Both 14.180 and 14.160 MHz RX seeds must fit inside the original pan span. The
+runner creates the additional slice, assigns distinct SQL, AGC, filter and audio
+values, switches the selected slice, exercises SQL on/off isolation and independent
+mode round trips, then performs a normal restart with both slices present. Radio
+slice letters identify the contexts across restart; current numeric IDs, owned
+slots and pan relationships are validated before mutations. The RX applet is
+checked against the selected slice, while both slices' model values are sampled.
+
+Only the test-created slice is removed/reopened. Original values are restored
+only when the current state still matches the test's expected state. Production
+slice reveal may move the pan center; its restoration also checks for conflicting
+changes and compares MHz at Flex's six-decimal wire resolution. Any unsupported
+topology or unresolved restoration stops with evidence retained. Successful runs
+quit the owned client. The single-slice runner still rejects multiple slices by
+default. Both persistence entry points disable TX permission; transmitting tests
+use the separately authorized procedure in `docs/automation/TX_TEST_PROMPT.md`.
+
+Use new, separate profile and output directories. The supervisor initializes
+`AutoConnectToLastRadio=False` through the normal `--config` CLI before the first
+GUI launch, selects the exact discovered serial, requires Available status and
+one owned slice/pan with no other clients, and checks TX/ownership before every
+mutation. The profile remains the same for the whole run; its deterministic
+GUIClientID remains the same while the process PID and bridge endpoint change.
+No settings CLI operation or forced save occurs between Quit and relaunch.
+`AETHER_SETTINGS_DIR` also isolates legacy preference migration: it cannot
+import native user preferences or move the ordinary profile's legacy XML.
+
+The current plan seeds distinct 20m/40m FFT average/FPS and mode/filter tuples,
+changes Grid and waterfall palette through real Display controls, checks mode
+and BAND round trips, quits via the production Quit action, waits for process
+exit, relaunches, and checks the entry context **before** revisiting both bands.
+The optional `--rx-antennas ANT1 ANT2` explicitly authorizes receive-port changes:
+seed different RX ports on each band, check retention across band/restart, and
+exercise ANT1→ANT2→ANT1 on 20m. Omit it to keep RX antennas untouched. Both ports
+must appear in the radio's published antenna list. TX antenna is an untouched sentinel. Slice mute has its own applet contract. A disconnected receive port is expected to be quiet; audio
+liveness is not a persistence assertion. It samples 11 observations
+across five seconds after readiness; any sampled mismatch remains a CONCERN even
+if a later sample recovers. This is bounded evidence, not a promise that later
+overwrites cannot happen.
+
+`persist.json` is an atomic, write-ahead journal: pending actions and full
+before-state are durable before sending commands, and ambiguous replies stop the
+run without retrying a mutation. `persist.md` provides a scenario table. Outcomes
+are ESTABLISHED at the named evidence layer, CONCERN, or INCONCLUSIVE; unfinished
+scenarios remain listed as not run. The exit status reports runner completion
+(0) or interruption (2), not a radio pass/fail grade.
+
+Live Flex findings refined the supervisor: command/status logging starts before
+connecting and is captured by process and sequence number alongside observations.
+Any detected log gap is recorded explicitly; a gap cannot support a claim that
+no intermediate write occurred. A seed model/presentation mismatch is retained
+while independent transitions continue. Later matching samples remain
+INCONCLUSIVE as a retention verdict until the seed/observation discrepancy is
+resolved; their matching observation is recorded separately. A safety, identity,
+ownership, topology or ambiguous-command failure still stops mutations.
+Owned app processes run in their own process session so the shell completing a
+report does not inadvertently terminate the client left open for inspection.
+
+Cleanup restores seeded fields only when the current tested values still match
+the last test intent. It restores a custom filter in the mode that was edited
+before returning to the original mode. Mismatches are preserved for inspection,
+not overwritten. Band-stack, frequency/span and other contextual side effects
+are captured but are **not automatically undone** in v1. On interruption, inspect
+`action-pending`, `band-baseline`, `mode-baseline` and the last snapshot before
+manual recovery; the owned client may still be open. The runner never kills an
+unresponsive client or falls back to another radio.
+
+The expanded applet catalogue (`tools/radiocert_persist_applets.py`) exercises
+40 non-keying setting contracts through scoped real widgets: RF/Tune setpoints,
+slice volume/pan/mute, manual SQL intent, AGC mode/threshold, mic gain, processor,
+phone monitor, AM carrier, VOX threshold/delay, downward expander, separate CW
+monitor/delay/speed, and both complete eight-band radio EQ curves and enables.
+Earlier seeds remain sentinels while later controls change. Band/mode/antenna
+round trips, normal restart and guarded cleanup have separate observations.
+A mode-specific or disabled control is an explicit coverage gap, never silently
+force-enabled. VOX enable, tuning, MOX and transmitting must all be known false
+before any mutation. Profile loads and keying/arming actions are excluded.
+
+The `persist` snapshot additionally includes `transmit`, `equalizer`, `audio`
+and `dsp` resources. Slice snapshots include manual SQL threshold, tuning step,
+RIT/XIT and DAX channel; transmit snapshots include boost/bias and accessory/TX
+delays. Observation does not imply that the corresponding UI scenario ran.
+The JSON contains per-setting inventory, observability, action, widget-readback,
+transition and cleanup evidence, plus explicit remaining domain gaps.
+
+Pan snapshots distinguish dispatched FFT requests (`averageIsRequest`,
+`fpsIsRequest`) from the last valid radio publications (`radioReportedAverage`,
+`radioReportedFps`, -1 until published). Flex 4.2.18 can acknowledge these setters
+without echoing status to the setting client. The model follows FlexLib's local
+update on dispatch and always yields to subsequent radio status, including the
+previous value. No timer or persistence replays the request. A dispatched value
+is not a radio-confirmed value; the runner requires the radio-published FFT
+values on context revisit and restart, including cleanup revisits.
+
+A real-app, no-radio restart smoke check is available with `smoke` instead of
+`run` (omit `--serial`); it uses Qt offscreen. The policy test
+`radiocert_persist_policy` uses only in-process data fixtures and no radio peer.
+Process supervision currently supports macOS/Linux. Icom mutation contracts,
+additional antenna types, multiple slices/pans, MultiFlex, crash/power-cycle recovery,
+DSP, memory banks and layout/audio-device scenarios remain explicit gaps for
+subsequent iterations. The broader issue table and proposed contracts are in
+[the persistence research](research/radiocert-persist-research-2026-09-07.md).
+
+The two-slice runner also tracks `flexAgcOffLevel` independently from AGC
+threshold, selects AGC Off before and after restart to check the shared RX
+slider, and records each slice's FM entry/return before explicit cleanup.
+Stable AGC/filter changes may be restored only after recording the original
+retention result; peer changes, missing fields and unrelated drift stop the
+run. The expanded FM/AGC matrix is locally policy-tested but awaits a live run.
+See the [Flex-to-Icom handoff](research/persist-flex-to-icom-handoff-2026-09-08.md)
+for completed evidence, remaining gaps and the IC-7300MK2 receive-only plan.
+These mutation runners remain Flex-only; Icom AGC modes do not imply support
+for Flex's AGC threshold/off-level controls.
+
 ### `get display`
 Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
 / WATERFALL / BACKGROUND / APPEARANCE / 3D VIEW groups own, as one flat object
@@ -1205,6 +1358,10 @@ radio-side `nr`/`nb`/`anf` in `get slice`. There is no widget that exposes which
 of the six AudioEngine NR modules is active and how it's tuned, so this is the
 only non-screenshot way to assert it.
 
+The response also carries **`backend`** — the backend-owned DSP configuration,
+separate from AudioEngine's AetherDSP chain. For HL2, these DSP chains run
+inside AetherSDR on the host, not in radio firmware (#5401).
+
 ```json
 → {"cmd":"get","model":"dsp"}
 ← {"ok":true,"model":"dsp","dsp":{
@@ -1221,7 +1378,23 @@ only non-screenshot way to assert it.
      "nr4":{"reductionDb":10,"smoothing":0,"whitening":0,"maskingDepth":50,"suppression":50,"noiseMethod":0,"adaptiveNoise":true},
      "mnr":{"strength":1},
      "dfnr":{"attenLimitDb":100,"postFilterBeta":0},
-     "bnr":{"intensity":1}}}}
+     "bnr":{"intensity":1}},
+   "backend":{
+     "family":"hl2",
+     "chains":[
+       {"chain":"rx-wdsp","receiver":0,"level":"channel-config",
+        "inputRateHz":48000,"dspRateHz":48000,"outputRateHz":48000,
+        "inputBlockSize":512,"dspBlockSize":512,"outputBlockSize":512,
+        "filterLowHz":150,"filterHighHz":2850,
+        "agcMode":"fast","agcMaxGainDb":90,"agcSlopeDb":0,"agcFixedGainDb":10,
+        "wdspNotchCount":0,"appliedNoiseBlanker":false},
+       {"chain":"rx-wdsp","receiver":1,"level":"not-configured"},
+       {"chain":"hl2-tx","level":"dsp-config",
+        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
+        "filterLowHz":300,"filterHighHz":2700,
+        "alcEnabled":true,"alcTargetPeak":0.9,"alcMaxGainDb":20,
+        "alcAttackSec":0.005,"alcReleaseSec":0.25,"alcHoldBelowDbfs":-45,
+        "micGainLinear":1}]}}}
 ```
 
 - `active` — the name of the **one** enabled module (the modules are mutually
@@ -1233,7 +1406,56 @@ only non-screenshot way to assert it.
   persisted `bnr` intensity, merged with the AppSettings-persisted
   NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
   #3902 — no container, so it exposes only `intensity`.)
-- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`.
+- `backend` — **the backend-owned DSP read-back**. Everything above describes
+  AetherDSP's chain in `AudioEngine`; this object describes the backend's
+  separate DSP chains. For HL2, both `rx-wdsp` and `hl2-tx` run on AetherSDR's
+  host I/O thread, so this is host DSP configuration, not firmware read-back.
+  `family` is the connected backend's family (`"hl2"` above), and `chains`
+  is a list with one entry per DSP chain that backend runs. It exists because
+  the recurring defect on a new backend is model/DSP divergence — a control
+  moves, the model records it, nothing reaches the DSP, and the symptom is "the
+  control does nothing". Reading the requested values from `get slice` alone
+  cannot prove that they reached the DSP; backend read-backs such as this object
+  and `get hostnb` expose that distinction.
+- `backend.chains[].chain` — **which** chain the entry describes: on a
+  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (a hand-written phasing
+  modulator on transmit, whose config is a different struct entirely). A backend
+  may run more than one chain and they need not share a vocabulary, so key off
+  `chain` rather than guessing from which fields are present. `rx-wdsp` entries
+  also carry `receiver` — the **DDC index**, not a slice id.
+- `backend.chains[].level` — **how close to the DSP the values came from**.
+  "Read-back" is used loosely, and the difference decides what a mismatch
+  proves:
+  - `channel-config` — what the channel was **opened** with, after any clamping
+    or refusal. One level below the model and one above a query into WDSP
+    itself. Within this entry, `wdspNotchCount` and `appliedNoiseBlanker`
+    are exceptions: they query WDSP directly.
+  - `dsp-config` — the DSP's **own state**.
+  - `not-configured` — a chain that **exists with nothing behind it**. Reported
+    present-but-unconfigured rather than omitted, and deliberately **without**
+    the configuration fields, so there are no stale or default values to
+    mistake for a real setting: a receiver with no channel behind it, or a
+    transmit chain that has never been configured, refused its `configure()`, or
+    been torn down by a disconnect, is exactly the state worth seeing.
+- **`dsp-config` describes the DSP, not the wire.** It is not liveness and not
+  keying. Normal unkeying and transient link loss retain the applied
+  configuration and still report `dsp-config`; for link state read
+  [`connectState`](#connectstate) on `get radio`.
+- **`backend` is absent entirely when the gather is empty.** No backend
+  attached, a backend that does not implement the read-back, and a gather that
+  could not be made all produce **no `backend` key at all** — never an empty
+  object and never an empty `chains` list, because an empty object would read as
+  "we asked, and the answer is nothing". `get dsp backend` errors with
+  `unknown property 'backend' for dsp` in exactly the cases the bare form omits
+  it. **A caller must not read the absence as "this radio has no chains"** — it
+  means the question went unanswered, which is a different fact. Both directions
+  are pinned by `tests/automation_dsp_backend_readback_test.cpp`.
+- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`, and
+  `get dsp backend` returns the identical object the bare form reports. The
+  read-back is merged into the snapshot **before** the property branch for that
+  reason: `assert_state` and `wait_for` only ever issue property reads, so a
+  field reachable only from the bare form is a field no automation client can
+  assert on.
 
 ### `get wavestats`
 Per-scope paint/append counters from every `WaveformWidget` instance — the
@@ -1475,6 +1697,24 @@ re-poll `get slices`.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+For a manual SQL band/profile-restore check, compare `get slice`'s
+`squelch`/`squelchLevel` with `dumpTree`'s **RX applet → Squelch threshold**
+and the VFO SQL control immediately after the transition. A radio-driven
+Off → Manual transition must adopt the incoming threshold before refreshing
+the controls (#5501). Use distinct thresholds on the two bands and retain
+each checkpoint: a later mode change can conceal a stale slider by causing
+another status update. In Auto, the slider is the margin, so it is not
+expected to equal the radio's computed threshold. Passive command suppression
+is covered by the socket-free `rx_applet_squelch_reconciliation_test`; a live
+snapshot alone cannot prove that no command was sent.
+
+A full SQL-on report after leaving Auto is adopted as current radio state,
+even when its threshold matches an earlier Auto calculation. The report
+does not identify whether it is a delayed echo or a restore. A later Off
+acknowledgement supersedes it; neither passive report triggers a SQL write.
+The socket-free regression pins both operator-driven and radio-driven Off
+sequences. It does not establish their occurrence on particular firmware.
 
 ### `notch`
 
@@ -2272,14 +2512,38 @@ at all), so a caller that wants strictness compares it against `"family"` and de
 itself, while a caller working around a wrong discovery entry still gets through. The
 mismatch is also logged.
 
+<a id="connectstate"></a>
+**`radio.connectState`** — `"idle"`, `"connecting"` or `"connected"`. The
+`connected` bool is unchanged and existing scripts need no edit; this is a third
+value beside it, because the bool cannot express the middle state. A caller that
+issues `connect ip` and then reads `connected: false` gets the same answer
+whether the connect is still working or nothing is happening at all, which is
+the whole of #5413 item 3.
+
+It is derived from the same model lifecycle as `connect wait`'s `phase`
+below — set when RadioModel starts a connection attempt (for example, in
+`connectToRadio()`), cleared when it lands, fails or is abandoned. `connected` wins whenever the link is up,
+whatever order the underlying edges arrive in.
+
+The field describes the model's current attempt, not every part of an accepted
+connect command: address probing before `connectToRadio()` may still report
+`idle`. Retry backoff after a failed attempt also reports `idle`; the flag is
+re-armed when the retry starts. An `idle` reading therefore does not by itself
+prove that the deferred command has failed or that no retry is scheduled.
+
+This is the polling form of what `connect wait` blocks for: use `wait` when you
+can hold a request open, and `assert_state` / `wait_for` on
+`radio.connectState` when you cannot.
+
 `connect wait <timeout_ms>` holds that request's response until the radio
 connects, the connect fails, or the timeout expires — the preferred unattended
 "request then assert" flow.
 
 A reply that is not `connected` carries `"phase"`: `"connecting"` means an
-attempt is still in flight and waiting again is the right move, `"idle"` means
-nothing is pending and another wait will time out identically. **This matters on
-the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+attempt is still in flight and waiting again is the right move; `"idle"` means
+no model attempt is currently active, including the probing and retry-backoff
+windows described above. **This matters on the HL2**, which queues a connect
+behind its DSP open and re-drives it later, so
 a wait can legitimately expire on a connect that then succeeds. A connect that
 fails outright returns immediately with the backend's own message instead of
 running out the clock.
@@ -2410,9 +2674,31 @@ Observe only mode. A successful stop reports `restorationStatus:"success"`,
 `systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
 
 The read-only diagnostic is available in **Observe only** mode; none of these
-actions keys the transmitter. On non-macOS platforms it returns
-`supported:false` because those backends do not use the affected IOKit claim
-path.
+actions keys the transmitter.
+
+On **Linux and Windows** the snapshot and the lifecycle actions answer
+differently, because only the snapshot is macOS-specific:
+
+- A bare `devices ulanzi` query returns `ok:false` with `supported:false` and
+  an `error` naming what is available instead. Those backends have no
+  `diagnostics()`, so the question cannot be answered here -- it is reported as
+  a refusal rather than as a success carrying no data.
+- `devices ulanzi-start` and `devices ulanzi-stop` **do** run on these
+  platforms and return `ok:true` with `operation`, `enabled`, and `queued`.
+  No `supported` field appears on a lifecycle reply: no snapshot was asked
+  for, so there is nothing for it to describe.
+
+`queued` is present on every platform and reports whether the call was posted
+to another thread rather than run inline. It is `true` on Linux and Windows,
+where the backend lives on the ExtControllers thread, so the reply is an
+acknowledgement that the request was accepted -- not a statement that it has
+completed. On macOS the backend stays on the main thread alongside the bridge
+handler, so the call runs inline, `queued` is `false`, and the returned
+snapshot reflects the state *after* it. A lifecycle request is refused with
+`ok:false` and `queued:false` when the backend thread is absent or stopped.
+A build without a concrete backend (for example Windows without HIDAPI) also
+refuses lifecycle requests with `ok:false` and `supported:false`. A queued
+acknowledgement does not guarantee delivery if the thread subsequently exits.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
@@ -3343,6 +3629,39 @@ hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
 should only be enabled briefly when these structured diagnostics are
 insufficient.
 
+The `icom.profile.show` extension distinguishes `modelId` (the `19 00` payload)
+from `civAddress` (the current command destination). A custom address can differ
+from the model ID; Network Radio Name does not select either value.
+
+**`civ wake <model-id-hex> <address-hex>`** explicitly requests one wake and one
+bounded reconnect on the current Icom network session. Supported selections are
+IC-705 (`civ wake a4 a4`), IC-7300MK2 (`civ wake b6 b6`), and IC-9700
+(`civ wake a2 a2`); the second argument may instead be its custom radio address. The model selection authorizes framing only; CI-V still
+establishes identity and capabilities after reconnect. The response acknowledges
+the request, not radio readiness. No power-off command is exposed. Read-only
+mode refuses this action. Disconnect or another connection selection cancels it.
+
+The connection panel's **Wake Icom on connect** checkbox persists in the `Icom`
+settings document (`wakeOnConnect`, default false). It requests wake only after
+identity discovery exhausts. Auto uses the CI-V destination advertised by the
+RS-BA1 radio, independently of its editable network name. A custom destination
+is respected. An unidentified custom address requires an explicit model in
+Connect by IP or `civ wake`; otherwise wake refuses with guidance instead of
+guessing standard framing for an IC-9700. Supported factory destinations from
+the network record may select a framing hint. Model identity and transmit
+capabilities still come only from the subsequent `19 00` reply.
+Connection advice/progress uses the connection panel while it is open;
+mid-session advice uses the status bar. Temporary messages keep the existing
+Connect control visible and restore its normal position when the message clears.
+The post-wake reconnect disables another wake and expires after 20 seconds;
+IC-705 and IC-7300MK2 reconnect after one second and probe identity each second
+until it arrives; IC-9700 retains its measured ten-second pre-reconnect delay. Radio configuration
+settings are not modified. IC-705 and IC-7300MK2 use their documented `18 01`
+command with standard framing; IC-9700 retains its measured extra FE prefix and
+E1 controller. Live network wake for the first two still requires hardware
+validation. Network control must remain reachable: an offline Wi-Fi interface
+cannot receive a wake command.
+
 ### `controls`
 
 The CI-V control and meter registry, joined against what is actually wired.
@@ -3866,9 +4185,9 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
-| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] — bring-up diagnostic; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
@@ -3914,3 +4233,18 @@ Proposed:
 
 All four are RX/config, no TX gate. `memory list` in particular would have
 replaced several screenshots in this feature's verification.
+
+### Persist observation and FFT provenance limits
+
+Applet scenario and per-control outcomes combine model samples and widget samples.
+Every widget sample is retained: a later matching value cannot conceal an earlier
+mismatch. A failed or unobserved seed presentation makes later retention
+inconclusive even after convergence. Hidden, disabled, ambiguous, missing, and
+unselected EQ controls remain presentation gaps; observation never selects a page
+to repair them. The Markdown report uses these combined outcomes.
+
+The FFT no-echo repair covers Average and FPS only. Weighted averaging and
+waterfall rate still follow their existing radio-publication paths; this change
+does not establish whether their setters echo on every firmware version.
+The aetherd panadapter resource exposes the same Average/FPS request provenance
+and last radio publications as the bridge, including same-value confirmations.

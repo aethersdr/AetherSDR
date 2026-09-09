@@ -69,7 +69,7 @@ void check(bool condition, const char* message)
 
 void testIc9700DerivedForwardPowerAcrossBands()
 {
-    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* ic9700 = modelForId(0xA2);
     check(ic9700 != nullptr, "IC-9700 derived-power fixture resolves the model");
     if (!ic9700) {
         return;
@@ -149,7 +149,7 @@ void testIc9700DerivedForwardPowerAcrossBands()
     check(updateSpy.count() == beforeGap,
           "IC-9700 gap frequency publishes no stale prior-deck watt estimate");
 
-    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    const IcomModel* ic705 = modelForId(0xA4);
     check(ic705 != nullptr, "cross-radio power fixture resolves the IC-705");
     if (ic705) {
         IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic705, 14'100'000ULL);
@@ -167,7 +167,7 @@ void testIc9700DerivedForwardPowerAcrossBands()
               "IC-705 uses only its own continuous 10 W rated-output range");
     }
 
-    const IcomModel* ic7300mk2 = modelForCivAddress(0xB6);
+    const IcomModel* ic7300mk2 = modelForId(0xB6);
     check(ic7300mk2 != nullptr, "cross-radio power fixture resolves the IC-7300MK2");
     if (ic7300mk2) {
         IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic7300mk2, 14'100'000ULL);

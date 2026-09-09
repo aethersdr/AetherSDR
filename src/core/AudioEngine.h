@@ -41,6 +41,8 @@ class QMediaDevices;
 
 namespace AetherSDR {
 
+struct RadioCapabilities;
+
 class SpecbleachFilter;
 class RNNoiseFilter;
 class DeepFilterFilter;
@@ -135,6 +137,10 @@ public:
     // test tone as well, since the tone is injected inside that callback.
     Q_INVOKABLE void setHostModulation(bool on) { m_hostModulation = on; }
     bool hostModulation() const { return m_hostModulation; }
+    // Called on the audio thread for connection and capability revisions.
+    void applyBackendAudioCapabilities(bool connected, const RadioCapabilities& caps,
+                                       bool pcAudioEnabled, const QHostAddress& address);
+
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")

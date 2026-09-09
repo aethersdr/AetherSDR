@@ -78,16 +78,20 @@ void RtlSdrDiscovery::onScanTimer()
             char manufactBuf[256] = {0};
             char productBuf[256] = {0};
             char serialBuf[256] = {0};
-            rtlsdr_get_device_usb_strings(i, manufactBuf, productBuf, serialBuf);
+            const bool stringsRead =
+                rtlsdr_get_device_usb_strings(i, manufactBuf, productBuf, serialBuf) == 0;
 
             RadioInfo info;
             info.family = QStringLiteral("rtl");
 
-            QString usbSerial = QString::fromUtf8(serialBuf).trimmed();
+            const QString usbSerial = stringsRead
+                ? QString::fromUtf8(serialBuf).trimmed() : QString();
+            info.serialIdentity.reportedSerial = usbSerial;
             if (!usbSerial.isEmpty() && !usedSerials.contains(usbSerial)) {
                 info.serial = usbSerial;
             } else {
                 info.serial = QStringLiteral("rtl:%1").arg(i);
+                info.serialIdentity.indexLocator = true;
             }
             usedSerials.insert(info.serial);
 
@@ -155,7 +159,11 @@ void RtlSdrDiscovery::onScanFinished()
         } else {
             // Check if anything changed (name, model, etc.)
             if (m_seen[info.serial].info.name != info.name ||
-                m_seen[info.serial].info.model != info.model) {
+                m_seen[info.serial].info.model != info.model ||
+                m_seen[info.serial].info.serialIdentity.reportedSerial
+                    != info.serialIdentity.reportedSerial ||
+                m_seen[info.serial].info.serialIdentity.indexLocator
+                    != info.serialIdentity.indexLocator) {
                 m_seen[info.serial].info = info;
                 emit radioUpdated(info);
             }

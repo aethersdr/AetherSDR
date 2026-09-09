@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DeferredSettingsWrites.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
 //     when genuinely cross-cutting — a feature's method bodies live in the
@@ -137,6 +139,9 @@ class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
 class NetworkDiagnosticsHistory;
+class MemoryHistoryRing;
+class CpuHistoryRing;
+class UiTickLagMeter;
 class WhatsNewDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
@@ -407,6 +412,8 @@ private:
     // nothing to be honest about, and a control that stays hidden after
     // unplugging reads as a fault rather than as an accurate report.
     void applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps);
+    void applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps);
+    void wireStatusBarMessages();
 
     // Push radio-side-DSP availability into one overlay menu's WNB row. Separate
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
@@ -719,6 +726,8 @@ private:
     // SpectrumWidget setters that persist it, radio-authoritative values via the
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
+    AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    void scheduleClientWaterfallRateSave(int panIndex, int rate);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -741,6 +750,9 @@ private:
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
+    // The RTTY pane's ✕: persist "operator does not want this window" and
+    // re-run the refresh, which stops the decoder (#5353).
+    void onRttyPanelCloseRequested();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
     void wireVfoTelemetry(VfoWidget* vfo, SliceModel* s);
@@ -1038,6 +1050,17 @@ private:
     QByteArray        m_knownDefaultAudioOutputId;
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
+    // The Runtime Monitor's memory history (#2554), owned here for the same
+    // reason the network history is: the dialog is WA_DeleteOnClose and a
+    // trend chart that forgot everything on Close would not be a trend.
+    // Filled only while the dialog is open (sampling follows visibility).
+    std::unique_ptr<MemoryHistoryRing> m_memoryHistory;
+    // The Overview tab's CPU history, owned here for the same reason.
+    std::unique_ptr<CpuHistoryRing> m_cpuHistory;
+    // GUI event-loop tick lag, fed by the perf-heartbeat timer's slot and read
+    // by the Runtime Monitor's Overview tab. Lives for the whole window because
+    // the heartbeat does; the dialog resets it when it starts reading.
+    std::unique_ptr<UiTickLagMeter> m_uiTickLagMeter;
     QsoRecorder*      m_qsoRecorder{nullptr};
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new

@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -157,7 +157,17 @@ if(APPLE)
     execute_process(COMMAND brew --prefix OUTPUT_VARIABLE HOMEBREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(HOMEBREW_PREFIX)
         link_directories("${HOMEBREW_PREFIX}/lib")
-        include_directories("${HOMEBREW_PREFIX}/include")
+        # SYSTEM is load-bearing, not cosmetic. A plain include_directories()
+        # here is directory-scoped at the TOP level, so it is inherited by every
+        # add_subdirectory() and initialises every target's INCLUDE_DIRECTORIES
+        # ahead of whatever that target adds for itself -- which means
+        # /opt/homebrew/include outranks every vendored include dir in the tree.
+        # Any Homebrew formula whose headers share a basename with a vendored one
+        # then silently wins, reversing the choice USE_SYSTEM_* made in CMake:
+        # ggml.h and whisper.h are both shadowed on the affected setup.
+        # SYSTEM emits -isystem, which the compiler searches AFTER all -I paths,
+        # so Homebrew stays findable and stops taking precedence.
+        include_directories(SYSTEM "${HOMEBREW_PREFIX}/include")
     endif()
 endif()
 
@@ -734,6 +744,7 @@ set(CORE_SOURCES
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
+    src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -749,6 +760,7 @@ set(CORE_SOURCES
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
+    src/core/SharedCapturePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
@@ -986,13 +998,19 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/CityLightsItem.cpp
+    src/gui/map/CityLightsSource.cpp
     src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp
     src/gui/map/MapTerminatorItem.cpp
+    src/gui/map/WeatherRadarPlaybackItem.cpp
+    src/gui/map/WeatherRadarSource.cpp
+    src/gui/map/WeatherRadarTileLayer.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
@@ -1051,6 +1069,7 @@ set(GUI_SOURCES
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
     src/gui/SpeApplet.cpp
+    src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/MeterApplet.cpp

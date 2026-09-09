@@ -537,8 +537,10 @@ bool SettingsDatabase::upsertRadioFeature(const QString& family,
 bool SettingsDatabase::readRadioFeature(const QString& family,
                                         const QString& radioId,
                                         const QString& feature,
-                                        int& schemaVersion, QString& value)
+                                        int& schemaVersion, QString& value,
+                                        bool* readFailedOut)
 {
+    if (readFailedOut) { *readFailedOut = true; }
     Statement stmt(m_db,
         "SELECT schema_version, value FROM radio_settings "
         "WHERE family = ?1 AND radio_id = ?2 AND feature = ?3;");
@@ -548,7 +550,9 @@ bool SettingsDatabase::readRadioFeature(const QString& family,
     bindText(stmt.get(), 1, family);
     bindText(stmt.get(), 2, radioId);
     bindText(stmt.get(), 3, feature);
-    if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    const int result = sqlite3_step(stmt.get());
+    if (readFailedOut) { *readFailedOut = result != SQLITE_ROW && result != SQLITE_DONE; }
+    if (result != SQLITE_ROW) {
         return false;
     }
     schemaVersion = sqlite3_column_int(stmt.get(), 0);

@@ -104,6 +104,9 @@
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "SystemInfoDialog.h"
+#include "MemoryHistoryRing.h"
+#include "CpuHistoryRing.h"
+#include "UiTickLagMeter.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -1223,9 +1226,21 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyDarkTheme();
 
+    // The Runtime Monitor's tick-lag meter measures THIS timer's cadence, so
+    // the nominal interval it subtracts is pinned to the interval set here.
+    static_assert(UiTickLagMeter::kNominalIntervalMs == 50.0,
+                  "UiTickLagMeter::kNominalIntervalMs must match the perf heartbeat interval");
+    m_uiTickLagMeter = std::make_unique<UiTickLagMeter>();
+    // Precise, not the default coarse type: with the default, an idle GUI
+    // thread on Windows 11 read the 50 ms heartbeat ~13 ms late on every tick
+    // (measured on #5427), so the Overview's tick-lag card had a floor that was
+    // timer scheduling, not event-loop load. The same timer drives
+    // PerfTelemetry::recordUiHeartbeat(), whose stall detection tightens with it.
+    m_perfHeartbeatTimer.setTimerType(Qt::PreciseTimer);
     m_perfHeartbeatTimer.setInterval(50);
-    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [] {
+    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [this] {
         PerfTelemetry::instance().recordUiHeartbeat();
+        m_uiTickLagMeter->tick();
     });
     m_perfHeartbeatTimer.start();
 
@@ -1427,6 +1442,8 @@ MainWindow::MainWindow(QWidget* parent)
             });
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
+    m_memoryHistory = std::make_unique<MemoryHistoryRing>();
+    m_cpuHistory = std::make_unique<CpuHistoryRing>();
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
             this, [this](const QString& message) {
         if (!message.isEmpty()) {
@@ -2683,6 +2700,14 @@ MainWindow::~MainWindow()
     ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
 
+    // The Runtime Monitor reads m_memoryHistory, m_cpuHistory and
+    // m_uiTickLagMeter, which are unique_ptr members and so are gone before
+    // ~QObject deletes the dialog (a WA_DeleteOnClose child). Its destructor
+    // does not touch them today; take the dialog down first so that a future
+    // line in ~SystemInfoDialog() cannot turn into a use-after-free at exit
+    // (#5427 review).
+    delete m_systemInfoDialog;
+
     // The qApp::focusChanged lambda (MainWindow_Shortcuts.cpp) runs
     // releaseSliderShortcutLease(), which touches m_shortcutManager and the
     // m_sliderShortcutLease* members. Those are value members, so they are gone
@@ -3482,6 +3507,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         // Re-evaluate CW decode panel and TX tap from the dialog's
         // RX/TX toggles, plus run state vs current slice mode (#2417).
         refreshCwDecodeState();
+        // Same for the Phone & CW page's RTTY Decode toggle — this is how the
+        // pane comes back after the operator dismissed it with ✕ (#5353).
+        refreshRttyDecodeState();
 
         // If audio compression changed, recreate the RX audio stream
         QString newComp = m_radioModel.audioCompressionParam();
@@ -3650,7 +3678,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
+        || !statusBar()->currentMessage().isEmpty()) {
         return;
     }
 
@@ -3825,6 +3854,7 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    m_pendingDisplayWrites.flush();
     ShutdownTrace closeEventTrace("main_window.close_event");
 #ifdef Q_OS_MAC
     // Shared Ulanzi access temporarily remaps only the dial's system key
@@ -4273,7 +4303,8 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog);
+    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
+                          m_uiTickLagMeter.get());
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
@@ -4971,6 +5002,24 @@ void MainWindow::buildUI()
     m_panApplet = nullptr;  // ensure setActivePanApplet sees a change
     setActivePanApplet(m_panStack->addPanadapter("default"));
     splitter->addWidget(m_panStack);
+
+    // A panadapter created AFTER the initial connect (Add Panadapter, layout
+    // switch, band-recall) never goes through onConnectionStateChanged()'s
+    // loop over allApplets() -- it comes up with QPushButton's default
+    // enabled state, silently reopening the exact no-op-click gap
+    // setBandSegmentZoomAvailable() exists to close, until the next
+    // connect/disconnect happens to re-sync it. panAdded fires once per
+    // applet "however it was created" (see its own comment on
+    // PanadapterStack::panAdded), so this is the one place that reliably
+    // catches every creation path.
+    connect(m_panStack, &PanadapterStack::panAdded, this, [this](const QString& panId) {
+        auto* applet = m_panStack->panadapter(panId);
+        if (!applet || !applet->spectrumWidget()) {
+            return;
+        }
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+    });
 
     // Band stack panel signal wiring
     auto* bsPanel = m_panStack->bandStackPanel();
@@ -5853,6 +5902,7 @@ void MainWindow::buildUI()
     hbox->addWidget(timeStack);
 
     statusBar()->addWidget(m_statusBarContainer, 1);
+    wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 
@@ -6011,16 +6061,25 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Keyed off RadioCapabilities::hasDdcPanEdgeRolloff (see its own
-    // comment), not a family-name check -- a future DDC-based backend gets
-    // this automatically instead of needing its own family string added
-    // here. Re-evaluate on every connect and disconnect, since
-    // backendCapabilities() only knows the CURRENTLY connected radio.
+    // Band/segment zoom only ever works on Flex (see SpectrumWidget::
+    // setBandSegmentZoomAvailable()'s own comment) -- usesFlexCommandPlane()
+    // is a direct family() == "flex" check (RadioModel.h), not merely "some
+    // connection object exists": SimBackend/demo mode owns a RadioConnection
+    // too but isn't Flex and doesn't understand band_zoom=/segment_zoom=, so
+    // the plain hasCommandPlane() this used before was one indirection looser
+    // than the actual question being asked. Edge taper is keyed off
+    // RadioCapabilities::hasDdcPanEdgeRolloff instead (see its own comment)
+    // -- a future DDC-based backend gets that automatically instead of
+    // needing its own family string added here. Re-evaluate both on every
+    // connect and disconnect, since usesFlexCommandPlane()/
+    // backendCapabilities() only know the CURRENTLY connected radio.
     if (m_panStack) {
+        const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
+                applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
             }
         }
@@ -6459,7 +6518,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));

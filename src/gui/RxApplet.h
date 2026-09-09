@@ -1,10 +1,13 @@
 #pragma once
 
 #include <QWidget>
+#include "DeferredSettingsWrites.h"
 #include <QVector>
 #include <QTimer>
 
 #include "core/backends/RadioCapabilities.h"
+#include "core/RadioSettingsScope.h"
+#include <optional>
 
 class ScrollableLabel;
 namespace AetherSDR { class FilterPassbandWidget; }
@@ -178,6 +181,7 @@ private:
     void updateFilterButtons();
     void refreshFilterWidth();   // "AUTO" while adaptive is live, else the width
     void updateModeSettings(const QString& mode);
+    bool squelchAvailableInMode(const QString& mode) const;
     void rebuildFilterButtons();
 public:
     // Narrow the filter buttons to the widths a radio can actually reach.
@@ -317,6 +321,16 @@ private:
     // so switching the active slice doesn't pull in another slice's threshold.
     int          m_sqlManualLevel{20};
 
+    // Icom has no separate SQL enable register: Off writes threshold zero.
+    // Only client intent is retained, never a live threshold to replay at attach.
+    RadioSettingsScope m_clientSquelchScope;
+    std::optional<int> m_clientManualSqlLevel;
+    bool m_restoreAutoSql{false};
+    bool m_clientSqlAwaitingReport{false};
+    void loadClientSquelchIntent();
+    void saveClientSquelchIntent();
+    AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
+    QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);

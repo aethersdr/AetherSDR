@@ -49,6 +49,15 @@ std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd, std::
     return buildFrame(to, cmd, body);
 }
 
+std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to, std::size_t extraPreambleBytes,
+                                     std::uint8_t from)
+{
+    std::vector<std::uint8_t> frame = buildFrameSub(to, cmd::kPower, 0x01, {});
+    frame[3] = from;
+    frame.insert(frame.begin(), extraPreambleBytes, kCivPreamble);
+    return frame;
+}
+
 // Which commands carry a subcommand is a per-command fact, not a positional
 // one. Treating every second byte as a subcommand would turn command 0x05's
 // first frequency digit into a "subcommand"; treating none of them as one
@@ -799,6 +808,13 @@ std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db)
 std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to)
 {
     return buildFrame(to, cmd::kAttenuator);
+}
+
+std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to)
+{
+    // IC-7300MK2: a bare 12 query returned 12 00 00/01 in the live
+    // Persist run. The 12 00 form returned only FB on earlier firmware.
+    return buildFrame(to, cmd::kRxAntenna);
 }
 
 std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)

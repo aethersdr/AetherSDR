@@ -485,7 +485,7 @@ jobs:
         if: steps.store-plan.outputs.productionDraft == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0
         with:
-          version: v0.4.1
+          version: v0.4.2
 
       - name: Stage Microsoft Store submission (draft)
         if: steps.store-plan.outputs.productionDraft == 'true'

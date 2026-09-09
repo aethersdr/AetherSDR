@@ -142,6 +142,11 @@ bool HdlcCodec::processBit(uint8_t nrziTone)
     if (m_complete) {
         m_complete = false;
         m_aborted  = false;
+        // The caller has now consumed the completed frame. closeFrame() left
+        // the buffer intact for that read but never cleared it, so the next
+        // frame appended to the previous one whenever two frames were
+        // separated by a single flag (the normal back-to-back case).
+        beginFrame();
     }
 
     // NRZI decode: no transition = 1 (mark held), transition = 0 (space).

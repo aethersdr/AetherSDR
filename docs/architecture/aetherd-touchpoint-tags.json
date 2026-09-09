@@ -101,6 +101,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ClientDisplaySettings.h": {
+  "tag": "ui-support",
+  "note": "Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientEq.h": {
   "tag": "universal",
   "note": "Client-side parametric EQ DSP in AudioEngine (RX/TX paths); radio-agnostic engine DSP, no vendor protocol ties.",

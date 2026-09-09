@@ -172,6 +172,12 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // "idle" / "connecting" / "connected" — the bridge's third value, so a
+    // caller can tell a connect that is working from one that is not happening
+    // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
+    // isConnected() and isConnectAttemptInFlight() below — one lifecycle, not
+    // a second one owned by this field.
+    QString connectState() const;
     // True from the moment a connect is requested until it lands, fails, or is
     // abandoned. isConnected() alone cannot express "still working": it is
     // false both before an attempt starts and while one is in flight, which is
@@ -782,6 +788,9 @@ public:
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
+    // One explicit wake, followed by one bounded connection attempt. Never persisted.
+    bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
+    bool radioWakeActive() const { return m_radioWakeActive; }
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     void setPendingClientDisconnects(const QList<quint32>& handles);
     bool disconnectClient(quint32 handle);
@@ -911,6 +920,7 @@ public:
     // `wfRate` is the 1..100 waterfall RATE control value, low slow / high
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
+    bool requestPanAverage(const QString& panId, int average);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
@@ -1040,6 +1050,8 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    void radioWakeProgress(const QString& message, bool active);
+    void radioWakeFailed(const QString& message);
     // Radio CONFIGURATION advice that does not end the session. See
     // IRadioBackend::configurationWarning for why this is a separate channel.
     void configurationWarning(const QString& msg);
@@ -1298,7 +1310,11 @@ public:
     // HL2 MAC); an unconnected model yields a family-wide scope.
     RadioSettingsScope settingsScope() const
     {
-        return RadioSettingsScope(m_family, serial());
+        const QString radioId = settingsRadioId(m_family, serial(), m_lastInfo.serialIdentity);
+        if (m_family == QLatin1String("rtl") && radioId.isEmpty() && isConnected()) {
+            return RadioSettingsScope::anonymousRadio(m_family);
+        }
+        return RadioSettingsScope(m_family, radioId);
     }
 
     // Fire a vendor-extension verb at the connected backend (IRadioBackend
@@ -1387,6 +1403,7 @@ private slots:
     void onBackendSpectrumFrame(int panId, const QByteArray& frame);
 
 private:
+    friend struct RadioModelWakeTestAccess;
     void handleRadioStatus(const QMap<QString, QString>& kvs);
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
@@ -1524,7 +1541,7 @@ private:
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
-    void handRestoredStateToBackend(const QString& serial);  // RFC #4603
+    void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
@@ -1645,6 +1662,16 @@ public:
             emit m_backend->sliceChanged(sliceId, delta);
         }
     }
+
+    // Install a backend directly, bypassing buildBackend()'s family wiring.
+    //
+    // The DSP read-back path — AutomationServer's `get dsp` — needs exactly one
+    // thing from this model: backend()->dspChains(). Reaching it through
+    // buildBackend() would mean constructing a real family backend, i.e. a wire
+    // object and its I/O thread, inside a test whose whole point is that it
+    // opens no socket. Takes ownership. Nothing in production calls this; the
+    // family string is set alongside because the read-back reports it.
+    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
@@ -2078,6 +2105,11 @@ private:
     void restoreAutomationSliceFixtureBaseline();
 
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
+    bool m_radioWakeActive = false;
+    quint64 m_radioWakeGeneration = 0;
+    QString m_radioWakeModel;
+    void cancelRadioWake();
+    void finishRadioWake(const QString& message, bool success);
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
     // See isConnectAttemptInFlight(). Set by the connect entry points, cleared

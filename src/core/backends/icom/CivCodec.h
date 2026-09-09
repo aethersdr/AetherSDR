@@ -80,6 +80,10 @@ struct CivFrame {
 // Build a frame. `to` is the radio's CI-V address.
 [[nodiscard]] std::vector<std::uint8_t> buildFrame(std::uint8_t to, std::uint8_t cmd,
                                                    std::span<const std::uint8_t> payload = {});
+// Explicit Power ON only. Native-network framing is selected by the model profile.
+[[nodiscard]] std::vector<std::uint8_t> cmdPowerOn(std::uint8_t to,
+    std::size_t extraPreambleBytes = 0, std::uint8_t from = kControllerAddress);
+
 [[nodiscard]] std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd,
                                                       std::uint8_t sub,
                                                       std::span<const std::uint8_t> payload = {});
@@ -695,6 +699,7 @@ struct PassbandEdges {
 // IC-705), encoded as one BCD byte. The read form carries no payload.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
 enum class RepeaterOffsetDirection : std::uint8_t {
     Simplex = 0x10,

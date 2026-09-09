@@ -8,6 +8,9 @@
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2OverloadPolicy.h"
+#include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -52,6 +55,14 @@ struct Hl2Backend::PendingConnect {
     // m_connectGeneration; a build whose generation is stale on completion
     // tears itself down instead of starting a wire nobody asked for.
     quint64 generation = 0;
+    // How long this phase has been running. Belongs to the connect rather than
+    // to the backend so a superseded build cannot report the new one's elapsed.
+    QElapsedTimer clock;
+    // Set when the phase watchdog has already released the caller with a
+    // dspSetupFinished(). The build is still running and finishDspSetup() will
+    // reach its stale branch later; this stops that branch emitting a second
+    // end-of-phase edge for one connect.
+    bool finishSignalled = false;
 };
 
 // What the I/O thread carries back. Parallel arrays indexed by DDC rather than
@@ -473,6 +484,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         pushInitialState();
         emitAllSliceState();
         defineMeters();
+        // Tell the IO board where we came up. applyBandFilter() is NOT called on
+        // this path — the connect-time filter byte is primed straight into
+        // MetisClient::Params instead — so without this the board would hold
+        // whatever the last session left it, and an amplifier would stay on that
+        // band until the operator's first retune. Placed after pushInitialState()
+        // so the receiver frequencies it reads are the restored ones.
+        applyIoBoardFrequency();
         // At connect there is one receiver, so this is always "not wide" — but
         // it is published rather than assumed, so the indicator starts from a
         // stated value instead of whatever the widget happened to hold.
@@ -482,6 +500,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         if (m_connected) {
             m_connected = false;
             m_linkStatsTimer->stop();
+            resetIoBoardSchedule();
             emit disconnected();
         }
     });
@@ -490,6 +509,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // connection error and stop the Metis client so it does not sit half-open
     // paying out C&C at a radio that will never answer.
     connect(m_metis, &MetisClient::connectFailed, this, [this](const QString& reason) {
+        invalidateTxDspConfiguration();
         // This handler runs on the MAIN thread (queued from the io thread), but
         // m_metis lives on the io thread — stop() touches its socket and timers,
         // so it must run THERE, not here. A direct call is the affinity bug the
@@ -497,6 +517,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
         m_connected = false;
         m_linkStatsTimer->stop();
+        resetIoBoardSchedule();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -1303,6 +1324,7 @@ void Hl2Backend::releaseReceiverDsps()
 
 void Hl2Backend::tearDownReceivers()
 {
+    invalidateTxDspConfiguration();
     releaseReceiverDsps();   // already withdrew every chain from the sample path
     m_rx.clear();
     publishIoDsps();         // and now the list is empty, not merely all-null
@@ -1626,6 +1648,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         qCInfo(lcHl2) << "HL2: connect requested while the DSP was still opening"
                       << "— queued behind it";
         ++m_connectGeneration;
+        invalidateTxDspConfiguration();
         m_queuedConnect = std::make_unique<RadioConnectRequest>(request);
         return;
     }
@@ -1699,11 +1722,29 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // Per-band memory (RFC #4603 PR 3): the session comes up with the start
     // band's remembered LNA. The explicit param still wins via the guard.
     m_currentBandKey = hl2::bandKeyForHz(startFreqHz);
-    if (m_haveRestoredState
-        && !request.params.contains(QStringLiteral("lnaGainDb"))) {
-        m_lnaGainDb = qBound(kLnaGainMinDb,
-                             m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
-                             kLnaGainMaxDb);
+    {
+        const bool paramPresent =
+            request.params.contains(QStringLiteral("lnaGainDb"));
+        const bool hasStored = m_lnaDbByBand.contains(m_currentBandKey);
+        const AetherSDR::hl2::ConnectLna seed = AetherSDR::hl2::connectLna(
+            m_haveRestoredState, hasStored,
+            m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
+            paramPresent,
+            request.params.value(QStringLiteral("lnaGainDb")).toInt(),
+            m_lnaDefaultDb, kLnaGainMinDb, kLnaGainMaxDb);
+        // Only take the live value when the policy actually had something to
+        // say: with no restored state and no param it returns the default,
+        // which must not stamp on a value the lines above already settled.
+        if (m_haveRestoredState || paramPresent) {
+            m_lnaGainDb = seed.liveDb;
+        }
+        m_lnaSessionPin = seed.sessionPin;
+        if (m_lnaSessionPin) {
+            qCInfo(lcHl2) << "HL2: lnaGainDb param pins" << m_lnaGainDb
+                          << "dB for this session;" << m_currentBandKey
+                          << "keeps its stored"
+                          << m_lnaDbByBand.value(m_currentBandKey) << "dB";
+        }
     }
     // Seed the DRIVE from the start band's memory and echo it upward NOW —
     // before linkUp — so TransmitModel carries the restored value when its
@@ -1998,6 +2039,13 @@ void Hl2Backend::beginDspSetup()
     }
 
     emit dspSetupProgress(tr("Preparing the receive chain…"), 0, total);
+    // MIRRORED TO THE LOG, because dspSetupProgress has exactly one consumer in
+    // the tree and it is MainWindow — so the phase is visible to an operator
+    // watching a dialog and invisible to everyone else, which is why a headless
+    // run showed nothing between here and the wire. (#5413.)
+    qCInfo(lcHl2) << "HL2 DSP setup: opening" << total << "receive chain(s)";
+    m_pendingConnect->clock.start();
+    armDspSetupWatchdog();
 
     const Hl2TxDsp::Config tc = m_pendingConnect->tc;
     Hl2TxDsp* txDsp = m_txDsp;
@@ -2062,10 +2110,93 @@ void Hl2Backend::beginDspSetup()
     }, Qt::QueuedConnection);
 }
 
+void Hl2Backend::armDspSetupWatchdog()
+{
+    if (!m_dspSetupWatchdog) {
+        m_dspSetupWatchdog = new QTimer(this);
+        m_dspSetupWatchdog->setSingleShot(true);
+        connect(m_dspSetupWatchdog, &QTimer::timeout, this,
+                &Hl2Backend::onDspSetupWatchdog);
+    }
+    m_dspSetupWatchdog->start(
+        static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(0)));
+}
+
+void Hl2Backend::onDspSetupWatchdog()
+{
+    if (!m_pendingConnect) {
+        return;               // finished between the fire and this slot
+    }
+    const qint64 elapsed = m_pendingConnect->clock.elapsed();
+    switch (AetherSDR::hl2::dspSetupAction(elapsed)) {
+    case AetherSDR::hl2::DspSetupAction::None:
+        // Fired early (a timer can). Look again at the point that matters.
+        m_dspSetupWatchdog->start(
+            static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(elapsed)));
+        return;
+    case AetherSDR::hl2::DspSetupAction::Warn:
+        // NOT a failure. A machine's first WDSP open measures its FFT plans
+        // rather than loading them and is legitimately slow (#5052) — 98 s on a
+        // quiet machine, 188 s under load — so this says so and keeps waiting;
+        // the alternative is failing a connect that is working. It repeats,
+        // because the wait it is reporting can be minutes long.
+        qCWarning(lcHl2) << "HL2 DSP setup: still opening after" << elapsed
+                         << "ms — a first open on this machine can be slow;"
+                         << "will fail at"
+                         << AetherSDR::hl2::kDspSetupFailMs / 1000 << "s";
+        m_dspSetupWatchdog->start(
+            static_cast<int>(AetherSDR::hl2::dspSetupNextCheckMs(elapsed)));
+        return;
+    case AetherSDR::hl2::DspSetupAction::Fail:
+        break;
+    }
+
+    qCWarning(lcHl2) << "HL2 DSP setup: gave up after" << elapsed << "ms";
+
+    // INVALIDATE, DO NOT TEAR DOWN. The I/O thread may be inside configure() on
+    // these very chains — WDSP's OpenChannel does not return early, so the build
+    // cannot be cancelled — and freeing them from this thread would be a
+    // use-after-free. So do exactly what disconnectRadio() does: bump the
+    // generation and LEAVE m_pendingConnect SET. The build runs to completion,
+    // finishDspSetup() takes its stale branch, and that branch is what releases
+    // the chains and re-drives anything queued behind them.
+    //
+    // Resetting pending here instead would disable the very mechanism this
+    // comment relies on: finishDspSetup() would return at its
+    // `if (!m_pendingConnect)` guard, tearDownReceivers() would never run, and
+    // every timed-out connect would leak its WDSP channels out of the 32-slot
+    // pool. Worse, connectRadio() queues behind an in-flight build only while
+    // m_pendingConnect is set, so a retry after this error would call
+    // buildReceivers() on the chains the I/O thread is still opening — a
+    // use-after-free reached by the ordinary "connect failed, try again"
+    // gesture. (#5413 triage; #5415 review.)
+    ++m_connectGeneration;
+    // Before the emits, not after: a connectionError handler can re-enter this
+    // object, and the stale branch must see this flag whatever it does.
+    m_pendingConnect->finishSignalled = true;
+    invalidateTxDspConfiguration();
+    emit connectionError(
+        tr("Hermes-Lite 2: the DSP setup did not finish within %1 seconds")
+            .arg(AetherSDR::hl2::kDspSetupFailMs / 1000));
+    // So a caller waiting on the phase is released rather than left hanging on
+    // a signal that now never comes. The build is still running; the flag above
+    // keeps the stale branch from emitting this a second time.
+    emit dspSetupFinished();
+}
+
 void Hl2Backend::finishDspSetup(const DspSetupResult& result)
 {
-    if (!m_pendingConnect)
+    // Stopped on EVERY exit below, including the two early returns — a timer
+    // left running past the phase it measures would fail a connect that had
+    // already succeeded.
+    if (m_dspSetupWatchdog) {
+        m_dspSetupWatchdog->stop();
+    }
+    if (!m_pendingConnect) {
         return;
+    }
+    qCInfo(lcHl2) << "HL2 DSP setup: chains open after"
+                  << m_pendingConnect->clock.elapsed() << "ms";
     // A disconnect, or a second connect, arrived while the chains were opening.
     // The wire was never started, so there is nothing to stop — but the chains
     // ARE open, and leaving them open would leak WDSP channels out of the
@@ -2073,11 +2204,16 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     if (m_pendingConnect->generation != m_connectGeneration) {
         qCInfo(lcHl2) << "HL2: connect superseded while the DSP was opening —"
                       << "releasing the chains it built";
+        // Read before the reset: the phase watchdog may already have ended the
+        // phase for a caller that could not wait for this moment.
+        const bool alreadyFinished = m_pendingConnect->finishSignalled;
         m_pendingConnect.reset();
         // Safe to block inside here: the build has finished, so the I/O thread
         // is back at its event loop and publishIoDsps() returns promptly.
         tearDownReceivers();
-        emit dspSetupFinished();
+        if (!alreadyFinished) {
+            emit dspSetupFinished();
+        }
         // A connect that arrived mid-build has been waiting for exactly this.
         if (m_queuedConnect) {
             const RadioConnectRequest queued = *m_queuedConnect;
@@ -2108,6 +2244,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
             // refusing the whole session over it would be a worse outcome than
             // the degradation. Trim to what opened and carry on.
             if (i == 0) {
+                invalidateTxDspConfiguration();
                 emit connectionError(
                     QStringLiteral("HL2 DSP: %1").arg(QString::fromStdString(err)));
                 emit dspSetupFinished();
@@ -2196,14 +2333,37 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // connected() has fired and RadioModel has finished staging the old session.
 }
 
+void Hl2Backend::invalidateTxDspConfiguration()
+{
+    if (!m_txDsp) {
+        return;
+    }
+    if (!m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_txDsp->thread()) {
+        m_txDsp->invalidateConfiguration();
+        return;
+    }
+    // Serializes after an in-flight configure and before any later read-back.
+    // Never wait here: a cancelled cold WDSP open can still take minutes.
+    QMetaObject::invokeMethod(m_txDsp, [dsp = m_txDsp] {
+        dsp->invalidateConfiguration();
+    }, Qt::QueuedConnection);
+}
+
 void Hl2Backend::disconnectRadio()
 {
+    invalidateTxDspConfiguration();
     // Invalidate any DSP build still in flight. Without this, a disconnect
     // during the opens would be followed by finishDspSetup() starting a wire
     // for a session the operator has already left. The build itself cannot be
     // cancelled — WDSP's OpenChannel does not return early — so it runs to
     // completion on the I/O thread and finishDspSetup() releases what it built.
     ++m_connectGeneration;
+    // The phase watchdog goes with it: the operator has left, so a later fire
+    // would report a failure for a connect nobody is waiting on.
+    if (m_dspSetupWatchdog) {
+        m_dspSetupWatchdog->stop();
+    }
     // And a connect PARKED BEHIND that build is stale for the same reason: the
     // operator has since asked to be disconnected. Leaving it here made
     // finishDspSetup()'s supersede branch re-drive it — a second full build
@@ -2888,15 +3048,40 @@ void Hl2Backend::setPanRfGain(const QString& panId, int gainDb)
     if (ddcForPan(panId) < 0)
         return;
     const int clamped = qBound(kLnaGainMinDb, gainDb, kLnaGainMaxDb);
-    if (clamped == m_lnaGainDb)
-        return;
-    applyLnaGainDb(clamped);
-    qCInfo(lcHl2) << "HL2 LNA gain:" << m_lnaGainDb << "dB (requested" << gainDb << ")";
+
+    // ONLY the register write is redundant when the value has not moved. The
+    // equality check used to return above everything below it, which made an
+    // operator who set exactly the value already live invisible to the band
+    // memory — and the one value guaranteed to be already live is the one a
+    // connect param pinned. 20 m stored at -12, connect with lnaGainDb=20, and
+    // the operator still on 20 m deliberately setting 20 ended no pin and
+    // recorded no band, so the snapshot kept persisting -12. (#5402 review.)
+    const bool moved = (clamped != m_lnaGainDb);
+    if (moved) {
+        applyLnaGainDb(clamped);
+        qCInfo(lcHl2) << "HL2 LNA gain:" << m_lnaGainDb << "dB (requested" << gainDb << ")";
+    }
 
     // The operator's gain belongs to the band they set it on (RFC #4603 PR 3).
-    if (!m_currentBandKey.isEmpty())
-        m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
-    notifyOperatingStateChanged();
+    // This is also what ends a session pin: the value is now the operator's
+    // own choice for this band, so the band memory is theirs to overwrite.
+    // Choosing the value the session was pinned to is still choosing it.
+    const bool endedPin = m_lnaSessionPin;
+    m_lnaSessionPin = false;
+    bool recordedBand = false;
+    if (!m_currentBandKey.isEmpty()) {
+        const auto stored = m_lnaDbByBand.constFind(m_currentBandKey);
+        if (stored == m_lnaDbByBand.constEnd() || *stored != m_lnaGainDb) {
+            m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
+            recordedBand = true;
+        }
+    }
+    // A slider that moved nothing, ended no pin and changed no stored entry has
+    // nothing to persist; notifying anyway would schedule a debounced store for
+    // a no-op. Any of the three actually changing still notifies as before.
+    if (moved || endedPin || recordedBand) {
+        notifyOperatingStateChanged();
+    }
 }
 
 void Hl2Backend::applyPanBandwidth(double hz)
@@ -3810,6 +3995,144 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
+namespace {
+
+// WDSP's AGC mode integer as the string the bridge and the operator use, so a
+// read-back can be compared against what was asked for without the reader
+// having to know WDSP's enumeration.
+QString agcModeName(int wdspMode)
+{
+    switch (wdspMode) {
+    case 0:  return QStringLiteral("off");
+    case 1:  return QStringLiteral("long");
+    case 2:  return QStringLiteral("slow");
+    case 3:  return QStringLiteral("med");
+    case 4:  return QStringLiteral("fast");
+    default: return QStringLiteral("unknown(%1)").arg(wdspMode);
+    }
+}
+
+}  // namespace
+
+// What the DSP is actually configured with. See IRadioBackend::dspChains().
+//
+// The gather is a STATIC member taking the two lists it may read, so it has no
+// `this` and cannot reach m_rx — see the declaration in the header for why that
+// is the enforcement rather than a comment. dspChains() below is the one place
+// that chooses what to hand it.
+QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
+                                         Hl2TxDsp* txDsp)
+{
+    QVariantList chains;
+
+    // rxDsps is the caller's snapshot, and everything below is a function of
+    // it. Its callers hand it m_ioDsps — the I/O thread's own DDC-indexed list,
+    // which is why the index reported here is the DDC — and never m_rx, whose
+    // storage the GUI thread reallocates underneath a reader. Nothing here
+    // needs Receiver in any case: every field reported comes from the DSP
+    // object, which was the point of reading the DSP rather than the mirror.
+    for (int i = 0; i < static_cast<int>(rxDsps.size()); ++i) {
+        Hl2RxDsp* dsp = rxDsps[static_cast<std::size_t>(i)];
+        QVariantMap e;
+        e[QStringLiteral("chain")] = QStringLiteral("rx-wdsp");
+        e[QStringLiteral("receiver")] = i;
+        if (!dsp || !dsp->isConfigured()) {
+            // Reported as present-but-unconfigured rather than omitted: a
+            // receiver that exists with no channel behind it is exactly the
+            // state worth seeing.
+            e[QStringLiteral("level")] = QStringLiteral("not-configured");
+            chains.append(e);
+            continue;
+        }
+        const WdspChannel::Config* c = dsp->channelConfig();
+        if (!c) {
+            e[QStringLiteral("level")] = QStringLiteral("not-configured");
+            chains.append(e);
+            continue;
+        }
+        // "channel-config" and not "dsp": these are the values the channel
+        // was OPENED with, after any clamping or refusal. That is one level
+        // below the model and one above a query into WDSP itself, and the
+        // difference decides what a mismatch proves.
+        e[QStringLiteral("level")] = QStringLiteral("channel-config");
+        e[QStringLiteral("inputRateHz")] = c->inputSampleRate;
+        e[QStringLiteral("dspRateHz")] = c->dspSampleRate;
+        e[QStringLiteral("outputRateHz")] = c->outputSampleRate;
+        e[QStringLiteral("inputBlockSize")] = static_cast<int>(c->inputBlockSize);
+        e[QStringLiteral("dspBlockSize")] = static_cast<int>(c->dspBlockSize);
+        e[QStringLiteral("outputBlockSize")] =
+            static_cast<int>(dsp->channelOutputBlockSize());
+        e[QStringLiteral("filterLowHz")] = c->filterLowHz;
+        e[QStringLiteral("filterHighHz")] = c->filterHighHz;
+        e[QStringLiteral("agcMode")] = agcModeName(c->agcMode);
+        e[QStringLiteral("agcMaxGainDb")] = c->maximumAgcGainDb;
+        e[QStringLiteral("agcSlopeDb")] = c->agcSlopeDb;
+        e[QStringLiteral("agcFixedGainDb")] = c->agcFixedGainDb;
+        // Level 4 where it exists: these two ask WDSP itself rather than
+        // reading the config, and are marked so a reader can tell.
+        e[QStringLiteral("wdspNotchCount")] = dsp->wdspNotchCount();
+        e[QStringLiteral("appliedNoiseBlanker")] =
+            dsp->appliedNoiseBlankerEnabled();
+        chains.append(e);
+    }
+
+    if (txDsp) {
+        QVariantMap e;
+        e[QStringLiteral("chain")] = QStringLiteral("hl2-tx");
+        if (!txDsp->isConfigured()) {
+            e[QStringLiteral("level")] = QStringLiteral("not-configured");
+            chains.append(e);
+            return chains;
+        }
+        const Hl2TxDsp::Config& t = txDsp->config();
+        // Level 4 by construction: there is no WDSP channel on transmit,
+        // so this struct is the modulator's state rather than a record of
+        // what it was asked for.
+        e[QStringLiteral("level")] = QStringLiteral("dsp-config");
+        e[QStringLiteral("inputRateHz")] = t.inputSampleRateHz;
+        e[QStringLiteral("outputRateHz")] = t.outputSampleRateHz;
+        e[QStringLiteral("dspBlockSize")] = t.dspBlockSize;
+        e[QStringLiteral("filterLowHz")] = t.filterLowHz;
+        e[QStringLiteral("filterHighHz")] = t.filterHighHz;
+        e[QStringLiteral("alcEnabled")] = t.alcEnabled;
+        e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
+        e[QStringLiteral("alcMaxGainDb")] = t.alcMaxGainDb;
+        e[QStringLiteral("alcAttackSec")] = t.alcAttackSec;
+        e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;
+        e[QStringLiteral("alcHoldBelowDbfs")] = t.alcHoldBelowDbfs;
+        e[QStringLiteral("micGainLinear")] = txDsp->micGain();
+        chains.append(e);
+    }
+    return chains;
+}
+
+// Gathered on the I/O thread, because that is where both chains live and this
+// is called from the GUI thread. Same shape as AutomationServer's
+// dspSnapshotOnObjectThread(): a same-thread fast path, otherwise a blocking
+// queued invocation. A failed invocation returns empty rather than a
+// half-filled list — "we could not ask" and "it answered zero" must not look
+// alike, which is the same rule healthSnapshot() follows.
+QVariantList Hl2Backend::dspChains() const
+{
+    // THE ONE LINE THAT CHOOSES. m_ioDsps, never m_rx: the I/O side gets its own
+    // DDC-indexed list, rebuilt by publishIoDsps() when the receiver set
+    // changes, and the EP6 fan-out reads it for the same reason. Nothing in the
+    // gather needs Receiver anyway — every field it reports comes from the DSP
+    // object, which was the point of reading the DSP rather than the mirror.
+    if (!m_txDsp || m_txDsp->thread() == QThread::currentThread()) {
+        return gatherDspChains(m_ioDsps, m_txDsp);
+    }
+    if (!m_ioThread || !m_ioThread->isRunning()) {
+        return {};  // no event loop can answer a blocking invocation
+    }
+
+    QVariantList out;
+    const bool invoked = QMetaObject::invokeMethod(
+        m_txDsp, [this, &out]() { out = gatherDspChains(m_ioDsps, m_txDsp); },
+        Qt::BlockingQueuedConnection);
+    return invoked ? out : QVariantList{};
+}
+
 void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                                  const QVariant& arg)
 {
@@ -3948,14 +4271,22 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("ptt", QStringLiteral("PTT (radio)"), m_telemetry.ptt);
     put("keyed", QStringLiteral("Keyed (app)"), m_keyed);
     put("tuning", QStringLiteral("Tune carrier"), m_tuning);
-    // "The most important number in the protocol" (oracle §6): the depth of the
-    // FPGA's transmit sample buffer. Drifting up means we are sending faster
-    // than the radio consumes; drifting down is an impending underrun.
-    put("txFifoCount", QStringLiteral("TX FIFO depth"), opt(m_telemetry.txFifoCount));
-    put("txFifoUnderflow", QStringLiteral("TX FIFO underflow"),
-        opt(m_telemetry.txFifoUnderflow));
-    put("txFifoOverflow", QStringLiteral("TX FIFO overflow"),
-        opt(m_telemetry.txFifoOverflow));
+    // The FPGA's transmit sample buffer. The oracle calls its depth "the most
+    // important number in the protocol"; the gateware at 883a338 does not send
+    // a depth. It sends the TOP 7 BITS of the fill level and one fault flag
+    // (fifos.v:100-110) — so this reads as a level out of 127, not a count, and
+    // the label says so rather than inviting the reader to treat 64 as samples.
+    // Rising means we are sending faster than the radio consumes; falling is an
+    // impending underrun. See MetisProtocol.cpp's apply() for the full layout
+    // and for what the previous three rows here got wrong.
+    put("txFifoFillMsbs", QStringLiteral("TX FIFO fill (0-127, coarse)"),
+        opt(m_telemetry.txFifoFillMsbs));
+    // ONE bit for TWO faults: ran empty, or writes blocked after filling. The
+    // gateware does not distinguish them, so this must not be split into an
+    // underflow row and an overflow row — the two rows that stood here reported
+    // opposite faults for the same flag depending on fill-level bit 6.
+    put("txFifoRecovery", QStringLiteral("TX pacing fault (under OR overrun)"),
+        opt(m_telemetry.txFifoRecovery));
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
@@ -4182,6 +4513,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_driveByBand.clear();
     m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
     m_lnaGainDb = 20;
+    m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
     m_sampleRateHz = 48000;       // construction default — radio B must not
@@ -4450,7 +4782,22 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     for (auto it = m_driveByBand.constBegin(); it != m_driveByBand.constEnd(); ++it)
         driveByBand.insert(it.key(), it.value());
     if (!m_currentBandKey.isEmpty()) {
-        lnaByBand.insert(m_currentBandKey, m_lnaGainDb);
+        // THE SAME PRESERVATION RULE AS THE WRITE-BACK, and it has to be here
+        // too. This snapshot is taken on a debounced store that any unrelated
+        // action schedules -- a same-band tune, a mode change, a filter change
+        // -- so it reaches the band map long BEFORE the first band change.
+        // Protecting only rememberCurrentBandState() left the session pin free
+        // to be persisted through this path: restore 20 m at -12, connect with
+        // lnaGainDb=20, tune within 20 m, and the capture stored 20 for 20 m.
+        // (#5402 review, Ozy311.)
+        //
+        // One policy, two call sites asking it -- not two copies of the rule.
+        lnaByBand.insert(
+            m_currentBandKey,
+            AetherSDR::hl2::bandMemoryWriteback(
+                m_lnaGainDb, m_lnaSessionPin,
+                m_lnaDbByBand.contains(m_currentBandKey),
+                m_lnaDbByBand.value(m_currentBandKey)));
         driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
     }
 
@@ -4516,7 +4863,12 @@ void Hl2Backend::rememberCurrentBandState()
 {
     if (m_currentBandKey.isEmpty())
         return;
-    m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
+    m_lnaDbByBand.insert(
+        m_currentBandKey,
+        AetherSDR::hl2::bandMemoryWriteback(
+            m_lnaGainDb, m_lnaSessionPin,
+            m_lnaDbByBand.contains(m_currentBandKey),
+            m_lnaDbByBand.value(m_currentBandKey)));
     m_driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
 }
 
@@ -4531,6 +4883,9 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
     // review: the drive that makes 5 W on 80 m is not polite on 10 m, so a
     // band change must never carry the old band's drive along.
     rememberCurrentBandState();
+    // Clear only AFTER writeback preserves the start band. Later bands must
+    // record their own gains normally.
+    m_lnaSessionPin = false;
     const QString oldBand = m_currentBandKey;
     m_currentBandKey = newBand;
 
@@ -4891,14 +5246,14 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve)";
     }
-    // TX IQ FIFO depth — the oracle calls this the most important number in the
-    // protocol. A queue-fed transmission can starve the radio's buffer in a way
-    // a per-packet generated tone never can, so this is what distinguishes
-    // "the audio is wrong" from "the audio never arrived".
-    if (m_keyed && t.txFifoCount)
-        qCDebug(lcHl2Tx) << "HL2 fifo:" << *t.txFifoCount
-                         << "under" << t.txFifoUnderflow.value_or(false)
-                         << "over" << t.txFifoOverflow.value_or(false);
+    // TX IQ FIFO — a queue-fed transmission can starve the radio's buffer in a
+    // way a per-packet generated tone never can, so this is what distinguishes
+    // "the audio is wrong" from "the audio never arrived". `fill` is the top 7
+    // bits of the level, 0-127, not a sample count; `pacingFault` is the one
+    // flag the gateware sends for both underrun and blocked writes.
+    if (m_keyed && t.txFifoFillMsbs)
+        qCDebug(lcHl2Tx) << "HL2 fifo: fill" << *t.txFifoFillMsbs << "/127"
+                         << "pacingFault" << t.txFifoRecovery.value_or(false);
     if (t.temperatureRaw) {
         const double c = temperatureCelsius(*t.temperatureRaw);
         // The instrumentation ADC's low bits are noisy enough that the displayed
@@ -4915,7 +5270,59 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)
+            ++m_adcOverloadAssertions;
+    }
+    // Rate-limited, not merely edge-gated. The edge gate above is necessary and
+    // was never sufficient: the comparator genuinely chatters on a strong band,
+    // so nearly every telemetry sample is an edge and one message repeats at the
+    // full telemetry cadence (see the members' comment in the header for the
+    // rate, and for why the historical figure there is not repeated as a
+    // current one).
+    //
+    // Deliberately OUTSIDE the edge test, and this is the whole reason the two
+    // are separate: a burst that stops must still report its tally. Flushing
+    // only on the next edge would hold the count until the band goes loud
+    // again, which could be hours away or never. publishTelemetry runs on every
+    // telemetry update, so the window closes on time whether or not the
+    // condition is still happening.
+    //
+    // Reported rather than dropped because the rate IS the severity here — a
+    // flag that sets once is a hint, one that sets on every sample for a minute
+    // is a front end being slammed.
+    const AetherSDR::hl2::AdcOverloadWarn w = AetherSDR::hl2::adcOverloadWarn(
+        m_adcOverloadAssertions,
+        m_adcOverloadClock.isValid(),
+        m_adcOverloadClock.isValid() ? m_adcOverloadClock.elapsed() : 0,
+        kAdcOverloadWarnIntervalMs);
+    if (w.warn) {
+        // What the aggregate branch does NOT mean. It is not "this is the first
+        // overload ever" — it is "exactly one assertion was seen in this
+        // window". That lone assertion may have arrived at any point since the
+        // window opened, so a bare message can lag the event by up to
+        // kAdcOverloadWarnIntervalMs. Accepted deliberately: it is the cost of
+        // the rate limit, one assertion is a hint rather than an emergency, and
+        // an isolated overload after a quiet period still reports immediately
+        // because the clock is long expired by then.
+        if (w.aggregate) {
+            // noquote + one composed string: streaming "(" as its own item makes
+            // QDebug insert a space after it and print "( 51 times in 10000 ms)".
+            qWarning().noquote()
+                << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate"
+                << QStringLiteral("(%1 times in %2 ms)")
+                       .arg(w.count)
+                       .arg(m_adcOverloadClock.elapsed());
+        } else {
             qWarning() << "Hl2Backend: ADC OVERLOAD — reduce LNA gain or attenuate";
+        }
+        if (w.restartClock) {
+            // start(), NOT restart(). restart() reads the elapsed time first,
+            // and reading it on a timer that was never started is undefined —
+            // which is exactly the first-assertion path, where the clock is
+            // invalid by construction. start() is defined on both, and the
+            // value restart() returns was discarded anyway. (#5381 review.)
+            m_adcOverloadClock.start();
+        }
+        m_adcOverloadAssertions = 0;
     }
 }
 
@@ -5000,10 +5407,119 @@ double Hl2Backend::temperatureCelsius(int raw)
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
 }
 
+void Hl2Backend::applyIoBoardFrequency()
+{
+    if (!m_metis || m_rx.empty())
+        return;
+
+    // The TRANSMIT receiver's frequency — NOT the agree-or-bypass answer the
+    // filter board gets. The IO board switches amplifiers, antenna relays and
+    // transverters, all of which must follow where the operator will RADIATE.
+    // Receive slices parked on other bands are irrelevant to that, and the
+    // bypass result (kOcNone) is a relay pattern with no frequency to offer.
+    const Receiver* txRx = rx(m_txDdc);
+    const double hz = txRx ? txRx->sliceFreqHz : m_rx[0].sliceFreqHz;
+    if (!std::isfinite(hz) || hz <= 0.0 || hz > static_cast<double>(0xFF'FF'FF'FF'FFULL)) {
+        return;                 // validate before converting to the 40-bit field
+    }
+
+    // sliceFreqHz is TRUE-RF and the board's field wants true RF: it compares
+    // against band edges to pick a relay. The frequency-calibration scaling in
+    // ncoCommandHz() exists to correct the HL2's own reference and belongs only
+    // on values going to an NCO register — applying it here would hand the
+    // board a slightly wrong frequency for no reason.
+    const auto target = static_cast<quint64>(hz + 0.5);
+
+    // The band, from the same bandKeyForHz() table the per-band memory uses, so
+    // "which band is this" has exactly one answer in this backend.
+    const QString targetBand = bandKeyForHz(hz);
+    const bool bandChanged = (targetBand != m_ioBoardBandKey);
+
+    if (!m_ioBoardThrottle) {
+        m_ioBoardThrottle = new QTimer(this);
+        m_ioBoardThrottle->setSingleShot(true);
+        m_ioBoardThrottle->setInterval(kIoBoardThrottleMs);
+        connect(m_ioBoardThrottle, &QTimer::timeout, this, [this] {
+            const quint64 pending = m_ioBoardSchedule.takePending();
+            if (pending == 0) {
+                return;                  // cooldown expired with nothing waiting
+            }
+            if (!sendIoBoardFrequency(pending))
+                return;                  // disconnected: nothing to re-arm for
+            // Re-arm: a tune still in progress must keep coalescing.
+            m_ioBoardThrottle->start();
+        });
+    }
+
+    // Neither MOX nor TUNE defers the amplifier alone: the TX NCO/filter
+    // already follow the requested band. Immediate sends also discard an older
+    // coalesced value so the timeout cannot send the board back to that band.
+    switch (m_ioBoardSchedule.request(m_connected, m_ioBoardThrottle->isActive(),
+                                      bandChanged, target)) {
+    case IoBoardAction::DropDisconnected:
+    case IoBoardAction::Coalesce:
+        return;
+    case IoBoardAction::Send:
+        break;
+    }
+
+    if (!sendIoBoardFrequency(target))
+        return;
+    m_ioBoardBandKey = targetBand;
+    // Restarted rather than left running, so the cooldown is measured from the
+    // push that actually went out — a band change mid-sweep resets the window
+    // instead of inheriting the remainder of the previous one.
+    m_ioBoardThrottle->start();
+}
+
+bool Hl2Backend::sendIoBoardFrequency(quint64 hz)
+{
+    // THE ONE PLACE either edge of the throttle reaches the wire.
+    //
+    // It exists because the guard below was originally written into the
+    // trailing edge only, and the leading edge — the commoner path — silently
+    // lacked it. Two call sites that must agree about a hardware safety
+    // condition is one call site too many, so both now go through here and the
+    // asymmetry cannot come back.
+    //
+    // Do not let a disconnected tune enqueue work for a future session.
+    // The MetisClient guard and stop-time purge also enforce this at the wire.
+    if (!m_connected) {
+        m_ioBoardSchedule.reset();
+        return false;
+    }
+    QMetaObject::invokeMethod(m_metis, "setIoBoardTxFrequencyHz",
+                              Qt::QueuedConnection, Q_ARG(quint64, hz));
+    return true;
+}
+
+void Hl2Backend::resetIoBoardSchedule()
+{
+    // Called on linkDown. The timer's armed/pending state is about a session:
+    // left running across a disconnect, a reconnect inside the residual window
+    // takes the coalescing branch and stores the connect-time frequency as
+    // PENDING instead of pushing it — delaying the board by up to the cooldown
+    // at exactly the moment linkUp() intends an immediate push.
+    //
+    // The band key is cleared too, so the first push of the next session is
+    // always treated as a band change and takes the leading edge. Assuming the
+    // previous session's band still applies is precisely the assumption that
+    // cannot be made across a disconnect.
+    if (m_ioBoardThrottle)
+        m_ioBoardThrottle->stop();
+    m_ioBoardSchedule.reset();
+    m_ioBoardBandKey.clear();
+}
+
 void Hl2Backend::applyBandFilter(const char* reason)
 {
     if (!m_metis || m_rx.empty())
         return;
+
+    // BEFORE the filter-byte comparison below, deliberately. The relay pattern
+    // is unchanged across a move from 7.100 to 7.200 MHz and this function
+    // returns early for it, but the IO board still needs the new frequency.
+    applyIoBoardFrequency();
 
     // ONE filter board, N receivers.
     //

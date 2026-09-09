@@ -8,6 +8,7 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
+#include "models/ConnectStatePolicy.h"
 #include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
 #include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
@@ -606,7 +607,7 @@ void RadioModel::requestGpsNtpSync()
                                QStringLiteral("gps.ntp.sync"), 0, {});
 }
 
-void RadioModel::handRestoredStateToBackend(const QString& serial)
+void RadioModel::handRestoredStateToBackend()
 {
     if (!m_backend) {
         return;
@@ -623,7 +624,7 @@ void RadioModel::handRestoredStateToBackend(const QString& serial)
     m_operatingStateMaxWaitTimer.stop();
 
     const RestoredRadioState state =
-        RadioStateMemory::load(RadioSettingsScope(m_family, serial), caps);
+        RadioStateMemory::load(settingsScope(), caps);
     if (caps.clientSettingsDomains.testFlag(
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         restoreClientOwnedCwState(state);
@@ -695,6 +696,12 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
         req.params.insert(QStringLiteral("icom.civAddress"), IcomSettings::civAddress());
         req.params.insert(QStringLiteral("icom.civAddressPinned"), true);
         break;
+    }
+
+    req.params.insert(QStringLiteral("icom.wakeOnConnect"), IcomSettings::wakeOnConnect());
+    if (IcomSettings::civSelection() == IcomSettings::CivSelection::Model) {
+        // An explicit model choice may authorize power framing, never capabilities.
+        req.params.insert(QStringLiteral("icom.wakeModelId"), IcomSettings::civAddress());
     }
 
     // LOW BANDWIDTH MODE REACHES THIS FAMILY NOW.
@@ -1128,6 +1135,18 @@ void RadioModel::setupBackend(const QString& family)
     // namespaces/kinds are ignored here.
     connect(m_backend.get(), &IRadioBackend::extensionStatus, this,
             [this](const QString& ns, const QString& kind, const QVariantMap& fields) {
+        if (ns == QLatin1String("icom") && kind == QLatin1String("power.wakeNeeded")) {
+            const quint64 generation = m_radioWakeGeneration;
+            QTimer::singleShot(0, this, [this, fields, generation] {
+                if (generation != m_radioWakeGeneration || m_radioWakeActive) { return; }
+                QString error;
+                if (!wakeIcomRadio(fields.value("modelId").toInt(),
+                                   fields.value("address").toInt(), &error)) {
+                    emit configurationWarning(error);
+                }
+            });
+            return;
+        }
         if (ns != QLatin1String("flex")) {
             return;
         }
@@ -1188,7 +1207,17 @@ void RadioModel::setupBackend(const QString& family)
     // through the same helper means every capability consumer has exactly one
     // signal to bind to and cannot observe a stale picture.
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
-            [this] { publishCapabilities(isConnected()); });
+            [this] {
+        publishCapabilities(isConnected());
+        // All currently supported wake profiles transmit. If an RX-only Icom
+        // profile is added, readiness must use an explicit identity signal.
+        if (m_radioWakeActive && m_backend->capabilities().canTransmit) {
+            const bool matches = m_radioWakeModel.isEmpty()
+                || m_backend->capabilities().model == m_radioWakeModel;
+            finishRadioWake(matches ? tr("Radio ready.")
+                                    : tr("The radio identified as a different model."), matches);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::transmitFrequencyCheckChanged, this,
             [this](bool on) {
         if (m_transmitFrequencyCheck == on) {
@@ -2554,11 +2583,12 @@ RadioModel::RadioModel(QObject* parent)
                 req.host   = m_lastInfo.address.toString();
                 req.port   = m_lastInfo.port;
                 req.serial = m_lastInfo.serial;
+                req.serialIdentity = m_lastInfo.serialIdentity;
                 // The RECONNECT path needs these too. Populating only the
                 // initial connect gives a session that authenticates once and
                 // then fails every automatic retry.
                 populateFamilyParams(req, m_family);
-                handRestoredStateToBackend(req.serial);
+                handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }
         } else {
@@ -2624,6 +2654,19 @@ QString RadioModel::digitalVoiceWaveformHealthName() const
 QString RadioModel::digitalVoiceWaveformHealthDetail() const
 {
     return DigitalVoiceWaveformProcess::instance().healthDetail();
+}
+
+QString RadioModel::connectState() const
+{
+    // The bool stays exactly as it was — existing scripts read `connected` and
+    // must not change meaning. This is the third value beside it.
+    //
+    // Derived from THE ATTEMPT, not from the DSP sub-phase. m_connectAttemptActive
+    // already spans the whole thing #5413 asks about: set at the request edge in
+    // connectToRadio(), cleared when the attempt lands, fails, or is abandoned.
+    // See connectStateFor() for what a DSP-only flag got wrong here.
+    return QString::fromLatin1(AetherSDR::connectStateName(
+        AetherSDR::connectStateFor(isConnected(), m_connectAttemptActive)));
 }
 
 bool RadioModel::isConnected() const
@@ -3487,12 +3530,20 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    cancelRadioWake();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
     // choice is actually made — so swap the backend here rather than pinning the
     // family for the whole process. Same-family reconnects rebuild nothing.
     const QString wantFamily = info.family.isEmpty() ? QStringLiteral("flex")
                                                      : info.family.toLower();
+    // RTL has no persistent radio memory. Finish its old session before the
+    // discovery identity or preconnect restore is replaced, including swaps
+    // within the same family. Its disconnect flush still sees the old scope.
+    if (m_family == QLatin1String("rtl") && m_backend && isConnected()) {
+        flushPendingOperatingState();
+        m_backend->disconnectRadio();
+    }
     if (wantFamily != m_family || !m_backend) {
         qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
                            << "->" << wantFamily << "for" << info.address.toString();
@@ -3589,14 +3640,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.host   = info.address.toString();
         req.port   = info.port;
         req.serial = info.serial;
+        req.serialIdentity = info.serialIdentity;
         populateFamilyParams(req, info.family);
-        handRestoredStateToBackend(req.serial);
+        handRestoredStateToBackend();
         m_backend->connectRadio(req);
     }
 }
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
+    cancelRadioWake();
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
              << "udpPort=" << udpPort
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
@@ -3804,8 +3857,104 @@ void RadioModel::announceClientConnection(quint32 handle,
     });
 }
 
+void RadioModel::cancelRadioWake()
+{
+    ++m_radioWakeGeneration;
+    if (m_radioWakeActive) {
+        m_radioWakeActive = false;
+        emit radioWakeProgress(tr("Wake cancelled."), false);
+    }
+}
+
+void RadioModel::finishRadioWake(const QString& message, bool success)
+{
+    if (!m_radioWakeActive) { return; }
+    m_radioWakeActive = false;
+    ++m_radioWakeGeneration;
+    if (!success) {
+        // Do not destroy a backend while delivering its capability signal.
+        m_intentionalDisconnect = true;
+        m_reconnectTimer.stop();
+        emit radioWakeFailed(message);
+        const quint64 generation = m_radioWakeGeneration;
+        QTimer::singleShot(0, this, [this, generation] {
+            if (generation == m_radioWakeGeneration) { disconnectFromRadio(); }
+        });
+    }
+    emit radioWakeProgress(message, false);
+}
+
+bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
+{
+    if (m_radioWakeActive || m_family != QLatin1String("icom") || !isConnected()
+        || !m_backend || m_lastInfo.address.isNull()) {
+        if (error) { *error = tr("Connect to the Icom network first, and finish any active wake."); }
+        return false;
+    }
+    bool sent = false;
+    QVariantMap result;
+    QString failure = tr("Wake is unavailable for this backend.");
+    // This Icom-only extension currently replies inline; unlike the general
+    // asynchronous extension contract, this call depends on that behavior.
+    // The reserved local ID is scoped to
+    // these connections and cannot consume another caller's asynchronous reply.
+    constexpr quint64 requestId = std::numeric_limits<quint64>::max();
+    const QMetaObject::Connection ok = connect(m_backend.get(), &IRadioBackend::extensionResult,
+        this, [&](quint64 id, const QVariant& value) {
+            if (id == requestId) { result = value.toMap(); sent = result.value("sent").toBool(); }
+        }, Qt::DirectConnection);
+    const QMetaObject::Connection bad = connect(m_backend.get(), &IRadioBackend::extensionError,
+        this, [&](quint64 id, const QString& message) {
+            if (id == requestId) { failure = message; }
+        }, Qt::DirectConnection);
+    m_backend->invokeExtension(QStringLiteral("icom"), QStringLiteral("power.wake"), requestId,
+        QVariantMap{{QStringLiteral("modelId"), modelId}, {QStringLiteral("address"), address}});
+    disconnect(ok);
+    disconnect(bad);
+    if (!sent) {
+        if (error) { *error = failure; }
+        return false;
+    }
+    const RadioInfo selectedRadio = m_lastInfo;
+    m_intentionalDisconnect = true;
+    m_reconnectTimer.stop();
+    m_pingTimer.stop();
+    m_radioWakeActive = true;
+    m_connectAttemptActive = true;
+    m_backend->disconnectRadio();
+    m_radioWakeModel = result.value("model").toString();
+    const quint64 generation = m_radioWakeGeneration;
+    emit radioWakeProgress(tr("Waking radio…"), true);
+    QTimer::singleShot(result.value("delayMs").toInt(), this, [this, generation, selectedRadio, address] {
+        if (!m_radioWakeActive || generation != m_radioWakeGeneration) { return; }
+        // Own this single reconnect instead of arming the repeating retry timer.
+        // Pin only this attempt to the operator's wake destination, never settings.
+        RadioConnectRequest request;
+        request.host = selectedRadio.address.toString();
+        request.port = selectedRadio.port;
+        request.serial = selectedRadio.serial;
+        populateFamilyParams(request, m_family);
+        request.params.insert(QStringLiteral("icom.wakeOnConnect"), false);
+        request.params.insert(QStringLiteral("icom.waitingForWake"), true);
+        request.params.insert(QStringLiteral("icom.civAddress"), address);
+        request.params.insert(QStringLiteral("icom.civAddressPinned"), true);
+        m_intentionalDisconnect = false;
+        m_connectAttemptActive = true;
+        m_backend->connectRadio(request);
+        const quint64 reconnectGeneration = m_radioWakeGeneration;
+        emit radioWakeProgress(tr("Waiting for radio identity…"), true);
+        QTimer::singleShot(20000, this, [this, reconnectGeneration] {
+            if (m_radioWakeActive && reconnectGeneration == m_radioWakeGeneration) {
+                finishRadioWake(tr("Wake did not complete. Check the radio and reconnect."), false);
+            }
+        });
+    });
+    return true;
+}
+
 void RadioModel::disconnectFromRadio()
 {
+    cancelRadioWake();
     m_intentionalDisconnect = true;
     m_rebootInProgress = false;
     m_connectAttemptActive = false;  // the operator abandoned it (#4912)
@@ -5350,6 +5499,22 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
         panId, std::numeric_limits<double>::quiet_NaN(), bandwidthMhz);
 }
 
+bool RadioModel::requestPanAverage(const QString& panId, int average)
+{
+    if (panId.isEmpty() || average < 0 || average > 100) {
+        return false;
+    }
+    // FlexLib Panadapter.Average updates locally on dispatch; later status
+    // reconciles it. Preserve the existing ownership and profile-load gates.
+    if (!sendCommand(QString("display pan set %1 average=%2").arg(panId).arg(average))) {
+        return false;
+    }
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setRequestedFftSettings(average, -1);
+    }
+    return true;
+}
+
 bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
                                         int wfRate)
 {
@@ -5377,8 +5542,10 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
 
     bool sent = false;
     if (fps > 0) {
-        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps))
-               || sent;
+        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps));
+        if (sent && pan) {
+            pan->setRequestedFftSettings(-1, fps);
+        }
     }
     if (wfRate > 0 && pan && !pan->waterfallId().isEmpty()) {
         // The wire parameter keeps Flex's name; the value is the rate.
@@ -6150,6 +6317,7 @@ void RadioModel::stageSessionModelsForReconnect()
 
     for (SliceModel* slice : m_slices) {
         if (slice) {
+            slice->invalidateSquelchState();
             m_staleSlices.insert(slice->sliceId(), slice);
         }
     }
@@ -7302,7 +7470,7 @@ void RadioModel::onDisconnected()
         qCDebug(lcProtocol) << "RadioModel: WAN disconnected";
         m_wanConn->disconnect(this);
         m_wanConn = nullptr;
-    } else if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
+    } else if (!m_intentionalDisconnect && !m_radioWakeActive && !m_lastInfo.address.isNull()) {
         qCDebug(lcProtocol) << "RadioModel: unexpected disconnect — reconnecting in 3s";
         m_reconnectTimer.start();
     }
@@ -7320,6 +7488,15 @@ void RadioModel::onDisconnected()
 void RadioModel::onConnectionError(const QString& msg)
 {
     qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
+    if (m_radioWakeActive) {
+        const quint64 generation = m_radioWakeGeneration;
+        QTimer::singleShot(0, this, [this, generation, msg] {
+            if (m_radioWakeActive && generation == m_radioWakeGeneration) {
+                finishRadioWake(msg, false);
+            }
+        });
+        return;
+    }
     // The attempt ended (#4912). If the reconnect below arms, its own lambda
     // re-arms the flag when it actually re-drives the connect — so the window
     // between the failure and the retry reads as idle, which is what it is.
@@ -9023,6 +9200,20 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
             [this, s]() {
         if (m_backend) m_backend->setActiveSlice(s->sliceId());
     });
+}
+
+void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
+                                   const QString& family)
+{
+    // THROUGH teardownBackend(), not over the top of the previous pointer.
+    // A bare `m_backend = std::move(...)` destroys the old backend while this
+    // model still holds the aliases and connections that were made for it, and
+    // the destructor's disconnect then runs against freed memory — which is
+    // exactly what a second call to this helper produced (SIGSEGV in
+    // QObject::disconnect at teardown, all checks having passed).
+    teardownBackend();
+    m_backend = std::move(backend);
+    m_family = family;
 }
 
 QString RadioModel::neutralPanIdStringForTest(int panIdx)

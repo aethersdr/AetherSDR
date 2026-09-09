@@ -3,6 +3,8 @@
 #include <QDebug>
 #include <QJsonDocument>
 
+#include <cmath>
+
 namespace AetherSDR {
 namespace RadioStateMemory {
 
@@ -223,6 +225,101 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
     if (!scope.setFeature(featureName(), kSchemaVersion, doc)) {
         qWarning() << "RadioStateMemory: operating-state write failed for"
                    << scope.family() << scope.radioId();
+        return false;
+    }
+    return true;
+}
+
+RtlMigrationSource rtlMigrationSource(const RadioSettingsScope& scope)
+{
+    RtlMigrationSource result;
+    if (scope.family() != QLatin1String("rtl")) {
+        return result;
+    }
+    int version = 0;
+    const QJsonObject doc = scope.featureExact(featureName(), &version, &result.status);
+    if (result.status != AppSettings::FeatureReadStatus::Present) {
+        return result;
+    }
+    if (version < 1 || version > kSchemaVersion) {
+        result.status = AppSettings::FeatureReadStatus::Corrupt;
+        return result;
+    }
+    const QStringList numbers{QStringLiteral("rfFrequencyHz"), QStringLiteral("filterLowHz"),
+        QStringLiteral("filterHighHz"), QStringLiteral("sampleRateHz")};
+    for (const QString& key : numbers) {
+        if (!doc.value(key).isDouble()) {
+            result.status = AppSettings::FeatureReadStatus::Corrupt;
+            return result;
+        }
+    }
+    const double rate = doc.value(QStringLiteral("sampleRateHz")).toDouble();
+    if (!std::isfinite(rate) || rate <= 0 || rate > 2147483647.0
+        || std::trunc(rate) != rate) {
+        result.status = AppSettings::FeatureReadStatus::Corrupt;
+        return result;
+    }
+    // Decode this exact snapshot; a second effective read could change scope
+    // or schema if another process replaced/deleted the row in between.
+    result.state.rfFrequencyHz = doc.value(QStringLiteral("rfFrequencyHz")).toDouble();
+    result.state.mode = doc.value(QStringLiteral("mode")).toString();
+    result.state.filterLowHz = doc.value(QStringLiteral("filterLowHz")).toDouble();
+    result.state.filterHighHz = doc.value(QStringLiteral("filterHighHz")).toDouble();
+    result.state.sampleRateHz = static_cast<int>(rate);
+    return result;
+}
+
+bool storeRtlRfGainPreservingLegacy(const RadioSettingsScope& scope,
+                                    const RestoredRadioState& state)
+{
+    if (scope.family() != QLatin1String("rtl")) {
+        qWarning() << "RadioStateMemory: refusing RTL gain update for a non-RTL scope";
+        return false;
+    }
+    int version = 0;
+    AppSettings::FeatureReadStatus status;
+    QJsonObject doc = scope.featureExact(featureName(), &version, &status);
+    if (status == AppSettings::FeatureReadStatus::Corrupt
+        || status == AppSettings::FeatureReadStatus::Unavailable
+        || version > kSchemaVersion) {
+        qWarning() << "RadioStateMemory: refusing RTL gain update over unreadable/newer legacy state";
+        return false;
+    }
+    // This helper understands RTL extension schema 1 only. Missing extVersion
+    // is an older legacy snapshot; a present invalid/future version must never
+    // be laundered into a schema-1 document by an RF-gain update.
+    const QJsonValue storedExtVersion = doc.value(QStringLiteral("extVersion"));
+    if (state.extensionSchemaVersion != 1
+        || (!storedExtVersion.isUndefined()
+            && (!storedExtVersion.isDouble() || storedExtVersion.toDouble() != 1.0))) {
+        qWarning() << "RadioStateMemory: refusing RTL gain update with unsupported/malformed extension version";
+        return false;
+    }
+    const QJsonValue storedExtension = doc.value(QStringLiteral("ext"));
+    if (!storedExtension.isUndefined() && !storedExtension.isObject()) {
+        qWarning() << "RadioStateMemory: refusing RTL gain update over malformed extension";
+        return false;
+    }
+    QJsonObject extension = storedExtension.toObject();
+    const QJsonValue storedGain = extension.value(QStringLiteral("rfGain"));
+    const QJsonValue requestedGain = state.extension.value(QStringLiteral("rfGain"));
+    const QJsonValue gainDb = requestedGain.toObject().value(QStringLiteral("gainDb"));
+    const double gainValue = gainDb.toDouble();
+    if ((!storedGain.isUndefined() && !storedGain.isObject())
+        || !requestedGain.isObject() || !gainDb.isDouble() || !std::isfinite(gainValue)
+        || std::trunc(gainValue) != gainValue || gainValue < -100 || gainValue > 100) {
+        qWarning() << "RadioStateMemory: refusing RTL gain update with malformed gain state";
+        return false;
+    }
+    // Only the known accepted gain value is replaced. Preserve unknown fields
+    // inside rfGain, the rest of the extension and the frozen legacy snapshot.
+    QJsonObject mergedGain = storedGain.toObject();
+    mergedGain.insert(QStringLiteral("gainDb"), gainDb);
+    extension.insert(QStringLiteral("rfGain"), mergedGain);
+    doc.insert(QStringLiteral("ext"), extension);
+    doc.insert(QStringLiteral("extVersion"), state.extensionSchemaVersion);
+    if (!scope.setFeature(featureName(), version > 0 ? version : kSchemaVersion, doc)) {
+        qWarning() << "RadioStateMemory: RTL gain update failed; legacy snapshot retained";
         return false;
     }
     return true;
