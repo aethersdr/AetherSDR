@@ -492,11 +492,42 @@ int main(int argc, char** argv)
         qRegisterMetaType<AetherSDR::MemorySample>("AetherSDR::MemorySample");
         SystemInfoDialog memoryDialog;
 
+        // One timeframe for the whole dialog, in the window header (#5496):
+        // the Memory and Overview charts read the same control, so no tab
+        // carries a selector of its own.
         auto* range = memoryDialog.findChild<QComboBox*>(QStringLiteral("systemInfoTimeframe"));
-        report("the Memory tab has a timeframe selector", range != nullptr);
+        report("the dialog has a timeframe selector", range != nullptr);
+        report("it is the only combo box in the dialog",
+               memoryDialog.findChildren<QComboBox*>().size() == 1);
         if (range != nullptr) {
             report("it offers the issue's four timeframes", range->count() == 4);
             report("it defaults to 5 minutes", range->currentData().toInt() == 5 * 60);
+            report("it is a child of the dialog body, not of a tab page",
+                   range->parentWidget() != nullptr
+                       && range->parentWidget()->findChild<QTabWidget*>() != nullptr);
+        }
+        // Hidden where there is no chart to draw: Threads has a fixed 60 s
+        // window and Logs has no time axis. Shown again on Overview and Memory.
+        auto* memoryTabs = memoryDialog.findChild<QTabWidget*>();
+        if (range != nullptr && memoryTabs != nullptr) {
+            const auto currentTabIs = [memoryTabs](const char* title) {
+                for (int i = 0; i < memoryTabs->count(); ++i) {
+                    if (memoryTabs->tabText(i) == QLatin1String(title)) {
+                        memoryTabs->setCurrentIndex(i);
+                        return true;
+                    }
+                }
+                return false;
+            };
+            report("the selector is shown while Overview is current",
+                   currentTabIs("Overview") && !range->isHidden());
+            report("the selector is hidden while Threads is current",
+                   currentTabIs("Threads") && range->isHidden());
+            report("the selector is shown while Memory is current",
+                   currentTabIs("Memory") && !range->isHidden());
+            report("the selector is hidden while Logs is current",
+                   currentTabIs("Logs") && range->isHidden());
+            currentTabIs("Memory");
         }
 
         auto* resident = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
@@ -659,8 +690,8 @@ int main(int argc, char** argv)
     {
         qRegisterMetaType<AetherSDR::CpuSample>("AetherSDR::CpuSample");
         SystemInfoDialog ov;
-        auto* range = ov.findChild<QComboBox*>(QStringLiteral("systemInfoOverviewTimeframe"));
-        report("the Overview tab has its own timeframe selector", range != nullptr && range->count() == 4);
+        report("the Overview tab has no timeframe selector of its own (#5496)",
+               ov.findChild<QComboBox*>(QStringLiteral("systemInfoOverviewTimeframe")) == nullptr);
         auto* cpuCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardCpu"));
         auto* maxCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMaxThread"));
         auto* memCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMemory"));
