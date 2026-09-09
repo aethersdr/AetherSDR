@@ -341,6 +341,9 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
                 if (!isCwMode(mode))
                     return;
             }
+            // TUNE active: the model would refuse the macro, so paint no
+            // bubble (it would latch m_pendingBubble against nothing). (#5422)
+            if (!m_model->canSend()) return;
             // Log the macro text to the history feed BEFORE firing the
             // command so the snapshot of m_model->sentIndex() lines up
             // with the chars about to be keyed for this bubble. (#3146)
@@ -600,6 +603,7 @@ void CwxPanel::buildSetupView()
         // Click F-key label → log macro text to history, then send. (#3146)
         connect(label, &QPushButton::clicked, this, [this, i]() {
             if (!m_model) return;
+            if (!m_model->canSend()) return;   // TUNE active: no bubble (#5422)
             const QString raw = m_model->macro(i);
             appendHistoryBubble(raw);
             m_model->sendMacro(i + 1);
