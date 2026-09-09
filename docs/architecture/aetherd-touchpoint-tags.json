@@ -289,19 +289,19 @@
  },
  "core/KiwiSdrClient.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself",
+  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself; also serves the Web-888 fork as a receiver family (docs/web888-cleanroom-design.md)",
   "split": "",
   "confidence": "high"
  },
  "core/KiwiSdrManager.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension.",
+  "note": "KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension. Profiles carry a receiver family (KiwiSDR or Web-888).",
   "split": "",
   "confidence": "high"
  },
  "core/KiwiSdrProtocol.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting",
+  "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting; family enum + inbound-frame classification shared by the Web-888 receiver family",
   "split": "",
   "confidence": "high"
  },

@@ -75,6 +75,32 @@ enum class ApiPolicy {
     Open,
 };
 
+// Receiver families served by this Kiwi-path client. Web-888
+// (RaspSDR/server, an open-source KiwiSDR server fork) speaks the same
+// wire protocol with small deltas — see docs/web888-cleanroom-design.md.
+enum class KiwiSdrReceiverFamily {
+    Kiwi,
+    Web888,
+};
+
+QString kiwiSdrReceiverFamilyId(KiwiSdrReceiverFamily family);
+QString kiwiSdrReceiverFamilyName(KiwiSdrReceiverFamily family);
+KiwiSdrReceiverFamily kiwiSdrReceiverFamilyFromString(const QString& value);
+
+enum class InboundFrameTag {
+    MsgText,
+    Sound,
+    Waterfall,
+    Extension,
+    Unknown,
+};
+
+// Pure classification of an inbound (always binary on Web-888) frame by its
+// leading ASCII magic. Extracted from KiwiSdrClient::handleBinaryMessage so
+// the dispatch — the one Web-888-relevant wire behavior — is testable
+// without sockets.
+InboundFrameTag classifyInboundFrameTag(const QByteArray& frame);
+
 enum class CampStatus {
     Unknown,
     Offered,

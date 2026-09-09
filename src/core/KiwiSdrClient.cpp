@@ -518,15 +518,19 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint,
     m_waterfallAvailabilityDetail.clear();
     m_waterfallRxChannel = -1;
     m_waterfallChannelCount = -1;
+    m_waterfallSetupResent = false;
     m_userDisconnecting = true;
     cleanupSockets();
     m_userDisconnecting = false;
     const QString callsign = kiwiIdentityCallsign();
+    const QString familyName =
+        KiwiSdrProtocol::kiwiSdrReceiverFamilyName(m_receiverFamily);
     setState(State::Connecting,
              callsign.isEmpty()
-                 ? tr("Checking KiwiSDR access policy for %1.").arg(m_endpoint)
-                 : tr("Checking KiwiSDR access policy for %1 as %2.")
-                       .arg(m_endpoint, callsign));
+                 ? tr("Checking %1 access policy for %2.")
+                       .arg(familyName, m_endpoint)
+                 : tr("Checking %1 access policy for %2 as %3.")
+                       .arg(familyName, m_endpoint, callsign));
 
 #ifdef HAVE_WEBSOCKETS
     m_statusPreflightSecure = false;  // try http first, then https
@@ -785,14 +789,23 @@ void KiwiSdrClient::openWebSockets()
     // Clean black-box observation against KiwiSDR v1.842 showed the current
     // web client using /ws/kiwi/<session>/<stream>. Some servers still upgrade
     // /<session>/<stream> but never emit MSG or stream frames on that path.
+    // Web-888's rx_server_websocket() only parses kiwi/<ts>/<stream>,
+    // no_wf/<ts>/<stream> and bare <ts>/<stream> — the /ws prefix fails all
+    // three and the server silently drops every frame, so use the bare Kiwi
+    // path there (same shape the Web-888 browser client uses).
+    const QString pathPrefix = m_receiverFamily
+                == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+        ? QStringLiteral("kiwi")
+        : QStringLiteral("ws/kiwi");
     const quint64 sessionId =
         kWebSocketSessionIdBase
         + static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
     const QString sessionIdText = QString::number(sessionId);
-    const QString secureAwareBase = QStringLiteral("%1://%2:%3/ws/kiwi/%4")
+    const QString secureAwareBase = QStringLiteral("%1://%2:%3/%4/%5")
         .arg(scheme)
         .arg(m_host)
         .arg(socketPort)
+        .arg(pathPrefix)
         .arg(sessionIdText);
     const QString soundUrl = secureAwareBase + QStringLiteral("/SND");
     const QString waterfallUrl = secureAwareBase + QStringLiteral("/W/F");
@@ -1195,6 +1208,7 @@ void KiwiSdrClient::cleanupSockets()
     m_soundFrameSeen = false;
     m_loggedSoundFrameShape = false;
     m_loggedWaterfallFrameShape = false;
+    m_waterfallSetupResent = false;
     m_lastDecodedSoundPcm.clear();
     // Release the sound resampler on teardown, matching the other two teardown
     // sites (connectToEndpoint / stream-rate change). It was the one sound-decode
@@ -1335,6 +1349,15 @@ void KiwiSdrClient::sendWaterfallSetupCommands()
 {
     sendWaterfallCommand(KiwiSdrProtocol::formatAuthCommand(m_password));
     sendWaterfallIdentityToServer();
+    sendWaterfallPostAuthCommands();
+}
+
+// Everything after auth/identity. Split out because Web-888 discards
+// waterfall SETs that arrive before its wf_setup config burst — the client
+// re-sends exactly this block once the first inbound MSG proves the server
+// is listening (docs/web888-cleanroom-design.md).
+void KiwiSdrClient::sendWaterfallPostAuthCommands()
+{
     sendWaterfallCommand(QStringLiteral("SERVER DE CLIENT AetherSDR W/F"));
     sendWaterfallCommand(KiwiSdrProtocol::formatWaterfallCompressionCommand(
         diagnosticWaterfallCompressionRequested()));
@@ -1888,13 +1911,17 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
                                         const QByteArray& frame)
 {
     traceInboundBinary(stream, frame);
-    if (frame.startsWith("MSG")) {
+    switch (KiwiSdrProtocol::classifyInboundFrameTag(frame)) {
+    case KiwiSdrProtocol::InboundFrameTag::MsgText:
         handleMessage(stream, frame);
-    } else if (frame.startsWith("SND")) {
+        break;
+    case KiwiSdrProtocol::InboundFrameTag::Sound:
         handleSoundFrame(frame);
-    } else if (frame.startsWith("W/F")) {
+        break;
+    case KiwiSdrProtocol::InboundFrameTag::Waterfall:
         handleWaterfallFrame(frame);
-    } else if (frame.startsWith("EXT")) {
+        break;
+    case KiwiSdrProtocol::InboundFrameTag::Extension: {
         KiwiSdrProtocol::FrameObservation observation;
         observation.stream = KiwiSdrProtocol::StreamMode::Extension;
         observation.layout = KiwiSdrProtocol::FrameLayout::Extension;
@@ -1908,7 +1935,9 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
             << "len=" << frame.size()
             << "first=" << firstBytesHex(frame);
-    } else {
+        break;
+    }
+    case KiwiSdrProtocol::InboundFrameTag::Unknown: {
         const QString tag = QString::fromLatin1(frame.left(3));
         KiwiSdrProtocol::FrameObservation observation;
         observation.stream = KiwiSdrProtocol::StreamMode::Unknown;
@@ -1923,6 +1952,8 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
             << "len=" << frame.size()
             << "first=" << firstBytesHex(frame);
+        break;
+    }
     }
 }
 
@@ -2306,6 +2337,21 @@ void KiwiSdrClient::handleMessage(StreamKind stream, const QByteArray& frame)
 void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
 {
     traceInboundText(stream, text);
+    // Web-888 ignores waterfall SETs sent before its config burst. The first
+    // inbound MSG on the W/F socket proves the server is listening, so
+    // re-send the post-auth waterfall setup exactly once (Kiwi family: no-op).
+    if (stream == StreamKind::Waterfall
+        && m_receiverFamily == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+        && !m_waterfallSetupResent) {
+        m_waterfallSetupResent = true;
+        qCDebug(lcKiwiSdr).noquote()
+            << "KiwiSDR waterfall setup re-sent after first W/F MSG"
+            << QStringLiteral("endpoint=%1").arg(logEndpoint())
+            << QStringLiteral("family=%1")
+               .arg(KiwiSdrProtocol::kiwiSdrReceiverFamilyId(m_receiverFamily));
+        traceProtocolEvent(QStringLiteral("WEB888 wf setup re-sent after burst"));
+        sendWaterfallPostAuthCommands();
+    }
     const QVector<KiwiSdrProtocol::MsgToken> msgTokens =
         KiwiSdrProtocol::parseMsgTokens(text);
 
@@ -2370,6 +2416,17 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 token, &m_telemetry.metadata)) {
             updateProtocolStateFromMetadata();
             emitTelemetryChanged();
+        }
+        // Web-888 burst diagnostic: if cfg_loaded arrives without a preceding
+        // audio_rate, the tune-command gate below never opens — recorded so a
+        // live capture proves which branch the server took. No rate is
+        // fabricated from it.
+        if (m_receiverFamily == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+            && stream == StreamKind::Sound
+            && key == QStringLiteral("cfg_loaded")
+            && !m_haveSoundAudioRate) {
+            traceProtocolEvent(
+                QStringLiteral("WEB888 cfg_loaded without audio_rate"));
         }
         if (updateCampStatusFromMetadata(token)) {
             return;

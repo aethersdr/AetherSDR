@@ -3,6 +3,13 @@
 Status: receive-only client implemented from clean AetherSDR interfaces plus
 black-box observations made in this thread.
 
+## Receiver Families
+
+The same Kiwi path also serves the **Web-888** (a KiwiSDR server fork) as a
+receiver family: a profile records whether its endpoint speaks plain KiwiSDR
+or Web-888, and the client applies the small wire deltas. See
+`docs/web888-cleanroom-design.md` for that family's clean-room note.
+
 ## Allowed Inputs Used
 
 - User requirements from the KiwiSDR receive-only integration request.

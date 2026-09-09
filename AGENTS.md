@@ -1005,6 +1005,10 @@ FlexRadio protocol path. Kiwi panadapters are receive-only (TX is inhibited).
 See `docs/kiwisdr-public-directory.md` (directory / API-policy behaviour) and
 `docs/kiwisdr-cleanroom-design.md` (clean-room design notes, Principle IV).
 
+The Kiwi path also serves the Web-888 (a KiwiSDR server fork) as a receiver
+family: profiles carry a receiver type, and the client applies the small wire
+deltas. See `docs/web888-cleanroom-design.md`.
+
 ---
 
 ## Accessibility — `src/gui/` Rules

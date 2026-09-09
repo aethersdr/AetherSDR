@@ -130,6 +130,7 @@ QString receiverAccessibleText(const KiwiSdrReceiverStatus& receiver)
 {
     QStringList parts;
     parts << receiver.name
+          << kiwiSdrReceiverFamilyName(receiver.family)
           << stateText(receiver.state);
     if (!receiver.detail.trimmed().isEmpty()) {
         parts << receiver.detail.trimmed();
@@ -253,6 +254,21 @@ QWidget* KiwiSdrApplet::buildReceiverRow(const KiwiSdrReceiverStatus& receiver)
     name->setStyleSheet(primaryLabelStyle());
     name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     topRow->addWidget(name, 1);
+
+    if (receiver.family == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888) {
+        auto* badge = new QLabel(
+            kiwiSdrReceiverFamilyName(receiver.family), row);
+        badge->setTextFormat(Qt::PlainText);
+        badge->setAccessibleName(tr("KiwiSDR receiver type"));
+        badge->setAccessibleDescription(
+            tr("Web-888 receiver, served by the Kiwi-compatible path"));
+        badge->setStyleSheet(
+            QStringLiteral("QLabel { color: {{color.accent.bright}}; "
+                           "border: 1px solid {{color.accent.bright}}; "
+                           "border-radius: 3px; font-size: 9px; "
+                           "font-weight: bold; padding: 1px 4px; }"));
+        topRow->addWidget(badge, 0, Qt::AlignVCenter);
+    }
 
     auto* status = new QLabel(stateText(receiver.state), row);
     status->setTextFormat(Qt::PlainText);
