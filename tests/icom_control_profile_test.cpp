@@ -91,6 +91,49 @@ struct IcomCivBackendTestAccess {
         backend.m_civModelId = model.civAddress;
     }
 
+    static void antennaReply(IcomCivBackend& b, std::uint8_t sub,
+                             std::vector<std::uint8_t> data, std::uint64_t generation = 1)
+    {
+        b.m_sessionGeneration = 1;
+        CivFrame frame;
+        frame.cmd = cmd::kRxAntenna;
+        frame.hasSub = true;
+        frame.sub = sub;
+        frame.data = std::move(data);
+        b.onCivFrame(frame, generation);
+    }
+    static bool antennaReads(IcomCivBackend& b, bool startup)
+    {
+        b.m_controlPollPhase = 2; // next tick is the three-second controls group
+        if (startup) { b.sendConnectReadBurst(); }
+        else { b.onLinkTick(); }
+        const auto read = cmdReadRxAntenna(b.m_session->civAddress());
+        return std::any_of(b.m_civScheduler.m_queue.begin(), b.m_civScheduler.m_queue.end(),
+            [&](const auto& request) { return request.request.frame == read; });
+    }
+    static bool antennaReplyCompletesRead(IcomCivBackend& b)
+    {
+        b.queueRead(cmdReadRxAntenna(b.m_session->civAddress()), "rx.antenna",
+                    IcomCivScheduler::Priority::Control);
+        const auto now = b.m_civScheduler.m_queue.front().enqueuedAtMs;
+        if (!b.m_civScheduler.takeNext(now)) { return false; }
+        CivFrame reply;
+        reply.cmd = cmd::kRxAntenna;
+        reply.hasSub = true;
+        reply.sub = 0;
+        reply.data = {1};
+        return b.m_civScheduler.observe(reply, now + 5) == IcomCivScheduler::Observation::Accepted
+            && !b.m_civScheduler.stats().readInFlight
+            && b.m_civScheduler.stats().timeouts == 0;
+    }
+
+    static bool antennaConfirmation(IcomCivBackend& b)
+    {
+        const auto write = cmdSetRxAntenna(b.m_session->civAddress(), true);
+        const auto read = cmdReadRxAntenna(b.m_session->civAddress());
+        return b.confirmationFor(write) == read && b.semanticKey(write) == b.semanticKey(read);
+    }
+
     static QString lastOutboundCiv(const IcomCivBackend& backend)
     {
         return backend.m_lastOutboundCiv;
@@ -269,6 +312,60 @@ int main(int argc, char** argv)
             }
         }
 
+    }
+    check(cmdReadRxAntenna(0xB6) == std::vector<std::uint8_t>({0xFE,0xFE,0xB6,0xE0,0x12,0xFD}),
+          "MK2 antenna read uses observed bare 12 form");
+    for (const std::vector<uint8_t>& payload : {std::vector<uint8_t>{}, {2}, {0, 1}}) {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepareSession(backend, *modelForName("IC-7300MK2"));
+        const ControlSpec* antennaSpec = nullptr;
+        for (const auto& spec : controlSpecs()) {
+            if (spec.id == "rx.antenna") { antennaSpec = &spec; }
+        }
+        check(antennaSpec != nullptr, "antenna registry row exists");
+        if (antennaSpec) {
+            check(!backend.scrubDrive(*antennaSpec), "unread antenna cannot be scrubbed");
+            IcomCivBackendTestAccess::antennaReply(backend, 0, payload);
+            check(!backend.scrubDrive(*antennaSpec), "malformed first antenna reply cannot seed scrub");
+            check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
+                  "malformed antenna reply cannot cause a default antenna write");
+        }
+    }
+    for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
+        const auto* model = modelForName(name);
+        check(model != nullptr, "antenna test model resolves");
+        if (!model) { continue; }
+        const bool supported = std::string(name) == "IC-7300MK2";
+        IcomCivBackend b;
+        IcomCivBackendTestAccess::prepareSession(b, *model);
+        QString antenna;
+        int publications = 0;
+        QObject::connect(&b, &IRadioBackend::sliceChanged, [&](int, const SliceDelta& delta) {
+            if (delta.rxAntenna) { antenna = *delta.rxAntenna; ++publications; }
+        });
+        IcomCivBackendTestAccess::antennaReply(b, 0, {1});
+        check(supported ? antenna == "RX-ANT" : antenna.isEmpty(), "antenna adoption is model gated");
+        const int before = publications;
+        IcomCivBackendTestAccess::antennaReply(b, 0, {});
+        IcomCivBackendTestAccess::antennaReply(b, 0, {2});
+        IcomCivBackendTestAccess::antennaReply(b, 1, {0});
+        IcomCivBackendTestAccess::antennaReply(b, 0, {0, 1});
+        IcomCivBackendTestAccess::antennaReply(b, 0, {0}, 0);
+        check(publications == before, "invalid and stale antenna replies cannot publish");
+        IcomCivBackendTestAccess::antennaReply(b, 0, {0});
+        check(supported ? antenna == "ANT1" : antenna.isEmpty(), "radio ANT1 return adopted");
+        check(IcomCivBackendTestAccess::lastOutboundCiv(b).isEmpty(), "passive antenna adoption writes nothing");
+        check(IcomCivBackendTestAccess::antennaReads(b, false) == supported, "periodic antenna read is model gated");
+        IcomCivBackend startup;
+        IcomCivBackendTestAccess::prepareSession(startup, *model);
+        check(IcomCivBackendTestAccess::antennaReads(startup, true) == supported, "startup antenna read is model gated");
+        if (supported) {
+            check(IcomCivBackendTestAccess::antennaConfirmation(b), "antenna write confirmation shares generation");
+            IcomCivBackend transaction;
+            IcomCivBackendTestAccess::prepareSession(transaction, *model);
+            check(IcomCivBackendTestAccess::antennaReplyCompletesRead(transaction),
+                  "bare antenna read completes on subcommand-bearing reply without timeout");
+        }
     }
     return g_failures ? 1 : 0;
 }

@@ -1090,6 +1090,9 @@ foreach(APP_SETTINGS_SCENARIO
         save-before-load
         xml-import-parity
         first-run
+        isolated-legacy-import
+        explicit-profile-outside-test-mode
+        explicit-profile-path-isolation
         database-file-permissions
         xml-import-tmp-promotion
         xml-import-bak-fallback
@@ -1130,6 +1133,9 @@ target_include_directories(rn2_settings_model_test PRIVATE src tests)
 target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(rn2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME rn2_settings_model_test COMMAND rn2_settings_model_test)
+
+set_tests_properties(app_settings_safety_explicit-profile-path-isolation
+    PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
@@ -2658,6 +2664,10 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+    # External persistence supervisor policies: data-only fixtures, no radio peer/socket.
+    add_test(NAME radiocert_persist_policy
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_radiocert_persist.py)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
@@ -2907,6 +2917,15 @@ add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test
 target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
 add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
 
+# #5353 — the RTTY decoder's enable flag: dismissing the pane with ✕ must
+# outlive the slice/frequency events that used to re-derive its visibility
+# from the mode, and must not clobber the sensitivity field it shares an
+# object with.
+add_executable(rtty_decode_settings_test tests/rtty_decode_settings_test.cpp)
+target_include_directories(rtty_decode_settings_test PRIVATE src tests)
+target_link_libraries(rtty_decode_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtty_decode_settings_test COMMAND rtty_decode_settings_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
@@ -2967,6 +2986,7 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
     tools/ax25_replay.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -2979,6 +2999,7 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/KissFraming.cpp
@@ -3506,6 +3527,12 @@ set_tests_properties(radio_setup_ip_config_presentation_test PROPERTIES
 # RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
 # capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
 # load AND store, per-radio isolation, family-wide fallback, schema tolerance.
+# Socket-free RTL persistence/identity foundation; no librtlsdr or live backend.
+add_executable(rtl_slice_settings_test tests/rtl_slice_settings_test.cpp)
+target_include_directories(rtl_slice_settings_test PRIVATE src tests)
+target_link_libraries(rtl_slice_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4411,6 +4438,39 @@ target_link_libraries(amp_applet_test PRIVATE
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
 
+# Socket-free validation of scoped client display documents.
+add_executable(client_display_settings_test tests/client_display_settings_test.cpp)
+target_include_directories(client_display_settings_test PRIVATE src tests)
+target_link_libraries(client_display_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
+
+# Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
+# RadioModel supplies identity only; no connectRadio call or firmware peer.
+add_executable(rx_applet_squelch_reconciliation_test
+    tests/rx_applet_squelch_reconciliation_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(rx_applet_squelch_reconciliation_test PRIVATE src)
+target_link_libraries(rx_applet_squelch_reconciliation_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME rx_applet_squelch_reconciliation_test
+         COMMAND rx_applet_squelch_reconciliation_test)
+set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -4582,6 +4642,9 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    client_display_settings_test
+    rx_applet_squelch_reconciliation_test
+    rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
     icom_identity_test
@@ -4774,6 +4837,27 @@ add_executable(memory_history_ring_test
 target_include_directories(memory_history_ring_test PRIVATE src)
 target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
 add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
+
+# #2554 (Overview tab): the CPU counterpart of the memory ring — retention, the
+# shared bucket rule, and the window-level top-N selection behind the per-line
+# "top threads" chart. Header-only; pure logic, constructed samples; no widget,
+# no socket.
+add_executable(cpu_history_ring_test
+    tests/cpu_history_ring_test.cpp
+)
+target_include_directories(cpu_history_ring_test PRIVATE src)
+target_link_libraries(cpu_history_ring_test PRIVATE Qt6::Core)
+add_test(NAME cpu_history_ring_test COMMAND cpu_history_ring_test)
+
+# #2554 (Overview tab): the GUI tick-lag meter's "actual - nominal" arithmetic,
+# driven with constructed timestamps through its clock seam. Header-only; no
+# timer, no widget, no socket.
+add_executable(ui_tick_lag_meter_test
+    tests/ui_tick_lag_meter_test.cpp
+)
+target_include_directories(ui_tick_lag_meter_test PRIVATE src)
+target_link_libraries(ui_tick_lag_meter_test PRIVATE Qt6::Core)
+add_test(NAME ui_tick_lag_meter_test COMMAND ui_tick_lag_meter_test)
 
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host

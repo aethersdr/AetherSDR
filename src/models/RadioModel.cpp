@@ -607,7 +607,7 @@ void RadioModel::requestGpsNtpSync()
                                QStringLiteral("gps.ntp.sync"), 0, {});
 }
 
-void RadioModel::handRestoredStateToBackend(const QString& serial)
+void RadioModel::handRestoredStateToBackend()
 {
     if (!m_backend) {
         return;
@@ -624,7 +624,7 @@ void RadioModel::handRestoredStateToBackend(const QString& serial)
     m_operatingStateMaxWaitTimer.stop();
 
     const RestoredRadioState state =
-        RadioStateMemory::load(RadioSettingsScope(m_family, serial), caps);
+        RadioStateMemory::load(settingsScope(), caps);
     if (caps.clientSettingsDomains.testFlag(
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         restoreClientOwnedCwState(state);
@@ -2576,11 +2576,12 @@ RadioModel::RadioModel(QObject* parent)
                 req.host   = m_lastInfo.address.toString();
                 req.port   = m_lastInfo.port;
                 req.serial = m_lastInfo.serial;
+                req.serialIdentity = m_lastInfo.serialIdentity;
                 // The RECONNECT path needs these too. Populating only the
                 // initial connect gives a session that authenticates once and
                 // then fails every automatic retry.
                 populateFamilyParams(req, m_family);
-                handRestoredStateToBackend(req.serial);
+                handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }
         } else {
@@ -3529,6 +3530,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // family for the whole process. Same-family reconnects rebuild nothing.
     const QString wantFamily = info.family.isEmpty() ? QStringLiteral("flex")
                                                      : info.family.toLower();
+    // RTL has no persistent radio memory. Finish its old session before the
+    // discovery identity or preconnect restore is replaced, including swaps
+    // within the same family. Its disconnect flush still sees the old scope.
+    if (m_family == QLatin1String("rtl") && m_backend && isConnected()) {
+        flushPendingOperatingState();
+        m_backend->disconnectRadio();
+    }
     if (wantFamily != m_family || !m_backend) {
         qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
                            << "->" << wantFamily << "for" << info.address.toString();
@@ -3625,8 +3633,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.host   = info.address.toString();
         req.port   = info.port;
         req.serial = info.serial;
+        req.serialIdentity = info.serialIdentity;
         populateFamilyParams(req, info.family);
-        handRestoredStateToBackend(req.serial);
+        handRestoredStateToBackend();
         m_backend->connectRadio(req);
     }
 }
@@ -5483,6 +5492,22 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
         panId, std::numeric_limits<double>::quiet_NaN(), bandwidthMhz);
 }
 
+bool RadioModel::requestPanAverage(const QString& panId, int average)
+{
+    if (panId.isEmpty() || average < 0 || average > 100) {
+        return false;
+    }
+    // FlexLib Panadapter.Average updates locally on dispatch; later status
+    // reconciles it. Preserve the existing ownership and profile-load gates.
+    if (!sendCommand(QString("display pan set %1 average=%2").arg(panId).arg(average))) {
+        return false;
+    }
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setRequestedFftSettings(average, -1);
+    }
+    return true;
+}
+
 bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
                                         int wfRate)
 {
@@ -5510,8 +5535,10 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
 
     bool sent = false;
     if (fps > 0) {
-        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps))
-               || sent;
+        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps));
+        if (sent && pan) {
+            pan->setRequestedFftSettings(-1, fps);
+        }
     }
     if (wfRate > 0 && pan && !pan->waterfallId().isEmpty()) {
         // The wire parameter keeps Flex's name; the value is the rate.
@@ -6283,6 +6310,7 @@ void RadioModel::stageSessionModelsForReconnect()
 
     for (SliceModel* slice : m_slices) {
         if (slice) {
+            slice->invalidateSquelchState();
             m_staleSlices.insert(slice->sliceId(), slice);
         }
     }

@@ -138,6 +138,9 @@ public:
                                       ? m_externalReceiveAudioMute
                                       : m_audioMute; }
     bool    flexAudioMute() const { return m_audioMute; }
+    // Only inbound reports establish current-session truth; local setters do not.
+    bool squelchStateKnown() const { return m_squelchOnKnown && m_squelchLevelKnown; }
+    void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; }
     bool    squelchOn()   const { return m_squelchOn; }
     bool    flexSquelchOn() const { return m_squelchOn; }
     bool    receiveSquelchOn() const { return m_externalReceiveAudioReplacement
@@ -615,6 +618,8 @@ private:
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     int     m_agcOffLevel{10};
+    bool m_squelchOnKnown{false};
+    bool m_squelchLevelKnown{false};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
     int     m_manualSquelchLevel{20};

@@ -236,7 +236,12 @@ Values come from `SliceModel`; radio/backend status remains authoritative.
 - `bandwidthLimitsHz.minimum`, `bandwidthLimitsHz.maximum`; zero means the
   backend has not reported a limit.
 - `receive.antenna`, `receive.rfGain`.
-- `displayCadence.fps`, `displayCadence.averageFrames`.
+- `displayCadence.fps`, `displayCadence.averageFrames`: effective model values.
+- `displayCadence.fpsIsRequest`, `displayCadence.averageIsRequest`: true when
+  the effective value is dispatched intent awaiting a subsequent radio publication.
+- `displayCadence.radioReportedFps`, `displayCadence.radioReportedAverage`: last
+  radio publications, or `-1` before any publication. Same-value requests and
+  confirmations also update provenance; later radio publications always win.
 - `displayCadence.weightedAverage`, `weightedAverageKnown`.
 - `displayCadence.waterfallRate`; `-1` means the backend has not reported a
   value, otherwise this is the normalized 1–100 rate, not milliseconds.

@@ -914,6 +914,7 @@ public:
     // `wfRate` is the 1..100 waterfall RATE control value, low slow / high
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
+    bool requestPanAverage(const QString& panId, int average);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
@@ -1303,7 +1304,11 @@ public:
     // HL2 MAC); an unconnected model yields a family-wide scope.
     RadioSettingsScope settingsScope() const
     {
-        return RadioSettingsScope(m_family, serial());
+        const QString radioId = settingsRadioId(m_family, serial(), m_lastInfo.serialIdentity);
+        if (m_family == QLatin1String("rtl") && radioId.isEmpty() && isConnected()) {
+            return RadioSettingsScope::anonymousRadio(m_family);
+        }
+        return RadioSettingsScope(m_family, radioId);
     }
 
     // Fire a vendor-extension verb at the connected backend (IRadioBackend
@@ -1530,7 +1535,7 @@ private:
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
-    void handRestoredStateToBackend(const QString& serial);  // RFC #4603
+    void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
