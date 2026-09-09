@@ -504,12 +504,48 @@ struct Hl2Telemetry {
     void apply(const Ep6Response& r) noexcept;
 };
 
+// Directional-coupler counts -> watts, through the reference calibration curve.
+// See the table in the .cpp for what this curve is and, much more importantly,
+// what it is NOT — it is not a calibration of any particular radio.
+//
+// Lives here rather than in Hl2Backend because swrFromRaw() now needs the same
+// curve, and MetisProtocol is the layer Hl2Backend already depends on. Putting
+// one copy at the lower layer costs no new dependency edge; the alternatives
+// both cost one (see the note above swrFromRaw()).
+double directionalWatts(int raw) noexcept;
+
+// Detector output in arbitrary VOLTAGE units: sqrt(directionalWatts(raw)).
+//
+// This is the inverse of the count->power curve, taken back to voltage because
+// SWR is a voltage ratio. The units are arbitrary and deliberately so — only
+// the ratio of two of these is ever used, so any consistent scale works, and
+// pretending the number is volts would be the same mistake as pretending the
+// counts are watts.
+double detectorVolts(int raw) noexcept;
+
+// Minimum forward-power reading, in raw converter counts, below which an SWR
+// ratio is quantisation noise rather than a measurement.
+//
+// With no carrier, forward and reverse are both near zero and dominated by
+// noise; reverse frequently exceeds forward and the ratio saturates. An
+// operator glancing at that sees a catastrophic mismatch on an antenna that is
+// fine. Raw counts because that is what we have — this is a noise floor, not a
+// calibrated power level.
+//
+// It lives in this header, beside the curve it is derived from, so EVERY
+// consumer shares one threshold. It was previously local to the meter path,
+// so the Radio Health snapshot computed an unguarded ratio and bounced at its
+// 500 ms refresh while the meter beside it stayed silent — two surfaces
+// disagreeing about the same radio because only one of them had the guard.
+inline constexpr int kMinForwardCountsForSwr = 16;
+
 // Standing-wave ratio from raw forward/reverse counts.
 //
-// The counts are UNCALIBRATED ADC readings, but SWR is a RATIO, so the unknown
-// scale factor cancels as long as both come from the same converter — which is
-// why SWR is meaningful here while absolute watts are not (oracle §6: "don't
-// pretend uncalibrated counts are watts").
+// The counts are UNCALIBRATED ADC readings, and SWR is a RATIO — but a ratio of
+// raw counts is scale-invariant, NOT curve-invariant, and the detector's curve
+// is not linear. Both counts are therefore mapped through detectorVolts()
+// before the ratio is taken. See the comment on the definition for the whole
+// argument, including the part of the old reasoning that is still correct.
 //
 // Returns nullopt when there is no forward power to speak of: SWR is undefined
 // with no carrier, and 1.0 would read as a perfect match rather than "unknown".

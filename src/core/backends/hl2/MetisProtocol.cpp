@@ -305,6 +305,85 @@ void Hl2Telemetry::apply(const Ep6Response& r) noexcept
     }
 }
 
+double directionalWatts(int raw) noexcept
+{
+    // MOVED here from Hl2Backend with #4578: swrFromRaw() below needs this same
+    // curve to linearize the detector, and MetisProtocol is the layer Hl2Backend
+    // already includes. One copy, at the lower layer, no new dependency edge.
+    //
+    // Quisk's `power_meter_std_calibrations['HL2FilterE3']` verbatim
+    // (quisk_conf_defaults.py): measured [ADC count, watts] pairs for a
+    // Hermes-Lite 2 with an N2ADR companion filter board, rev E3. Quisk is the
+    // reference client and tier 3 on the source-precedence ladder, and this is
+    // the only published curve for this coupler.
+    //
+    // WHAT THIS IS NOT: a calibration of THIS radio. The oracle (§6) is explicit
+    // that these counts need a per-unit calibration against a dummy load to mean
+    // watts, because the coupler, the toroid winding and the detector diode all
+    // vary between boards. A reading from this curve is the right ORDER OF
+    // MAGNITUDE and roughly the right shape; it is not a measurement.
+    //
+    // It is still much better than the alternative, which was publishing
+    // nothing: an operator had no way to tell 100 mW from 5 W, and on a radio
+    // where a mis-set drive level is silent that is the difference between
+    // "working" and "not transmitting". The meters are labelled uncalibrated
+    // (defineMeters) so nobody reads them as a power measurement.
+    //
+    // A future per-unit calibration replaces this table and nothing else.
+    struct Point { double counts; double watts; };
+    static constexpr Point kCurve[] = {
+        {    0.000000, 0.000000 }, {   25.865385, 0.002550 },
+        {  101.024540, 0.012752 }, {  265.290123, 0.050601 },
+        {  647.915584, 0.216458 }, { 1196.593548, 0.665480 },
+        { 1603.703226, 1.155723 }, { 2012.327160, 1.811892 },
+        { 2616.772727, 3.008585 }, { 3173.818182, 4.392743 },
+        { 3382.792208, 4.979133 }, { 3721.071429, 6.024751 },
+        { 4093.178571, 7.289948 }, { 4502.496429, 8.820838 },
+        { 4952.746071, 10.673214 },
+    };
+    constexpr std::size_t kN = std::size(kCurve);
+
+    const double counts = static_cast<double>(raw);
+    if (counts <= kCurve[0].counts)
+        return 0.0;
+    // Above the top of the table, extrapolate along the last segment rather
+    // than clamping. Clamping would pin the meter at 10.7 W and hide the one
+    // reading an operator most needs to see — that they are past where the
+    // curve was ever measured.
+    if (counts >= kCurve[kN - 1].counts) {
+        const Point& a = kCurve[kN - 2];
+        const Point& b = kCurve[kN - 1];
+        const double slope = (b.watts - a.watts) / (b.counts - a.counts);
+        return b.watts + (counts - b.counts) * slope;
+    }
+    for (std::size_t i = 1; i < kN; ++i) {
+        if (counts <= kCurve[i].counts) {
+            const Point& a = kCurve[i - 1];
+            const Point& b = kCurve[i];
+            const double span = b.counts - a.counts;
+            if (span <= 0.0)
+                return b.watts;
+            return a.watts + (counts - a.counts) * (b.watts - a.watts) / span;
+        }
+    }
+    return kCurve[kN - 1].watts;
+}
+
+
+
+double detectorVolts(int raw) noexcept
+{
+    // The inverse of the count->power curve, taken back to VOLTAGE, in
+    // arbitrary units — only ratios of two of these are ever used.
+    //
+    // sqrt() of directionalWatts() rather than a second table, deliberately:
+    // the interpolation scheme is then the SAME scheme by construction, and the
+    // two functions cannot drift apart when a per-unit calibration replaces the
+    // points. A separate voltage table would be a second thing to keep in step.
+    const double w = directionalWatts(raw);
+    return w > 0.0 ? std::sqrt(w) : 0.0;
+}
+
 std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
 {
     // No carrier, no SWR. Returning 1.0 here would render as a perfect match
