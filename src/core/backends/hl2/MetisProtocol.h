@@ -538,7 +538,7 @@ double detectorVolts(int raw) noexcept;
 // 500 ms refresh while the meter beside it stayed silent — two surfaces
 // disagreeing about the same radio because only one of them had the guard.
 //
-// ---- why 96 and not 16 (#4578, nigelfenton's half) ----
+// ---- why not 16 (#4578, nigelfenton's half), and how 96 was first reached ----
 //
 // 16 was a guess about where noise stops, and it is too low by six times. A TX
 // Cal sweep aborted on its first step at a reported SWR of 256.00 on an antenna
