@@ -537,7 +537,45 @@ double detectorVolts(int raw) noexcept;
 // so the Radio Health snapshot computed an unguarded ratio and bounced at its
 // 500 ms refresh while the meter beside it stayed silent — two surfaces
 // disagreeing about the same radio because only one of them had the guard.
-inline constexpr int kMinForwardCountsForSwr = 16;
+//
+// ---- why 96 and not 16 (#4578, nigelfenton's half) ----
+//
+// 16 was a guess about where noise stops, and it is too low by six times. A TX
+// Cal sweep aborted on its first step at a reported SWR of 256.00 on an antenna
+// a RigExpert AA-170 and a real carrier both measured at 1.50 — a LIVE reading,
+// admitted by this gate, computed from counts barely above it. Every layer's
+// absent-handling worked; the number itself was admitted and wrong.
+//
+// CRITERION, because there is no single correct answer and the choice has to be
+// arguable: one count of quantisation on EITHER channel must not move the
+// reported SWR by more than 0.25 — half the finest distinction anything
+// downstream makes (1.5 against 2.0 against 2.5, and the 3.0 at which a sweep
+// aborts) — for every true SWR from 1.0 to 3.0. Above 3.0 the exact value stops
+// mattering because every consumer has already stopped.
+//
+// Swept against directionalWatts()'s own curve, worst case over that band:
+//
+//     forward counts    16     32     64     96    128    256    512
+//     worst SWR error  0.85   0.50   0.30   0.20   0.16   0.10   0.05
+//
+// 96 is the smallest count at and above which the criterion holds. That is
+// ~12 mW forward on the reference curve, against ~1.6 mW at 16 — so the cost is
+// SWR reading "absent" between 1.6 and 12 mW, which is the right trade for a
+// number that could not tell 1.5 from 2.35 down there.
+//
+// NOT ~1200, which #4578 suggested. Gating on FORWARD counts does nothing to
+// lift the REVERSE channel out of the knee: at a true 1.5 the reverse sits a
+// factor of five below forward in voltage, so getting it above 1200 counts
+// needs about 16 W forward — past the top of this table and past what an HL2
+// produces. At 1200 forward counts a true 2.0 still displayed 1.76 under the
+// old raw ratio. It buys nothing and costs SWR below ~0.67 W.
+//
+// DERIVED ANALYTICALLY FROM THE REFERENCE CURVE — NOT MEASURED ON HARDWARE. It
+// assumes the channel-to-channel disagreement at the floor is one count, which
+// is what the field report describes and what nobody has yet measured on a
+// bench. If the real noise amplitude is larger than one count, 96 is still too
+// low. hl2_metis_protocol_test runs this derivation rather than restating it.
+inline constexpr int kMinForwardCountsForSwr = 96;
 
 // Standing-wave ratio from raw forward/reverse counts.
 //

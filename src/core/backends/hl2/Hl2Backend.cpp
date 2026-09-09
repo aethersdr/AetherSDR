@@ -4408,9 +4408,10 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
         m_telemetry.reversePowerRaw
             ? QVariant(directionalWatts(*m_telemetry.reversePowerRaw)) : QVariant());
-    // Meaningful without calibration — it is a ratio of two readings from the
-    // same converter, so the unknown scale cancels. Absent below the noise
-    // floor, where a ratio of two noise samples is not a mismatch reading.
+    // Meaningful without calibration — it is a ratio, so the unknown SCALE
+    // cancels. The detector's CURVE does not cancel, which is why swrFromRaw()
+    // linearizes both counts first (#4578). Absent below the noise floor, where
+    // a ratio of two noise samples is not a mismatch reading.
     //
     // That last sentence described the intent but not the code: this site had no
     // floor, so with no carrier it recomputed a noise ratio at the dialog's
@@ -5172,8 +5173,11 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // build one, and that raw counts must not be presented as watts), only the
     // quantities that are actually meaningful get published.
     //
-    // SWR is meaningful WITHOUT calibration because it is a ratio of two
-    // readings from the same converter, so the unknown scale cancels.
+    // SWR is meaningful WITHOUT calibration because it is a RATIO — but of two
+    // linearized readings, not of two raw counts. The unknown SCALE cancels in
+    // a raw ratio; the detector's CURVE does not, and taking the raw ratio read
+    // optimistically low at low drive (#4578). swrFromRaw() maps both counts
+    // through detectorVolts() first; see its comment for the whole argument.
     // SWR only means something with real forward power behind it.
     //
     // Measured on the live radio: with no carrier the forward and reverse counts

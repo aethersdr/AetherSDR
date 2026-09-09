@@ -401,13 +401,57 @@ std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
     // (one branch uses the voltage form (Vf+Vr)/(Vf-Vr), another a sqrt form
     // whose arguments are the wrong way round and would return a NEGATIVE SWR),
     // so it is not usable as the tie-breaker.
-    const double fwd = static_cast<double>(forwardRaw);
-    double rev = static_cast<double>(reverseRaw < 0 ? 0 : reverseRaw);
+    //
+    // ---- and the caveat that reasoning does not cover (#4578) ----
+    //
+    // All of the above is about the FORM of the expression and it is correct.
+    // What it does not establish is that the counts may be used RAW. This
+    // function used to compute (fwd + rev) / (fwd - rev) directly on counts,
+    // defended by "a ratio of two readings from the same converter, so the
+    // unknown scale cancels". A ratio of raw counts is scale-invariant; it is
+    // not CURVE-invariant, and a diode detector's curve is not a straight line.
+    //
+    // Write a count as c = k(c)·V. Then
+    //
+    //     rho_shown / rho_true = k(c_rev) / k(c_fwd)
+    //
+    // and k, from directionalWatts()'s own table (k = counts / sqrt(watts)),
+    // rises from 512 at 26 counts to a flat ~1516 above ~1200:
+    //
+    //     counts   26   101   265   648  1197  2012  4953
+    //     k       512   895  1179  1393  1467  1495  1516
+    //
+    // c_rev is below c_fwd always, so k(c_rev) <= k(c_fwd) always, so the shown
+    // reflection coefficient is always LOW and the shown SWR always optimistic
+    // — never conservative. That is the unsafe direction on a meter whose whole
+    // job is to warn about a mismatch. Reported by ten9876 (#4578): at 265
+    // forward counts a true 2.0:1 displayed 1.44.
+    //
+    // The repair is to undo the curve before taking the ratio: detectorVolts()
+    // is sqrt(directionalWatts()), the inverse curve in arbitrary voltage units,
+    // and rho is the ratio of two of those. Everything else here is unchanged —
+    // the nullopt on no carrier, the clamp, and the voltage form with no square
+    // root. Above the knee this converges to what the raw ratio already gave
+    // (at 4953 counts a true 2.0 read 1.975 before and 2.000 after), so it is a
+    // low-end correction and not a rescaling of every reading in the log.
+    //
+    // What this does NOT fix, and must not be read as fixing: two counts one LSB
+    // apart are two nearly-equal numbers on either side of the curve, so the
+    // ratio still runs away down at the noise floor — harder, if anything, since
+    // the knee's slope amplifies the reverse channel relative to the forward one
+    // there. At 20/19 counts the raw ratio gave 39.0 and this gives 78.0. That
+    // case is refused by kMinForwardCountsForSwr, which is why that constant had
+    // to be re-derived at the same time; it is not repaired here.
+    const double fwd = detectorVolts(forwardRaw);
+    if (!(fwd > 0.0))
+        return std::nullopt;          // below the bottom of the curve entirely
+    double rev = detectorVolts(reverseRaw < 0 ? 0 : reverseRaw);
     // Reverse above forward is physically impossible; it means noise on a tiny
     // reading. Clamp rather than emit a negative or infinite SWR.
     if (rev >= fwd)
         rev = fwd * 0.999;
-    return (fwd + rev) / (fwd - rev);
+    const double rho = rev / fwd;
+    return (1.0 + rho) / (1.0 - rho);
 }
 
 std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept
