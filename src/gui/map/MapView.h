@@ -21,6 +21,8 @@ class QVariantAnimation;
 
 namespace AetherSDR {
 
+class DarkBasemapLayer;
+
 class MapMarkerItem;
 class MapMarkerBatchItem;
 class MapPathBatchItem;
@@ -97,6 +99,7 @@ public:
     bool dayNightTerminatorVisible() const;
     void setCityLightsVisible(bool visible);
     void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setBasemapDarkEnabled(bool enabled);
     void setBasemapBrightness(int percent);
     void setCityLightsBrightness(int percent);
     void setWeatherRadarVisible(bool visible);
@@ -180,6 +183,7 @@ private:
     void updateAttributionStyle();
     void updateMapAttribution();
 
+    DarkBasemapLayer* m_basemapLayer{nullptr};
     QGVItem* m_basemapDimmer{nullptr};
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};

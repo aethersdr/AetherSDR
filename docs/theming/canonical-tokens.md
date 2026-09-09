@@ -198,3 +198,11 @@ resolver converts that storage format to `rgba()` before applying QSS; raw
 3. **Pilot conversion on one shared stylesheet** — pick `src/gui/SliceLabel.h` or `src/gui/CommonStyles.h` to validate the mechanical conversion process
 4. **Mass conversion in batches** — file-by-file, with diff-screenshot review
 5. **Resolver records widget→token reverse-map** as conversions land (feeds Phase 5 inspector)
+
+## Optional dark basemap palette
+
+`color.map.darkBackground` and `color.map.darkDetail` are the endpoints of the
+PSK Reporter dark-map luminance ramp. Both bundled themes use the same dark
+cartographic palette; selecting the light app theme does not turn an explicitly
+enabled dark map light. These tokens affect only basemap images, not data
+overlays, attribution, or window chrome.

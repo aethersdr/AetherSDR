@@ -710,6 +710,16 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     mapForm->addRow(m_globeCheck);
     mapForm->addRow(m_pathsCheck);
     mapForm->addRow(m_terminatorCheck);
+    auto* basemapDarkTint = new QCheckBox(tr("Dark map"), mapBox);
+    basemapDarkTint->setObjectName(QStringLiteral("pskReporterBasemapDarkTint"));
+    basemapDarkTint->setAccessibleName(tr("Dark basemap"));
+    basemapDarkTint->setAccessibleDescription(tr(
+        "Remap the map to dark backgrounds and light printed labels. "
+        "City lights, radar, and reports keep their colours."));
+    basemapDarkTint->setToolTip(basemapDarkTint->accessibleDescription());
+    basemapDarkTint->setChecked(
+        pskSettings().value("basemapDarkTintEnabled").toBool(false));
+    mapForm->addRow(basemapDarkTint);
     auto* basemapBrightness = new GuardedSlider(Qt::Horizontal, mapBox);
     basemapBrightness->setObjectName(QStringLiteral("pskReporterBasemapBrightness"));
     basemapBrightness->setAccessibleName(tr("Map brightness"));
@@ -778,7 +788,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         m_beaconCallsign, m_beaconGrid, m_beaconBand, m_beaconPower,
         m_beaconTone, m_beaconLevel, m_beaconButton, m_queryCallsign,
         m_bandCombo, m_modeCombo, m_lookbackCombo, m_allCallsignsCheck,
-        m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck, basemapBrightness,
+        m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck, basemapDarkTint, basemapBrightness,
         m_cityLightsCheck, m_cityLightsBrightness, m_cityLightsFaintLights,
         m_cityLightsWarmth, m_weatherRadarCheck, m_weatherRadarPlayButton,
         m_weatherRadarHistoryCombo, m_weatherRadarSpeedSlider};
@@ -799,6 +809,11 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     root->addWidget(splitter, 1);
 
     m_mapView = new MapDisplayWidget(bodyWidget());
+    m_mapView->setBasemapDarkEnabled(basemapDarkTint->isChecked());
+    connect(basemapDarkTint, &QCheckBox::toggled, this, [this](bool enabled) {
+        m_mapView->setBasemapDarkEnabled(enabled);
+        writePskSetting("basemapDarkTintEnabled", enabled);
+    });
     m_mapView->setBasemapBrightness(basemapBrightness->value());
     connect(basemapBrightness, &QSlider::valueChanged, this,
             [this, basemapValue](int value) {

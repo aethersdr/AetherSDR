@@ -1212,6 +1212,15 @@ add_test(NAME map_image_cache_test COMMAND map_image_cache_test)
 set_tests_properties(map_image_cache_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Display-only colour remapping and reversible live-tile styling; no sockets.
+add_executable(dark_basemap_test tests/dark_basemap_test.cpp)
+target_include_directories(dark_basemap_test PRIVATE src)
+target_link_libraries(dark_basemap_test PRIVATE
+    qgeoview Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+add_test(NAME dark_basemap_test COMMAND dark_basemap_test)
+set_tests_properties(dark_basemap_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
 # Injected HTTP replies and virtual time: no sockets, provider traffic or minute-long waits.
 add_executable(map_provider_retry_test tests/map_provider_retry_test.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp)

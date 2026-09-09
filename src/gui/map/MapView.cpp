@@ -1,4 +1,5 @@
 #include "MapView.h"
+#include "DarkBasemapLayer.h"
 #include "MapProviderNetworkAccessManager.h"
 #include "CityLightsItem.h"
 #include "MapMarkerBatchItem.h"
@@ -166,7 +167,8 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     }
     layout->addWidget(m_map);
 
-    auto* osmLayer = new QGVLayerOSM();
+    auto* osmLayer = new DarkBasemapLayer();
+    m_basemapLayer = osmLayer;
     // Deliberately tighter than QGVLayerTiles' upstream defaults, in both
     // dimensions — the decoded-image cache in QGVLayerTilesOnline is what pays
     // for it, since re-entering an area now costs a memcpy rather than a fetch
@@ -785,6 +787,12 @@ void MapView::setCityLightsVisible(bool visible)
 void MapView::setCityLightsImage(const QImage& image, const QRectF& bounds)
 {
     m_cityLightsItem->setImage(image, bounds);
+}
+
+void MapView::setBasemapDarkEnabled(bool enabled)
+{
+    m_basemapLayer->setDarkEnabled(enabled);
+    m_terminatorItem->setDarkBasemapEnabled(enabled);
 }
 
 void MapView::setBasemapBrightness(int percent)

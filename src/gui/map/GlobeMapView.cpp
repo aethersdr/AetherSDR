@@ -1,4 +1,5 @@
 #include "GlobeMapView.h"
+#include "BasemapStyle.h"
 #include "CityLightsShading.h"
 
 #include "MapHoverPathSelection.h"
@@ -355,8 +356,17 @@ void GlobeMapView::initializeGL()
         uniform lowp vec4 nightColor;
         uniform lowp float terminatorEnabled;
         uniform lowp float basemapBrightness;
+        uniform lowp float darkBasemapEnabled;
+        uniform lowp vec3 darkBasemapBackground;
+        uniform lowp vec3 darkBasemapDetail;
         void main() {
             lowp vec4 mapColor = texture2D(atlas, uv);
+            if (darkBasemapEnabled > 0.5) {
+                highp float inverse = 1.0 - dot(mapColor.rgb,
+                    vec3(0.2126, 0.7152, 0.0722));
+                mapColor.rgb = mix(darkBasemapBackground, darkBasemapDetail,
+                                    inverse);
+            }
             mapColor.rgb *= basemapBrightness;
             highp float daylight = smoothstep(-0.018, 0.018,
                 dot(normalize(earthNormal), normalize(sunDirection)));
@@ -555,11 +565,17 @@ void GlobeMapView::paintGL()
     m_program->setUniformValue("sunDirection", geoVector(
         qRadiansToDegrees(sun.declinationRad),
         qRadiansToDegrees(sun.subsolarLonRad)));
-    const QColor night = m_nightColor;
+    const QColor night = m_basemapDarkEnabled
+        ? BasemapStyle::nightColor(m_basemapBackground) : m_nightColor;
     m_program->setUniformValue("nightColor", QVector4D(
         night.redF(), night.greenF(), night.blueF(), 0.62F));
     m_program->setUniformValue("terminatorEnabled",
                                m_terminatorVisible ? 1.0F : 0.0F);
+    m_program->setUniformValue("darkBasemapEnabled", m_basemapDarkEnabled ? 1.0F : 0.0F);
+    m_program->setUniformValue("darkBasemapBackground", QVector3D(
+        m_basemapBackground.redF(), m_basemapBackground.greenF(), m_basemapBackground.blueF()));
+    m_program->setUniformValue("darkBasemapDetail", QVector3D(
+        m_basemapDetail.redF(), m_basemapDetail.greenF(), m_basemapDetail.blueF()));
     m_program->setUniformValue("basemapBrightness", m_basemapBrightness / 100.0F);
     m_program->setUniformValue("atlas", 0);
     m_texture->bind(0);
@@ -1827,6 +1843,12 @@ void GlobeMapView::setCityLightsFaintLights(int percent)
     update();
 }
 
+void GlobeMapView::setBasemapDarkEnabled(bool enabled)
+{
+    m_basemapDarkEnabled = enabled;
+    update();
+}
+
 void GlobeMapView::setBasemapBrightness(int percent)
 {
     m_basemapBrightness = std::clamp(percent, 20, 100);
@@ -2548,6 +2570,8 @@ void GlobeMapView::updateTheme()
     ThemeManager& theme = ThemeManager::instance();
     m_backgroundColor = theme.color(this, "color.background.0");
     m_nightColor = theme.color(this, "color.background.0");
+    m_basemapBackground = theme.color(BasemapStyle::kBackgroundToken);
+    m_basemapDetail = theme.color(BasemapStyle::kDetailToken);
     m_textColor = theme.color(this, "color.text.primary");
     m_vectorOverlayDirty = true;
     const QString overlayStyle = QStringLiteral(

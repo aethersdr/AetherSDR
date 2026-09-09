@@ -310,6 +310,15 @@ void MapDisplayWidget::setCityLightsFaintLights(int percent)
     }
 }
 
+void MapDisplayWidget::setBasemapDarkEnabled(bool enabled)
+{
+    m_basemapDarkEnabled = enabled;
+    m_flatView->setBasemapDarkEnabled(enabled);
+    if (m_globeView != nullptr) {
+        m_globeView->setBasemapDarkEnabled(enabled);
+    }
+}
+
 void MapDisplayWidget::setBasemapBrightness(int percent)
 {
     m_basemapBrightness = std::clamp(percent, 20, 100);
@@ -1998,6 +2007,7 @@ void MapDisplayWidget::ensureGlobeView()
     connect(m_globeView, &GlobeMapView::weatherRadarPlaybackPresented,
             this, &MapDisplayWidget::handleWeatherRadarPlaybackPresented,
             Qt::QueuedConnection);
+    m_globeView->setBasemapDarkEnabled(m_basemapDarkEnabled);
     m_globeView->setBasemapBrightness(m_basemapBrightness);
     m_globeView->setHomeSpanDegrees(m_homeSpanDegrees);
     if (m_hasHome) {
@@ -2042,6 +2052,7 @@ void MapDisplayWidget::synchronizeGlobeView()
     if (!m_globeViewDirty) {
         return;
     }
+    m_globeView->setBasemapDarkEnabled(m_basemapDarkEnabled);
     m_globeView->setBasemapBrightness(m_basemapBrightness);
     m_globeView->setHomeSpanDegrees(m_homeSpanDegrees);
     if (m_hasHome) {

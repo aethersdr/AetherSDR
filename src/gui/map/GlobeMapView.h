@@ -62,6 +62,7 @@ public:
     bool dayNightTerminatorVisible() const { return m_terminatorVisible; }
     void setCityLightsVisible(bool visible);
     void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setBasemapDarkEnabled(bool enabled);
     void setBasemapBrightness(int percent);
     void setCityLightsBrightness(int percent);
     void setCityLightsFaintLights(int percent);
@@ -273,6 +274,7 @@ private:
     QVector<ProjectedMarker> m_projectedMarkers;
     int m_hoverMarker{-1};
     bool m_pathsVisible{true};
+    bool m_basemapDarkEnabled{false};
     int m_basemapBrightness{100};
     bool m_terminatorVisible{true};
     bool m_weatherRadarVisible{false};
@@ -302,6 +304,8 @@ private:
     QToolButton* m_homeButton{nullptr};
     QColor m_backgroundColor;
     QColor m_nightColor;
+    QColor m_basemapBackground;
+    QColor m_basemapDetail;
     QColor m_textColor;
     QMatrix4x4 m_overlayModel;
     QMatrix4x4 m_overlayViewProjection;
