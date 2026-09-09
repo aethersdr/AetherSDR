@@ -12,6 +12,7 @@
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
+#include "core/backends/hl2/Hl2GainSplit.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -1125,7 +1126,10 @@ bool Hl2Backend::createPanadapter()
             static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
             static_cast<double>(m_sampleRateHz) / 1.0e6);
         emit panRfGainInfoChanged(ids->panId, kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
-        emit panRfGainChanged(ids->panId, m_lnaGainDb);
+        // EFFECTIVE, not baseline: a pan created while an automatic control is
+        // holding gain down must come up showing the same number as its
+        // siblings, not the operator's untouched baseline (Hl2GainSplit.h).
+        emit panRfGainChanged(ids->panId, lnaEffectiveDb());
     }
     // A new receiver can change whether the set spans bands.
     applyBandFilter("add receiver");
@@ -1984,7 +1988,11 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // command banks, which are register contents. Everything else in this
     // function keeps startFreqHz in the true-RF domain.
     mp.rxFrequencyHz = ncoCommandHz(startFreqHz);
-    mp.lnaGainDb = m_lnaGainDb;
+    // EFFECTIVE. resetPersistedState() zeroes the automatic offset, so on the
+    // ordinary connect path this equals the baseline; taking it through the
+    // split anyway means no future caller can leave a connect seeding the
+    // register with a number the rest of the session does not agree with.
+    mp.lnaGainDb = lnaEffectiveDb();
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
     if (m_boardMaxRx <= 0) {
@@ -2039,7 +2047,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         << QString::number(startFreqHz / 1.0e6, 'f', 6) << " MHz, trigger=connect";
     // Seed the reference from the gain we are about to command, so the very
     // first spectrum frame is already on the same footing as every later one.
-    m_dbRef.setLnaGainDb(m_lnaGainDb);
+    m_dbRef.setLnaGainDb(lnaEffectiveDb());
 
     // ---- build the receivers, BEFORE start() ----
     //
@@ -4714,7 +4722,15 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         put(QStringLiteral("adcPairing%1").arg(ids.uiNumber).toUtf8().constData(),
             QStringLiteral("Pre-DDC vs post-DDC") + suffix, pairing);
     }
-    put("lnaGainDb", QStringLiteral("LNA gain (dB)"), m_lnaGainDb);
+    // THE VALUE ON THE WIRE. Kept under its original key because that is what
+    // this row has always meant — what the AD9866 is running — and because a
+    // reader that wanted the operator's stored number would be reaching for the
+    // wrong one either way. The two rows below say which is which, and while no
+    // automatic control is armed all three agree.
+    put("lnaGainDb", QStringLiteral("LNA gain (dB)"), lnaEffectiveDb());
+    put("lnaBaselineDb", QStringLiteral("LNA baseline (dB, operator)"), m_lnaGainDb);
+    put("lnaAutoOffsetDb", QStringLiteral("LNA auto offset (dB below baseline)"),
+        m_lnaAutoOffsetDb);
 
     section("txInhibited", QStringLiteral("Transmit"));
     // The register bit is ACTIVE LOW and MetisProtocol already decodes it, so
@@ -5081,6 +5097,10 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_driveByBand.clear();
     m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
     m_lnaGainDb = 20;
+    // The automatic offset is session state and a radio swap ends the session:
+    // radio B must not come up attenuated by a decision taken about radio A's
+    // antenna. (Hl2GainSplit.h)
+    m_lnaAutoOffsetDb = 0;
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
@@ -5462,22 +5482,60 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     return state;
 }
 
-// The one true LNA application: register write, dB-reference lockstep, the
-// re-referred AGC ceilings, and the every-pan echo. Shared by the operator
-// path (setPanRfGain) and the band-memory path so the two can't drift
-// (PR #4619 review).
+// The one true LNA BASELINE application: it sets the operator's number and
+// re-derives what the wire carries. Shared by the operator path (setPanRfGain)
+// and the band-memory path so the two can't drift (PR #4619 review).
+//
+// This is deliberately the ONLY writer of m_lnaGainDb outside the connect seed,
+// and it is deliberately not what an automatic control calls — see
+// setLnaAutoOffsetDb() and Hl2GainSplit.h for why an automatic writer on this
+// path destroys the per-band memory and the persisted operating state.
+void Hl2Backend::applyLnaGainDb(int gainDb)
+{
+    m_lnaGainDb = gainDb;
+    pushEffectiveLnaGain();
+}
+
+int Hl2Backend::lnaEffectiveDb() const noexcept
+{
+    return AetherSDR::hl2::effectiveLnaGain(m_lnaGainDb, m_lnaAutoOffsetDb,
+                                            kLnaGainMinDb, kLnaGainMaxDb)
+        .effectiveDb;
+}
+
+// The automatic attenuation below the operator's baseline. NON-NEGATIVE by
+// construction: this axis has no representation for a gain above the number the
+// operator set, so no automatic control built on it can make the radio louder
+// than they asked (Hl2GainSplit.h).
+//
+// It does NOT touch m_lnaGainDb, m_lnaDbByBand, m_lnaSessionPin or
+// notifyOperatingStateChanged(). That is the whole point: nothing here is the
+// operator's intent, so nothing here may be persisted as if it were.
+void Hl2Backend::setLnaAutoOffsetDb(int offsetDb)
+{
+    const int requested = offsetDb < 0 ? 0 : offsetDb;
+    if (requested == m_lnaAutoOffsetDb)
+        return;
+    m_lnaAutoOffsetDb = requested;
+    pushEffectiveLnaGain();
+}
+
+// Register write, dB-reference lockstep, and the every-pan echo — all three on
+// the EFFECTIVE value, never on the baseline.
 //
 // The dB reference moves IN LOCKSTEP with the gain: spectrum and S-meter are
 // both rendered through m_dbRef, so without this every gain change would
 // slide the whole trace — an operator backing off 10 dB would watch the
-// noise floor drop and read it as the band going quiet.
-void Hl2Backend::applyLnaGainDb(int gainDb)
+// noise floor drop and read it as the band going quiet. That argument applies
+// to an automatic step exactly as it does to a manual one, which is why the
+// offset goes through here rather than round it.
+void Hl2Backend::pushEffectiveLnaGain()
 {
-    m_lnaGainDb = gainDb;
-    m_dbRef.setLnaGainDb(m_lnaGainDb);
+    const int effective = lnaEffectiveDb();
+    m_dbRef.setLnaGainDb(effective);
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setLnaGainDb", Qt::QueuedConnection,
-            Q_ARG(int, m_lnaGainDb));
+            Q_ARG(int, effective));
     // THE AGC CEILING IS THE OTHER HALF OF THAT LOCKSTEP, and it is the half
     // the operator hears rather than sees. WDSP's maximum gain is a setpoint
     // about the antenna signal applied to a POST-LNA one, so moving the LNA
@@ -5503,9 +5561,10 @@ void Hl2Backend::applyLnaGainDb(int gainDb)
             Q_ARG(double, m_dbRef.agcCeilingDb(r.agcThresholdDb)));
     }
     // Echo what the hardware actually took, to every pan — a slider that
-    // asked for something outside the register's range finds out here.
+    // asked for something outside the register's range finds out here, and so
+    // does an operator whose gain is being held down by an automatic control.
     for (const auto& ids : m_ids.all())
-        emit panRfGainChanged(ids.panId, m_lnaGainDb);
+        emit panRfGainChanged(ids.panId, effective);
 }
 
 void Hl2Backend::rememberCurrentBandState()
@@ -5806,7 +5865,7 @@ void Hl2Backend::pushInitialState()
     for (const auto& ids : m_ids.all()) {
         emit panRfGainInfoChanged(ids.panId,
                                   kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
-        emit panRfGainChanged(ids.panId, m_lnaGainDb);
+        emit panRfGainChanged(ids.panId, lnaEffectiveDb());
     }
 
     // Keying state is ours, not the radio's: a reconnect must never come up

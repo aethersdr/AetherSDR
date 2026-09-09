@@ -130,6 +130,26 @@ public:
     HealthSnapshot healthSnapshot() const override;
     QVariantList dspChains() const override;
 
+    // ---- The LNA gain split (Hl2GainSplit.h) ----
+    //
+    // Two numbers. `lnaBaselineDb` is the OPERATOR's: it is what the per-band
+    // map stores, what `currentOperatingState` persists, and the only one
+    // `setPanRfGain` and the band-memory restore write. `lnaAutoOffsetDb` is a
+    // non-negative attenuation applied BELOW it, owned by whatever automatic
+    // control is armed; it is session state and is never persisted.
+    //
+    // The register, `Hl2DbReference` and every `panRfGainChanged` echo all carry
+    // `lnaEffectiveDb` — the operator is shown what the radio is actually doing,
+    // because hiding a gain change from them is its own defect. What is
+    // PRESERVED is the stored baseline, not the displayed number.
+    //
+    // Setting the offset to 0 restores the operator's number to the hardware in
+    // one action, from any state.
+    void setLnaAutoOffsetDb(int offsetDb);
+    [[nodiscard]] int lnaAutoOffsetDb() const noexcept { return m_lnaAutoOffsetDb; }
+    [[nodiscard]] int lnaBaselineDb() const noexcept { return m_lnaGainDb; }
+    [[nodiscard]] int lnaEffectiveDb() const noexcept;
+
     // dspChains()' gather, over the two things it may read.
     //
     // STATIC, AND THAT IS THE POINT. This runs on the I/O thread, where m_rx is
@@ -224,7 +244,11 @@ private:
     // and record the operator's current values into the maps for the band
     // being left. Called from the band-change path and connect.
     void applyPerBandStateFor(double freqHz, const char* reason);
-    void applyLnaGainDb(int gainDb);   // the one true LNA application
+    void applyLnaGainDb(int gainDb);   // the one true LNA BASELINE application
+    // Push m_lnaGainDb - m_lnaAutoOffsetDb to the register, the dB reference and
+    // every pan. Called by both writers of the split (see Hl2GainSplit.h): the
+    // baseline path above, and the automatic-offset path below.
+    void pushEffectiveLnaGain();
     void rememberCurrentBandState();
     void notifyOperatingStateChanged();
 
@@ -773,7 +797,17 @@ private:
     // much the UI would like them to be. Four panadapters on four bands share
     // one preamp setting and one filter selection; see applyBandFilter() for
     // what happens when they disagree.
+    // THE OPERATOR'S BASELINE, not the register value. See Hl2GainSplit.h and
+    // setLnaAutoOffsetDb(): what reaches the AD9866 is this minus
+    // m_lnaAutoOffsetDb. Written only by setPanRfGain, the band-memory restore
+    // and the connect seed — never by an automatic control.
     int m_lnaGainDb = 20;
+    // The automatic attenuation below that baseline, in dB, never negative.
+    // SESSION STATE: it is deliberately absent from currentOperatingState() and
+    // from m_lnaDbByBand, because an automatic transient that outlived the
+    // session that produced it would be indistinguishable, next launch, from a
+    // gain the operator chose. Reset to 0 by resetPersistedState().
+    int m_lnaAutoOffsetDb = 0;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
     // meaning "every relay released", so it cannot double as the sentinel.
