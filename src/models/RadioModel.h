@@ -407,6 +407,17 @@ public:
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
     // reasoning as hasManualNotch(): it can only add the NB button.
     bool hasHostNoiseBlanker() const;
+    // Whether the connected backend drives its own receive RF gain
+    // (RadioCapabilities::hasAutoRfGain). Non-permissive on the same grounds:
+    // it only ever ADDS the Auto checkbox.
+    bool hasAutoRfGain() const;
+    // Arm/disarm that control. Goes through the seam rather than any wire text:
+    // a backend that owns its gain in a hardware register is the only thing
+    // that can own the loop driving it.
+    void setAutoRfGain(bool on);
+    // How deaf that control may make the receiver, in dB below the operator's
+    // own gain setting.
+    void setAutoRfGainFloorDb(int floorDb);
     // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a

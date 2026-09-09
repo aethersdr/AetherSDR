@@ -7286,6 +7286,21 @@ QString MainWindow::rfGainSettingsKey(SpectrumWidget* sw) const
     return base + QLatin1Char('_') + family;
 }
 
+// Family-scoped ALWAYS, with no Flex exception. rfGainSettingsKey() leaves Flex
+// un-suffixed because its key predates the scoping and had to stay readable by
+// an older build; this one is new, so there is no history to preserve and no
+// reason to let two families share a switch that only one of them has.
+QString MainWindow::autoRfGainSettingsKey(SpectrumWidget* sw) const
+{
+    if (!sw)
+        return QStringLiteral("DisplayAutoRfGain");
+    const QString base = sw->settingsKey(QStringLiteral("DisplayAutoRfGain"));
+    const QString family = m_radioModel.backendCapabilities().family;
+    if (family.isEmpty())
+        return base;
+    return base + QLatin1Char('_') + family;
+}
+
 void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
 {
     if (!menu)
@@ -7792,6 +7807,9 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         // The per-pan DAX button and panel, which the capability gate previously
         // missed — so an HL2 kept IQ Ch / DAX Ch selectors that reach nothing.
         menu->setDaxStreamsAvailable(m_radioModel.hasDaxStreams());
+        // The Auto checkbox beside RF Gain. Non-permissive when disconnected,
+        // so it appears only once a backend has actually claimed the loop.
+        menu->setAutoRfGainAvailable(m_radioModel.hasAutoRfGain());
     }
     // A MASK, not a rewrite: the operator's stored HW preference survives a
     // session on a radio that has no hardware black level, and comes back by

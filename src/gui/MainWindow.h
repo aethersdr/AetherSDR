@@ -443,6 +443,9 @@ private:
     //
     // Flex keeps the unsuffixed key so existing settings survive untouched.
     QString rfGainSettingsKey(SpectrumWidget* sw) const;
+    // The Auto RF Gain switch's settings key, family-scoped the same way and
+    // for the same reason: an HL2's automatic gain control is not a Flex's.
+    QString autoRfGainSettingsKey(SpectrumWidget* sw) const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
     BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,

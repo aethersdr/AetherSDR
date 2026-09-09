@@ -4357,6 +4357,33 @@ bool RadioModel::hasManualNotch() const
     return backendCapabilities().hasManualNotch;
 }
 
+bool RadioModel::hasAutoRfGain() const
+{
+    // NOT permissive, for the same reason hasHostNoiseBlanker() is not: this
+    // flag can only ADD the Auto checkbox, so answering true with no backend
+    // attached would show it on a family that never claims it.
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    return backendCapabilities().hasAutoRfGain;
+}
+
+void RadioModel::setAutoRfGain(bool on)
+{
+    if (!m_backend) {
+        return;
+    }
+    m_backend->setAutoRfGain(on);
+}
+
+void RadioModel::setAutoRfGainFloorDb(int floorDb)
+{
+    if (!m_backend) {
+        return;
+    }
+    m_backend->setAutoRfGainFloorDb(floorDb);
+}
+
 bool RadioModel::hasHostNoiseBlanker() const
 {
     // NOT permissive, for the same reason hasManualNotch() is not: this flag

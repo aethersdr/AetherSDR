@@ -352,6 +352,26 @@ public:
         Q_UNUSED(gainDb);
     }
 
+    // Arm or disarm the backend's own receive-gain control, where it has one
+    // (RadioCapabilities::hasAutoRfGain). RADIO-WIDE rather than per-pan, like
+    // setPanRfGain's target on a single-converter radio: there is one front end.
+    //
+    // Disarming must restore the operator's own gain to the hardware in ONE
+    // action, from whatever state the control was in. A backend that left the
+    // radio attenuated after the switch was turned off would be a control that
+    // does not undo itself.
+    //
+    // Default no-op AND a capability flag that defaults false: a family with no
+    // such control shows no switch, so nothing can call this.
+    virtual void setAutoRfGain(bool on) { Q_UNUSED(on); }
+
+    // How far below the operator's own gain that control may go, in dB. The
+    // second of the two numbers the operator owns; everything else about such a
+    // loop is a decision they have no evidence to make.
+    //
+    // Default no-op behind the same capability flag as setAutoRfGain.
+    virtual void setAutoRfGainFloorDb(int floorDb) { Q_UNUSED(floorDb); }
+
     // The discrete front-end stages above. `step` indexes the label list the
     // backend published; a backend clamps rather than refuses, exactly as
     // setPanRfGain does.

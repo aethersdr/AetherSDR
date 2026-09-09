@@ -1726,6 +1726,23 @@ void MainWindow::wirePanLifecycle()
             sw->setRfGain(rfGain);
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
             sw->overlayMenu()->setRfGain(rfGain);
+            // AUTO RF GAIN, restored only when the operator actually stored a
+            // preference, and DEFAULTING OFF when they did not.
+            //
+            // Not through restoreLegacyRfGain: that helper is about a gain
+            // VALUE with no band identity, and refuses to replay it on an HL2
+            // because RadioStateMemory owns the per-band gain instead. A switch
+            // has no band identity to lose, so it restores normally -- but only
+            // if it is written down, because writing a default here is how the
+            // RF-gain restore above once pushed a deaf receiver.
+            const QString autoKey = autoRfGainSettingsKey(sw);
+            const bool autoOn = s.contains(autoKey)
+                             && s.value(autoKey).toString() == QLatin1String("True");
+            if (autoOn && m_radioModel.hasAutoRfGain()) {
+                m_radioModel.setAutoRfGain(true);
+            }
+            sw->overlayMenu()->setAutoRfGainEnabled(
+                autoOn && m_radioModel.hasAutoRfGain());
             QString bgPath = s.value(sw->settingsKey("BackgroundImage")).toString();
             if (!bgPath.isEmpty() && bgPath != "none")
                 sw->setBackgroundImage(bgPath);

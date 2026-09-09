@@ -744,7 +744,34 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_rfGainLabel->setFixedWidth(36);
     m_rfGainLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     gainRow->addWidget(m_rfGainLabel);
+    // AUTOMATIC RECEIVE GAIN, on the same row as the control it drives.
+    //
+    // Beside the slider rather than in a menu because the two are one control:
+    // the slider becomes the CEILING when this is ticked, and an operator who
+    // cannot see both at once cannot see that relationship. The slider stays
+    // live and keeps moving -- it shows what the radio is running, and a gain
+    // change hidden from the operator is its own defect.
+    //
+    // Hidden until a backend claims RadioCapabilities::hasAutoRfGain, and
+    // unchecked until the operator or a restored setting says otherwise.
+    m_autoRfGainCheck = new QCheckBox(QStringLiteral("Auto"));
+    m_autoRfGainCheck->setObjectName(QStringLiteral("antennaAutoRfGainCheck"));
+    m_autoRfGainCheck->setAccessibleName(QStringLiteral("Automatic RF gain"));
+    m_autoRfGainCheck->setStyleSheet(kLabelStyle);
+    m_autoRfGainCheck->setToolTip(
+        "Automatic RF Gain — reduces gain when the radio's converter clips.\n"
+        "The slider becomes the CEILING: this can only take gain away, never add.\n"
+        "Off by default. Does nothing while transmitting.");
+    m_autoRfGainCheck->setVisible(false);
+    gainRow->addWidget(m_autoRfGainCheck);
     vbox->addLayout(gainRow);
+
+    connect(m_autoRfGainCheck, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_updatingFromModel)
+            return;
+        applyAutoRfGainToSlider(on);
+        emit autoRfGainChanged(on);
+    });
 
     connect(m_rfGainSlider, &QSlider::valueChanged, this, [this](int v) {
         // Snap to nearest multiple of step size
@@ -2855,6 +2882,75 @@ void SpectrumOverlayMenu::layoutDisplayPanel()
 // WNB is a RADIO-side noise blanker: the toggle and level go to the radio's own
 // wideband blanker, so on a backend that has none the row would be a control
 // with nothing behind it. Hidden as a unit, button and slider together.
+// THE SLIDER IS AN INPUT AS WELL AS A DISPLAY, and that is why this exists.
+//
+// While the loop is armed the slider shows the EFFECTIVE gain -- the number the
+// radio is running, which is the operator's baseline minus whatever the loop is
+// holding down. That is the right thing to display: a gain change hidden from
+// the operator is its own defect.
+//
+// But the same widget is also how the operator SETS the gain, and the two roles
+// contradict each other the moment the loop holds anything. Drag it to 12 dB
+// with 11 dB held and the backend takes 12 as the new baseline, computes an
+// effective 1, echoes that back, and the slider lands on 1 -- the operator
+// asked for 12, watched it jump to 1, and the stored value is 12. Every reading
+// of that is wrong.
+//
+// So while the loop owns the gain, the slider is a READOUT and says so. To
+// change the ceiling, untick Auto, set it, tick Auto again. That is the
+// maintainer triage's own suggestion on #5354 ("when on, the slider goes
+// read-only"), reached here from the failure rather than from the suggestion.
+void SpectrumOverlayMenu::applyAutoRfGainToSlider(bool autoOn)
+{
+    if (!m_rfGainSlider) {
+        return;
+    }
+    const bool armed = autoOn && m_autoRfGainCheck && m_autoRfGainCheck->isVisible();
+    m_rfGainSlider->setEnabled(!armed);
+    m_rfGainSlider->setToolTip(
+        armed ? QStringLiteral(
+                    "RF Gain — read-only while Auto is on.\n"
+                    "This shows what the radio is running: your setting minus "
+                    "whatever Auto is holding down.\n"
+                    "Untick Auto to change it.")
+              : QStringLiteral("RF Gain: −8 to +32 dB (8 dB steps)\n"
+                               "Step size is determined by radio hardware."));
+}
+
+void SpectrumOverlayMenu::setAutoRfGainAvailable(bool available)
+{
+    if (m_autoRfGainCheck) {
+        m_autoRfGainCheck->setVisible(available);
+    }
+    // A family that does not have the loop must never inherit a disabled
+    // slider from one that did — a radio swap would otherwise leave the
+    // operator's only gain control dead with nothing on screen explaining it.
+    if (!available) {
+        applyAutoRfGainToSlider(false);
+    }
+}
+
+void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
+{
+    if (!m_autoRfGainCheck) {
+        return;
+    }
+    if (m_autoRfGainCheck->isChecked() == on) {
+        // Already there, but the slider may not be: this is also the path a
+        // REFUSED arm takes when the operator's click had already unticked and
+        // re-ticked, and the readout state has to end up matching regardless.
+        applyAutoRfGainToSlider(on);
+        return;
+    }
+    // A backend may DECLINE to arm (an RF Gain baseline in the region where
+    // this radio's gain axis is not trusted). The checkbox has to be able to
+    // come back down without that looking like the operator unticking it, so
+    // this path must not emit.
+    QSignalBlocker b(m_autoRfGainCheck);
+    m_autoRfGainCheck->setChecked(on);
+    applyAutoRfGainToSlider(on);
+}
+
 void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
 {
     if (m_wnbRow) {

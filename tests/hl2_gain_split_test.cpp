@@ -275,6 +275,74 @@ int main(int argc, char** argv)
               "a negative offset is refused at the backend too, resolving to zero");
     }
 
+    // ---- 8. THE AUTOMATIC CONTROL'S SWITCH ---------------------------------
+    //
+    // The law itself is exercised as a pure function in
+    // hl2_auto_gain_policy_test. What is tested HERE is the part that only
+    // exists at the backend: arming, refusing to arm, and the guarantee that
+    // switching it off restores the operator's number in one action.
+    {
+        Session s(rememberedGain());
+        check(s.backend.capabilities().hasAutoRfGain,
+              "the HL2 declares the automatic RF-gain capability");
+        check(!s.backend.autoRfGainEnabled(),
+              "and it is OFF on a fresh session, with no setting to say otherwise");
+
+        // ---- THE REFUSAL. Above +19 dB this radio's gain axis is not
+        // trustworthy: #5354 measured +48 dB reading identically to +18 dB, and
+        // nothing in the gateware decode or the AD9866's stated geometry
+        // accounts for it. The control declines and says why; it does NOT
+        // quietly move the operator's number to somewhere it would work.
+        s.backend.setPanRfGain(s.panId, 20);
+        s.backend.setAutoRfGain(true);
+        check(!s.backend.autoRfGainEnabled(),
+              "arming is REFUSED from a baseline of +20 dB, in the fold region");
+        check(s.backend.lnaBaselineDb() == 20,
+              "and the operator's +20 is not moved to make the feature work");
+        check(s.healthLive() == 20,
+              "nor is the wire quietly attenuated in its place");
+
+        // At the boundary it arms: the limit is where the measurement puts it.
+        s.backend.setPanRfGain(s.panId, 19);
+        s.backend.setAutoRfGain(true);
+        check(s.backend.autoRfGainEnabled(),
+              "+19 dB is inside the trusted range and arming succeeds");
+        check(s.backend.lnaAutoOffsetDb() == 0,
+              "arming alone takes no gain — it acts on evidence, not on being armed");
+        check(s.healthLive() == 19 && s.backend.lnaBaselineDb() == 19,
+              "and neither the wire nor the baseline moved at the moment of arming");
+
+        // ---- DISARMING RESTORES IN ONE ACTION, FROM ANY STATE. Simulate the
+        // loop having taken gain, then switch it off. A control that left the
+        // radio attenuated after being turned off would not undo itself.
+        s.backend.setLnaAutoOffsetDb(11);
+        check(s.backend.lnaEffectiveDb() == 8 && s.echoedGain == 8,
+              "with 11 dB of offset held, the wire is 8 dB and every pan knows");
+        s.backend.setAutoRfGain(false);
+        check(!s.backend.autoRfGainEnabled(), "the switch reports itself off");
+        check(s.backend.lnaAutoOffsetDb() == 0,
+              "and the offset is surrendered");
+        check(s.backend.lnaEffectiveDb() == 19 && s.echoedGain == 19,
+              "the operator's +19 is back on the wire, in ONE action");
+        check(bandGain(s.backend.currentOperatingState(), QStringLiteral("20m")) == 19,
+              "and what is stored for the band is +19 throughout — never the 8");
+
+        // ---- THE OPERATOR'S FLOOR. The second, and last, of the two numbers
+        // they own. 26 dB is a CHOSEN default inside a MEASURED bound: from
+        // the stock +20 dB baseline it reaches -6 dB, which is the first gain
+        // #5354's own sweep measures as clean on this station.
+        check(s.backend.autoRfGainFloorDb() == 26,
+              "the floor defaults to 26 dB below the operator's setting");
+        s.backend.setAutoRfGainFloorDb(9);
+        check(s.backend.autoRfGainFloorDb() == 9, "and the operator can pull it in");
+        s.backend.setAutoRfGainFloorDb(500);
+        check(s.backend.autoRfGainFloorDb() == hl2::Hl2Backend::kAutoRfGainFloorMaxDb,
+              "an absurd floor clamps rather than being taken literally");
+        s.backend.setAutoRfGainFloorDb(-4);
+        check(s.backend.autoRfGainFloorDb() == 0,
+              "and a negative one resolves to zero — 'may take no gain at all'");
+    }
+
     if (failures == 0) {
         std::printf("\nALL PASS\n");
         return 0;
