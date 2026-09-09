@@ -1,5 +1,6 @@
 #include "QsoRecorder.h"
 #include "AppSettings.h"
+#include "CwRecordGate.h"
 #include "AudioDeviceNegotiator.h"
 #include "LogManager.h"
 #include "Resampler.h"
@@ -190,13 +191,16 @@ void QsoRecorder::feedRxAudio(const QByteArray& pcm)
     // during finalize/stop can't stall audio. The post-lock check stays
     // authoritative (m_recording/m_transmitting can flip after this read).
     if (!m_recording.load(std::memory_order_acquire)
-        || m_transmitting.load(std::memory_order_acquire))
+        || m_transmitting.load(std::memory_order_acquire)
+        || m_cwOverActive.load(std::memory_order_acquire))
         return;
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // While transmitting the radio mutes RX (this stream would be silence), and
     // the TX monitor is recorded instead — skip RX so the two don't double-write
     // and the file stays a clean time-interleaved RX/TX stream (#3556).
-    if (!m_recording || !m_file || m_transmitting.load(std::memory_order_acquire)) return;
+    if (!m_recording || !m_file
+        || m_transmitting.load(std::memory_order_acquire)
+        || m_cwOverActive.load(std::memory_order_acquire)) return;
     QByteArray converted = float32ToInt16(pcm);
     m_file->write(converted);
     m_dataBytes += static_cast<quint32>(converted.size());
@@ -208,13 +212,19 @@ void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
     // real-time audio thread. Skip the mutex when we're not recording a TX over
     // so a GUI thread holding m_writeMutex during finalize/stop can't stall
     // audio (xrun). The post-lock check stays authoritative.
+    // "Transmitting" here means the over, not the element: under break-in the
+    // interlock is low in every inter-element gap, and gating on it alone
+    // discarded the record pump's blocks in all of them (#4281).
     if (!m_recording.load(std::memory_order_acquire)
-        || !m_transmitting.load(std::memory_order_acquire))
+        || !(m_transmitting.load(std::memory_order_acquire)
+             || m_cwOverActive.load(std::memory_order_acquire)))
         return;
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // Only capture the TX monitor while actually transmitting (the tap can fire
     // whenever mic capture runs), so RX and TX never both write.
-    if (!m_recording || !m_file || !m_transmitting.load(std::memory_order_acquire)) return;
+    if (!m_recording || !m_file
+        || !(m_transmitting.load(std::memory_order_acquire)
+             || m_cwOverActive.load(std::memory_order_acquire))) return;
     // The post-limiter TX monitor is already 24 kHz stereo int16 — the WAV's
     // native format — so write it directly, no float32 conversion (#3556).
     m_file->write(int16Stereo);
@@ -227,24 +237,55 @@ void QsoRecorder::onMoxChanged(bool mox)
 {
     // Gate RX vs TX writes (#3556). Set before any early-return so the feed
     // slots see the correct state immediately on the TX/RX edge.
+    //
+    // MOX is the SOLE writer of m_transmitting. setCwOverActive deliberately
+    // does not come through here: a CW over outlives the interlock by design
+    // (#4281), so letting it write this flag made two writers disagree for the
+    // length of the hang — long enough that a voice over started inside that
+    // window had m_transmitting forced false underneath it and the rest of the
+    // over was dropped, with no further MOX edge to repair it.
     m_transmitting.store(mox, std::memory_order_release);
+    applyOverBookkeeping(mox);
+}
 
+// The half of onMoxChanged that is about an OVER rather than about the
+// interlock: start an auto-record when one begins, run the idle timer when one
+// ends. A CW over needs exactly this and must NOT touch m_transmitting (#4281).
+void QsoRecorder::applyOverBookkeeping(bool overActive)
+{
     // Only auto-record when in client-side recording mode
     bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
-    if (mox) {
+    if (overActive) {
         // TX started — begin recording if auto-record is on and not already
         // recording. Auto trigger: a standing refusal is reported once, not on
         // every key-down (see beginRecording).
         if (clientSide && m_autoRecord && !m_recording)
             beginRecording(StartTrigger::Auto);
 
-        // Reset idle timer on each TX
+        // Reset idle timer on each over
         m_idleTimer->stop();
     } else {
-        // TX ended — start idle countdown
-        if (m_recording)
+        // TX ended — start the idle countdown, but only once BOTH over sources
+        // are down. The CW gate-close is queued and can land inside a live
+        // voice over begun during the over-hang; arming then would auto-stop
+        // that recording mid-transmission (#4281). Whichever over ends last
+        // arms the countdown.
+        if (AetherSDR::idleCountdownShouldArm(
+                m_recording,
+                m_transmitting.load(std::memory_order_acquire),
+                m_cwOverActive.load(std::memory_order_acquire)))
             m_idleTimer->start(m_idleTimeoutSecs * 1000);
     }
+}
+
+void QsoRecorder::setCwOverActive(bool active)
+{
+    // Set before delegating so both feed slots see the over immediately.
+    m_cwOverActive.store(active, std::memory_order_release);
+    // A CW over must still start an auto-record and run the idle timer exactly
+    // as a voice over does — but it must NOT write m_transmitting, which MOX
+    // owns. See onMoxChanged for what went wrong when it did.
+    applyOverBookkeeping(active);
 }
 
 // ── File management ─────────────────────────────────────────────────────────

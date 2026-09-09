@@ -1,4 +1,5 @@
 #include "CwSidetonePortAudioSink.h"
+#include "CwSidetoneDeviceMatch.h"
 #include "CwSidetoneGenerator.h"
 #include "LogManager.h"
 
@@ -15,15 +16,16 @@ namespace AetherSDR {
 
 namespace {
 
-QString normalizedDeviceName(QString name)
+// Resolve the operator's explicit Qt output selection to a PortAudio device.
+// The name rule lives in CwSidetoneDeviceMatch.h so it is testable without
+// hardware.  `partialMatchName` (optional) receives the PortAudio name when
+// the result came from a PARTIAL match rather than an exact one, so the
+// caller can report the substitution in the sidetone summary instead of it
+// living in one warning line (#5123).
+PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
+                                        QString* partialMatchName = nullptr)
 {
-    return name.simplified().toCaseFolded();
-}
-
-PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
-{
-    const QString target = normalizedDeviceName(device.description());
-    if (target.isEmpty())
+    if (device.description().trimmed().isEmpty())
         return paNoDevice;
 
     const PaDeviceIndex count = Pa_GetDeviceCount();
@@ -46,11 +48,11 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
             continue;
 
         const QString rawName = QString::fromUtf8(info->name);
-        const QString candidate = normalizedDeviceName(rawName);
-        if (candidate == target)
+        const DeviceNameMatch kind = classifyDeviceNameMatch(rawName, device.description());
+        if (kind == DeviceNameMatch::Exact)
             return i;
 
-        if (candidate.contains(target) || target.contains(candidate)) {
+        if (kind == DeviceNameMatch::Partial) {
             // paInDevelopment (0) is used as a safe "unknown" sentinel when
             // Pa_GetHostApiInfo returns null — it will never equal paWASAPI.
             PaHostApiTypeId apiType = paInDevelopment;
@@ -82,11 +84,12 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
     }
 
     if (partials.size() == 1) {
+        if (partialMatchName)
+            *partialMatchName = partials[0].rawName;
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                            << device.description()
-                           << "partially matched PortAudio output"
-                           << partials[0].rawName
-                           << "by name substring";
+                           << "only partially matched PortAudio output"
+                           << partials[0].rawName;
         return partials[0].idx;
     }
 
@@ -203,9 +206,10 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         m_paInitialized = true;
     }
 
+    QString partialMatchName;
     PaDeviceIndex devIdx = device.isNull()
         ? defaultPortAudioOutputDevice()
-        : findPortAudioOutputDevice(device);
+        : findPortAudioOutputDevice(device, &partialMatchName);
     if (!device.isNull() && devIdx == paNoDevice) {
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                            << device.description()
@@ -223,9 +227,29 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         return false;
     }
     if (!device.isNull()) {
-        qCWarning(lcAudio) << "CwSidetonePortAudioSink: matched selected Qt output"
-                           << device.description()
-                           << "to PortAudio output" << devInfo->name;
+        if (partialMatchName.isEmpty()) {
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: matched selected Qt output"
+                               << device.description()
+                               << "to PortAudio output" << devInfo->name;
+        } else {
+            // Not "matched": the operator did not pick this device (#5123).
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: opening PortAudio output"
+                               << devInfo->name
+                               << "in place of selected Qt output"
+                               << device.description()
+                               << "(partial name match)";
+        }
+    }
+    if (!partialMatchName.isEmpty()) {
+        // A partial name match is a substitution the operator did not make;
+        // surface it in the summary and the support bundle, not only in the
+        // warning above (#5123).
+        m_fallbackOccurred = true;
+        const QString detail = QStringLiteral("selected \"%1\" resolved by partial name match to \"%2\"")
+                                   .arg(device.description(), partialMatchName);
+        m_fallbackReason = m_fallbackReason.isEmpty()
+            ? detail
+            : m_fallbackReason + QStringLiteral("; ") + detail;
     }
     m_deviceDescription = QString::fromLocal8Bit(devInfo->name ? devInfo->name : "");
 

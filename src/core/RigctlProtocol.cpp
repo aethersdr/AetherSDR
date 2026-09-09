@@ -249,7 +249,11 @@ void RigctlProtocol::removeCreatedTxSlice()
     if (id < 0 || !m_model) return;
     auto* model = m_model;
     QMetaObject::invokeMethod(model, [model, id]{
-        if (model->slice(id))
+        // hasCommandPlane: defense in depth — the created-slice id is only
+        // ever set from a successful Flex `slice create` callback, but the
+        // remove must not become a logged drop if that invariant ever bends
+        // (M0, #5263).
+        if (model->slice(id) && model->hasCommandPlane())
             model->sendCommand(QStringLiteral("slice remove %1").arg(id));
     }, Qt::QueuedConnection);
 }

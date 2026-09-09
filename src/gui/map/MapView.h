@@ -1,5 +1,7 @@
 #pragma once
 
+#include "WeatherRadarSource.h"
+
 #include <QWidget>
 #include <QTimer>
 #include <QColor>
@@ -12,6 +14,7 @@ class QGVMap;
 class QGVLayer;
 class QAbstractAnimation;
 class QLabel;
+class QOpenGLWidget;
 class QToolButton;
 class QVariantAnimation;
 
@@ -21,6 +24,9 @@ class MapMarkerItem;
 class MapMarkerBatchItem;
 class MapPathBatchItem;
 class MapTerminatorItem;
+class CityLightsItem;
+class WeatherRadarPlaybackItem;
+class WeatherRadarTileLayer;
 
 // Reusable OpenStreetMap slippy-map widget (#mapping-engine).
 //
@@ -37,6 +43,11 @@ class MapView : public QWidget {
     Q_OBJECT
 
 public:
+    enum class ViewportMode {
+        Raster,
+        OpenGlIfAvailable
+    };
+
     struct Marker {
         double  lat{0.0};
         double  lon{0.0};
@@ -54,7 +65,14 @@ public:
         QString clickInfo;      // rich text shown on click (empty = none)
     };
 
-    explicit MapView(QWidget* parent = nullptr);
+    explicit MapView(
+        QWidget* parent = nullptr,
+        ViewportMode viewportMode = ViewportMode::Raster);
+
+    // A narrow diagnostic seam for automation and platform smoke tests. The
+    // answer changes to false if the requested OpenGL viewport cannot create
+    // a context and MapView has fallen back to the raster viewport.
+    bool openGlViewportActive() const;
 
     // Home position (e.g. radio GPS fix). Home key / resetToHome() recenters
     // here. Also draws/updates the home station marker when showMarker.
@@ -76,6 +94,25 @@ public:
 
     void setDayNightTerminatorVisible(bool visible);
     bool dayNightTerminatorVisible() const;
+    void setCityLightsVisible(bool visible);
+    void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setCityLightsBrightness(int percent);
+    void setWeatherRadarVisible(bool visible);
+    bool weatherRadarVisible() const;
+    int pendingWeatherRadarRequests() const;
+    bool weatherRadarLoadFailed() const;
+    void refreshWeatherRadar();
+    void setWeatherRadarSource(const WeatherRadarSource& source);
+    QRectF weatherRadarPlaybackBounds() const;
+    QSize weatherRadarPlaybackSize() const;
+    // Atomic presentation of a single original NOAA observation.
+    bool showWeatherRadarPlaybackFrame(
+        const QImage& image, const QDateTime& frameTime, const QRectF& bounds);
+    void acknowledgeWeatherRadarPlaybackFrame(quint64 presentationSequence);
+    void preloadWeatherRadarPlaybackFrame(const QImage& image,
+                                          const QDateTime& frameTime,
+                                          const QRectF& bounds);
+    void clearWeatherRadarPlayback();
 
     // Color/label legend chip, lower-left. Empty list hides it.
     void setLegend(const QVector<QPair<QString, QColor>>& entries);
@@ -86,7 +123,12 @@ public:
     QGVMap* map() const { return m_map; }
 
 signals:
+    void imageOverlayViewChanged();
     void markerClicked(const MapView::Marker& marker);
+    void weatherRadarFrameLoaded(const QDateTime& frameTime);
+    void weatherRadarPlaybackPresented(quint64 presentationSequence);
+    void weatherRadarPlaybackFramePreloaded(const QDateTime& frameTime);
+    void weatherRadarPlaybackInvalidated();
 
 public slots:
     void resetToHome();
@@ -129,10 +171,28 @@ private:
     // Instant hover tooltip driven by mouse-move (QGeoView's built-in
     // tooltip waits for the OS hover delay, which is too slow here).
     void showHoverTooltip(const QPointF& projPos);
+    void handleWeatherRadarFrameReady(WeatherRadarTileLayer* layer,
+                                      const QDateTime& frameTime);
+    void configureViewportInput(QWidget* viewport);
+    void fallBackToRasterViewport();
+    void updateAttributionStyle();
+    void updateMapAttribution();
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
     QGVLayer* m_terminatorLayer{nullptr};
+    CityLightsItem* m_cityLightsItem{nullptr};
+    bool m_cityLightsVisible{false};
+    QGVLayer* m_weatherRadarPlaybackLayer{nullptr};
+    WeatherRadarTileLayer* m_weatherRadarLayer{nullptr};
+    WeatherRadarTileLayer* m_weatherRadarNextLayer{nullptr};
+    WeatherRadarSource m_weatherRadarSource;
+    QString m_pendingWeatherRadarFrameId;
+    QVariantAnimation* m_weatherRadarTransition{nullptr};
+    WeatherRadarPlaybackItem* m_weatherRadarPlaybackItem{nullptr};
+    bool m_weatherRadarPlaybackActive{false};
+    bool m_weatherRadarEnabled{false};
+    QLabel* m_attribution{nullptr};
     MapTerminatorItem* m_terminatorItem{nullptr};
     QTimer* m_terminatorTimer{nullptr};
     QVector<MapMarkerItem*> m_homeMarkers;
@@ -160,6 +220,8 @@ private:
     QToolButton* m_zoomOutBtn{nullptr};
     QToolButton* m_homeBtn{nullptr};
     QPointer<QAbstractAnimation> m_zoomAnimation;
+    QPointer<QOpenGLWidget> m_openGlViewport;
+    bool m_openGlViewportChecked{false};
 
     // Sonar pulse on the home marker: a short ring animation fired every
     // few seconds. The animation only runs for its ~1s duration, so the

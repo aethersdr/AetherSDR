@@ -137,6 +137,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
+    caps.fmDtcsCodes = {};
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
@@ -150,10 +151,13 @@ RadioCapabilities FlexBackend::capabilities() const
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
     caps.hasLmsNoiseFilters = true;
+    // CW audio peaking filter is base Flex firmware (`slice set <n> apf=`).
+    caps.hasAudioPeakingFilter = true;
     // A Flex notches with TNFs, which are pinned to absolute frequencies and
     // are a different instrument. No single in-passband manual notch.
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
+    caps.hasDdcPanEdgeRolloff = false;  // superhet/direct-sampling, no DDC decimation edge
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -169,8 +173,21 @@ RadioCapabilities FlexBackend::capabilities() const
     // receive-only mode guard to refuse. Stated rather than defaulted, per the
     // "adding a field" rule in RadioCapabilities.h.
     caps.receiveOnlyModes = {};
+    caps.hasRadioDialLock = false;
     caps.hasTuner = true;
+    caps.hasTunerMemories = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
+    caps.hasRemoteOnControl = true;
+    caps.canUpgradeFirmware = true;
+    caps.hasSmartLink = true;
+    caps.hasLicenseInfo = true;
+    caps.hasClientNetworkConfig = true;
+    caps.hasFlexControlIntegration = true;
+    caps.hasAudioCompression = true;
+    caps.hasSharpFilters = true;
+    caps.usesVita49Transport = true;
+    caps.hasNetworkConfigurationReadback = true;
+    caps.hasPrivateIpConnectionPolicy = true;
     // The radio owns its reference and its own calibration ("radio set cal_freq",
     // "radio pll_start", freq_error_ppb) — that surface is the Frequency Offset
     // group on the Receive page, and it is NOT this flag. False here means "the
@@ -182,6 +199,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR's compander command is the authoritative DEXP path used by
     // TransmitModel::setDexp/setDexpLevel.
     caps.hasDownwardExpander = true;
+    caps.hasAgcThreshold = true;
+    caps.hasAmCarrierLevel = true;
+    caps.hasVoxDelay = true;
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one
@@ -190,6 +210,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // omitted field is indistinguishable here from a considered false, which is
     // what this file's ADDING-A-FIELD note exists to prevent.
     caps.takesTxAudioOverSeam = false;
+    // The keyed edge is decoded from `interlock` status inside RadioModel, not
+    // published through this seam — see RadioCapabilities::hasRadioPttReadback.
+    caps.hasRadioPttReadback = false;
 
     // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
     // configurable width list. A Flex's filters are continuous.
@@ -258,10 +281,17 @@ RadioCapabilities FlexBackend::capabilities() const
     // MainWindow therefore combines this family declaration with
     // RadioModel::hasGpsHardware() while connected.
     caps.hasGpsLocation = true;
+    caps.hasGpsSatelliteTelemetry = true;
+    caps.hasGpsFrequencyReference = true;
+    caps.hasGpsTimeConfiguration = false;
+    caps.hasGpsHardware = true;
+    caps.gpsHardwareRequiresPresence = true;
     // The radio owns the memory slots and re-dumps them on every connect, so
     // the client must NOT keep a local bank for a Flex — two stores that both
     // believe they are authoritative would fight over slot indices.
     caps.persistsMemories = true;
+    caps.canWriteMemories = true;
+    caps.canApplyMemories = true;
     // The radio persists its own operating state (frequency, mode, filters,
     // power) and restores it via GUIClientID session restore — the client must
     // never re-assert any of it (Constitution II/III; the #2465/#4126/#4261
@@ -659,8 +689,12 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         return;
     }
 
-    // Group tokens by meter index.
+    // Group fields by meter ID, but publish in first-appearance wire order.
+    // MeterModel associates a TX waveform block with its preceding SLC block
+    // (observed FLEX-8400M fw 4.2.18); sorting IDs can move a reused TX ID
+    // ahead of its own SLC context.
     QMap<int, QMap<QString, QString>> grouped;
+    QList<int> meterOrder;
     const QStringList tokens = rawBody.split('#', Qt::SkipEmptyParts);
     for (const QString& token : tokens) {
         const int dot = token.indexOf('.');
@@ -670,11 +704,14 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         bool ok = false;
         const int idx = token.left(dot).toInt(&ok);
         if (!ok) continue;
+        if (!grouped.contains(idx)) {
+            meterOrder.append(idx);
+        }
         grouped[idx][token.mid(dot + 1, eq - dot - 1)] = token.mid(eq + 1);
     }
 
-    for (auto it = grouped.constBegin(); it != grouped.constEnd(); ++it) {
-        const QMap<QString, QString>& f = it.value();
+    for (int index : meterOrder) {
+        const QMap<QString, QString>& f = grouped.constFind(index).value();
         // Build the typed MeterDef directly (#4070). Present-only: a field the
         // wire didn't report keeps its MeterDef default. The carry() ok-guard is
         // defensive/consistency only here — a plain MeterDef field's default IS
@@ -685,7 +722,7 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         // (slice/transmit), where a dropped value leaves the field disengaged.
         // (#4075 review.)
         MeterDef def;
-        def.index = it.key();
+        def.index = index;
         carry(f, "src", def.source);
         carry(f, "num", def.sourceIndex, /*base=*/0);
         carry(f, "nam", def.name);
@@ -920,10 +957,11 @@ void FlexBackend::decodeAtuStatus(const QMap<QString, QString>& kvs)
 void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& model,
                                         const QMap<QString, QString>& kvs, bool removed)
 {
-    // Stateless translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
-    // (#4094). The presence latch, operate change-gating, and handle matching are
-    // the model's job (AmpModel::applyChanges) — this only reports what the wire
-    // said. Command/encode is the reverse path — invokeExtension("flex",
+    // Translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
+    // (#4094). Placeholder handles are normalized here so the vendor-neutral
+    // model never needs SmartSDR sentinel knowledge. The presence latch, operate
+    // change-gating, and handle matching are the model's job
+    // (AmpModel::applyChanges). Command/encode is the reverse path — invokeExtension("flex",
     // "amp.operate", …) below translates AmpModel's neutral intent (#4094).
     AmpDelta d;
     d.handle = handle;
@@ -937,14 +975,18 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
         emit amplifierChanged(d);
         return;
     }
+    if (handle == QLatin1String("0x00000000")) {
+        d.handle.clear();
+    }
     // RadioModel routes only power amps (PGXL) into this decode, so the handle is
     // the amp's — cache it for the encode path (#4198). Ignore the placeholder
     // handle a first status can carry before the real one is assigned. Defense in
     // depth (#4203): a pre-existing routing edge — a model-less TGXL status arriving
     // before its handle is known — can fall through to here; refuse to cache a
     // known-tuner handle so a later amp.operate can never mis-target the TGXL.
-    if (!handle.isEmpty() && handle != QLatin1String("0x00000000") && handle != m_tunerHandle)
-        m_ampHandle = handle;
+    if (!d.handle.isEmpty() && d.handle != m_tunerHandle) {
+        m_ampHandle = d.handle;
+    }
     // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
     // the tuner and routes to TunerModel, not here.
     if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
@@ -967,15 +1009,18 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
 
 void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs)
 {
-    // Cache the TGXL handle for the encode path (#4198). RadioModel passes the
-    // handle it already extracted+sanitized (never the 0x00000000 placeholder),
-    // so the tuner intents no longer carry a Flex identifier through the seam.
+    // Cache the TGXL handle for the encode path (#4198). A first status can
+    // carry 0x00000000 before the real handle is assigned; keep that SmartSDR
+    // placeholder out of both the neutral delta and outgoing tuner commands.
     if (!handle.isEmpty() && handle != QLatin1String("0x00000000"))
         m_tunerHandle = handle;
     // Present-only, strict parity with the prior TunerModel::applyStatus: bools
     // are "1"-equality, ints are unguarded toInt() (matching val.toInt()), text
     // is verbatim. The change-gating / edge signals live in TunerModel::applyChanges.
     TunerDelta d;
+    if (!handle.isEmpty() && handle != QLatin1String("0x00000000")) {
+        d.handle = handle;
+    }
     if (kvs.contains(QStringLiteral("serial_num")))
         d.serialNum = kvs.value(QStringLiteral("serial_num"));
     if (kvs.contains(QStringLiteral("model")))
@@ -1102,6 +1147,20 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 
     GpsDelta d;
     carry(kvs, "status", d.status);
+    if (kvs.contains(QStringLiteral("status"))) {
+        const QString status = kvs.value(QStringLiteral("status")).trimmed().toLower();
+        const bool saysLock = status.contains(QLatin1String("lock"));
+        const bool saysNoLock = status.contains(QLatin1String("unlock"))
+            || status.contains(QLatin1String("no lock"))
+            || status.contains(QLatin1String("not lock"))
+            || status.contains(QLatin1String("lost"))
+            || status.contains(QLatin1String("loss"));
+        // Lock alone decides validity; the coordinates are carried by their
+        // own keys and consumers parse the persisted lat/lon, so a status
+        // line without them must not invalidate a fix the radio still has.
+        d.positionValid = saysLock && !saysNoLock;
+        d.source = QStringLiteral("GPSDO");
+    }
     carry(kvs, "tracked", d.tracked);
     carry(kvs, "visible", d.visible);
     carry(kvs, "grid", d.grid);

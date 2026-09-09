@@ -111,6 +111,9 @@ struct SliceDelta {
     std::optional<QString>     fmToneMode;
     std::optional<double>      fmToneValue;
     std::optional<double>      fmToneRxValue;
+    std::optional<int>         fmDtcsCode;
+    std::optional<bool>        fmDtcsTxReverse;
+    std::optional<bool>        fmDtcsRxReverse;
     std::optional<QString>     repeaterOffsetDir;
     std::optional<double>      fmRepeaterOffsetFreq;
     std::optional<double>      txOffsetFreq;

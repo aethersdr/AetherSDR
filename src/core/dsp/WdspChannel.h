@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -260,6 +261,15 @@ public:
 
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
+
+    // Shared FFTW-planner serialization guard. Anything outside this class
+    // that calls fftw_plan_*/fftw_destroy_plan directly (today: AnanSpectrum,
+    // off the real-time path) must hold this for the call, or it can race a
+    // concurrent WdspChannel::create()/reconfigure() on a DIFFERENT channel
+    // and corrupt FFTW's process-global plan cache -- the same reason
+    // open()/close() and every control call below already take it. Held only
+    // around the planner call itself, not the whole construction.
+    [[nodiscard]] static std::unique_lock<std::mutex> fftwSetupLock();
 
 private:
     explicit WdspChannel(int channelId, const Config& config) noexcept;

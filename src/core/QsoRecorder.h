@@ -139,6 +139,19 @@ public slots:
 
     // TX state tracking (connect to TransmitModel::moxChanged)
     void onMoxChanged(bool mox);
+    // A CW over has started/finished, from AudioEngine::cwRecordingActiveChanged.
+    // Separate from onMoxChanged because break-in gives no MOX edge that spans the
+    // over: the interlock toggles once per ELEMENT (measured on a FLEX-8400 at
+    // 20 WPM: 47 edges in 15.8 s). Routing this through onMoxChanged let raw MOX
+    // shut the gate in every inter-element gap (#4281).
+    void setCwOverActive(bool active);
+
+private:
+    // Auto-record + idle-timer bookkeeping shared by a voice over (onMoxChanged)
+    // and a CW over (setCwOverActive). Split out so the CW path cannot write
+    // m_transmitting, which MOX alone owns (#4281).
+    void applyOverBookkeeping(bool overActive);
+public:
 
 signals:
     void recordingStarted(const QString& filePath);
@@ -185,6 +198,10 @@ private:
     // Recording state
     std::atomic<bool> m_recording{false};  // checked lock-free on the audio feed fast path
     std::atomic<bool> m_transmitting{false};  // MOX state; gates RX vs TX writes (#3556)
+    // True for the whole of a CW over that OUR keyer is sending. ORed with
+    // m_transmitting on both feed paths so an over survives the interlock
+    // toggling between elements under break-in (#4281).
+    std::atomic<bool> m_cwOverActive{false};
     QFile*      m_file{nullptr};
     QDateTime   m_startTime;
     quint32     m_dataBytes{0};    // PCM data bytes written (for WAV header patching)

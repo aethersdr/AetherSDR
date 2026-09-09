@@ -85,6 +85,11 @@ public:
     // carrier drops is at best confusing and at worst a stray emission.
     void flush() noexcept;
 
+    // Complete the final 20 ms wire frame with codec-correct silence. Returns
+    // the number of bytes appended, or zero when already frame-aligned. May
+    // exceed kMaxPendingBytes by less than one frame; it never evicts.
+    [[nodiscard]] std::size_t padToFrame();
+
     [[nodiscard]] std::size_t pendingBytes() const noexcept { return m_pending.size(); }
 
     // Roughly 250 ms at 48 kHz mono s16. Past that the operator is hearing

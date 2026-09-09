@@ -42,8 +42,10 @@ bring-up profile.
 | CW text keyer | Command `17` | Command `17` | Not attested |
 | RX antenna | None | Selectable; live firmware returns ACK without readback | Not attested |
 | RF decks | Continuous envelope | Continuous envelope | Three discontinuous decks with 100/75/10 W ceilings |
-| FM repeater | Extended registers documented; basic tone/level/offset/XFC live-proved | Tone + TSQL, no DTCS claim | Extended registers official-guide + live-proved |
+| FM repeater | Extended registers official-guide; basic tone/level/offset/XFC live-proved | Tone + TSQL, no DTCS claim | Extended registers official-guide + live-proved |
 | CI-V data restart | Not enabled | Not enabled | `0x04` data-start recovery, three attempts at 1 s; public implementation + physical watchdog evidence |
+| GPS position | `23 00/01`, official guide + live-proved | Not attested | Not attested |
+| GPS/NTP clock | SET `0167`-`0169` plus `1A 07/08`, official guide + live-proved | Not attested | Not attested |
 
 The FM row deliberately corrects the assumption in the original IC-9700 PR
 that the repeater family must be hidden on IC-705. The IC-705 guide documents
@@ -53,11 +55,10 @@ but not the DTCS combinations, so its profile is narrower.
 
 Documented command coverage and activated runtime traffic remain separate
 facts. `FmRepeaterExtendedReadback` activates `16 5D`, `1B 01`, `1B 02`, and
-`1C 03` only for the IC-9700, whose preserved live trace covers those reads.
-The IC-705 keeps its live-proven basic poll/write inventory unchanged even
-though its guide documents the wider register family; moving that radio to the
-extended runtime surface requires its own operator proof and an explicit
-profile change.
+`1C 03` for the IC-705 and IC-9700 because each model's official CI-V guide
+defines those registers independently. The IC-9700 also carries preserved live
+trace evidence; the IC-705 extended surface remains guide-proved until an
+operator pass exercises it on hardware.
 
 ## Effective control registry
 
@@ -76,10 +77,10 @@ radio.
 
 The backend's read-only `profile.show` extension returns the active model, guide
 revision, SET-item differences, per-feature evidence, FM repeater access modes,
-RX-antenna readback behavior, and the scope-command facet. It contains no
-credentials. `controls map` is the currently public automation surface; routing
-the RFC's proposed `icom profile show` bridge spelling remains separate
-automation work so this foundation does not cross the radio seam.
+RX-antenna readback behavior, and the scope-command and GPS facets.
+It contains no credentials. `controls map` is the currently public automation
+surface; routing the RFC's proposed `icom profile show` bridge spelling remains
+separate automation work so this foundation does not cross the radio seam.
 
 ## Adding another Icom
 

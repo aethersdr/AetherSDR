@@ -23,14 +23,24 @@ QJsonObject entryToJson(const MemoryEntry& m)
     o["index"] = m.index;
     o["group"] = m.group;
     o["owner"] = m.owner;
+    o["channel"] = m.channel;
+    o["importSource"] = m.importSource;
+    o["importKey"] = m.importKey;
     o["freq"] = m.freq;
     o["name"] = m.name;
     o["mode"] = m.mode;
+    o["nativeFilter"] = m.nativeFilter;
+    o["dataMode"] = m.dataMode;
     o["step"] = m.step;
     o["offsetDir"] = m.offsetDir;
     o["repeaterOffset"] = m.repeaterOffset;
     o["toneMode"] = m.toneMode;
     o["toneValue"] = m.toneValue;
+    o["rxToneValue"] = m.rxToneValue;
+    o["dtcsCode"] = m.dtcsCode;
+    o["dtcsTxReverse"] = m.dtcsTxReverse;
+    o["dtcsRxReverse"] = m.dtcsRxReverse;
+    o["recallable"] = m.recallable;
     o["squelch"] = m.squelch;
     o["squelchLevel"] = m.squelchLevel;
     o["rxFilterLow"] = m.rxFilterLow;
@@ -48,14 +58,24 @@ MemoryEntry entryFromJson(const QJsonObject& o)
     m.index = o.value("index").toInt(m.index);
     m.group = o.value("group").toString(m.group);
     m.owner = o.value("owner").toString(m.owner);
+    m.channel = o.value("channel").toString(m.channel);
+    m.importSource = o.value("importSource").toString(m.importSource);
+    m.importKey = o.value("importKey").toString(m.importKey);
     m.freq = o.value("freq").toDouble(m.freq);
     m.name = o.value("name").toString(m.name);
     m.mode = o.value("mode").toString(m.mode);
+    m.nativeFilter = o.value("nativeFilter").toInt(m.nativeFilter);
+    m.dataMode = o.value("dataMode").toInt(m.dataMode);
     m.step = o.value("step").toInt(m.step);
     m.offsetDir = o.value("offsetDir").toString(m.offsetDir);
     m.repeaterOffset = o.value("repeaterOffset").toDouble(m.repeaterOffset);
     m.toneMode = o.value("toneMode").toString(m.toneMode);
     m.toneValue = o.value("toneValue").toDouble(m.toneValue);
+    m.rxToneValue = o.value("rxToneValue").toDouble(m.rxToneValue);
+    m.dtcsCode = o.value("dtcsCode").toInt(m.dtcsCode);
+    m.dtcsTxReverse = o.value("dtcsTxReverse").toBool(m.dtcsTxReverse);
+    m.dtcsRxReverse = o.value("dtcsRxReverse").toBool(m.dtcsRxReverse);
+    m.recallable = o.value("recallable").toBool(m.recallable);
     m.squelch = o.value("squelch").toBool(m.squelch);
     m.squelchLevel = o.value("squelchLevel").toInt(m.squelchLevel);
     m.rxFilterLow = o.value("rxFilterLow").toInt(m.rxFilterLow);
@@ -69,12 +89,26 @@ MemoryEntry entryFromJson(const QJsonObject& o)
 
 }  // namespace
 
+int LocalMemoryStore::formatVersionFor(const QMap<int, MemoryEntry>& memories)
+{
+    for (const MemoryEntry& memory : memories) {
+        if (!memory.channel.isEmpty() || !memory.importSource.isEmpty()
+            || !memory.importKey.isEmpty() || memory.nativeFilter != 0
+            || memory.dataMode != 0 || memory.rxToneValue != 0.0
+            || memory.dtcsCode != 23 || memory.dtcsTxReverse
+            || memory.dtcsRxReverse || !memory.recallable) {
+            return kFormatVersion;
+        }
+    }
+    return 1;
+}
+
 QByteArray LocalMemoryStore::serialize(const QMap<int, MemoryEntry>& memories,
                                        const QString& savedAtIso)
 {
     QJsonObject root;
     root["format"] = kFormatId;
-    root["version"] = kFormatVersion;
+    root["version"] = formatVersionFor(memories);
     if (!savedAtIso.isEmpty())
         root["savedAt"] = savedAtIso;
     root["savedBy"] = "AetherSDR";

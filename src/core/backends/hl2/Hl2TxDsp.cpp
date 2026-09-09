@@ -106,6 +106,7 @@ void Hl2TxDsp::designFilters()
 
 bool Hl2TxDsp::configure(const Config& config, std::string* error)
 {
+    m_configured = false;
     if (config.inputSampleRateHz <= 0 || config.outputSampleRateHz <= 0) {
         if (error) *error = "invalid sample rate";
         return false;
@@ -120,6 +121,7 @@ bool Hl2TxDsp::configure(const Config& config, std::string* error)
     m_upsample = config.outputSampleRateHz / config.inputSampleRateHz;
     designFilters();
     m_inBuffer.clear();
+    m_configured = true;
     return true;
 }
 

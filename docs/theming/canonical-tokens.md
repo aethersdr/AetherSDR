@@ -104,6 +104,31 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.spectrum.average` | `#8ea8c0` | averaged trace |
 | `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
 | `color.waterfall.colormap` | (gradient — Phase 2 gradient support) | the 8-stop RF colormap |
+| `color.spectrum.zoomButton.disabled.background` | `#5a0f0f1a` | disabled state of the waterfall zoom / band-segment buttons |
+| `color.spectrum.zoomButton.disabled.border` | `#5a304050` | as above, border |
+| `color.spectrum.zoomButton.disabled.text` | `#8c90a0b0` | as above, glyph |
+
+The three `zoomButton.disabled.*` tokens are the exception to this section's
+"paint code only" heading — they are consumed from a QSS template through
+`ThemeManager::applyStyleSheet()`, not from a painter.
+
+These tokens use the enabled colours at reduced opacity against the widget's
+own dark backdrop. Both bundled themes carry the same values to preserve that
+dimming, while theme authors can override each role.
+
+Store translucent values in canonical `#AARRGGBB` format so `QColor` and the
+Theme Editor can read them and restore their factory values. The stylesheet
+resolver converts that storage format to `rgba()` before applying QSS; raw
+`rgba()` token values would bypass the editor's colour and Reset paths.
+
+### Hardware-display colours (specialised — paint code only)
+
+| Token | Canonical | Notes |
+|---|---|---|
+| `color.spe.lcd.background` | `#102010` | SPE Expert LCD glass background |
+| `color.spe.lcd.foreground` | `#d6f5d6` | illuminated SPE Expert LCD pixel |
+| `color.spe.lcd.dim` | `#3a553a` | waiting-for-display text |
+| `color.spe.lcd.bezel` | `#222822` | SPE Expert LCD bezel |
 
 ### Slice indicators
 

@@ -185,6 +185,29 @@ std::vector<TxPacketizer::Chunk> TxPacketizer::takeFrame()
 
 void TxPacketizer::flush() noexcept { m_pending.clear(); }
 
+std::size_t TxPacketizer::padToFrame()
+{
+    const std::size_t remainder = m_pending.size() % kAudioFrameBytes;
+    if (remainder == 0) {
+        return 0;
+    }
+
+    // Never evict to make room. The cap in submit() bounds LATENCY for a
+    // continuous producer; padding is the end of a finite stream, adds less
+    // than one frame, and nothing follows it. Dropping the oldest frame here
+    // would punch a 20 ms hole into unsent audio of the very packet the
+    // padding exists to complete — an FCS failure by another route.
+    const std::size_t missing = kAudioFrameBytes - remainder;
+    std::uint8_t silenceByte = 0x00;
+    if (m_codec == AudioCodec::Lpcm1ch8) {
+        silenceByte = 0x80;
+    } else if (m_codec == AudioCodec::ULaw1ch8) {
+        silenceByte = 0xFF;
+    }
+    m_pending.insert(m_pending.end(), missing, silenceByte);
+    return missing;
+}
+
 // ---------------------------------------------------------------------------
 // Receive reassembly
 // ---------------------------------------------------------------------------

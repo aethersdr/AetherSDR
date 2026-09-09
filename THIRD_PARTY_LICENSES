@@ -136,6 +136,33 @@ AetherSDR.
   or text incorporated, figures only.
   Publisher: ACOM (manufacturer public documentation)
 
+The TelePost LP-100A wattmeter peripheral (see
+docs/architecture/lp-100a-wattmeter-design.md) implements TelePost's own
+published serial protocol — the single-byte command set, the ';'-framed record
+and its field order and semantics. These wire-protocol facts were consulted
+from the manufacturer's public documentation and re-implemented from scratch;
+no vendor code was used.
+  Source:   "RF Wattmeter LP-100A Operations Manual", TelePost Inc. (N8LP),
+            http://www.telepostinc.com/LP-100A-Op_Manual.pdf
+  Publisher: TelePost Inc. (manufacturer public documentation)
+
+  NOTE: the manual's printed example record is wrong about two things, both
+  corrected against real hardware rather than against the document: its Z field
+  is 4 characters where the wire sends 5 (zero-padded), and it lists five SWR
+  alarm values and two peak-hold modes where the hardware has six and three.
+
+  wt2p_lp100a / "LP100A OSD" (Cedrick Johnson, WT2P) — consulted only as a
+  secondary, practical cross-check on the port settings and the response field
+  order. No code incorporated.
+  License:  MIT
+  Source:   https://github.com/chibondking/wt2p_lp100a
+
+  A Node-RED flow authored by this project's own contributor and used to drive
+  the reference LP-100A for several years was consulted as a working example
+  of the protocol in practice. It is first-party material, not third-party, and
+  is recorded here only because the design note audits which of its behaviours
+  were adopted, improved on, or rejected.
+
 The SPE Expert amplifier peripheral (see
 docs/architecture/spe-expert-amplifier-design.md) implements SPE's USB/RS-232
 serial protocol — the command/data packet framing (sync run, count,
@@ -160,6 +187,47 @@ vendored, translated, or linked.
   the 1450/1500/1600 W gauge thresholds carried
   into SpeProtocol.cpp's modelTable(). Author's own work, contributed under
   this project's license; no third-party rights involved.
+
+  The remote LCD mirror (SpeProtocol.cpp's Lcd namespace + gui/SpeLcdWidget)
+  decodes the display frame the amplifier answers to keystroke 0x80 — a
+  mechanism the spec's foreword advertises ("a perfect copy of the display
+  ... in less than 400 bytes") but does not document. The frame layout
+  (payload-length header, 95 FE type marker, 8x40 character matrix,
+  per-column inverse-video attribute bytes), the character-to-glyph mapping,
+  and the 256-glyph 6x8 font ROM in gui/SpeLcdFontRom.inc are carried from
+  the contributing author's own v2 control application (validated against a
+  real 1.5K-FA), which in turn ported them from:
+
+  expert-amp-server (FtlC-ian) — Go web server mirroring the SPE Expert LCD
+  in a browser; the origin of the display-frame decode and the font ROM.
+  License:  MIT
+  Source:   https://github.com/FtlC-ian/expert-amp-server
+
+  The C++ parser and renderer are an original re-expression of the wire-format
+  facts. The glyph table and the captured frame embedded in the protocol test
+  are reproduced from expert-amp-server under its MIT license:
+
+  MIT License
+
+  Copyright (c) 2026 Ian Ferrell
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
 
 
 1. WDSP 2.00 — engine-side SDR DSP
@@ -525,4 +593,3 @@ overlay layer. Contains community-curated utility, beacon, broadcast, and DX spo
   Copyright (c) John Seamons and KiwiSDR community contributors
   License: GPL-2.0 / GPL-3.0 / LGPL-2.1 / MIT (per KiwiSDR repository root _LICENSE)
   Source:  https://github.com/jks-prv/KiwiSDR/blob/master/unix_env/kiwi.config/dist.dx_community.json
-

@@ -51,10 +51,24 @@ int main(int argc, char** argv)
 
     // ---- Default is Flex: transmits, reboots ----
     RadioModel model;
+    check(model.backendCapabilities().family == QLatin1String("flex"),
+          "isFlexRadio identifies the default Flex backend");
     check(model.backendCapabilities().canTransmit,
           "Flex default advertises canTransmit");
     check(model.backendCapabilities().canReboot,
           "Flex default advertises canReboot");
+
+    RadioInfo networkSeed = flexInfo();
+    networkSeed.address = QHostAddress(QStringLiteral("192.0.2.44"));
+    model.connectToRadio(networkSeed);
+    check(model.ip() == QStringLiteral("192.0.2.44"),
+          "connect seeds only the selected radio endpoint");
+    model.disconnectFromRadio();
+    check(QMetaObject::invokeMethod(&model, "onDisconnected", Qt::DirectConnection),
+          "network reset fixture reached RadioModel");
+    check(model.ip().isEmpty() && model.netmask().isEmpty()
+              && model.gateway().isEmpty() && model.mac().isEmpty(),
+          "disconnect clears session-owned network identity");
     check(!model.backendCapabilities().hostModulates,
           "#4449: Flex modulates on-radio, not on the host");
 
@@ -63,6 +77,8 @@ int main(int argc, char** argv)
     // advertises canTransmit=true, matching Flex. Headless automation stays
     // gated behind AETHER_AUTOMATION_ALLOW_TX inside the backend (m_txAllowed).
     model.connectToRadio(hl2Info());
+    check(model.backendCapabilities().family != QLatin1String("flex"),
+          "isFlexRadio rejects the HL2 family without a model-name table");
     check(model.backendCapabilities().canTransmit,
           "HL2 advertises canTransmit (transmit landed post-#4448)");
     check(!model.backendCapabilities().canReboot,
@@ -179,6 +195,8 @@ int main(int argc, char** argv)
     check(model.prepareWsprTransmit(), "WSPR: armed on HL2 for the switch test");
     check(model.hasWsprTxStream(), "WSPR: armed claim is live before the switch");
     model.connectToRadio(flexInfo());
+    check(model.backendCapabilities().family == QLatin1String("flex"),
+          "round-trip: isFlexRadio restores on the Flex family");
     check(!model.hasWsprTxStream(),
           "WSPR: an armed host-modulated claim does NOT survive onto a Flex");
     model.connectToRadio(hl2Info());

@@ -212,6 +212,21 @@ public:
         return it == m_settings.end() ? -1 : static_cast<int>(it->second);
     }
     void setSetting(int item, std::uint8_t value) { m_settings[item] = value; }
+    [[nodiscard]] std::string settingText(int item) const
+    {
+        auto it = m_textSettings.find(item);
+        return it == m_textSettings.end() ? std::string{} : it->second;
+    }
+    void setSettingText(int item, std::string value)
+    {
+        m_textSettings[item] = std::move(value);
+    }
+    void setGpsSource(std::uint8_t source) { m_gpsSource = source; }
+    void setGpsPosition(std::vector<std::uint8_t> position)
+    {
+        m_gpsPosition = std::move(position);
+    }
+    void setNtpResult(std::uint8_t result) { m_ntpResult = result; }
     [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
     {
         return m_renewalSequences;
@@ -748,6 +763,20 @@ private:
                      encodeBcdByte(value % 100), kCivEom});
             return;
         }
+        if (frame->cmd == cmd::kGps && frame->hasSub && frame->data.empty()) {
+            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress, kIc705Addr,
+                                            cmd::kGps, frame->sub};
+            if (frame->sub == gps::kSource) {
+                reply.push_back(m_gpsSource);
+            } else if (frame->sub == gps::kPosition) {
+                reply.insert(reply.end(), m_gpsPosition.begin(), m_gpsPosition.end());
+            } else {
+                return;
+            }
+            reply.push_back(kCivEom);
+            pushCiv(reply);
+            return;
+        }
         // ---- 1A 03 IF FILTER WIDTH ---------------------------------------
         //
         // ONE BCD BYTE, and its meaning depends on the mode — code 40 is
@@ -784,6 +813,23 @@ private:
             const int item = decodeBcdByte(frame->data[0]) * 100
                 + decodeBcdByte(frame->data[1]);
             if (frame->data.size() == 2) {
+                auto textIt = m_textSettings.find(item);
+                if (textIt != m_textSettings.end()) {
+                    std::vector<std::uint8_t> reply{
+                        0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                        settingSub::kMenu, frame->data[0], frame->data[1]};
+                    reply.insert(reply.end(), textIt->second.begin(), textIt->second.end());
+                    if (item == setting::kNtpServer && textIt->second.size() < 64) {
+                        // The real IC-705 returns this leaf as a 64-byte,
+                        // NUL-padded field. Mirroring that here keeps the
+                        // backend test from accepting a friendlier fake-only
+                        // response shape.
+                        reply.resize(8 + 64, 0x00);
+                    }
+                    reply.push_back(kCivEom);
+                    pushCiv(reply);
+                    return;
+                }
                 auto it = m_settings.find(item);
                 if (it == m_settings.end())
                     return;   // no such leaf on this model — silence, not an error
@@ -791,8 +837,25 @@ private:
                          0x05, frame->data[0], frame->data[1], it->second, kCivEom});
                 return;
             }
-            m_settings[item] = frame->data[2];
+            if (item == setting::kNtpServer) {
+                m_textSettings[item] = std::string(frame->data.begin() + 2,
+                                                   frame->data.end());
+            } else {
+                m_settings[item] = frame->data[2];
+            }
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kSetting && frame->hasSub
+            && frame->sub == settingSub::kNtpAccess && !frame->data.empty()) {
+            m_ntpResult = frame->data.front() == 0x01 ? 0x01 : 0x00;
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kSetting && frame->hasSub
+            && frame->sub == settingSub::kNtpResult && frame->data.empty()) {
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                     settingSub::kNtpResult, m_ntpResult, kCivEom});
             return;
         }
         if (frame->cmd == cmd::kTuneOffset && frame->hasSub && frame->data.empty()) {
@@ -942,6 +1005,10 @@ public:
         // item here rather than being accidentally right.
         {func::kTxBandwidth, 1},
     };
+    std::map<int, std::string> m_textSettings;
+    std::uint8_t m_gpsSource = 0x01;
+    std::vector<std::uint8_t> m_gpsPosition = std::vector<std::uint8_t>(27, 0xFF);
+    std::uint8_t m_ntpResult = 0x00;
     // The IF width, as a BCD code, PER (mode, DATA, slot) — which is how the
     // real radio stores it, and the distinction a fixture must reproduce.
     //

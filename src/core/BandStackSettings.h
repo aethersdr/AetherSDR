@@ -29,7 +29,9 @@ struct BandStackEntry {
 };
 
 // User frequency bookmarks, stored per radio as ONE feature document —
-// (family, serial, "BandStack") in radio_settings (RFC #4603 PR 4). Every
+// (family, serial, "BandStack") in radio_settings (RFC #4603 PR 4). Explicit
+// anonymous model scopes use their family row; unknown empty identities refuse.
+// Every
 // mutation writes the whole document through immediately (atomic, Principle
 // V), so there is no separate save() step anymore and a crash can't lose a
 // bookmark the operator just made.

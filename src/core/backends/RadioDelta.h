@@ -15,7 +15,8 @@ namespace AetherSDR {
 // rtty_mark_default to slices, the TNF/DAX-IQ sub-models, the infoChanged /
 // audioOutputChanged / callsign / autoSave emits).
 //
-// The universal fields (model, callsign, nickname, region, GPS/audio-out) map to
+// The universal fields (model, callsign, nickname, network identity, region,
+// GPS/audio-out) map to
 // any radio; the Flex-specific ones (MultiFlex, radio_options, freq calibration,
 // rtty default) are simply absent for a backend that has no analog.
 struct RadioDelta {
@@ -27,6 +28,10 @@ struct RadioDelta {
     std::optional<QString> region;
     std::optional<QString> radioOptions;
     std::optional<QString> bandsRaw;          // optional "bands=" declaration (validated model-side; see RadioModel::declaredBands())
+    std::optional<QString> ip;
+    std::optional<QString> netmask;
+    std::optional<QString> gateway;
+    std::optional<QString> networkName;
 
     // Global flags
     std::optional<bool>    remoteOnEnabled;

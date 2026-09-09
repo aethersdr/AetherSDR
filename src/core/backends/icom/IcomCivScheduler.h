@@ -4,6 +4,7 @@
 #include <deque>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -44,6 +45,7 @@ public:
         std::uint8_t replyCmd = 0;
         bool replyHasSub = false;
         std::uint8_t replySub = 0;
+        std::vector<std::uint8_t> replyDataPrefix;
         // A write supersedes all older observations of the same semantic key.
         bool supersedes = false;
         // Reads and repeated slider writes collapse to the newest queued item.
@@ -65,13 +67,49 @@ public:
         Stale,
     };
 
+    // Bounded, payload-free lifecycle events for transactions that actually
+    // reached the wire. A timed-out transaction can have a second event if its
+    // reply later arrives. Raw CI-V bytes remain available through `civ trace
+    // all`; this history answers the different post-mortem question: how long
+    // did each semantic command wait, how long did its reply take, and how did
+    // it terminate? Keeping only the semantic key avoids placing frequencies,
+    // memories, or text payloads into the default support log.
+    enum class Completion : std::uint8_t {
+        Reply,
+        StaleReply,
+        LateReply,
+        LateStaleReply,
+        Timeout,
+        Displaced,
+        NoReply,
+    };
+
+    struct TransactionEvent {
+        std::string key;
+        Priority priority = Priority::Control;
+        std::uint64_t generation = 0;
+        Completion completion = Completion::Reply;
+        std::int64_t completedAtMs = 0;
+        std::int64_t queueWaitMs = -1;
+        std::int64_t responseMs = -1;
+    };
+
     struct Stats {
         std::uint64_t queued = 0;
         std::uint64_t dispatched = 0;
         std::uint64_t coalesced = 0;
         std::uint64_t replies = 0;
         std::uint64_t staleReplies = 0;
+        std::uint64_t lateReplies = 0;
+        std::uint64_t unmatchedFrames = 0;
         std::uint64_t timeouts = 0;
+        std::uint64_t responseSamples = 0;
+        std::int64_t totalResponseMs = 0;
+        std::int64_t lastResponseMs = -1;
+        std::int64_t maxResponseMs = -1;
+        std::int64_t lastResponseAtMs = 0;
+        std::string lastCompletedKey;
+        std::string lastTimeoutKey;
         std::size_t queueDepth = 0;
         bool readInFlight = false;
         std::string inFlightKey;
@@ -107,11 +145,32 @@ public:
     [[nodiscard]] ResetResult reset(
         TerminalOutcome outcome = TerminalOutcome::Cancelled) noexcept;
     [[nodiscard]] Stats stats() const;
+    [[nodiscard]] const std::deque<TransactionEvent>& recentTransactions() const noexcept
+    {
+        return m_recentTransactions;
+    }
+    void clearTransactionHistory() noexcept { m_recentTransactions.clear(); }
     [[nodiscard]] bool idle() const noexcept { return m_queue.empty() && !m_inFlight; }
+    [[nodiscard]] bool hasPendingKeyPrefix(
+        std::string_view prefix, std::int64_t nowMs) const noexcept;
 
     static constexpr int kSlotMs = 25;
     static constexpr int kReadTimeoutMs = 350;
     static constexpr int kPriorityAgingMs = 1000;
+    static constexpr int kMeterQueueBudgetMs = 100;
+    // The ceiling on how long overdue meters may hold background work off.
+    // Without it, meters that replenish faster than the link drains them keep
+    // kMeterQueueBudgetMs satisfied forever and background aging never fires
+    // again — which is starvation, not pacing.
+    //
+    // 1500 ms is where the two pressures stop trading against each other.
+    // Measured on the production scheduler and poller over 60 s of sustained
+    // TX with every meter visible, worst-case forward-power age is 620/710/1190
+    // ms at 63/75/100 ms round trip — matching an unbounded hold to the
+    // millisecond at 63 and 75 ms — while control reconciliation still lands
+    // ~39-45 times a minute instead of never. Raising it further buys no
+    // freshness at all (the ages plateau) and only costs background progress.
+    static constexpr int kBackgroundStarvationCeilingMs = 1500;
     // How long a timed-out or displaced transaction stays recognisable, so a
     // late answer is still generation-checked rather than adopted as fresh
     // radio truth. Comfortably longer than kReadTimeoutMs and shorter than the
@@ -127,6 +186,7 @@ private:
         std::uint64_t generation = 0;
         std::uint64_t sequence = 0;
         std::int64_t enqueuedAtMs = 0;
+        std::int64_t dispatchedAtMs = -1;
     };
 
     struct Expired {
@@ -137,13 +197,18 @@ private:
     [[nodiscard]] static bool sameReplyShape(const Request& a, const Request& b) noexcept;
     [[nodiscard]] bool matches(const CivFrame& frame, const Queued& request) const noexcept;
     [[nodiscard]] Priority effectivePriority(const Queued& request,
-                                             std::int64_t nowMs) const noexcept;
+                                             std::int64_t nowMs,
+                                             bool yieldToMeters) const noexcept;
     void expireRead(std::int64_t nowMs);
     void dropStaleExpired(std::int64_t nowMs);
+    void recordTransaction(const Queued& request, Completion completion,
+                           std::int64_t completedAtMs, std::int64_t responseMs = -1);
+    void noteResponse(const Queued& request, std::int64_t nowMs);
 
     // Bounded: one ordinary transaction is outstanding at a time and each entry
     // lives only kLateReplyGraceMs, so this cannot grow with queue depth.
     static constexpr std::size_t kMaxExpiredTracked = 16;
+    static constexpr std::size_t kTransactionHistoryMax = 128;
 
     std::deque<Queued> m_queue;
     std::optional<Queued> m_inFlight;
@@ -152,7 +217,14 @@ private:
     std::uint64_t m_sequence = 0;
     std::int64_t m_lastDispatchMs = 0;
     std::int64_t m_inFlightAtMs = 0;
+    // Background aging may win one meter-band slot, then yields until an
+    // actual meter is dispatched. PTT/operator traffic does not reset it.
+    bool m_backgroundSinceMeter = false;
+    // When background work last reached the radio, so yielding to overdue
+    // meters stays a delay rather than an indefinite hold.
+    std::int64_t m_lastBackgroundDispatchMs = 0;
     Stats m_stats;
+    std::deque<TransactionEvent> m_recentTransactions;
 };
 
 }  // namespace AetherSDR::icom

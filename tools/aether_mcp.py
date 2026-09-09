@@ -485,7 +485,10 @@ TOOLS = [
             "setChecked, setValue, setText, setCurrentText, "
             "setCurrentIndex, selectRow, submit (QLineEdit: setText + "
             "returnPressed), trigger (QAction/menu item, works while "
-            "the menu is closed). Target = objectName / class / "
+            "the menu is closed), showPopup / hidePopup (QComboBox: hold "
+            "the drop-down open; the open list is named aetherComboPopup "
+            "for grab_widget/dump_tree — valid only while open). "
+            "Target = objectName / class / "
             "accessibleName from dump_tree. The bridge REFUSES "
             "transmit-keying controls (MOX/PTT/TUNE/ATU/CWX) unless the "
             "app was launched with AETHER_AUTOMATION_ALLOW_TX."),

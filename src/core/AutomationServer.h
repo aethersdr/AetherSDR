@@ -21,6 +21,7 @@ class QWebSocket;
 
 #include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
 #include "MemoryTelemetry.h"
+#include "MeterObservationWindow.h"
 
 class QLocalServer;
 class QLocalSocket;
@@ -60,7 +61,9 @@ class AetherClockModel;
 //   invoke <target> <action> [v]   -> drive a control deterministically:
 //                                     click / toggle / setChecked / setValue /
 //                                     setText / setCurrentText / setCurrentIndex /
-//                                     selectRow. SAFETY: refuses any control
+//                                     selectRow / showPopup / hidePopup (combo
+//                                     drop-down held open; container named
+//                                     aetherComboPopup). SAFETY: refuses any control
 //                                     marked as transmit-keying (markTxKeying() /
 //                                     the "aetherTxKeying" property — MOX/PTT,
 //                                     TUNE, ATU, CWX send, packet/APRS send)
@@ -246,13 +249,13 @@ public:
     // Live model handle for the get() verb. Set once at startup from the
     // MainWindow's active-session RadioModel; may be null (get() then reports
     // "no radio model" rather than crashing).
-    void setRadioModel(RadioModel* model) { m_radioModel = model; }
-    void setAudioEngine(AudioEngine* audio) { m_audioEngine = audio; }
+    void setRadioModel(RadioModel* model);
+    void setAudioEngine(AudioEngine* audio);
     // AetherClock model handle for "get clock"; may be null (reports
     // "no clock model available" until the applet wires it).
     void setClockModel(AetherClockModel* model);  // out-of-line: QPointer needs the complete type
     // QSO recorder handle for the record() verb (start/stop/status/path).
-    void setQsoRecorder(QsoRecorder* rec) { m_qsoRecorder = rec; }
+    void setQsoRecorder(QsoRecorder* rec);
     // Real connection hook for the connect/disconnect/dialog verbs. The bridge
     // asks the implementor (the GUI's ConnectionPanel) to drive the same path
     // the visible buttons do, so automation exercises the normal
@@ -400,6 +403,8 @@ private:
     QJsonObject doDeviceDiagnostics(const QString& action) const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
+    // Full plain text of one QTextEdit/QPlainTextEdit view (#5078). Read-only.
+    QJsonObject doGetText(const QString& target) const;
     // grab pan <index> [path]: capture the raw SpectrumWidget framebuffer for a
     // specific pan (by SpectrumWidget::panIndex) in a multi-pan layout — plain
     // `grab SpectrumWidget` only ever resolves the first one (#3646).
@@ -588,6 +593,13 @@ private:
                                const QString& path) const;
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
+    QJsonObject doMeterWindow(const QString& action, const QString& value);
+    void sampleMeterWindow();
+    MeterObservationWindow m_meterWindow;
+    QTimer* m_meterWindowTimer{nullptr};
+    QMetaObject::Connection m_meterWindowSamples;
+    bool m_meterWindowStarted{false};
+    bool m_meterWindowActive{false};
     // Digital-voice helper lifecycle and non-keying radio waveform maintenance.
     // `unregister` is generic by design; legacy names are not retained in the
     // production cleanup path.
@@ -691,6 +703,12 @@ private:
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
     QJsonObject doShortcut(const QString& id);
+    // keyevent <press|release> <action-id|key-seq>: a real key edge through the
+    // app event filter for the momentary shortcut family (#5079). Press is
+    // TX-gated like shortcut; a release is never blocked.
+    QJsonObject doKeyEvent(const QString& action, const QString& spec);
+    // Release-edge policing hand-back, gated on the transmitter being down.
+    void releaseEdgeHandsBackPolicing();
     // Inject a learned VFO Tune Knob MIDI CC value through the controller
     // decoder. Automation-only, RX-only, and never persists a binding.
     QJsonObject doMidi(const QString& action, const QString& value) const;

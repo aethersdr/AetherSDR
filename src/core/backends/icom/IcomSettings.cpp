@@ -67,6 +67,18 @@ void IcomSettings::writeObj(const QJsonObject& obj)
     s.save();
 }
 
+bool IcomSettings::wakeOnConnect()
+{
+    return readObj().value(QStringLiteral("wakeOnConnect")).toBool(false);
+}
+
+void IcomSettings::setWakeOnConnect(bool enabled)
+{
+    QJsonObject object = readObj();
+    object.insert(QStringLiteral("wakeOnConnect"), enabled);
+    writeObj(object);
+}
+
 QString IcomSettings::username()
 {
     const QString stored = readObj().value(QLatin1String(kFieldUsername)).toString();

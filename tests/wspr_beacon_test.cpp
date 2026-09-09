@@ -171,7 +171,7 @@ void testIndependentDaxPump()
     AudioEngine engine;
     engine.setTxStreamId(0x4a000001U);
     engine.setTransmitting(true);
-    engine.setRadioTransmitting(true);
+    engine.setRadioTransmitting(true, /*ownedByUs=*/true);
 
     int packetCount = 0;
     QByteArray firstPacket;

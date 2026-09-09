@@ -1,6 +1,8 @@
 #include "core/tnc/AetherAx25LibmodemShim.h"
 #include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25AudioCapture.h"
 #include "core/tnc/KissFraming.h"
+#include "core/Resampler.h"
 
 #include "bitstream.h"
 
@@ -197,48 +199,6 @@ bool loadMonoFloatWav(const QString& path, ReplayAudio& audio, QString& error)
     audio.samples.resize(static_cast<size_t>(dataBytes / static_cast<qsizetype>(sizeof(float))));
     std::memcpy(audio.samples.data(), data, static_cast<size_t>(dataBytes));
     return true;
-}
-
-bool writeMonoFloatWavForTest(const QString& path, const std::vector<float>& samples, int sampleRate)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return false;
-
-    auto writeAscii = [&file](const char* text) { file.write(text, 4); };
-    auto writeU16 = [&file](quint16 value) {
-        char bytes[2] = {
-            static_cast<char>(value & 0xff),
-            static_cast<char>((value >> 8) & 0xff),
-        };
-        file.write(bytes, sizeof(bytes));
-    };
-    auto writeU32 = [&file](quint32 value) {
-        char bytes[4] = {
-            static_cast<char>(value & 0xff),
-            static_cast<char>((value >> 8) & 0xff),
-            static_cast<char>((value >> 16) & 0xff),
-            static_cast<char>((value >> 24) & 0xff),
-        };
-        file.write(bytes, sizeof(bytes));
-    };
-
-    const quint32 dataBytes = static_cast<quint32>(samples.size() * sizeof(float));
-    writeAscii("RIFF");
-    writeU32(36u + dataBytes);
-    writeAscii("WAVE");
-    writeAscii("fmt ");
-    writeU32(16);
-    writeU16(3);
-    writeU16(1);
-    writeU32(static_cast<quint32>(sampleRate));
-    writeU32(static_cast<quint32>(sampleRate * sizeof(float)));
-    writeU16(static_cast<quint16>(sizeof(float)));
-    writeU16(32);
-    writeAscii("data");
-    writeU32(dataBytes);
-    file.write(reinterpret_cast<const char*>(samples.data()), static_cast<qint64>(dataBytes));
-    return file.error() == QFileDevice::NoError;
 }
 
 void printReplayDiagnostics(const char* label,
@@ -651,6 +611,100 @@ void testTransmitVhf1200LoopbackDecodes()
            frames.first().payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS TX"));
 }
 
+void testIcomResamplerTailDrainPreservesVhfPacket()
+{
+    const Ax25DemodConfig config =
+        ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(config);
+    const Ax25TransmitResult tx = txShim.buildTransmitAudio(
+        QStringLiteral("KI6BCJ>APZATH,WIDE1-1:=3651.25N/11952.50W-AetherSDR"),
+        QStringLiteral("KI6BCJ"));
+    report("Icom tail-drain test packetizes", tx.ok);
+    if (!tx.ok) {
+        return;
+    }
+
+    // Mirror AudioEngine's host-route int16 conversion and IcomCivBackend's
+    // stereo downmix before the 24->48 kHz radio conversion.
+    const auto* stereo = reinterpret_cast<const float*>(
+        tx.stereoFloat32Pcm.constData());
+    std::vector<float> mono;
+    mono.reserve(static_cast<std::size_t>(tx.audioFrames));
+    for (int frame = 0; frame < tx.audioFrames; ++frame) {
+        const auto toInt16 = [](float value) {
+            const float finite = std::isfinite(value) ? value : 0.0f;
+            return static_cast<qint16>(
+                std::clamp(finite * 32768.0f, -32768.0f, 32767.0f));
+        };
+        const qint16 left = toInt16(stereo[frame * 2]);
+        const qint16 right = toInt16(stereo[frame * 2 + 1]);
+        mono.push_back((left + right) * 0.5f / 32768.0f);
+    }
+
+    Resampler upsampler(config.sampleRate, 48000, 4096);
+    QByteArray radioPcm;
+    constexpr int kChunkFrames = 480;
+    for (std::size_t offset = 0; offset < mono.size(); offset += kChunkFrames) {
+        const int count = static_cast<int>(std::min<std::size_t>(
+            kChunkFrames, mono.size() - offset));
+        radioPcm.append(upsampler.process(mono.data() + offset, count));
+    }
+    const int withoutDrainSamples =
+        radioPcm.size() / static_cast<int>(sizeof(float));
+    const QByteArray tail = upsampler.drain();
+    radioPcm.append(tail);
+    report("Icom resampler exposes a finite-stream tail", !tail.isEmpty());
+    report("Icom resampler tail covers its group delay",
+           tail.size() / static_cast<int>(sizeof(float))
+               >= upsampler.groupDelayInputFrames());
+
+    // The radio path is an exact 2x conversion. Selecting each input-aligned
+    // phase brings the captured 48 kHz stream back to the decoder's 24 kHz
+    // contract without introducing another stateful filter or another tail.
+    const auto* radioSamples = reinterpret_cast<const float*>(radioPcm.constData());
+    const int radioSamplesCount =
+        radioPcm.size() / static_cast<int>(sizeof(float));
+    std::vector<float> replay;
+    replay.reserve(static_cast<std::size_t>(radioSamplesCount / 2));
+    for (int index = 0; index + 1 < radioSamplesCount; index += 2) {
+        replay.push_back(radioSamples[index]);
+    }
+
+    AetherAx25LibmodemShim rxShim;
+    rxShim.configure(config);
+    const QVector<Ax25DecodedFrame> frames = rxShim.processMonoFloat(
+        replay.data(), static_cast<int>(replay.size()), config.sampleRate);
+    report("Icom resampler tail drain preserves one VHF AX.25 frame",
+           frames.size() == 1);
+    if (!frames.isEmpty()) {
+        report("Icom tail-drain frame FCS is valid", frames.first().fcsOk);
+        report("Icom tail-drain APRS payload is intact",
+               frames.first().payloadText
+                   == QStringLiteral("=3651.25N/11952.50W-AetherSDR"));
+    }
+
+    // Pin the failure mode that motivated the API: the undrained finite output
+    // is shorter by the converter's delayed tail — and that missing tail is
+    // the FCS and postamble, so the undrained stream must NOT decode. Without
+    // this second half the test would pass against a drain() that returned
+    // any non-empty buffer.
+    report("undrained Icom output is shorter than finalized output",
+           withoutDrainSamples < radioSamplesCount);
+    std::vector<float> undrainedReplay;
+    undrainedReplay.reserve(static_cast<std::size_t>(withoutDrainSamples / 2));
+    for (int index = 0; index + 1 < withoutDrainSamples; index += 2) {
+        undrainedReplay.push_back(radioSamples[index]);
+    }
+    AetherAx25LibmodemShim undrainedShim;
+    undrainedShim.configure(config);
+    const QVector<Ax25DecodedFrame> undrainedFrames = undrainedShim.processMonoFloat(
+        undrainedReplay.data(), static_cast<int>(undrainedReplay.size()),
+        config.sampleRate);
+    report("the undrained Icom output loses the AX.25 frame (missing FCS/postamble)",
+           undrainedFrames.isEmpty());
+}
+
 void testKissFramingRoundTrip()
 {
     namespace k = AetherSDR::kiss;
@@ -794,7 +848,10 @@ void testReplayWavLoaderFeedsShim()
     const QString path = file.fileName();
     file.close();
 
-    report("temporary replay WAV written", writeMonoFloatWavForTest(path, audio, cfg.sampleRate));
+    const QByteArray pcm(reinterpret_cast<const char*>(audio.data()),
+                         static_cast<qsizetype>(audio.size() * sizeof(float)));
+    report("temporary replay WAV written",
+           writeAx25Float32Wav(path, pcm, cfg.sampleRate, 1));
 
     ReplayAudio loaded;
     QString error;
@@ -808,6 +865,63 @@ void testReplayWavLoaderFeedsShim()
                                               static_cast<int>(loaded.samples.size()),
                                               loaded.sampleRate);
     report("temporary replay WAV decodes", frames.size() == 1);
+}
+
+void testCaptureWriterSupportsTxStages()
+{
+    const QString captureId = QStringLiteral("20260828-201306Z");
+    const QString generated = ax25AudioCapturePath(
+        Ax25AudioCaptureStage::TxGenerated, captureId, 1);
+    const QString postResample = ax25AudioCapturePath(
+        Ax25AudioCaptureStage::TxIcomPostResample, captureId, 1);
+    report("generated TX capture path is named by stage and packet",
+           generated.endsWith(QStringLiteral(
+               "/ax25-tx-generated-20260828-201306Z-001-float32.wav")));
+    report("Icom TX capture path is named by stage and packet",
+           postResample.endsWith(QStringLiteral(
+               "/ax25-tx-icom-post-resample-20260828-201306Z-001-float32.wav")));
+    report("capture path rejects unsafe identifier",
+           ax25AudioCapturePath(Ax25AudioCaptureStage::TxGenerated,
+                                QStringLiteral("../escape"), 1).isEmpty());
+    report("TX capture path requires positive packet sequence",
+           ax25AudioCapturePath(Ax25AudioCaptureStage::TxGenerated,
+                                captureId, 0).isEmpty());
+
+    QTemporaryFile file;
+    file.setFileTemplate(QStringLiteral("aether-ax25-tx-capture-XXXXXX.wav"));
+    const bool opened = file.open();
+    report("temporary TX capture WAV opened", opened);
+    if (!opened) {
+        return;
+    }
+    const QString path = file.fileName();
+    file.close();
+
+    const float stereoFrames[] = {
+        0.25f, 0.25f,
+        -0.5f, -0.5f,
+    };
+    const QByteArray stereoPcm(
+        reinterpret_cast<const char*>(stereoFrames), sizeof(stereoFrames));
+    QString error;
+    report("stereo TX capture WAV written atomically",
+           writeAx25Float32Wav(path, stereoPcm, 24000, 2, &error));
+
+    QFile written(path);
+    report("stereo TX capture WAV reopened", written.open(QIODevice::ReadOnly));
+    const QByteArray bytes = written.readAll();
+    report("stereo TX capture WAV has complete header",
+           bytes.size() == 44 + stereoPcm.size()
+           && bytes.mid(0, 4) == QByteArrayLiteral("RIFF")
+           && bytes.mid(8, 4) == QByteArrayLiteral("WAVE"));
+    report("stereo TX capture WAV declares float32 stereo 24 kHz",
+           bytes.size() >= 44
+           && readLe16(bytes.constData() + 20) == 3
+           && readLe16(bytes.constData() + 22) == 2
+           && readLe32(bytes.constData() + 24) == 24000
+           && readLe16(bytes.constData() + 34) == 32);
+    report("capture writer rejects frame-misaligned PCM",
+           !writeAx25Float32Wav(path, QByteArray(5, '\0'), 24000, 2, &error));
 }
 
 void testBadFcsDoesNotEmit()
@@ -929,11 +1043,13 @@ int main(int argc, char** argv)
     testTransmitRawPayloadBuildsLoopbackAudio();
     testTransmitMonitorSyntaxBuildsLoopbackAudio();
     testTransmitVhf1200LoopbackDecodes();
+    testIcomResamplerTailDrainPreservesVhfPacket();
     testKissFramingRoundTrip();
     testKissTxFromFrameLoopbackDecodes();
     testMalformedTransmitMonitorSyntaxIsRejected();
     testChunkedSyntheticReplayUsesReceiveGate();
     testReplayWavLoaderFeedsShim();
+    testCaptureWriterSupportsTxStages();
     testBadFcsDoesNotEmit();
     testTooShortRejectDiagnostics();
     testTonePolarityConfig();

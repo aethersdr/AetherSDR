@@ -3,6 +3,7 @@
 #include "MidiControlManager.h"
 #include "CwTrace.h"
 #include "LogManager.h"
+#include "ThreadName.h"
 
 #include <RtMidi.h>
 #include <QDateTime>
@@ -277,6 +278,23 @@ void MidiControlManager::rtmidiCallback(double deltatime,
                                          std::vector<unsigned char>* message,
                                          void* userData)
 {
+    // Name the thread we are standing on, once (#2554). RtMidi delivers on a
+    // thread its backend created — CoreMIDI's MIDIInPortThread on macOS, ALSA's
+    // on Linux, WinMM's on Windows — so nothing in our source ever started it
+    // and Qt never named it. It showed as an unnamed row in the System Info
+    // thread table, which is the wrong row to leave anonymous: this is the MIDI
+    // input path the CW keyer timing work is measured through.
+    //
+    // A thread name can only be set from the thread itself, and this callback
+    // is the one moment we are running there. thread_local rather than a
+    // std::once_flag because a second input port would be a second thread, and
+    // each needs naming.
+    thread_local bool named = false;
+    if (!named) {
+        named = true;
+        setCurrentThreadName("MidiIn");
+    }
+
     if (!message || message->size() < 2) return;
     auto* self = static_cast<MidiControlManager*>(userData);
     int status = (*message)[0];

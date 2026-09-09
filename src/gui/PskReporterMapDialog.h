@@ -11,10 +11,12 @@ class QSpinBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QToolButton;
+class GuardedSlider;
 
 namespace AetherSDR {
 
-class MapView;
+class MapDisplayWidget;
 class AudioEngine;
 class PropForecastClient;
 class PskReporterClient;
@@ -75,7 +77,7 @@ private:
     PskReporterClient*  m_client{nullptr};
     PskReporterClient*  m_globalClient{nullptr};
     PropForecastClient* m_propForecast{nullptr};
-    MapView*            m_mapView{nullptr};
+    MapDisplayWidget*   m_mapView{nullptr};
     QComboBox*          m_bandCombo{nullptr};
     QComboBox*          m_modeCombo{nullptr};
     QComboBox*          m_lookbackCombo{nullptr};
@@ -84,9 +86,20 @@ private:
     QLabel*             m_dxLabel{nullptr};
     QLabel*             m_connLabel{nullptr};
     QCheckBox*          m_pathsCheck{nullptr};
+    QCheckBox*          m_globeCheck{nullptr};
     QCheckBox*          m_allCallsignsCheck{nullptr};
     QCheckBox*          m_activeMonitorsCheck{nullptr};
     QCheckBox*          m_terminatorCheck{nullptr};
+    QCheckBox*          m_cityLightsCheck{nullptr};
+    GuardedSlider*      m_cityLightsBrightness{nullptr};
+    GuardedSlider*      m_cityLightsFaintLights{nullptr};
+    GuardedSlider*      m_cityLightsWarmth{nullptr};
+    QCheckBox*          m_weatherRadarCheck{nullptr};
+    QToolButton*        m_weatherRadarPlayButton{nullptr};
+    QComboBox*          m_weatherRadarHistoryCombo{nullptr};
+    GuardedSlider*      m_weatherRadarSpeedSlider{nullptr};
+    QLabel*            m_weatherRadarSpeedValue{nullptr};
+    QLabel*             m_weatherRadarFrameLabel{nullptr};
     QTimer*             m_emptyStateTimer{nullptr};
     QTimer*             m_lookbackDebounce{nullptr};
     QTimer*             m_markerRefreshTimer{nullptr};
@@ -126,6 +139,7 @@ private:
     bool                m_beaconPrevTxEq{false};
     bool                m_beaconArmed{false};
     bool                m_beaconTransmitting{false};
+    bool                m_weatherRadarTimelineLoading{false};
     QLabel*             m_bandCondPills[4]{};
     bool                m_started{false};
     bool                m_mapCallsignUserEdited{false};

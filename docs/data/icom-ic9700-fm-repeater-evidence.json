@@ -6,7 +6,7 @@
     "pages": [4, 5, 11],
     "liveTrace": "docs/data/icom-ic9700-fm-repeater-live-trace.txt"
   },
-  "scope": "Capability-gated readback only; the existing basic FM repeater UI and command paths are unchanged.",
+  "scope": "Capability-gated IC-9700 extended FM repeater readback and operator DTCS UI/write support; sibling Icom profiles retain their existing basic paths.",
   "registers": [
     {
       "field": "repeaterOffset",

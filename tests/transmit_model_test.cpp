@@ -62,6 +62,28 @@ int main(int argc, char** argv)
     ok &= expect(radioTxEdges.isEmpty() && localMoxEdges.isEmpty(),
                  "radio-reported MOX emits no local transmit-ownership edges");
 
+    // ...but it MUST raise stateChanged(), because that is the only edge a
+    // presentation consumer gating on isMox() can subscribe to (#5306).
+    // MainWindow's PA-current label reads isMox() and repaints on this signal;
+    // wiring it to moxChanged instead produces a slot that never fires, and
+    // the assertion above is precisely why. Guard both directions so a future
+    // change that folds mox into a silent assign, or one that "fixes" this by
+    // reopening moxChanged, fails here.
+    int stateEdges = 0;
+    QObject::connect(&tx, &TransmitModel::stateChanged,
+                     [&stateEdges]() { ++stateEdges; });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(stateEdges == 1 && tx.isMox(),
+                 "radio-reported MOX raises stateChanged() so isMox() consumers repaint");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(stateEdges == 1,
+                 "an unchanged MOX value raises no redundant stateChanged()");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(stateEdges == 2 && !tx.isMox(),
+                 "the un-key edge repaints too, so the label cannot latch on stale current");
+    ok &= expect(localMoxEdges.isEmpty(),
+                 "and none of that reopened the local moxChanged path");
+
     // ---- forced mic selection is ADOPTED, never commanded --------------------
     //
     // On a radio whose input a client cannot choose (an Icom picks its own from

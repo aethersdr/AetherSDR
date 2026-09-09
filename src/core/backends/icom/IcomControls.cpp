@@ -139,17 +139,18 @@ constexpr std::array kSpecs = {
                 IcomFeature::FmRepeaterExtendedReadback},
     ControlSpec{"repeater.dtcs", 0x1B, 0x02, true,
                 "DTCS code and polarity",
-                Plane::Slice, Encoding::Bcd6, Wiring::DecodeOnly,
+                Plane::Slice, Encoding::Dtcs, Wiring::Both,
                 0, 999, "code", 0, 999,
-                "", "", true,
-                "IC-9700 extended readback only. Payload bit 4 is TX reverse "
+                "setSliceFmDtcs", "vfoFmToneContainer", true,
+                "IC-9700 extended control. Payload bit 4 is TX reverse "
                 "and bit 0 is RX reverse; all other polarity bits are rejected.",
                 IcomFeature::FmRepeaterExtendedReadback},
     ControlSpec{"repeater.access.ctcss", 0x16, 0x5D, true,
-                "CTCSS access mode", Plane::Slice, Encoding::Enum, Wiring::Both,
-                0, 9, "enum", 0, 3, "setSliceFmToneMode", "vfoFmToneContainer", true,
-                "IC-9700 CTCSS subset only: OFF, TX, RX and TX/RX. DTCS values "
-                "remain outside this control.", IcomFeature::FmRepeaterCtcssRx},
+                "FM repeater access mode", Plane::Slice, Encoding::Enum, Wiring::Both,
+                0, 9, "enum", 0, 7, "setSliceFmToneMode", "vfoFmToneContainer", true,
+                "IC-9700 exposes the complete documented CTCSS, DTCS, and mixed "
+                "access vocabulary through the capability-gated FM tone UI.",
+                IcomFeature::FmRepeaterCtcssRx},
     ControlSpec{"repeater.tone.rx", 0x1B, 0x01, true,
                 "Receive CTCSS frequency", Plane::Slice, Encoding::Bcd6, Wiring::Both,
                 0, 2999, "Hz", 0, 299, "setSliceFmToneRxValue", "vfoFmToneContainer", true,
@@ -306,9 +307,12 @@ constexpr std::array kSpecs = {
                 0, 1, "on/off", 0, 1,
                 "setSliceManualNotch", "dspMNBtn", true, ""},
     ControlSpec{"dial.lock", 0x16, 0x50, true, "Dial lock",
-                Plane::Radio, Encoding::OnOff, Wiring::Declared,
+                Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used."},
+                "setRadioDialLock", "sliceLockButtons", true,
+                "IC-705, IC-7300MK2, and IC-9700 profile-gated; radio-global "
+                "readback is mirrored to every slice lock surface.",
+                IcomFeature::DialLock},
     ControlSpec{"notch.width", 0x16, 0x57, true, "Manual notch width",
                 Plane::Slice, Encoding::Enum, Wiring::Declared,
                 0, 2, "step", 0, 2,
@@ -349,9 +353,10 @@ constexpr std::array kSpecs = {
                 "setAtu", "txAtuBtn", true,
                 "NOT a tune carrier — it runs the model's internal or external "
                 "antenna-tuner matching cycle and it KEYS. There is no universal "
-                "attachment query, so capabilities().hasTuner follows canTransmit and the "
-                "button is honest about the OUTCOME (00 none / 01 matched / 02 "
-                "tuning) rather than about the hardware."},
+                "attachment query, so only exact model profiles with documented tuner "
+                "paths publish capabilities().hasTuner and send this command. The "
+                "shared button remains visible but unavailable otherwise.",
+                IcomFeature::AntennaTuner},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
                 Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -469,6 +474,55 @@ constexpr std::array kSpecs = {
                 "txFilterLowEdgesHz, so the UI and the backend decline together.",
                 IcomFeature::TxBandwidth},
 
+    // ---- GPS position and radio clock -----------------------------------
+    ControlSpec{"gps.position", 0x23, 0x00, true, "GPS position and UTC",
+                Plane::Radio, Encoding::GpsPosition, Wiring::DecodeOnly,
+                0, 0, "coordinates", 0, 0,
+                "", "gpsLocationDialog", true,
+                "Latitude/longitude are converted locally to Maidenhead grid. The "
+                "frame may also carry altitude, course, speed and complete UTC; it "
+                "does not carry an explicit lock bit or satellite telemetry.",
+                IcomFeature::GpsPosition},
+    ControlSpec{"gps.source", 0x23, 0x01, true, "GPS source",
+                Plane::Radio, Encoding::Enum, Wiring::DecodeOnly,
+                0, 3, "enum", 0, 3,
+                "", "gpsLocationDialog", true,
+                "00 off, 01 internal GPS, 03 manual position.",
+                IcomFeature::GpsPosition},
+    ControlSpec{"gps.ntp.enabled", 0x1A, 0x05, true, "NTP client enable",
+                Plane::Radio, Encoding::Bcd4, Wiring::Both,
+                0, 1, "on/off", 0, 1,
+                "invokeExtension icom/gps.ntp.enabled", "gpsNtpEnabled", true,
+                "MODEL-SPECIFIC SET item 0167 on IC-705; written only on operator "
+                "intent and confirmed by readback.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.ntp.server", 0x1A, 0x05, true, "NTP server address",
+                Plane::Radio, Encoding::Ascii, Wiring::Both,
+                1, 64, "characters", 1, 64,
+                "invokeExtension icom/gps.ntp.server", "gpsNtpServer", true,
+                "MODEL-SPECIFIC SET item 0168 on IC-705; the radio reports a "
+                "fixed-width NUL-padded field.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.time.correct", 0x1A, 0x05, true, "GPS Time Correct",
+                Plane::Radio, Encoding::Bcd4, Wiring::Both,
+                0, 1, "on/off", 0, 1,
+                "invokeExtension icom/gps.time-correction", "gpsTimeCorrection", true,
+                "MODEL-SPECIFIC SET item 0169 on IC-705; radio-authoritative and "
+                "confirmed by readback.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.ntp.access", 0x1A, 0x07, true, "NTP access now",
+                Plane::Radio, Encoding::OnOff, Wiring::SendOnly,
+                0, 1, "trigger", 0, 1,
+                "invokeExtension icom/gps.ntp.sync", "gpsNtpSyncNow", false,
+                "01 asks the radio to access its configured NTP server now.",
+                IcomFeature::GpsTimeConfiguration},
+    ControlSpec{"gps.ntp.result", 0x1A, 0x08, true, "NTP access result",
+                Plane::Radio, Encoding::Enum, Wiring::DecodeOnly,
+                0, 2, "enum", 0, 2,
+                "", "gpsNtpSyncStatus", true,
+                "00 not accessed/accessing, 01 succeeded, 02 failed.",
+                IcomFeature::GpsTimeConfiguration},
+
     // ---- Identity / power ------------------------------------------------
     ControlSpec{"id", 0x19, 0x00, true, "Transceiver ID",
                 Plane::Radio, Encoding::None, Wiring::Both,
@@ -514,6 +568,9 @@ std::string_view encodingName(Encoding e)
     case Encoding::ModeFilter: return "mode+filter";
     case Encoding::Bcd4:       return "bcd4";
     case Encoding::Bcd6:       return "bcd6";
+    case Encoding::Dtcs:       return "dtcs";
+    case Encoding::Ascii:      return "ascii";
+    case Encoding::GpsPosition: return "gps-position";
     }
     return "?";
 }

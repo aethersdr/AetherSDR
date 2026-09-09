@@ -277,6 +277,9 @@ QJsonObject RadioCertification::renderedSnapshot() const
     const bool alcLive = alcAge >= 0 && alcAge <= MeterModel::kTxMeterStaleMs;
     out[QStringLiteral("alcDbfs")] =
         alcLive ? QJsonValue(static_cast<double>(meters.swAlc())) : QJsonValue();
+    out[QStringLiteral("alcValue")] =
+        alcLive ? QJsonValue(static_cast<double>(meters.alcValue())) : QJsonValue();
+    out[QStringLiteral("alcUnit")] = meters.alcUnit();
     out[QStringLiteral("alcAgeMs")] = static_cast<double>(alcAge);
     out[QStringLiteral("alcLive")] = alcLive;
     return out;
