@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace AetherSDR::KiwiSdrProtocol {
 namespace {
@@ -848,6 +849,33 @@ QString formatSoundCompressionCommand(bool compressed)
 QString formatWaterfallCompressionCommand(bool compressed)
 {
     return QStringLiteral("SET wf_comp=%1").arg(compressed ? 1 : 0);
+}
+
+double waterfallStartFixedPointScale(int zoomMax)
+{
+    return static_cast<double>(
+        kDefaultWaterfallFftBins << std::clamp(zoomMax, 0, 20));
+}
+
+quint32 waterfallStartFixedPoint(double fullLowMhz, double fullBandwidthMhz,
+                                 double rowLowMhz, double fixedPointScale)
+{
+    const double requested = fullBandwidthMhz > 0.0
+        ? ((rowLowMhz - fullLowMhz) / fullBandwidthMhz) * fixedPointScale
+        : 0.0;
+    return static_cast<quint32>(std::clamp(
+        std::isfinite(requested) ? std::round(requested) : 0.0,
+        0.0,
+        std::min(fixedPointScale - 1.0,
+                 static_cast<double>(std::numeric_limits<quint32>::max()))));
+}
+
+double waterfallStartFixedPointToLowMhz(double fullLowMhz,
+                                        double fullBandwidthMhz,
+                                        quint32 start, double fixedPointScale)
+{
+    return fullLowMhz
+        + (static_cast<double>(start) / fixedPointScale) * fullBandwidthMhz;
 }
 
 FrameObservation classifySoundFrame(const QByteArray& frame)
