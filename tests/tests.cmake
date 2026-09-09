@@ -1090,6 +1090,9 @@ foreach(APP_SETTINGS_SCENARIO
         save-before-load
         xml-import-parity
         first-run
+        isolated-legacy-import
+        explicit-profile-outside-test-mode
+        explicit-profile-path-isolation
         database-file-permissions
         xml-import-tmp-promotion
         xml-import-bak-fallback
@@ -1130,6 +1133,9 @@ target_include_directories(rn2_settings_model_test PRIVATE src tests)
 target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(rn2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME rn2_settings_model_test COMMAND rn2_settings_model_test)
+
+set_tests_properties(app_settings_safety_explicit-profile-path-isolation
+    PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
@@ -2658,6 +2664,10 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+    # External persistence supervisor policies: data-only fixtures, no radio peer/socket.
+    add_test(NAME radiocert_persist_policy
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_radiocert_persist.py)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
@@ -2907,6 +2917,15 @@ add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test
 target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
 add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
 
+# #5353 — the RTTY decoder's enable flag: dismissing the pane with ✕ must
+# outlive the slice/frequency events that used to re-derive its visibility
+# from the mode, and must not clobber the sensitivity field it shares an
+# object with.
+add_executable(rtty_decode_settings_test tests/rtty_decode_settings_test.cpp)
+target_include_directories(rtty_decode_settings_test PRIVATE src tests)
+target_link_libraries(rtty_decode_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtty_decode_settings_test COMMAND rtty_decode_settings_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
@@ -2967,6 +2986,7 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
     tools/ax25_replay.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -2979,6 +2999,7 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/KissFraming.cpp

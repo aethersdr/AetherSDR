@@ -93,12 +93,19 @@ Use the guarded harness:
 
 ```bash
 python3 tools/tx_meter_test.py \
-  --ant ANT1 \
+  --serial RADIO_SERIAL --ant ANT1 --frequency 14.2 --mode USB \
   --max-watts 10 \
   --levels 2,5
 ```
 
-`--levels` and `--two-tone-percent` are Tune Power percentages, not watts.
+`--levels` and `--two-tone-percent` are Tune Power control settings, not measured
+watts. `--max-control` bounds both RF and Tune controls (default 5). Each burst
+rechecks the exact radio, TX slice, antenna, frequency, mode, offsets, VOX and
+bypass state. The sampling window repeats the context check and uses fresh
+**unsmoothed** `fwdPowerInstant` for the watt cutoff; it records peak watts,
+peak SWR and every sampled meter row. Missing/unknown link state, a missing or
+stale calibrated power definition, and missing/stale SWR stop the run. Unkey
+is confirmed before restoring power; unknown TX flags never count as unkeyed.
 
 ### 4. Restart proof
 

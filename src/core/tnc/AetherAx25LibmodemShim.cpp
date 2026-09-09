@@ -572,9 +572,15 @@ struct AetherAx25LibmodemShim::Impl {
             auto& lane = lanes.emplace_back();
             lane.phaseOffsetSamples = phaseOffsetSamples;
             lane.samplesUntilStart  = phaseOffsetSamples;
+            // sinc_bw is the correlator lowpass as a fraction of baud. At
+            // 1200 baud Bell 202 the shift is 1000 Hz and 0.75 gives a 900 Hz
+            // lowpass, narrower than the shift, so each correlator rejects the
+            // other tone. At 300 baud the shift is only 200 Hz and 0.75 gives
+            // 225 Hz — wider than the shift, so both correlators see both
+            // tones and the difference carries almost no information.
             lane.demod = std::make_unique<LibmodemAfskDemod>(
                 mark, space, config.baud, config.sampleRate,
-                0.75, 6.0, 0.75, 3.0, 0.008, 0.005, pllAlpha);
+                0.75, 6.0, 0.50, 3.0, 0.008, 0.005, pllAlpha);
         };
 
         if (config.profile == Ax25ModemProfile::Hf300) {

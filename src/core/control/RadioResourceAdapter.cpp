@@ -210,6 +210,9 @@ void RadioResourceAdapter::attachPanadapter(PanadapterModel* panadapter)
     connect(panadapter, &PanadapterModel::rfGainChanged, this, refresh);
     connect(panadapter, &PanadapterModel::fpsChanged, this, refresh);
     connect(panadapter, &PanadapterModel::averageChanged, this, refresh);
+    connect(panadapter, &PanadapterModel::fftProvenanceChanged, this, refresh);
+    connect(panadapter, &PanadapterModel::averageReported, this, refresh);
+    connect(panadapter, &PanadapterModel::fpsReported, this, refresh);
     // The first valid report can be false, matching the model's default value.
     // Listen to Reported so weightedAverageKnown is published on that edge;
     // ControlResourceStore deduplicates later identical snapshots.
@@ -336,6 +339,10 @@ void RadioResourceAdapter::publishPanadapter(PanadapterModel* panadapter)
         {QStringLiteral("displayCadence"), QJsonObject{
              {QStringLiteral("fps"), panadapter->fps()},
              {QStringLiteral("averageFrames"), panadapter->average()},
+             {QStringLiteral("averageIsRequest"), panadapter->averageIsRequest()},
+             {QStringLiteral("fpsIsRequest"), panadapter->fpsIsRequest()},
+             {QStringLiteral("radioReportedAverage"), panadapter->radioReportedAverage()},
+             {QStringLiteral("radioReportedFps"), panadapter->radioReportedFps()},
              {QStringLiteral("weightedAverage"), panadapter->weightedAverage()},
              {QStringLiteral("weightedAverageKnown"),
               panadapter->weightedAverageKnown()},

@@ -5492,6 +5492,22 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
         panId, std::numeric_limits<double>::quiet_NaN(), bandwidthMhz);
 }
 
+bool RadioModel::requestPanAverage(const QString& panId, int average)
+{
+    if (panId.isEmpty() || average < 0 || average > 100) {
+        return false;
+    }
+    // FlexLib Panadapter.Average updates locally on dispatch; later status
+    // reconciles it. Preserve the existing ownership and profile-load gates.
+    if (!sendCommand(QString("display pan set %1 average=%2").arg(panId).arg(average))) {
+        return false;
+    }
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setRequestedFftSettings(average, -1);
+    }
+    return true;
+}
+
 bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
                                         int wfRate)
 {
@@ -5519,8 +5535,10 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
 
     bool sent = false;
     if (fps > 0) {
-        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps))
-               || sent;
+        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps));
+        if (sent && pan) {
+            pan->setRequestedFftSettings(-1, fps);
+        }
     }
     if (wfRate > 0 && pan && !pan->waterfallId().isEmpty()) {
         // The wire parameter keeps Flex's name; the value is the rate.

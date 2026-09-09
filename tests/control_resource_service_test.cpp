@@ -721,7 +721,8 @@ bool testSimBackendEndToEnd()
                    && hasExactlyKeys(panValue.value(QStringLiteral("receive")).toObject(),
                                      {"antenna", "rfGain"})
                    && hasExactlyKeys(displayCadence,
-                                     {"fps", "averageFrames", "weightedAverage",
+                                     {"fps", "averageFrames", "averageIsRequest", "fpsIsRequest",
+                                      "radioReportedAverage", "radioReportedFps", "weightedAverage",
                                       "weightedAverageKnown", "waterfallRate"}),
                "SimBackend resources must match the complete documented v1 schemas")) {
         radio.disconnectFromRadio();
@@ -735,6 +736,31 @@ bool testSimBackendEndToEnd()
         radio.disconnectFromRadio();
         return false;
     }
+    // A same-value request still changes provenance; a same-value radio
+    // report confirms it without needing a numeric-value signal.
+    modelPan->applyStateExtension({{"average", "17"}, {"fps", "15"}});
+    drain(client);
+    modelPan->setRequestedFftSettings(17, 15);
+    const QJsonObject requested = store.get(panAddress)->value
+        .value(QStringLiteral("displayCadence")).toObject();
+    if (!check(requested.value(QStringLiteral("averageIsRequest")).toBool()
+                   && requested.value(QStringLiteral("fpsIsRequest")).toBool()
+                   && requested.value(QStringLiteral("radioReportedAverage")).toInt() == 17
+                   && requested.value(QStringLiteral("radioReportedFps")).toInt() == 15,
+               "same-value FFT requests must publish their provenance")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    modelPan->applyStateExtension({{"average", "17"}, {"fps", "15"}});
+    const QJsonObject confirmed = store.get(panAddress)->value
+        .value(QStringLiteral("displayCadence")).toObject();
+    if (!check(!confirmed.value(QStringLiteral("averageIsRequest")).toBool()
+                   && !confirmed.value(QStringLiteral("fpsIsRequest")).toBool(),
+               "same-value radio reports must clear request provenance")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    drain(client);
     const quint64 weightedRevision = store.get(panAddress)->revision;
     modelPan->applyStateExtension(
         {{QStringLiteral("weighted_average"), QStringLiteral("0")}});
