@@ -500,6 +500,27 @@ int main()
               "failure accounting preserves each request identity and lifecycle state");
     }
 
+    {
+        IcomCivScheduler scheduler;
+        for (int i = 0; i < 140; ++i) {
+            scheduler.enqueue(read("same", 0x15, 0x02, Priority::ActiveMeter), i * 30);
+            (void)scheduler.takeNext(i * 30);
+            (void)scheduler.observe(reply(0x15, 0x02, 0), i * 30 + 1);
+        }
+        const auto& events = scheduler.recentTransactions();
+        check(events.size() == 128 && events.front().eventId == 13
+                  && events.back().eventId == 140,
+              "repeated same-generation polls have unique IDs across ring eviction");
+        check(events.front().generation == events.back().generation,
+              "event identity is independent of semantic generation");
+        scheduler.clearTransactionHistory();
+        (void)scheduler.reset();
+        scheduler.enqueue(read("same", 0x15, 0x02, Priority::ActiveMeter), 5000);
+        (void)scheduler.takeNext(5000);
+        (void)scheduler.observe(reply(0x15, 0x02, 0), 5001);
+        check(scheduler.recentTransactions().back().eventId == 141,
+              "history clear and scheduler reset never reuse event IDs");
+    }
     if (g_failures == 0) {
         std::printf("icom_civ_scheduler_test: all checks passed\n");
         return 0;

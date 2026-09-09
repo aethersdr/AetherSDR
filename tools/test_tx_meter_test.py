@@ -193,7 +193,76 @@ def test_unknown_transmit_flags_never_confirm_unkeyed():
           "missing flags did not attempt semantic unkey")
 
 
+def test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio():
+    m = meter_snapshot(fwd=0, swr=None, fwd_age=50, swr_age=80)
+    check(subject.swr_gap_is_observed(m, 1000, True), "fresh zero-carrier gap rejected")
+    check(not subject.swr_gap_is_observed(m, 1000, False), "never-established SWR accepted")
+    for key, value in (("fwdPowerInstant", 1), ("fwdPowerInstant", float("nan")),
+                       ("fwdPowerAgeMs", 600), ("swrAgeMs", 600), ("swrAgeMs", -1)):
+        changed = {**m, key: value}
+        check(not subject.swr_gap_is_observed(changed, 1000, True), changed)
+
+
+def test_icom_unkey_requires_new_confirmed_ptt_off():
+    from unittest.mock import patch
+    class IcomBridge:
+        def __init__(self, ptt): self.ptt = ptt
+        def request(self, request):
+            if request.get("cmd") == "get":
+                return {"ok": True, "value": "icom:test" if request.get("property") == "serial" else False}
+            return {"ok": True, "result": {"stateFreshness": {"fields": {"ptt": self.ptt}}}}
+    with patch.object(subject.time, "sleep"):
+        for state in ({}, {"status": "pending", "value": False, "ageMs": 0},
+                      {"status": "confirmed", "value": True, "ageMs": 0},
+                      {"status": "confirmed", "value": False, "ageMs": 400}):
+            check(not subject.Tx(IcomBridge(state)).ensure_unkeyed(), state)
+        check(subject.Tx(IcomBridge({"status": "confirmed", "value": False, "ageMs": 0})).ensure_unkeyed(),
+              "new confirmed PTT-off was rejected")
+
+
+def test_native_meter_reporting():
+    meters = meter_snapshot()
+    meters.update(paTemp=0, swAlc=-42)
+    missing = subject.reported_meter(meters, "PATEMP")
+    check(missing["status"] == "unsupported" and missing["value"] is None, missing)
+    meters["all"].append({"name": "ALC", "source": "TX", "unit": "Percent",
+                          "has_value": True, "age_ms": 0, "value": 63.5})
+    result = run_once(FakeTx(meters))
+    check(result["alc"] == 63.5 and result["alcUnit"] == "Percent", result)
+    check(result["paTemp"] is None, result)
+    row = meters["all"][-1]
+    row["has_value"] = False
+    check(subject.reported_meter(meters, "ALC")["status"] == "never-fed", row)
+    row["has_value"] = True
+    row["age_ms"] = 2000
+    check(subject.reported_meter(meters, "ALC")["status"] == "stale", row)
+    row["reliable"] = False
+    check(subject.reported_meter(meters, "ALC")["status"] == "unreliable", row)
+
+
+def test_previous_burst_sample_cannot_satisfy_safety():
+    from unittest.mock import patch
+    # Age 400ms looks fresh under the old 500ms check, but predates this key.
+    with patch.object(subject, "POWER_SAMPLE_DEADLINE_S", 0):
+        result = run_once(FakeTx(meter_snapshot(fwd_age=400, swr_age=400)), max_watts=10)
+    check("no fresh calibrated FWDPWR" in result["stopReason"], result)
+    check(result["fwd"] is None and result["swr"] is None, "prior-burst samples leaked into aggregates")
+
+
+def test_old_swr_cannot_qualify_a_later_carrier_gap():
+    from unittest.mock import patch
+    with patch.object(subject.time, "monotonic", side_effect=[1, 1, 1.1, 2]):
+        result = subject.sample_window(FakeTx(meter_snapshot(swr_age=600)), dur=1.5, settle=-1, keyed_at=0)
+    check(result["swr"] is None and result["peakSwr"] is None, result)
+    check(result["stopReason"] == "no fresh SWR sample before safety deadline", result)
+
+
 if __name__ == "__main__":
+    test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio()
+    test_icom_unkey_requires_new_confirmed_ptt_off()
+    test_native_meter_reporting()
+    test_previous_burst_sample_cannot_satisfy_safety()
+    test_old_swr_cannot_qualify_a_later_carrier_gap()
     test_over_watt_unkeys()
     test_high_swr_unkeys()
     test_missing_power_unkeys()
