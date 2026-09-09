@@ -102,6 +102,22 @@ public:
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
     void setRadioSideDspAvailable(bool available);
+    // Whether the connected backend drives its own receive RF gain
+    // (RadioCapabilities::hasAutoRfGain). False HIDES the Auto checkbox beside
+    // the RF Gain slider rather than disabling it: on a family with no such
+    // loop it would be a control wired to nothing, which is the HERMES 17
+    // failure the capability comments repeatedly warn against.
+    void setAutoRfGainAvailable(bool available);
+    // Reflect the armed state without emitting. Used by the settings restore
+    // and by a backend that declined to arm.
+    void setAutoRfGainEnabled(bool on);
+
+private:
+    // The RF Gain slider is a readout while the loop owns the gain. See the
+    // definition for why leaving it live is not a cosmetic question.
+    void applyAutoRfGainToSlider(bool autoOn);
+
+public:
     // Whether this radio has DAX audio/IQ channels at all
     // (RadioCapabilities::hasDaxStreams). Hides the per-pan DAX button and its
     // panel: the channel selectors reach a radio-side routing feature that a
@@ -235,6 +251,8 @@ signals:
     void wnbLevelChanged(int level);
     // Emitted when RF gain slider changes (panadapter-level).
     void rfGainChanged(int gain);
+    // The operator ticked or unticked Auto beside the RF Gain slider.
+    void autoRfGainChanged(bool on);
     // Step index into the label list this menu was given, never a dB value.
     void preampStepChanged(int step);
     void attenuatorStepChanged(int step);
@@ -357,6 +375,9 @@ private:
     QPushButton* m_loopBBtn{nullptr};
     QSlider*     m_rfGainSlider{nullptr};
     QLabel*      m_rfGainLabel{nullptr};
+    // Born HIDDEN, like the front-end rows below: a control that has never
+    // shipped must not appear on a family that does not claim it.
+    QCheckBox*   m_autoRfGainCheck{nullptr};
     // What the RF-gain readout appends. " dB" on a radio with a real gain
     // register, "%" on one whose gain is an opaque scale.
     QString      m_rfGainUnitSuffix{QStringLiteral(" dB")};
