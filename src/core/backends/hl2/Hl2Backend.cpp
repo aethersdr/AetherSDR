@@ -446,6 +446,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // tick of a healthy new stream would declare it stalled.
         m_rxPacketsAtLastAdvance = 0;
         m_rxAdvanceClock.restart();
+        // The bandscope belongs to the SESSION: MetisClient::start() comes up
+        // with wide_spectrum clear and ep4_seq_no restarted, so carrying the
+        // previous link's state here would report a stream nothing enabled.
+        m_bandscopeEnabled = false;
+        m_ep4Packets = 0;
+        m_ep4Drops = 0;
+        m_ep4Rewinds = 0;
         m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
@@ -643,6 +650,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
                               ? c.maxGapMs - c.meanGapMs
                               : -1;
         m_link.localEndpoint = c.localEndpoint;
+        // The bandscope's counters ride this same publish rather than a signal
+        // or a timer of their own — the point of putting them on LinkCounters.
+        // They stay off LinkStats: see the members' comment in the header.
+        m_ep4Packets = c.ep4Packets;
+        m_ep4Drops = c.ep4Drops;
+        m_ep4Rewinds = c.ep4Rewinds;
     });
 
     m_linkStatsTimer = new QTimer(this);
@@ -4356,6 +4369,32 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             }
             return;
         }
+        // The wideband bandscope (endpoint 0x04). NO UI AND NO SETTING, on
+        // purpose: it is a diagnostic that streams ~3.3 Mbit/s continuously
+        // while it runs, there is no duty-cycle gate yet, and nothing in the app
+        // reads a sample out of it. An operator who wants it asks for it here,
+        // once, and it is off again at the next connect.
+        //
+        // Completes locally, like freqcal.set above and for the same reason:
+        // the run byte is fire-and-forget, nothing in Protocol 1 reads it back,
+        // and fabricating a device round trip to await would be inventing a
+        // confirmation the wire cannot give.
+        if (verb == QLatin1String("bandscope.enable")) {
+            // Refused while disconnected, and REPORTED as refused: MetisClient
+            // ignores a run byte with no stream behind it, so echoing the
+            // request back would be this side inventing a state the radio was
+            // never told about.
+            const bool on = arg.toBool() && m_connected;
+            m_bandscopeEnabled = on;
+            QMetaObject::invokeMethod(m_metis, "setBandscopeEnabled",
+                                      Qt::QueuedConnection, Q_ARG(bool, on));
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("enabled"), on},
+                });
+            }
+            return;
+        }
         // Noise-blanker READBACK, per receiver. Exists because the bridge's
         // `get dsp` reports the SLICE MODEL's nb flag, which is set the moment
         // the operator clicks and says nothing about whether the intent reached
@@ -4902,6 +4941,22 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // this is the first number to look at when it does.
     put("droppedPackets", QStringLiteral("Dropped EP6 packets"),
         static_cast<qulonglong>(m_drops));
+    // The wideband bandscope. Reported unconditionally rather than only when it
+    // is on, because "off" is the answer the reader of a health dialog needs
+    // first — an absent row would leave "is this costing me link budget?"
+    // unanswered rather than answered "no".
+    put("bandscopeEnabled", QStringLiteral("Wideband bandscope (EP4)"),
+        m_bandscopeEnabled);
+    put("ep4Packets", QStringLiteral("Bandscope packets"),
+        static_cast<qulonglong>(m_ep4Packets));
+    put("ep4Drops", QStringLiteral("Dropped EP4 packets"),
+        static_cast<qulonglong>(m_ep4Drops));
+    // Kept apart from the drops above, not folded in. Exactly one rewind is
+    // expected per stream start — the gateware re-aligns ep4_seq_no's low two
+    // bits while the capture FIFO fills — and none after it. Inside a counter
+    // that is supposed to read zero, a second one would be invisible.
+    put("ep4Rewinds", QStringLiteral("EP4 sequence rewinds"),
+        static_cast<qulonglong>(m_ep4Rewinds));
     return h;
 }
 

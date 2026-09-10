@@ -86,6 +86,22 @@ public:
         quint64 rxPackets = 0;      // EP6 datagrams accepted
         quint64 txPackets = 0;      // datagrams sent (EP2 + start/stop)
         quint64 drops = 0;          // cumulative EP6 sequence gaps
+        // ---- the wideband bandscope (EP4), off by default ----
+        //
+        // A THIRD set of counters and not a widening of the three above: EP4 is
+        // a different endpoint with its own 20-bit sequence counter and its own
+        // reset, so folding it into rxPackets/drops would report a gap on every
+        // packet and hide which stream a loss belongs to.
+        quint64 ep4Packets = 0;     // bandscope datagrams accepted
+        quint64 ep4Drops = 0;       // cumulative EP4 sequence gaps
+        // Backward jumps of ep4_seq_no, which are a RESET and not a loss. Kept
+        // apart from ep4Drops because exactly one is expected per stream start
+        // (the gateware re-aligns the counter's low two bits while the capture
+        // FIFO fills) and none afterwards — 15,003 recorded packets saw one per
+        // start and zero thereafter. A second one mid-session is a real
+        // anomaly, and it would be invisible inside a counter that is supposed
+        // to stay at zero.
+        quint64 ep4Rewinds = 0;
         // Over the publish window only, so a stall that has ended stops being
         // reported as if it were still happening. Negative = nothing measured.
         int meanGapMs = -1;
@@ -244,6 +260,30 @@ public:
     {
         return m_ccRequest;
     }
+    // Turn the wideband bandscope (endpoint 0x04) on or off, by re-sending the
+    // run byte with kRunWideSpectrum set or clear.
+    //
+    // DEFAULT OFF, and there is no UI and no setting: this is reached only
+    // through Hl2Backend::invokeExtension("hl2", "bandscope.enable", ...).
+    // While it is on the radio streams continuously — 380.95 datagrams a second
+    // measured, flat to 3 ppm across 48/96/192/384 kHz, which is ~3.3 Mbit/s of
+    // wire rate beside EP6 — because there is no duty-cycle gate yet. At one
+    // receiver and 48 kHz that is about as much again as the IQ stream itself
+    // (see the table at kEp6LinkBudgetFraction), so it is not free.
+    //
+    // Re-asserting `run` in the same byte is a no-op in the gateware's decode,
+    // so this does not restart or perturb the IQ stream. It is a no-op here
+    // unless the stream is already running: the run byte is only meaningful to
+    // a radio that has been started, and metisStop() clears both bits anyway.
+    Q_INVOKABLE void setBandscopeEnabled(bool on);
+    // The last state REQUESTED of the radio, which is all this side can know:
+    // nothing in Protocol 1 reads the run byte back. Cleared by stop() and by
+    // the receiver-count restart, both of which put 0x00 or 0x01 on the wire
+    // and so clear wide_spectrum in the gateware.
+    [[nodiscard]] bool bandscopeEnabled() const noexcept { return m_bandscopeEnabled; }
+    [[nodiscard]] quint64 ep4Packets() const noexcept { return m_link.ep4Packets; }
+    [[nodiscard]] quint64 ep4Drops() const noexcept { return m_ep4Drops; }
+    [[nodiscard]] quint64 ep4Rewinds() const noexcept { return m_ep4Rewinds; }
 
     // Receivers this client can both RUN and TUNE: the RX1..RX7 NCO registers
     // are one contiguous run (0x02..0x08) and RX8..RX12 are not. See ccRxFreq().
@@ -382,6 +422,15 @@ private slots:
 
 private:
     void sendControlPacket();           // one round-robin EP2 C&C packet
+    // One datagram off this socket, whatever endpoint it came from: the EP6/EP4
+    // branch, the sequence accounting, telemetry and the IQ decode. Split out of
+    // onReadyRead's drain loop so the whole ingest path can be driven from
+    // recorded bytes with no socket bound — see MetisClientTestAccess.
+    void handleDatagram(std::span<const std::uint8_t> bytes);
+    // Account one bandscope datagram: its sequence step, and the counters.
+    // Takes the ALREADY-PARSED sequence rather than the bytes, because the
+    // caller has had to parse it to know the datagram was EP4 at all.
+    void handleEp4(std::uint32_t seq) noexcept;
     // Accumulate one socket wakeup into the gap window. Called at the TOP of
     // onReadyRead, because the instant the wakeup happened is what it measures.
     void accountReceiveWakeup();
@@ -528,6 +577,16 @@ private:
     std::uint32_t m_expectedRxSeq = 0;   // for EP6 drop detection
     bool m_haveRxSeq = false;
     quint64 m_drops = 0;
+    // The SAME triple for EP4, and deliberately not shared with the one above.
+    // ep4_seq_no is a separate 20-bit counter in the gateware with its own
+    // reset (`if (~run)` zeroes both independently), so a client that tracked
+    // one expectation across both endpoints would report a gap on every single
+    // packet of whichever stream it saw second.
+    std::uint32_t m_expectedEp4Seq = 0;
+    bool m_haveEp4Seq = false;
+    quint64 m_ep4Drops = 0;
+    quint64 m_ep4Rewinds = 0;
+    bool m_bandscopeEnabled = false;   // see setBandscopeEnabled()
     bool m_running = false;
     bool m_linkUp = false;
     // Reused per-packet decode buffers, one vector per running receiver. Sized

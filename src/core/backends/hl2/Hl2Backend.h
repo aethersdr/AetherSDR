@@ -790,6 +790,17 @@ private:
     // MetisClient::droppedPackets(): that object lives on the I/O thread, and
     // healthSnapshot() is read from the GUI thread.
     quint64 m_drops = 0;
+    // The wideband bandscope's counters, mirrored the same way and for the same
+    // reason. Plain members here rather than fields on LinkStats: LinkStats is
+    // the family-agnostic seam type every backend fills in, and endpoint 0x04
+    // is a Hermes-Lite 2 feature that no Flex, Icom or simulated radio has.
+    // They reach only this backend's own healthSnapshot() rows.
+    quint64 m_ep4Packets = 0;
+    quint64 m_ep4Drops = 0;
+    quint64 m_ep4Rewinds = 0;
+    // The last bandscope state requested of MetisClient, mirrored so
+    // healthSnapshot() need not reach across the I/O thread to read it.
+    bool m_bandscopeEnabled = false;
     // Transport counters, mirrored onto THIS thread from
     // MetisClient::linkCountersUpdated for the same reason m_drops is.
     //
