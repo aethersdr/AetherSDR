@@ -55,51 +55,65 @@ jobs:
     # the cache and the compiler side.
     env:
       CCACHE_DIR: /ccache
-      # Raised 1000M -> 2000M. This cache was FULL and evicting internally: the
-      # last green main run before this change reported
+      # 1500M, revised twice. Read both steps before touching it again.
+      #
+      # 1000M -> 2000M (#5008, 2026-08-15). At 1000M this cache was FULL and
+      # evicting internally — the last green main run before that change:
       #
       #   Cache size (GB):  1.0 /  1.0 (95.41%)   Hits 2082/2210 (94.21%)
       #
-      # A cold build settles at ~0.5 GB, so 1000M looked like 2x headroom — but
-      # this entry does not hold one build, it accumulates objects across ~9.2
-      # main merges a day. At 1.0 GB it was continuously discarding its own
-      # oldest objects, so it only ever represented a narrow window of recent
-      # main, and a PR branched from a day-old main took misses on objects that
-      # had fallen out of ccache rather than out of the GitHub cache.
+      # A cold build settles at ~0.7 GB, but this entry does not hold one
+      # build: it accumulates objects across ~9.2 main merges a day. At 1.0 GB
+      # it only ever represented a narrow window of recent main, and a PR
+      # branched from a day-old main took misses on objects that had fallen
+      # out of ccache rather than out of the GitHub cache. 2000M fixed that:
+      # main runs 2026-09-01..05 report Hits 99.2–99.7%, PR runs 91–99%.
+      #
+      # 2000M -> 1500M (#5548 item 5, 2026-09-10). The #5008 budget assumed
+      # entries compress to ~55% of the ccache directory. They do not: ccache
+      # already compresses its objects, so the entry is ~95% of the directory
+      # — a full 2000M cache saved as a ~1.88 GiB entry (measured on every
+      # main save 2026-09-01..05). With the other caches also at their caps
+      # (sccache-windows 1.02 GiB, canary 0.94, macOS 0.44) and cache-cleanup
+      # keeping two of each, main alone held ~10.6 GiB against the 10 GiB
+      # allowance. GitHub evicted by LRU, this entry went first because it was
+      # the largest, and every main run until the next green save was a cold
+      # build: 27–37 min instead of 3–6, ten times between 2026-09-06 and
+      # 2026-09-10. cache-cleanup.yml now keeps one entry per prefix, which
+      # alone brings main to ~6.1 GiB; 1500M trims the largest entry further
+      # without giving back the whole 2000M window. Judge it by the "ccache
+      # stats" step: if main's hit rate settles below the ~99% seen at 2000M,
+      # the window is too narrow again and the budget below has room to go
+      # back up. If "Cache size" sits at 100% with a large `Cleanups` count
+      # AND the hit rate holds, leave it — a full cache that still hits is
+      # working as designed.
       #
       # Raised for THIS job only. The other two are not constrained and would
       # pay transfer time for nothing — do not raise them on symmetry grounds:
       #   check-macos     0.3 / 0.5 GB (57.63%)
       #   check-windows   628 MiB / 1 GiB (61%)
       #
-      # 2000M, not the 5000M the headroom would allow, because the binding
-      # constraint is TRANSFER TIME, not storage. Entries compress to ~55% of
-      # the ccache directory (1.0 GB of ccache -> a 556 MiB entry), and restore
-      # cost scales with it: 12 s at 556 MiB today, ~24 s at 2000M, ~60 s at
-      # 5000M — paid on EVERY run, against a benefit that only materialises
-      # for misses that were eviction-caused rather than genuinely new source.
-      # This is the reversible first step; read the `cleanups` counter and the
-      # hit rate in the "ccache stats" step before going further.
-      #
-      # Budget check at 2000M, against the repo's 10 GB cache allowance. Entry
-      # sizes are MEASURED on refs/heads/main, not projected, except Linux which
-      # is extrapolated from the 55% compression ratio at the new cap:
-      #   Linux    ~1.1 GiB entry x 2 retained  = 2.2 GiB
-      #   Windows  ~0.38 GiB x 2                = 0.8 GiB
-      #   macOS    ~0.18 GiB x 2                = 0.4 GiB
-      #   canary   ~0.57 GiB x 2                = 1.1 GiB
-      #   deps (Qt, DeepFilterNet, FFTW, qtkeychain; 9 entries)
+      # Budget at 1500M, against the repo's 10 GiB cache allowance, with
+      # cache-cleanup.yml's KEEP=1. Entry sizes are MEASURED on refs/heads/main
+      # from the "Save" steps, except Linux which is extrapolated from the
+      # ~95% ratio at the new cap:
+      #   Linux    ~1.4 GiB entry x 1 retained  = 1.4 GiB
+      #   Windows  ~1.02 GiB x 1                = 1.0 GiB
+      #   macOS    ~0.44 GiB x 1                = 0.4 GiB
+      #   canary   ~0.94 GiB x 1                = 0.9 GiB
+      #   deps (Qt 1.3, install-qt 0.4, DeepFilterNet, FFTW, qtkeychain)
       #                                         ~ 1.8 GiB
       #                                         --------
-      #                                         ~ 6.3 GiB
-      # The canary line is system-libs-canary.yml's cache, which an earlier
-      # revision of this table omitted — the same omission that left it out of
-      # cache-cleanup.yml's PREFIXES. Counting it moves the projection from
-      # ~5.1 to ~6.3 GiB: still comfortably inside the allowance, with less
-      # headroom than the earlier figure implied.
+      #                                         ~ 5.5 GiB
+      # The canary line is system-libs-canary.yml's cache; it was missed by an
+      # earlier revision of this table and by cache-cleanup.yml's PREFIXES
+      # alike, so if you add a compiler cache in ANY workflow, add it to both.
+      # Dependency caches are still written on PR refs until #5548 item 1
+      # lands; that adds up to ~1.7 GiB per open PR that missed, on top of
+      # the figure above.
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
-      CCACHE_MAXSIZE: 2000M
+      CCACHE_MAXSIZE: 1500M
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -280,11 +294,12 @@ jobs:
       # Local disk cache, not the GHA backend — see the note above. D: is the
       # fast runner volume and the one the workspace already lives on.
       SCCACHE_DIR: D:\sccache
-      # Left at 1G. The Linux ccache was raised to 2000M because it was
-      # measurably full (1.0/1.0 GB, 95.41%); this one measured 628 MiB of 1 GiB
-      # on the same run, so raising it would buy nothing and cost transfer time
-      # on every restore. Do not raise the three caps together on symmetry
-      # grounds — check the stats step first.
+      # Left at 1G. When the Linux ccache cap was first raised (#5008) this one
+      # measured 628 MiB of 1 GiB on the same run; it has since filled to its
+      # cap and saves as a ~1.02 GiB entry on every main run (2026-09-01..).
+      # That is budgeted in the Linux CCACHE_MAXSIZE comment above; before
+      # raising it, check the "sccache stats" hit rate, and re-do that budget.
+      # Do not move the caps together on symmetry grounds.
       SCCACHE_CACHE_SIZE: 1G
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
