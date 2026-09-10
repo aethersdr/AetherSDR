@@ -344,11 +344,19 @@ jobs:
       # wrote a 396 MiB entry onto its own refs/pull/N/merge, where nothing
       # else could read it. Keyed on everything that changes the tree — Qt
       # version, arch, module set, and the aqt version that resolved them.
+      #
+      # runner.workspace (D:\a\AetherSDR\Qt), NOT github.workspace as
+      # check-macos uses: that is where install-qt-action put it, and the path
+      # is in every Qt-including compile's -I flags, which sccache hashes.
+      # The first cut of this port moved the tree one directory down and the
+      # sccache hit rate on an otherwise-identical PR went from 99.26% to
+      # 19.09% (657 of 812 objects missed, Build 26 min instead of 6). Keeping
+      # the path keeps main's ~1 GiB sccache entry valid across the port.
       - name: Restore Qt
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qt-win
         with:
-          path: ${{ github.workspace }}\Qt
+          path: ${{ runner.workspace }}\Qt
           key: qt-${{ env.QT_VERSION }}-windows-${{ env.QT_ARCH }}-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
 
       - name: Install Qt LTS via aqtinstall
@@ -364,14 +372,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$env:RUNNER_TEMP\aqtvenv\Scripts\aqt.exe" install-qt windows desktop $env:QT_VERSION $env:QT_ARCH `
             -m qtmultimedia qtwebsockets qtserialport qtshadertools `
-            --outputdir "$env:GITHUB_WORKSPACE\Qt"
+            --outputdir "$env:RUNNER_WORKSPACE\Qt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Save Qt
         if: github.ref == 'refs/heads/main' && steps.cache-qt-win.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ${{ github.workspace }}\Qt
+          path: ${{ runner.workspace }}\Qt
           key: ${{ steps.cache-qt-win.outputs.cache-primary-key }}
 
       # Separate from the install so it also runs on a cache hit. Exports the
@@ -385,10 +393,10 @@ jobs:
         run: |
           # aqt lays the tree down under <version>/<arch minus the win64_ host
           # prefix>: win64_msvc2022_64 -> msvc2022_64.
-          $qtRoot = "$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION\" + ($env:QT_ARCH -replace '^win64_', '')
+          $qtRoot = "$env:RUNNER_WORKSPACE\Qt\$env:QT_VERSION\" + ($env:QT_ARCH -replace '^win64_', '')
           if (-not (Test-Path "$qtRoot\bin\qmake.exe")) {
             Write-Host "ERROR: no qmake at $qtRoot — aqt layout changed, or a stale cache entry"
-            Get-ChildItem "$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION" -ErrorAction SilentlyContinue
+            Get-ChildItem "$env:RUNNER_WORKSPACE\Qt\$env:QT_VERSION" -ErrorAction SilentlyContinue
             exit 1
           }
           @(
