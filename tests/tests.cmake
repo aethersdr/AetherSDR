@@ -2219,6 +2219,17 @@ add_executable(pan_recenter_policy_test
 target_include_directories(pan_recenter_policy_test PRIVATE src)
 add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
 
+add_executable(waterfall_time_marker_settings_test tests/waterfall_time_marker_settings_test.cpp)
+target_include_directories(waterfall_time_marker_settings_test PRIVATE src)
+target_link_libraries(waterfall_time_marker_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME waterfall_time_marker_settings_test COMMAND waterfall_time_marker_settings_test)
+
+# Pure row/timestamp geometry, no sockets or radio peer.
+add_executable(waterfall_time_markers_test tests/waterfall_time_markers_test.cpp)
+target_include_directories(waterfall_time_markers_test PRIVATE src)
+target_link_libraries(waterfall_time_markers_test PRIVATE Qt6::Core)
+add_test(NAME waterfall_time_markers_test COMMAND waterfall_time_markers_test)
+
 add_executable(waterfall_history_buffer_test
     tests/waterfall_history_buffer_test.cpp
     src/gui/WaterfallHistoryBuffer.cpp
@@ -5022,6 +5033,7 @@ set(AETHER_SETTINGS_CONSUMERS
     extension_namespace_gate_test
     tx_operation_integration_test
     backend_slice_lifecycle_test
+    waterfall_time_marker_settings_test
     client_display_settings_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
