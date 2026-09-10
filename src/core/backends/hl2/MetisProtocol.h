@@ -794,6 +794,20 @@ std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept;
 // dead endpoint (after which it stops answering discovery until power-cycled).
 inline constexpr std::uint8_t kRunWatchdogDisable = 0x80;
 
+// Bit 1 of the same run/stop byte is `wide_spectrum` (Hermes-Lite 2 gateware,
+// rtl/dsopenhpsdr1.v RUNSTOP: `run <= eth_data[0]; wide_spectrum <=
+// eth_data[1]`), which turns the WIDEBAND BANDSCOPE stream (endpoint 0x04) on.
+//
+// It is a SEPARATE, LATER datagram, never folded into metisStart(): connect
+// stays byte-identical (`0x01`), which is what tests/hl2_metis_protocol_test.cpp
+// asserts and what three fake-radio fixtures sniff as `d[3] == 0x01`. Enabling
+// mid-stream re-sends the run byte with this bit set, and re-asserting `run`
+// while already running is a no-op in the gateware's own decode.
+//
+// The same RUNSTOP write clears BOTH bits, so metisStop() (0x00) stops the
+// bandscope as well as the IQ stream — including the pre-armed emergency stop.
+inline constexpr std::uint8_t kRunWideSpectrum = 0x02;
+
 inline std::array<std::uint8_t, 64> metisStart(bool watchdogEnabled = true) noexcept
 {
     return metisCommand(static_cast<std::uint8_t>(
@@ -893,5 +907,142 @@ int ep6Samples(std::span<const std::uint8_t> pkt,
 // one vector; both share ep6DecodeRounds().
 int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
                     std::span<std::vector<std::complex<float>>> out) noexcept;
+
+// ---- EP4 (radio->host): the wideband bandscope ----
+//
+// A SECOND radio->host stream on the SAME socket and port as EP6, enabled by
+// kRunWideSpectrum and framed `EF FE 01 04`. Grounded in the Hermes-Lite 2
+// gateware (rtl/usopenhpsdr1.v `WIDE1`..`WIDE4`, rtl/fifos.v `usbs_fifo`,
+// rtl/ad9866.v) and CONFIRMED ON THE WIRE against a v74.2 board: 15,003
+// datagrams, every one 1032 bytes, byte 4 always 0x00, and 131,072 payload
+// words with the low nibble clear without exception.
+//
+// What it carries is NOT a receiver: it is the raw AD9866 output, PRE-DDC,
+// pre-decimation and pre-NCO — 2048 consecutive 12-bit codes off a 76.8 MSPS
+// converter, drained four packets at a time from a 2048-word FIFO.
+//
+// It is the same `rx_data` register the gateware's own clip detector reads
+// (ad9866.v: `rxclipp = (rx_data == 12'b011111111111)`), so a level taken from
+// these codes and the ADC-overload bit in the EP6 telemetry are on ONE scale by
+// construction. That is the whole reason this stream is worth parsing.
+inline constexpr std::size_t kEp4PayloadBytes     = 1024;
+inline constexpr std::size_t kEp4SamplesPerPacket = 512;   // 1024 bytes / 2
+// Four packets drain the 2048-word usbs_fifo, and they are NOT four packets
+// apart in wall time — measured at ~2.6 ms between the packets of a block and
+// ~10.5 ms between blocks. The 2048 samples are contiguous in CONVERTER time
+// (26.67 us) whatever the wall-clock spread; see kEp4BlockSamples.
+inline constexpr int         kEp4PacketsPerBlock  = 4;
+inline constexpr int         kEp4BlockSamples     = 2048;
+// 12-bit two's complement, so the code range is [-2048, +2047] and the POSITIVE
+// extreme is 2047, not 2048. Normalising by 2048 keeps 0 dBFS at the negative
+// rail and at the gateware's own rxclip threshold; see Ep4Stats::clippedSamples
+// for why the clip predicate is not a symmetric `abs(code) >= 2048`.
+//
+// NOT kFullScale: that is the EP6 24-bit DDC scale and applying it here would
+// read every bandscope block as ~66 dB quieter than it is.
+inline constexpr int         kEp4FullScale        = 2048;
+// hermeslite_core.v `parameter CLK_FREQ = 76800000`; clk_ad9866 is derived from
+// rffe_ad9866_clk76p8. First Nyquist zone DC..38.4 MHz.
+inline constexpr double      kAdcSampleRateHz     = 76.8e6;
+// `ep4_seq_no` is declared `logic [19:0]`: byte 4 of the header is a hardwired
+// 8'h00 and byte 5 masks to a nibble. It wraps at 1,048,576 — about 46 minutes
+// at the measured 381 packets/s — and a detector that assumes EP6's 32 bits
+// reports one enormous gap per wrap.
+inline constexpr std::uint32_t kEp4SeqModulus = 1u << 20;
+// The forward-gap guard, at 20-bit scale. MetisClient::onReadyRead already
+// applies the 32-bit form to EP6 (`if (gap < 0x80000000u)`) on the reasoning
+// that a BACKWARD jump is a reset, not a loss.
+//
+// EP4 needs the same rule and needs it harder, because the backward jump is not
+// rare — it happens once at every stream start. usopenhpsdr1.v:
+//
+//     ep4_seq_no <= (bs_tvalid) ? ep4_seq_no_next : {ep4_seq_no_next[19:2],2'b00};
+//
+// forces the low two bits to zero whenever the FIFO is not yet full, so a fresh
+// stream emits 0, 1, 2 and then RESTARTS AT 0 — measured three times in six
+// legs, always at the same place. Read with a 32-bit detector that `2 -> 0` is
+// a forward gap of 1,048,574, and the drop counter reports a million lost
+// packets in the first second of every session. A counter that is wrong in its
+// first reading is worse than no counter.
+inline constexpr std::uint32_t kEp4SeqForwardGapMax = kEp4SeqModulus / 2;
+
+// One step of the EP4 sequence counter, classified.
+//
+// A pure function rather than four lines inlined into the receive path,
+// because the classification IS the phase's difficulty: it is what the d94
+// bench run changed, and a rule that lives here can be proved against recorded
+// sequences in a socket-free, Qt-free test instead of only through a client.
+struct Ep4SeqStep {
+    std::uint32_t drops = 0;   // packets genuinely lost before this one
+    bool rewind = false;       // the counter went backwards: a reset, not loss
+};
+
+constexpr Ep4SeqStep ep4SeqStep(std::uint32_t expected, std::uint32_t got) noexcept
+{
+    Ep4SeqStep step;
+    // Modular difference, so the 20-bit wrap at kEp4SeqModulus is an ordinary
+    // step of one rather than a gap of a million.
+    const std::uint32_t gap = (got - expected) & (kEp4SeqModulus - 1);
+    if (gap == 0)
+        return step;                                   // in sequence
+    if (gap < kEp4SeqForwardGapMax)
+        step.drops = gap;                              // forward gap = real loss
+    else
+        step.rewind = true;                            // backward jump = reset
+    return step;
+}
+// dBFS of half a code — 20*log10(1 / (2*kEp4FullScale)). A block of all-zero
+// codes has no representable level at all; the true answer is -inf, which no
+// readout can render and no arithmetic downstream survives. This floor says
+// "below the smallest code this converter has" without inventing a level.
+inline constexpr double kEp4FloorDbfs = -72.25;
+
+// Accumulated magnitude statistics over one EP4 packet, or over a whole block
+// merged from four of them. Deliberately NOT a spectrum: nothing here plans,
+// allocates or transforms, and this type must never grow an FFT — see
+// WdspChannel::fftwSetupLock() for why a second FFTW user in this process is a
+// hazard rather than a convenience.
+struct Ep4Stats {
+    int    samples        = 0;
+    int    peakAbs        = 0;    // 0..kEp4FullScale
+    double sumSquares     = 0.0;  // of raw codes, so rms shares peak's scale
+    // Codes at either converter rail, counted with the gateware's OWN
+    // predicate rather than a symmetric one: ad9866.v fires rxclipp at
+    // 12'b011111111111 (+2047) and rxclipn at 12'b100000000000 (-2048). A
+    // symmetric `abs(code) >= 2048` can never fire on a POSITIVE clip, because
+    // +2048 is not a code a 12-bit two's-complement converter can produce.
+    int    clippedSamples = 0;
+    // UNCALIBRATED, PRE-DDC dBFS on the converter's own scale. It is
+    // commensurable with the gateware's clip and good-level flags and with
+    // nothing else — not with an S-meter, not with the WDSP ADC peak, and not
+    // with any antenna-referred level. Nothing has compared it against a real
+    // band; do not present it as an absolute.
+    [[nodiscard]] double peakDbfs() const noexcept;
+    [[nodiscard]] double rmsDbfs()  const noexcept;
+    // Fold another packet's statistics in. Peak takes the max, everything else
+    // sums — which is what makes a block's stats the same shape as a packet's.
+    void merge(const Ep4Stats& other) noexcept;
+};
+
+// The EP4 sequence number, masked to its real 20 bits, or nullopt if `pkt` is
+// not an EP4 packet. The mask is not decoration: the gateware hardwires the
+// high bits, and masking here means a corrupted or spoofed header cannot push
+// the expected-sequence state outside the modulus the gap arithmetic assumes.
+std::optional<std::uint32_t> ep4Seq(std::span<const std::uint8_t> pkt) noexcept;
+
+// Decode an EP4 packet's 512 ADC codes, normalised to [-1, 1) by
+// kEp4FullScale, and append them to `out`. Returns the count appended, or -1
+// if `pkt` is not a valid EP4 packet.
+//
+// The wire word is little-endian 16-bit and holds the 12-bit code SHIFTED LEFT
+// BY FOUR (usopenhpsdr1.v `WIDE3` emits `{bs_tdata[3:0], 4'b0000}` and `WIDE4`
+// emits `bs_tdata[11:4]`, both halves of the same FIFO word, low nibble first).
+// Recovering the code is an ARITHMETIC right shift by four; a logical shift
+// turns every negative sample into a large positive one.
+int ep4Samples(std::span<const std::uint8_t> pkt, std::vector<float>& out) noexcept;
+
+// Magnitude statistics over one EP4 packet, or nullopt if `pkt` is not one.
+// Allocation-free and transform-free: this is what runs on the I/O thread.
+std::optional<Ep4Stats> ep4Stats(std::span<const std::uint8_t> pkt) noexcept;
 
 }  // namespace AetherSDR::hl2
