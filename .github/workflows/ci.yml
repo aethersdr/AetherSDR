@@ -55,6 +55,15 @@ permissions:
 env:
   QT_VERSION: '6.8.3'
   AQTINSTALL_VERSION: '3.3.0'
+  # py7zr is aqt's 7z extractor and is pinned separately, to the same series
+  # jurplel/install-qt-action pins (py7zrversion default ==1.0.*). Left to
+  # pip, aqtinstall==3.3.0 resolves py7zr>=0.22.0 to the newest 1.1.x, whose
+  # symlink sanitising throws `Bad7zFile: Specified path is bad: lib/cmake/…`
+  # part-way through the Windows extraction, at random (aqtinstall #995 —
+  # the reporter measured ~50%). It passed on two PR runs of #5552 and then
+  # failed the first main run, which is exactly the shape of that bug.
+  # Not in the Qt cache key: the extractor does not change what is laid down.
+  PY7ZR_VERSION: '1.0.0'
 
 jobs:
   build:
@@ -415,7 +424,7 @@ jobs:
           # change to the Qt this job builds against.
           python -m venv "$env:RUNNER_TEMP\aqtvenv"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & "$env:RUNNER_TEMP\aqtvenv\Scripts\pip.exe" install -q "aqtinstall==$env:AQTINSTALL_VERSION"
+          & "$env:RUNNER_TEMP\aqtvenv\Scripts\pip.exe" install -q "aqtinstall==$env:AQTINSTALL_VERSION" "py7zr==$env:PY7ZR_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$env:RUNNER_TEMP\aqtvenv\Scripts\aqt.exe" install-qt windows desktop $env:QT_VERSION $env:QT_ARCH `
             -m qtmultimedia qtwebsockets qtserialport qtshadertools `
@@ -767,7 +776,7 @@ jobs:
           # this job exists to make about Qt itself. Matches
           # .github/docker/Dockerfile, which pins for that reason.
           python3 -m venv "$RUNNER_TEMP/aqtvenv"
-          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}"
+          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}" "py7zr==${PY7ZR_VERSION}"
           "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir "${{ github.workspace }}/Qt"
