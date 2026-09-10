@@ -109,6 +109,10 @@ public:
         std::int64_t maxResponseMs = -1;
         std::int64_t lastResponseAtMs = 0;
         std::string lastCompletedKey;
+        // Command byte of the frame that lastCompletedKey retired. The key is
+        // semantic and deliberately coarse (a frequency READ and WRITE share
+        // "frequency"); a consumer that must tell them apart reads this.
+        std::uint8_t lastCompletedCmd = 0;
         std::string lastTimeoutKey;
         std::size_t queueDepth = 0;
         bool readInFlight = false;

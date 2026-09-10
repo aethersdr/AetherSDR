@@ -280,6 +280,7 @@ private:
     void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                     const std::string& key);
     void pumpCiv(qint64 nowMs);
+    void scheduleFrequencyRestore();
     // Monotonic milliseconds since construction. THE clock for this backend:
     // every interval here (dispatch slot, reply timeout, poll period, stall
     // threshold, trace age) is measured against it, and none of them survives
@@ -409,6 +410,10 @@ private:
     QString m_deviceName;
     QString m_memoryImportSource;
     std::uint64_t m_frequencyHz = 0;
+    // Bumped by every operator tune. A deferred frequency re-assert captures
+    // it and fires only if no newer tune arrived in the one-turn gap, so a
+    // correction for a refused write cannot stomp a later successful one.
+    std::uint64_t m_tuneEpoch = 0;
     CivMode m_mode = CivMode::Usb;
     bool m_dataMode = false;
     bool m_connected = false;

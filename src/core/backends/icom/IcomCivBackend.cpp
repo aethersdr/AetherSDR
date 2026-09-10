@@ -1878,7 +1878,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     // that is the case with hardware evidence and a known-good restoration
     // value (m_frequencyHz, which is radio-authoritative). Other refused
     // writes are a separate question and are left alone rather than guessed at.
-    // ⚠ BOTH halves of the predicate are load-bearing, and `lastCompletedKey`
+    // ⚠ EVERY clause of the predicate is load-bearing, and `lastCompletedKey`
     // alone is NOT enough. observe() sets it only when a frame MATCHES the
     // in-flight transaction; an unmatched FA returns Observation::Unmatched and
     // leaves the key at its previous value. Frequency writes are the most
@@ -1891,9 +1891,16 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     //
     // Observation::Accepted is the signal that THIS frame completed the
     // in-flight transaction; the key then says WHICH transaction it was.
+    //
+    // The key alone is still one step too coarse: semanticKey() folds the
+    // poll's 03 READ and the +60 ms confirmation read onto "frequency" as
+    // well, and matches() retires ANY in-flight transaction on an FA. An NG
+    // to a read is not a refused tune, so the command byte of the retired
+    // frame has to say 05 before this is allowed to speak.
     if (frame.isNg()
         && observation == IcomCivScheduler::Observation::Accepted
         && m_civScheduler.stats().lastCompletedKey == "frequency"
+        && m_civScheduler.stats().lastCompletedCmd == cmd::kSetFreq
         && m_frequencyHz != 0) {
         // Re-assert the radio's real VFO one event-loop turn later, exactly as
         // the out-of-band gate in setSliceFrequency() and the refused mode in
@@ -1904,11 +1911,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         qCWarning(lcIcomLink)
             << "radio refused the frequency write (CI-V FA); restoring"
             << actualMhz << "MHz";
-        QTimer::singleShot(0, this, [this, actualMhz] {
-            SliceDelta delta;
-            delta.frequency = actualMhz;
-            emit sliceChanged(sliceId(), delta);
-        });
+        scheduleFrequencyRestore();
         // The dual-receiver explanation is TRUE ONLY WHERE THERE ARE TWO.
         // This block fires on every Icom model, so an IC-705 refusing a write
         // for some other reason was being handed a reason that cannot apply to
@@ -3822,6 +3825,31 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
     pumpCiv(now);
 }
 
+// Re-assert the radio's real VFO one event-loop turn from now.
+//
+// Deferred because SliceModel has already accepted and announced the
+// operator's request by the time a seam verb or a CI-V reply runs; a direct
+// emit would be applied and then announced away, and the indicator would keep
+// lying. Same ordering contract as setSliceMode().
+//
+// Read at FIRE time, not captured: a 03 reply can land in the gap and move
+// m_frequencyHz, and the radio's newest word is the one to publish. Guarded
+// by m_tuneEpoch: if the operator issued a newer tune in that gap, the
+// correction is for a request they have already abandoned and re-asserting it
+// would drag the readout back behind a write that may well succeed.
+void IcomCivBackend::scheduleFrequencyRestore()
+{
+    const std::uint64_t epoch = m_tuneEpoch;
+    QTimer::singleShot(0, this, [this, epoch] {
+        if (epoch != m_tuneEpoch || m_frequencyHz == 0) {
+            return;
+        }
+        SliceDelta delta;
+        delta.frequency = static_cast<double>(m_frequencyHz) / 1.0e6;
+        emit sliceChanged(sliceId(), delta);
+    });
+}
+
 void IcomCivBackend::setSliceFrequency(int, double hz)
 {
     if (!std::isfinite(hz) || hz <= 0.0
@@ -3829,6 +3857,10 @@ void IcomCivBackend::setSliceFrequency(int, double hz)
         return;
     }
     const std::uint64_t roundedHz = static_cast<std::uint64_t>(std::llround(hz));
+    // Every operator tune opens a new epoch: any frequency re-assert still
+    // deferred from an earlier refusal now belongs to a request the operator
+    // has already moved past, and must not fire on top of this one.
+    ++m_tuneEpoch;
     // Only a model that DECLARES discontinuous bands gets this gate. Every
     // other Icom keeps its existing command path — an empty table is the
     // predicate, so the day another model's holes are documented, this site
@@ -3850,12 +3882,7 @@ void IcomCivBackend::setSliceFrequency(int, double hz)
         // the next event-loop turn, after that optimistic announcement, so a
         // refused gap tune cannot leave the display claiming a frequency the
         // radio never entered. Same ordering contract as setSliceMode().
-        const double actualMhz = static_cast<double>(m_frequencyHz) / 1.0e6;
-        QTimer::singleShot(0, this, [this, actualMhz] {
-            SliceDelta delta;
-            delta.frequency = actualMhz;
-            emit sliceChanged(sliceId(), delta);
-        });
+        scheduleFrequencyRestore();
         return;
     }
     sendUserCommand(cmdSetFrequency(m_session ? m_session->civAddress() : 0xA4,

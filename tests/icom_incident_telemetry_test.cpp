@@ -52,12 +52,40 @@ struct IcomCivBackendTestAccess {
                                                  std::uint64_t generation,
                                                  std::uint64_t heldHz)
     {
+        prepareOutstandingFrequencyRequest(
+            backend, model, generation, heldHz,
+            cmdSetFrequency(model.civAddress, heldHz + 1'000'000));
+    }
+
+    // Same state, but the in-flight transaction is the poll's 03 READ. It
+    // shares the "frequency" key with the write, and an FA retires it just the
+    // same — which is exactly why the fix must look past the key.
+    static void prepareOutstandingFrequencyRead(IcomCivBackend& backend,
+                                                const IcomModel& model,
+                                                std::uint64_t generation,
+                                                std::uint64_t heldHz)
+    {
+        prepareOutstandingFrequencyRequest(backend, model, generation, heldHz,
+                                           cmdReadFrequency(model.civAddress));
+    }
+
+    static void setHeldFrequency(IcomCivBackend& backend, std::uint64_t hz)
+    {
+        backend.m_frequencyHz = hz;
+    }
+
+    static void prepareOutstandingFrequencyRequest(IcomCivBackend& backend,
+                                                   const IcomModel& model,
+                                                   std::uint64_t generation,
+                                                   std::uint64_t heldHz,
+                                                   std::vector<std::uint8_t> frame)
+    {
         backend.m_model = &model;
         backend.m_connected = true;
         backend.m_sessionGeneration = generation;
         backend.m_frequencyHz = heldHz;
         IcomCivScheduler::Request request;
-        request.frame = cmdSetFrequency(model.civAddress, heldHz + 1'000'000);
+        request.frame = std::move(frame);
         request.key = "frequency";
         request.expectsReply = true;
         request.acceptsGenericReply = true;
@@ -287,6 +315,118 @@ int main(int argc, char** argv)
               "an unmatched FA republishes NOTHING (no redundant re-assert)");
         check(warnings.size() == warningsAfterReal,
               "an unmatched FA does not tell the operator a tune was refused");
+    }
+
+    // AN FA TO A FREQUENCY *READ* IS NOT A REFUSED TUNE.
+    //
+    // semanticKey() folds the poll's 03 read and the +60 ms confirmation read
+    // onto the same "frequency" key as the 05 write, and matches() retires any
+    // in-flight transaction on an FA. So `Accepted && key == "frequency"` is
+    // also true when the radio NGs a READ — and that must not tell the
+    // operator a tune was refused, nor republish anything.
+    {
+        constexpr std::uint64_t kHeldHz = 145'030'000;
+        IcomCivBackend readBackend;
+        std::vector<double> published;
+        QObject::connect(&readBackend, &IRadioBackend::sliceChanged, &app,
+                         [&published](int, const SliceDelta& delta) {
+                             if (delta.frequency)
+                                 published.push_back(*delta.frequency);
+                         });
+        QStringList warnings;
+        QObject::connect(&readBackend, &IRadioBackend::configurationWarning,
+                         &app, [&warnings](const QString& w) { warnings << w; });
+
+        IcomCivBackendTestAccess::prepareOutstandingFrequencyRead(
+            readBackend, *ic705, kGeneration, kHeldHz);
+
+        CivFrame refused;
+        refused.to = kControllerAddress;
+        refused.from = ic705->civAddress;
+        refused.cmd = kCivNg;
+        IcomCivBackendTestAccess::deliver(readBackend, refused, kGeneration);
+        QCoreApplication::processEvents();
+
+        check(IcomCivBackendTestAccess::lastCompletedKey(readBackend)
+                  == "frequency",
+              "the FA retires the outstanding frequency read under the same key");
+        check(published.empty(),
+              "an FA to a frequency READ republishes nothing");
+        check(warnings.isEmpty(),
+              "an FA to a frequency READ does not claim a tune was refused");
+    }
+
+    // THE DEFERRED CORRECTION MUST NOT STOMP A NEWER TUNE.
+    //
+    // The re-assert is one event-loop turn behind the FA. If the operator
+    // issues another tune inside that gap, the correction is for a request
+    // they have already moved past; firing it anyway drags the readout back
+    // behind a write that may well succeed. The epoch guard drops it.
+    {
+        constexpr std::uint64_t kHeldHz = 145'030'000;
+        IcomCivBackend raceBackend;
+        std::vector<double> published;
+        QObject::connect(&raceBackend, &IRadioBackend::sliceChanged, &app,
+                         [&published](int, const SliceDelta& delta) {
+                             if (delta.frequency)
+                                 published.push_back(*delta.frequency);
+                         });
+        QStringList warnings;
+        QObject::connect(&raceBackend, &IRadioBackend::configurationWarning,
+                         &app, [&warnings](const QString& w) { warnings << w; });
+
+        IcomCivBackendTestAccess::prepareOutstandingFrequencyWrite(
+            raceBackend, *ic705, kGeneration, kHeldHz);
+
+        CivFrame refused;
+        refused.to = kControllerAddress;
+        refused.from = ic705->civAddress;
+        refused.cmd = kCivNg;
+        IcomCivBackendTestAccess::deliver(raceBackend, refused, kGeneration);
+        // A newer operator tune lands before the deferred correction fires.
+        // (No session is attached, so nothing goes on the wire; the epoch
+        // bump at the top of the seam verb is the part under test.)
+        raceBackend.setSliceFrequency(0, 145'500'000.0);
+        QCoreApplication::processEvents();
+
+        check(warnings.size() == 1,
+              "the refusal is still reported even when a newer tune follows");
+        check(published.empty(),
+              "a correction overtaken by a newer tune does not fire");
+    }
+
+    // THE CORRECTION PUBLISHES THE RADIO'S NEWEST WORD, NOT A SNAPSHOT.
+    //
+    // A 03 reply can land in the same gap and move m_frequencyHz. Capturing
+    // the value at FA time would then publish a frequency the radio has
+    // already left; reading it at fire time publishes where the radio is.
+    {
+        constexpr std::uint64_t kHeldHz = 145'030'000;
+        constexpr std::uint64_t kMovedHz = 145'040'000;
+        IcomCivBackend freshBackend;
+        std::vector<double> published;
+        QObject::connect(&freshBackend, &IRadioBackend::sliceChanged, &app,
+                         [&published](int, const SliceDelta& delta) {
+                             if (delta.frequency)
+                                 published.push_back(*delta.frequency);
+                         });
+
+        IcomCivBackendTestAccess::prepareOutstandingFrequencyWrite(
+            freshBackend, *ic705, kGeneration, kHeldHz);
+
+        CivFrame refused;
+        refused.to = kControllerAddress;
+        refused.from = ic705->civAddress;
+        refused.cmd = kCivNg;
+        IcomCivBackendTestAccess::deliver(freshBackend, refused, kGeneration);
+        IcomCivBackendTestAccess::setHeldFrequency(freshBackend, kMovedHz);
+        QCoreApplication::processEvents();
+
+        check(published.size() == 1
+                  && std::llround(published.front() * 1.0e6)
+                         == static_cast<long long>(kMovedHz),
+              "a deferred correction publishes the frequency the radio holds "
+              "when it fires, not the one it held at FA time");
     }
 
     return failures == 0 ? 0 : 1;
