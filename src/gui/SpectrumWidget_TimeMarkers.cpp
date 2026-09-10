@@ -87,8 +87,10 @@ void SpectrumWidget::prepareWaterfallTimeMarkerAtlas(
     }
     m_wfTimeMarkerAtlasDirty = false;
 #ifdef AETHER_GPU_SPECTRUM
-    // Recreate/upload only when the text, theme, or scale changes; row motion
-    // updates small vertex data, never the full-screen static overlay.
+    // Row motion normally updates only vertex data. The position-dependent
+    // label set can also change at visibility/crowding thresholds, requiring
+    // an atlas upload, as do font, theme, and scale changes. None of these
+    // updates rebuilds the full-screen static overlay.
     if (m_wfTimeMarkerTexture && m_wfTimeMarkerTexture->pixelSize() != pixels) {
         m_wfTimeMarkerTexture->setPixelSize(pixels);
         if (!m_wfTimeMarkerTexture->create()

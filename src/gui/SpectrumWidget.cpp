@@ -6820,6 +6820,9 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
         m_waterfallStreamSizeHint = m_waterfall.size();
     }
     m_wfWriteRow = restored.wfWriteRow;
+    // The viewport-size guard above preserves matching timestamp rows. Both
+    // marker readers also tolerate a mismatch: drawing skips it and append
+    // reinitializes the metadata before writing the next row.
     m_wfVisibleTimeRows = std::move(restored.visibleTimeRows);
     m_wfVisibleRowCenterMhz = std::move(restored.visibleRowCenterMhz);
     m_wfVisibleRowBwMhz = std::move(restored.visibleRowBwMhz);
