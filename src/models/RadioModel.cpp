@@ -5089,6 +5089,7 @@ bool RadioModel::addSliceOnPan(const QString& panId)
     // bandwidth if any existing slice is within 5 kHz.
     PanadapterModel* pan = panadapter(panId);
     if (!pan) {
+        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: unknown panadapter" << panId;
         return false;
     }
     double newFreq = pan->centerMhz();
@@ -5155,7 +5156,16 @@ bool RadioModel::removeSlice(int sliceId)
         return false;
     }
     if (!hasCommandPlane()) {
-        return m_backend && m_backend->removeSlice(sliceId);
+        if (m_backend && m_backend->removeSlice(sliceId)) {
+            return true;
+        }
+        // Same contract as creation: a terminal refusal is never silent, and
+        // it never falls back to a Flex command. One channel reports it so the
+        // GUI, the bridge and the log agree.
+        const QString reason = tr("this radio cannot remove this slice");
+        qCWarning(lcProtocol) << "RadioModel::removeSlice: backend declined" << sliceId << reason;
+        emit sliceLifecycleFailed(QStringLiteral("remove"), sliceId, reason);
+        return false;
     }
     return dispatchSliceLifecycleCommand(QStringLiteral("slice remove %1").arg(sliceId));
 }

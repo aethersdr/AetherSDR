@@ -7156,10 +7156,14 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(msg + QStringLiteral(")"));
         }
 
-        bool okF = false;
-        const double freq = arg.toDouble(&okF);
-        if (!arg.isEmpty() && (!okF || !std::isfinite(freq) || freq <= 0.0)) {
-            return err(QStringLiteral("slice add requires a finite positive frequency in MHz"));
+        // An omitted value asks for default placement; an explicit value gets
+        // the same parse/range rule as every other MHz-taking verb, so a
+        // malformed one is refused rather than becoming a default-frequency
+        // request — see refuseUntunableMhz().
+        double freq = 0.0;
+        if (!arg.isEmpty()) {
+            if (const auto refusal = refuseUntunableMhz(QStringLiteral("slice add"), arg, freq))
+                return *refusal;
         }
         const bool accepted = arg.isEmpty()
             ? radio->addSlice()
@@ -7168,7 +7172,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(QStringLiteral("refused: radio did not accept slice creation"));
         }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("add")},
-                           {QStringLiteral("freq"), okF ? QJsonValue(freq) : QJsonValue()},
+                           {QStringLiteral("freq"), arg.isEmpty() ? QJsonValue() : QJsonValue(freq)},
                            {QStringLiteral("requested"), true},
                            {QStringLiteral("sliceCount"), radio->slices().size()}};
     }

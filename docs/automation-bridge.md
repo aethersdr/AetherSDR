@@ -1679,7 +1679,7 @@ re-poll `get slices`.
 
 | `action` | `value` | effect |
 |---|---|---|
-| `add` | optional finite positive `<mhz>` | request a slice through RadioModel (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant). Omit the value for default placement; an explicit malformed, non-finite or non-positive value is an error, never a default-frequency fallback |
+| `add` | optional `<mhz>` | request a slice through RadioModel (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant). Omit the value for default placement; an explicit value follows the same parse and tunable-range rule as `tune`, so a malformed, non-finite, non-positive or out-of-band value is an error, never a default-frequency fallback |
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
@@ -1700,8 +1700,9 @@ re-poll `get slices`.
 
 Ordinary `add`/`remove` requests report acceptance, not completion. An accepted
 request can still be pending; re-poll `get slices` for authoritative ownership.
-Explicit invalid `add` values return `"slice add requires a finite positive
-frequency in MHz"` after the capacity pre-check. A RadioModel refusal returns
+Explicit invalid `add` values are refused after the capacity pre-check with
+the shared MHz wording (`"slice add requires a positive finite frequency in
+MHz"`, or the `tune`-style range message). A RadioModel refusal returns
 `"refused: radio did not accept slice creation"` or
 `"refused: radio did not accept slice removal"`; this includes unsupported
 backend operations and does not imply that a wire command was sent. The latter

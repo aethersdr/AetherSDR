@@ -728,8 +728,10 @@ void MainWindow::wireRadioModel()
     // surface cannot spam the bar while still never failing silently.
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        if (connected)
+        if (connected) {
             m_commandDroppedNoticeShown = false;
+            m_sliceLifecycleNoticesShown.clear();
+        }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
             this, [this](const QString&) {
@@ -936,9 +938,19 @@ void MainWindow::wireRadioModel()
             QString("%1 supports a maximum of %2 panadapters")
                 .arg(model).arg(limit), 4000);
     });
+    // Same shape as the commandDropped notice above: RadioModel's qCWarning
+    // carries every occurrence; the operator sees each distinct refusal once
+    // per connect session.
     connect(&m_radioModel, &RadioModel::sliceLifecycleFailed, this,
             [this](const QString& operation, int, const QString& reason) {
-        statusBar()->showMessage(tr("Slice %1 failed: %2").arg(operation, reason), 6000);
+        const QString key = operation + QLatin1Char('\n') + reason;
+        if (m_sliceLifecycleNoticesShown.contains(key))
+            return;
+        m_sliceLifecycleNoticesShown.insert(key);
+        const QString what = operation == QLatin1String("remove")
+            ? tr("Cannot remove slice: %1").arg(reason)
+            : tr("Cannot create slice: %1").arg(reason);
+        statusBar()->showMessage(what, 6000);
     });
     connect(&m_radioModel, &RadioModel::sliceCreateFailed,
             this, [this](int limit, const QString& model) {

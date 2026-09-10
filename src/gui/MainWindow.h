@@ -336,6 +336,8 @@ private slots:
     void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
+    // Ordinary RX close from the VFO ✕ / "Close Slice" menu (RFC #5468 P01).
+    void requestSliceClose(int sliceId);
 
     // Master volume — single entry point used by both the title bar slider
     // (TitleBar::masterVolumeChanged) and TCI clients (TciServer::
@@ -1592,6 +1594,10 @@ private:
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
+    // Slice lifecycle refusals already shown this connect session, keyed
+    // "<operation>\n<reason>": one notice per distinct refusal, so a control
+    // that re-requests (rigctl split on every set_split_vfo) cannot spam the bar.
+    QSet<QString> m_sliceLifecycleNoticesShown;
     // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
     //
     // The slot is driven by radioUpdated as well as radioDiscovered, and

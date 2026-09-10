@@ -243,6 +243,9 @@ void testNeutralLifecycle()
     check(radio.slice(1) && radio.slice(3) == sibling && removed.isEmpty()
               && radio.panadapters().size() == 1,
           "refusal preserves slices and pan without authoritative removal notification");
+    check(failed.size() == 2 && failed.at(1).at(0).toString() == QLatin1String("remove")
+              && failed.at(1).at(1).toInt() == 1 && !failed.at(1).at(2).toString().isEmpty(),
+          "backend removal refusal tells the operator through the lifecycle failure signal");
     check(!radio.removeSlice(2) && backend->removeCalls == 1, "unknown sparse ID is not a vector position");
     backend->acceptRemove = true;
     check(radio.removeSlice(1) && backend->requestedRemoval == 1 && radio.slice(1),
