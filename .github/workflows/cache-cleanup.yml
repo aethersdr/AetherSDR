@@ -12,9 +12,11 @@ name: Cache cleanup
 # that made the size limit configurable introduced a retention limit (days)
 # alongside it, manageable by enterprise/org/repo admins in Actions settings.
 # Whether it can be lowered on this org's Free plan is undocumented and the API
-# does not expose it, so this workflow assumes the default and does the job in
-# code. If retention is ever lowered, revisit whether prune-main is still
-# earning its keep — a short retention does much of the same work for free.
+# does not expose it (GET repos/{owner}/{repo}/actions/cache/usage-policy
+# returns 404 here, probed 2026-09-10 — don't re-run the trip), so this
+# workflow assumes the default and does the job in code. If retention is ever
+# lowered, revisit whether prune-main is still earning its keep — a short
+# retention does much of the same work for free.
 #
 # One cause is handled here — SUPERSEDED main entries. ci.yml saves a compiler
 # cache on every green main build, keyed on run_id because actions/cache entries
@@ -23,16 +25,21 @@ name: Cache cleanup
 # unreachable it is never accessed again, so nothing refreshes its LRU position
 # and nothing deletes it.
 #
-# That adds up faster than it looks. Measured entry sizes on refs/heads/main,
-# with the Linux cap raised to 2000M:
+# That adds up faster than it looks. Entry sizes on refs/heads/main once each
+# cache has filled to its cap, measured 2026-09-01..05 from the "Save" steps:
 #
-#   ccache-linux-build-   ~1.1 GiB      sccache-windows-   ~0.38 GiB
-#   ccache-ccache-macos-  ~0.18 GiB     ccache-sid-canary- ~0.57 GiB
+#   ccache-linux-build-   ~1.88 GiB     sccache-windows-   ~1.02 GiB
+#   ccache-ccache-macos-  ~0.44 GiB     ccache-sid-canary- ~0.94 GiB
 #
-# so a main CI run writes ~1.66 GiB across its three platforms, ~9.2x/day —
-# ~15 GiB/day of entries that are unreachable within the hour. Unmanaged, that
-# pins the repo at its allowance on its own, holding well under a day of caches
-# nothing will ever read.
+# (The figures this header carried before — 1.1 / 0.38 / 0.18 / 0.57 — were
+# taken on 2026-08-15, days after #5008, while the caches were still filling.
+# ccache and sccache both compress their own objects, so the entry is ~95% of
+# the directory, not the ~55% that earlier estimate assumed.)
+#
+# So a main CI run writes ~4.3 GiB across its four compiler caches, ~9.2x/day
+# — ~40 GiB/day of entries that are unreachable within the hour. Unmanaged,
+# that pins the repo at its allowance on its own, holding a few hours of
+# caches nothing will ever read.
 #
 # The other causes are caches on refs that nothing will run against again:
 # refs/pull/N/merge once the PR closes, and refs/tags/v* once the release
@@ -88,11 +95,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          # Keep 2, not 1. Only the newest is ever restored, so the second is
-          # insurance: if a save lands a sparse or corrupt entry, deleting it by
-          # hand falls back to a known-good one instead of a cold build for
-          # everybody until the next green main run.
-          KEEP: "2"
+          # Keep 1. This was 2 from 2026-08-15 to 2026-09-10: only the newest
+          # is ever restored, and the second was insurance — if a save landed
+          # a sparse or corrupt entry, deleting it by hand would fall back to a
+          # known-good one instead of a cold build until the next green main
+          # run. That insurance was never used, and it cost more than it
+          # covered: with every cache filled to its cap the doubled set is
+          # ~8.6 GiB on main alone, which with the ~1.8 GiB of dependency
+          # entries is OVER the 10 GiB allowance before a PR writes anything.
+          # GitHub then evicts by LRU, the largest entry (Linux ccache) goes
+          # first, and every main run until the next green save is a cold
+          # build — 27–37 min instead of 3–6, on 10 of the 50 main runs between
+          # 2026-09-06 and 2026-09-10. A corrupt-entry recovery would have
+          # been ONE such cold build; the insurance was causing them weekly.
+          #
+          # The sparse case the insurance guarded against is closed by the
+          # `success()` gate on the Linux and Windows saves (ci.yml, "Save
+          # ccache objects" / "Save sccache objects"). It is NOT closed on
+          # macOS: ci.yml's "Set up ccache" step documents that the
+          # ccache-action saves from a post-job hook with no `success()` half,
+          # so a failed main build there can still write a sparse entry and
+          # KEEP=1 leaves no fallback. Accepted — that entry is 0.44 GiB on the
+          # lightest config and one cold macOS rebuild is the whole cost. If a
+          # corrupt entry ever lands on any prefix, `gh cache delete` it and
+          # take the one cold rebuild; do not go back to 2 without re-doing
+          # the budget in ci.yml's CCACHE_MAXSIZE comment.
+          KEEP: "1"
         run: |
           set -euo pipefail
 
