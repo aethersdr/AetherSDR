@@ -75,8 +75,9 @@ public:
     void switchOff() { sendKey(Spe::Key::SwitchOff); }
 
     // Remote LCD mirroring: while enabled (and connected) the amplifier's
-    // display is polled with the 0x80 request at kLcdPollIntervalMs and
-    // every decoded refresh arrives via lcdFrameReceived. Driven by the
+    // display is polled with the 0x80 request — each reply schedules the
+    // next request kLcdPollIntervalMs later — and every decoded refresh
+    // arrives via lcdFrameReceived. Driven by the
     // applet's floating state — the docked rail has no room for the LCD,
     // so polling it there would be pure link noise.
     void setLcdPolling(bool on);
@@ -176,13 +177,25 @@ private:
     QTimer m_lcdStaleTimer;
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
-    static constexpr int kLcdPollIntervalMs = 600;
-    // Three missed refreshes, not two: on a telnet proxy link a single
-    // display reply is occasionally lost to mid-frame corruption (the
-    // parser resyncs on the next Status frame), and a one-loss margin made
-    // the freshness gate visibly flap on real stations. One survivable
-    // loss, two consecutive losses = stale.
-    static constexpr int kLcdStaleTimeoutMs = kLcdPollIntervalMs * 3;
+    // The IDLE GAP between a display reply and the next request, not a
+    // free-running period: the timer re-arms from each reply, so the
+    // effective cadence is gap + round trip + the link's own serialization
+    // time for the 371-byte frame (~32 ms at 115200, ~193 ms at 19200).
+    // That self-clocking is what makes a small gap safe on slow links — a
+    // second request is never in flight before the previous reply has
+    // fully arrived, so the amp is never asked to interleave display
+    // blocks and the cadence degrades gracefully instead of piling up.
+    // (At ≤9600 the 100 ms Status poll alone nearly saturates the wire —
+    // see the design note §11's proxy baud recommendation.)
+    static constexpr int kLcdPollIntervalMs = 250;
+    // Absolute, deliberately decoupled from the poll gap: it must cover a
+    // full lost frame plus a retry on the slowest plausible link (a 9600
+    // baud proxy serial side spends ~390 ms per display frame), and on a
+    // fast link the extra margin only makes the freshness gate calmer. On
+    // a telnet proxy a single display reply is occasionally lost to
+    // mid-frame corruption (the parser resyncs on the next Status frame),
+    // and a one-loss margin made the gate visibly flap on real stations.
+    static constexpr int kLcdStaleTimeoutMs = 1800;
 
     QString m_currentModelId;
 

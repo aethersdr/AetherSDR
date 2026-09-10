@@ -315,9 +315,17 @@ control application and re-validated against the real 1.5K-FA (see
 `THIRD_PARTY_LICENSES` for the provenance chain, which ends at the
 MIT-licensed expert-amp-server project) — is:
 
-- **Request**: the standard keystroke-style packet with code `0x80`,
-  polled at 600 ms (the field-proven cadence; the frame is ~5x a Status
-  reply, and the mirror is for eyes, not telemetry).
+- **Request**: the standard keystroke-style packet with code `0x80`.
+  Polling is reply-paced: each decoded display schedules the next request
+  250 ms later, so the effective cadence is that idle gap plus the round
+  trip plus the link's own serialization time for the 371-byte frame
+  (~285 ms total at 115200; a 19200 proxy serial side stretches it to
+  ~450 ms on its own). A second request is never in flight before the
+  previous reply has fully arrived — the amplifier is never asked to
+  interleave display blocks, and a slow link stretches the cadence
+  instead of accumulating a request backlog. At a 9600 baud proxy serial
+  side the 100 ms Status poll alone consumes ~80% of the wire, so ser2net
+  serial sides should be configured at 57600 or above.
 - **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
   ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
   columns, row-major) + 40 attribute bytes (one per column, bit N =
@@ -343,16 +351,18 @@ With the mirror on screen, the FRONT PANEL keys stop being blind — the
 operator navigates the amplifier's menu watching the amplifier's screen,
 which is what unlocked the §4 ruling change. Those keys remain disabled
 until the first checksum-valid display arrives and are disabled again after
-three missed 600 ms refreshes — one display frame lost to mid-frame
-corruption on a proxy link must read as a hiccup, not flap the gate. Losing
-freshness dims the last image on the glass rather than blanking it; the
-mirror only returns to the idle glass when the image is truly obsolete
-(disconnect, or a docked⇄floating switch). Every acknowledged keystroke
-requests an immediate display refresh, and the periodic cadence re-arms
-from each display *reply* rather than free-running: 600 ms is an exact
-multiple of the 100 ms Status poll, and two free-running timers can
-phase-lock with every display reply straddling a status poll on the wire,
-dropping display frames in bursts until clock drift walks the alignment
-out. Pacing from the reply folds the amplifier's variable response latency
-into the period, so no stable phase relationship can form and a fast menu
-sequence still never waits a full polling interval to show its result.
+1.8 s without one — an absolute window sized to cover a lost frame plus a
+retry even on a 9600 baud proxy serial side, because one display frame
+lost to mid-frame corruption on a proxy link must read as a hiccup, not
+flap the gate. Losing freshness dims the last image on the glass rather
+than blanking it; the mirror only returns to the idle glass when the image
+is truly obsolete (disconnect, or a docked⇄floating switch). Every
+acknowledged keystroke requests an immediate display refresh, and the
+cadence re-arms from each display *reply* rather than free-running: the
+original free-running 600 ms period was an exact multiple of the 100 ms
+Status poll, and two such timers phase-lock with every display reply
+straddling a status poll on the wire, dropping display frames in bursts
+until clock drift walks the alignment out. Pacing from the reply folds the
+amplifier's variable response latency into the period, so no stable phase
+relationship can form — and it is also what makes the small 250 ms gap
+safe on slow links (see the request bullet above).

@@ -22,14 +22,17 @@ SpeConnection::SpeConnection(QObject* parent)
             setLcdFresh(true);
             m_lcdStaleTimer.start();
             // Pace the next request from the REPLY, not just from our own
-            // send: 600 is an exact multiple of the 100 ms Status cadence,
-            // so two free-running timers can phase-lock (Qt's coarse timers
-            // actively coalesce them) with every display reply straddling a
-            // status poll on the wire — and hold that alignment for many
-            // seconds until clock drift walks out of it, dropping several
-            // display frames in a row. Re-arming here folds the amp's own
+            // send. Two free-running timers whose periods divide evenly
+            // (the original 600 ms cadence was an exact multiple of the
+            // 100 ms Status poll) phase-lock — Qt's coarse timers actively
+            // coalesce them — with every display reply straddling a status
+            // poll on the wire, and hold that alignment for many seconds
+            // until clock drift walks out of it, dropping several display
+            // frames in a row. Re-arming here folds the amp's own
             // (variable) response latency into the period, so no stable
-            // phase relationship with the status poll can form.
+            // phase relationship with the status poll can form — and it is
+            // also what lets kLcdPollIntervalMs be a small idle gap rather
+            // than a conservative worst-case-link period.
             m_lcdTimer.start();
         }
     });
@@ -370,8 +373,8 @@ void SpeConnection::onFrameReceived(const Spe::Frame& f)
         qCDebug(lcTuner) << "SpeConnection: ACK for command"
                           << QString::number(static_cast<quint8>(f.data.at(0)), 16);
         // The keys are safe only beside a fresh mirror. Pull the resulting
-        // screen immediately instead of making a fast menu sequence wait up
-        // to the next 600 ms periodic refresh.
+        // screen immediately instead of making a fast menu sequence wait
+        // out the rest of the current poll gap.
         requestLcdFrame();
         return;
     }
