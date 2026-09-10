@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QMetaObject>
 
+class QMenu;
 class QPushButton;
 class QLabel;
 class QSlider;
@@ -45,6 +46,13 @@ public:
     // and command routing. (#2624)
     void setRadioModel(RadioModel* radio);
     void setBandPlanManager(BandPlanManager* bandPlan);
+
+    // Building a context menu is split from showing it so the actions, their
+    // enabled state and their explanatory tooltips can be asserted without
+    // entering the modal QMenu::exec() loop. The show* slots build then exec.
+    // (#5510)
+    void buildAtuContextMenu(QMenu& menu);
+    void buildTuneContextMenu(QMenu& menu);
 
 public slots:
     void updateMeters(float fwdPower, float swr, bool swrValid);
