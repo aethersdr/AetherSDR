@@ -4272,7 +4272,7 @@ add_executable(transmit_model_apd_test
     src/core/LogManager.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(transmit_model_apd_test PRIVATE src tests)
+target_include_directories(transmit_model_apd_test PRIVATE src)
 target_link_libraries(transmit_model_apd_test PRIVATE Qt6::Core Qt6::Test)
 if(UNIX)
     target_link_libraries(transmit_model_apd_test PRIVATE pthread)
@@ -4589,32 +4589,12 @@ add_executable(transmit_model_test
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
 )
-target_include_directories(transmit_model_test PRIVATE src tests)
+target_include_directories(transmit_model_test PRIVATE src)
 target_link_libraries(transmit_model_test PRIVATE Qt6::Core)
 if(UNIX)
     target_link_libraries(transmit_model_test PRIVATE pthread)
 endif()
 add_test(NAME transmit_model_test COMMAND transmit_model_test)
-
-# The mic level's restore-at-construction (PhoneMicLevel). Its own target rather
-# than a case in transmit_model_test: this one touches AppSettings, which is a
-# process-wide singleton, so it needs the redirected settings home a shared
-# process cannot give it — same reasoning as icom_settings_test/anan_settings_test.
-add_executable(transmit_model_mic_persistence_test
-    tests/transmit_model_mic_persistence_test.cpp
-    src/models/TransmitModel.cpp
-    src/core/ClientQuindarTone.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/AsyncLogWriter.cpp
-    src/core/LogManager.cpp
-)
-target_include_directories(transmit_model_mic_persistence_test PRIVATE src tests)
-target_link_libraries(transmit_model_mic_persistence_test PRIVATE Qt6::Core)
-if(UNIX)
-    target_link_libraries(transmit_model_mic_persistence_test PRIVATE pthread)
-endif()
-add_test(NAME transmit_model_mic_persistence_test
-         COMMAND transmit_model_mic_persistence_test)
 
 add_executable(transmit_inhibit_policy_test
     tests/transmit_inhibit_policy_test.cpp
@@ -5178,7 +5158,6 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_control_dialog_size_test
     pan_layout_dialog_size_test
     transmit_model_test
-    transmit_model_mic_persistence_test
     container_widget_test
     hl2_pc_audio_lock_test
     titlebar_headphone_mute_test

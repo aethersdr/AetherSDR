@@ -68,6 +68,7 @@ RestoredRadioState sampleState()
     state.cwlEnabled = 1;
     state.monGainCw = 73;
     state.monPanCw = 22;
+    state.micLevel = 70;
     state.extensionSchemaVersion = 1;
     // The extension's top level is domain sub-objects (the per-domain gate);
     // each sub-object's contents are backend-owned.
@@ -139,6 +140,11 @@ int main(int argc, char** argv)
                   && restored.cwlEnabled == 1 && restored.monGainCw == 73
                   && restored.monPanCw == 22,
               "the complete client-owned CW surface round-trips");
+        // The Phone/CW mic level. Client-owned only where the radio keeps no
+        // memory of it — a Flex and an Icom persist mic gain in the radio, and
+        // neither declares TxSetpoints, so neither reaches this row.
+        check(restored.micLevel == 70,
+              "the mic level round-trips under the TxSetpoints domain");
         check(restored.extensionSchemaVersion == 1
                   && restored.extension.value(QStringLiteral("rfGain"))
                              .toObject()
@@ -186,6 +192,12 @@ int main(int argc, char** argv)
                   && gated.cwBreakIn == -1 && gated.cwDelay == -1
                   && gated.monGainCw == -1 && gated.monPanCw == -1,
               "an undeclared CW domain stays absent");
+        // The Flex/Icom guarantee for the mic level, stated as a gate rather
+        // than trusted to family: a radio that does not declare TxSetpoints
+        // gets -1 back even though radio A's document carries a level of 70,
+        // and -1 rather than 0 because 0 is the slider's mute.
+        check(gated.micLevel == -1,
+              "an undeclared TxSetpoints domain is absent, not a mic level of 0");
     }
 
     // ---- deliberate false/zero CW values survive -------------------------
@@ -238,6 +250,26 @@ int main(int argc, char** argv)
         const RestoredRadioState back = RadioStateMemory::load(zeroRadio, caps);
         check(back.agcThreshold == 0 && back.agcMode == QStringLiteral("off"),
               "a deliberate AGC threshold of 0 is not mistaken for 'absent'");
+    }
+
+    // ---- a mic level of ZERO survives too ---------------------------------
+    // The same sentinel argument, on a sharper case: 0 on the mic slider is the
+    // MUTE. With 0 as "absent" an operator who deliberately parked the slider
+    // there would be restored to unity instead — and the point of remembering
+    // the control is that it comes back where they left it, visibly, on a
+    // slider that reads 0.
+    {
+        RadioCapabilities txOnly;
+        txOnly.family = QStringLiteral("hl2");
+        txOnly.clientSettingsDomains = Domain::TxSetpoints;
+        const RadioSettingsScope mutedRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("00:00:00:00:00:B0"));
+        RestoredRadioState state;
+        state.micLevel = 0;
+        check(RadioStateMemory::store(mutedRadio, txOnly, state),
+              "a deliberate mic mute stores");
+        check(RadioStateMemory::load(mutedRadio, txOnly).micLevel == 0,
+              "a deliberate mic level of 0 is not mistaken for 'absent'");
     }
 
     // ---- per-domain gating on store ---------------------------------------

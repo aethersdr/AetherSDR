@@ -86,6 +86,12 @@ RestoredRadioState load(const RadioSettingsScope& scope,
         state.monGainCw = doc.value(QStringLiteral("monGainCw")).toInt(-1);
         state.monPanCw = doc.value(QStringLiteral("monPanCw")).toInt(-1);
     }
+    if (has(caps, Domain::TxSetpoints)) {
+        // -1 (not 0) when the key is absent, for the same reason as the AGC
+        // threshold above: 0 is the mic slider's MUTE and a position the
+        // operator can select — see RestoredRadioState.
+        state.micLevel = doc.value(QStringLiteral("micLevel")).toInt(-1);
+    }
 
     // The extension is gated per domain too: only a declared domain's
     // sub-object is handed over, so a narrowed declaration cannot smuggle
@@ -198,6 +204,10 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
         if (state.monPanCw >= 0) {
             doc.insert(QStringLiteral("monPanCw"), state.monPanCw);
         }
+    }
+    // >= 0, so a deliberate mute of 0 IS written — the sentinel is -1.
+    if (has(caps, Domain::TxSetpoints) && state.micLevel >= 0) {
+        doc.insert(QStringLiteral("micLevel"), state.micLevel);
     }
 
     // Extension: same per-domain sub-object gate as load().

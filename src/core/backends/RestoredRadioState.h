@@ -62,6 +62,25 @@ struct RestoredRadioState {
     int monGainCw = -1;           // Cw — 0..100; -1 = not restored
     int monPanCw = -1;            // Cw — 0..100; -1 = not restored
 
+    // TxSetpoints. The Phone/CW MIC slider, which on a host-modulating radio is
+    // the operator's only control over where their audio lands relative to the
+    // ALC's hold threshold — and an operating procedure that begins "set mic
+    // gain once" is defeated by a control that returns to unity every launch.
+    //
+    // HERE rather than in a flat AppSettings key, and gated on TxSetpoints
+    // rather than restored for everyone, because the slider is not the client's
+    // to remember on every family: a Flex and an Icom persist mic gain in the
+    // radio (Constitution II/III), and a level stored globally would be handed
+    // to whichever radio connected next. Only a backend that declares
+    // TxSetpoints — the HL2, which persists nothing across power cycles — makes
+    // the client its memory for this value.
+    //
+    // The sentinel is -1, NOT 0: zero is the MUTE position (hl2::
+    // micSliderToLinear) and a selectable one, so "not restored" needs a value
+    // outside the 0..100 control range or an unreadable document would take the
+    // operator off the air.
+    int micLevel = -1;            // TxSetpoints — 0..100; -1 = not restored
+
     // Per-family extension document (per-band gain/drive maps live here —
     // RFC PR 3). Versioned by its owner. GATED PER DOMAIN at the top level:
     // the engine hands over only the sub-objects named for declared domains —
@@ -86,6 +105,7 @@ struct RestoredRadioState {
                && cwDelay < 0 && cwSidetone < 0 && cwIambic < 0
                && cwIambicMode < 0 && cwSwapPaddles < 0 && cwlEnabled < 0
                && monGainCw < 0 && monPanCw < 0
+               && micLevel < 0
                && extension.isEmpty();
     }
 };

@@ -1596,6 +1596,13 @@ private:
     void scheduleOperatingStateSave();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
+    // Same pair for the TX setpoints the client owns on a radio that keeps no
+    // memory of them — today the Phone/CW mic level. Gated on the
+    // TxSetpoints domain exactly as the CW pair is gated on Cw, so a family
+    // that persists its own mic gain in the radio (Flex, Icom) is neither
+    // captured from nor restored over (Constitution II/III).
+    void captureClientOwnedTxSetpoints(RestoredRadioState& state) const;
+    void restoreClientOwnedTxSetpoints(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these

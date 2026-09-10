@@ -458,6 +458,10 @@ void RadioModel::persistOperatingState(bool force)
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         captureClientOwnedCwState(state);
     }
+    if (caps.clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::TxSetpoints)) {
+        captureClientOwnedTxSetpoints(state);
+    }
     RadioStateMemory::store(settingsScope(), caps, state);
 }
 
@@ -486,6 +490,60 @@ void RadioModel::captureClientOwnedCwState(RestoredRadioState& state) const
     state.cwlEnabled = m_transmitModel.cwlEnabled() ? 1 : 0;
     state.monGainCw = m_transmitModel.monGainCw();
     state.monPanCw = m_transmitModel.monPanCw();
+}
+
+void RadioModel::captureClientOwnedTxSetpoints(RestoredRadioState& state) const
+{
+    // The mic slider is already bounded to 0..100 by TransmitModel::setMicLevel
+    // and by applyChanges, so this cannot write the -1 sentinel by accident.
+    state.micLevel = m_transmitModel.micLevel();
+}
+
+void RadioModel::restoreClientOwnedTxSetpoints(const RestoredRadioState& state)
+{
+    // PRESENT-ONLY, unlike the CW restore above, and the difference is
+    // deliberate. The CW surface has no other keeper, so an absent document
+    // there means "this radio's construction defaults". The mic level does
+    // have another keeper: setupBackend() re-asserts the model's level into
+    // every freshly built host-modulating backend, precisely so a mid-session
+    // family swap cannot part the slider from the modulator
+    // (hl2_family_transition_test pins it). Replacing an absent level with 50
+    // here would overwrite that re-assert and silently drop an operator who
+    // switched radios mid-session back to unity.
+    //
+    // So: a stored level wins, and no stored level leaves the seam's answer
+    // standing. What this must never do is let a level cross a FAMILY, and it
+    // cannot — it runs only for a backend declaring TxSetpoints.
+    if (state.micLevel < 0) {
+        return;
+    }
+    if (state.micLevel > 100) {
+        // Out of range means a hand-edited or corrupt document. Leave the
+        // model alone rather than clamping: a stored 250 is not evidence that
+        // the operator wanted 100, and 0 at the other end of this control is
+        // the mute (hl2::micSliderToLinear), so a document this client cannot
+        // read must not be allowed to set a level at all.
+        qWarning() << "RadioModel: dropping invalid restored mic level"
+                   << state.micLevel;
+        return;
+    }
+    const int level = state.micLevel;
+
+    TransmitDelta delta;
+    delta.micLevel = level;
+    m_transmitModel.applyChanges(delta);
+
+    // applyChanges updates the MODEL and the slider, and deliberately issues no
+    // command — it is the observed-state path. The modulator still has to be
+    // told, and setupBackend()'s own push has already run by the time a restore
+    // reaches here (the backend is built before connectRadio, this runs just
+    // before it), so without this the slider would read the restored level
+    // while the radio transmitted at unity. That is the readback-agrees-with-
+    // the-failure shape, and it is the reason this line is here and not left to
+    // the seam.
+    if (m_backend) {
+        m_backend->setMicGain(level);
+    }
 }
 
 void RadioModel::restoreClientOwnedCwState(const RestoredRadioState& state)
@@ -654,6 +712,10 @@ void RadioModel::handRestoredStateToBackend()
     if (caps.clientSettingsDomains.testFlag(
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         restoreClientOwnedCwState(state);
+    }
+    if (caps.clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::TxSetpoints)) {
+        restoreClientOwnedTxSetpoints(state);
     }
     // UNCONDITIONALLY — an empty state is the reset that stops a same-family
     // backend reuse leaking radio A's maps and live members into radio B
@@ -1479,16 +1541,30 @@ void RadioModel::setupBackend(const QString& family)
     // exists, and a backend that is never connected should still answer
     // healthSnapshot() honestly.
     //
-    // On the constructor's OWN call this is now the road the operator's stored
-    // level travels: TransmitModel's constructor restores micLevel from
-    // PhoneMicLevel, and TransmitModel is a member of this class, so by the time
-    // the first backend exists the model may already be at yesterday's 70 and
-    // this push is the only thing that puts the modulator there. It is free —
-    // 50 onto the 1.0 the modulator already holds — only for the operator who
-    // has never moved the slider. Same Flex gate as the seam: on a Flex the
-    // slider's `transmit set miclevel=` reaches the radio's own preamp and this
-    // must not double it.
-    if (m_backend && !usesFlexCommandPlane())
+    // GATED ON hostModulates, NOT ON "everyone except Flex".
+    //
+    // The old `!usesFlexCommandPlane()` gate answered the wrong question. It
+    // excluded Flex, whose slider reaches the radio's own preamp through
+    // `transmit set miclevel=` and must not be doubled — but it also let this
+    // push through to an ICOM, where IRadioBackend::setMicGain is a live CI-V
+    // write (14 0B / LAN MOD) into a front-panel setting the radio itself
+    // persists. Constitution II/III: the client does not re-assert a value the
+    // radio owns. With the mic level now restored per radio, that gate would
+    // have handed an HL2's stored slider position to an Icom on the next
+    // in-session family swap.
+    //
+    // hostModulates says exactly what this push means — the HOST runs the
+    // modulator, so this gain exists nowhere but here and the model is its only
+    // source. It is false for Flex (unchanged), false for Icom, and false for
+    // the sim and RTL, whose backends do not override setMicGain at all and for
+    // which this call was already a no-op on IRadioBackend's default.
+    //
+    // Note this gate is about OWNERSHIP OF THE MODULATOR, and is separate from
+    // the TxSetpoints gate on the restore in handRestoredStateToBackend(), which
+    // is about whose memory the stored value is. A family that host-modulates
+    // gets this in-session re-assert; only a family that also declares
+    // TxSetpoints gets a value that outlived the session.
+    if (m_backend && backendCapabilities().hostModulates)
         m_backend->setMicGain(m_transmitModel.micLevel());
 }
 
@@ -2263,6 +2339,22 @@ RadioModel::RadioModel(QObject* parent)
         if (!m_backend
             || !m_backend->capabilities().clientSettingsDomains.testFlag(
                 RadioCapabilities::ClientSettingsDomain::Cw)) {
+            return;
+        }
+        scheduleOperatingStateSave();
+    });
+
+    // The mic level under the same rule and for the same reason. micStateChanged
+    // is the whole mic group, not just the level — that is deliberate: the
+    // capture reads the model, the store writes only DECLARED fields, and a
+    // debounced save that occasionally fires for a mic-source change costs one
+    // row and cannot record anything undeclared. A Flex or an Icom declares no
+    // TxSetpoints domain, so its radio-owned mic gain is never captured here.
+    connect(&m_transmitModel, &TransmitModel::micStateChanged, this,
+            [this] {
+        if (!m_backend
+            || !m_backend->capabilities().clientSettingsDomains.testFlag(
+                RadioCapabilities::ClientSettingsDomain::TxSetpoints)) {
             return;
         }
         scheduleOperatingStateSave();
