@@ -258,8 +258,8 @@ the release binaries use 6.8.3 LTS).
 :: 2. Point at your Qt kit once, with forward slashes (CMake reads the path
 ::    literally, so backslashes would be taken as escape sequences). Change the
 ::    version/edition here to match your install; both steps below reuse it.
-::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI ci.yml exports it
-::    right after installing Qt, so a local build has to set it explicitly
+::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI that variable is
+::    exported by install-qt-action, so a local build has to set it explicitly
 ::    or the script exits with "Qt not found".
 set "QT_KIT=C:/Qt/6.8.3/msvc2022_64"
 set "QT_ROOT_DIR=%QT_KIT%"

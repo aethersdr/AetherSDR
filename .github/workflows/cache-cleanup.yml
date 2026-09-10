@@ -267,89 +267,7 @@ jobs:
       group: cache-cleanup-sweep
       cancel-in-progress: false
     steps:
-      - name: Delete caches belonging to closed PRs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          # gh paginates, so a high cap is free. It matters which end gets cut
-          # if the cap is ever hit: the default order is last-accessed first,
-          # and a closed PR's entries are by definition the least recently
-          # accessed, so a low cap would drop exactly the candidates. 36 entries
-          # on 2026-09-10 (usage API counts 23 active; the two endpoints differ),
-          # ~5 per open PR. Logged below if the cap is hit, because a silent
-          # truncation here would look exactly like "nothing to clean".
-          LIMIT=500
-          caches=$(gh cache list --limit "$LIMIT" --json id,ref,sizeInBytes)
-          total=$(printf '%s' "$caches" | jq 'length')
-          [ "$total" -lt "$LIMIT" ] || echo "::warning::cache list hit the $LIMIT limit; some entries not examined this run"
-
-          # refs/pull/N/merge entries first; tag refs are the next step and
-          # main's are prune-main's. One jq pass emits, per PR ref: number,
-          # total bytes, and the ids.
-          candidates=$(printf '%s' "$caches" | jq -r '
-            [.[] | select(.ref | test("^refs/pull/[0-9]+/merge$"))]
-            | group_by(.ref) | .[]
-            | "\(.[0].ref | capture("^refs/pull/(?<n>[0-9]+)/merge$").n)\t\(map(.sizeInBytes) | add)\t\(map(.id) | join(","))"')
-
-          if [ -z "$candidates" ]; then
-            echo "No PR-scoped caches at all — nothing to sweep."
-            exit 0
-          fi
-
-          freed=0
-          swept=0
-          unresolved=0
-          errlog="$RUNNER_TEMP/pr-view.err"
-          : > "$errlog"
-          while IFS=$'\t' read -r num bytes ids; do
-            mib=$(( bytes / 1048576 ))
-
-            # An OPEN PR's caches are still live — leave them. Anything else
-            # (CLOSED or MERGED) can never be read again.
-            state=$(gh pr view "$num" --json state --jq .state 2>>"$errlog" || echo UNKNOWN)
-            if [ "$state" = "OPEN" ]; then
-              continue
-            fi
-            if [ "$state" = "UNKNOWN" ]; then
-              # A cache ref with no resolvable PR. Left alone deliberately:
-              # deleting on a failed lookup would turn a transient API error
-              # into data loss, and the next run retries for free. Counted and
-              # surfaced below so a PERSISTENT cause (a missing scope, a rate
-              # limit) cannot hide behind the same message run after run.
-              echo "  #$num: state unresolved, skipping this run"
-              unresolved=$(( unresolved + 1 ))
-              continue
-            fi
-
-            echo "#$num ($state): sweeping ${mib} MiB"
-            # Delete by id, the same idiom as prune-main: unambiguous, and a
-            # single 404 (LRU took the entry between the list and now) neither
-            # aborts the loop nor counts toward `freed`.
-            ref_freed=0
-            for id in ${ids//,/ }; do
-              size=$(printf '%s' "$caches" | jq --argjson i "$id" '.[] | select(.id == $i) | .sizeInBytes')
-              if gh cache delete "$id"; then
-                ref_freed=$(( ref_freed + size ))
-              else
-                echo "  #$num: delete of $id failed or already gone"
-              fi
-            done
-            if [ "$ref_freed" -gt 0 ]; then
-              freed=$(( freed + ref_freed / 1048576 ))
-              swept=$(( swept + 1 ))
-            fi
-          done <<< "$candidates"
-
-          echo "Swept $swept closed PR(s), freeing ~${freed} MiB."
-          if [ "$unresolved" -gt 0 ]; then
-            echo "::warning::$unresolved PR state lookup(s) failed; their caches were left alone. gh stderr:"
-            cat "$errlog"
-          fi
-
-      - name: Delete caches on idle tag refs
+      - name: Delete caches on dead refs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -357,9 +275,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Same listing shape and the same cap warning as the PR step above.
+          # ONE listing serves both sweeps. gh paginates, so a high cap is
+          # free; what matters is which END gets cut if the cap is ever hit.
+          # Both predicates below select the LEAST recently accessed entries
+          # (a closed PR's are idle by definition; the tag rule IS idle time),
+          # so list oldest-access first: a truncation then drops entries we
+          # would have kept anyway. gh's default is newest first, which would
+          # drop exactly the candidates. 36 entries on 2026-09-10 (the usage
+          # API counted 23 active; the two endpoints differ), ~5 per open PR.
+          # Logged below if the cap is hit, because a silent truncation would
+          # look exactly like "nothing to clean".
           LIMIT=500
-          caches=$(gh cache list --limit "$LIMIT" --json id,ref,key,sizeInBytes,lastAccessedAt)
+          caches=$(gh cache list --limit "$LIMIT" --sort last_accessed_at --order asc \
+                     --json id,ref,sizeInBytes,lastAccessedAt)
           total=$(printf '%s' "$caches" | jq 'length')
           [ "$total" -lt "$LIMIT" ] || echo "::warning::cache list hit the $LIMIT limit; some entries not examined this run"
 
@@ -368,36 +296,96 @@ jobs:
           # question is whether anything is still READING the entry, and a
           # re-run of the tag's workflow is the only thing that could be.
           cutoff=$(date -u -d "-${TAG_IDLE_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+
+          # One jq pass emits, per candidate ref: kind, ref, total bytes, and
+          # id:size pairs — the sizes travel with the ids so the delete loop
+          # never re-scans the listing. Only refs/pull/N/merge and refs/tags/*
+          # are candidates; main's entries are prune-main's. The idle test is
+          # a string compare on RFC3339 UTC text, correct for the Z-suffixed
+          # form the API returns; jq orders null BELOW every string, so a
+          # missing lastAccessedAt is excluded explicitly rather than read as
+          # infinitely old (which would sweep a release's set while it is
+          # still retry-able).
           candidates=$(printf '%s' "$caches" | jq -r --arg cutoff "$cutoff" '
-            [.[] | select(.ref | startswith("refs/tags/")) | select(.lastAccessedAt < $cutoff)]
+            [ .[] | select(.ref | test("^refs/pull/[0-9]+/merge$")) | . + {kind: "pr"} ]
+            + [ .[] | select(.ref | startswith("refs/tags/"))
+                    | select(.lastAccessedAt != null and .lastAccessedAt < $cutoff)
+                    | . + {kind: "tag"} ]
             | group_by(.ref) | .[]
-            | "\(.[0].ref)\t\(map(.sizeInBytes) | add)\t\(map(.id) | join(","))"')
+            | "\(.[0].kind)\t\(.[0].ref)\t\(map(.sizeInBytes) | add)\t\(map("\(.id):\(.sizeInBytes)") | join(","))"')
 
           if [ -z "$candidates" ]; then
-            echo "No tag-ref caches idle for ${TAG_IDLE_HOURS}h — nothing to sweep."
+            echo "No PR-scoped caches and no tag-ref caches idle for ${TAG_IDLE_HOURS}h — nothing to sweep."
             exit 0
           fi
 
-          freed=0
-          swept=0
-          while IFS=$'\t' read -r ref bytes ids; do
-            mib=$(( bytes / 1048576 ))
-            echo "$ref: sweeping ${mib} MiB (idle > ${TAG_IDLE_HOURS}h)"
+          # Delete every id in one ref's group. By id, which is unambiguous;
+          # deleting by key would need --ref and could match another ref's
+          # identically-keyed entry. A single 404 (LRU took the entry between
+          # the list and now) neither aborts the loop nor counts toward the
+          # total. Leaves the bytes actually freed in ref_freed.
+          sweep_group() {
+            local pairs=$1 label=$2 pair id size
             ref_freed=0
-            for id in ${ids//,/ }; do
-              size=$(printf '%s' "$caches" | jq --argjson i "$id" '.[] | select(.id == $i) | .sizeInBytes')
+            for pair in ${pairs//,/ }; do
+              id=${pair%%:*}
+              size=${pair##*:}
               if gh cache delete "$id"; then
                 ref_freed=$(( ref_freed + size ))
               else
-                echo "  $ref: delete of $id failed or already gone"
+                echo "  $label: delete of $id failed or already gone"
               fi
             done
+          }
+
+          freed_bytes=0
+          swept=0
+          unresolved=0
+          errlog="$RUNNER_TEMP/pr-view.err"
+          : > "$errlog"
+          while IFS=$'\t' read -r kind ref bytes pairs; do
+            mib=$(( bytes / 1048576 ))
+            case "$kind" in
+              pr)
+                num=${ref#refs/pull/}
+                num=${num%/merge}
+                # An OPEN PR's caches are still live — leave them. Anything
+                # else (CLOSED or MERGED) can never be read again.
+                state=$(gh pr view "$num" --json state --jq .state 2>>"$errlog" || echo UNKNOWN)
+                if [ "$state" = "OPEN" ]; then
+                  continue
+                fi
+                if [ "$state" = "UNKNOWN" ]; then
+                  # A cache ref with no resolvable PR. Left alone deliberately:
+                  # deleting on a failed lookup would turn a transient API
+                  # error into data loss, and the next run retries for free.
+                  # Counted and surfaced below so a PERSISTENT cause (a
+                  # missing scope, a rate limit) cannot hide behind the same
+                  # message run after run.
+                  echo "  #$num: state unresolved, skipping this run"
+                  unresolved=$(( unresolved + 1 ))
+                  continue
+                fi
+                echo "#$num ($state): sweeping ${mib} MiB"
+                label="#$num"
+                ;;
+              tag)
+                echo "$ref: sweeping ${mib} MiB (idle > ${TAG_IDLE_HOURS}h)"
+                label=$ref
+                ;;
+            esac
+            sweep_group "$pairs" "$label"
             if [ "$ref_freed" -gt 0 ]; then
-              freed=$(( freed + ref_freed / 1048576 ))
+              freed_bytes=$(( freed_bytes + ref_freed ))
               swept=$(( swept + 1 ))
             fi
           done <<< "$candidates"
-          echo "Swept $swept idle tag ref(s), freeing ~${freed} MiB."
+
+          echo "Swept $swept dead ref(s), freeing ~$(( freed_bytes / 1048576 )) MiB."
+          if [ "$unresolved" -gt 0 ]; then
+            echo "::warning::$unresolved PR state lookup(s) failed; their caches were left alone. gh stderr:"
+            cat "$errlog"
+          fi
 
       # Same line prune-main prints, kept as a copy: a shared always() job was
       # tried and rejected (see prune-main). If you change one, change both.
