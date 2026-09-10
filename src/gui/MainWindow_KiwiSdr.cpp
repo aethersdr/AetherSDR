@@ -2364,6 +2364,7 @@ void MainWindow::refreshKiwiSdrAppletReceivers()
             KiwiSdrReceiverStatus receiver;
             receiver.id = profile.id;
             receiver.name = m_kiwiSdrManager->displayName(profile.id);
+            receiver.family = profile.family;
             receiver.state = m_kiwiSdrManager->state(profile.id);
             receiver.detail = m_kiwiSdrManager->stateDetail(profile.id);
             if (receiver.state == KiwiSdrClient::State::Connected

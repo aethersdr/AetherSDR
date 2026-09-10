@@ -26,11 +26,12 @@ dummy load.
 
 Usage:
     AETHER_AUTOMATION=1 AETHER_AUTOMATION_ALLOW_TX=1 ./build/.../AetherSDR &
-    python3 tools/tx_meter_test.py --ant ANT1 --max-watts 10 --levels 2,5
+    python3 tools/tx_meter_test.py --serial RADIO_SERIAL --ant ANT1 --frequency 14.2 --mode USB --max-watts 10 --levels 2,5
 """
 
 import argparse
 import json
+import math
 import statistics
 import sys
 import time
@@ -68,10 +69,10 @@ class Tx:
 
     def ensure_unkeyed(self):
         for _ in range(8):
-            if not self.tuning() and not self.mox() and not self.txing():
+            flags = [self.g("transmit", field) for field in ("tuning", "mox", "transmitting")]
+            flags.append(self.g("radio", "transmitting"))
+            if all(value is False for value in flags):
                 return True
-            if self.tuning():
-                self.inv("Tune", "click")
             # Semantic unkey is always allowed and survives applet redesigns;
             # do not depend only on finding a particular MOX widget.
             self.cmd(cmd="key", action="ptt", value="off")
@@ -107,7 +108,7 @@ class Tx:
         return st in ("bypass", "manual_bypass"), st
 
 
-def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5):
+def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=None):
     """Key-down meter sampling. Collect fresh fwd/swr/temp/volts and the freshest
     PACURRENT/ALC over the window. Returns a dict of aggregates + freshness."""
     fwd, swr, temp, volts, alc = [], [], [], [], []
@@ -115,21 +116,26 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5):
     pacur_reliable = True
     micp = []
     stop_reason = None
+    peaks, samples = [], []
     t0 = time.monotonic()
     while time.monotonic() - t0 < dur:
         elapsed = time.monotonic() - t0
         if elapsed > settle:
             m = tx.meters()
-            link_alive = tx.liveness().get("linkAlive")
-            if link_alive is False:
+            link_alive = tx.liveness().get("connected")
+            if link_alive is not True:
                 stop_reason = "radio link is not alive"
             fwd_age = m.get("fwdPowerAgeMs", 1e9)
             fwd_val = m.get("fwdPower", 0)
+            instant = m.get("fwdPowerInstant")
+            fresh_peak = (type(instant) in (int, float) and math.isfinite(instant)
+                          and type(fwd_age) in (int, float) and 0 <= fwd_age < SAFETY_FRESH_MS)
+            if fresh_peak:
+                peaks.append(instant)
             if 0 <= fwd_age < FRESH_MS and fwd_val > 0.3:
                 fwd.append(fwd_val)
-            if (max_watts is not None and 0 <= fwd_age < SAFETY_FRESH_MS
-                    and fwd_val > max_watts):
-                stop_reason = (f"measured forward power {fwd_val:.1f} W exceeds "
+            if max_watts is not None and fresh_peak and instant > max_watts:
+                stop_reason = (f"measured forward power {instant:.1f} W exceeds "
                                f"{max_watts:.1f} W ceiling")
             # swr is null when no live sample exists, and swrAgeMs is -1
             # when no sample EVER arrived -- both mean "no data", not 0.0,
@@ -149,11 +155,18 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5):
                 if pacur is None or pv > pacur[0]:
                     pacur = (pv, pa)
             micp.append(m.get("micPeak", -150))
-            if elapsed >= POWER_SAMPLE_DEADLINE_S and not any(
+            if elapsed >= POWER_SAMPLE_DEADLINE_S and (not fresh_peak or not any(
                     0 <= x.get("age_ms", -1) < SAFETY_FRESH_MS
                     and x.get("name") == "FWDPWR" and x.get("has_value")
-                    for x in m.get("all", [])):
+                    and str(x.get("unit", "")).lower() in ("dbm", "w", "watts")
+                    and x.get("reliable") is not False
+                    for x in m.get("all", []))):
                 stop_reason = "no fresh calibrated FWDPWR sample before safety deadline"
+            if elapsed >= POWER_SAMPLE_DEADLINE_S and (swr_val is None or not 0 <= swr_age < SAFETY_FRESH_MS):
+                stop_reason = stop_reason or "no fresh SWR sample before safety deadline"
+            if not stop_reason and guard:
+                stop_reason = guard()
+            samples.append({"elapsed": elapsed, "meters": m, "connected": link_alive})
             if stop_reason:
                 tx.cmd(cmd="txtest", action="off")
                 tx.ensure_unkeyed()
@@ -164,6 +177,8 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5):
               else round(pacur[0], 2) if pacur else "stale")
     return {
         "fwd": round(statistics.median(fwd), 1) if fwd else None,
+        "peakFwdWatts": max(peaks) if peaks else None,
+        "peakSwr": max(swr) if swr else None,
         "swr": round(statistics.median(swr), 2) if swr else None,
         "paTemp": round(max(temp), 1) if temp else None,
         "volts": round(statistics.median(volts), 2) if volts else None,
@@ -171,6 +186,7 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5):
         "paCurrent": pa_out,
         "n_fwd": len(fwd),
         "stopReason": stop_reason,
+        "samples": samples,
     }
 
 
@@ -193,10 +209,46 @@ def tx_antennas(tree):
     return values
 
 
+def authorized_context(tx, serial, antenna, frequency, mode, max_control, *, widgets=False):
+    """Return a refusal reason; use before every burst and while sampling.
+
+    Frequency includes the TX slice's offsets: unknown or enabled XIT and
+    repeater offsets are refused rather than inferred from the RX display.
+    """
+    radio, transmit, target = tx.g("radio"), tx.g("transmit"), tx.g("slice", sel="tx")
+    if radio.get("connected") is not True or radio.get("serial") != serial:
+        return "authorized radio identity or connection changed"
+    if target.get("txSlice") is not True or target.get("txAntenna") != antenna:
+        return "TX slice or antenna changed"
+    if target.get("frequency") != frequency or target.get("mode") != mode:
+        return "TX frequency or mode changed"
+    if (target.get("xitOn") is not False or target.get("txOffsetFreq") != 0
+            or target.get("repeaterOffsetDir") != "simplex"):
+        return "TX offset is active or unknown"
+    if transmit.get("voxEnable") is not False:
+        return "VOX is enabled or unknown"
+    if transmit.get("atuStatus") not in ("bypass", "manual_bypass"):
+        return "tuner is not bypassed"
+    for key in ("rfPower", "tunePower"):
+        value = transmit.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= max_control:
+            return key + " exceeds the staged control ceiling or is unknown"
+    if widgets:
+        if tx.cmd(cmd="whoami").get("txAllowed") is not True:
+            return "explicit bridge TX permission is absent"
+        if tx_antennas(tx.cmd(cmd="dumpTree")) != {antenna}:
+            return "visible TX antenna is missing, ambiguous or different"
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="TX meter test harness (agent automation bridge)")
     ap.add_argument("--ant", required=True,
                     help="exact live TX antenna connected to the dummy load")
+    ap.add_argument("--serial", required=True, help="exact authorized radio serial")
+    ap.add_argument("--frequency", required=True, type=float, help="authorized TX frequency in MHz")
+    ap.add_argument("--mode", required=True, help="one authorized mode for this invocation")
+    ap.add_argument("--max-control", type=int, default=5, help="conservative RF/Tune control ceiling, not measured watts")
     ap.add_argument("--max-watts", required=True, type=float,
                     help="maximum calibrated forward power permitted during this run")
     ap.add_argument("--levels", default="2,5",
@@ -209,18 +261,23 @@ def main():
     ap.add_argument("--socket")
     args = ap.parse_args()
     levels = [int(x) for x in args.levels.split(",")]
-    if args.max_watts <= 0:
+    if not math.isfinite(args.max_watts) or args.max_watts <= 0:
         ap.error("--max-watts must be positive")
-    if not levels or any(x < 0 or x > 100 for x in levels):
-        ap.error("--levels must contain percentages from 0 through 100")
+    if not math.isfinite(args.max_swr) or args.max_swr < 1:
+        ap.error("--max-swr must be finite and at least 1")
+    if not math.isfinite(args.frequency) or args.frequency <= 0 or not 0 < args.max_control <= 100:
+        ap.error("frequency and control ceiling must be positive and bounded")
+    if not levels or any(x < 0 or x > args.max_control for x in levels):
+        ap.error("--levels must stay within --max-control")
     tone_percent = args.two_tone_percent if args.two_tone_percent is not None else levels[0]
-    if tone_percent < 0 or tone_percent > 100:
-        ap.error("--two-tone-percent must be from 0 through 100")
+    if tone_percent < 0 or tone_percent > args.max_control:
+        ap.error("--two-tone-percent must stay within --max-control")
 
     sock = args.socket or discover_socket()
     if not sock:
         sys.exit("error: no bridge socket; launch with AETHER_AUTOMATION=1 AETHER_AUTOMATION_ALLOW_TX=1")
     tx = Tx(Bridge(sock))
+    guard = lambda: authorized_context(tx, args.serial, args.ant, args.frequency, args.mode, args.max_control)
 
     # --- pre-flight ---
     print("=== PRE-FLIGHT ===")
@@ -254,13 +311,17 @@ def main():
                 print(f"  *** Tune Power readback {actual_tp} != requested {tp} — ABORT ***")
                 abort = True
                 break
+            problem = authorized_context(tx, args.serial, args.ant, args.frequency, args.mode,
+                                         args.max_control, widgets=True)
+            if problem or not tx.ensure_unkeyed():
+                raise RuntimeError(problem or "unkey state could not be established")
             tx.inv("Tune", "click")
             t0 = time.monotonic()
             while time.monotonic() - t0 < 1.5 and not tx.tuning():
                 time.sleep(0.05)
-            agg = sample_window(tx, max_watts=args.max_watts, max_swr=args.max_swr)
-            if not agg["stopReason"]:
-                tx.inv("Tune", "click")
+            agg = sample_window(tx, max_watts=args.max_watts, max_swr=args.max_swr, guard=guard)
+            tx.cmd(cmd="txtest", action="off")
+            tx.cmd(cmd="key", action="ptt", value="off")
             ok_unkey = tx.ensure_unkeyed()
             agg.update(set=tp, unkeyed=ok_unkey, atu=tx.g("transmit", "atuStatus"))
             rows.append(agg)
@@ -283,13 +344,17 @@ def main():
                 abort = True
             if abort:
                 return
+            problem = authorized_context(tx, args.serial, args.ant, args.frequency, args.mode,
+                                         args.max_control, widgets=True)
+            if problem or not tx.ensure_unkeyed():
+                raise RuntimeError(problem or "unkey state could not be established")
             r = tx.cmd(cmd="txtest", action="twotone")
             if r.get("ok"):
                 t0 = time.monotonic()
                 while time.monotonic() - t0 < 1.5 and not tx.txing() and not tx.tuning():
                     time.sleep(0.05)
                 agg = sample_window(tx, dur=1.2, max_watts=args.max_watts,
-                                    max_swr=args.max_swr)
+                                    max_swr=args.max_swr, guard=guard)
                 tx.cmd(cmd="txtest", action="off"); ok = tx.ensure_unkeyed()
                 print(f"  two-tone: fwd={agg['fwd']}W swr={agg['swr']} ALC={agg['alc']}dBFS "
                       f"PAcur={agg['paCurrent']} unkeyed={ok}")
@@ -299,8 +364,9 @@ def main():
             else:
                 print(f"  two-tone unavailable: {r.get('error')}")
     finally:
-        tx.inv("Tune power", "setValue", orig_tp)
         safe = tx.ensure_unkeyed()
+        if safe:
+            tx.inv("Tune power", "setValue", orig_tp)
         print(f"\nrestored tunePower={tx.g('transmit','tunePower')} transmitting={tx.txing()} "
               f"atu={tx.g('transmit','atuStatus')} (unkeyed={safe})")
         if args.json:

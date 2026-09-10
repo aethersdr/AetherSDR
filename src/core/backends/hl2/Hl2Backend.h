@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2IoBoardPolicy.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -54,6 +55,13 @@ public:
     // and applied during connect/pushInitialState; capture reports through
     // currentOperatingState() + operatingStateChanged().
     void applyRestoredState(const RestoredRadioState& state) override;
+    // The validated document applyRestoredState() kept — what the session will
+    // seed from at linkUp. Test seam only: currentOperatingState() reads the
+    // RECEIVERS, which are seeded at linkUp and not before, so a pre-connect
+    // test asserting on the snapshot sees construction defaults regardless of
+    // what the validator did (#5031). Assert here for validator behaviour;
+    // assert on the snapshot only after a connect has settled.
+    const RestoredRadioState& restoredStateForTest() const { return m_restoredState; }
     RestoredRadioState currentOperatingState() const override;
     void disconnectRadio() override;
     bool isConnected() const override;
@@ -115,6 +123,26 @@ public:
                          const QVariant& arg) override;
 
     HealthSnapshot healthSnapshot() const override;
+    QVariantList dspChains() const override;
+
+    // dspChains()' gather, over the two things it may read.
+    //
+    // STATIC, AND THAT IS THE POINT. This runs on the I/O thread, where m_rx is
+    // off limits — it is GUI-thread-owned, and createPanadapter()'s push_back
+    // reallocates while removePanadapter()'s erase shifts, either of which can
+    // pull the storage out from under a reader midway. The first version of the
+    // read-back iterated m_rx and review caught it (#5401).
+    //
+    // A static member has no `this`, so the hundred lines below cannot reach
+    // m_rx however they are edited: not through a rename, not through a helper,
+    // not through an alias. The compiler enforces what a comment used to ask
+    // for, and the only line left that could pass the wrong list is the single
+    // call in dspChains() itself.
+    //
+    // Public because it is also the seam the read-back test substitutes: hand
+    // it a snapshot, and what comes back is a function of that snapshot alone.
+    static QVariantList gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
+                                        Hl2TxDsp* txDsp);
     LinkStats linkStats() const override;
 
 signals:
@@ -135,6 +163,8 @@ signals:
     void dspSetupFinished();
 
 private:
+    friend struct Hl2DspReadbackTestAccess;
+    void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives
     // the radio going silent — which is the case the heartbeat has to detect.
@@ -143,6 +173,22 @@ private:
     // frequency. Idempotent and change-gated, so it is safe to call from every
     // path that can move the dial.
     void applyBandFilter(const char* reason);
+    // Push the transmit frequency to the HL2 IO Board, throttled.
+    //
+    // Called from applyBandFilter() so it inherits every trigger that can move
+    // a band — tune, TX slice, key/unkey, pan, add/close receiver — but from
+    // ABOVE that function's `oc == m_ocFilterByte` early return, because the
+    // two have different resolutions. The filter byte is one of seven relays
+    // and does not change between 7.100 and 7.200 MHz; the IO board wants the
+    // frequency itself and does.
+    void applyIoBoardFrequency();
+    // The single point at which either edge of the IO-board throttle reaches
+    // the wire, so the disconnected guard cannot be present on one path and
+    // missing on the other. Returns false when the push was refused.
+    [[nodiscard]] bool sendIoBoardFrequency(quint64 hz);
+    // Drop the IO-board schedule on linkDown: armed timer, coalesced value and
+    // remembered band all describe a session and must not survive one.
+    void resetIoBoardSchedule();
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band
@@ -174,6 +220,8 @@ private:
     // the note above buildReceivers() and docs/HERMES.md §20.8). The sequence stays
     // serial on the I/O thread; only the GUI thread stopped waiting for it.
     void beginDspSetup();
+    void armDspSetupWatchdog();
+    void onDspSetupWatchdog();
 
     // Everything the async build needs to carry across event-loop turns (the
     // wire params, the RX and TX configs, and which connect it belongs to). A
@@ -186,6 +234,10 @@ private:
     void finishDspSetup(const DspSetupResult& result);
 
     std::unique_ptr<PendingConnect> m_pendingConnect;
+    // Watches the window between beginDspSetup() returning and finishDspSetup()
+    // being posted back — the one stretch of the connect that no other timer
+    // covers, because MetisClient's watchdog is armed after it (#5413).
+    QTimer* m_dspSetupWatchdog = nullptr;
     // A connect that arrived while m_pendingConnect was still building. Held
     // rather than served inline — see the guard at the top of connectRadio().
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
@@ -588,6 +640,30 @@ private:
     QTimer* m_bandwidthThrottle = nullptr;
     double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
 
+    // The IO board's README asks for at most one frequency update every 0.5 s,
+    // and only on change. Leading edge queues immediately; wire delivery and relay settling
+    // are not acknowledged, so this is not an amplifier-ready interlock;
+    // anything arriving inside the cooldown is coalesced and the LAST value
+    // applied when it expires.
+    //
+    // Coalesce-and-apply, never drop: a VFO wheel delivers ~10 tune events a
+    // second, and simply discarding those inside the window would leave the
+    // amplifier on the old band whenever the operator stopped turning mid-
+    // cooldown — the one moment they are most likely to key.
+    static constexpr int kIoBoardThrottleMs = 500;
+    QTimer* m_ioBoardThrottle = nullptr;
+    hl2::IoBoardSchedule m_ioBoardSchedule;
+    // The band the IO board was last told about, as a bandKeyForHz() key.
+    // Empty means "no session has told it anything", which is also the state
+    // reset() restores — so the first push after any connect is treated as a
+    // band change and takes the leading edge rather than being coalesced.
+    //
+    // Tracked SEPARATELY from m_currentBandKey (the per-band memory's notion):
+    // that one follows the operator's tuning for LNA/drive recall and moves on
+    // paths this does not, and conflating "what the operator is on" with "what
+    // the amplifier has been told" is how the two silently diverge.
+    QString m_ioBoardBandKey;
+
     // Has this connect already derived the passband from the mode? (#4484)
     //
     // pushInitialState() runs on every linkUp, and MetisClient re-emits linkUp
@@ -645,6 +721,27 @@ private:
     quint64 m_linkRxPacketsAtLastTick = 0;
     static constexpr int kLinkStatsIntervalMs = 1000;
     bool m_adcOverload = false;
+    // The overload bit is a per-frame sample of a level comparator, not an
+    // event: on a strong band it dithers, so the edge gate in publishTelemetry
+    // sees an edge nearly every time it looks. docs/HERMES.md 15.7 recorded
+    // ~133 warnings/second on the MW broadcast band, flushing the log ring.
+    //
+    // That figure is stale and deliberately not repeated as a present-tense
+    // claim: MetisClient has since coalesced telemetryUpdated to 10 Hz (#4449),
+    // which caps this at ~10/s however hard the comparator chatters. What
+    // remains is one message repeating ten times a second for as long as the
+    // band stays strong — no longer ring-flushing, still enough to bury the
+    // lines around it over a session.
+    //
+    // So the edge gate stays and a rate limit sits behind it: warn on the first
+    // transition, then at most once per window, carrying the count of
+    // assertions the window swallowed. Note what that count is and is not — it
+    // counts the assertions SEEN, at the 10 Hz telemetry cadence, not
+    // comparator edges, which are sampled far below their true rate and always
+    // were.
+    QElapsedTimer m_adcOverloadClock;
+    int m_adcOverloadAssertions = 0;
+    static constexpr qint64 kAdcOverloadWarnIntervalMs = 10000;
     bool m_keyed = false;
     bool m_tuning = false;
     bool m_cwAutoKeyed = false;
@@ -672,6 +769,10 @@ private:
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
     int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
+    // The connect param pinned a gain that the start band did not have stored.
+    // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
+    // Cleared when the operator changes gain or leaves the start band.
+    bool m_lnaSessionPin = false;
     int m_driveDefaultPercent = -1;  // <0: no restored default; leave drive alone
     QString m_currentBandKey;
     // True while band-memory / restore code drives setTxPower() itself: the

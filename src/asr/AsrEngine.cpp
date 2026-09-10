@@ -464,6 +464,10 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
                             AsrSpeakerEmbedderFactory speakerEmbedderFactory)
 {
     m_thread = new QThread(this);
+    // Named like every other worker thread so it is identifiable in the System
+    // Info thread table and in external profilers (#2554); Qt propagates this
+    // to the OS thread name when the thread starts.
+    m_thread->setObjectName(QStringLiteral("AsrWorker"));
     m_worker = new AsrWorker(std::move(factory), segConfig,
                              std::move(speakerEmbedderFactory));
     m_worker->moveToThread(m_thread);

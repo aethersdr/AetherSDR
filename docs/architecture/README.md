@@ -39,6 +39,13 @@ context that would otherwise live in tribal knowledge.
   a dedicated `SpeConnection`/`SpeApplet` pair with a polled ASCII/CSV
   status protocol.
 
+- [`lp-100a-wattmeter-design.md`](lp-100a-wattmeter-design.md) — design note
+  for TelePost LP-100A wattmeter support (serial or ser2net), a peripheral
+  *instrument* rather than an amplifier: a dedicated `LpMeterConnection`/
+  `LpMeterApplet` pair. Read it for the two protocol facts that look like
+  implementation gaps — phase carries no sign on the wire, and a record is not
+  a coherent snapshot — and for the shared-transport poll gate.
+
 - [`radio-capabilities-map.md`](radio-capabilities-map.md) — every
   `RadioCapabilities` field, what each backend declares, and where the value is
   read. Read before adding a field: the struct defaults to `false`, so a
@@ -57,6 +64,12 @@ context that would otherwise live in tribal knowledge.
 The HL2 bring-up narrative itself is [`docs/HERMES.md`](../HERMES.md) — read §15
 and §5 before touching `src/core/backends/hl2/`. The Python probes that
 predate the backend live in `tools/hl2/`.
+
+- [`anan-p2-backend-design.md`](anan-p2-backend-design.md) — the original RFC
+  #4970 proposal for the ANAN-G2 openHPSDR Protocol 2 backend (`AnanBackend`),
+  preserved as the historical design record rather than kept in sync with the
+  shipped code line-by-line — see the doc's own header note for what has and
+  hasn't been resolved since it was written.
 
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.

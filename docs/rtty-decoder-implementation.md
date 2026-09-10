@@ -46,10 +46,13 @@ Appears automatically when the active slice enters RTTY or DIGL mode; hides on e
 | Shift | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz |
 | Baud | **45.45**, 50, 75, 100, 110, 150, 300 |
 | REV | Space above mark (LSB / inverted polarity) |
+| Sens | 0–100 display squelch (#5028): drops decoded characters below a confidence threshold (0 = show everything, the default; ~38 filters what the stats bar calls UNLOCK; 100 = near-certain only). Mapping in `src/gui/RttyDecoderSensitivity.h` |
 
 Stats bar updates ~2×/second: `M:xx% S:xx% SNR:xxdB  LOCKED/UNLOCK`
 
-All settings persisted to AppSettings (flat key names — see bug #4 below).
+Mark/Shift/Baud/REV persist to AppSettings as flat key names (grandfathered —
+see bug #4 below); Sens persists as one nested JSON object under the root key
+`RttyDecoder` per Constitution Principle V.
 
 ---
 

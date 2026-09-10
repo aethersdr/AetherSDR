@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QMap>
+#include <QString>
 
 #include <deque>
 #include <QObject>
@@ -103,12 +104,19 @@ public:
         quint64 rxBytes = 0;
         quint64 txBytes = 0;
         quint64 rxPackets = 0;
+        quint64 txPackets = 0;
         quint64 rxLost = 0;          // gaps retransmission could not repair
         quint64 retransmitsAsked = 0;
         quint64 retransmitsServed = 0;
         int rttMs = -1;              // negative == not measured
+        qint64 lastRxAgeMs = -1;
+        qint64 lastTxAgeMs = -1;
+        qint64 lastPayloadAgeMs = -1;
+        qint64 lastPingReplyAgeMs = -1;
+        quint64 socketErrors = 0;
+        QString lastSocketError;
     };
-    [[nodiscard]] Counters counters() const { return m_counters; }
+    [[nodiscard]] Counters counters() const;
 
 signals:
     // Handshake complete; the stream will now carry payload.
@@ -202,6 +210,11 @@ private:
 
     QElapsedTimer m_pingSentAt;
     QElapsedTimer m_idleSince;     // time since we last sent anything tracked
+    QElapsedTimer m_activityClock;
+    qint64 m_lastRxAtMs = -1;
+    qint64 m_lastTxAtMs = -1;
+    qint64 m_lastPayloadAtMs = -1;
+    qint64 m_lastPingReplyAtMs = -1;
     Counters m_counters;
 };
 

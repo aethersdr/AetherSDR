@@ -164,6 +164,25 @@ void Resampler::reset()
     prewarm();
 }
 
+QByteArray Resampler::drain()
+{
+    if (m_groupDelayInputFrames <= 0) {
+        reset();
+        return {};
+    }
+
+    // prewarm() removes r8brain's no-output startup interval, but the acoustic
+    // group delay remains. A finite stream therefore needs this many source
+    // frames of silence before its final real samples emerge. Without this,
+    // callers that stop after their last input block lose the same duration
+    // from the END of the stream.
+    std::vector<float> silence(
+        static_cast<std::size_t>(m_groupDelayInputFrames), 0.0f);
+    QByteArray tail = process(silence.data(), m_groupDelayInputFrames);
+    reset();
+    return tail;
+}
+
 void Resampler::prewarm()
 {
     if (std::abs(m_srcRate - m_dstRate) < 0.001) return;

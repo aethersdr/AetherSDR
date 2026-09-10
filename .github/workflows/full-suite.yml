@@ -1,0 +1,315 @@
+name: Full Suite
+
+# The ONLY gating run of the whole test suite (#5032).
+#
+# ci.yml runs no Linux tests on a pull request — its gate is frozen to a
+# handful of platform-only tests (.github/ci-test-gate.txt). Before this
+# workflow the full suite ran in exactly one place, sanitizers.yml, weekly and
+# non-gating, and a test that shipped red in v26.8.3 (#5031) went through both
+# holes at once: no PR job selected it, and the weekly run it would have failed
+# was four days away. This closes the window from "up to a week" to "minutes
+# after the merge": every push to main builds RelWithDebInfo — the same
+# configuration ci.yml's build job uses, ccache-warm — and runs `ctest` with
+# no -R filter. A red run here means main is red, full stop.
+#
+# Two things it is NOT. Not a PR gate — it runs post-merge, so it catches
+# rather than prevents (a PR-time full run is #5032's option 2 and wants
+# measuring on a runner first). And not the sanitizer lane: same tests, no
+# instrumentation, so it fails on what a test asserts rather than on what a
+# sanitizer sees; sanitizers.yml keeps that job, weekly.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# No `concurrency:` block, deliberately. Every push to main gets its own run
+# and nothing cancels anything: this lane is the record of whether THAT commit
+# is green, so a later push must not cancel an earlier commit's verdict, and
+# serialising would only delay the signal. The block that used to sit here put
+# `github.run_id` in the group, which gave every run a group of its own and
+# made the whole thing inert — the same behaviour, reached confusingly.
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  full-suite:
+    name: Full test suite
+    runs-on: ubuntu-latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    timeout-minutes: 90
+    env:
+      CCACHE_DIR: /ccache
+      CCACHE_MAXSIZE: 2000M
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Ensure ccache is present
+        run: command -v ccache || (apt-get update && apt-get install -y ccache)
+
+      - name: Ensure RTL-SDR build dependency is present
+        run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
+
+      # RESTORE only, never save. ci.yml's build job is the single writer for
+      # this key; this job reads whatever the prefix currently resolves to —
+      # usually the objects that job saved for a recent commit, not
+      # necessarily this one, since both are triggered by the same push and
+      # the restore is a prefix match. That is a hit-rate question, never a
+      # correctness one: ccache is content-addressed, so a stale entry is a
+      # miss rather than a wrong object.
+      - name: Restore ccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          key: ccache-linux-build-
+          restore-keys: |
+            ccache-linux-build-
+
+      - name: Cache DeepFilterNet3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-deepfilter
+        with:
+          path: third_party/deepfilter
+          key: deepfilter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup/setup-deepfilter.sh') }}
+
+      - name: Setup DeepFilterNet3 (DFNR)
+        if: steps.cache-deepfilter.outputs.cache-hit != 'true'
+        run: bash scripts/setup/setup-deepfilter.sh
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
+            -DAETHER_GPU_SPECTRUM=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
+            cat configure.log
+            exit 1
+          }
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: ccache stats
+        run: ccache --show-stats
+
+      # Unfiltered, serial, and the exit code is the verdict. Serial because
+      # several tests bind fixed ports or Unix sockets (the reason ci.yml's
+      # gate and sanitizers.yml both run ctest without -j); parallelising this
+      # is a separate change with its own port audit.
+      - name: Run the full test suite
+        id: ctest
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: bash
+        run: |
+          set -o pipefail
+          ec=0
+          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          echo "exit=$ec" >> "$GITHUB_OUTPUT"
+
+      - name: Extract failure report
+        id: extract
+        if: steps.ctest.outputs.exit != '0'
+        shell: bash
+        run: |
+          # NOTHING in this step may abort it. It runs under Actions' default
+          # `bash -eo pipefail`, and the artifact, sticky-issue and explicit-
+          # verdict steps below all carry an implicit success() on their `if:`
+          # — so a reporter that dies takes the whole report with it and the
+          # job goes red with no issue and no log: a crash wearing the costume
+          # of a report (#5412 second-opinion review). Two real triggers, both
+          # reproduced under that exact shell:
+          #   - a zero-test run ("No tests were found!!!", which the
+          #     --no-tests=error added earlier in this PR turns INTO a failure)
+          #     has no "The following tests FAILED:" block, so grep exits 1 and
+          #     the unguarded assignment aborted the step: rc=1, $GITHUB_OUTPUT
+          #     never written;
+          #   - piping the concatenation through `head -c 45000` SIGPIPEs the
+          #     writer (rc=141) as soon as the failed-test list pushes the
+          #     total past the cap — reachable with a few hundred failures.
+          set +e
+
+          # ctest's own tail names every failed test; keep that, and the last
+          # 40 KB of output above it for the assertion text. Truncate through a
+          # FILE, not a live `head` pipeline, so a large report cannot kill the
+          # writer.
+          {
+            sed -n '/^The following tests FAILED:/,$p' full-suite.log
+            echo
+            echo '--- last 40 KB of ctest output ---'
+            tail -c 40000 full-suite.log
+          } > report.full 2>/dev/null
+          head -c 45000 report.full > report.txt 2>/dev/null
+          # `-s` is not enough: the marker line above is always written, so a
+          # ctest that produced nothing still yields a ~40-byte report that is
+          # technically non-empty and says nothing.
+          if [ "$(wc -c < report.txt)" -lt 80 ]; then
+            # PREPEND the explanation, never replace: whatever ctest did print
+            # is the whole diagnosis in this case ("No tests were found!!!" is
+            # the entire story of a zero-test run), so it must survive.
+            {
+              echo 'ctest produced no parsable failure list — a zero-test run, or it died before writing a summary.'
+              echo 'Everything it did print follows; the full log is attached to this run as an artifact.'
+              echo
+              cat report.full
+            } > report.txt
+          fi
+
+          # CAPPED. This lands in the issue title line, and GitHub rejects an
+          # issue body over 65536 characters — a catastrophic run (a few
+          # hundred failures) produced ~14 KB here, which on top of the 45 KB
+          # report is close enough to the limit that the create call would 422
+          # and the worst possible failure would be the one that opens no
+          # issue. The full list is in the report body and the artifact.
+          allfailed=$(sed -n '/^The following tests FAILED:/,$p' full-suite.log | grep -oE '[A-Za-z0-9_.-]+ \((Failed|Timeout|Subprocess aborted|Not Run|SEGFAULT|Child aborted)[^)]*\)' | sort)
+          count=$(printf '%s' "$allfailed" | grep -c . )
+          failed=$(printf '%s' "$allfailed" | head -n 25 | tr '\n' ' ')
+          if [ "${count:-0}" -gt 25 ]; then
+            failed="${failed}… and $((count - 25)) more"
+          fi
+          echo "failed=${failed:-unknown}" >> "$GITHUB_OUTPUT"
+          # Fingerprint = WHICH tests failed, by name, sorted. Same rule as
+          # sanitizers.yml (#5411 S5) and for the same reason: without it every
+          # new regression on main arrives as comment N+1 on an already-red
+          # sticky issue, where it reads as more of the same. Names only — no
+          # ctest ordinals, which shift whenever a test is added earlier in
+          # tests.cmake and would churn a fresh issue for an unchanged failure.
+          names=$(sed -n '/^The following tests FAILED:/,$p' full-suite.log \
+                  | grep -oE '[0-9]+ - [A-Za-z0-9_.-]+' | sed 's/^[0-9]* - //' | sort -u || true)
+          if [ -n "$names" ]; then
+            fp=$(printf '%s' "$names" | sha256sum | cut -c1-12)
+          else
+            fp=unknown
+          fi
+          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload test log
+        # !cancelled() rather than a bare condition: without it the implicit
+        # success() means one bad step upstream silently drops the report.
+        if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: full-suite-${{ github.run_id }}
+          path: |
+            full-suite.log
+            build/Testing/Temporary/LastTest.log
+          retention-days: 14
+
+      # Same sticky-issue shape as sanitizers.yml, one bucket: a red main is a
+      # red main. High priority on open because this is the project's only
+      # gating full-suite signal; the weekly append never touches labels, so a
+      # maintainer's re-triage sticks.
+      - name: Open or update tracking issue
+        if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          FAILED:  ${{ steps.extract.outputs.failed }}
+          FP:      ${{ steps.extract.outputs.fingerprint }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            // Tolerant: the extract step is now failure-proof, but this step
+            // also runs on !cancelled(), so it must still produce an issue if
+            // that step ever dies before writing anything.
+            const report = fs.existsSync('report.txt')
+              ? fs.readFileSync('report.txt', 'utf8')
+              : '(the extract step produced no report; see the workflow run log)';
+            const fp     = process.env.FP || 'unknown';
+            // The fingerprint goes in the TITLE so a new failure signature
+            // opens a NEW issue instead of landing as comment N+1 on an
+            // already-red one (#5411 S5, same rule as sanitizers.yml). This is
+            // the project's primary gating signal once #5405 lands, so "a new
+            // regression is a new notification" matters more here than there.
+            const fpTag  = fp && fp !== 'unknown' ? ` (fp ${fp})` : '';
+            const title  = `[full-suite] test suite failing on main${fpTag}`;
+            // Lookup key only — extra labels go on createLabels, or the
+            // existing sticky issue is missed and a duplicate opened.
+            const labels = ['full-suite'];
+            const createLabels = [...labels, 'bug', 'priority: high'];
+            const sha    = context.sha.substring(0, 7);
+            const date   = new Date().toISOString().split('T')[0];
+
+            const body = [
+              `**Run:** ${process.env.RUN_URL}`,
+              `**Commit:** \`${sha}\``,
+              `**Date:** ${date}`,
+              `**Failed:** ${process.env.FAILED}`,
+              '',
+              '<details><summary>ctest report</summary>',
+              '',
+              '```',
+              report,
+              '```',
+              '</details>',
+              '',
+              'Full `full-suite.log` and `LastTest.log` attached to the workflow run artifacts.',
+            ].join('\n');
+
+            // Ensure the lookup label EXISTS before it is used as a lookup
+            // key. issues.create associates labels; creating repository label
+            // metadata is a different endpoint, so relying on the create call
+            // to bring `full-suite` into being is a bet on undocumented
+            // behaviour — and if it loses, the first failure opens an
+            // unlabelled issue that every later listForRepo() misses, so the
+            // sticky issue never sticks and each week opens another
+            // (#5412 second-opinion review). Idempotent and self-healing:
+            // a label deleted by hand is recreated on the next failure.
+            for (const name of createLabels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner, repo: context.repo.repo, name,
+                });
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  name,
+                  color: 'b60205',
+                  description: 'The post-merge full test suite is failing on main',
+                });
+                core.notice(`Created missing label ${name}`);
+              }
+            }
+
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: labels.join(','),
+              per_page: 100,
+            });
+            // Within the label bucket the fingerprint tag picks the issue. An
+            // open issue with no tag absorbs only runs whose fingerprint could
+            // not be computed; a run with a known signature gets its own.
+            const tagged   = open.data.find(i => fpTag && i.title.includes(fpTag));
+            const untagged = open.data.find(i => !/\(fp [0-9a-f]{12}\)/.test(i.title));
+            const existing = tagged || (fpTag ? undefined : untagged);
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              core.notice(`Appended to #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                title,
+                labels: createLabels,
+                body,
+              });
+              core.notice(`Opened #${created.data.number}`);
+            }
+
+      - name: Fail the job if any test failed
+        if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}
+        run: exit 1

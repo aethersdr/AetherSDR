@@ -35,6 +35,7 @@ Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtWarningMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcRender,     "aether.render",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
 Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
@@ -94,6 +95,7 @@ LogManager::LogManager()
         {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
         {"aether.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
         {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
+        {"aether.render",     "Render",       "Render pipeline: RHI/GPU path selection and fallback, paint stalls, texture upload churn"},
         {"aether.propforecast", "Propagation",  "Solar and propagation forecast updates"},
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},

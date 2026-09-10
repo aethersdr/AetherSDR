@@ -76,6 +76,27 @@ int main(int argc, char** argv)
     p.civAddress = kIc705Addr;
     p.tokenRequestId = 0x1234;
 
+    // App shutdown can arrive after the control stream is ready but before
+    // login has produced an auth ID.  stop() must remain synchronous and close
+    // that partial session without waiting for the rest of the handshake.
+    {
+        FakeIc705 partialRadio;
+        partialRadio.setHoldLoginReply(true);
+        IcomSession partialSession;
+        IcomSession::Params partialParams = p;
+        partialParams.controlPort = partialRadio.controlPort();
+        partialParams.serialPort = partialRadio.serialPort();
+        partialParams.audioPort = partialRadio.audioPort();
+        check(partialSession.start(partialParams), "partial-login session starts");
+        check(waitFor([&] { return !partialRadio.loginTokenRequestIds().empty(); }),
+              "partial-login fixture reaches the unanswered login request");
+        partialSession.stop();
+        check(!partialSession.isConnected(),
+              "app shutdown synchronously closes a partial login");
+        check(waitFor([&] { return partialRadio.deauthOuterSequences().size() >= 2; }),
+              "partial-login shutdown sends the two tracked token removals before close");
+    }
+
     check(session.start(p), "session starts");
 
     // ---- Phase 0: the session comes up -------------------------------------

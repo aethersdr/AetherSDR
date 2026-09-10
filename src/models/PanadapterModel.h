@@ -150,6 +150,13 @@ public:
     void setWide(bool wide);
     bool loopA() const { return m_loopA; }
     bool loopB() const { return m_loopB; }
+    // Dispatch evidence is deliberately distinct from radio status. Flex 4.2.18
+    // can ACK a display setter without echoing status to the setting client.
+    void setRequestedFftSettings(int average, int fps);
+    int radioReportedAverage() const { return m_radioReportedAverage; }
+    int radioReportedFps() const { return m_radioReportedFps; }
+    bool averageIsRequest() const { return m_averageIsRequest; }
+    bool fpsIsRequest() const { return m_fpsIsRequest; }
     int fps() const { return m_fps; }
     int average() const { return m_average; }
     bool weightedAverage() const { return m_weightedAverage; }
@@ -226,6 +233,7 @@ signals:
     void wideChanged(bool active);
     void loopChanged(bool loopA, bool loopB);
     void fpsChanged(int fps);
+    void fftProvenanceChanged();
     void fpsReported(int fps);
     // Averaging is radio-authoritative (firmware runs it, echoes the level in
     // pan status). Reported fires every status cycle; Changed only on an actual
@@ -274,6 +282,10 @@ private:
     bool        m_loopA{false};
     bool        m_loopB{false};
     int         m_wnbLevel{50};
+    int         m_radioReportedAverage{-1};
+    int         m_radioReportedFps{-1};
+    bool        m_averageIsRequest{false};
+    bool        m_fpsIsRequest{false};
     int         m_fps{-1};
     int         m_average{-1};        // -1 = unknown; 0 = off, 1-N = level (#4001)
     bool        m_weightedAverage{false};

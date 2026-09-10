@@ -1,5 +1,7 @@
+#include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
+#include "RttyDecodeSettings.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -30,6 +32,7 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
@@ -78,6 +81,8 @@
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QPoint>
 #include <QHostAddress>
 #include <QClipboard>
 #include <QDebug>
@@ -310,10 +315,22 @@ static QString radioOptionsText(const RadioModel* model)
     if (!model) {
         return QStringLiteral("—");
     }
-    if (!model->radioOptions().isEmpty()) {
-        return model->radioOptions();
+
+    QStringList options;
+    for (const QString& rawOption : model->radioOptions().split(
+             QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString option = rawOption.trimmed();
+        if (option.compare(QLatin1String("GPS"), Qt::CaseInsensitive) != 0) {
+            options.append(option);
+        }
     }
-    return model->amplifier().present() ? QStringLiteral("GPS, PGXL") : QStringLiteral("GPS");
+    if (model->hasGpsSetupHardware()) {
+        options.prepend(QStringLiteral("GPS"));
+    }
+    if (options.isEmpty() && model->amplifier().present()) {
+        options.append(QStringLiteral("PGXL"));
+    }
+    return options.isEmpty() ? QStringLiteral("—") : options.join(QStringLiteral(", "));
 }
 
 static void showCopiedPopup(QWidget* anchor);
@@ -638,12 +655,13 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    AcomConnection* acom,
                                    SpeConnection* spe,
                                    VkampConnection* vkamp,
+                                   LpMeterConnection* lpMeter,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -750,6 +768,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         [this] { return buildNetworkTab(); });
     addPage(radioCategory, QStringLiteral("GPS"),
         QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
+    m_gpsPageIndex = m_pageIndexes.value(QStringLiteral("GPS"));
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
@@ -760,6 +779,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("rx receive calibration rf gain preamp"), [this] { return buildRxTab(); });
     addPage(signalCategory, QStringLiteral("Filters"),
         QStringLiteral("filter bandwidth low high cut mode"), [this] { return buildFiltersTab(); });
+    m_filtersPageIndex = m_pageIndexes.value(QStringLiteral("Filters"));
     // Calibration page (HL2 and any future family that cannot calibrate itself).
     // Gated on the CAPABILITY, not on the family name: "does this radio correct
     // its own oscillator" is the question, and a Flex answers it on the Receive
@@ -775,6 +795,19 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         // so a later Trim press cannot commit the previous radio's number.
         if (m_calibrationReseed)
             m_calibrationReseed();
+    });
+    // Droop Correction page — mirrors the Calibration page immediately above:
+    // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
+    // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
+    QTreeWidgetItem* droopItem = addPage(radioCategory, QStringLiteral("Droop Correction"),
+        QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
+        [this] { return buildDroopCalibrationTab(); });
+    m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
+    droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this, droopItem] {
+        droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+        if (m_droopReseed)
+            m_droopReseed();
     });
     addPage(hardwareCategory, QStringLiteral("Antennas"),
         QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
@@ -798,6 +831,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("themes colors display font vision contrast click wheel ui enhancements"), [this] { return buildUiEnhancementsTab(); });
     addPage(onlineCategory, QStringLiteral("SmartLink"),
         QStringLiteral("remote internet certificate security pin wan"), [this] { return buildSmartLinkTab(); });
+    m_smartLinkPageIndex = m_pageIndexes.value(QStringLiteral("SmartLink"));
     addPage(onlineCategory, QStringLiteral("QRZ & Callsigns"),
         QStringLiteral("qrz callsign lookup spots contact online account"), [this] { return buildQrzTab(); });
 #ifdef HAVE_SERIALPORT
@@ -809,6 +843,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     connect(m_navigation, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem* previous) {
         if (!current) {
+            return;
+        }
+        if (!isCapabilityPageAvailable(current)) {
+            selectTab(QStringLiteral("Radio"));
             return;
         }
         if (!current->parent()) {
@@ -850,9 +888,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 // reaches the radio).
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
+                const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
                 const bool gated =
-                    (apdRow && !m_model->transmitModel().apdConfigurable())
-                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
+                    (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
+                    || (isGpsPage(item)
+                        && !isGpsSetupAvailable())
+                    || (apdRow && !m_model->transmitModel().apdConfigurable())
+                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
+                    || (droopRow && !droopCalibrationAvailable(m_model->backend()));
                 if (!gated) {
                     item->setHidden(!matches);
                 }
@@ -888,6 +931,23 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     });
     addAction(findAction);
     m_navigation->setCurrentItem(firstItem);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this](bool, const RadioCapabilities&) {
+        updateRadioCapabilityVisibility();
+    });
+    connect(m_model, &RadioModel::connectionStateChanged, this,
+            [this](bool) {
+        updateRadioCapabilityVisibility();
+    });
+    connect(m_model, &RadioModel::oscillatorChanged, this,
+            [this] {
+        updateRadioCapabilityVisibility();
+    });
+    connect(m_model, &RadioModel::gpsStatusChanged, this,
+            [this] {
+        updateRadioCapabilityVisibility();
+    });
+    updateRadioCapabilityVisibility();
     layout->addWidget(content, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
@@ -901,11 +961,178 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
 void RadioSetupDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
+    // This dialog is persistent and may have been hidden while the selected
+    // radio or an optional Flex GPSDO changed. Re-evaluate every gated page and
+    // group before presenting the cached widget tree again.
+    updateRadioCapabilityVisibility();
     // The dialog is a showOrRaisePersistent singleton and pages are built once,
     // so anything that changed the stored calibration while it was closed (a
     // `freqcal` bridge call, a different radio) has to be re-read here.
     if (m_calibrationReseed)
         m_calibrationReseed();
+    if (m_droopReseed)
+        m_droopReseed();
+}
+
+bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
+{
+    if (!item) {
+        return false;
+    }
+    const int index = item->data(0, Qt::UserRole).toInt();
+    return index == m_filtersPageIndex || index == m_smartLinkPageIndex;
+}
+
+bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) const
+{
+    if (!m_model || !item) {
+        return false;
+    }
+    const int index = item->data(0, Qt::UserRole).toInt();
+    if (index == m_droopCalibrationPageIndex) {
+        return droopCalibrationAvailable(m_model->backend());
+    }
+    if (!m_model->isConnected()) {
+        return true;
+    }
+    const RadioCapabilities caps = m_model->backendCapabilities();
+    if (index == m_filtersPageIndex) {
+        return caps.hasSharpFilters;
+    }
+    if (index == m_smartLinkPageIndex) {
+        return caps.hasSmartLink;
+    }
+    return true;
+}
+
+bool RadioSetupDialog::isGpsSetupAvailable() const
+{
+    return m_model && (!m_model->isConnected() || m_model->hasGpsSetupHardware());
+}
+
+bool RadioSetupDialog::isGpsPage(const QTreeWidgetItem* item) const
+{
+    return item && item->data(0, Qt::UserRole).toInt() == m_gpsPageIndex;
+}
+
+void RadioSetupDialog::updateRadioCapabilityVisibility()
+{
+    const bool connected = m_model->isConnected();
+    const RadioCapabilities caps = m_model->backendCapabilities();
+    if (m_flexControlInfoField) {
+        m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
+    }
+    if (m_multiFlexInfoField) {
+        m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+    if (m_remoteOnInfoField) {
+        applyCapabilitySurfaceVisibility(
+            m_remoteOnInfoField, connected, caps.hasRemoteOnControl);
+    }
+    if (m_rebootInfoField) {
+        applyCapabilitySurfaceVisibility(m_rebootInfoField, connected, caps.canReboot);
+    }
+    if (m_licenseInfoGroup) {
+        m_licenseInfoGroup->setVisible(!connected || caps.hasLicenseInfo);
+    }
+    if (m_firmwareUpdateGroup) {
+        applyCapabilitySurfaceVisibility(
+            m_firmwareUpdateGroup, connected, caps.canUpgradeFirmware);
+    }
+    if (m_firmwareDisclaimer) {
+        applyCapabilitySurfaceVisibility(
+            m_firmwareDisclaimer, connected, caps.canUpgradeFirmware);
+    }
+    if (m_networkIdentityGroup) {
+        applyCapabilitySurfaceVisibility(
+            m_networkIdentityGroup, connected, caps.hasNetworkConfigurationReadback);
+    }
+    if (m_vitaReceiveBufferLabel) {
+        applyCapabilitySurfaceVisibility(
+            m_vitaReceiveBufferLabel, connected, caps.usesVita49Transport);
+    }
+    if (m_vitaReceiveBufferControls) {
+        applyCapabilitySurfaceVisibility(
+            m_vitaReceiveBufferControls, connected, caps.usesVita49Transport);
+    }
+    if (m_vitaReceiveBufferStatus) {
+        applyCapabilitySurfaceVisibility(
+            m_vitaReceiveBufferStatus, connected, caps.usesVita49Transport);
+    }
+    if (m_networkMtuLabel) {
+        applyCapabilitySurfaceVisibility(
+            m_networkMtuLabel, connected, caps.usesVita49Transport);
+    }
+    if (m_networkMtuControl) {
+        applyCapabilitySurfaceVisibility(
+            m_networkMtuControl, connected, caps.usesVita49Transport);
+    }
+    if (m_privateIpPolicyLabel) {
+        applyCapabilitySurfaceVisibility(
+            m_privateIpPolicyLabel, connected, caps.hasPrivateIpConnectionPolicy);
+    }
+    if (m_privateIpPolicyControl) {
+        applyCapabilitySurfaceVisibility(
+            m_privateIpPolicyControl, connected, caps.hasPrivateIpConnectionPolicy);
+    }
+    if (m_ipDhcpButton) {
+        const bool canConfigure = caps.hasClientNetworkConfig;
+        const QString sessionKey = connected
+            ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
+            : QString();
+        const QString tip = canConfigure
+            ? QString()
+            : tr("Changing the radio's IP configuration is not supported by this radio.");
+        const bool isStatic = m_model->hasStaticIp();
+        applyIpConfigPresentation(
+            m_ipConfigPresentation, sessionKey, canConfigure, isStatic,
+            isStatic ? m_model->staticIp() : m_model->ip(),
+            isStatic ? m_model->staticNetmask() : m_model->netmask(),
+            isStatic ? m_model->staticGateway() : m_model->gateway(),
+            m_ipDhcpButton, m_ipStaticButton, m_staticIpEdit,
+            m_staticMaskEdit, m_staticGatewayEdit, m_ipApplyButton, tip);
+    }
+    if (m_audioCompressionGroup) {
+        m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
+    }
+    if (m_flexControlGroup) {
+        m_flexControlGroup->setVisible(!connected || caps.hasFlexControlIntegration);
+    }
+    if (m_optionsLabel) {
+        m_optionsLabel->setText(radioOptionsText(m_model));
+    }
+
+    const QLineEdit* search = findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
+    const QString needle = search ? search->text().trimmed() : QString();
+    for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex}) {
+        if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
+            const QString haystack = item->text(0) + QStringLiteral(" ")
+                + item->data(0, Qt::UserRole + 1).toString();
+            item->setHidden(!isCapabilityPageAvailable(item)
+                            || (!needle.isEmpty()
+                                && !haystack.contains(needle, Qt::CaseInsensitive)));
+        }
+    }
+
+    if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
+        const QString haystack = gpsItem->text(0) + QStringLiteral(" ")
+            + gpsItem->data(0, Qt::UserRole + 1).toString();
+        gpsItem->setHidden(!isGpsSetupAvailable()
+                           || (!needle.isEmpty()
+                               && !haystack.contains(needle, Qt::CaseInsensitive)));
+    }
+
+    const bool currentPageUnavailable = m_navigation
+        && (!isCapabilityPageAvailable(m_navigation->currentItem())
+            || (!isGpsSetupAvailable()
+                && isGpsPage(m_navigation->currentItem())));
+    if (currentPageUnavailable) {
+        if (QLineEdit* mutableSearch = findChild<QLineEdit*>(
+                QStringLiteral("radioSetupSearch"))) {
+            mutableSearch->clear();
+        }
+        selectTab(QStringLiteral("Radio"));
+    }
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
@@ -978,9 +1205,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
             m_remoteOnBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setRemoteOnEnabled(on);
         });
-        grid->addWidget(makeInfoField(QStringLiteral("Remote On:"), m_remoteOnBtn,
-                                      kInfoRightLabelWidth),
-                        1, 1);
+        m_remoteOnInfoField = makeInfoField(QStringLiteral("Remote On:"), m_remoteOnBtn,
+                                            kInfoRightLabelWidth);
+        grid->addWidget(m_remoteOnInfoField, 1, 1);
 
         m_optionsLabel = new QLabel(radioOptionsText(m_model));
         m_optionsLabel->setStyleSheet(kValueStyle);
@@ -1013,18 +1240,18 @@ QWidget* RadioSetupDialog::buildRadioTab()
         updateFcLbl(m_model->isConnected());
         fcLbl->setAlignment(Qt::AlignCenter);
         connect(m_model, &RadioModel::connectionStateChanged, this, updateFcLbl);
-        grid->addWidget(makeInfoField(QStringLiteral("FlexControl:"), fcLbl,
-                                      kInfoRightLabelWidth),
-                        2, 1);
+        m_flexControlInfoField = makeInfoField(QStringLiteral("FlexControl:"), fcLbl,
+                                               kInfoRightLabelWidth);
+        grid->addWidget(m_flexControlInfoField, 2, 1);
 
         auto* mfBtn = makeToggle(m_model->multiFlexEnabled());
         connect(mfBtn, &QPushButton::toggled, this, [this, mfBtn](bool on) {
             mfBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setMultiFlexEnabled(on);
         });
-        grid->addWidget(makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
-                                      kInfoRightLabelWidth),
-                        3, 1);
+        m_multiFlexInfoField = makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
+                                             kInfoRightLabelWidth);
+        grid->addWidget(m_multiFlexInfoField, 3, 1);
 
         auto* rebootBtn = new QPushButton(QStringLiteral("Reboot Radio"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(rebootBtn,
@@ -1065,9 +1292,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 close();
             }
         });
-        grid->addWidget(makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
-                                      kInfoLeftLabelWidth),
-                        3, 0);
+        m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
+                                          kInfoLeftLabelWidth);
+        grid->addWidget(m_rebootInfoField, 3, 0);
 
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_serialLabel) {
@@ -1223,6 +1450,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
     // License Info group (matches SmartSDR Radio Setup → License Info section)
     {
         auto* group = new QGroupBox("License Info");
+        m_licenseInfoGroup = group;
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
@@ -1288,6 +1516,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
     // Firmware Update group
     {
         auto* group = new QGroupBox("Firmware Update");
+        m_firmwareUpdateGroup = group;
         group->setStyleSheet(kGroupStyle);
         auto* vlay = new QVBoxLayout(group);
         vlay->setSpacing(6);
@@ -1477,6 +1706,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         "Use at your own risk. At this time we still recommend updating "
         "via the SmartSDR Windows application.");
     disclaimer->setWordWrap(true);
+    m_firmwareDisclaimer = disclaimer;
     disclaimer->setStyleSheet(
         "QLabel { color: #c08040; font-size: 11px; font-style: italic;"
         " padding: 4px 8px; }");
@@ -1506,6 +1736,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
     // Network group
     {
         auto* group = new QGroupBox("Network");
+        m_networkIdentityGroup = group;
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
@@ -1527,10 +1758,24 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         macLbl->setStyleSheet(kValueStyle);
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1);
 
-        connect(m_model, &RadioModel::infoChanged, this, [this, ipLbl, maskLbl, macLbl] {
+        grid->addWidget(new QLabel("Default Gateway:"), 1, 2);
+        auto* gatewayLbl = new QLabel(displayOrDash(m_model->gateway()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(gatewayLbl, kValueStyle);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Default Gateway"), gatewayLbl), 1, 3);
+
+        grid->addWidget(new QLabel("Network Name:"), 2, 0);
+        auto* networkNameLbl = new QLabel(displayOrDash(m_model->networkName()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(networkNameLbl, kValueStyle);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Network Name"), networkNameLbl),
+                        2, 1, 1, 3);
+
+        connect(m_model, &RadioModel::infoChanged, this,
+                [this, ipLbl, maskLbl, macLbl, gatewayLbl, networkNameLbl] {
             ipLbl->setText(displayOrDash(m_model->ip()));
             maskLbl->setText(displayOrDash(m_model->netmask()));
             macLbl->setText(displayOrDash(m_model->mac()));
+            gatewayLbl->setText(displayOrDash(m_model->gateway()));
+            networkNameLbl->setText(displayOrDash(m_model->networkName()));
         });
 
         for (auto* lbl : group->findChildren<QLabel*>())
@@ -1546,7 +1791,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
-        grid->addWidget(new QLabel("Enforce Private IP Connections:"), 0, 0);
+        m_privateIpPolicyLabel = new QLabel("Enforce Private IP Connections:");
+        grid->addWidget(m_privateIpPolicyLabel, 0, 0);
         auto* enforceBtn = new QPushButton(m_model->enforcePrivateIp() ? "Enabled" : "Disabled");
         enforceBtn->setCheckable(true);
         enforceBtn->setChecked(m_model->enforcePrivateIp());
@@ -1560,6 +1806,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             m_model->sendCommand(
                 QString("radio set enforce_private_ip_connections=%1").arg(on ? 1 : 0));
         });
+        m_privateIpPolicyControl = enforceBtn;
         grid->addWidget(enforceBtn, 0, 1);
 
         // 128-bit hex token generator — plenty for a local same-user secret.
@@ -1789,7 +2036,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             grid->addWidget(roCheck, 4, 1);
         }
 
-        grid->addWidget(new QLabel("Network MTU:"), 5, 0);
+        m_networkMtuLabel = new QLabel("Network MTU:");
+        grid->addWidget(m_networkMtuLabel, 5, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
         mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
@@ -1801,6 +2049,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
         });
+        m_networkMtuControl = mtuSpin;
         grid->addWidget(mtuSpin, 5, 1);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
@@ -1818,7 +2067,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             return QStringLiteral("%1 KB").arg(b / 1024);
         };
 
-        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 6, 0);
+        m_vitaReceiveBufferLabel = new QLabel("VITA-49 RX buffer:");
+        grid->addWidget(m_vitaReceiveBufferLabel, 6, 0);
         auto* bufRow = new QWidget;
         auto* bufLay = new QHBoxLayout(bufRow);
         bufLay->setContentsMargins(0, 0, 0, 0);
@@ -1846,6 +2096,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         bufValLabel->setMinimumWidth(48);
         bufLay->addWidget(bufSlider, 1);
         bufLay->addWidget(bufValLabel);
+        m_vitaReceiveBufferControls = bufRow;
         grid->addWidget(bufRow, 6, 1);
 
         auto* bufGrantedLabel = new QLabel;
@@ -1854,6 +2105,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
                                            : QStringLiteral("granted: — (applies on connect)"));
         }
+        m_vitaReceiveBufferStatus = bufGrantedLabel;
         grid->addWidget(bufGrantedLabel, 7, 1);
 
         connect(bufSlider, &QSlider::valueChanged, this,
@@ -1884,6 +2136,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         for (auto* lbl : group->findChildren<QLabel*>())
             if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);
 
+        updateRadioCapabilityVisibility();
+
         vbox->addWidget(group);
     }
 
@@ -1907,10 +2161,15 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->setSpacing(4);
 
     const bool isStatic = m_model->hasStaticIp();
+    const bool canConfigure = m_model->backendCapabilities().hasClientNetworkConfig;
+    const QString unavailableTip = tr("Changing the radio's IP configuration is not supported by this radio.");
 
     auto* dhcpBtn = new QPushButton("DHCP");
+    m_ipDhcpButton = dhcpBtn;
     dhcpBtn->setCheckable(true);
     dhcpBtn->setChecked(!isStatic);
+    dhcpBtn->setEnabled(canConfigure);
+    dhcpBtn->setToolTip(canConfigure ? QString() : unavailableTip);
     AetherSDR::ThemeManager::instance().applyStyleSheet(dhcpBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
@@ -1919,8 +2178,11 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->addWidget(dhcpBtn);
 
     auto* staticBtn = new QPushButton("Static");
+    m_ipStaticButton = staticBtn;
     staticBtn->setCheckable(true);
     staticBtn->setChecked(isStatic);
+    staticBtn->setEnabled(canConfigure);
+    staticBtn->setToolTip(dhcpBtn->toolTip());
     staticBtn->setStyleSheet(dhcpBtn->styleSheet());
     btnRow->addWidget(staticBtn);
 
@@ -1932,20 +2194,23 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
 
     fieldsGrid->addWidget(new QLabel("IP Address:"), 0, 0);
     auto* staticIp = new QLineEdit(isStatic ? m_model->staticIp() : m_model->ip());
+    m_staticIpEdit = staticIp;
     staticIp->setStyleSheet(kEditStyle);
-    staticIp->setEnabled(isStatic);
+    staticIp->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticIp, 0, 1);
 
     fieldsGrid->addWidget(new QLabel("Mask:"), 1, 0);
     auto* staticMask = new QLineEdit(isStatic ? m_model->staticNetmask() : m_model->netmask());
+    m_staticMaskEdit = staticMask;
     staticMask->setStyleSheet(kEditStyle);
-    staticMask->setEnabled(isStatic);
+    staticMask->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticMask, 1, 1);
 
     fieldsGrid->addWidget(new QLabel("Gateway:"), 2, 0);
     auto* staticGw = new QLineEdit(isStatic ? m_model->staticGateway() : m_model->gateway());
+    m_staticGatewayEdit = staticGw;
     staticGw->setStyleSheet(kEditStyle);
-    staticGw->setEnabled(isStatic);
+    staticGw->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticGw, 2, 1);
 
     for (auto* lbl : group->findChildren<QLabel*>())
@@ -1954,7 +2219,14 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     gvbox->addLayout(fieldsGrid);
 
     auto* applyBtn = new QPushButton("Apply");
+    m_ipApplyButton = applyBtn;
+    m_ipConfigPresentation.sessionKey = m_model->isConnected()
+        ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
+        : QString();
+    m_ipConfigPresentation.canConfigure = canConfigure;
     applyBtn->setEnabled(false);
+    applyBtn->setToolTip(canConfigure ? QString() : unavailableTip);
+    applyBtn->setAccessibleDescription(applyBtn->toolTip());
     AetherSDR::ThemeManager::instance().applyStyleSheet(applyBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
@@ -2013,8 +2285,7 @@ QWidget* RadioSetupDialog::buildGpsTab()
 
     // GPS installed status
     {
-        const bool installed = (m_model->gpsStatus() != "Not Present"
-                                && !m_model->gpsStatus().isEmpty());
+        const bool installed = m_model->hasGpsSetupHardware();
         auto* statusLbl = new QLabel(installed ? "GPS is installed" : "GPS is not installed");
         statusLbl->setStyleSheet(installed
             ? "QLabel { color: #00c040; font-size: 16px; font-weight: bold; }"
@@ -2366,6 +2637,17 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
+        // The four keyer controls below commit through their TransmitModel
+        // setters, never raw wire text.  Each setter updates local state and
+        // emits phoneStateChanged BEFORE sending the same command, and that
+        // local update is the only thing that makes the value stick on a
+        // backend which never echoes the setting back: `iambic` and
+        // `iambic_mode` are parsed in exactly one place in the tree
+        // (FlexBackend::decodeTransmitState), so on a Hermes-Lite 2 nothing
+        // else ever moves the model.  Sending only the wire text leaves the
+        // dialog reseeding from a stale model and leaves
+        // MainWindow_Session's syncLocalKeyerToRadio unaware, so the keyer
+        // keeps the old mode too (#5256).
         // Iambic: Enabled | A | B
         auto* iamLbl = new QLabel("Iambic:");
         iamLbl->setStyleSheet(kLabelStyle);
@@ -2373,18 +2655,18 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* iamBtn = mkTogBtn(tx.cwIambic() ? "Enabled" : "Disabled", tx.cwIambic());
         connect(iamBtn, &QPushButton::toggled, this, [this, iamBtn](bool on) {
             iamBtn->setText(on ? "Enabled" : "Disabled");
-            m_model->sendCommand(QString("cw iambic %1").arg(on ? 1 : 0));
+            m_model->transmitModel().setCwIambic(on);
         });
         grid->addWidget(iamBtn, 0, 1);
         auto* modeA = mkTogBtn("A", tx.cwIambicMode() == 0);
         auto* modeB = mkTogBtn("B", tx.cwIambicMode() == 1);
         connect(modeA, &QPushButton::clicked, this, [this, modeA, modeB] {
             modeA->setChecked(true); modeB->setChecked(false);
-            m_model->sendCommand("cw mode 0");
+            m_model->transmitModel().setCwIambicMode(0);
         });
         connect(modeB, &QPushButton::clicked, this, [this, modeA, modeB] {
             modeA->setChecked(false); modeB->setChecked(true);
-            m_model->sendCommand("cw mode 1");
+            m_model->transmitModel().setCwIambicMode(1);
         });
         grid->addWidget(modeA, 0, 2);
         grid->addWidget(modeB, 0, 3);
@@ -2395,7 +2677,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         grid->addWidget(swapLbl, 0, 4);
         auto* swapBtn = mkTogBtn("Dot/Dash", tx.cwSwapPaddles());
         connect(swapBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_model->sendCommand(QString("cw swap %1").arg(on ? 1 : 0));
+            m_model->transmitModel().setCwSwapPaddles(on);
         });
         grid->addWidget(swapBtn, 0, 5);
 
@@ -2407,11 +2689,11 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* cwlBtn = mkTogBtn("CWL", tx.cwlEnabled());
         connect(cwuBtn, &QPushButton::clicked, this, [this, cwuBtn, cwlBtn] {
             cwuBtn->setChecked(true); cwlBtn->setChecked(false);
-            m_model->sendCommand("cw cwl_enabled 0");
+            m_model->transmitModel().setCwlEnabled(false);
         });
         connect(cwlBtn, &QPushButton::clicked, this, [this, cwuBtn, cwlBtn] {
             cwuBtn->setChecked(false); cwlBtn->setChecked(true);
-            m_model->sendCommand("cw cwl_enabled 1");
+            m_model->transmitModel().setCwlEnabled(true);
         });
         grid->addWidget(cwuBtn, 1, 1);
         grid->addWidget(cwlBtn, 1, 2);
@@ -2469,6 +2751,29 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
                 "radio set rtty_mark_default=" + markEdit->text());
         });
         grid->addWidget(markEdit, 0, 1);
+
+        // RTTY Decode — the operator's explicit "I want the decoder pane"
+        // state (#5353).  The pane's own ✕ clears this flag, and before it
+        // existed there was no way back on: visibility was recomputed from
+        // the slice mode, so the pane reopened on the next slice switch or
+        // rtty_mark echo.  This is the re-enable, and it mirrors the CW
+        // Decode RX/TX toggles above.  MainWindow re-evaluates panel and
+        // run state on dialog close via refreshRttyDecodeState().
+        auto* rttyDecodeLbl = new QLabel("RTTY Decode:");
+        ThemeManager::instance().applyStyleSheet(rttyDecodeLbl,
+            "QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+        grid->addWidget(rttyDecodeLbl, 1, 0);
+        auto* rttyDecodeBtn = mkTogBtn(
+            RttyDecodeSettings::enabled() ? "Enabled" : "Disabled",
+            RttyDecodeSettings::enabled());
+        rttyDecodeBtn->setObjectName("rttyDecodeEnabled");
+        rttyDecodeBtn->setAccessibleName("RTTY Decode");
+        rttyDecodeBtn->setAccessibleDescription("Enable or disable the RTTY decoder pane.");
+        connect(rttyDecodeBtn, &QPushButton::toggled, this, [rttyDecodeBtn](bool on) {
+            RttyDecodeSettings::setEnabled(on);
+            rttyDecodeBtn->setText(on ? "Enabled" : "Disabled");
+        });
+        grid->addWidget(rttyDecodeBtn, 1, 1);
 
         vbox->addWidget(group);
     }
@@ -3177,6 +3482,201 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     return page;
 }
 
+// ── Droop Correction tab ────────────────────────────────────────────────────
+
+QWidget* RadioSetupDialog::buildDroopCalibrationTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
+
+    static const QString kLabel =
+        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kButton =
+        QStringLiteral("QPushButton { background: {{color.background.1}}; "
+                       "border: 1px solid {{color.background.2}}; border-radius: 4px; "
+                       "color: {{color.text.primary}}; font-size: 12px; font-weight: bold; "
+                       "padding: 4px 10px; }"
+                       "QPushButton:hover { background: {{color.background.2}}; }"
+                       "QPushButton:disabled { color: {{color.text.secondary}}; }");
+
+    auto* group = new QGroupBox("DDC0 Droop Correction");
+    themed(group, QStringLiteral(
+        "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+        "margin-top: 8px; padding-top: 12px; font-weight: bold; "
+        "color: {{color.text.secondary}}; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"));
+    auto* gvb = new QVBoxLayout(group);
+    gvb->setSpacing(8);
+
+    {
+        auto* intro = new QLabel(
+            "This radio's DDC has a real amplitude droop near the edges of the "
+            "displayed span, measured here rather than guessed. For the most "
+            "accurate correction, disconnect the antenna or terminate it in a "
+            "dummy load before starting — the sweep measures the receiver's own "
+            "noise floor as a flat reference, and a live signal during the "
+            "sweep will bias the correction for whichever rate it lands in.");
+        themed(intro, kLabel);
+        intro->setWordWrap(true);
+        gvb->addWidget(intro);
+    }
+
+    auto* noRadioLbl = new QLabel(
+        "Connect the radio first. The calibration belongs to one physical "
+        "radio, and there is no radio identity to store it against yet.");
+    themed(noRadioLbl, QStringLiteral(
+        "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"));
+    noRadioLbl->setWordWrap(true);
+    noRadioLbl->setVisible(false);
+    gvb->addWidget(noRadioLbl);
+
+    auto* startStopBtn = new QPushButton("Start Sweep");
+    themed(startStopBtn, kButton);
+    startStopBtn->setFixedWidth(120);
+    // Description, NOT accessibleName: this button's text toggles between
+    // "Start Sweep" and "Stop", and a screen reader takes a button's name
+    // from its text unless one is set explicitly. A fixed name here would
+    // freeze the announcement at "Start sweep" while the button actually
+    // reads "Stop" -- worse than saying nothing. The description supplements
+    // the live text instead of replacing it.
+    startStopBtn->setAccessibleDescription(QStringLiteral(
+        "Steps the radio through every DDC0 sample rate and measures the "
+        "panadapter's edge droop at each one. Takes several minutes."));
+
+    auto* progressBar = new QProgressBar;
+    progressBar->setRange(0, 100);
+    progressBar->setValue(0);
+    progressBar->setTextVisible(false);
+    progressBar->setFixedHeight(startStopBtn->sizeHint().height());
+    // setTextVisible(false) leaves this with no text at all, so without a
+    // name it is announced as an unlabelled progress bar.
+    progressBar->setAccessibleName(QStringLiteral("Droop sweep progress"));
+
+    auto* rowLayout = new QHBoxLayout;
+    rowLayout->addWidget(startStopBtn);
+    rowLayout->addWidget(progressBar, 1);
+    gvb->addLayout(rowLayout);
+
+    auto* statusLbl = new QLabel("Idle — no sweep has been run this session.");
+    themed(statusLbl, kLabel);
+    statusLbl->setWordWrap(true);
+    // Same reasoning as the Start button, for the same reason in reverse: a
+    // QLabel's accessible name IS its text, and this label's text is the
+    // live sweep status (including the failure reasons the calibrator
+    // reports). Naming it would hide exactly the content worth hearing.
+    statusLbl->setAccessibleDescription(QStringLiteral("Droop sweep status"));
+    gvb->addWidget(statusLbl);
+
+    auto* summaryLbl = new QLabel;
+    themed(summaryLbl, QStringLiteral(
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px; "
+        "font-family: monospace; }"));
+    summaryLbl->setWordWrap(true);
+    summaryLbl->setAccessibleDescription(QStringLiteral(
+        "Measured correction per DDC0 rate"));
+    gvb->addWidget(summaryLbl);
+
+    auto* applyBtn = new QPushButton("Apply");
+    themed(applyBtn, kButton);
+    applyBtn->setFixedWidth(90);
+    applyBtn->setEnabled(false);
+    // Static text, so a name is safe here -- and needed: "Apply" and
+    // "Discard" alone say nothing about what is being applied or discarded.
+    applyBtn->setAccessibleName(QStringLiteral("Apply the measured droop correction"));
+    applyBtn->setToolTip(QStringLiteral(
+        "Push the measured tables live and save them for this radio"));
+
+    auto* cancelBtn = new QPushButton("Discard");
+    themed(cancelBtn, kButton);
+    cancelBtn->setFixedWidth(90);
+    cancelBtn->setEnabled(false);
+    cancelBtn->setAccessibleName(QStringLiteral("Discard the measured droop correction"));
+    cancelBtn->setToolTip(QStringLiteral("Drop the measured (not yet applied) result"));
+
+    auto* applyRow = new QHBoxLayout;
+    applyRow->addWidget(applyBtn);
+    applyRow->addWidget(cancelBtn);
+    applyRow->addStretch(1);
+    gvb->addLayout(applyRow);
+
+    vbox->addWidget(group);
+
+    auto update = [this, startStopBtn, progressBar, statusLbl, summaryLbl,
+                   applyBtn, cancelBtn, noRadioLbl](const QVariantMap& state) {
+        const bool available = droopCalibrationAvailable(m_model->backend());
+        const bool running = available && state.value(QStringLiteral("running")).toBool();
+        const bool hasResult = available && state.value(QStringLiteral("hasResult")).toBool();
+        startStopBtn->setEnabled(available);
+        startStopBtn->setText(running ? QStringLiteral("Stop") : QStringLiteral("Start Sweep"));
+        startStopBtn->setProperty("droopRunning", running);
+        applyBtn->setEnabled(hasResult && !running);
+        cancelBtn->setEnabled(hasResult && !running);
+        noRadioLbl->setVisible(!available);
+        progressBar->setValue(available ? state.value(QStringLiteral("percent")).toInt() : 0);
+        QString message = state.value(QStringLiteral("message")).toString();
+        if (state.contains(QStringLiteral("error"))) {
+            message = state.value(QStringLiteral("error")).toString();
+        }
+        statusLbl->setText(message.isEmpty()
+            ? QStringLiteral("Idle — no sweep has been run this session.") : message);
+        QStringList lines;
+        if (available) {
+            const QVariantList corrections = state.value(QStringLiteral("corrections")).toList();
+            for (const QVariant& value : corrections) {
+                const QVariantMap correction = value.toMap();
+                lines << QStringLiteral("%1 ksps: %2–%3 dB correction")
+                    .arg(correction.value(QStringLiteral("rateKsps")).toInt())
+                    .arg(correction.value(QStringLiteral("minDb")).toDouble(), 0, 'f', 1)
+                    .arg(correction.value(QStringLiteral("maxDb")).toDouble(), 0, 'f', 1);
+            }
+        }
+        summaryLbl->setText(lines.join(QStringLiteral("\n")));
+    };
+    auto request = [this, update](const QString& action) {
+        update(requestDroopCalibration(m_model->backend(), action));
+    };
+    connect(startStopBtn, &QPushButton::clicked, this, [startStopBtn, request] {
+        request(startStopBtn->property("droopRunning").toBool()
+                    ? QStringLiteral("stop") : QStringLiteral("start"));
+    });
+    connect(applyBtn, &QPushButton::clicked, this, [request] {
+        request(QStringLiteral("apply"));
+    });
+    connect(cancelBtn, &QPushButton::clicked, this, [request] {
+        request(QStringLiteral("discard"));
+    });
+
+    // Rebind to the current neutral backend on reconnect. No captured ANAN
+    // object survives a family switch; both entry points re-check capability.
+    m_droopReseed = [this, update] {
+        QObject::disconnect(m_droopStatusConnection);
+        IRadioBackend* backend = m_model->backend();
+        if (backend && backend->capabilities().family == QLatin1String("anan")
+            && backend->capabilities().hostDroopCalibration) {
+            m_droopStatusConnection = connect(backend, &IRadioBackend::extensionStatus, this,
+                [this, backend, update](const QString& ns, const QString& kind,
+                                        const QVariantMap& state) {
+                    if (m_model->backend() == backend && ns == QLatin1String("anan")
+                        && kind == QLatin1String("droop")) {
+                        update(state);
+                    }
+                });
+            update(droopCalibrationAvailable(backend)
+                ? requestDroopCalibration(backend, QStringLiteral("status")) : QVariantMap{});
+        } else {
+            update({});
+        }
+    };
+    m_droopReseed();
+
+    vbox->addStretch(1);
+    return page;
+}
+
 // ── Audio tab ────────────────────────────────────────────────────────────────
 
 QWidget* RadioSetupDialog::buildAudioTab()
@@ -3290,6 +3790,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     // ── Audio Compression ────────────────────────────────────────────────
     {
         auto* compGroup = new QGroupBox("Audio Compression (SmartLink)");
+        m_audioCompressionGroup = compGroup;
+        compGroup->setVisible(!m_model->isConnected()
+                              || m_model->backendCapabilities().hasAudioCompression);
         compGroup->setStyleSheet(kGroupStyle);
         auto* compLayout = new QHBoxLayout(compGroup);
         compLayout->setSpacing(4);
@@ -4313,6 +4816,30 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             edit->setMinimumHeight(24);
         };
 
+        auto styleKiwiCombo = [](QComboBox* combo) {
+            applyComboStyle(combo);
+            combo->setMinimumHeight(24);
+        };
+
+        // Receiver-family selector shared by the configured and new rows:
+        // index 0 = KiwiSDR, index 1 = Web-888 (docs/web888-cleanroom-design.md).
+        auto fillReceiverTypeCombo = [](QComboBox* combo) {
+            combo->addItem(QStringLiteral("KiwiSDR"));
+            combo->addItem(QStringLiteral("Web-888"));
+        };
+        auto receiverTypeComboIndex =
+            [](KiwiSdrProtocol::KiwiSdrReceiverFamily family) {
+                return family == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+                    ? 1
+                    : 0;
+            };
+        auto receiverTypeComboFamily =
+            [](int index) {
+                return index == 1
+                    ? KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+                    : KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi;
+            };
+
         auto styleKiwiButton = [](QPushButton* button) {
             button->setStyleSheet(kKiwiActionButtonStyle);
             button->setMinimumWidth(96);
@@ -4326,7 +4853,9 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         };
 
         *refreshKiwi = [this, kiwiRowsLayout, stateText, styleKiwiEdit,
-                        styleKiwiButton, styleKiwiIconButton,
+                        styleKiwiButton, styleKiwiIconButton, styleKiwiCombo,
+                        fillReceiverTypeCombo, receiverTypeComboIndex,
+                        receiverTypeComboFamily,
                         kiwiPasswordDescription] {
             while (QLayoutItem* item = kiwiRowsLayout->takeAt(0)) {
                 if (QWidget* widget = item->widget()) {
@@ -4437,6 +4966,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 addFieldLabel(rowLayout, "NAME", 0);
                 addFieldLabel(rowLayout, "SERVER", 1);
                 addFieldLabel(rowLayout, "PASSWORD", 2);
+                addFieldLabel(rowLayout, "TYPE", 3);
 
                 auto* nameEdit = new QLineEdit(profile.name);
                 nameEdit->setMaxLength(16);
@@ -4467,7 +4997,18 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     passwordEdit->setEnabled(false);
                 }
                 styleKiwiEdit(passwordEdit);
-                rowLayout->addWidget(passwordEdit, 2, 2, 1, 2);
+                rowLayout->addWidget(passwordEdit, 2, 2);
+
+                auto* typeCombo = new GuardedComboBox;
+                fillReceiverTypeCombo(typeCombo);
+                typeCombo->setCurrentIndex(receiverTypeComboIndex(profile.family));
+                typeCombo->setAccessibleName("KiwiSDR receiver type");
+                typeCombo->setAccessibleDescription(
+                    "Receiver family for this endpoint: a KiwiSDR or a "
+                    "Web-888, which speaks the same protocol with small "
+                    "differences.");
+                styleKiwiCombo(typeCombo);
+                rowLayout->addWidget(typeCombo, 2, 3);
 
                 const KiwiSdrPasswordPersistenceState persistenceState =
                     m_kiwiSdrManager->profilePasswordPersistenceState(
@@ -4596,6 +5137,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 kiwiRowsLayout->addWidget(rowFrame);
 
                 auto updateProfile = [this, profile, nameEdit, endpointEdit,
+                                      typeCombo, receiverTypeComboFamily,
                                       autoCheck, keepTxAudioCheck,
                                       resumeDelayCheck] {
                     const QString name = nameEdit->text().trimmed();
@@ -4618,6 +5160,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     KiwiSdrAntennaProfile updated = profile;
                     updated.name = name;
                     updated.endpoint = endpoint;
+                    updated.family = receiverTypeComboFamily(
+                        typeCombo->currentIndex());
                     updated.autoConnect = autoCheck->isChecked();
                     updated.keepAudioDuringTx = keepTxAudioCheck->isChecked();
                     updated.resumeAudioAfterTxDelay =
@@ -4646,6 +5190,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 });
                 connect(resumeDelayCheck, &QCheckBox::toggled,
                         this, [updateProfile](bool) { updateProfile(); });
+                connect(typeCombo, &QComboBox::currentIndexChanged,
+                        this, [updateProfile](int) { updateProfile(); });
                 connect(connectButton, &QPushButton::clicked,
                         this, [this, profile, activeSession] {
                     if (activeSession) {
@@ -4675,6 +5221,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             addFieldLabel(rowLayout, "NAME", 0);
             addFieldLabel(rowLayout, "SERVER", 1);
             addFieldLabel(rowLayout, "PASSWORD", 2);
+            addFieldLabel(rowLayout, "TYPE", 3);
 
             auto* nameEdit = new QLineEdit;
             nameEdit->setMaxLength(16);
@@ -4703,6 +5250,16 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             styleKiwiEdit(passwordEdit);
             rowLayout->addWidget(passwordEdit, 2, 2);
 
+            auto* typeCombo = new GuardedComboBox;
+            fillReceiverTypeCombo(typeCombo);
+            typeCombo->setAccessibleName("New KiwiSDR receiver type");
+            typeCombo->setAccessibleDescription(
+                "Receiver family for the new endpoint: a KiwiSDR or a "
+                "Web-888, which speaks the same protocol with small "
+                "differences.");
+            styleKiwiCombo(typeCombo);
+            rowLayout->addWidget(typeCombo, 2, 3);
+
             auto* autoCheck = new QCheckBox;
             autoCheck->setText("Auto-connect");
             autoCheck->setAccessibleName("Auto connect new KiwiSDR antenna");
@@ -4713,6 +5270,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
 
             auto committed = std::make_shared<bool>(false);
             auto commitNewRow = [this, nameEdit, endpointEdit, passwordEdit,
+                                 typeCombo, receiverTypeComboFamily,
                                  autoCheck, committed] {
                 if (*committed) {
                     return;
@@ -4724,7 +5282,9 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     return;
                 }
                 *committed = true;
-                const QString id = m_kiwiSdrManager->addProfile(name, endpoint);
+                const QString id = m_kiwiSdrManager->addProfile(
+                    name, endpoint, receiverTypeComboFamily(
+                                        typeCombo->currentIndex()));
                 if (id.isEmpty()) {
                     *committed = false;
                     return;
@@ -6483,6 +7043,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
     {
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
+        m_flexControlGroup = group;
+        group->setVisible(!m_model->isConnected()
+                          || m_model->backendCapabilities().hasFlexControlIntegration);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -7939,6 +8502,17 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         if (m_spe) {
             m_spe->setAutoReconnect(on);
         }
+        if (m_lpMeter) {
+            m_lpMeter->setAutoReconnect(on);
+        }
+        // NOTE: m_vkamp is deliberately NOT propagated here, and that is a
+        // pre-existing gap from #4919 rather than an intentional omission --
+        // VkampConnection has setAutoReconnect() and the startup block in
+        // MainWindow_Wiring.cpp does call it, so toggling this checkbox
+        // mid-session reaches every peripheral except that one. Left alone on
+        // purpose: it is not this PR's row to change, and bundling an
+        // unrelated shipped-code fix into a feature PR is what the project's
+        // scope-discipline rule exists to prevent. Needs its own one-liner.
     });
     vbox->addWidget(reconnectCheck);
 
@@ -7947,6 +8521,253 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "Configure manual IP addresses for peripherals that cannot be discovered via UDP broadcast.\n"
         "This is needed for remote, VPN, and SmartLink connections. "
         "Configured devices auto-connect when the radio connects.");
+    // Next free row: TelePost LP-100A wattmeter — serial OR ser2net network,
+    // structurally identical to the ACOM row above. See
+    // docs/architecture/lp-100a-wattmeter-design.md for the design note.
+    //
+    // Only the CONNECTION settings live here. The per-range full scale is a
+    // display preference and is edited from the applet's own context menu.
+    if (m_lpMeter) {
+        const int row = grid->rowCount();
+        static const QString kComboStyle =
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        // Token-based equivalents of the file-level kLabelStyle/kEditStyle/
+        // kBtnStyle that the rows above apply with a direct setStyleSheet().
+        // Two separate reasons, and only the first is about the CI gate:
+        //
+        //  1. The colour ratchet counts setStyleSheet CALL SITES as well as
+        //     colours, so four new direct calls fail it even though this row
+        //     introduces no new hex.  Routing through ThemeManager clears
+        //     that, because ThemeManager.cpp is on the audit allow-list.
+        //  2. Routing alone is NOT enough to make a widget follow the theme.
+        //     applyStyleSheet() resolves {{color.*}} tokens and re-resolves on
+        //     a theme change -- but a template with literal hex in it resolves
+        //     to itself, so re-applying it is a no-op.  The tokens below are
+        //     what actually makes this row theme-aware; passing the hex
+        //     constants through applyStyleSheet would have satisfied the gate
+        //     while changing nothing visually.
+        //
+        // Mappings are from docs/theming/canonical-tokens.md: #c8d8e8 ->
+        // text.primary (the table folds it there explicitly), #1a2a3a ->
+        // background.1, #304050 -> background.2.  kBtnStyle's #203040 hover
+        // also folds into background.1 -- i.e. into its own base fill -- so
+        // the hover would vanish under a literal translation.  Lift it one
+        // tier to background.2 instead, which is what Theme.h:376 and
+        // MainWindow_Menus.cpp:1438 do for a background.1-filled button.
+        static const QString kLpLabelStyle =
+            "QLabel { color: {{color.text.primary}}; font-size: 12px; }";
+        static const QString kLpEditStyle =
+            "QLineEdit { background: {{color.background.1}}; "
+            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+            "color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }";
+        static const QString kLpBtnStyle =
+            "QPushButton { background: {{color.background.1}}; "
+            "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+            "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
+            "padding: 3px 10px; }"
+            "QPushButton:hover { background: {{color.background.2}}; }";
+        auto& tm = AetherSDR::ThemeManager::instance();
+
+        auto* devWidget = new QWidget;
+        auto* devLay = new QVBoxLayout(devWidget);
+        devLay->setContentsMargins(0, 0, 0, 0);
+        devLay->setSpacing(2);
+        auto* devLbl = new QLabel("LP-100A Meter");
+        tm.applyStyleSheet(devLbl, kLpLabelStyle);
+        devLay->addWidget(devLbl);
+        auto* modeCombo = new QComboBox;
+        modeCombo->setAccessibleName(tr("LP-100A connection type"));
+        tm.applyStyleSheet(modeCombo, kComboStyle);
+#ifdef HAVE_SERIALPORT
+        modeCombo->addItem("Serial", "Serial");
+#endif
+        modeCombo->addItem("Network", "Network");
+        devLay->addWidget(modeCombo);
+        grid->addWidget(devWidget, row, 0);
+
+        auto* addrStack = new QStackedWidget;
+        int serialPageIdx = -1;
+        QComboBox* serialCombo = nullptr;
+        QLineEdit* serialCustomEdit = nullptr;
+#ifdef HAVE_SERIALPORT
+        {
+            auto* serialPage = new QWidget;
+            auto* lay = new QHBoxLayout(serialPage);
+            lay->setContentsMargins(0, 0, 0, 0);
+            serialCombo = new QComboBox;
+            serialCombo->setAccessibleName(tr("LP-100A serial port"));
+            tm.applyStyleSheet(serialCombo, kComboStyle);
+            serialCustomEdit = new QLineEdit;
+            serialCustomEdit->setAccessibleName(tr("LP-100A custom serial port"));
+            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
+            tm.applyStyleSheet(serialCustomEdit, kLpEditStyle);
+            const QString savedSerialPort =
+                PeripheralSettings::deviceString("Lp100a", "SerialPort");
+            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
+            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
+            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [serialCombo, serialCustomEdit](int idx) {
+                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
+            });
+            lay->addWidget(serialCombo, 1);
+            lay->addWidget(serialCustomEdit, 1);
+            serialPageIdx = addrStack->addWidget(serialPage);
+        }
+#endif
+        auto* netPage = new QWidget;
+        auto* netLay = new QHBoxLayout(netPage);
+        netLay->setContentsMargins(0, 0, 0, 0);
+        auto* netIpEdit = new QLineEdit;
+        netIpEdit->setAccessibleName(tr("LP-100A network address"));
+        netIpEdit->setAccessibleDescription(
+            tr("IP address or host name of the raw-mode serial proxy"));
+        netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.7");
+        tm.applyStyleSheet(netIpEdit, kLpEditStyle);
+        netIpEdit->setText(PeripheralSettings::deviceString("Lp100a", "ManualIp"));
+        netLay->addWidget(netIpEdit);
+        const int netPageIdx = addrStack->addWidget(netPage);
+        grid->addWidget(addrStack, row, 1);
+
+        auto* portStack = new QStackedWidget;
+        int serialBaudIdx = -1;
+#ifdef HAVE_SERIALPORT
+        {
+            // Fixed by the meter's own spec, not user-configurable. Firmware
+            // before 1.2.0.0 used 38400 and before 1.0.3 used 19200 without
+            // dBm or SWR; neither is supported.
+            auto* fixedLbl = new QLabel("115200 8N1");
+            tm.applyStyleSheet(fixedLbl,
+                "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+            serialBaudIdx = portStack->addWidget(fixedLbl);
+        }
+#endif
+        auto* netPortSpin = new QSpinBox;
+        netPortSpin->setAccessibleName(tr("LP-100A network port"));
+        netPortSpin->setAccessibleDescription(tr("TCP port, 1 to 65535, default 2000"));
+        netPortSpin->setRange(1, 65535);
+        // 2000, not the ACOM row's 7000: ser2net's own common default.
+        netPortSpin->setValue(PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000));
+        tm.applyStyleSheet(netPortSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        const int netPortIdx = portStack->addWidget(netPortSpin);
+        grid->addWidget(portStack, row, 2);
+
+        auto applyMode = [=](const QString& mode) {
+#ifdef HAVE_SERIALPORT
+            if (mode == "Serial" && serialPageIdx >= 0) {
+                addrStack->setCurrentIndex(serialPageIdx);
+                portStack->setCurrentIndex(serialBaudIdx);
+                return;
+            }
+#endif
+            addrStack->setCurrentIndex(netPageIdx);
+            portStack->setCurrentIndex(netPortIdx);
+        };
+        const QString savedMode = PeripheralSettings::deviceString("Lp100a", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        {
+            const int idx = modeCombo->findData(savedMode);
+            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        applyMode(modeCombo->currentData().toString());
+        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [=](int idx) {
+            const QString mode = modeCombo->itemData(idx).toString();
+            PeripheralSettings::setDeviceString("Lp100a", "ConnectionMode", mode);
+            applyMode(mode);
+        });
+
+        auto* statusLbl = new QLabel(m_lpMeter->isConnected() ? "Connected" : "Not connected");
+        statusLbl->setAccessibleName(tr("LP-100A connection status"));
+        const QString kOkStyle =
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        const QString kIdleStyle =
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+        const QString kErrStyle =
+            "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
+        tm.applyStyleSheet(statusLbl, m_lpMeter->isConnected() ? kOkStyle : kIdleStyle);
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* lpBtn = new QPushButton(m_lpMeter->isConnected() ? "Disconnect" : "Connect");
+        lpBtn->setAccessibleName(tr("Connect or disconnect the LP-100A meter"));
+        tm.applyStyleSheet(lpBtn, kLpBtnStyle);
+        grid->addWidget(lpBtn, row, 3);
+
+        auto updateLpState = [this, lpBtn, statusLbl, kOkStyle, kIdleStyle]() {
+            const bool conn = m_lpMeter->isConnected();
+            lpBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                statusLbl, conn ? kOkStyle : kIdleStyle);
+        };
+        connect(m_lpMeter, &LpMeterConnection::connected, this, updateLpState);
+        connect(m_lpMeter, &LpMeterConnection::disconnected, this, updateLpState);
+        connect(m_lpMeter, &LpMeterConnection::connectionFailed, this,
+                [statusLbl, kErrStyle](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kErrStyle);
+        });
+        // Link up but the meter silent is its own state, and the operator
+        // should be able to tell it apart from "not connected" here as well
+        // as in the applet.
+        connect(m_lpMeter, &LpMeterConnection::dataFlowingChanged, this,
+                [this, statusLbl, kOkStyle, kIdleStyle](bool flowing) {
+            if (!m_lpMeter->isConnected()) return;
+            statusLbl->setText(flowing ? "Connected" : "Connected — meter not answering");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                statusLbl, flowing ? kOkStyle : kIdleStyle);
+        });
+
+        connect(lpBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_lpMeter->isConnected()) {
+                m_lpMeter->disconnect();
+                return;
+            }
+            const QString mode = modeCombo->currentData().toString();
+            if (mode == "Network") {
+                const QString ip = netIpEdit->text().trimmed();
+                if (ip.isEmpty()) return;
+                const int port = netPortSpin->value();
+                PeripheralSettings::setDeviceString("Lp100a", "ManualIp", ip);
+                PeripheralSettings::setDeviceInt("Lp100a", "ManualPort", port);
+                m_lpMeter->connectNetwork(ip, static_cast<quint16>(port));
+            }
+#ifdef HAVE_SERIALPORT
+            else {
+                QString port = serialCombo->currentData().toString();
+                if (port == "__custom__")
+                    port = serialCustomEdit->text().trimmed();
+                if (port.isEmpty()) return;
+                PeripheralSettings::setDeviceString("Lp100a", "SerialPort", port);
+                m_lpMeter->connectSerial(port);
+            }
+#endif
+        });
+
+        // Save-on-close, same shape and same reasoning as the ACOM row's.
+        m_peripheralRowSavers.append([netIpEdit, this]() {
+            if (!netIpEdit) return;
+            const QString ip = netIpEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Lp100a", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Lp100a", "ManualIp");
+            PeripheralSettings::clearDeviceField("Lp100a", "ManualPort");
+            if (m_lpMeter->isConnected()
+                && m_lpMeter->description().startsWith(savedIp + ":")) {
+                m_lpMeter->disconnect();
+            }
+        });
+    }
+
     note->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");
     vbox->addWidget(note);
@@ -7990,9 +8811,59 @@ void RadioSetupDialog::selectTab(const QString& tabName)
     const QString pageName = kLegacyPageNames.value(tabName, tabName);
     const int index = m_pageIndexes.value(pageName, -1);
     if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
+        if (!isCapabilityPageAvailable(item)) {
+            return;
+        }
+        if (isGpsPage(item) && !isGpsSetupAvailable()) {
+            return;
+        }
         m_navigation->setCurrentItem(item);
         m_navigation->scrollToItem(item, QAbstractItemView::PositionAtCenter);
     }
+}
+
+void RadioSetupDialog::revealFlexControlSettings()
+{
+    if (m_model->isConnected()
+        && !m_model->backendCapabilities().hasFlexControlIntegration) {
+        return;
+    }
+
+    selectTab(QStringLiteral("Serial & Controllers"));
+    if (!m_flexControlGroup) {
+        return;
+    }
+    // selectTab() just switched (and, on first visit, built) the page on
+    // this call stack, but the scroll area it's wrapped in (#3345) hasn't
+    // laid out yet — ensureWidgetVisible() against stale/zero geometry is a
+    // no-op. Defer one event-loop turn so layout has actually happened.
+    QPointer<QGroupBox> group = m_flexControlGroup;
+    QTimer::singleShot(0, this, [group] {
+        if (!group) {
+            return;
+        }
+        // The group lives inside the tab's content widget, which
+        // wrapTabInScrollArea() set as the QScrollArea's viewport child —
+        // walk up the parent chain to find that enclosing scroll area.
+        for (QWidget* w = group->parentWidget(); w; w = w->parentWidget()) {
+            if (auto* area = qobject_cast<QScrollArea*>(w)) {
+                QWidget* content = area->widget();
+                if (!content) {
+                    return;
+                }
+                // Deliberately not ensureWidgetVisible(): it *centers* a
+                // widget taller than the viewport, and the FlexControl
+                // Tuning Knob group (~450-480px) is tall enough that at the
+                // dialog's 960x680 floor, centering pushes the group's own
+                // title and Status row above the top edge — the opposite of
+                // what "reveal" should do. Scroll its top edge into view
+                // directly instead (PR #5157 review).
+                const int y = group->mapTo(content, QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
+                return;
+            }
+        }
+    });
 }
 
 void RadioSetupDialog::refreshFlexControlButtonActions()

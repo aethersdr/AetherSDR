@@ -204,6 +204,43 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.manualSquelchLevel(), before);
     }
 
+    // DTCS is one radio register: a three-digit code plus independent TX/RX
+    // polarity. The normalized model must move and publish that tuple intact.
+    {
+        SliceModel s(7);
+        QSignalSpy commandSpy(&s, &SliceModel::fmDtcsCommandIssued);
+        QSignalSpy stateSpy(&s, &SliceModel::fmDtcsChanged);
+        EXPECT_EQ(s.fmDtcsCode(), -1);
+        s.setFmDtcs(23, true, false);
+        EXPECT_EQ(commandSpy.count(), 1);
+        EXPECT_EQ(stateSpy.count(), 0);
+        EXPECT_EQ(s.fmDtcsCode(), -1);
+        EXPECT_EQ(s.fmDtcsTxReverse(), false);
+        EXPECT_EQ(s.fmDtcsRxReverse(), false);
+
+        s.setFmDtcs(123, false, false);
+        EXPECT_EQ(commandSpy.count(), 1); // non-standard operator intent is refused
+
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.fmDtcsCode = 754;
+            d.fmDtcsTxReverse = false;
+            d.fmDtcsRxReverse = true;
+        }));
+        EXPECT_EQ(commandSpy.count(), 1); // radio echo is state, not new intent
+        EXPECT_EQ(stateSpy.count(), 1);
+        EXPECT_EQ(s.fmDtcsCode(), 754);
+        EXPECT_EQ(s.fmDtcsTxReverse(), false);
+        EXPECT_EQ(s.fmDtcsRxReverse(), true);
+
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.fmDtcsCode = 754;
+            d.fmDtcsTxReverse = false;
+            d.fmDtcsRxReverse = true;
+        }));
+        EXPECT_EQ(commandSpy.count(), 1);
+        EXPECT_EQ(stateSpy.count(), 1); // repeated radio truth is a no-op
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_squelch_memory_test: all checks passed\n");
         return 0;

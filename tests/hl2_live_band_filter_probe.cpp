@@ -228,12 +228,12 @@ int main(int argc, char** argv)
     {
         const Observation o = observe(client, 1000);
         const Hl2Telemetry& t = o.telemetry;
-        std::printf("\n  telemetry: fw=%s adcOvl=%s txInh=%s fifo=%s tempRaw=%s "
+        std::printf("\n  telemetry: fw=%s adcOvl=%s txInh=%s fifoFill=%s tempRaw=%s "
                     "fwd=%s rev=%s bias=%s\n",
                     t.firmwareVersion ? qPrintable(QString::number(*t.firmwareVersion)) : "-",
                     t.adcOverload ? (*t.adcOverload ? "yes" : "no") : "-",
                     t.txInhibited ? (*t.txInhibited ? "yes" : "no") : "-",
-                    t.txFifoCount ? qPrintable(QString::number(*t.txFifoCount)) : "-",
+                    t.txFifoFillMsbs ? qPrintable(QString::number(*t.txFifoFillMsbs)) : "-",
                     t.temperatureRaw ? qPrintable(QString::number(*t.temperatureRaw)) : "-",
                     t.forwardPowerRaw ? qPrintable(QString::number(*t.forwardPowerRaw)) : "-",
                     t.reversePowerRaw ? qPrintable(QString::number(*t.reversePowerRaw)) : "-",

@@ -255,12 +255,16 @@ void MainWindow::wireDspApplets()
             }
         });
     }
-    connect(&m_radioModel.meterModel(), &MeterModel::swAlcChanged,
-            this, [this](float alc) {
+    connect(&m_radioModel.meterModel(), &MeterModel::alcValueChanged,
+            this, [this](float alc, const QString& unit) {
         // FLEX-8000 TX-chain meters can publish quiescent RX values near 0 dBFS.
         // Only show SW ALC while the radio interlock says RF is actually keyed.
-        m_appletPanel->phoneCwApplet()->updateAlc(
-            m_radioModel.isRadioTransmitting() ? alc : -20.0f);
+        m_appletPanel->phoneCwApplet()->setAlcMeterUnit(unit);
+        if (!unit.isEmpty() && m_radioModel.isRadioTransmitting()) {
+            m_appletPanel->phoneCwApplet()->updateAlc(alc);
+        } else {
+            m_appletPanel->phoneCwApplet()->resetAlc();
+        }
     });
     // Client-side PC mic metering — radio CODEC meters only see hardware mics.
     // Apply VU-style ballistics: fast attack, slow decay (~20 dB/sec).

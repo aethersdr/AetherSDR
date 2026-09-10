@@ -441,6 +441,23 @@ bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId)
     return true;
 }
 
+std::string radioIdHex(const RadioId& radioId)
+{
+    static constexpr char kHex[] = "0123456789abcdef";
+    if (std::all_of(radioId.begin(), radioId.end(),
+                    [](std::uint8_t byte) { return byte == 0; })) {
+        return {};
+    }
+
+    std::string encoded;
+    encoded.reserve(radioId.size() * 2);
+    for (const std::uint8_t byte : radioId) {
+        encoded.push_back(kHex[(byte >> 4) & 0x0f]);
+        encoded.push_back(kHex[byte & 0x0f]);
+    }
+    return encoded;
+}
+
 std::string parseCapabilitiesName(std::span<const std::uint8_t> pkt)
 {
     if (!startsWith(pkt, kLenCapabilities, 0xa8))
@@ -451,6 +468,15 @@ std::string parseCapabilitiesName(std::span<const std::uint8_t> pkt)
     // name the radio it wants, and a hardcoded name is exactly what stops the
     // same backend reaching an IC-9700 or an RS-BA1 server fronting an IC-7300.
     return fixedString(pkt, 0x52, 32);
+}
+
+std::uint8_t parseCapabilitiesCivAddress(std::span<const std::uint8_t> pkt)
+{
+    // wfview packettypes.h radio_cap_packet: civ is at absolute 0x94
+    // (0x42-byte envelope + record offset 0x52). Name is at absolute 0x52.
+    if (!startsWith(pkt, kLenCapabilities, 0xa8)) { return 0; }
+    const std::uint8_t address = pkt[0x94];
+    return address > 0 && address < 0xE0 ? address : 0;
 }
 
 StatusKind parseStatus(std::span<const std::uint8_t> pkt)
@@ -528,6 +554,16 @@ std::vector<std::uint8_t> buildSerialOpen(std::uint32_t localSid, std::uint32_t 
     putBe16(p, 0x13, sendSeq);
     p[0x15] = open ? 0x05 : 0x00;
     return p;
+}
+
+std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
+                                             std::uint32_t remoteSid,
+                                             std::uint16_t sendSeq)
+{
+    std::vector<std::uint8_t> packet =
+        buildSerialOpen(localSid, remoteSid, sendSeq, true);
+    packet[0x15] = 0x04;
+    return packet;
 }
 
 std::vector<std::uint8_t> buildSerialData(std::uint32_t localSid, std::uint32_t remoteSid,

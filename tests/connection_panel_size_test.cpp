@@ -3,12 +3,16 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/backends/icom/IcomCredentials.h"
+#include "core/backends/icom/IcomSettings.h"
 #include "gui/ConnectionPanel.h"
 
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
 #include <QFont>
+#include <QFile>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
@@ -16,6 +20,7 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpinBox>
 #include <QSpacerItem>
 #include <QStyle>
 #include <QToolButton>
@@ -133,6 +138,121 @@ void checkIcomManualGuidanceIsModelNeutral()
     report("Icom address example is model-neutral",
            ip && !ip->placeholderText().contains(QStringLiteral("IC-705"),
                                                   Qt::CaseInsensitive));
+}
+
+void checkIcomCustomNatPorts()
+{
+    auto& settings = AppSettings::instance();
+    const bool hadIcom = settings.contains(QStringLiteral("Icom"));
+    const QVariant previousIcom = settings.value(QStringLiteral("Icom"));
+    const bool hadProfiles = settings.contains(QStringLiteral("RoutedProfilesJson"));
+    const QVariant previousProfiles = settings.value(QStringLiteral("RoutedProfilesJson"));
+    const bool hadRecent = settings.contains(QStringLiteral("RecentConnectByIpAddresses"));
+    const QVariant previousRecent = settings.value(QStringLiteral("RecentConnectByIpAddresses"));
+
+    IcomSettings::reset();
+
+    ConnectionPanel panel;
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* radioType =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualRadioType"));
+    auto* portMode =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomPortMode"));
+    auto* basePort =
+        panel.findChild<QSpinBox*>(QStringLiteral("connectionManualIcomBasePort"));
+    auto* user = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomUser"));
+    auto* password =
+        panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomPassword"));
+
+    if (manualMode) {
+        manualMode->click();
+    }
+    const int icomIndex = radioType
+        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyIcom))
+        : -1;
+    if (radioType && icomIndex >= 0) {
+        radioType->setCurrentIndex(icomIndex);
+    }
+    QApplication::processEvents();
+
+    report("Icom connect-by-IP defaults to standard UDP ports",
+           portMode
+               && portMode->currentData().toString() == QStringLiteral("__standard__"));
+    report("custom NAT base port stays hidden in standard mode",
+           basePort && !basePort->isVisibleTo(&panel));
+
+    const int customIndex = portMode
+        ? portMode->findData(QStringLiteral("__custom__"))
+        : -1;
+    if (portMode && customIndex >= 0) {
+        portMode->setCurrentIndex(customIndex);
+    }
+    if (basePort) {
+        basePort->setValue(52001);
+    }
+    if (user) {
+        user->setText(QStringLiteral("test-user"));
+    }
+    if (password) {
+        password->setText(QStringLiteral("test-password"));
+    }
+    QApplication::processEvents();
+
+    report("custom NAT mode reveals the first UDP port",
+           basePort && basePort->isVisibleTo(&panel));
+
+    bool emitted = false;
+    RadioInfo requested;
+    QObject::connect(&panel, &ConnectionPanel::connectRequested,
+                     [&emitted, &requested](const RadioInfo& info) {
+        emitted = true;
+        requested = info;
+    });
+    panel.probeRadio(QStringLiteral("127.0.0.1"));
+
+    report("custom NAT Icom emits a connection request", emitted);
+    report("custom NAT base port becomes the control destination",
+           emitted && requested.port == 52001);
+    report("custom NAT endpoint has a port-qualified radio identity",
+           emitted && requested.serial == QStringLiteral("icom:127.0.0.1:52001"));
+    report("custom NAT range derives the CI-V port",
+           IcomSettings::serialPort() == 52002);
+    report("custom NAT range derives the audio port",
+           IcomSettings::audioPort() == 52003);
+
+    // The authenticated endpoint is the one emitted above. Editing the still-
+    // visible field while that request is in flight must not change what a
+    // later success callback retains for restart.
+    if (basePort) {
+        basePort->setValue(51001);
+    }
+    panel.setConnected(true);
+    const QJsonObject profiles = QJsonDocument::fromJson(
+        settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}"))
+            .toString().toUtf8()).object();
+    const int savedBase = profiles.value(QStringLiteral("127.0.0.1"))
+                              .toObject().value(QStringLiteral("icom"))
+                              .toObject().value(QStringLiteral("base_port")).toInt();
+    report("successful routed profile retains the requested base port", savedBase == 52001);
+
+    if (hadIcom) {
+        settings.setValue(QStringLiteral("Icom"), previousIcom);
+    } else {
+        settings.remove(QStringLiteral("Icom"));
+    }
+    if (hadProfiles) {
+        settings.setValue(QStringLiteral("RoutedProfilesJson"), previousProfiles);
+    } else {
+        settings.remove(QStringLiteral("RoutedProfilesJson"));
+    }
+    if (hadRecent) {
+        settings.setValue(QStringLiteral("RecentConnectByIpAddresses"), previousRecent);
+    } else {
+        settings.remove(QStringLiteral("RecentConnectByIpAddresses"));
+    }
+    settings.save();
+    IcomCredentials::clearSession();
 }
 
 bool setScaledApplicationFont(QApplication& app,
@@ -342,6 +462,44 @@ int main(int argc, char** argv)
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QApplication app(argc, argv);
+
+    // MainWindow is intentionally not linked into this focused widget target.
+    // Pin the consolidated startup policy instead: each settings combination
+    // must schedule at most one idempotent show request, while the two real
+    // operator entry points retain deliberate toggle behavior.
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    report("startup dialog test can inspect MainWindow",
+           mainWindowSource.open(QIODevice::ReadOnly));
+    const QByteArray mainWindowText = mainWindowSource.readAll();
+    const qsizetype startupPolicyStart = mainWindowText.indexOf(
+        "// Saved-radio autoconnect is controlled solely");
+    const qsizetype startupPolicyEnd = mainWindowText.indexOf(
+        "// Auto-connect to routed radios", startupPolicyStart);
+    const QByteArray startupPolicy = mainWindowText.mid(
+        startupPolicyStart, startupPolicyEnd - startupPolicyStart);
+    report("connection dialog startup policy remains one adjacent block",
+           startupPolicyStart >= 0 && startupPolicyEnd > startupPolicyStart);
+    report("auto-connect opt-out idempotently shows connection dialog",
+           startupPolicy.contains(
+               "QTimer::singleShot(0, this, &MainWindow::showConnectionDialog);"));
+    report("missing-radio fallback idempotently shows connection dialog",
+           startupPolicy.contains(
+               "QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });"));
+    report("startup policy never toggles an already-visible dialog",
+           !startupPolicy.contains("toggleConnectionDialog"));
+
+    QFile menuSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Menus.cpp"));
+    report("startup dialog test can inspect the Settings menu",
+           menuSource.open(QIODevice::ReadOnly));
+    report("Settings menu retains deliberate toggle behavior",
+           menuSource.readAll().contains("toggleConnectionDialog();"));
+
+    QFile shortcutSource(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
+    report("startup dialog test can inspect keyboard shortcuts",
+           shortcutSource.open(QIODevice::ReadOnly));
+    report("keyboard shortcut retains deliberate toggle behavior",
+           shortcutSource.readAll().contains("toggleConnectionDialog();"));
     AppSettings::instance().load();
     std::printf("ConnectionPanel screen-fit test harness (#4515)\n\n");
 
@@ -528,6 +686,7 @@ int main(int argc, char** argv)
 
     app.setFont(originalFont);
     checkIcomManualGuidanceIsModelNeutral();
+    checkIcomCustomNatPorts();
     checkIcomUsesRoutedRetention();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;

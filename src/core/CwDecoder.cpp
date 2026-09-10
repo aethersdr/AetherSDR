@@ -62,6 +62,25 @@ void CwDecoder::stop()
     }
 
     m_ggmorse.reset();
+
+    // The estimates died with the ggmorse instance — clear them so a later
+    // Zero Beat can't retune the slice on a pitch from a previous run
+    // (#5213).  Locked values are operator-set state, not estimates: keep
+    // them, or applyDecodeParameters() would feed 0 into a still-pressed
+    // lock button on the next start.
+    if (!m_pitchLocked) m_pitch = 0;
+    if (!m_speedLocked) m_speed = 0;
+    if (!m_pitchLocked || !m_speedLocked) {
+        // Post the clearing emission through the event queue: the worker's
+        // cross-thread statsUpdated deliveries are queued, so a reading it
+        // posted just before m_running flipped would otherwise arrive AFTER
+        // a direct emit and re-show the dead estimate.  Queued-behind, the
+        // clear always lands last (and dies with the object at shutdown).
+        QMetaObject::invokeMethod(this, [this] {
+            emit statsUpdated(m_pitch, m_speed);
+        }, Qt::QueuedConnection);
+    }
+
     qCDebug(lcDsp) << "CwDecoder: stopped";
 }
 

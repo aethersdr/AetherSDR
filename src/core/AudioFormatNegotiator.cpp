@@ -58,15 +58,42 @@ QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
 // native is Int16; Float is the virtual-driver / Float-only fallback — #1090).
 // Int16-native playback sinks (QSO/Pudu) pass Int16First so they avoid a
 // conversion on normal devices while still falling back to Float.
-QList<SampleFmt> formatOrder(Direction dir, FormatPreference pref)
+QList<SampleFmt> formatOrder(TargetOs os, Direction dir, FormatPreference pref)
 {
     if (pref == FormatPreference::Int16First)
         return {SampleFmt::Int16, SampleFmt::Float32};
     if (pref == FormatPreference::Float32First)
         return {SampleFmt::Float32, SampleFmt::Int16};
-    return dir == Direction::Output
-        ? QList<SampleFmt>{SampleFmt::Float32, SampleFmt::Int16}
-        : QList<SampleFmt>{SampleFmt::Int16, SampleFmt::Float32};
+    if (dir == Direction::Output)
+        return {SampleFmt::Float32, SampleFmt::Int16};
+
+    // Input. Same inversion the 48 kHz strip forced on the RATE ladder, applied
+    // to the FORMAT ladder. Int16-first was right while the DSP island was
+    // Int16: the mic's own samples are integer, so asking for Int16 meant no
+    // conversion anywhere. TxVoiceProcessor is float now, and every host engine
+    // we open through already mixes in float — WASAPI's shared mix is float32 by
+    // construction, and converts to integer only at the app boundary
+    // (learn.microsoft.com/windows/win32/coreaudio/device-formats); PipeWire and
+    // PulseAudio likewise. So Int16 capture buys a quantization on the way in
+    // and processCapturedFloat32() would widen it straight back — a round trip
+    // at the ENTRANCE of a chain whose stated design is "become float once,
+    // quantize once at the 24 kHz transport boundary".
+    //
+    // Int16 stays the next rung, so an Int16-only endpoint negotiates exactly as
+    // it did before.
+    switch (os) {
+    case TargetOs::Windows:
+    case TargetOs::Linux:
+        return {SampleFmt::Float32, SampleFmt::Int16};
+    // macOS deliberately keeps Int16-first. The argument above applies to
+    // CoreAudio too, but this change only measures Windows and Linux, and the
+    // mac input ladder additionally leads with the device's preferredFormat for
+    // BT-HFP / 16k-native mics (#2615 / #2930). Left for a follow-up with real
+    // hardware behind it rather than changed blind.
+    case TargetOs::MacOS:
+        return {SampleFmt::Int16, SampleFmt::Float32};
+    }
+    Q_UNREACHABLE();
 }
 
 bool ladderHas(const QList<FormatCandidate>& ladder, int rate, SampleFmt fmt)
@@ -90,6 +117,74 @@ ResamplerKind resamplerKindFor(int deviceRate, ResamplerPolicy policy, int inter
     return ResamplerKind::None;
 }
 
+QList<TxOpenAttempt> txOpenLadder(int initialChannels)
+{
+    // Stage 0 must reproduce exactly what AudioEngine opens first: 48 kHz
+    // Float32 at whatever channel count survived the maximumChannelCount()
+    // clamp. Everything after it is recovery.
+    const int initial = (initialChannels <= 1) ? 1 : 2;
+
+    QList<TxOpenAttempt> ladder;
+    const auto add = [&](int rate, SampleFmt fmt, int channels) {
+        const TxOpenAttempt candidate{rate, fmt, channels};
+        for (const auto& existing : ladder) {
+            if (existing == candidate) return;
+        }
+        ladder.append(candidate);
+    };
+
+    // Rate outermost, then format, then channels. Within 48 kHz that reads
+    // Float32/clamped, Float32/mono, Int16/clamped, Int16/mono — the exact
+    // order the #2929 recovery had, so a merely mono-only mic still recovers
+    // in ONE reopen and the format dimension only costs extra reopens on
+    // devices that actually need it.
+    //
+    // The lower rates are the rungs the null-open path used to own as a
+    // separate loop. They are here rather than there because a rung reached by
+    // a null open and a rung reached by a silent open are the same rung, and
+    // the bug that produced this restructure was two sequences disagreeing
+    // about which one they were on.
+    for (int rate : {48000, 44100, 24000, 16000}) {
+        for (SampleFmt fmt : {SampleFmt::Float32, SampleFmt::Int16}) {
+            add(rate, fmt, initial);
+            add(rate, fmt, 1);
+        }
+    }
+    return ladder;
+}
+
+TxOpenCursor::TxOpenCursor(int initialChannels, int stage)
+    : m_ladder(txOpenLadder(initialChannels))
+{
+    // A persisted stage from a previous pass is clamped rather than trusted:
+    // the ladder's LENGTH depends on the channel clamp, so a stage carried
+    // across a device change could otherwise index past the end.
+    m_stage = qBound(0, stage, static_cast<int>(m_ladder.size()) - 1);
+}
+
+bool TxOpenCursor::advance()
+{
+    if (!hasNext())
+        return false;
+    ++m_stage;
+    return true;
+}
+
+int walkTxOpen(TxOpenCursor& cursor,
+               const std::function<TxOpenOutcome(const TxOpenAttempt&)>& probe)
+{
+    for (;;) {
+        const TxOpenOutcome outcome = probe(cursor.attempt());
+        if (outcome == TxOpenOutcome::Delivers)
+            return cursor.stage();
+        // Null and SilentNonNull take the same branch on purpose — see the
+        // enum's comment. If the ladder is exhausted the mic never opens
+        // (null) or never speaks (silent); either way there is nothing left.
+        if (!cursor.advance())
+            return -1;
+    }
+}
+
 QList<FormatCandidate> buildLadder(TargetOs os,
                                    Direction dir,
                                    const DeviceCaps& caps,
@@ -98,7 +193,7 @@ QList<FormatCandidate> buildLadder(TargetOs os,
                                    FormatPreference pref)
 {
     QList<FormatCandidate> ladder;
-    const QList<SampleFmt> fmts = formatOrder(dir, pref);
+    const QList<SampleFmt> fmts = formatOrder(os, dir, pref);
 
     const auto add = [&](int rate, SampleFmt fmt, const QString& reason) {
         if (rate <= 0) return;
@@ -114,13 +209,27 @@ QList<FormatCandidate> buildLadder(TargetOs os,
 
     // macOS / preferred-first inputs: the device's own preferred rate leads the
     // ladder so we never force a 16k-native or BT-HFP mic up to 48k (#2930 /
-    // #2615). preferredFormat is honoured here too.
+    // #2615).
+    //
+    // This rung exists for the RATE. Taking caps.preferredFormat with it would
+    // quietly hand macOS a different FORMAT policy than formatOrder() states,
+    // because CoreAudio inputs report Float as their preferred format — so
+    // every Mac mic advertising a preferred rate would capture Float32 while
+    // formatOrder() below still says macOS leads with Int16. That contradiction
+    // was invisible while AudioEngine discarded every non-Int16 rung itself;
+    // once the engine honours the rung, it decides macOS behaviour (review of
+    // PR #5017). Lead with the per-OS format order instead, and let the
+    // preferredFormat catch-all rung at the bottom keep Float32-only endpoints
+    // working — strictly more capable than the engine-side filter it replaces.
     const bool preferredFirst =
         (dir == Direction::Input && os == TargetOs::MacOS && caps.preferredRate > 0);
     if (preferredFirst) {
-        add(caps.preferredRate, caps.preferredFormat,
+        const QString reason =
             caps.isBluetoothHfp ? QStringLiteral("macOS Bluetooth-HFP native rate (#2615)")
-                                : QStringLiteral("macOS mic preferred rate first (#2930)"));
+                                : QStringLiteral("macOS mic preferred rate first (#2930)");
+        for (SampleFmt fmt : fmts) {
+            add(caps.preferredRate, fmt, reason);
+        }
     }
 
     // Main per-OS rate order × format order.

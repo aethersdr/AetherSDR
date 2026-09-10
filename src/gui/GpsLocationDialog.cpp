@@ -8,18 +8,22 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QCheckBox>
 #include <QDateTime>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QLocale>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSizePolicy>
+#include <QSignalBlocker>
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -31,6 +35,13 @@ namespace AetherSDR {
 namespace {
 
 constexpr double kAddressMovementThresholdDegrees = 0.001;
+
+bool validNtpInput(const QString& value)
+{
+    static const QRegularExpression allowed(
+        QStringLiteral("^[A-Za-z0-9.-]{1,64}$"));
+    return allowed.match(value.trimmed()).hasMatch();
+}
 
 QString displayValue(const QString& value)
 {
@@ -181,6 +192,10 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
         "QLabel[gpsRole='value'] { color: {{color.text.primary}}; font-size: 13px; font-weight: 600; }"
         "QLabel[gpsRole='muted'] { color: {{color.text.secondary}}; font-size: 11px; }"
         "QLabel[gpsRole='tip'] { color: {{color.text.primary}}; background: {{color.background.2}}; border: 1px solid {{color.border.subtle}}; border-radius: 6px; padding: 8px; font-size: 12px; }"
+        "QCheckBox { color: {{color.text.primary}}; background-color: transparent; spacing: 7px; }"
+        "QLineEdit#gpsNtpServer { color: {{color.text.primary}}; background-color: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 5px; padding: 5px 7px; }"
+        "QLineEdit#gpsNtpServer:focus { border-color: {{color.border.accent}}; }"
+        "QLineEdit#gpsNtpServer:disabled { color: {{color.text.disabled}}; background-color: {{color.background.1}}; border-color: {{color.border.subtle}}; }"
         "QPushButton { color: {{color.text.primary}}; background: {{color.background.2}}; border: 1px solid {{color.border.strong}}; border-radius: 5px; padding: 5px 10px; }"
         "QPushButton:hover, QPushButton:focus { border-color: {{color.border.accent}}; }"
         "QPushButton:pressed { background: {{color.background.3}}; }"
@@ -216,12 +231,14 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     headerLayout->addWidget(makeMetricCard(
         tr("GPS FIX"), QStringLiteral("gpsFixStatus"), tr("GPS fix status"),
         m_fixStatusLabel, header));
-    headerLayout->addWidget(makeMetricCard(
+    m_satelliteMetricCard = makeMetricCard(
         tr("SATELLITES"), QStringLiteral("gpsSatelliteSummary"),
-        tr("GPS satellites tracked and visible"), m_satelliteSummaryLabel, header));
-    headerLayout->addWidget(makeMetricCard(
+        tr("GPS satellites tracked and visible"), m_satelliteSummaryLabel, header);
+    headerLayout->addWidget(m_satelliteMetricCard);
+    m_referenceMetricCard = makeMetricCard(
         tr("10 MHz REFERENCE"), QStringLiteral("gpsReferenceSummary"),
-        tr("Radio frequency reference status"), m_referenceSummaryLabel, header));
+        tr("Radio frequency reference status"), m_referenceSummaryLabel, header);
+    headerLayout->addWidget(m_referenceMetricCard);
     headerLayout->addWidget(makeMetricCard(
         tr("TELEMETRY"), QStringLiteral("gpsReportFreshness"),
         tr("Age of the latest GPS report"), m_freshnessLabel, header));
@@ -237,33 +254,37 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     locationLayout->addWidget(
         makeSectionTitle(tr("Current Location"), locationGroup), 0, 0, 1, 2);
 
+    m_sourceLabel = new QLabel;
+    configureReadout(m_sourceLabel, QStringLiteral("gpsPositionSource"),
+                     tr("Position source selected by the radio"));
+    addReadoutRow(locationLayout, 1, tr("Source"), m_sourceLabel);
     m_gridLabel = new QLabel;
     configureReadout(m_gridLabel, QStringLiteral("gpsGrid"), tr("Maidenhead grid square"));
-    addReadoutRow(locationLayout, 1, tr("Grid square"), m_gridLabel);
+    addReadoutRow(locationLayout, 2, tr("Grid square"), m_gridLabel);
     m_latitudeLabel = new QLabel;
     configureReadout(m_latitudeLabel, QStringLiteral("gpsLatitude"), tr("GPS latitude"));
-    addReadoutRow(locationLayout, 2, tr("Latitude"), m_latitudeLabel);
+    addReadoutRow(locationLayout, 3, tr("Latitude"), m_latitudeLabel);
     m_longitudeLabel = new QLabel;
     configureReadout(m_longitudeLabel, QStringLiteral("gpsLongitude"), tr("GPS longitude"));
-    addReadoutRow(locationLayout, 3, tr("Longitude"), m_longitudeLabel);
+    addReadoutRow(locationLayout, 4, tr("Longitude"), m_longitudeLabel);
     m_nativeCoordinatesLabel = new QLabel;
     configureReadout(m_nativeCoordinatesLabel, QStringLiteral("gpsNativeCoordinates"),
                      tr("Coordinates as reported by the radio"));
     m_nativeCoordinatesLabel->setWordWrap(true);
-    addReadoutRow(locationLayout, 4, tr("Radio format"), m_nativeCoordinatesLabel);
+    addReadoutRow(locationLayout, 5, tr("Radio format"), m_nativeCoordinatesLabel);
     m_altitudeLabel = new QLabel;
     configureReadout(m_altitudeLabel, QStringLiteral("gpsAltitude"), tr("GPS altitude"));
-    addReadoutRow(locationLayout, 5, tr("Altitude"), m_altitudeLabel);
+    addReadoutRow(locationLayout, 6, tr("Altitude"), m_altitudeLabel);
     m_speedLabel = new QLabel;
     configureReadout(m_speedLabel, QStringLiteral("gpsSpeed"), tr("GPS speed"));
-    addReadoutRow(locationLayout, 6, tr("Speed"), m_speedLabel);
+    addReadoutRow(locationLayout, 7, tr("Speed"), m_speedLabel);
     m_courseLabel = new QLabel;
     configureReadout(m_courseLabel, QStringLiteral("gpsCourse"), tr("GPS course over ground"));
-    addReadoutRow(locationLayout, 7, tr("Course"), m_courseLabel);
+    addReadoutRow(locationLayout, 8, tr("Course"), m_courseLabel);
 
     auto* addressTitle = new QLabel(tr("Nearest mapped address"));
     addressTitle->setProperty("gpsRole", QStringLiteral("fieldTitle"));
-    locationLayout->addWidget(addressTitle, 8, 0, Qt::AlignTop);
+    locationLayout->addWidget(addressTitle, 9, 0, Qt::AlignTop);
     auto* addressColumn = new QWidget(locationGroup);
     addressColumn->setObjectName(QStringLiteral("gpsAddressColumn"));
     auto* addressLayout = new QVBoxLayout(addressColumn);
@@ -279,7 +300,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     attribution->setProperty("gpsRole", QStringLiteral("muted"));
     attribution->setAccessibleName(tr("OpenStreetMap address attribution"));
     addressLayout->addWidget(attribution);
-    locationLayout->addWidget(addressColumn, 8, 1, Qt::AlignTop);
+    locationLayout->addWidget(addressColumn, 9, 1, Qt::AlignTop);
 
     auto* actions = new QHBoxLayout;
     actions->setContentsMargins(0, 6, 0, 0);
@@ -307,8 +328,8 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     });
     actions->addWidget(m_refreshAddressButton);
     actions->addStretch();
-    locationLayout->addLayout(actions, 9, 0, 1, 2, Qt::AlignTop);
-    locationLayout->setRowStretch(10, 1);
+    locationLayout->addLayout(actions, 10, 0, 1, 2, Qt::AlignTop);
+    locationLayout->setRowStretch(11, 1);
     root->addWidget(locationGroup, 1, 0);
 
     auto* mapGroup = new QGroupBox(content);
@@ -333,19 +354,19 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     QTimer::singleShot(0, m_mapView, &MapView::resetToHome);
     root->addWidget(mapGroup, 1, 1);
 
-    auto* satelliteGroup = new QGroupBox(content);
-    satelliteGroup->setAccessibleName(
+    m_satelliteGroup = new QGroupBox(content);
+    m_satelliteGroup->setAccessibleName(
         tr("Satellite Reception and Frequency Reference"));
-    auto* satelliteLayout = new QGridLayout(satelliteGroup);
+    auto* satelliteLayout = new QGridLayout(m_satelliteGroup);
     satelliteLayout->setContentsMargins(14, 12, 14, 12);
     satelliteLayout->setHorizontalSpacing(18);
     satelliteLayout->setVerticalSpacing(7);
     satelliteLayout->setColumnStretch(1, 1);
     satelliteLayout->addWidget(makeSectionTitle(
-        tr("Satellite Reception and Frequency Reference"), satelliteGroup),
+        tr("Satellite Reception and Frequency Reference"), m_satelliteGroup),
         0, 0, 1, 2);
 
-    m_satelliteProgress = new QProgressBar(satelliteGroup);
+    m_satelliteProgress = new QProgressBar(m_satelliteGroup);
     m_satelliteProgress->setObjectName(QStringLiteral("gpsSatelliteProgress"));
     m_satelliteProgress->setAccessibleName(tr("Satellite tracking ratio"));
     m_satelliteProgress->setRange(0, 100);
@@ -385,14 +406,14 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     auto* apiNote = new QLabel(
         tr("AetherSDR reports aggregate tracked/visible counts, but not individual "
            "satellite IDs, azimuth, elevation, or signal strength. Orbital positions "
-           "are therefore intentionally not estimated."), satelliteGroup);
+           "are therefore intentionally not estimated."), m_satelliteGroup);
     apiNote->setObjectName(QStringLiteral("gpsSatelliteApiNote"));
     apiNote->setProperty("gpsRole", QStringLiteral("muted"));
     apiNote->setWordWrap(true);
     apiNote->setAccessibleName(tr("Satellite API limitation"));
     satelliteLayout->addWidget(apiNote, 10, 0, 1, 2);
     satelliteLayout->setRowStretch(11, 1);
-    root->addWidget(satelliteGroup, 2, 0);
+    root->addWidget(m_satelliteGroup, 2, 0);
 
     auto* timeGroup = new QGroupBox(content);
     timeGroup->setAccessibleName(tr("Satellite Time"));
@@ -420,15 +441,15 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                      tr("Agreement between radio GPS time and computer UTC"));
     m_clockAgreementLabel->setWordWrap(true);
     addReadoutRow(timeLayout, 5, tr("Clock agreement"), m_clockAgreementLabel);
-    auto* timeNote = new QLabel(
+    m_timeSourceNote = new QLabel(
         tr("The radio GPS feed supplies UTC time-of-day but no date. UTC/local dates "
            "above therefore come from the computer clock. Use Clock agreement as a "
            "coarse guide when interpreting FT8 time differential (DT), and keep the "
            "computer synchronized with NTP for precise operation."), timeGroup);
-    timeNote->setProperty("gpsRole", QStringLiteral("muted"));
-    timeNote->setWordWrap(true);
-    timeNote->setAccessibleName(tr("GPS date source explanation"));
-    timeLayout->addWidget(timeNote, 6, 0, 1, 2);
+    m_timeSourceNote->setProperty("gpsRole", QStringLiteral("muted"));
+    m_timeSourceNote->setWordWrap(true);
+    m_timeSourceNote->setAccessibleName(tr("GPS date source explanation"));
+    timeLayout->addWidget(m_timeSourceNote, 6, 0, 1, 2);
     m_ntpServerTipLabel = new QLabel(timeGroup);
     m_ntpServerTipLabel->setObjectName(QStringLiteral("gpsNtpServerTip"));
     m_ntpServerTipLabel->setProperty("gpsRole", QStringLiteral("tip"));
@@ -439,7 +460,66 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     m_ntpServerTipLabel->setAccessibleDescription(
         tr("Local FLEX-8000 NTP server address; use it only on a trusted network"));
     timeLayout->addWidget(m_ntpServerTipLabel, 7, 0, 1, 2);
-    timeLayout->setRowStretch(8, 1);
+
+    m_gpsTimeControlGroup = new QGroupBox(timeGroup);
+    m_gpsTimeControlGroup->setAccessibleName(tr("Radio clock synchronization"));
+    auto* gpsTimeControlLayout = new QGridLayout(m_gpsTimeControlGroup);
+    gpsTimeControlLayout->setContentsMargins(12, 10, 12, 10);
+    gpsTimeControlLayout->setHorizontalSpacing(9);
+    gpsTimeControlLayout->setVerticalSpacing(8);
+    gpsTimeControlLayout->setColumnStretch(1, 1);
+    gpsTimeControlLayout->addWidget(
+        makeSectionTitle(tr("Radio Clock Synchronization"), m_gpsTimeControlGroup),
+        0, 0, 1, 3);
+
+    m_ntpEnabledCheck = new QCheckBox(tr("Enable NTP client"), m_gpsTimeControlGroup);
+    m_ntpEnabledCheck->setObjectName(QStringLiteral("gpsNtpEnabled"));
+    m_ntpEnabledCheck->setAccessibleDescription(
+        tr("Enable or disable the NTP client stored by the radio"));
+    gpsTimeControlLayout->addWidget(m_ntpEnabledCheck, 1, 0, 1, 3);
+
+    auto* ntpServerTitle = new QLabel(tr("NTP server"), m_gpsTimeControlGroup);
+    ntpServerTitle->setProperty("gpsRole", QStringLiteral("fieldTitle"));
+    gpsTimeControlLayout->addWidget(ntpServerTitle, 2, 0);
+    m_ntpServerEdit = new QLineEdit(m_gpsTimeControlGroup);
+    m_ntpServerEdit->setObjectName(QStringLiteral("gpsNtpServer"));
+    m_ntpServerEdit->setMaxLength(64);
+    m_ntpServerEdit->setPlaceholderText(tr("pool.ntp.org"));
+    m_ntpServerEdit->setAccessibleName(tr("NTP server address"));
+    m_ntpServerEdit->setAccessibleDescription(
+        tr("Server stored in the radio; letters, digits, dots, and hyphens only"));
+    gpsTimeControlLayout->addWidget(m_ntpServerEdit, 2, 1);
+    m_applyNtpServerButton = makeActionButton(
+        tr("Apply"), QStringLiteral("gpsApplyNtpServer"),
+        tr("Send this NTP server to the radio and read it back"), m_gpsTimeControlGroup);
+    gpsTimeControlLayout->addWidget(m_applyNtpServerButton, 2, 2);
+
+    m_gpsTimeCorrectionCheck = new QCheckBox(
+        tr("Correct radio clock from GPS automatically"), m_gpsTimeControlGroup);
+    m_gpsTimeCorrectionCheck->setObjectName(QStringLiteral("gpsTimeCorrection"));
+    m_gpsTimeCorrectionCheck->setAccessibleDescription(
+        tr("Enable or disable the GPS Time Correct setting stored by the radio"));
+    gpsTimeControlLayout->addWidget(m_gpsTimeCorrectionCheck, 3, 0, 1, 3);
+
+    m_ntpSyncButton = makeActionButton(
+        tr("Sync now"), QStringLiteral("gpsNtpSyncNow"),
+        tr("Ask the radio to access its configured NTP server now"), m_gpsTimeControlGroup);
+    gpsTimeControlLayout->addWidget(m_ntpSyncButton, 4, 0);
+    m_ntpSyncStatusLabel = new QLabel(m_gpsTimeControlGroup);
+    configureReadout(m_ntpSyncStatusLabel, QStringLiteral("gpsNtpSyncStatus"),
+                     tr("NTP access result reported by the radio"));
+    gpsTimeControlLayout->addWidget(m_ntpSyncStatusLabel, 4, 1, 1, 2);
+
+    auto* radioAuthorityNote = new QLabel(
+        tr("These settings are stored by the radio. AetherSDR sends a change only "
+           "when you use a control here, then displays the radio's read-back."),
+        m_gpsTimeControlGroup);
+    radioAuthorityNote->setProperty("gpsRole", QStringLiteral("muted"));
+    radioAuthorityNote->setWordWrap(true);
+    radioAuthorityNote->setAccessibleName(tr("Radio setting authority explanation"));
+    gpsTimeControlLayout->addWidget(radioAuthorityNote, 5, 0, 1, 3);
+    timeLayout->addWidget(m_gpsTimeControlGroup, 8, 0, 1, 2);
+    timeLayout->setRowStretch(9, 1);
     root->addWidget(timeGroup, 2, 1);
 
     auto* footer = new QHBoxLayout;
@@ -483,6 +563,26 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                 [this] { refreshGps(false); });
         connect(m_radioModel, &RadioModel::infoChanged,
                 this, &GpsLocationDialog::updateNtpServerTip);
+        connect(m_radioModel, &RadioModel::gpsTimeSettingsChanged,
+                this, &GpsLocationDialog::updateGpsTimeControls);
+        connect(m_radioModel, &RadioModel::capabilitiesChanged,
+                this, [this] { refreshGps(false); });
+        connect(m_ntpEnabledCheck, &QCheckBox::clicked,
+                m_radioModel, &RadioModel::setGpsNtpEnabled);
+        connect(m_gpsTimeCorrectionCheck, &QCheckBox::clicked,
+                m_radioModel, &RadioModel::setGpsTimeCorrectionEnabled);
+        connect(m_applyNtpServerButton, &QPushButton::clicked, this, [this] {
+            m_radioModel->setGpsNtpServer(m_ntpServerEdit->text().trimmed());
+            m_ntpServerEdit->setModified(false);   // the read-back now owns it
+        });
+        connect(m_ntpServerEdit, &QLineEdit::textChanged, this,
+                [this](const QString& value) {
+                    m_applyNtpServerButton->setEnabled(validNtpInput(value));
+                });
+        connect(m_ntpServerEdit, &QLineEdit::returnPressed,
+                m_applyNtpServerButton, &QPushButton::click);
+        connect(m_ntpSyncButton, &QPushButton::clicked,
+                m_radioModel, &RadioModel::requestGpsNtpSync);
     }
 
     m_clockTimer = new QTimer(this);
@@ -494,6 +594,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     refreshGps(false);
     updateClockAndAges();
     updateNtpServerTip();
+    updateGpsTimeControls();
 }
 
 bool GpsLocationDialog::currentPosition(double& latitude, double& longitude) const
@@ -519,9 +620,16 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
 
     const QString status = displayValue(m_radioModel->gpsStatus());
     const bool locked = statusIsLocked(m_radioModel->gpsStatus());
+    const RadioCapabilities caps = m_radioModel->backendCapabilities();
+    const bool hasSatelliteTelemetry = caps.hasGpsSatelliteTelemetry;
+    const bool hasFrequencyReference = caps.hasGpsFrequencyReference;
     const bool gpsAvailable = m_radioModel->hasGpsHardware()
         || !m_radioModel->gpsStatus().isEmpty();
     m_fixStatusLabel->setText(gpsAvailable ? status : tr("Not present"));
+    m_sourceLabel->setText(displayValue(m_radioModel->gpsSource()));
+    m_satelliteMetricCard->setVisible(hasSatelliteTelemetry);
+    m_referenceMetricCard->setVisible(hasFrequencyReference);
+    m_satelliteGroup->setVisible(hasSatelliteTelemetry || hasFrequencyReference);
 
     const int tracked = qMax(0, m_radioModel->gpsTracked());
     const int visible = qMax(0, m_radioModel->gpsVisible());
@@ -561,7 +669,8 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
 
     double latitude = 0.0;
     double longitude = 0.0;
-    m_hasPosition = locked && currentPosition(latitude, longitude);
+    m_hasPosition = m_radioModel->gpsPositionValid()
+        && currentPosition(latitude, longitude);
     if (m_hasPosition) {
         const bool moved = !std::isfinite(m_latitude)
             || std::abs(latitude - m_latitude) > 0.00001
@@ -590,8 +699,20 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
         m_lockBeganMs = 0;
     }
     m_wasGpsLocked = locked;
+    if (!m_radioModel->gpsDate().isEmpty()) {
+        m_timeSourceNote->setText(
+            tr("The radio reports a complete UTC date and time. Clock agreement is "
+               "a coarse whole-second comparison; keep the computer synchronized "
+               "for digital modes that depend on precise timing."));
+    } else {
+        m_timeSourceNote->setText(
+            tr("This radio feed supplies UTC time-of-day but no date. UTC/local dates "
+               "above therefore come from the computer clock. Clock agreement is a "
+               "coarse guide; keep the computer synchronized for precise operation."));
+    }
     updateClockAndAges();
     updateNtpServerTip();
+    updateGpsTimeControls();
 }
 
 void GpsLocationDialog::updateNtpServerTip()
@@ -613,6 +734,37 @@ void GpsLocationDialog::updateNtpServerTip()
            "lock is active. Set your time server to %1. Use it only on a trusted "
            "local network.")
             .arg(address));
+}
+
+void GpsLocationDialog::updateGpsTimeControls()
+{
+    if (m_radioModel == nullptr || m_gpsTimeControlGroup == nullptr) {
+        return;
+    }
+    const bool supported = m_radioModel->isConnected()
+        && m_radioModel->backendCapabilities().hasGpsTimeConfiguration;
+    m_gpsTimeControlGroup->setVisible(supported);
+    if (!supported) {
+        return;
+    }
+
+    const QSignalBlocker ntpBlock(m_ntpEnabledCheck);
+    const QSignalBlocker correctionBlock(m_gpsTimeCorrectionCheck);
+    m_ntpEnabledCheck->setChecked(m_radioModel->gpsNtpEnabled());
+    m_gpsTimeCorrectionCheck->setChecked(
+        m_radioModel->gpsTimeCorrectionEnabled());
+    // isModified() is the operator's unsent edit; a periodic read-back must
+    // not replace it just because focus moved to the Apply button.
+    if (!m_ntpServerEdit->isModified()) {
+        const QSignalBlocker serverBlock(m_ntpServerEdit);
+        m_ntpServerEdit->setText(m_radioModel->gpsNtpServer());
+    }
+    m_applyNtpServerButton->setEnabled(validNtpInput(m_ntpServerEdit->text()));
+    m_ntpSyncStatusLabel->setText(
+        displayValue(m_radioModel->gpsNtpSyncStatus()));
+    const bool canSync = m_radioModel->gpsNtpEnabled()
+        && !m_radioModel->gpsNtpServer().isEmpty();
+    m_ntpSyncButton->setEnabled(canSync);
 }
 
 void GpsLocationDialog::requestAddress(double latitude, double longitude, bool force)
@@ -654,12 +806,15 @@ void GpsLocationDialog::updateClockAndAges()
             .arg((std::abs(local.offsetFromUtc()) % 3600) / 60, 2, 10, QLatin1Char('0')));
 
     if (m_radioModel != nullptr) {
-        m_radioGpsTimeLabel->setText(displayValue(m_radioModel->gpsTime()));
+        const QString radioDateTime = m_radioModel->gpsDate().isEmpty()
+            ? m_radioModel->gpsTime()
+            : tr("%1  %2").arg(m_radioModel->gpsDate(), m_radioModel->gpsTime());
+        m_radioGpsTimeLabel->setText(displayValue(radioDateTime));
         QTime radioTime = QTime::fromString(m_radioModel->gpsTime(), QStringLiteral("HH:mm:ss'Z'"));
         if (!radioTime.isValid()) {
             radioTime = QTime::fromString(m_radioModel->gpsTime(), QStringLiteral("HH:mm:ssZ"));
         }
-        if (radioTime.isValid() && statusIsLocked(m_radioModel->gpsStatus())) {
+        if (radioTime.isValid() && m_radioModel->gpsPositionValid()) {
             // The radio reports only whole-second GPS time. Advance that last
             // sample by its telemetry age before comparing it with the computer,
             // otherwise a healthy but infrequent GPS status update looks many
@@ -694,7 +849,7 @@ void GpsLocationDialog::updateClockAndAges()
                     tr("Radio GPS and computer agree (0.000 seconds; 0 ms)"));
             }
         } else {
-            m_clockAgreementLabel->setText(tr("Unavailable until the GPS is locked"));
+            m_clockAgreementLabel->setText(tr("Unavailable until the radio reports GPS time"));
         }
     }
 

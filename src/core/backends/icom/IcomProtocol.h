@@ -334,11 +334,17 @@ struct AuthReply {
 // Extract the radio identity from the 0xA8 capabilities packet.
 [[nodiscard]] bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId);
 
+// Stable, address-independent identity for one radio advertised by the RS-BA1
+// capabilities record. Empty means the record supplied no usable identity.
+[[nodiscard]] std::string radioIdHex(const RadioId& radioId);
+
 // The radio's own name ("IC-705") from the same packet. Parsed rather than
 // hardcoded: the stream request has to name the radio it wants, and a literal
 // there is exactly what stops this backend reaching an IC-9700 or an RS-BA1
 // server fronting an IC-7300.
 [[nodiscard]] std::string parseCapabilitiesName(std::span<const std::uint8_t> pkt);
+// RS-BA1 destination, not model identity. Zero means missing/invalid.
+[[nodiscard]] std::uint8_t parseCapabilitiesCivAddress(std::span<const std::uint8_t> pkt);
 
 // What the 0x50 status packet is telling us. The radio uses one packet shape
 // for "your auth failed" and "you have been disconnected", distinguished by
@@ -403,6 +409,17 @@ struct StreamGrant {
                                                          std::uint32_t remoteSid,
                                                          std::uint16_t sendSeq,
                                                          bool open);
+
+// Restart an already-open CI-V data pipe. The IC-9700 distinguishes this
+// data-start request (magic 0x04) from the initial open above (magic 0x05).
+// Public clean-room provenance: wfview's icomUdpCivData and RigPlane Core's
+// Icom LAN transport use 0x04 for CI-V data start/restart and 0x00 for close;
+// wfview also publishes physical IC-9700 watchdog logs for this path. Icom's
+// public RS-BA1 manual documents the UDP transports, not this packet field.
+// Keep the recovery model-gated; do not infer support for another Icom model.
+[[nodiscard]] std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
+                                                            std::uint32_t remoteSid,
+                                                            std::uint16_t sendSeq);
 
 // Wrap one raw CI-V frame for the serial stream.
 //

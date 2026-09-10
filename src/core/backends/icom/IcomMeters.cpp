@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace AetherSDR::icom {
 namespace {
@@ -32,6 +33,14 @@ constexpr std::array<CurvePoint, 4> kPowerIc7300Mk2{{
     {0, 0.0}, {143, 50.0}, {213, 100.0}, {255, 130.0},
 }};
 
+// IC-9700 Po meter, raw -> RELATIVE PERCENT. The CI-V guide defines an
+// indicated Po scale, not a calibrated wattmeter. The backend combines this
+// with the active RF deck's documented 100/75/10 W rating to produce an
+// explicitly DERIVED watt estimate for existing watt-based consumers.
+constexpr std::array<CurvePoint, 3> kPowerIc9700Relative{{
+    {0, 0.0}, {143, 50.0}, {213, 100.0},
+}};
+
 // SWR. Icom's guide: 0 = 1.0, 48 = 1.5, 80 = 2.0, 120 = 3.0.
 //
 // The guide stops at 3.0 and the field is a full byte. The final point is an
@@ -47,14 +56,34 @@ constexpr std::array<CurvePoint, 3> kComp{{
     {0, 0.0}, {130, 15.0}, {210, 25.5},
 }};
 
+// IC-7300MK2 CI-V guide, command 15 14: 0/130/210 = 0/15/30 dB.
+constexpr std::array<CurvePoint, 3> kCompIc7300Mk2{{
+    {0, 0.0}, {130, 15.0}, {210, 30.0},
+}};
+
 // Vd (PA drain), raw -> volts. Icom's guide: 0 = 0 V, 75 = 5 V, 241 = 16 V.
 constexpr std::array<CurvePoint, 3> kVd{{
     {0, 0.0}, {75, 5.0}, {241, 16.0},
 }};
 
+// IC-9700 Vd calibration from the model's CI-V reference guide. This is kept
+// separate from the portable-radio curve: raw 185 is the nominal 13.8 V point.
+constexpr std::array<CurvePoint, 4> kVdIc9700{{
+    {0, 0.0}, {13, 10.0}, {185, 13.8}, {241, 16.0},
+}};
+
 // Id (PA current), raw -> amps. Icom's guide: 0 = 0 A, 121 = 2 A, 241 = 4 A.
 constexpr std::array<CurvePoint, 3> kId{{
     {0, 0.0}, {121, 2.0}, {241, 4.0},
+}};
+
+// IC-9700 Id calibration. wfview independently publishes these exact
+// model-specific points in rigs/IC-9700.rig (commit cd18ea55, lines 1743-1753):
+// raw 0/121/241 = 0/10/20 A. Keep this separate from the generic 4 A curve;
+// the identical raw breakpoints have different model-specific amp values.
+// https://gitlab.com/eliggett/wfview/-/blob/cd18ea55fe479eb4526d1732b443cbfc3969c540/rigs/IC-9700.rig#L1743-1754
+constexpr std::array<CurvePoint, 3> kIdIc9700{{
+    {0, 0.0}, {121, 10.0}, {241, 20.0},
 }};
 
 // IC-7300MK2 desktop-radio calibration from its own CI-V guide.
@@ -130,12 +159,51 @@ double interpolateCurve(std::span<const CurvePoint> curve, int raw)
 }
 
 std::span<const CurvePoint> powerCurveIc705() { return kPowerIc705; }
+std::span<const CurvePoint> powerCurveIc9700() { return kPowerIc9700Relative; }
 std::span<const CurvePoint> powerCurveIc7300Mk2() { return kPowerIc7300Mk2; }
+double derivedPowerWatts(double relativePercent, double bandRatedWatts)
+{
+    if (!std::isfinite(relativePercent) || !std::isfinite(bandRatedWatts)
+        || bandRatedWatts <= 0.0) {
+        return 0.0;
+    }
+    return std::clamp(relativePercent, 0.0, 100.0)
+        * bandRatedWatts / 100.0;
+}
 std::span<const CurvePoint> swrCurve()        { return kSwr; }
 std::span<const CurvePoint> compCurve()       { return kComp; }
 std::span<const CurvePoint> vdCurve()         { return kVd; }
 std::span<const CurvePoint> idCurve()         { return kId; }
 std::span<const CurvePoint> alcCurve()        { return kAlc; }
+
+std::span<const CurvePoint>
+powerCurveForCalibration(MeterCalibration calibration)
+{
+    switch (calibration) {
+    case MeterCalibration::Ic705:
+        return kPowerIc705;
+    case MeterCalibration::Ic7300Mk2:
+        return kPowerIc7300Mk2;
+    case MeterCalibration::Uncalibrated:
+    case MeterCalibration::Ic9700:
+        return {};
+    }
+    return {};
+}
+
+bool hasVoltageCalibration(MeterCalibration calibration) noexcept
+{
+    return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic9700
+        || calibration == MeterCalibration::Ic7300Mk2;
+}
+
+bool hasCurrentCalibration(MeterCalibration calibration) noexcept
+{
+    return calibration == MeterCalibration::Ic705
+        || calibration == MeterCalibration::Ic9700
+        || calibration == MeterCalibration::Ic7300Mk2;
+}
 
 double sMeterDbm(int raw, double s9Dbm)
 {
@@ -176,24 +244,51 @@ const MeterSpec* meterSpecForSub(std::uint8_t sub)
     return nullptr;
 }
 
-double meterValue(MeterId id, int raw, double s9Dbm, std::uint8_t civAddress)
+double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibration)
 {
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
-    case MeterId::Power:    return interpolateCurve(
-                                civAddress == 0xB6 ? powerCurveIc7300Mk2()
-                                                   : powerCurveIc705(), raw);
+    case MeterId::Power:
+        if (const std::span<const CurvePoint> curve = powerCurveForCalibration(calibration);
+            !curve.empty()) {
+            return interpolateCurve(curve, raw);
+        }
+        return std::clamp(raw, 0, 255) * 100.0 / 255.0;
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
-    case MeterId::Comp:     return interpolateCurve(kComp, raw);
-    case MeterId::Vd:       return interpolateCurve(
-                                civAddress == 0xB6
-                                    ? std::span<const CurvePoint>(kVdIc7300Mk2)
-                                    : std::span<const CurvePoint>(kVd), raw);
-    case MeterId::Id:       return interpolateCurve(
-                                civAddress == 0xB6
-                                    ? std::span<const CurvePoint>(kIdIc7300Mk2)
-                                    : std::span<const CurvePoint>(kId), raw);
+    case MeterId::Comp:
+        return calibration == MeterCalibration::Ic7300Mk2
+            ? interpolateCurve(kCompIc7300Mk2, raw) : interpolateCurve(kComp, raw);
+    case MeterId::Vd:
+        if (!hasVoltageCalibration(calibration)) {
+            return 0.0;
+        }
+        switch (calibration) {
+        case MeterCalibration::Ic705:
+            return interpolateCurve(kVd, raw);
+        case MeterCalibration::Ic9700:
+            return interpolateCurve(kVdIc9700, raw);
+        case MeterCalibration::Ic7300Mk2:
+            return interpolateCurve(kVdIc7300Mk2, raw);
+        case MeterCalibration::Uncalibrated:
+            return 0.0;
+        }
+        return 0.0;
+    case MeterId::Id:
+        if (!hasCurrentCalibration(calibration)) {
+            return 0.0;
+        }
+        switch (calibration) {
+        case MeterCalibration::Ic705:
+            return interpolateCurve(kId, raw);
+        case MeterCalibration::Ic9700:
+            return interpolateCurve(kIdIc9700, raw);
+        case MeterCalibration::Ic7300Mk2:
+            return interpolateCurve(kIdIc7300Mk2, raw);
+        case MeterCalibration::Uncalibrated:
+            return 0.0;
+        }
+        return 0.0;
     // OVF is 00/01 from the radio, not a scaled reading.
     case MeterId::Overflow: return raw != 0 ? 1.0 : 0.0;
     }
@@ -220,6 +315,58 @@ void MeterPoller::setVisible(MeterId id, bool visible)
 }
 
 bool MeterPoller::isVisible(MeterId id) const { return stateFor(id).visible; }
+
+void MeterPoller::setTransmitting(bool tx) noexcept
+{
+    if (m_transmitting == tx) {
+        return;
+    }
+    m_transmitting = tx;
+    // A held sample belongs to one keyed interval only. In particular, the
+    // first minimum of a new transmission must not reuse a non-minimum sample
+    // from the previous one.
+    resetMinimumHolds();
+}
+
+bool MeterPoller::shouldPublish(MeterId id, int raw, std::int64_t nowMs,
+                                bool holdIsolatedMinimums)
+{
+    State& state = stateFor(id);
+    const bool minimumHoldMeter = id == MeterId::Swr || id == MeterId::Alc;
+    if (!holdIsolatedMinimums || !m_transmitting || !minimumHoldMeter) {
+        state.hasNonMinimumReading = false;
+        state.minimumCandidateSinceMs = -1;
+        return true;
+    }
+
+    if (raw > 0) {
+        state.hasNonMinimumReading = true;
+        state.minimumCandidateSinceMs = -1;
+        return true;
+    }
+
+    // Before this keyed interval has produced a real sample, minimum is the
+    // honest rest value. There is nothing older to hold.
+    if (!state.hasNonMinimumReading) {
+        return true;
+    }
+
+    if (state.minimumCandidateSinceMs < 0) {
+        state.minimumCandidateSinceMs = nowMs;
+        return false;
+    }
+
+    if (nowMs - state.minimumCandidateSinceMs < kMinimumConfirmationMs) {
+        return false;
+    }
+
+    // The radio has reported minimum continuously for a complete sample
+    // interval. Publish it and stop treating later minimum replies as gaps
+    // until a new non-minimum reading arrives.
+    state.hasNonMinimumReading = false;
+    state.minimumCandidateSinceMs = -1;
+    return true;
+}
 
 std::vector<MeterId> MeterPoller::due(std::int64_t nowMs)
 {
@@ -279,6 +426,14 @@ void MeterPoller::reset() noexcept
         s = State{};
     m_transmitting = false;
     m_quietUntilMs = 0;
+}
+
+void MeterPoller::resetMinimumHolds() noexcept
+{
+    for (State& state : m_state) {
+        state.hasNonMinimumReading = false;
+        state.minimumCandidateSinceMs = -1;
+    }
 }
 
 }  // namespace AetherSDR::icom

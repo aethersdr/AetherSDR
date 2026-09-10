@@ -33,6 +33,10 @@ public:
     static QString username();
     static void setUsername(const QString& username);
 
+    // Client-owned, opt-in connection policy, stored in the Icom document.
+    static bool wakeOnConnect();
+    static void setWakeOnConnect(bool enabled);
+
     // The last host connected to, so the connect dialog can offer it back.
     static QString lastHost();
     static void setLastHost(const QString& host);
@@ -46,6 +50,14 @@ public:
     static quint16 audioPort();
     static void setPorts(quint16 control, quint16 serial, quint16 audio);
 
+    // Connect-by-IP NAT convenience: the public forwards are one sequential
+    // triplet (control, CI-V, audio). The highest valid base is 65533 so the
+    // derived audio port remains inside the UDP port range.
+    static quint16 defaultBasePort();
+    static quint16 maximumBasePort();
+    static bool usesDefaultPorts();
+    static void setBasePort(quint16 basePort);
+
     // The radio's CI-V address. Seeded here and CORRECTED at runtime from the
     // 0x19 0x00 reply — never trusted as final, because the address is
     // user-changeable and several Icom models speak this same transport.
@@ -55,8 +67,8 @@ public:
     // is allowed to overrule it. Three states, not two, because "A2" means
     // different things depending on where it was typed:
     //
-    //   Auto    nobody chose. Seed from the model the handshake names, then
-    //           adopt whatever answers the broadcast 0x19 0x00.
+    //   Auto    nobody chose. Query 19 00 at the broadcast address, then
+    //           adopt the sole responder's source address.
     //   Model   the operator picked a model from the list. That is a SHORTCUT
     //           for an address, not a device selection, so a radio that reports
     //           a different address is correcting a stale pick and wins.

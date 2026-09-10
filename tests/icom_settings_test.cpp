@@ -49,6 +49,11 @@ int main(int argc, char** argv)
     // ---- the non-secret document round-trips ------------------------------
     IcomSettings::reset();
     check(IcomSettings::username().isEmpty(), "no username by default");
+    check(IcomSettings::defaultBasePort() == icom::kControlPort,
+          "the UI default is the ordinary Icom control port");
+    check(IcomSettings::maximumBasePort() == 65533,
+          "a sequential triplet leaves room for base plus two");
+    check(IcomSettings::usesDefaultPorts(), "the default triplet is reported as standard");
     check(IcomSettings::controlPort() == icom::kControlPort, "default control port 50001");
     check(IcomSettings::serialPort() == icom::kSerialPort, "default serial port 50002");
     check(IcomSettings::audioPort() == icom::kAudioPort, "default audio port 50003");
@@ -61,7 +66,16 @@ int main(int argc, char** argv)
     check(IcomSettings::username() == QStringLiteral("beer"), "username round-trips");
     check(IcomSettings::lastHost() == QStringLiteral("ic-705.local"), "host round-trips");
     check(IcomSettings::serialPort() == 51002, "ports round-trip");
+    check(!IcomSettings::usesDefaultPorts(), "a custom triplet is not reported as standard");
     check(IcomSettings::civAddress() == 0xB6, "the MK2's address round-trips");
+
+    IcomSettings::setBasePort(52001);
+    check(IcomSettings::controlPort() == 52001, "custom base port becomes control");
+    check(IcomSettings::serialPort() == 52002, "custom base plus one becomes CI-V");
+    check(IcomSettings::audioPort() == 52003, "custom base plus two becomes audio");
+
+    IcomSettings::setBasePort(65534);
+    check(IcomSettings::usesDefaultPorts(), "a base that cannot fit three ports fails safe");
 
     // A hand-edited or truncated file must not command a nonsense port — 0 in
     // particular would bind an ephemeral local port and then tell the radio to

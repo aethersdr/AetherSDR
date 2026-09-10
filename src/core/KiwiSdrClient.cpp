@@ -52,7 +52,6 @@ constexpr int kWaterfallAutoMinRows = kWaterfallAutoHistoryRows;
 constexpr float kWaterfallAutoReuseToleranceDb = 5.0f;
 constexpr quint64 kMaxSequenceGapPaddingFrames = 8;
 constexpr int kWaterfallGuiMinIntervalMs = 33;
-constexpr double kWaterfallStartFixedPointScale = 16777216.0; // 2^24
 constexpr quint64 kWebSocketSessionIdBase = 1ULL << 62;
 constexpr const char* kSoundCompressionEnv = "AETHER_KIWI_SND_COMP";
 constexpr const char* kWaterfallCompressionEnv = "AETHER_KIWI_WF_COMP";
@@ -196,29 +195,6 @@ double waterfallZoomScale(int zoom)
 double waterfallRowSpanMhz(double fullBandwidthMhz, int zoom)
 {
     return fullBandwidthMhz / waterfallZoomScale(zoom);
-}
-
-quint32 waterfallStartFixedPoint(double fullLowMhz, double fullBandwidthMhz,
-                                 double rowLowMhz)
-{
-    const double requested = fullBandwidthMhz > 0.0
-        ? ((rowLowMhz - fullLowMhz) / fullBandwidthMhz)
-              * kWaterfallStartFixedPointScale
-        : 0.0;
-    return static_cast<quint32>(std::clamp(
-        std::isfinite(requested) ? std::round(requested) : 0.0,
-        0.0,
-        std::min(kWaterfallStartFixedPointScale - 1.0,
-                 static_cast<double>(std::numeric_limits<quint32>::max()))));
-}
-
-double waterfallStartFixedPointToLowMhz(double fullLowMhz,
-                                        double fullBandwidthMhz,
-                                        quint32 start)
-{
-    return fullLowMhz
-        + (static_cast<double>(start) / kWaterfallStartFixedPointScale)
-            * fullBandwidthMhz;
 }
 
 double waterfallMetadataValueToMhz(double value)
@@ -542,15 +518,19 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint,
     m_waterfallAvailabilityDetail.clear();
     m_waterfallRxChannel = -1;
     m_waterfallChannelCount = -1;
+    m_waterfallSetupResent = false;
     m_userDisconnecting = true;
     cleanupSockets();
     m_userDisconnecting = false;
     const QString callsign = kiwiIdentityCallsign();
+    const QString familyName =
+        KiwiSdrProtocol::kiwiSdrReceiverFamilyName(m_receiverFamily);
     setState(State::Connecting,
              callsign.isEmpty()
-                 ? tr("Checking KiwiSDR access policy for %1.").arg(m_endpoint)
-                 : tr("Checking KiwiSDR access policy for %1 as %2.")
-                       .arg(m_endpoint, callsign));
+                 ? tr("Checking %1 access policy for %2.")
+                       .arg(familyName, m_endpoint)
+                 : tr("Checking %1 access policy for %2 as %3.")
+                       .arg(familyName, m_endpoint, callsign));
 
 #ifdef HAVE_WEBSOCKETS
     m_statusPreflightSecure = false;  // try http first, then https
@@ -809,14 +789,23 @@ void KiwiSdrClient::openWebSockets()
     // Clean black-box observation against KiwiSDR v1.842 showed the current
     // web client using /ws/kiwi/<session>/<stream>. Some servers still upgrade
     // /<session>/<stream> but never emit MSG or stream frames on that path.
+    // Web-888's rx_server_websocket() only parses kiwi/<ts>/<stream>,
+    // no_wf/<ts>/<stream> and bare <ts>/<stream> — the /ws prefix fails all
+    // three and the server silently drops every frame, so use the bare Kiwi
+    // path there (same shape the Web-888 browser client uses).
+    const QString pathPrefix = m_receiverFamily
+                == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+        ? QStringLiteral("kiwi")
+        : QStringLiteral("ws/kiwi");
     const quint64 sessionId =
         kWebSocketSessionIdBase
         + static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
     const QString sessionIdText = QString::number(sessionId);
-    const QString secureAwareBase = QStringLiteral("%1://%2:%3/ws/kiwi/%4")
+    const QString secureAwareBase = QStringLiteral("%1://%2:%3/%4/%5")
         .arg(scheme)
         .arg(m_host)
         .arg(socketPort)
+        .arg(pathPrefix)
         .arg(sessionIdText);
     const QString soundUrl = secureAwareBase + QStringLiteral("/SND");
     const QString waterfallUrl = secureAwareBase + QStringLiteral("/W/F");
@@ -1219,6 +1208,7 @@ void KiwiSdrClient::cleanupSockets()
     m_soundFrameSeen = false;
     m_loggedSoundFrameShape = false;
     m_loggedWaterfallFrameShape = false;
+    m_waterfallSetupResent = false;
     m_lastDecodedSoundPcm.clear();
     // Release the sound resampler on teardown, matching the other two teardown
     // sites (connectToEndpoint / stream-rate change). It was the one sound-decode
@@ -1359,6 +1349,13 @@ void KiwiSdrClient::sendWaterfallSetupCommands()
 {
     sendWaterfallCommand(KiwiSdrProtocol::formatAuthCommand(m_password));
     sendWaterfallIdentityToServer();
+    sendWaterfallPostAuthCommands();
+}
+
+// Everything after auth/identity. Web-888 replays this block once its
+// wf_setup marker has been processed (docs/web888-cleanroom-design.md).
+void KiwiSdrClient::sendWaterfallPostAuthCommands()
+{
     sendWaterfallCommand(QStringLiteral("SERVER DE CLIENT AetherSDR W/F"));
     sendWaterfallCommand(KiwiSdrProtocol::formatWaterfallCompressionCommand(
         diagnosticWaterfallCompressionRequested()));
@@ -1447,16 +1444,10 @@ void KiwiSdrClient::sendWaterfallViewToServer()
         m_waterfallRequestValid = false;
         return;
     }
-#ifdef HAVE_WEBSOCKETS
-    if (!m_waterfallSocket
-        || m_waterfallSocket->state() != QAbstractSocket::ConnectedState) {
+    if (!waterfallTransportConnected()) {
         m_waterfallRequestValid = false;
         return;
     }
-#else
-    m_waterfallRequestValid = false;
-    return;
-#endif
 
     double viewCenterMhz = m_waterfallViewCenterMhz;
     double viewBandwidthMhz = m_waterfallViewBandwidthMhz;
@@ -1478,6 +1469,10 @@ void KiwiSdrClient::sendWaterfallViewToServer()
     const double fullLowMhz = fullCenterMhz - fullBandwidthMhz * 0.5;
     const double fullHighMhz = fullCenterMhz + fullBandwidthMhz * 0.5;
     const int zoomCap = std::clamp(m_waterfallZoomCap, 0, 20);
+    // Server fixed-point scale: 1024 << the zoom_max the server advertised
+    // (KiwiSdrProtocol::waterfallStartFixedPointScale).
+    const double startScale =
+        KiwiSdrProtocol::waterfallStartFixedPointScale(zoomCap);
     const double halfBandwidthMhz = std::max(0.0005, viewBandwidthMhz * 0.5);
     const double viewLowMhz = std::clamp(viewCenterMhz - halfBandwidthMhz,
                                          fullLowMhz,
@@ -1506,10 +1501,11 @@ void KiwiSdrClient::sendWaterfallViewToServer()
             viewMidMhz - candidateRowSpanMhz * 0.5,
             fullLowMhz,
             std::max(fullLowMhz, fullHighMhz - candidateRowSpanMhz));
-        const quint32 candidateStart = waterfallStartFixedPoint(
-            fullLowMhz, fullBandwidthMhz, candidateLowMhz);
-        candidateLowMhz = waterfallStartFixedPointToLowMhz(
-            fullLowMhz, fullBandwidthMhz, candidateStart);
+        const quint32 candidateStart = KiwiSdrProtocol::waterfallStartFixedPoint(
+            fullLowMhz, fullBandwidthMhz, candidateLowMhz, startScale);
+        candidateLowMhz =
+            KiwiSdrProtocol::waterfallStartFixedPointToLowMhz(
+                fullLowMhz, fullBandwidthMhz, candidateStart, startScale);
         const double candidateHighMhz = candidateLowMhz
             + std::min(fullBandwidthMhz,
                        waterfallRowSpanMhz(fullBandwidthMhz, candidate));
@@ -1521,7 +1517,7 @@ void KiwiSdrClient::sendWaterfallViewToServer()
         // requested.
         const double coverEpsilonMhz = std::max(
             1.0e-9,
-            (fullBandwidthMhz / kWaterfallStartFixedPointScale) * 2.0);
+            (fullBandwidthMhz / startScale) * 2.0);
         if (candidateLowMhz <= viewLowMhz + coverEpsilonMhz
             && candidateHighMhz + coverEpsilonMhz >= viewHighMhz) {
             zoom = candidate;
@@ -1534,8 +1530,8 @@ void KiwiSdrClient::sendWaterfallViewToServer()
     }
     if (!selectedRequest) {
         zoom = 0;
-        start = waterfallStartFixedPoint(fullLowMhz, fullBandwidthMhz,
-                                         fullLowMhz);
+        start = KiwiSdrProtocol::waterfallStartFixedPoint(
+            fullLowMhz, fullBandwidthMhz, fullLowMhz, startScale);
         requestLowMhz = fullLowMhz;
         requestHighMhz = fullHighMhz;
     }
@@ -1907,13 +1903,17 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
                                         const QByteArray& frame)
 {
     traceInboundBinary(stream, frame);
-    if (frame.startsWith("MSG")) {
+    switch (KiwiSdrProtocol::classifyInboundFrameTag(frame)) {
+    case KiwiSdrProtocol::InboundFrameTag::MsgText:
         handleMessage(stream, frame);
-    } else if (frame.startsWith("SND")) {
+        break;
+    case KiwiSdrProtocol::InboundFrameTag::Sound:
         handleSoundFrame(frame);
-    } else if (frame.startsWith("W/F")) {
+        break;
+    case KiwiSdrProtocol::InboundFrameTag::Waterfall:
         handleWaterfallFrame(frame);
-    } else if (frame.startsWith("EXT")) {
+        break;
+    case KiwiSdrProtocol::InboundFrameTag::Extension: {
         KiwiSdrProtocol::FrameObservation observation;
         observation.stream = KiwiSdrProtocol::StreamMode::Extension;
         observation.layout = KiwiSdrProtocol::FrameLayout::Extension;
@@ -1927,7 +1927,9 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
             << "len=" << frame.size()
             << "first=" << firstBytesHex(frame);
-    } else {
+        break;
+    }
+    case KiwiSdrProtocol::InboundFrameTag::Unknown: {
         const QString tag = QString::fromLatin1(frame.left(3));
         KiwiSdrProtocol::FrameObservation observation;
         observation.stream = KiwiSdrProtocol::StreamMode::Unknown;
@@ -1942,6 +1944,8 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
             << "len=" << frame.size()
             << "first=" << firstBytesHex(frame);
+        break;
+    }
     }
 }
 
@@ -2282,8 +2286,13 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
             ? m_waterfallServerCenterMhz
             : kDefaultWaterfallCenterMhz;
         const double fullLowMhz = fullCenterMhz - fullBandwidthMhz * 0.5;
-        rowLowMhz = waterfallStartFixedPointToLowMhz(
-            fullLowMhz, fullBandwidthMhz, frameStart);
+        // The frame header start uses the same server fixed-point scale as
+        // the SET zoom/start request: 1024 << the zoom_max the server
+        // advertised (see sendWaterfallViewToServer).
+        const double headerScale =
+            KiwiSdrProtocol::waterfallStartFixedPointScale(m_waterfallZoomCap);
+        rowLowMhz = KiwiSdrProtocol::waterfallStartFixedPointToLowMhz(
+            fullLowMhz, fullBandwidthMhz, frameStart, headerScale);
         rowHighMhz = rowLowMhz
             + std::min(fullBandwidthMhz,
                        waterfallRowSpanMhz(fullBandwidthMhz, frameZoom));
@@ -2384,6 +2393,17 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 token, &m_telemetry.metadata)) {
             updateProtocolStateFromMetadata();
             emitTelemetryChanged();
+        }
+        // Web-888 burst diagnostic: if cfg_loaded arrives without a preceding
+        // audio_rate, the tune-command gate below never opens — recorded so a
+        // live capture proves which branch the server took. No rate is
+        // fabricated from it.
+        if (m_receiverFamily == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+            && stream == StreamKind::Sound
+            && key == QStringLiteral("cfg_loaded")
+            && !m_haveSoundAudioRate) {
+            traceProtocolEvent(
+                QStringLiteral("WEB888 cfg_loaded without audio_rate"));
         }
         if (updateCampStatusFromMetadata(token)) {
             return;
@@ -2629,6 +2649,25 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 emitTelemetryChanged();
             }
         }
+    }
+
+    // RaspSDR 68a64e1b: several W/F messages precede the bare wf_setup token.
+    // Apply the entire metadata message before replaying setup, even if the
+    // marker appears before zoom_max in the message. An unchanged view must
+    // also be resent: our cached request does not prove the server retained it.
+    const bool setupComplete = std::any_of(
+        msgTokens.cbegin(), msgTokens.cend(),
+        [](const KiwiSdrProtocol::MsgToken& token) {
+            return token.key == QLatin1String("wf_setup") && !token.hasValue;
+        });
+    if (stream == StreamKind::Waterfall
+        && m_receiverFamily == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+        && !m_waterfallSetupResent && setupComplete
+        && waterfallTransportConnected() && !receiverControlSuppressed()) {
+        m_waterfallSetupResent = true;
+        m_waterfallRequestValid = false;
+        traceProtocolEvent(QStringLiteral("WEB888 wf setup re-sent after wf_setup"));
+        sendWaterfallPostAuthCommands();
     }
 }
 
@@ -3619,6 +3658,12 @@ void KiwiSdrClient::sendSoundCommand(const QString& command)
         << redactedKiwiCommand(command);
 }
 
+bool KiwiSdrClient::waterfallTransportConnected() const
+{
+    return m_waterfallSocket
+        && m_waterfallSocket->state() == QAbstractSocket::ConnectedState;
+}
+
 void KiwiSdrClient::sendWaterfallCommand(const QString& command)
 {
     const bool connected =
@@ -3669,6 +3714,11 @@ void KiwiSdrClient::handleSocketError(const QString& detail,
 #else
 void KiwiSdrClient::sendSoundCommand(const QString&)
 {
+}
+
+bool KiwiSdrClient::waterfallTransportConnected() const
+{
+    return false;
 }
 
 void KiwiSdrClient::sendWaterfallCommand(const QString&)

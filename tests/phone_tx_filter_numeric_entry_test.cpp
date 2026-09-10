@@ -17,6 +17,7 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QFile>
 #include <QLineEdit>
 #include <QAccessible>
 #include <QFocusEvent>
@@ -107,6 +108,41 @@ int main(int argc, char** argv)
 
     check(low->isEditable(),  "low cut readout is editable (#3627)");
     check(high->isEditable(), "high cut readout is editable (#3627)");
+
+    QWidget* txFilterControls = applet.findChild<QWidget*>(QStringLiteral("txFilterControls"));
+    check(txFilterControls != nullptr, "TX filter controls have one capability-gated container");
+    applet.setTxFilterControlsAvailable(false);
+    check(txFilterControls && txFilterControls->isHidden(),
+          "an unsupported TX cutoff editor is hidden as a complete section");
+    applet.setTxFilterControlsAvailable(true);
+    check(txFilterControls && !txFilterControls->isHidden(),
+          "a supported TX cutoff editor is restored without rebuilding the applet");
+
+    // This target intentionally does not link the whole MainWindow. Inspect
+    // the owning fan-out so deleting the capability-to-widget call still fails
+    // CI instead of leaving the issue's actual behavior to physical-radio
+    // testing alone.
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    check(mainWindowSource.open(QIODevice::ReadOnly),
+          "the capability test can inspect MainWindow's shipping fan-out");
+    const QByteArray wiring = mainWindowSource.readAll();
+    check(wiring.contains(
+              "phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);"),
+          "MainWindow wires hasTxFilterControls to the complete TX cutoff editor");
+    check(wiring.contains(
+              "m_radioModel.isConnected() && !caps.hasTxFilterControls"),
+          "MainWindow rejects TX EQ-canvas cutoff drags for unsupported radios");
+
+    QFile automationSource(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/core/AutomationServer.cpp"));
+    check(automationSource.open(QIODevice::ReadOnly),
+          "the capability test can inspect the automation snapshot wiring");
+    const QByteArray automation = automationSource.readAll();
+    check(automation.contains("if (hasTxFilterControls)"),
+          "automation omits TX cutoff fields when the backend lacks the capability");
+    check(automation.contains(
+              "radio->backendCapabilities().hasTxFilterControls"),
+          "automation obtains TX cutoff availability from the active backend");
 
     // The accepted range comes from the MODEL, never a literal in the widget.
     // AetherSDR is growing backends (HL2, Icom, FT-991, ColibriNANO, RTL-SDR);
@@ -409,10 +445,27 @@ int main(int argc, char** argv)
 
     // Qt::Key_Cancel is the same gesture on platforms that send it; VfoWidget
     // treats the two together and so do we.
+    //
+    // Delivered by hand, not QTest::keyClick(): testlib maps a key to its ASCII
+    // text through a table that has no entry for Key_Cancel and aborts on the
+    // miss. On the Qt we ship, 6.8.3, that is fatal — the CI container's own
+    // log is `ASSERT: "false" in .../src/testlib/qasciikey.cpp, line 470`.
+    // Later Qt does not abort (6.11 passes the keyClick), so the reverting
+    // mutation looks green on a dev box; this delivery is correct on every
+    // version rather than only on the one that happens to be installed.
+    // Production never goes through that table — the platform sends a real
+    // QKeyEvent — and the handler keys on the press (GuardedSlider.h
+    // eventFilter), so a press and a release through QApplication::sendEvent
+    // is the same delivery the app sees.
     model.setTxFilter(150, 3300);
     if (QLineEdit* ed = openEditor(low)) {
         ed->setText(QStringLiteral("2000"));
-        QTest::keyClick(ed, Qt::Key_Cancel);
+        QKeyEvent cancelOverride(QEvent::ShortcutOverride, Qt::Key_Cancel, Qt::NoModifier);
+        QApplication::sendEvent(ed, &cancelOverride);
+        QKeyEvent cancelPress(QEvent::KeyPress, Qt::Key_Cancel, Qt::NoModifier);
+        QApplication::sendEvent(ed, &cancelPress);
+        QKeyEvent cancelRelease(QEvent::KeyRelease, Qt::Key_Cancel, Qt::NoModifier);
+        QApplication::sendEvent(ed, &cancelRelease);
     }
     check(!low->isEditing() && model.txFilterLow() == 150,
           "Key_Cancel abandons the edit the same way Esc does");

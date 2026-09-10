@@ -17,6 +17,7 @@ public:
     explicit MemoryBrowsePanel(QWidget* parent = nullptr);
 
     void setMemories(const QMap<int, MemoryEntry>& memories);
+    void setWritable(bool writable);
     void focusClosestToFrequency(double frequencyMhz);
 
 signals:

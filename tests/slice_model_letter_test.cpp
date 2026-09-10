@@ -551,6 +551,46 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.filterLow(),  -2500);
         EXPECT_EQ(s.filterHigh(), -95);
     }
+    {
+        // FM repeater controls cross the neutral backend seam in addition to
+        // retaining the Flex wire path. A local-memory recall is grouped and
+        // MUST emit even when every value equals the current model snapshot:
+        // the IC-705 may have cleared tone as a side effect of tuning.
+        SliceModel s(7);
+        QStringList commands;
+        QObject::connect(&s, &SliceModel::commandReady,
+                         [&commands](const QString& command) { commands.append(command); });
+        QSignalSpy toneModeSpy(&s, &SliceModel::fmToneModeCommandIssued);
+        QSignalSpy toneValueSpy(&s, &SliceModel::fmToneValueCommandIssued);
+        QSignalSpy directionSpy(&s, &SliceModel::repeaterOffsetDirCommandIssued);
+        QSignalSpy offsetSpy(&s, &SliceModel::fmRepeaterOffsetCommandIssued);
+        QSignalSpy recallSpy(&s, &SliceModel::fmRepeaterRecallCommandIssued);
+
+        s.setFmToneMode(QStringLiteral("ctcss_tx"));
+        s.setFmToneValue(QStringLiteral("88.5"));
+        s.setRepeaterOffsetDir(QStringLiteral("up"));
+        s.setFmRepeaterOffsetFreq(0.6);
+        EXPECT_EQ(toneModeSpy.count(), 1);
+        EXPECT_EQ(toneValueSpy.count(), 1);
+        EXPECT_EQ(directionSpy.count(), 1);
+        EXPECT_EQ(offsetSpy.count(), 1);
+        EXPECT_EQ(commands.size(), 4);
+
+        commands.clear();
+        s.applyRecalledFmRepeater(QStringLiteral("up"), 0.6,
+                                  QStringLiteral("ctcss_tx"), 88.5);
+        EXPECT_EQ(recallSpy.count(), 1);
+        EXPECT_EQ(commands.size(), 0);
+        EXPECT_EQ(toneModeSpy.count(), 1);
+        EXPECT_EQ(toneValueSpy.count(), 1);
+        EXPECT_EQ(directionSpy.count(), 1);
+        EXPECT_EQ(offsetSpy.count(), 1);
+        const QList<QVariant> args = recallSpy.takeFirst();
+        EXPECT_EQ(args.at(0).toString(), QStringLiteral("up"));
+        EXPECT_EQ(args.at(1).toDouble(), 600000.0);
+        EXPECT_EQ(args.at(2).toString(), QStringLiteral("ctcss_tx"));
+        EXPECT_EQ(args.at(3).toDouble(), 88.5);
+    }
 
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");

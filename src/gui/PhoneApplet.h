@@ -30,6 +30,12 @@ public:
 
     void setTransmitModel(TransmitModel* model);
 
+    // Hide the complete DEXP row when the connected backend has no
+    // authoritative downward-expander command path.
+    void setDexpVisible(bool visible);
+    void setAmCarrierAvailable(bool available);
+    void setVoxDelayAvailable(bool available);
+
     // The TX passband edges the connected radio can actually reach, ascending
     // (RadioCapabilities::txFilterLowEdgesHz / txFilterHighEdgesHz). Empty
     // restores the continuous 50 Hz behaviour.
@@ -41,11 +47,18 @@ public:
     // With the list, one click is one reachable edge.
     void setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int>& highEdgesHz);
 
+    // Hides the complete TX cutoff editor when the backend has no independent
+    // low/high cutoff command. Unsupported controls are absent, not inert.
+    void setTxFilterControlsAvailable(bool available);
+
 private:
     void buildUI();
     void syncFromModel();
 
     TransmitModel* m_model{nullptr};
+
+    QWidget* m_amCarrierRow{nullptr};
+    QWidget* m_voxDelayRow{nullptr};
 
     // AM Carrier
     GuardedSlider* m_amCarrierSlider{nullptr};
@@ -61,11 +74,13 @@ private:
     QLabel*  m_voxDelayLabel{nullptr};
 
     // DEXP (radio compander control)
+    QWidget*     m_dexpRow{nullptr};
     QPushButton* m_dexpBtn{nullptr};
     GuardedSlider* m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};
 
     // TX filter
+    QWidget* m_txFilterWidget{nullptr};
     QSlider* m_lowCutSlider{nullptr};
     ScrollableLabel* m_lowCutLabel{nullptr};
     QPushButton* m_lowCutDown{nullptr};

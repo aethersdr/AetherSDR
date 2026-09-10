@@ -16,11 +16,11 @@ Guards the dependency direction the aetherd RFC
        warn as "known". Any OTHER file warns as NEW leakage.
 
   EB3  No file ABOVE the radio seam may include a VENDOR header —
-       family-specific wire code (SmartSDR/FlexLib + KiwiSDR) that the
-       aetherd RFC keeps *behind* IRadioBackend. "Above the seam" is
-       everything in src/gui/, src/core/, and src/models/ EXCEPT the
-       backend tree (src/core/backends/) and the vendor translation
-       units themselves. Today's coupling is frozen as a per-file
+       family-specific wire code kept *behind* IRadioBackend. "Above the
+       seam" is everything in src/gui/, src/core/, and src/models/ plus
+       app-shell files at the src/ root, EXCEPT the backend tree
+       (src/core/backends/) and the vendor translation units themselves.
+       Today's coupling is frozen as a per-file
        baseline of the EXACT vendor headers each file may include
        (KNOWN_VENDOR_INCLUDE_BASELINE). A file may only SHRINK its set;
        any header not in its baseline row — a brand-new include, OR a
@@ -63,6 +63,14 @@ GUI_DIR = REPO / "src" / "gui"
 # EB3 scans a WIDER set than EB1/EB2: the radio seam lives below all three of
 # these, so gui/ is in scope for vendor-include leakage too.
 ABOVE_SEAM_DIRS = [REPO / "src" / "gui", REPO / "src" / "core", REPO / "src" / "models"]
+# The app shell itself lives at the src/ root, outside every directory above.
+# Scan these explicitly instead of adding src/ and traversing gui/core/models
+# twice.
+ABOVE_SEAM_FILES = [
+    REPO / "src" / "main.cpp",
+    REPO / "src" / "MacStartupAbortGuard.h",
+    REPO / "src" / "MacStartupAbortGuard.cpp",
+]
 # Below the seam = the backend tree. Anything here may include vendor code freely.
 BACKENDS_PREFIX = "src/core/backends/"
 
@@ -94,14 +102,10 @@ KNOWN_WIDGETS_LEGACY = {
 # `vendor(*)` there is enforced automatically — no silent drift where the audit
 # grows a vendor family but this checker keeps permitting it.
 VENDOR_TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.json"
-# Sanity floor: the audit currently tags 21 radio-family vendor headers (the
-# original 26 minus 5 that aren't radio-family wire — the direct 4O3A transports
-# TgxlConnection/PgxlConnection + the AntennaGenius switch → peripheral(4o3a);
-# the FlexControl USB knob → ui-support; and TunerModel → mixed(flex), a
-# generic-tuner model with a Flex TGXL relay to split, not vendor). This floor
-# only guards against the audit being moved/gutted (a parse yielding near zero),
-# NOT the exact count — deliberate reclassifications lower it over time, so keep
-# the floor well below the live count.
+# Sanity floor guards against the audit being moved, gutted, or parsed with a
+# changed schema. The live vocabulary now spans Flex, Kiwi, HL2, Sim, Icom,
+# ANAN and RTL;
+# deliberate reclassification can lower it, so keep the floor conservative.
 VENDOR_STEMS_FLOOR = 15
 
 
@@ -152,29 +156,42 @@ VENDOR_INCLUDE_RE = re.compile(
 # include OR a lateral swap that keeps the count flat) fails --strict. Decouple
 # a file by routing its radio access through IRadioBackend, then delete the
 # dropped stem(s) from its row; delete the row when it empties. NEVER add a stem
-# or a row to make a build pass.
+# or a row merely to make a build pass. The only permitted re-baseline is an
+# intentional vendor-vocabulary classification change: every added include
+# must be proven to predate the classification against the merge base, the
+# change must document that evidence, and it requires explicit maintainer
+# review. After classification, the expanded set is shrink-only again.
+#
+# Re-baselined for previously untagged HL2/Sim/Icom/ANAN/RTL backend surfaces.
+# The ANAN/RTL includes below are present on upstream/main at b1499334, before
+# their vocabulary classification in this PR. These entries freeze coupling
+# that predates classification; they are burndown targets, not waivers. New
+# code must not add to them.
 KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/core/TciProtocol.cpp": ["DaxIqModel"],
     "src/core/TciServer.cpp": ["DaxIqModel", "StreamStatus"],
     "src/core/WfmDemodulator.cpp": ["DaxIqModel"],
     "src/gui/Ax25HfPacketDecodeDialog.cpp": ["DaxTxPolicy"],
+    "src/gui/ConnectionPanel.cpp": ["AnanDiscovery", "Hl2Discovery", "IcomModels", "MetisProtocol", "P2Protocol", "SimBackend"],
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
+    "src/gui/DemoApplet.cpp": ["NoiseMixer"],
     "src/gui/DvkPanel.cpp": ["DvkWavTransfer"],
     "src/gui/KiwiPublicReceiverPicker.h": ["KiwiPublicDirectory"],
     "src/gui/KiwiSdrApplet.h": ["KiwiSdrClient"],
-    "src/gui/MainWindow.cpp": ["DvkWavTransfer", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "StreamStatus"],
-    "src/gui/MainWindow.h": ["SmartLinkClient", "WanConnection"],
+    "src/gui/MainWindow.cpp": ["DvkWavTransfer", "Hl2Backend", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
+    "src/gui/MainWindow.h": ["AnanDiscovery", "Hl2Discovery", "RtlSdrDiscovery", "SmartLinkClient", "WanConnection"],
     "src/gui/MainWindowHelpers.cpp": ["PanadapterStream", "SmartLinkClient"],
     "src/gui/MainWindow_Controllers.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_KiwiSdr.cpp": ["KiwiSdrClient", "KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/MainWindow_ReceiveSync.cpp": ["KiwiSdrManager"],
+    "src/gui/MainWindow_Session.cpp": ["SimBackend"],
     "src/gui/MainWindow_Shortcuts.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_Wiring.cpp": ["KiwiSdrManager", "KiwiSdrProtocol", "ProfileLoadCommand"],
     "src/gui/MemoryDialog.cpp": ["MemoryCsvCompat", "RadioConnection"],
     "src/gui/NetworkDiagnosticsDialog.h": ["PanadapterStream"],
     "src/gui/ProfileImportExportDialog.h": ["ProfileTransfer"],
-    "src/gui/RadioSetupDialog.cpp": ["FirmwareStager", "FirmwareUploader", "KiwiSdrManager", "PanadapterStream", "WanConnection"],
+    "src/gui/RadioSetupDialog.cpp": ["FirmwareStager", "FirmwareUploader", "Hl2Discovery", "KiwiSdrManager", "PanadapterStream", "WanConnection"],
     "src/gui/RxApplet.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/SMeterWidget.h": ["KiwiSdrProtocol"],
     "src/gui/SpectrumOverlayMenu.cpp": ["KiwiSdrManager"],
@@ -183,7 +200,8 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/VfoWidget.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/VfoWidget.h": ["KiwiSdrProtocol"],
     "src/gui/WaveformsDialog.cpp": ["FlexWaveformModel", "WaveformInstaller"],
-    "src/models/RadioModel.cpp": ["CommandParser", "ProfileLoadCommand", "RadioStatusOwnership", "StreamStatus"],
+    "src/main.cpp": ["Hl2EmergencyStop"],
+    "src/models/RadioModel.cpp": ["CommandParser", "Hl2Backend", "ProfileLoadCommand", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
     "src/models/RadioModel.h": ["CommandParser", "DaxIqModel", "DaxTxPolicy", "FlexWaveformModel", "PanadapterStream", "RadioConnection", "RadioStatusOwnership", "WanConnection"],
     "src/models/SliceModel.cpp": ["KiwiSdrProtocol"],
     "src/models/TransmitInhibitPolicy.h": ["CommandParser"],
@@ -371,12 +389,14 @@ def collect_above_seam_files(args):
             p = (REPO / a) if not Path(a).is_absolute() else Path(a)
             if p.suffix in ENGINE_SUFFIXES and p.is_file():
                 rel = p.resolve().relative_to(REPO).as_posix()
-                if any(rel.startswith(f"src/{d}/") for d in ("gui", "core", "models")):
+                if (any(rel.startswith(f"src/{d}/") for d in ("gui", "core", "models"))
+                        or p.resolve() in {f.resolve() for f in ABOVE_SEAM_FILES}):
                     out.append(p.resolve())
         return out
     out = []
     for d in ABOVE_SEAM_DIRS:
         out.extend(p for p in sorted(d.rglob("*")) if p.suffix in ENGINE_SUFFIXES)
+    out.extend(f for f in ABOVE_SEAM_FILES if f.is_file())
     return out
 
 

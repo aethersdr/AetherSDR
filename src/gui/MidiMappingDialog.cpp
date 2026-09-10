@@ -292,6 +292,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         // Profile management
         m_profileCombo = new QComboBox;
+        m_profileCombo->setObjectName(QStringLiteral("midiProfileCombo"));
+        m_profileCombo->setAccessibleName(QStringLiteral("MIDI profile name"));
         m_profileCombo->setStyleSheet(kComboStyle);
         m_profileCombo->setMinimumWidth(120);
         m_profileCombo->setEditable(true);
@@ -300,11 +302,20 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         btnRow->addWidget(m_profileCombo);
 
         auto* saveProfileBtn = makeStyledButton("Save");
+        saveProfileBtn->setObjectName(QStringLiteral("midiProfileSaveButton"));
+        saveProfileBtn->setAccessibleName(QStringLiteral("Save MIDI profile"));
         saveProfileBtn->setToolTip(
             QStringLiteral("Save the current bindings as a named profile"));
+        // No name means no target: show that before the click rather than
+        // letting Save silently do nothing. (#5077)
+        saveProfileBtn->setEnabled(!m_profileCombo->currentText().trimmed().isEmpty());
+        connect(m_profileCombo, &QComboBox::currentTextChanged, saveProfileBtn,
+                [saveProfileBtn](const QString& text) {
+                    saveProfileBtn->setEnabled(!text.trimmed().isEmpty());
+                });
         connect(saveProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
-            if (name.isEmpty()) return;
+            if (name.isEmpty()) return;  // unreachable while disabled; kept as the guard
             if (!MidiSettings::isValidProfileName(name)) {
                 // The store refuses these names silently; say why here so the
                 // operator isn't left with a Save that does nothing. (#4975)
@@ -315,12 +326,42 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                         .arg(name));
                 return;
             }
-            MidiSettings::instance().saveProfile(name, m_manager->bindings());
+            // Sampled before the write so the result can say which success
+            // happened — an overwrite is otherwise invisible, because the list
+            // refresh changes nothing. Asked of the filesystem, so it matches
+            // what the write does on case-insensitive volumes too. (#5077)
+            const int count = m_manager->bindings().size();
+            if (count == 0) {
+                // The store refuses an empty set (it would replace the profile
+                // with nothing); say so here so the refusal isn't reported as
+                // an unwritable directory.
+                FramelessMessageBox::warning(
+                    this, QStringLiteral("Save Profile"),
+                    QStringLiteral("No bindings to save — add a binding first."));
+                return;
+            }
+            const bool existed = MidiSettings::profileExists(name);
+            if (!MidiSettings::instance().saveProfile(name, m_manager->bindings())) {
+                FramelessMessageBox::warning(
+                    this, QStringLiteral("Save Profile"),
+                    QStringLiteral("Couldn't write profile \"%1\" — check that %2 "
+                                   "is writable.")
+                        .arg(name, QDir::toNativeSeparators(MidiSettings::profileDir())));
+                return;
+            }
             refreshProfileList();
+            FramelessMessageBox::information(
+                this, QStringLiteral("Save Profile"),
+                QStringLiteral("%1 profile \"%2\" (%3 binding%4).")
+                    .arg(existed ? QStringLiteral("Overwrote") : QStringLiteral("Saved"),
+                         name, QString::number(count),
+                         count == 1 ? QString() : QStringLiteral("s")));
         });
         btnRow->addWidget(saveProfileBtn);
 
         auto* loadProfileBtn = makeStyledButton("Load");
+        loadProfileBtn->setObjectName(QStringLiteral("midiProfileLoadButton"));
+        loadProfileBtn->setAccessibleName(QStringLiteral("Load MIDI profile"));
         loadProfileBtn->setToolTip(
             QStringLiteral("Apply the selected profile to the current bindings"));
         connect(loadProfileBtn, &QPushButton::clicked, this, [this] {

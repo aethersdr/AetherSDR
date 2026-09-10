@@ -5,6 +5,9 @@
 #include "models/TransmitModel.h"
 
 #include <QApplication>
+#include <QAccessible>
+#include <QFile>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
 
@@ -15,6 +18,17 @@ using namespace AetherSDR;
 namespace {
 
 int failures = 0;
+QList<QObject*> g_nameChangedObjects;
+QList<QObject*> g_descriptionChangedObjects;
+
+void captureAccessibilityUpdate(QAccessibleEvent* event)
+{
+    if (event->type() == QAccessible::NameChanged) {
+        g_nameChangedObjects.append(event->object());
+    } else if (event->type() == QAccessible::DescriptionChanged) {
+        g_descriptionChangedObjects.append(event->object());
+    }
+}
 
 void check(bool condition, const char* label)
 {
@@ -28,6 +42,24 @@ QSlider* micSlider(PhoneCwApplet& applet)
     for (QSlider* slider : applet.findChildren<QSlider*>()) {
         if (slider->accessibleName() == QLatin1String("Microphone gain"))
             return slider;
+    }
+    return nullptr;
+}
+
+QSlider* processorSlider(PhoneCwApplet& applet)
+{
+    for (QSlider* slider : applet.findChildren<QSlider*>()) {
+        if (slider->accessibleName() == QLatin1String("Processor level"))
+            return slider;
+    }
+    return nullptr;
+}
+
+QPushButton* processorButton(PhoneCwApplet& applet)
+{
+    for (QPushButton* button : applet.findChildren<QPushButton*>()) {
+        if (button->accessibleName() == QLatin1String("Speech processor"))
+            return button;
     }
     return nullptr;
 }
@@ -53,9 +85,77 @@ int main(int argc, char** argv)
     PhoneCwApplet applet;
     applet.setTransmitModel(&model);
     QSlider* slider = micSlider(applet);
+    QSlider* procSlider = processorSlider(applet);
+    QPushButton* procButton = processorButton(applet);
     check(slider != nullptr, "microphone gain slider exists");
     if (!slider)
         return 1;
+    check(procSlider != nullptr, "speech processor slider exists");
+    if (!procSlider)
+        return 1;
+    check(procButton != nullptr, "speech processor button exists");
+    if (!procButton)
+        return 1;
+
+    check(procSlider->maximum() == 2,
+          "default processor surface preserves Flex NOR/DX/DX+ range");
+    QSignalSpy flexCommands(&model, &TransmitModel::commandReady);
+    procSlider->setValue(2);
+    check(flexCommands.count() == 1
+              && flexCommands.takeFirst().at(0).toString()
+                     == QStringLiteral("transmit set speech_processor_level=2"),
+          "Flex DX+ retains its existing level-2 command");
+    const QAccessible::UpdateHandler previousHandler =
+        QAccessible::installUpdateHandler(captureAccessibilityUpdate);
+    const bool wasAccessible = QAccessible::isActive();
+    QAccessible::setActive(true);
+    g_nameChangedObjects.clear();
+    g_descriptionChangedObjects.clear();
+    applet.setSpeechProcessorPresentation(QStringLiteral("COMP"), 100);
+    model.setSpeechProcessorLevelMaximum(100);
+    check(procSlider->maximum() == 100 && procSlider->pageStep() == 10,
+          "continuous processor capability exposes the full 0..100 range");
+    check(procSlider->accessibleDescription().contains(QLatin1String("compressor")),
+          "IC-9700 presentation identifies the continuous control as compressor level");
+    check(procButton->text() == QLatin1String("COMP")
+              && procButton->accessibleName() == QLatin1String("Speech compressor"),
+          "IC-9700 presentation uses the radio-native COMP label and accessible name");
+    check(procButton->width() == 54
+              && procButton->property("continuousCompressor").toBool(),
+          "IC-9700 COMP label uses its legible model-gated presentation");
+    if (QAccessible::isActive()) {
+        check(g_nameChangedObjects.contains(procButton),
+              "COMP selection emits NameChanged for the processor button");
+        check(g_descriptionChangedObjects.contains(procButton)
+                  && g_descriptionChangedObjects.contains(procSlider),
+              "COMP selection emits DescriptionChanged for button and slider");
+    }
+    QAccessible::installUpdateHandler(previousHandler);
+    QAccessible::setActive(wasAccessible);
+    procSlider->setValue(50);
+    check(model.speechProcessorLevel() == 50,
+          "continuous processor midpoint reaches the transmit model unchanged");
+    TransmitDelta procReport;
+    procReport.speechProcLevel = 73;
+    model.applyChanges(procReport);
+    check(procSlider->value() == 73,
+          "radio-reported continuous processor level returns to the slider");
+    applet.setSpeechProcessorPresentation(QStringLiteral("PROC"), 2);
+    model.setSpeechProcessorLevelMaximum(2);
+    check(procSlider->maximum() == 2 && model.speechProcessorLevel() == 2
+              && procButton->width() == 48
+              && !procButton->property("continuousCompressor").toBool(),
+          "three-position capability restores and bounds the legacy surface");
+
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    check(mainWindowSource.open(QIODevice::ReadOnly),
+          "processor presentation test can inspect the shipping capability fan-out");
+    const QByteArray mainWindowText = mainWindowSource.readAll();
+    check(mainWindowText.contains(
+              "connected ? caps.speechProcessorLabel : QStringLiteral(\"PROC\")")
+              && mainWindowText.contains(
+                  "connected ? caps.speechProcessorLevelMaximum : 2"),
+          "MainWindow forwards the normalized processor label and range to P/CW");
 
     QSignalSpy clientGain(&applet, &PhoneCwApplet::micLevelChanged);
 

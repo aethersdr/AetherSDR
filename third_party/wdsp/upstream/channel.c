@@ -30,6 +30,15 @@ struct _ch ch[MAX_CHANNELS];
 
 void start_thread (int channel)
 {
+	// AetherSDR patch 4: arm the exit handshake before the thread exists, on every
+	// (re)build path — OpenChannel and the SetInput*/SetDSP* rebuilds all come here.
+	// A GENERATION, not a 0/1 flag. If a previous pre_main_destroy() fell through
+	// its cap, that worker is still alive and will store eventually; with a flag
+	// its late store would land on the NEW worker's slot and satisfy the next
+	// wait for free, silently disabling the handshake for the rest of the
+	// channel's life (#5411 review). Storing the generation makes a stale store
+	// inert: it writes an old number that never equals the current mainGen.
+	InterlockedIncrement (&ch[channel].mainGen);
 	HANDLE handle = (HANDLE) _beginthread(wdspmain, 0, (void *)(uintptr_t)channel);
 	//SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST);
 }
@@ -104,10 +113,37 @@ void pre_main_destroy (int channel)
 {
 	IOB a = ch[channel].iob.pc;
 	InterlockedBitTestAndReset (&ch[channel].exchange, 0);
-	InterlockedBitTestAndReset (&ch[channel].run, 0);
+	// AetherSDR patch 4: exec_bypass BEFORE run, which is the reverse of
+	// upstream's order. The worker reads exec_bypass and then, inside
+	// dexchange(), reads run (iobuffs.c). Clearing run first opens a window
+	// where it sees "not bypassed" and then "not running" and unwinds through
+	// dexchange()'s early return. Setting the bypass first makes the bypass
+	// branch win for any worker that has not yet read it. The window is
+	// narrowed, not closed — a worker can read exec_bypass just before this
+	// line — but either way the worker leaves through wdspmain()'s tail and
+	// performs the handshake there, so correctness does not rest on the
+	// ordering; it only saves a wakeup.
 	InterlockedBitTestAndSet (&ch[channel].iob.pc->exec_bypass, 0);
+	InterlockedBitTestAndReset (&ch[channel].run, 0);
 	ReleaseSemaphore (a->Sem_BuffReady, 1, 0);
-	Sleep (25);
+	// AetherSDR patch 4. Upstream slept 25 ms here as its only barrier between
+	// the worker's exit and destroy_main()/post_main_destroy() freeing the
+	// semaphore, mutex and buffers the worker is still touching. A sleep is a
+	// scheduling bet, not synchronization: a starved worker leaves
+	// pthread_cond_wait() on freed memory (TSan: 116 reports, 21 failing tests
+	// across the HL2/WDSP family, #5275). Wait for the worker's own exit store
+	// instead. BOUNDED, because upstream ignores thread-creation failure and an
+	// unbounded wait would then hang CloseChannel() forever; falling through
+	// after the cap restores upstream's behaviour exactly, no worse.
+	{
+		const long gen = _InterlockedAnd (&ch[channel].mainGen, ~0L);
+		int waited = 0;
+		while (_InterlockedAnd (&ch[channel].mainExited, ~0L) != gen && waited < 1000)
+		{
+			Sleep (1);
+			++waited;
+		}
+	}
 }
 
 void post_main_destroy (int channel)

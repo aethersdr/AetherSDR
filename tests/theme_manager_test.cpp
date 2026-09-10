@@ -1,9 +1,14 @@
+#include "TestEventLoop.h"
 #include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
+#include "gui/GuardedSlider.h"
+#include "gui/Theme.h"
 
 #include <QApplication>
+#include <QHoverEvent>
 #include <QLabel>
+#include <QSlider>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QSignalSpy>
@@ -36,6 +41,56 @@ static int g_failures = 0;
         ++g_failures; \
     } \
 } while (0)
+
+namespace {
+
+// Counts hover events that reach the slider's own event() dispatch --
+// i.e., that were NOT intercepted by an installed SliderHoverSuppressor
+// filter first. Proves the suppression is a delivery-level interception,
+// which (unlike the original attribute-clearing approach) doesn't care
+// how or when Qt::WA_Hover itself got set (#4869 review, NF0T).
+class HoverCountingSlider : public QSlider {
+public:
+    using QSlider::QSlider;
+    int hoverEventsSeen = 0;
+    bool event(QEvent* ev) override {
+        switch (ev->type()) {
+        case QEvent::HoverEnter:
+        case QEvent::HoverMove:
+        case QEvent::HoverLeave:
+            ++hoverEventsSeen;
+            break;
+        default:
+            break;
+        }
+        return QSlider::event(ev);
+    }
+};
+
+class HoverCountingGuardedSlider : public GuardedSlider {
+public:
+    using GuardedSlider::GuardedSlider;
+    int hoverEventsSeen = 0;
+    bool event(QEvent* ev) override {
+        switch (ev->type()) {
+        case QEvent::HoverEnter:
+        case QEvent::HoverMove:
+        case QEvent::HoverLeave:
+            ++hoverEventsSeen;
+            break;
+        default:
+            break;
+        }
+        return GuardedSlider::event(ev);
+    }
+};
+
+void sendHoverEnter(QWidget* w) {
+    QHoverEvent ev(QEvent::HoverEnter, QPointF(5, 5), QPointF(5, 5), QPointF(-1, -1));
+    QCoreApplication::sendEvent(w, &ev);
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -1453,6 +1508,69 @@ int main(int argc, char** argv)
 
     // Restore Default Dark for any future test additions below.
     tm.setActiveTheme("Default Dark");
+
+    // #4869: a themed slider must not repaint on hover — the canonical
+    // slider theme (Theme.h) declares no :hover rule, so the partial-rect
+    // update() a hover fires changes no pixels, and at a fractional
+    // effective device pixel ratio (a non-100%, non-200% AetherSDR UI
+    // scale on a Retina display) that leaves stale pixels behind.
+    //
+    // The original fix here tried to clear Qt::WA_Hover instead, on the
+    // theory that our stylesheet's absence of a :hover rule was why Qt set
+    // it. Wrong (review on #4923, credit NF0T): AetherSDR forces the
+    // Fusion style app-wide, and QFusionStyle::polish() sets WA_Hover on
+    // every QAbstractSlider by widget type regardless of stylesheet — so
+    // the attribute can't be reliably cleared, only raced. This version
+    // swallows the hover events themselves (SliderHoverSuppressor in
+    // Theme.h), which doesn't care how or when the attribute got set.
+    // Pins the three cases the #4923 review found the old approach missed:
+    {
+        QWidget host;
+        auto* layout = new QVBoxLayout(&host);
+
+        // A plain QSlider styled via applyPrimarySliderStyle() — the
+        // helper's own direct contract.
+        auto* styled = new HoverCountingSlider(Qt::Horizontal);
+        applyPrimarySliderStyle(styled);
+        layout->addWidget(styled);
+
+        // A GuardedSlider styled via ThemeManager::applyStyleSheet()
+        // directly, the way EqApplet's band sliders and TitleBar's
+        // master/headphone sliders actually do it — NEVER routed through
+        // applyPrimarySliderStyle() at all. Only GuardedSlider's own
+        // constructor filter can cover this one (Blocker 2 on #4923).
+        auto* guarded = new HoverCountingGuardedSlider(Qt::Horizontal);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            guarded, QStringLiteral("QSlider::groove:horizontal { height: 4px; }"));
+        layout->addWidget(guarded);
+
+        host.show();
+        EXPECT_TRUE(AetherTest::waitFor([&] { return host.isVisible(); }));
+
+        sendHoverEnter(styled);
+        EXPECT_TRUE(styled->hoverEventsSeen == 0);
+
+        sendHoverEnter(guarded);
+        EXPECT_TRUE(guarded->hoverEventsSeen == 0);
+
+        // Blocker 1 on #4923: RxApplet's/VfoWidget's squelch-mode redraw
+        // re-polishes the slider with a DIRECT style()->polish() call,
+        // which emits neither QEvent::Polish nor QEvent::StyleChange — the
+        // exact case the original StyleChange/Polish-watching filter could
+        // never see. This approach doesn't watch those events at all, so
+        // the cycle must not reopen the gap.
+        guarded->style()->unpolish(guarded);
+        guarded->style()->polish(guarded);
+        sendHoverEnter(guarded);
+        EXPECT_TRUE(guarded->hoverEventsSeen == 0);
+
+        // And a theme switch — the case the original fix already handled —
+        // must still not regress.
+        tm.setActiveTheme("Default Light");
+        sendHoverEnter(styled);
+        EXPECT_TRUE(styled->hoverEventsSeen == 0);
+        tm.setActiveTheme("Default Dark");
+    }
 
     if (g_failures == 0) {
         std::fprintf(stderr, "PASS theme_manager_test\n");

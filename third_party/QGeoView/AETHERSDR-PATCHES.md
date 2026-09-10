@@ -96,3 +96,43 @@ this list current when updating the snapshot.
     this applies with or without horizontal wrapping. A continuous slow pan
     can therefore defer newly required tile loads until the gesture pauses;
     this is deliberate so tile scene churn does not stall map interaction.
+
+13. **Online-tile readiness.**
+    `QGVLayerTilesOnline` exposes pending, decoded-delivery, and failed-request
+    counters so an overlay can retain its current frame until replacement
+    coverage has actually loaded, and retry failed detail tiles.
+    `QGVLayerTiles::retryUnfinishedTiles()` explicitly re-requests current-view
+    null placeholders. An ordinary update skips unchanged cameras and cannot
+    retry those indexed failures. Completed coverage is retained; online
+    request coalescing still applies. Radar opts in with bounded retry delays.
+    Intentional cancellations do not count as failures. Encoded-size aborts
+    are marked before aborting and do count; retiring a reply disconnects its
+    layer callbacks, and stale completions cannot remove a newer request.
+    The socket-free `map_tile_reply_test` covers cleanup, direct cancellation,
+    size-limit aborts, timeouts, and same-tile requests in a new generation.
+
+14. **`lib/src/QGVMapQGItem.cpp` — direct image painting on OpenGL viewports.**
+    `QGVImage` wrappers use `NoCache` when attached to an OpenGL-backed view.
+    Qt's GL painter can retain each original image as a texture; the upstream
+    device-coordinate cache instead creates scaled CPU pixmaps which thrash
+    the shared cache at HiDPI during radar animation. Raster views and vector
+    items retain the upstream mode. `map_image_cache_test` exercises real item
+    attachment, unchanged source identity/resolution, and those exclusions.
+
+15. **Transparent zoom fallback (opt-in).** `QGVLayerTiles` exposes
+    `setTransparentFallbackEnabled()` and the undelivered footprint of retained
+    tiles. `QGVLayerTilesOnline` clips fallback tiles to that footprint while
+    painting: a completed higher-resolution tile replaces its entire footprint,
+    including transparent pixels, rather than revealing old rain beneath it.
+    Pending/failed descendants keep their fallback. Clipping uses const index
+    lookup without a per-paint level-map copy. Radar opts in and retains three
+    adjacent zoom levels; ordinary opaque basemap layers do not opt in.
+    Parent retirement also counts `4^zoomDelta` descendants, not
+    `2^(zoomDelta+1)`: eight of sixteen grandchildren cannot replace a parent.
+    `weather_radar_loading_test` injects real QGeoView tile deliveries without
+    sockets and covers missing descendants, transparent replacement and zoom out.
+
+16. **Current tile coverage readiness.** `currentTilesComplete()` checks the
+    selected viewport after coalesced camera processing, including undelivered
+    placeholders. Radar readiness can acknowledge an unchanged completed tile
+    set after a small pan without requiring another decoded tile.

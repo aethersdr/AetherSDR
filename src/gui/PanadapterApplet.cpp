@@ -1,4 +1,6 @@
 #include "PanadapterApplet.h"
+#include "RttyDecodeSettings.h"
+#include "RttyDecoderSensitivity.h"
 #include "CallsignCard.h"
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistPanel.h"
@@ -475,6 +477,32 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     });
     rttyBar->addWidget(m_rttyRevBtn);
 
+    // Sensitivity slider — drops low-confidence characters so noise between
+    // transmissions is not rendered (#5028).  Mirrors the CW pane's control.
+    auto* rttySensLabel = new QLabel("Sens:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rttySensLabel, "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(rttySensLabel);
+    m_rttySensSlider = new GuardedSlider(Qt::Horizontal);
+    m_rttySensSlider->setObjectName(QStringLiteral("rttySensSlider"));
+    m_rttySensSlider->setAccessibleName(QStringLiteral("RTTY decoder sensitivity"));
+    m_rttySensSlider->setToolTip(QStringLiteral(
+        "Squelch for the decoded text: drops characters the decoder is not confident\n"
+        "about, so noise between transmissions stops filling the pane with gibberish.\n"
+        "0 (default) shows every decoded character — exactly the behavior before this\n"
+        "control existed. Higher values drop more; ~38 filters what the stats bar\n"
+        "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
+        "nothing is retuned and no audio changes."));
+    m_rttySensSlider->setRange(0, 100);
+    const int savedRttySens = RttyDecodeSettings::sensitivity();
+    m_rttySensSlider->setValue(savedRttySens);
+    m_rttySensSlider->setFixedWidth(60);
+    applyPrimarySliderStyle(m_rttySensSlider);
+    m_rttyConfThreshold = rttyConfThresholdFor(savedRttySens);
+    connectSliderSetting(m_rttySensSlider,
+        [this](int v) { m_rttyConfThreshold = rttyConfThresholdFor(v); },
+        [](int v) { RttyDecodeSettings::setSensitivity(v); });
+    rttyBar->addWidget(m_rttySensSlider);
+
     // Stats
     m_rttyStatsLabel = new QLabel;
     m_rttyStatsLabel->setTextFormat(Qt::RichText);
@@ -520,6 +548,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     // ── Text area ─────────────────────────────────────────────────────────
     m_rttyText = new QTextEdit;
+    m_rttyText->setObjectName(QStringLiteral("rttyDecodeText"));
+    m_rttyText->setAccessibleName(QStringLiteral("RTTY decoded text"));
     m_rttyText->setReadOnly(true);
     m_rttyText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyText,
@@ -793,6 +823,8 @@ void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
     if (pitchHz > 0 && speedWpm > 0)
         m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));
+    else
+        m_cwStatsLabel->clear();   // decoder stopped — don't show a dead estimate (#5213)
 }
 
 void PanadapterApplet::clearCwText()
@@ -956,6 +988,14 @@ bool PanadapterApplet::rttyReverse() const
 
 void PanadapterApplet::appendRttyText(const QString& text, float confidence)
 {
+    // Filter by sensitivity threshold — drop low-confidence decodes.  Above
+    // the CR/LF handling on purpose: Baudot CR and LF are ordinary codepoints
+    // that noise hits as often as any other, and a dropped character must
+    // not still spray blank lines down the pane. (#5028)
+    if (confidence < m_rttyConfThreshold) {
+        return;
+    }
+
     // CR is a no-op in a wrapped text view; LF becomes a line break.
     // Standard RTTY sends CR+LF pairs — discarding CR and converting LF
     // to <br> produces exactly one new line per pair.

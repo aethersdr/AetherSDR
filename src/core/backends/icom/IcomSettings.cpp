@@ -67,6 +67,18 @@ void IcomSettings::writeObj(const QJsonObject& obj)
     s.save();
 }
 
+bool IcomSettings::wakeOnConnect()
+{
+    return readObj().value(QStringLiteral("wakeOnConnect")).toBool(false);
+}
+
+void IcomSettings::setWakeOnConnect(bool enabled)
+{
+    QJsonObject object = readObj();
+    object.insert(QStringLiteral("wakeOnConnect"), enabled);
+    writeObj(object);
+}
+
 QString IcomSettings::username()
 {
     const QString stored = readObj().value(QLatin1String(kFieldUsername)).toString();
@@ -122,6 +134,35 @@ void IcomSettings::setPorts(quint16 control, quint16 serial, quint16 audio)
     obj[QLatin1String(kFieldSerialPort)]  = serial ? int(serial) : int(icom::kSerialPort);
     obj[QLatin1String(kFieldAudioPort)]   = audio ? int(audio) : int(icom::kAudioPort);
     writeObj(obj);
+}
+
+quint16 IcomSettings::defaultBasePort()
+{
+    return icom::kControlPort;
+}
+
+quint16 IcomSettings::maximumBasePort()
+{
+    return 65533;
+}
+
+bool IcomSettings::usesDefaultPorts()
+{
+    return controlPort() == icom::kControlPort
+        && serialPort() == icom::kSerialPort
+        && audioPort() == icom::kAudioPort;
+}
+
+void IcomSettings::setBasePort(quint16 basePort)
+{
+    if (basePort == 0 || basePort > maximumBasePort()) {
+        setPorts(icom::kControlPort, icom::kSerialPort, icom::kAudioPort);
+        return;
+    }
+
+    setPorts(basePort,
+             static_cast<quint16>(basePort + 1),
+             static_cast<quint16>(basePort + 2));
 }
 
 std::uint8_t IcomSettings::civAddress()

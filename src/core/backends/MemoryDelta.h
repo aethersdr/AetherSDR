@@ -20,6 +20,9 @@ struct MemoryDelta {
     // Text (carried raw; model decodes/sanitises)
     std::optional<QString> group;
     std::optional<QString> owner;
+    std::optional<QString> channel;
+    std::optional<QString> importSource;
+    std::optional<QString> importKey;
     std::optional<QString> name;
     std::optional<QString> mode;
     std::optional<QString> offsetDir;   // wire key "repeater"
@@ -29,6 +32,13 @@ struct MemoryDelta {
     std::optional<double>  freq;
     std::optional<double>  repeaterOffset;
     std::optional<double>  toneValue;
+    std::optional<double>  rxToneValue;
+    std::optional<int>     nativeFilter;
+    std::optional<int>     dataMode;
+    std::optional<int>     dtcsCode;
+    std::optional<bool>    dtcsTxReverse;
+    std::optional<bool>    dtcsRxReverse;
+    std::optional<bool>    recallable;
     std::optional<int>     step;
     std::optional<bool>    squelch;
     std::optional<int>     squelchLevel;
