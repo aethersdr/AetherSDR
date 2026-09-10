@@ -47,6 +47,11 @@ private:
     QString m_radioSessionId;
     QPointer<RadioConnectionTarget> m_connectionTarget;
     QSet<SliceModel*> m_slices;
+    // Backend capabilities are rebuilt on every RadioModel::backendCapabilities()
+    // call; cache the slice-frequency authority string and refill it on the
+    // same edges that republish the radio session (capabilities, rebuild,
+    // connection). Empty means "read it on the next publish".
+    QString m_frequencyAuthority;
     QSet<PanadapterModel*> m_panadapters;
 };
 

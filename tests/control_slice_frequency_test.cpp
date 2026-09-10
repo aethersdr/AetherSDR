@@ -193,6 +193,9 @@ void authoritativeObservations()
               && f.backend->tunes == 1 && f.backend->lastSlice == 0
               && f.backend->lastHz == 14'230'000,
           "production target dispatches exactly one typed Hz intent");
+    check(f.store.get(f.address)->value.value("frequencyObservation").toObject()
+                  .value("authority").toString() == "radio",
+          "published observation authority reflects the bound backend");
     check(f.radio.slice(0)->frequency() == 14.225
               && f.store.get(f.address)->revision == originalRevision
               && f.controller.takePendingFrames().isEmpty(),
@@ -206,8 +209,8 @@ void authoritativeObservations()
           "same observed revision permits ordered pending intents, not compare-and-swap");
     const int readsBeforeReport = f.backend->capabilityReads;
     f.report(14'232'000);
-    check(f.backend->capabilityReads <= readsBeforeReport + 1,
-          "a changed frequency avoids duplicate adapter capability reads");
+    check(f.backend->capabilityReads == readsBeforeReport,
+          "a frequency report republishes without re-reading backend capabilities");
     const ResourceSnapshot changed = *f.store.get(f.address);
     check(changed.revision > originalRevision
               && changed.value.value("frequencyObservation").toObject().value("hz").toInteger() == 14'232'000

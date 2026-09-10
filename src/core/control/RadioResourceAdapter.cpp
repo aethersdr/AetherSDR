@@ -88,6 +88,7 @@ RadioResourceAdapter::RadioResourceAdapter(
             this, &RadioResourceAdapter::publishRadioSession);
     connect(m_radio, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
+                m_frequencyAuthority.clear();
                 publishRadioSession();
                 if (connected) {
                     publishAll();
@@ -285,6 +286,7 @@ void RadioResourceAdapter::clearDynamicResources()
 void RadioResourceAdapter::publishRadioSession()
 {
     const RadioCapabilities capabilities = m_radio->backendCapabilities();
+    m_frequencyAuthority = frequencyAuthority(capabilities.sliceFrequencyControl.authority);
     QJsonObject value{
         {QStringLiteral("id"), m_radioSessionId},
         {QStringLiteral("connected"), m_radio->isConnected()},
@@ -316,6 +318,10 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
     if (!slice || !m_slices.contains(slice)) {
         return;
     }
+    if (m_frequencyAuthority.isEmpty()) {
+        m_frequencyAuthority = frequencyAuthority(
+            m_radio->backendCapabilities().sliceFrequencyControl.authority);
+    }
     const QJsonObject value{
         {QStringLiteral("id"), QString::number(slice->sliceId())},
         {QStringLiteral("letter"), slice->letter()},
@@ -327,8 +333,7 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
              {QStringLiteral("hz"), slice->frequencyReportedKnown()
                   ? QJsonValue(qRound64(slice->reportedFrequency() * 1'000'000.0))
                   : QJsonValue(QJsonValue::Null)},
-             {QStringLiteral("authority"), frequencyAuthority(
-                  m_radio->backendCapabilities().sliceFrequencyControl.authority)}}},
+             {QStringLiteral("authority"), m_frequencyAuthority}}},
         {QStringLiteral("mode"), slice->mode()},
         {QStringLiteral("filter"), QJsonObject{
              {QStringLiteral("lowHz"), slice->filterLow()},
