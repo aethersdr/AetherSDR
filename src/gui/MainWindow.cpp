@@ -2601,7 +2601,14 @@ MainWindow::MainWindow(QWidget* parent)
     // connection dialog — the operator has to know the Settings menu item exists.
     connect(m_connPanel, &ConnectionPanel::startupConnectUnavailable,
             this, [this](const QString& reason) {
-        if (m_userDisconnected || m_radioModel.isConnected()) {
+        // isConnected() is false for the whole handshake, so it cannot tell
+        // "nothing is happening" from "another connect is already winning":
+        // a routed HL2/ANAN saved by IP on the LAN is also found by broadcast
+        // discovery, whose auto-connect starts first and makes the radio
+        // answer the later directed probe as busy. That probe's report must
+        // not tear down the live connect (see maybeAutoConnectToDiscoveredRadio).
+        if (m_userDisconnected || m_radioModel.isConnected()
+            || m_radioModel.isConnectAttemptInFlight()) {
             return;
         }
         setPanadapterConnectionAnimation(false);

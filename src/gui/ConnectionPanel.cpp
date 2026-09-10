@@ -2710,6 +2710,10 @@ void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
         return;
     }
     m_startupProbe = false;
+    // Land the operator on the page that explains the failure: the full
+    // guidance setManualMessage() wrote lives on the Connect by IP page, and
+    // the footer line MainWindow sets carries only the short reason.
+    setCurrentMode(ManualMode);
     emit startupConnectUnavailable(reason);
 }
 
@@ -2815,7 +2819,12 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                     || panel->m_manualIpEdit->text().trimmed() != requestedHost) {
                     panel->resetManualConnectButton();
                     panel->m_manualConnectPending = false;
-                    panel->m_startupProbe = false;
+                    // An operator edit has normally cleared the latch already,
+                    // making this a no-op; if the route changed under the read
+                    // any other way, the startup attempt still ends here and
+                    // must not leave the overlay with no owner.
+                    panel->reportStartupProbeFailure(
+                        QStringLiteral("The saved Icom route changed before its password loaded."));
                     return;
                 }
                 if (password.isEmpty()) {
@@ -2887,12 +2896,14 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                         // input reproduces the exact symptom the field is here to
                         // cure, and the operator would be left reading a "no reply"
                         // that their typo caused.
-                        setStatusText(tr("CI-V address \"%1\" is not a hex byte "
-                                         "(try A2, 0xA2 or A2h) — not connecting.")
-                                          .arg(m_manualIcomCivEdit->text().trimmed()));
+                        const QString civError =
+                            QStringLiteral("CI-V address \"%1\" is not a hex byte "
+                                           "(try A2, 0xA2 or A2h) — not connecting.")
+                                .arg(m_manualIcomCivEdit->text().trimmed());
+                        setStatusText(civError);
                         m_manualIcomCivEdit->setFocus();
                         m_manualIcomCivEdit->selectAll();
-                        reportStartupProbeFailure(tr("The saved Icom CI-V address is invalid."));
+                        reportStartupProbeFailure(civError);
                         return;
                     }
                 }
@@ -3280,8 +3291,9 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
                                "ANAN-G2: %1").arg(hpsdr.errorString()),
                 true);
         }
-        reportStartupProbeFailure(
-            QStringLiteral("Could not probe the ANAN-G2 at %1. Check the source path and address.").arg(ip));
+        reportStartupProbeFailure(explicitBind
+            ? QStringLiteral("The saved source path for this radio is unavailable.")
+            : QStringLiteral("Could not open a UDP socket to reach the ANAN-G2."));
         return AnanProbeResult::NotAttempted;
     }
 
@@ -3320,7 +3332,7 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
                 .arg(dest.toString(), hpsdr.errorString()),
             true);
         reportStartupProbeFailure(
-            QStringLiteral("Could not probe the ANAN-G2 at %1. Check the source path and address.").arg(ip));
+            QStringLiteral("Could not send a discovery request to %1.").arg(dest.toString()));
         return AnanProbeResult::NotAttempted;
     }
 
@@ -3575,15 +3587,14 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
 
     connect(sock, &QTcpSocket::errorOccurred, this,
             [this, sock, trimmedIp](QAbstractSocket::SocketError) {
-        setManualMessage(
-            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString()),
-            true);
+        const QString reason =
+            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString());
+        setManualMessage(reason, true);
         sock->deleteLater();
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
-        reportStartupProbeFailure(
-            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString()));
+        reportStartupProbeFailure(reason);
     });
 }
 

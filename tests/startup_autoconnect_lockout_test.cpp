@@ -176,12 +176,11 @@ void checkOperatorRouteEditsEndStartupOwnership()
     ConnectionPanelStartupTestAccess::arm(panel);
     // textEdited/activated are the user-only signals; startup's setText and
     // saved-family restoration must not cancel the startup probe themselves.
-    QMetaObject::invokeMethod(host, "textEdited", Qt::DirectConnection,
-                              Q_ARG(QString, QStringLiteral("replacement-host")));
+    emit host->textEdited(QStringLiteral("replacement-host"));
     ConnectionPanelStartupTestAccess::noAnswer(panel);
     report("operator host edit clears startup ownership", failures.isEmpty());
     ConnectionPanelStartupTestAccess::arm(panel);
-    QMetaObject::invokeMethod(family, "activated", Qt::DirectConnection, Q_ARG(int, 0));
+    emit family->activated(0);
     ConnectionPanelStartupTestAccess::noAnswer(panel);
     report("operator family pick clears startup ownership", failures.isEmpty());
 }
