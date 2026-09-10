@@ -361,11 +361,18 @@ the retry stream is self-limited by the link's serialization time): the
 field case is strong RF near the serial run mid-transmit, where the
 371-byte display reply dies to bit errors far more often than the 76-byte
 Status reply, and one clean frame every second or two is all the mirror
-needs to stay live through a transmission. Losing freshness anyway dims
-the last image on the glass — lightly; the authoritative not-live signal
-is the disabled key group, not the depth of the dim — rather than blanking
-it; the mirror only returns to the idle glass when the image is truly
-obsolete (disconnect, or a docked⇄floating switch). Every
+needs to stay live through a transmission. Losing freshness changes
+nothing on the glass: the mirror holds its newest image at full
+brightness, exactly like the amplifier's own LCD holds its picture, and
+the disabled key group is the one and only not-live signal. (Both
+alternatives were field-tested and rejected: blanking the glass made the
+mirror blink in and out, and even a light dim read as the LCD switching
+off — display gaps of one to several seconds are ROUTINE on a
+best-effort link, in plain standby on a quiet band, so any visible
+staleness treatment fires constantly and punishes the operator without
+adding safety the key gate doesn't already provide.) The mirror only
+returns to the idle glass when the image is truly obsolete (disconnect,
+or a docked⇄floating switch). Every
 acknowledged keystroke requests an immediate display refresh, and the
 cadence re-arms from each display *reply* rather than free-running: the
 original free-running 600 ms period was an exact multiple of the 100 ms

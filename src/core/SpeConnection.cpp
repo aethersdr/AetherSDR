@@ -66,6 +66,11 @@ SpeConnection::SpeConnection(QObject* parent)
     m_lcdStaleTimer.setSingleShot(true);
     m_lcdStaleTimer.setInterval(kLcdStaleTimeoutMs);
     connect(&m_lcdStaleTimer, &QTimer::timeout, this, [this]() {
+        // Routine on best-effort links (a stall, an amp quiet spell, RF
+        // mid-transmit) — logged so field reports can measure the gaps.
+        qCDebug(lcTuner) << "SpeConnection: no valid display frame for"
+                         << kLcdStaleTimeoutMs << "ms — menu keys gated until"
+                            " the next one";
         setLcdFresh(false);
     });
 
