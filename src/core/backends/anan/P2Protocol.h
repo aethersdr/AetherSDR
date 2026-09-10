@@ -62,6 +62,20 @@ inline constexpr std::uint16_t kHighPriorityPort = 1027;
 inline constexpr std::uint16_t kDdc0DefaultPort = 1035;
 
 // Saturn boards' DSP clock. RFC §2.4; saturnregisters.c VSAMPLERATE.
+// The six DDC0 sample rates this radio can run, in ksps, ascending. DDC0 is
+// STEPPED, not continuously tunable -- see AnanBackend::nearestDdc0RateKsps(),
+// which snaps a zoom request to one of these by ratio distance.
+//
+// Spelled ONCE, on purpose. Five places consume this set -- the backend's
+// capabilities().sampleRatesHz and its pan-bandwidth limits,
+// nearestDdc0RateKsps(), AnanRxDsp::setDroopCorrectionTable()'s validity
+// check, AnanDroopCalibrator's sweep, and ConnectionPanel's rate picker --
+// and they used to spell it out independently. Adding a seventh rate to some
+// of them but not to AnanRxDsp's check would silently reject every
+// correction table for the new rate, which presents to the operator as "the
+// calibration didn't take" with nothing logged anywhere.
+inline constexpr std::array<int, 6> kDdc0RatesKsps{48, 96, 192, 384, 768, 1536};
+
 inline constexpr std::uint32_t kDspClockHz = 122'880'000;
 
 // 24-bit signed full scale. (1<<23)-1, not 1<<23 -- see MetisProtocol.h's

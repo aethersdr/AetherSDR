@@ -20,6 +20,7 @@ public:
     MapTerminatorItem();
     ~MapTerminatorItem() override;
     void setDateTime(const QDateTime& dateTime);
+    void setDarkBasemapEnabled(bool enabled);
 
 private:
     friend class MapBatchItemTestAccess;
@@ -31,6 +32,7 @@ private:
         QRectF worldRect, QDateTime dateTime, QColor night,
         std::shared_ptr<std::atomic_bool> cancelled);
 
+    bool m_darkBasemapEnabled{false};
     QDateTime m_dateTime{QDateTime::currentDateTimeUtc()};
     QRectF m_worldRect;
     QImage m_image;

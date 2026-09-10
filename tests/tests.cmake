@@ -1090,6 +1090,9 @@ foreach(APP_SETTINGS_SCENARIO
         save-before-load
         xml-import-parity
         first-run
+        isolated-legacy-import
+        explicit-profile-outside-test-mode
+        explicit-profile-path-isolation
         database-file-permissions
         xml-import-tmp-promotion
         xml-import-bak-fallback
@@ -1130,6 +1133,9 @@ target_include_directories(rn2_settings_model_test PRIVATE src tests)
 target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(rn2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME rn2_settings_model_test COMMAND rn2_settings_model_test)
+
+set_tests_properties(app_settings_safety_explicit-profile-path-isolation
+    PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
@@ -1205,6 +1211,15 @@ target_link_libraries(map_image_cache_test PRIVATE
 add_test(NAME map_image_cache_test COMMAND map_image_cache_test)
 set_tests_properties(map_image_cache_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Display-only colour remapping and reversible live-tile styling; no sockets.
+add_executable(dark_basemap_test tests/dark_basemap_test.cpp)
+target_include_directories(dark_basemap_test PRIVATE src)
+target_link_libraries(dark_basemap_test PRIVATE
+    qgeoview Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+add_test(NAME dark_basemap_test COMMAND dark_basemap_test)
+set_tests_properties(dark_basemap_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
 
 # Injected HTTP replies and virtual time: no sockets, provider traffic or minute-long waits.
 add_executable(map_provider_retry_test tests/map_provider_retry_test.cpp
@@ -2001,6 +2016,33 @@ target_compile_definitions(rf_gain_presentation_test PRIVATE
     AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME rf_gain_presentation_test COMMAND rf_gain_presentation_test)
 
+# ANAN droop-correction apply math -- pure C++, no Qt dependency at all.
+# Table SELECTION/storage now lives in AnanRxDsp (a runtime map, populated
+# live by AnanDroopCalibrator or a per-radio settings load), not a compiled
+# lookup, so this only covers applyDroopCorrectionDb()/kDroopCorrectionZero.
+add_executable(anan_droop_correction_test
+    tests/anan_droop_correction_test.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_correction_test PRIVATE src)
+add_test(NAME anan_droop_correction_test COMMAND anan_droop_correction_test)
+
+# AnanDroopCalibrator's pure math (median-in-power averaging, central-window
+# reference, clamp) -- no live radio needed. Ported from this feature's
+# original offline prototype (formerly tools/test_anan_droop_calibration.py,
+# since superseded by this in-app engine). Links aethercore (matches
+# anan_rxdsp_handedness_test's own pattern) rather than compiling
+# AnanDroopCalibrator.cpp/AnanDroopCorrection.cpp a second time -- both
+# already live in libaethercore.a, and re-compiling AnanDroopCalibrator.cpp
+# here too duplicates its moc-generated QObject symbols (multiple
+# definition at link time).
+add_executable(anan_droop_calibrator_test
+    tests/anan_droop_calibrator_test.cpp
+)
+target_include_directories(anan_droop_calibrator_test PRIVATE src)
+target_link_libraries(anan_droop_calibrator_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_droop_calibrator_test COMMAND anan_droop_calibrator_test)
+
 # Floating-panadapter crash-loop guard (#4617) — pins that a session which died
 # inside floatPanadapter() comes up docked instead of replaying the crash.
 add_executable(floating_restore_policy_test
@@ -2677,6 +2719,10 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+    # External persistence supervisor policies: data-only fixtures, no radio peer/socket.
+    add_test(NAME radiocert_persist_policy
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_radiocert_persist.py)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
@@ -2926,6 +2972,15 @@ add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test
 target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
 add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
 
+# #5353 — the RTTY decoder's enable flag: dismissing the pane with ✕ must
+# outlive the slice/frequency events that used to re-derive its visibility
+# from the mode, and must not clobber the sensitivity field it shares an
+# object with.
+add_executable(rtty_decode_settings_test tests/rtty_decode_settings_test.cpp)
+target_include_directories(rtty_decode_settings_test PRIVATE src tests)
+target_link_libraries(rtty_decode_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtty_decode_settings_test COMMAND rtty_decode_settings_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
@@ -2986,6 +3041,7 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
     tools/ax25_replay.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -2998,6 +3054,7 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     tools/ax25_session_analyze.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/KissFraming.cpp
@@ -4436,6 +4493,39 @@ target_link_libraries(amp_applet_test PRIVATE
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
 
+# Socket-free validation of scoped client display documents.
+add_executable(client_display_settings_test tests/client_display_settings_test.cpp)
+target_include_directories(client_display_settings_test PRIVATE src tests)
+target_link_libraries(client_display_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
+
+# Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
+# RadioModel supplies identity only; no connectRadio call or firmware peer.
+add_executable(rx_applet_squelch_reconciliation_test
+    tests/rx_applet_squelch_reconciliation_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(rx_applet_squelch_reconciliation_test PRIVATE src)
+target_link_libraries(rx_applet_squelch_reconciliation_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME rx_applet_squelch_reconciliation_test
+         COMMAND rx_applet_squelch_reconciliation_test)
+set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -4607,6 +4697,8 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    client_display_settings_test
+    rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
@@ -4801,6 +4893,27 @@ target_include_directories(memory_history_ring_test PRIVATE src)
 target_link_libraries(memory_history_ring_test PRIVATE Qt6::Core)
 add_test(NAME memory_history_ring_test COMMAND memory_history_ring_test)
 
+# #2554 (Overview tab): the CPU counterpart of the memory ring — retention, the
+# shared bucket rule, and the window-level top-N selection behind the per-line
+# "top threads" chart. Header-only; pure logic, constructed samples; no widget,
+# no socket.
+add_executable(cpu_history_ring_test
+    tests/cpu_history_ring_test.cpp
+)
+target_include_directories(cpu_history_ring_test PRIVATE src)
+target_link_libraries(cpu_history_ring_test PRIVATE Qt6::Core)
+add_test(NAME cpu_history_ring_test COMMAND cpu_history_ring_test)
+
+# #2554 (Overview tab): the GUI tick-lag meter's "actual - nominal" arithmetic,
+# driven with constructed timestamps through its clock seam. Header-only; no
+# timer, no widget, no socket.
+add_executable(ui_tick_lag_meter_test
+    tests/ui_tick_lag_meter_test.cpp
+)
+target_include_directories(ui_tick_lag_meter_test PRIVATE src)
+target_link_libraries(ui_tick_lag_meter_test PRIVATE Qt6::Core)
+add_test(NAME ui_tick_lag_meter_test COMMAND ui_tick_lag_meter_test)
+
 # Startup hardware inventory (#4986): pins the baseline-comparison contracts
 # that arm the "CPU below the speech-engine baseline" warning, plus host
 # self-consistency of the detection. Compiled with the same baseline define as
@@ -4903,3 +5016,10 @@ foreach(_aether_test IN LISTS _aether_registered_tests)
         set_tests_properties(${_aether_test} PROPERTIES TIMEOUT 300)
     endif()
 endforeach()
+
+# Socket-free capability/extension tests: injected transport, no QLocalServer
+# and no radio connect. Exercises the same dispatcher used by the bridge.
+add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp)
+target_include_directories(droop_calibration_seam_test PRIVATE src tests)
+target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
+add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)

@@ -537,8 +537,8 @@ static void testCapabilityProfiles()
               && pMk2.scope.scrollFixed && pMk2.scope.hasSweepSpeed,
           "IC-7300MK2 profile records all four scope modes and sweep speed");
     check(pMk2.rxAntenna && pMk2.rxAntenna->selectable
-              && !pMk2.rxAntenna->readbackAvailable,
-          "IC-7300MK2 RX-ANT quirk is explicit rather than a B6 branch");
+              && pMk2.rxAntenna->readbackAvailable,
+          "IC-7300MK2 RX-ANT readback is explicitly model gated");
 
     const auto spec = [](std::string_view id) -> const ControlSpec* {
         const auto it = std::ranges::find(controlSpecs(), id, &ControlSpec::id);

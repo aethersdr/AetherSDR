@@ -34,12 +34,14 @@
 // a WDSP fact, not a Hermes-Lite fact, and this class reuses the identical
 // DcBlocker code, so it is tested with full confidence, no hedging.
 
+#include "core/backends/anan/AnanDroopCorrection.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSpectrum.h"
 
 #include <QCoreApplication>
 
 #include <cmath>
+#include <functional>
 #include <complex>
 #include <cstdio>
 #include <numbers>
@@ -395,6 +397,358 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+    }
+
+    // ---- Group 5: droop-correction insertion point ----
+    // Pins that AnanDroopCorrection's per-bin dB correction lands exactly
+    // between AnanSpectrum::process() and smoothSpectrumBins()'s EMA -- not
+    // applied twice, not applied after smoothing. Uses a SYNTHETIC table
+    // pushed via setDroopCorrectionTable() rather than any bench-measured
+    // one, so this test is independent of whatever a real calibration sweep
+    // (AnanDroopCalibrator) or a per-radio settings load happened to
+    // produce. On a freshly configured AnanRxDsp, smoothSpectrumBins()
+    // takes its "nothing to blend against yet" branch on exactly the FIRST
+    // emitted frame (m_smoothedBins starts empty), which passes m_bins
+    // through untouched -- so the first frame's emitted bins must equal an
+    // independently computed raw AnanSpectrum frame plus the synthetic
+    // table, bin for bin.
+    {
+        constexpr int kFft = 1024;   // matches production (AnanBackend.cpp
+                                     // always configures fftSize=1024) and
+                                     // the fixed size of every droop table.
+
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = 48000;   // -> 48 ksps, a recognized droop rate
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.fftSize = kFft;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 2900.0;
+        cfg.agcMode = 0;                 // linear: nothing else rescales the bins
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;
+
+        AnanRxDsp dsp;
+        std::string err;
+        check(dsp.configure(cfg, &err),
+              err.empty() ? "droop-correction test: configure() succeeds" : err.c_str());
+
+        // Synthetic, deliberately non-zero and non-uniform so the test can't
+        // pass by accident on an all-zero table.
+        DroopCorrectionTable syntheticTable{};
+        for (std::size_t k = 0; k < syntheticTable.size(); ++k)
+            syntheticTable[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
+        dsp.setDroopCorrectionTable(cfg.inputSampleRateHz / 1000,
+            std::vector<float>(syntheticTable.begin(), syntheticTable.end()));
+
+        const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
+
+        std::vector<float> emitted;
+        bool gotFrame = false;
+        const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+            [&](const std::vector<float>& bins) {
+                if (!gotFrame) {   // keep the FIRST frame only
+                    emitted = bins;
+                    gotFrame = true;
+                }
+            });
+        dsp.processIqBlock(iq);
+        QObject::disconnect(conn);
+        check(gotFrame, "the first processIqBlock() call emits one spectrum frame");
+
+        // Independently computed reference: the SAME conjugation convention
+        // processIqBlock() applies (raw IQ conjugated once, before the FFT --
+        // see processIqBlock()'s own comment on why the spectrum path
+        // conjugates), fed to a standalone AnanSpectrum with no AnanRxDsp
+        // involved at all.
+        std::vector<std::complex<float>> conjugated(iq.size());
+        for (std::size_t k = 0; k < iq.size(); ++k)
+            conjugated[k] = std::conj(iq[k]);
+        AnanSpectrum refSpectrum(kFft);
+        std::vector<float> rawBins;
+        check(refSpectrum.process(conjugated, rawBins) == 1,
+              "reference AnanSpectrum produces exactly one frame from the same IQ");
+
+        const DroopCorrectionTable& table = syntheticTable;
+        check(emitted.size() == rawBins.size() && emitted.size() == table.size(),
+              "emitted/reference/table sizes all agree");
+
+        // applyEdgeFade() now runs right after applyDroopCorrectionDb() for
+        // any rate with a real (non-zero) table -- which this synthetic one
+        // is -- so the outermost kTailBins on each side no longer equal
+        // raw+table exactly; they're the fade's own deterministic curve.
+        // kTailBins mirrors applyEdgeFade()'s own default tailFraction
+        // (0.03) at this test's fftSize (1024): static_cast<size_t>(1024 *
+        // 0.03f) == 30.
+        constexpr std::size_t kTailBins = 30;
+
+        std::vector<float> rawPlusTable(rawBins.size());
+        for (std::size_t k = 0; k < rawPlusTable.size(); ++k)
+            rawPlusTable[k] = rawBins[k] + table[k];
+
+        bool matched = emitted.size() == rawBins.size() && emitted.size() == table.size();
+        for (std::size_t k = kTailBins; matched && k < emitted.size() - kTailBins; ++k) {
+            if (std::fabs(emitted[k] - rawPlusTable[k]) > 1.0e-4f) {
+                matched = false;
+                std::fprintf(stderr,
+                    "  bin %zu: emitted=%.6f raw+correction=%.6f (raw=%.6f correction=%.6f)\n",
+                    k, emitted[k], rawPlusTable[k], rawBins[k], table[k]);
+            }
+        }
+        check(matched,
+              "the first emitted frame's non-tail bins equal the raw FFT bins plus the "
+              "rate's droop correction table, bin for bin -- proving the correction "
+              "lands between process() and the EMA, not before the FFT and not after "
+              "smoothing");
+
+        // Tail bins: applyEdgeFade() run on a copy of raw+table, at the
+        // same defaults processIqBlock() uses, must equal what was emitted
+        // -- proving the fade is the SECOND step in the pipeline (after
+        // the per-bin correction, still before the EMA), not skipped and
+        // not applied to the raw bins directly.
+        std::vector<float> expectedTail = rawPlusTable;
+        applyEdgeFade(expectedTail);
+        bool tailMatched = expectedTail.size() == emitted.size();
+        for (std::size_t k = 0; tailMatched && k < kTailBins; ++k) {
+            if (std::fabs(emitted[k] - expectedTail[k]) > 1.0e-4f)
+                tailMatched = false;
+            const std::size_t ridx = emitted.size() - 1 - k;
+            if (std::fabs(emitted[ridx] - expectedTail[ridx]) > 1.0e-4f)
+                tailMatched = false;
+        }
+        check(tailMatched,
+              "the tail bins match applyEdgeFade() run on raw+table, bin for bin -- "
+              "the cosmetic fade is the second step, not a replacement for the real "
+              "correction and not skipped");
+    }
+
+    // ---- Group 6: rate change picks up the NEW rate's droop table ----
+    // Regression for a real bug: installRebuiltChannel() swapped in the new
+    // WdspChannel/AnanSpectrum but never updated m_config.inputSampleRateHz,
+    // so droopTableForRate() (which reads m_config.inputSampleRateHz, not
+    // the rate the new channel was actually built for) kept consulting
+    // whatever rate was live at the last configure() -- forever, for every
+    // live rate change after the first. On real hardware this meant a live
+    // panadapter zoom (which snaps to a new DDC0 rate and rebuilds through
+    // exactly this path) kept applying the CONNECT-TIME rate's correction
+    // curve to a different rate's spectrum: visible as a mismatched, lumpy
+    // rolloff rather than a flat corrected trace. Configure at 48 ksps,
+    // rebuild to 96 ksps like a live rate change does, and confirm the
+    // emitted spectrum reflects the 96 ksps table -- not the 48 ksps one and
+    // not the zero fallback.
+    {
+        constexpr int kFft = 1024;
+
+        AnanRxDsp::Config cfg48;
+        cfg48.inputSampleRateHz = 48000;   // -> 48 ksps
+        cfg48.audioSampleRateHz = kAudioRate;
+        cfg48.dspBlockSize = kBlock;
+        cfg48.fftSize = kFft;
+        cfg48.mode = WdspChannel::Mode::Usb;
+        cfg48.filterLowHz = 100.0;
+        cfg48.filterHighHz = 2900.0;
+        cfg48.agcMode = 0;                 // linear: nothing else rescales the bins
+        cfg48.maximumAgcGainDb = 40.0;
+        cfg48.blockForOutput = true;
+
+        AnanRxDsp dsp;
+        std::string err;
+        check(dsp.configure(cfg48, &err),
+              err.empty() ? "rate-change test: initial 48 ksps configure() succeeds"
+                          : err.c_str());
+
+        DroopCorrectionTable table48{};
+        DroopCorrectionTable table96{};
+        for (std::size_t k = 0; k < table48.size(); ++k) {
+            table48[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
+            table96[k] = 9.0f + 0.02f * static_cast<float>(k % 37);   // distinct shape
+        }
+        dsp.setDroopCorrectionTable(48, std::vector<float>(table48.begin(), table48.end()));
+        dsp.setDroopCorrectionTable(96, std::vector<float>(table96.begin(), table96.end()));
+
+        // Rebuild to 96 ksps exactly as AnanBackend::beginRateChange() does:
+        // buildChannel() off this object's own thread, then
+        // installRebuiltChannel() to swap it in.
+        AnanRxDsp::Config cfg96 = cfg48;
+        cfg96.inputSampleRateHz = 96000;   // -> 96 ksps
+        AnanRxDsp::RebuildResult result = AnanRxDsp::buildChannel(cfg96);
+        check(result.channel != nullptr,
+              result.error.empty() ? "rate-change test: 96 ksps buildChannel() succeeds"
+                                   : result.error.c_str());
+        check(dsp.installRebuiltChannel(std::move(result)),
+              "rate-change test: installRebuiltChannel() to 96 ksps succeeds");
+
+        const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
+        std::vector<float> emitted;
+        bool gotFrame = false;
+        const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+            [&](const std::vector<float>& bins) {
+                if (!gotFrame) {
+                    emitted = bins;
+                    gotFrame = true;
+                }
+            });
+        dsp.processIqBlock(iq);
+        QObject::disconnect(conn);
+        check(gotFrame, "rate-change test: processIqBlock() emits a frame after the rebuild");
+
+        std::vector<std::complex<float>> conjugated(iq.size());
+        for (std::size_t k = 0; k < iq.size(); ++k)
+            conjugated[k] = std::conj(iq[k]);
+        AnanSpectrum refSpectrum(kFft);
+        std::vector<float> rawBins;
+        check(refSpectrum.process(conjugated, rawBins) == 1,
+              "rate-change test: reference AnanSpectrum produces exactly one frame");
+
+        // Skip the tail bins here -- applyEdgeFade() replaces them with its
+        // own deterministic curve (see Group 5, which already covers that
+        // math in detail); this group's job is only to confirm the RIGHT
+        // rate's table drives the non-tail bins after a live rate change.
+        constexpr std::size_t kTailBins = 30;
+        bool matched = emitted.size() == rawBins.size() && emitted.size() == table96.size();
+        for (std::size_t k = kTailBins; matched && k < emitted.size() - kTailBins; ++k) {
+            if (std::fabs(emitted[k] - (rawBins[k] + table96[k])) > 1.0e-4f)
+                matched = false;
+        }
+        check(matched,
+              "after a live rate change, the emitted frame's non-tail bins use the NEW "
+              "rate's (96 ksps) droop table -- proving m_config.inputSampleRateHz was "
+              "updated by the rebuild, not left stale at the connect-time 48 ksps");
+    }
+
+    // ---- Group 7: the sweep bypass, and forgetting a radio's tables ----
+    // Two lifecycle rules the droop feature depends on, both invisible to
+    // Groups 5 and 6 because both of those only ever measure the armed path.
+    //
+    // (a) BYPASS. AnanDroopCalibrator taps the same spectrumReady bins the
+    //     panadapter paints, so it measures its own corrected output unless
+    //     the correction is suspended for the sweep. The subtle half is the
+    //     EDGE FADE: processIqBlock() decides whether to fade by testing
+    //     `&droopTable != &kDroopCorrectionZero`, an IDENTITY test -- so
+    //     "bypass" implemented as "push an all-zero table" would store a
+    //     copy, keep failing that test, and leave the synthetic fade running
+    //     to be measured as if it were hardware droop. The pin below is
+    //     therefore equality with the RAW reference across the WHOLE frame,
+    //     tails included, not just the non-tail bins the other groups check.
+    //
+    // (b) CLEAR. m_droopTables outlives any one connection (this object is
+    //     constructed once per backend), so a second radio in the same
+    //     session would render through the first one's corrections. Clearing
+    //     must return the same rate to the true zero path -- again including
+    //     the fade, for the same identity reason.
+    //
+    // Each case needs its OWN AnanRxDsp: smoothSpectrumBins() passes only the
+    // FIRST emitted frame through untouched (m_smoothedBins starts empty),
+    // and a comparison against a raw reference is only exact on that frame.
+    {
+        constexpr int kFft = 1024;
+        constexpr int kRateKsps = 48;
+
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = kRateKsps * 1000;
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.fftSize = kFft;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 2900.0;
+        cfg.agcMode = 0;
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;
+
+        // Non-uniform and non-zero, so "suppressed" cannot pass by accident.
+        DroopCorrectionTable syntheticTable{};
+        for (std::size_t k = 0; k < syntheticTable.size(); ++k)
+            syntheticTable[k] = 5.5f + 0.02f * static_cast<float>(k % 40);
+        const std::vector<float> tableVec(syntheticTable.begin(), syntheticTable.end());
+
+        const std::vector<std::complex<float>> iq = makeTone(kFft, 41.0, /*conjugate=*/false);
+
+        // The raw reference: the same conjugation convention processIqBlock()
+        // uses, through a standalone AnanSpectrum with no AnanRxDsp involved.
+        std::vector<std::complex<float>> conjugated(iq.size());
+        for (std::size_t k = 0; k < iq.size(); ++k)
+            conjugated[k] = std::conj(iq[k]);
+        AnanSpectrum refSpectrum(kFft);
+        std::vector<float> rawBins;
+        check(refSpectrum.process(conjugated, rawBins) == 1,
+              "bypass test: reference AnanSpectrum produces exactly one frame");
+
+        // Captures the first emitted frame from a freshly configured AnanRxDsp
+        // after `arrange` has had its way with the droop tables.
+        const auto firstFrameWith = [&](const std::function<void(AnanRxDsp&)>& arrange) {
+            AnanRxDsp dsp;
+            std::string err;
+            check(dsp.configure(cfg, &err),
+                  err.empty() ? "bypass test: configure() succeeds" : err.c_str());
+            dsp.setDroopCorrectionTable(kRateKsps, tableVec);
+            arrange(dsp);
+            std::vector<float> emitted;
+            bool got = false;
+            const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+                [&](const std::vector<float>& bins) {
+                    if (!got) { emitted = bins; got = true; }
+                });
+            dsp.processIqBlock(iq);
+            QObject::disconnect(conn);
+            check(got, "bypass test: processIqBlock() emits one spectrum frame");
+            return emitted;
+        };
+
+        // `report` only for the checks that EXPECT equality -- the negative
+        // controls below call this too, and printing their first differing
+        // bin would decorate a fully passing run with what looks like failure
+        // output.
+        const auto equalsRawEverywhere = [&](const std::vector<float>& emitted,
+                                             bool report) {
+            if (emitted.size() != rawBins.size())
+                return false;
+            bool equal = true;
+            for (std::size_t k = 0; k < emitted.size(); ++k) {
+                if (std::fabs(emitted[k] - rawBins[k]) > 1.0e-4f) {
+                    if (!report)
+                        return false;
+                    equal = false;
+                    std::fprintf(stderr, "  bin %zu: emitted=%.6f raw=%.6f\n",
+                                 k, emitted[k], rawBins[k]);
+                    break;
+                }
+            }
+            return equal;
+        };
+
+        // Control: armed, the table really does change the bins. Without this
+        // the two suppression checks below would pass on a broken table push.
+        const std::vector<float> armed = firstFrameWith([](AnanRxDsp&) {});
+        check(!equalsRawEverywhere(armed, /*report=*/false),
+              "control: with the table armed, the emitted frame differs from raw");
+
+        const std::vector<float> bypassed =
+            firstFrameWith([](AnanRxDsp& d) { d.setDroopCorrectionBypassed(true); });
+        check(equalsRawEverywhere(bypassed, /*report=*/true),
+              "with the correction bypassed, the emitted frame equals the raw FFT bins "
+              "across the WHOLE frame -- neither the per-bin correction nor the edge "
+              "fade survives, so a calibration sweep measures the radio and not its "
+              "own corrected output");
+
+        const std::vector<float> cleared =
+            firstFrameWith([](AnanRxDsp& d) { d.clearDroopCorrectionTables(); });
+        check(equalsRawEverywhere(cleared, /*report=*/true),
+              "after clearDroopCorrectionTables(), the same rate falls back to the true "
+              "zero path (fade included) -- a second radio in one session cannot inherit "
+              "the first one's corrections");
+
+        // The bypass is a sweep property, not a table property: lifting it
+        // must bring the SAME tables back without re-pushing them.
+        const std::vector<float> restored = firstFrameWith([](AnanRxDsp& d) {
+            d.setDroopCorrectionBypassed(true);
+            d.setDroopCorrectionBypassed(false);
+        });
+        check(!equalsRawEverywhere(restored, /*report=*/false) && restored == armed,
+              "lifting the bypass restores the identical corrected frame -- the tables "
+              "were hidden, never discarded, so an aborted sweep cannot lose a "
+              "calibration");
     }
 
     if (g_failures == 0)

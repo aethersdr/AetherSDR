@@ -26,6 +26,8 @@
 
 #include <QNetworkReply>
 
+class QGVImage;
+
 class QGV_LIB_DECL QGVLayerTilesOnline : public QGVLayerTiles
 {
     Q_OBJECT
@@ -41,6 +43,10 @@ public:
 protected:
     virtual QString tilePosToUrl(const QGV::GeoTilePos& tilePos) const = 0;
     void onClean() override;
+    // AetherSDR: display-only tile customisation, after the original is cached.
+    // Ownership transfers to the layer through onTile().
+    virtual QGVImage* createTileImage(const QGV::GeoTilePos& tilePos,
+                                     const QImage& image);
 
 private:
     static QGV::GeoTilePos canonicalTile(const QGV::GeoTilePos& tilePos);

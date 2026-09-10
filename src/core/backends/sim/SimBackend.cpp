@@ -306,6 +306,7 @@ RadioCapabilities SimBackend::capabilities() const
     // Synthesised signals come out exactly where the demo says they are; there
     // is no oscillator to be wrong about.
     caps.hostFrequencyCalibration = false;
+    caps.hostDroopCalibration = false;   // synthesised bins have no DDC to droop
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;

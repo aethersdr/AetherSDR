@@ -1085,6 +1085,9 @@ void IcomCivBackend::sendConnectReadBurst()
     }
 
     const IcomModelProfile& profile = profileFor(*m_model);
+    if (profile.rxAntenna && profile.rxAntenna->readbackAvailable) {
+        queueStartupRead(cmdReadRxAntenna(m_session->civAddress()));
+    }
     if (profile.supports(IcomFeature::GpsPosition)) {
         queueStartupRead(cmdReadGpsSource(m_session->civAddress()));
         queueStartupRead(cmdReadGpsPosition(m_session->civAddress()));
@@ -1556,9 +1559,8 @@ void IcomCivBackend::publishModelControls()
                                       QStringLiteral("RX-ANT")};
         s.txAntennaList = QStringList{QStringLiteral("ANT1")};
         s.txAntenna = QStringLiteral("ANT1");
-        // The documented read form returns only FB on live B6 firmware, so no
-        // current selection is claimed here. A user selection is optimistic
-        // for this session; reconnect never replays client-owned state.
+        // Selection is adopted only from a validated 12 reply, never from
+        // the construction default or a client-side saved antenna.
     }
     emit sliceChanged(sliceId(), s);
     // The two DISCRETE stages, published as named positions. Their size is the
@@ -1769,6 +1771,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                     .arg(QString::number(frame.from, 16).toUpper(),
                          QString::number(m_session->civAddress(), 16).toUpper()));
             }
+            return;
+        }
+    }
+    // Validate before retiring a read or marking the scrub mirror as known.
+    if (frame.cmd == cmd::kRxAntenna) {
+        const auto antenna = profileFor(*m_model).rxAntenna;
+        if (!antenna || !antenna->readbackAvailable || !frame.hasSub
+            || frame.sub != 0 || frame.data.size() != 1 || frame.data[0] > 1) {
             return;
         }
     }
@@ -2051,6 +2061,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             }
         }
         publishExtendedRepeaterState();
+        return;
+    }
+
+    case cmd::kRxAntenna: {
+        m_rxAntennaExternal = frame.data[0] == 1;
+        SliceDelta delta;
+        delta.rxAntenna = m_rxAntennaExternal ? QStringLiteral("RX-ANT")
+                                             : QStringLiteral("ANT1");
+        emit sliceChanged(sliceId(), delta);
         return;
     }
 
@@ -3339,6 +3358,8 @@ std::string IcomCivBackend::semanticKey(std::span<const std::uint8_t> frame) con
         return {};
     }
     switch (parsed->cmd) {
+    case cmd::kRxAntenna:
+        return "rx.antenna";
     case cmd::kSetFreqTrx:
     case cmd::kReadFreq:
     case cmd::kSetFreq:
@@ -3391,6 +3412,12 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
     }
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     switch (parsed->cmd) {
+    case cmd::kRxAntenna:
+        if (m_model && profileFor(*m_model).rxAntenna
+            && profileFor(*m_model).rxAntenna->readbackAvailable) {
+            return cmdReadRxAntenna(addr);
+        }
+        break;
     case cmd::kSetFreq:
         return cmdReadFrequency(addr);
     case cmd::kSetMode:
@@ -3455,6 +3482,13 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
     request.replyCmd = parsed->cmd;
     request.replyHasSub = parsed->hasSub;
     request.replySub = parsed->sub;
+    if (parsed->cmd == cmd::kRxAntenna && !parsed->hasSub) {
+        // The bare 12 query has no subcommand; its 12 00 00/01 reply does.
+        // Retire the read on that reply instead of delaying the next control
+        // until the timeout, while retaining the same semantic generation.
+        request.replyHasSub = true;
+        request.replySub = 0;
+    }
     request.replyDataPrefix = std::move(replyDataPrefix);
     request.notBeforeMs = notBeforeMs;
     m_civScheduler.enqueue(std::move(request), nowMs());
@@ -6596,6 +6630,9 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadFunction(addr, fn));
         }
         queueControl(cmdReadAttenuator(addr));
+        if (profile.rxAntenna && profile.rxAntenna->readbackAvailable) {
+            queueControl(cmdReadRxAntenna(addr));
+        }
         queueTunerReadIfSupported(addr, IcomCivScheduler::Priority::Control);
         for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                                  tuneOffset::kXitOnOff}) {

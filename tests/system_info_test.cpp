@@ -8,15 +8,19 @@
 // values that would differ between them.
 
 #include "core/SystemInfo.h"
+#include "MeasuredCpuWorkers.h"
 #include "core/ThreadCpuRing.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
 #include <QSet>
 #include <QThread>
 
+#include <algorithm>
 #include <cstdio>
+#include <optional>
 
 using namespace AetherSDR;
 
@@ -369,6 +373,142 @@ void testBusiestAndThreshold()
            SystemInfo::crossedThreshold(50.0, 90.001, t));
 }
 
+void testOverviewMaths()
+{
+    // The process total is "of the machine", from two readings of the
+    // whole-process counter: 2 s of CPU in a 1 s interval on a four-core box
+    // is half the machine, not 200 % of anything.
+    report("2 s of CPU over 1 s on four cores reads 50 % of capacity",
+           qAbs(SystemInfo::processPercentOfCapacity(1000000, 3000000, 1000000, 4) - 50.0) < 0.001);
+    // Every core saturated reads 100, and a hair over (the two clocks are read
+    // a few microseconds apart) clamps rather than reporting 100.3 % of a machine.
+    report("a saturated machine clamps to 100 %",
+           qAbs(SystemInfo::processPercentOfCapacity(0, 4012000, 1000000, 4) - 100.0) < 0.001);
+    report("a zero interval is 0 %, not a division by zero",
+           SystemInfo::processPercentOfCapacity(0, 500000, 0, 4) == 0.0);
+    report("a non-positive core count is 0 %, not a division by zero",
+           SystemInfo::processPercentOfCapacity(0, 500000, 1000000, 0) == 0.0);
+    report("a counter that runs backwards is 0 %, not negative",
+           SystemInfo::processPercentOfCapacity(900000, 800000, 1000000, 4) == 0.0);
+    report("no CPU consumed is 0 %",
+           SystemInfo::processPercentOfCapacity(700000, 700000, 1000000, 4) == 0.0);
+
+    // Card bands, inclusive at both lines ("yellow ≥50%, red ≥80%").
+    using Level = SystemInfo::CardLevel;
+    report("below the warning line is Normal",  SystemInfo::cardLevel(49.9, 50.0, 80.0) == Level::Normal);
+    report("exactly at the warning line is Warning", SystemInfo::cardLevel(50.0, 50.0, 80.0) == Level::Warning);
+    report("between the lines is Warning",      SystemInfo::cardLevel(79.9, 50.0, 80.0) == Level::Warning);
+    report("exactly at the danger line is Danger",  SystemInfo::cardLevel(80.0, 50.0, 80.0) == Level::Danger);
+    report("far above both is Danger",          SystemInfo::cardLevel(100.0, 50.0, 80.0) == Level::Danger);
+}
+
+// The sum of the per-thread deltas over `elapsedUsecs` — the formula the
+// Overview card used before the #5427 review, kept here as the thing the
+// regression has to be BETTER than, not as production code.
+double perThreadSumPercent(const QVector<ThreadTimes>& before, const QVector<ThreadTimes>& after,
+                           quint64 elapsedUsecs, int cores)
+{
+    double sum = 0.0;
+    for (const ThreadCpuSample& s : SystemInfo::cpuPercentBetween(before, after, elapsedUsecs)) {
+        sum += s.cpuPercentOfCore;
+    }
+    return cores > 0 ? sum / cores : 0.0;
+}
+
+struct Snapshot {
+    QVector<ThreadTimes> threads;
+    quint64 processCpuUsecs{0};
+    bool ok{false};
+};
+
+Snapshot snapshotNow()
+{
+    Snapshot snap;
+    snap.threads = SystemInfo::enumerateThreads();
+    const std::optional<quint64> cpu = SystemInfo::processCpuUsecs();
+    snap.ok = !snap.threads.isEmpty() && cpu.has_value();
+    snap.processCpuUsecs = cpu.value_or(0);
+    return snap;
+}
+
+// #5427 review (Ozy311): CPU Total must count the CPU time of threads that
+// start and exit BETWEEN two snapshots. The per-thread sum cannot, by
+// construction — a thread on neither list has no delta — so the whole-process
+// counter is the source, and this pins that the collector's inputs actually
+// carry the lost time. Real work on real threads: the loss only shows during
+// acquisition, which a test fed prepared percentages cannot reach.
+void testProcessTotalSurvivesThreadChurn()
+{
+    const int cores = QThread::idealThreadCount();
+    // Each worker measures 50 ms of actual CPU time, regardless of host load.
+    const int workers = std::max(2, std::min(4, cores));
+
+    // Churn arm: the workers live and die entirely inside the interval.
+    {
+        const Snapshot before = snapshotNow();
+        QElapsedTimer clock;
+        clock.start();
+        quint64 measuredCpuUsecs = 0;
+        {
+            MeasuredCpuWorkers busy(workers);
+            report("churn workers complete bounded measured CPU work", busy.run());
+            measuredCpuUsecs = busy.cpuUsecs();
+        }  // joined here: gone before the second snapshot
+        const Snapshot after = snapshotNow();
+        const quint64 elapsed = static_cast<quint64>(clock.nsecsElapsed() / 1000);
+        report("both snapshots read the thread table and the process counter",
+               before.ok && after.ok);
+        if (before.ok && after.ok) {
+            const double whole = SystemInfo::processPercentOfCapacity(
+                before.processCpuUsecs, after.processCpuUsecs, elapsed, cores);
+            const double summed = perThreadSumPercent(before.threads, after.threads, elapsed, cores);
+            // Allow native counter granularity; the floor follows measured CPU
+            // work, not a promise about how much scheduling time CI grants us.
+            const double floorPercent = 0.75 * 100.0 * measuredCpuUsecs / elapsed / cores;
+            std::printf("  churn: whole-process=%.2f%% per-thread-sum=%.2f%% floor=%.2f%% "
+                        "(workers=%d cores=%d elapsed=%llu us)\n",
+                        whole, summed, floorPercent, workers, cores,
+                        static_cast<unsigned long long>(elapsed));
+            report("whole-process counter sees the exited workers' CPU time",
+                   whole >= floorPercent);
+            report("the per-thread sum does not (the defect, pinned as the contrast)",
+                   whole - summed >= floorPercent);
+        }
+    }
+
+    // Control arm: the same workers alive at both snapshots. Here both
+    // formulas see the work, so a regression that broke the divisor or the
+    // interval would show as disagreement rather than hide behind churn.
+    {
+        MeasuredCpuWorkers busy(workers);  // every worker is parked before the baseline
+        const Snapshot before = snapshotNow();
+        QElapsedTimer clock;
+        clock.start();
+        report("control workers complete bounded measured CPU work", busy.run());
+        const Snapshot after = snapshotNow();
+        const quint64 elapsed = static_cast<quint64>(clock.nsecsElapsed() / 1000);
+        busy.stop();
+        report("control: both snapshots read the thread table and the process counter",
+               before.ok && after.ok);
+        if (before.ok && after.ok) {
+            const double whole = SystemInfo::processPercentOfCapacity(
+                before.processCpuUsecs, after.processCpuUsecs, elapsed, cores);
+            const double summed = perThreadSumPercent(before.threads, after.threads, elapsed, cores);
+            const double floorPercent = 0.75 * 100.0 * busy.cpuUsecs() / elapsed / cores;
+            std::printf("  control: whole-process=%.2f%% per-thread-sum=%.2f%% floor=%.2f%%\n",
+                        whole, summed, floorPercent);
+            report("control: whole-process counter sees the persistent workers",
+                   whole >= floorPercent);
+            report("control: the per-thread sum sees them too", summed >= floorPercent);
+            // The two are the same quantity measured two ways; the gap is the
+            // test's own threads and the snapshots' skew. A quarter of the
+            // machine apart would mean one of them is wrong.
+            report("control: the two formulas agree within 25 points of capacity",
+                   qAbs(whole - summed) <= 25.0);
+        }
+    }
+}
+
 void testEnumeration()
 {
     const QVector<ThreadTimes> threads = SystemInfo::enumerateThreads();
@@ -500,6 +640,8 @@ int main(int argc, char** argv)
     testRunState();
     testThreadCpuRing();
     testBusiestAndThreshold();
+    testOverviewMaths();
+    testProcessTotalSurvivesThreadChurn();
     testEnumeration();
     testNaming();
     testQtNamesItsOwnThreads();

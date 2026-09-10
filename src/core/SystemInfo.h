@@ -4,6 +4,8 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include <optional>
+
 namespace AetherSDR {
 
 // Per-thread CPU accounting for the System Info dialog (#2554).
@@ -126,6 +128,38 @@ public:
     static QVector<ThreadCpuSample> cpuPercentBetween(const QVector<ThreadTimes>& previous,
                                                       const QVector<ThreadTimes>& current,
                                                       quint64 elapsedUsecs);
+
+    // Cumulative CPU time (user + system) consumed by the WHOLE process since it
+    // started, in microseconds, or nullopt when the platform refused to say.
+    // This is the kernel's own running total, and it keeps the time of every
+    // thread that has already exited — which the per-thread table cannot: a
+    // worker that starts and finishes between two snapshots is on neither
+    // list, one that exits mid-interval is only on the old one, and summing
+    // per-thread deltas loses both (#5427 review, reproduced: twelve short
+    // workers burning 5.4 s of CPU in 0.6 s read 0.003 % by the sum against
+    // 74 % by this counter). The same source the status bar's CPU label reads.
+    //
+    // POSIX: getrusage(RUSAGE_SELF) ru_utime + ru_stime.
+    // Windows: GetProcessTimes() kernel + user, 100 ns units scaled to µs.
+    static std::optional<quint64> processCpuUsecs();
+
+    // The process's share of the WHOLE machine over an interval, 0..100, from
+    // two readings of processCpuUsecs(): (current − previous) / elapsed, then
+    // divided by the core count — the same divisor the status bar's CPU label
+    // uses (idealThreadCount()), so the Overview's "CPU Total" card and the
+    // footer read the same thing. Pure so the arithmetic is testable without
+    // a process to observe. Clamped to 100 (the two clocks are read a few
+    // microseconds apart). Zero for a zero interval, a non-positive core
+    // count, or a counter that appears to run backwards.
+    static double processPercentOfCapacity(quint64 previousCpuUsecs, quint64 currentCpuUsecs,
+                                           quint64 elapsedUsecs, int coreCount);
+
+    // Which colour band an Overview card sits in for a reading (#2554: "yellow
+    // ≥50%, red ≥80%" and the like). Inclusive at both lines, which is what the
+    // issue's "≥" says; Danger wins when both are met. Pure so the table of
+    // thresholds can be pinned without a widget.
+    enum class CardLevel { Normal, Warning, Danger };
+    static CardLevel cardLevel(double value, double warningAt, double dangerAt);
 };
 
 } // namespace AetherSDR

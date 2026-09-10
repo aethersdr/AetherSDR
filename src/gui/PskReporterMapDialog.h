@@ -54,8 +54,11 @@ private:
     void updateBandConditions();
     void updateConnectionIndicator();
     void scheduleBeacon();
-    void stopBeacon(const QString& status);
+    enum class BeaconStopOutcome { Completed, Cancelled, Interrupted };
+    void stopBeacon(const QString& status,
+                    BeaconStopOutcome outcome = BeaconStopOutcome::Interrupted);
     void updateBeaconState();
+    void setBeaconStatus(const QString& text, const char* colourToken = "color.accent.warning");
     // Stay armed and roll to the following even UTC minute. Used when the slot
     // boundary was missed, or when the DAX TX stream is still being created.
     void deferBeaconToNextSlot(const QString& reason);
@@ -112,6 +115,7 @@ private:
     QSpinBox*           m_beaconLevel{nullptr};
     QPushButton*        m_beaconButton{nullptr};
     QLabel*             m_beaconStatus{nullptr};
+    QLabel*             m_beaconStatusDot{nullptr};
     qint64              m_beaconSlotMs{0};
     qint64              m_beaconStopDeadlineMs{0};
     // How many slots this arming has rolled past waiting for the TX stream,

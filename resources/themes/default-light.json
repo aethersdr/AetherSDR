@@ -38,6 +38,7 @@
             "spectrum": "{color.gray.950}",
             "app":      "{color.gray.900}"
           },
+          "map": { "darkBackground": "#18212b", "darkDetail": "#c8d8e8" },
           "canvas": {
             "background": "#7b7b7c",
             "dots":       "#501a2a3a"

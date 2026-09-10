@@ -704,6 +704,11 @@ void MainWindow::updateExperimentalRadioSupport(bool connected)
 void MainWindow::wireRadioModel()
 {
     // ── Wire up radio model ────────────────────────────────────────────────
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (!connected) {
+            m_pendingDisplayWrites.flush();
+        }
+    });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
 

@@ -101,6 +101,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ClientDisplaySettings.h": {
+  "tag": "ui-support",
+  "note": "Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientEq.h": {
   "tag": "universal",
   "note": "Client-side parametric EQ DSP in AudioEngine (RX/TX paths); radio-agnostic engine DSP, no vendor protocol ties.",
@@ -1299,6 +1305,24 @@
   "tag": "vendor(anan)",
   "note": "openHPSDR Ethernet Protocol 2 wire primitives for the ANAN-G2 backend. Family protocol code belongs below the radio seam.",
   "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/AnanDroopCalibrator.h": {
+  "tag": "vendor(anan)",
+  "note": "ANAN-owned DDC0 calibration state machine; control and progress cross only the namespaced backend extension.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/AnanDroopCorrection.h": {
+  "tag": "vendor(anan)",
+  "note": "ANAN-specific per-rate spectrum correction tables and edge-fade math.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DroopCalibration.h": {
+  "tag": "mixed(anan)",
+  "note": "Capability-gated client for the ANAN calibration extension. Uses only IRadioBackend requests and replies; concrete calibration ownership, rate control and DSP stay below the backend seam.",
+  "split": "Client protocol adapter only; no vendor implementation dependency.",
   "confidence": "high"
  }
 }

@@ -699,6 +699,7 @@ struct PassbandEdges {
 // IC-705), encoded as one BCD byte. The read form carries no payload.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
 enum class RepeaterOffsetDirection : std::uint8_t {
     Simplex = 0x10,
