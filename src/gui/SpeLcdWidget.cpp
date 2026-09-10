@@ -144,8 +144,13 @@ void SpeLcdWidget::paintEvent(QPaintEvent* event)
         // Veil the glass toward its own background rather than blanking it:
         // the operator keeps the last screen for context while the dimming
         // says "not live" — alpha over the background token, no new colour.
+        // Kept light on purpose: the amplifier routinely pauses display
+        // service (relay transitions, heavy transmit), and a heavy veil
+        // made those ordinary moments read as the LCD switching off. The
+        // authoritative not-live signal is the disabled key group, not the
+        // depth of the dim.
         QColor veil = glassBg;
-        veil.setAlpha(170);
+        veil.setAlpha(90);
         p.setBrush(veil);
         p.drawRect(x, y, w, h);
     }

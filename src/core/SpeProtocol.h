@@ -114,6 +114,13 @@ public:
     // payload-length + type-marker bytes and hands the complete raw frame
     // here instead of misreading the length field as a CNT byte.
     void setDisplayCallback(std::function<void(const QByteArray&)> cb) { m_onDisplay = std::move(cb); }
+    // Fires when a complete display-shaped frame fails validation in both
+    // its raw and telnet-escaped readings and is dropped. A display reply
+    // is 371 bytes against Status's ~76, so under the same bit-error rate
+    // (strong RF near the serial run mid-transmit is the field case) it is
+    // ~5x as likely to die — and unlike Status, nothing re-polls it for
+    // most of a poll gap. The owner uses this to schedule a prompt retry.
+    void setDisplayRejectCallback(std::function<void()> cb) { m_onDisplayReject = std::move(cb); }
     void feed(const QByteArray& bytes);
     void reset() { m_buf.clear(); }
 
@@ -126,6 +133,7 @@ private:
     QByteArray m_buf;
     std::function<void(const Frame&)> m_onFrame;
     std::function<void(const QByteArray&)> m_onDisplay;
+    std::function<void()> m_onDisplayReject;
 };
 
 // ── Status string decode (spec §5) ───────────────────────────────────────

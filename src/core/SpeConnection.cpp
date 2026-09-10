@@ -21,6 +21,7 @@ SpeConnection::SpeConnection(QObject* parent)
             emit lcdFrameReceived(*frame);
             setLcdFresh(true);
             m_lcdStaleTimer.start();
+            m_lcdRetryTimer.stop();  // a good frame supersedes a pending retry
             // Pace the next request from the REPLY, not just from our own
             // send. Two free-running timers whose periods divide evenly
             // (the original 600 ms cadence was an exact multiple of the
@@ -67,6 +68,27 @@ SpeConnection::SpeConnection(QObject* parent)
     connect(&m_lcdStaleTimer, &QTimer::timeout, this, [this]() {
         setLcdFresh(false);
     });
+
+    // A display frame that died on the wire is re-requested promptly (the
+    // field case: strong RF near the serial run mid-transmit corrupts the
+    // long display replies far more often than the short Status ones, and
+    // one clean frame every second or two is all the mirror needs to stay
+    // live). The short pause is the flood guard: each retry can only be
+    // provoked by a complete received-and-rejected frame, so the loop is
+    // additionally self-limited by the link's own serialization time.
+    m_lcdRetryTimer.setSingleShot(true);
+    m_lcdRetryTimer.setInterval(kLcdRetryGapMs);
+    connect(&m_lcdRetryTimer, &QTimer::timeout, this, &SpeConnection::requestLcdFrame);
+    m_parser.setDisplayRejectCallback([this]() {
+        if (!m_lcdWanted || !m_connected) {
+            return;
+        }
+        qCDebug(lcTuner) << "SpeConnection: display frame failed validation —"
+                            " re-requesting";
+        if (!m_lcdRetryTimer.isActive()) {
+            m_lcdRetryTimer.start();
+        }
+    });
 }
 
 void SpeConnection::setLcdPolling(bool on)
@@ -81,6 +103,7 @@ void SpeConnection::setLcdPolling(bool on)
     } else {
         m_lcdTimer.stop();
         m_lcdStaleTimer.stop();
+        m_lcdRetryTimer.stop();
         setLcdFresh(false);
     }
 }
@@ -211,6 +234,7 @@ void SpeConnection::disconnect()
     m_pollTimer.stop();
     m_lcdTimer.stop();
     m_lcdStaleTimer.stop();
+    m_lcdRetryTimer.stop();
     setLcdFresh(false);
     m_powerOnTimer.stop();
     m_powerOnStep = -1;
@@ -272,6 +296,7 @@ void SpeConnection::onTransportDown()
     m_pollTimer.stop();
     m_lcdTimer.stop();
     m_lcdStaleTimer.stop();
+    m_lcdRetryTimer.stop();
     setLcdFresh(false);
     m_powerOnTimer.stop();
     m_powerOnStep = -1;

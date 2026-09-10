@@ -175,6 +175,7 @@ private:
     // against Status's ~76, and the panel is for eyes, not telemetry.
     QTimer m_lcdTimer;
     QTimer m_lcdStaleTimer;
+    QTimer m_lcdRetryTimer;  // single-shot reject->re-request pause
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
     // The IDLE GAP between a display reply and the next request, not a
@@ -188,14 +189,20 @@ private:
     // (At ≤9600 the 100 ms Status poll alone nearly saturates the wire —
     // see the design note §11's proxy baud recommendation.)
     static constexpr int kLcdPollIntervalMs = 250;
+    // Prompt-retry pause after a display frame fails validation (see the
+    // parser's reject callback). Short enough that a mostly-corrupted
+    // mid-transmit stream still lands a clean frame within the staleness
+    // window whenever one gets through at all; long enough that the retry
+    // stream (each retry also provoked by a full received frame) stays
+    // well under the wire's capacity even at 115200 with Status polling.
+    static constexpr int kLcdRetryGapMs = 80;
     // Absolute, deliberately decoupled from the poll gap: it must cover a
     // full lost frame plus a retry on the slowest plausible link (a 9600
-    // baud proxy serial side spends ~390 ms per display frame), and on a
-    // fast link the extra margin only makes the freshness gate calmer. On
-    // a telnet proxy a single display reply is occasionally lost to
-    // mid-frame corruption (the parser resyncs on the next Status frame),
-    // and a one-loss margin made the gate visibly flap on real stations.
-    static constexpr int kLcdStaleTimeoutMs = 1800;
+    // baud proxy serial side spends ~390 ms per display frame) AND the
+    // amplifier's own quiet spells — it stops serving the display for a
+    // moment around OPERATE/STANDBY relay transitions — so routine events
+    // never flap the gate. On a fast link the margin only calms things.
+    static constexpr int kLcdStaleTimeoutMs = 2400;
 
     QString m_currentModelId;
 

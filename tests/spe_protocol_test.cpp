@@ -409,6 +409,27 @@ int main()
         report("bad display checksum resyncs without consuming the following ACK",
                afterBadChecksum.isEmpty() && ackAfterBadChecksum.size() == 1);
 
+        // The reject callback is the mirror's retry trigger: it must fire
+        // exactly once per display frame that died on the wire, never for a
+        // frame that is merely still arriving, and a clean frame afterward
+        // must still be handed out (mid-transmit RF corrupting most display
+        // replies is the field case this recovers).
+        int rejects = 0;
+        QList<QByteArray> afterReject;
+        FrameParser rejectParser;
+        rejectParser.setDisplayRejectCallback([&]() { ++rejects; });
+        rejectParser.setDisplayCallback(
+            [&](const QByteArray& d) { afterReject.append(d); });
+        rejectParser.feed(badChecksum.left(200));
+        report("no reject while the display frame is still incomplete",
+               rejects == 0);
+        rejectParser.feed(badChecksum.mid(200));
+        report("a complete corrupted display frame fires one reject",
+               rejects == 1);
+        rejectParser.feed(raw);
+        report("a clean display frame after a reject is still handed out",
+               afterReject.size() == 1 && afterReject.at(0) == raw && rejects == 1);
+
         QByteArray telnet;
         for (char byte : raw) {
             telnet.append(byte);

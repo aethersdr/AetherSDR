@@ -351,12 +351,21 @@ With the mirror on screen, the FRONT PANEL keys stop being blind — the
 operator navigates the amplifier's menu watching the amplifier's screen,
 which is what unlocked the §4 ruling change. Those keys remain disabled
 until the first checksum-valid display arrives and are disabled again after
-1.8 s without one — an absolute window sized to cover a lost frame plus a
-retry even on a 9600 baud proxy serial side, because one display frame
-lost to mid-frame corruption on a proxy link must read as a hiccup, not
-flap the gate. Losing freshness dims the last image on the glass rather
-than blanking it; the mirror only returns to the idle glass when the image
-is truly obsolete (disconnect, or a docked⇄floating switch). Every
+2.4 s without one — an absolute window sized to cover a lost frame plus a
+retry even on a 9600 baud proxy serial side AND the amplifier's own quiet
+spells around OPERATE/STANDBY relay transitions, because routine events
+must read as a hiccup, not flap the gate. A display frame that arrives
+complete but fails validation triggers a prompt re-request (80 ms pause;
+each retry is itself provoked by a full received-and-rejected frame, so
+the retry stream is self-limited by the link's serialization time): the
+field case is strong RF near the serial run mid-transmit, where the
+371-byte display reply dies to bit errors far more often than the 76-byte
+Status reply, and one clean frame every second or two is all the mirror
+needs to stay live through a transmission. Losing freshness anyway dims
+the last image on the glass — lightly; the authoritative not-live signal
+is the disabled key group, not the depth of the dim — rather than blanking
+it; the mirror only returns to the idle glass when the image is truly
+obsolete (disconnect, or a docked⇄floating switch). Every
 acknowledged keystroke requests an immediate display refresh, and the
 cadence re-arms from each display *reply* rather than free-running: the
 original free-running 600 ms period was an exact multiple of the 100 ms
