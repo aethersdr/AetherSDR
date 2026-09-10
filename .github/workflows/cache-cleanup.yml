@@ -34,15 +34,17 @@ name: Cache cleanup
 # pins the repo at its allowance on its own, holding well under a day of caches
 # nothing will ever read.
 #
-# The other cause is caches on refs/pull/N/merge, which become unreadable the
-# moment the PR closes — handled by sweep-closed-prs below, on a schedule rather
-# than on the close event. See that job for why the trigger is what it is.
+# The other causes are caches on refs that nothing will run against again:
+# refs/pull/N/merge once the PR closes, and refs/tags/v* once the release
+# workflows that ran on that tag have finished. Both are handled by
+# sweep-dead-refs below, on a schedule rather than on an event. See that job
+# for why the trigger is what it is.
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-  # Daily, plus on demand. See sweep-closed-prs for why this is scheduled
+  # Daily, plus on demand. See sweep-dead-refs for why this is scheduled
   # rather than fired from `pull_request: closed`.
   schedule:
     - cron: "17 4 * * *"
@@ -53,7 +55,7 @@ on:
 # specifically so ci.yml keeps `contents: read` — nothing that compiles
 # PR-authored code ever holds a write scope.
 #
-# pull-requests:read is a read scope, needed only by sweep-closed-prs to ask
+# pull-requests:read is a read scope, needed only by sweep-dead-refs to ask
 # whether a PR is still open. Listing it is not optional: naming ANY scope in a
 # `permissions:` block sets every unnamed one to `none`, and the job's lookup
 # would then fail on every ref while the job stayed green.
@@ -175,16 +177,18 @@ jobs:
   # closes nothing can ever read them again, but they hold budget for up to the
   # full 7-day retention.
   #
-  # ci.yml's save-on-main split already stops PRs writing the big COMPILER
-  # caches. What still lands on a PR ref is a content-hash-keyed DEPENDENCY
-  # cache (Qt, FFTW3, DeepFilterNet3, qtkeychain, install-qt-action). In theory a
-  # PR only writes one when the key is not readable from main; in practice the
-  # repo sits at its allowance, LRU evicts main's copy between runs, and the
-  # next PR run re-saves its own — measured 2026-09-10: four open PRs each
-  # holding the same 1,297 MiB Qt entry main holds, plus a merged PR holding
-  # 1,720 MiB nothing could read. That loop is a ci.yml problem (the dependency
-  # caches want the same restore-on-PR / save-on-main split the compiler caches
-  # got); this job only reclaims the closed-PR leg of it.
+  # ci.yml saves nothing from a PR ref any more: #5008 gave the COMPILER
+  # caches a restore-on-PR / save-on-main split, and #5548 gave the
+  # content-hash-keyed DEPENDENCY caches (Qt, FFTW3, DeepFilterNet3,
+  # qtkeychain) the same. Before that second step, a PR wrote a dependency
+  # entry whenever main's copy was unreadable — and with the repo at its
+  # allowance, LRU evicted main's copy between runs, so on 2026-09-10 four
+  # open PRs each held the same 1,297 MiB Qt entry main holds, plus a merged
+  # PR holding 1,720 MiB nothing could read. This step is now the backstop for
+  # whatever other PR-triggered workflows still write (setup-python and the
+  # like — small) and for anything that regresses to a bidirectional
+  # `actions/cache` step in ci.yml. If it starts reporting large sweeps
+  # again, look for that regression before anything else.
   #
   # WHY SCHEDULED, not `pull_request: closed`
   #
@@ -208,7 +212,25 @@ jobs:
   # A PR that is closed and later REOPENED can read its ref again, but this job
   # will already have deleted it; the reopened PR's first run re-saves its
   # dependency caches (~1.7 GiB across platforms). Accepted, not a bug.
-  sweep-closed-prs:
+  #
+  # ── Dead cause 3: the tag's release run is over ─────────────────────────────
+  # appimage.yml, macos-dmg.yml and windows-installer.yml run on push:tags only.
+  # main never runs them, so the keys they cache (Opus, FFTW3, hidapi, Vulkan
+  # SDK, macos-deps, the DMG legs' ccache) exist ONLY on tag refs — and a run
+  # on refs/tags/v26.9.2 can read its own ref and main, never v26.9.1's. Every
+  # release therefore writes a full set that no later release can read: ~6
+  # entries from windows-installer, ~4 per DMG leg, one from appimage, held
+  # for the 7-day retention. The sharpest is macos-dmg's ccache-action, which
+  # append-timestamps its key and so writes a fresh ~0.5 GiB entry per leg per
+  # release under a prefix prune-main does not match.
+  #
+  # The one thing that CAN read a tag's caches is a re-run of the same tag's
+  # workflow — a retry after a flaky release step, typically within hours — so
+  # the rule is last-access age, not "not the newest tag": a tag-ref entry that
+  # nothing has touched for TAG_IDLE_HOURS is dead. 48 h is long enough for a
+  # next-morning retry and short enough that a release's set is gone before
+  # it can crowd main's compiler caches for the rest of the week.
+  sweep-dead-refs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # A dispatch overlapping the cron would run two sweeps over the same refs;
@@ -236,10 +258,9 @@ jobs:
           total=$(printf '%s' "$caches" | jq 'length')
           [ "$total" -lt "$LIMIT" ] || echo "::warning::cache list hit the $LIMIT limit; some entries not examined this run"
 
-          # Only refs/pull/N/merge entries are candidates. main and tag refs are
-          # not swept here: main's are handled by prune-main, and tag caches
-          # belong to release workflows that run rarely enough not to matter.
-          # One jq pass emits, per PR ref: number, total bytes, and the ids.
+          # refs/pull/N/merge entries first; tag refs are the next step and
+          # main's are prune-main's. One jq pass emits, per PR ref: number,
+          # total bytes, and the ids.
           candidates=$(printf '%s' "$caches" | jq -r '
             [.[] | select(.ref | test("^refs/pull/[0-9]+/merge$"))]
             | group_by(.ref) | .[]
@@ -299,6 +320,56 @@ jobs:
             echo "::warning::$unresolved PR state lookup(s) failed; their caches were left alone. gh stderr:"
             cat "$errlog"
           fi
+
+      - name: Delete caches on idle tag refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_IDLE_HOURS: "48"
+        run: |
+          set -euo pipefail
+
+          # Same listing shape and the same cap warning as the PR step above.
+          LIMIT=500
+          caches=$(gh cache list --limit "$LIMIT" --json id,ref,key,sizeInBytes,lastAccessedAt)
+          total=$(printf '%s' "$caches" | jq 'length')
+          [ "$total" -lt "$LIMIT" ] || echo "::warning::cache list hit the $LIMIT limit; some entries not examined this run"
+
+          # last_accessed_at, deliberately — the opposite of prune-main's
+          # created_at. There "newest written" is the entry to keep; here the
+          # question is whether anything is still READING the entry, and a
+          # re-run of the tag's workflow is the only thing that could be.
+          cutoff=$(date -u -d "-${TAG_IDLE_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+          candidates=$(printf '%s' "$caches" | jq -r --arg cutoff "$cutoff" '
+            [.[] | select(.ref | startswith("refs/tags/")) | select(.lastAccessedAt < $cutoff)]
+            | group_by(.ref) | .[]
+            | "\(.[0].ref)\t\(map(.sizeInBytes) | add)\t\(map(.id) | join(","))"')
+
+          if [ -z "$candidates" ]; then
+            echo "No tag-ref caches idle for ${TAG_IDLE_HOURS}h — nothing to sweep."
+            exit 0
+          fi
+
+          freed=0
+          swept=0
+          while IFS=$'\t' read -r ref bytes ids; do
+            mib=$(( bytes / 1048576 ))
+            echo "$ref: sweeping ${mib} MiB (idle > ${TAG_IDLE_HOURS}h)"
+            ref_freed=0
+            for id in ${ids//,/ }; do
+              size=$(printf '%s' "$caches" | jq --argjson i "$id" '.[] | select(.id == $i) | .sizeInBytes')
+              if gh cache delete "$id"; then
+                ref_freed=$(( ref_freed + size ))
+              else
+                echo "  $ref: delete of $id failed or already gone"
+              fi
+            done
+            if [ "$ref_freed" -gt 0 ]; then
+              freed=$(( freed + ref_freed / 1048576 ))
+              swept=$(( swept + 1 ))
+            fi
+          done <<< "$candidates"
+          echo "Swept $swept idle tag ref(s), freeing ~${freed} MiB."
 
       # Same line prune-main prints, kept as a copy: a shared always() job was
       # tried and rejected (see prune-main). If you change one, change both.

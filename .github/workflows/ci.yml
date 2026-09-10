@@ -130,8 +130,36 @@ jobs:
           restore-keys: |
             ccache-linux-build-
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # DEPENDENCY caches: restore on every run, save only on main — the same
+      # split the compiler caches got in #5008, applied here in #5548. These
+      # keys are content hashes, so unlike the compiler caches they need no
+      # run_id: the save is gated on the MISS (cache-hit != 'true') as well as
+      # the ref, because actions/cache/save against a key that already exists
+      # only warns, and that warning on every main run would hide a real one.
+      #
+      # Why it matters: a plain `actions/cache` step saves on a miss from ANY
+      # ref, and a PR's entry lands on refs/pull/N/merge where nothing else can
+      # read it. In theory a PR only misses when main's copy is gone; in
+      # practice (2026-09-10) the repo sat at its 10 GiB allowance, LRU evicted
+      # main's Qt entry between runs, and four open PRs each held their own
+      # 1.3 GiB copy — which kept the repo at the allowance, which evicted
+      # main's compiler caches, which is a 30-minute cold build. Saving from
+      # main only breaks that loop; cache-cleanup.yml sweeps what remains.
+      #
+      # THE COST, accepted deliberately: a PR that changes one of these keys —
+      # bumps QT_VERSION, edits setup-deepfilter.sh / setup-fftw.ps1 /
+      # setup-qtkeychain.sh — misses on EVERY push until it merges, because
+      # the new entry only appears once main has built it. For the macOS Qt
+      # tree that is the ~6 min -> ~18 min this file already records below.
+      # Rare, self-limiting, and the right trade against a permanent
+      # 1.7 GiB × open-PRs tax; it is written here so the next Qt bump is not
+      # a surprise.
+      #
+      # `cache-hit` from actions/cache/restore is 'true' only on an exact key
+      # match. None of these steps use restore-keys, so the setup-step gating
+      # below is unchanged from the bidirectional form.
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -140,6 +168,13 @@ jobs:
       - name: Setup DeepFilterNet3 (DFNR)
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
+
+      - name: Save DeepFilterNet3
+        if: github.ref == 'refs/heads/main' && steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
 
       - name: Zero ccache stats
         run: ccache --zero-stats
@@ -239,9 +274,13 @@ jobs:
   # of regression we kept paying for.
   #
   # Caching strategy:
-  #   * Qt install        — handled by jurplel/install-qt-action's cache: true
+  #   * Qt install        — aqtinstall into an explicitly cached tree, the
+  #                         same shape as check-macos (was install-qt-action's
+  #                         cache: true until #5548 — see the Qt step)
   #   * FFTW3 third_party — actions/cache, keyed on the setup script + version
   #   * MSVC object files — sccache over a LOCAL dir, persisted by actions/cache
+  #   All of the above restore on every run and save only from main; the
+  #   reasoning is on the Linux job's DeepFilterNet3 step.
   #
   # sccache used to run on the GitHub Actions cache backend
   # (SCCACHE_GHA_ENABLED), which stores each object as its own cache entry
@@ -286,31 +325,105 @@ jobs:
       # on every restore. Do not raise the three caps together on symmetry
       # grounds — check the stats step first.
       SCCACHE_CACHE_SIZE: 1G
+      # 6.8.3 matches what community Windows builders are running and exposes
+      # Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC COFF section
+      # limit, fixed by /bigobj) before they reach users. Exact, and the same
+      # spelling as windows-installer.yml, so the per-PR build and the release
+      # build agree by construction. QT_ARCH likewise: Qt 6.8 LTS dropped the
+      # MSVC 2019 builds.
+      QT_VERSION: '6.8.3'
+      QT_ARCH: 'win64_msvc2022_64'
+      AQTINSTALL_VERSION: '3.3.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
+      # Qt via aqtinstall into an explicitly cached tree — the shape check-macos
+      # already uses, ported here in #5548. Until then this step was
+      # jurplel/install-qt-action with `cache: true`, which is aqt plus a
+      # bidirectional cache with no restore-only mode: every PR that missed
+      # wrote a 396 MiB entry onto its own refs/pull/N/merge, where nothing
+      # else could read it. Keyed on everything that changes the tree — Qt
+      # version, arch, module set, and the aqt version that resolved them.
+      - name: Restore Qt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-qt-win
         with:
-          # 6.8.3 matches what community Windows builders are running and
-          # exposes Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC
-          # COFF section limit, fixed by /bigobj) before they reach users.
-          version: '6.8.3'
-          modules: 'qtmultimedia qtwebsockets qtserialport qtshadertools'
-          cache: true
+          path: ${{ github.workspace }}\Qt
+          key: qt-${{ env.QT_VERSION }}-windows-${{ env.QT_ARCH }}-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
 
-      - name: Cache FFTW3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Install Qt LTS via aqtinstall
+        if: steps.cache-qt-win.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          # aqt goes in a venv and is pinned, for the reason check-macos and
+          # .github/docker/Dockerfile give: it is the tool that decides what
+          # Qt lands here, so an unreviewed aqt upgrade is an unreviewed
+          # change to the Qt this job builds against.
+          python -m venv "$env:RUNNER_TEMP\aqtvenv"
+          & "$env:RUNNER_TEMP\aqtvenv\Scripts\pip.exe" install -q "aqtinstall==$env:AQTINSTALL_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\aqtvenv\Scripts\aqt.exe" install-qt windows desktop $env:QT_VERSION $env:QT_ARCH `
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools `
+            --outputdir "$env:GITHUB_WORKSPACE\Qt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save Qt
+        if: github.ref == 'refs/heads/main' && steps.cache-qt-win.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}\Qt
+          key: ${{ steps.cache-qt-win.outputs.cache-primary-key }}
+
+      # Separate from the install so it also runs on a cache hit. Exports the
+      # same variables install-qt-action did (QT_ROOT_DIR, QT_PLUGIN_PATH,
+      # QML2_IMPORT_PATH, bin on PATH) plus Qt6_DIR and CMAKE_PREFIX_PATH so
+      # find_package(Qt6) resolves without a -D on the configure line. PATH
+      # goes through GITHUB_PATH so it prepends; the test steps below run Qt
+      # executables and need the DLLs resolvable.
+      - name: Export Qt environment
+        shell: pwsh
+        run: |
+          # aqt lays the tree down under <version>/<arch minus the win64_ host
+          # prefix>: win64_msvc2022_64 -> msvc2022_64.
+          $qtRoot = "$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION\" + ($env:QT_ARCH -replace '^win64_', '')
+          if (-not (Test-Path "$qtRoot\bin\qmake.exe")) {
+            Write-Host "ERROR: no qmake at $qtRoot — aqt layout changed, or a stale cache entry"
+            Get-ChildItem "$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          @(
+            "QT_ROOT_DIR=$qtRoot",
+            "Qt6_DIR=$qtRoot\lib\cmake\Qt6",
+            "CMAKE_PREFIX_PATH=$qtRoot",
+            "QT_PLUGIN_PATH=$qtRoot\plugins",
+            "QML2_IMPORT_PATH=$qtRoot\qml"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$qtRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          & "$qtRoot\bin\qmake.exe" -query QT_VERSION
+
+      - name: Restore FFTW3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-fftw
         with:
           path: third_party/fftw3
           key: ${{ runner.os }}-fftw3-3.3.5-${{ hashFiles('scripts/setup/setup-fftw.ps1') }}
 
+      # Gated on the miss, as windows-installer.yml's copy of this step already
+      # is; the script's output is entirely inside the cached directory.
       - name: Install FFTW3
+        if: steps.cache-fftw.outputs.cache-hit != 'true'
         shell: pwsh
         run: .\scripts\setup\setup-fftw.ps1
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Save FFTW3
+        if: github.ref == 'refs/heads/main' && steps.cache-fftw.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/fftw3
+          key: ${{ steps.cache-fftw.outputs.cache-primary-key }}
+
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -320,6 +433,13 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         shell: pwsh
         run: .\scripts\setup\setup-deepfilter.ps1
+
+      - name: Save DeepFilterNet3
+        if: github.ref == 'refs/heads/main' && steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
 
       # Restored BEFORE sccache first runs, so the server sees a populated
       # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
@@ -564,15 +684,14 @@ jobs:
             autoconf automake libtool
 
       # ~1.3 GB downloaded on every PR otherwise, and it showed: this job went
-      # from ~6 min to ~18 min the first time it took Qt from aqt.
-      # check-windows gets caching for free from jurplel/install-qt-action; aqt
-      # has no such wrapper, so cache the tree explicitly. Keyed on everything
-      # that changes its contents — the Qt version, the module set, and the aqt
-      # version that resolved them — so the entry is written once and then just
-      # restored, which is what keeps it from churning the repo's 10 GB cache
-      # budget the way a per-run key would.
-      - name: Cache Qt
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # from ~6 min to ~18 min the first time it took Qt from aqt. aqt has no
+      # caching wrapper, so cache the tree explicitly (check-windows now does
+      # the same). Keyed on everything that changes its contents — the Qt
+      # version, the module set, and the aqt version that resolved them — so
+      # the entry is written once and then just restored. Saved from main only;
+      # see the Linux job's DeepFilterNet3 step for why.
+      - name: Restore Qt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qt-mac
         with:
           path: ${{ github.workspace }}/Qt
@@ -592,6 +711,13 @@ jobs:
           "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir "${{ github.workspace }}/Qt"
+
+      - name: Save Qt
+        if: github.ref == 'refs/heads/main' && steps.cache-qt-mac.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/Qt
+          key: ${{ steps.cache-qt-mac.outputs.cache-primary-key }}
 
       # Separate from the install so it also runs on a cache hit.
       - name: Export Qt environment
@@ -637,8 +763,8 @@ jobs:
           fi
           echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -648,8 +774,15 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
-      - name: Cache qtkeychain
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Save DeepFilterNet3
+        if: github.ref == 'refs/heads/main' && steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
+
+      - name: Restore qtkeychain
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qtkeychain-mac
         with:
           path: third_party/qtkeychain
@@ -670,6 +803,16 @@ jobs:
       - name: Setup qtkeychain (SmartLink credential persistence)
         if: steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-qtkeychain.sh
+
+      # Saved from main only, like the rest. macos-dmg.yml restores this same
+      # key on a tag ref and cannot read a PR's copy anyway; the entry it
+      # normally finds is the one this job wrote from main.
+      - name: Save qtkeychain
+        if: github.ref == 'refs/heads/main' && steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/qtkeychain
+          key: ${{ steps.cache-qtkeychain-mac.outputs.cache-primary-key }}
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
