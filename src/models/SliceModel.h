@@ -24,6 +24,13 @@ class SliceModel : public QObject {
     Q_PROPERTY(bool txSlice      READ isTxSlice  NOTIFY txSliceChanged)
 
 public:
+    // Conservative whole-MHz observation domain below JSON's 2^53-1 Hz
+    // integer limit. Keep target admission and MHz observation validation
+    // on this same bound; the general protocol integer domain is wider.
+    static constexpr qint64 kMaximumReportedFrequencyMhz = 9'007'199'254;
+    static constexpr qint64 kMaximumReportedFrequencyHz =
+        kMaximumReportedFrequencyMhz * 1'000'000;
+
     explicit SliceModel(int id, QObject* parent = nullptr);
     ~SliceModel() override;
 
@@ -370,6 +377,8 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Supplemental observation notification when frequencyChanged does not
+    // fire (same-value reports, optimistic-value echoes, or invalidation).
     void frequencyReported();
     // Emitted after a local setter has issued a frequency command. Unlike
     // frequencyChanged, radio-status application does not emit this signal.

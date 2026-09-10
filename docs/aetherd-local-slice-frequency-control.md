@@ -22,6 +22,13 @@ sign, whitespace or leading zeros). `expectedRevision` is the slice resource's
 revision, not the radio-session revision. It and `hz` must be positive exact
 JSON integers at most 2^53-1. Hz are never silently rounded or clamped.
 
+That is the general wire-integer limit, not the frequency-observation domain.
+Coverage maxima and observations share the conservative whole-MHz ceiling
+9,007,199,254 MHz (9,007,199,254,000,000 Hz), below the wire ceiling by 740,991 Hz.
+This avoids advertising a command domain the MHz model cannot report as known.
+A backend maximum above this ceiling disables its frequency-control capability;
+an observation above it is unknown. Current backend maxima are much smaller.
+
 Success is `{"v":1,"id":"tune-1","result":{"accepted":true}}`.
 It means exactly one typed backend intent was dispatched, **not** that the
 radio acknowledged it, the requested frequency took effect, or DSP settled.
@@ -107,6 +114,12 @@ transmit/MOX/TUNE state is active. Active TX, backend replacement and connection
 transitions invalidate idle knowledge. A falling command edge alone cannot
 restore it. This is conservative receive admission, **not the Stage 4 transmit
 arbiter**: asynchronous external PTT can always change after the last report.
+
+The `txSlice` designation is not itself a refusal condition. An explicit receive
+tune while confirmed idle may change the frequency that a subsequent transmission
+would use; this method does not grant permission to key. Lease/inhibit policy for
+that coupling belongs to the Stage 4 arbiter and must be reviewed before enabling
+TX-capable daemon paths, not inferred from this receive-only method.
 
 The production simulator is the fully exercised integration path for this
 slice. RTL-SDR is eligible when built and connected but is not hardware-certified

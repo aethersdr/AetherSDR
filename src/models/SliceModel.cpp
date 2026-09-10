@@ -1199,7 +1199,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.frequency.has_value()) {
         const double f = *d.frequency;
         m_frequencyReportedKnown = std::isfinite(f)
-            && f > 0.0 && f <= 9'007'199'254.0;
+            && f > 0.0 && f <= kMaximumReportedFrequencyMhz;
         m_reportedFrequency = m_frequencyReportedKnown ? f : 0.0;
         // qFuzzyCompare fails when either value is 0.0 — use explicit epsilon
         if (std::abs(m_frequency - f) > 1e-9) {
@@ -1714,8 +1714,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
         if (changed) emit stepChanged(m_stepHz, m_stepList);
     }
 
-    if (d.frequency.has_value()) {
+    if (d.frequency.has_value() && !freqChanged) {
         // Also report a same-value echo following an optimistic desktop tune.
+        // A changed value already notifies observation consumers below.
         emit frequencyReported();
     }
     if (freqChanged)

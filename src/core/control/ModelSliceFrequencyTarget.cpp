@@ -23,7 +23,7 @@ bool validCoverage(const RadioCapabilities& caps)
     const SliceFrequencyControl& control = caps.sliceFrequencyControl;
     if (control.authority == SliceFrequencyControl::Authority::Unknown
         || control.minimumHz <= 0 || control.maximumHz < control.minimumHz
-        || control.maximumHz > 9'007'199'254'000'000) {
+        || control.maximumHz > SliceModel::kMaximumReportedFrequencyHz) {
         return false;
     }
     for (const DeclaredBandRange& band : caps.declaredBandRanges) {
@@ -141,6 +141,9 @@ private:
         if (!validCoverage(caps) || !slice->frequencyReportedKnown()) {
             return refusal("capability.unavailable", "frequency coverage or observation unavailable");
         }
+        // TX-slice designation alone is not keying: this receive intent may
+        // retune it while confirmed idle. Any lease/inhibit policy coupling
+        // belongs to the Stage 4 arbiter before TX-capable daemon enablement.
         if (caps.canTransmit
             && (!m_confirmedIdle || m_radio->isRadioTransmitting()
                 || m_radio->transmitModel().isTransmitting()

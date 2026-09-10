@@ -34,7 +34,8 @@ public:
     int keys{0};
     int lastSlice{-1};
     double lastHz{0};
-    RadioCapabilities capabilities() const override { return caps; }
+    mutable int capabilityReads{0};
+    RadioCapabilities capabilities() const override { ++capabilityReads; return caps; }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override { connected = true; }
     void disconnectRadio() override { connected = false; }
@@ -203,7 +204,10 @@ void authoritativeObservations()
     check(call(f.service, second, "slice.setFrequency", competing).contains("result")
               && f.backend->tunes == 2 && f.backend->lastHz == 14'235'000,
           "same observed revision permits ordered pending intents, not compare-and-swap");
+    const int readsBeforeReport = f.backend->capabilityReads;
     f.report(14'232'000);
+    check(f.backend->capabilityReads <= readsBeforeReport + 1,
+          "a changed frequency avoids duplicate adapter capability reads");
     const ResourceSnapshot changed = *f.store.get(f.address);
     check(changed.revision > originalRevision
               && changed.value.value("frequencyObservation").toObject().value("hz").toInteger() == 14'232'000
@@ -254,6 +258,10 @@ void coverageAndSafety()
     f.radio.slice(0)->setLocked(true);
     f.rejected(f.params(), "request.conflict");
     f.radio.slice(0)->setLocked(false);
+    SliceDelta txSelection;
+    txSelection.txSlice = true;
+    f.radio.slice(0)->applyChanges(txSelection);
+    check(f.radio.slice(0)->isTxSlice(), "TX-slice designation is independent of active transmission");
     f.backend->caps.canTransmit = true;
     check(!f.target->available(), "TX-capable backend starts with unknown idle state");
     f.rejected(f.params(), "request.conflict");
@@ -286,6 +294,33 @@ void coverageAndSafety()
     f.connection.change(RadioConnectionTarget::State::Connected);
     f.rejected(f.params(), "request.conflict");
     check(f.backend->keys == 0, "safety cases issue no keying");
+}
+
+void numericDomainBoundary()
+{
+    Fixture f;
+    constexpr qint64 kWireMaximum = 9'007'199'254'740'991;
+    constexpr qint64 kObservationMaximum = SliceModel::kMaximumReportedFrequencyHz;
+    check(kWireMaximum - kObservationMaximum == 740'991,
+          "documented whole-MHz ceiling remains below the general wire limit");
+    f.backend->caps.sliceFrequencyControl.maximumHz = kObservationMaximum;
+    check(f.target->available() && f.tune(f.params(kObservationMaximum)).contains("result"),
+          "coverage ceiling is inclusive for typed intents");
+    f.report(kObservationMaximum);
+    check(f.radio.slice(0)->frequencyReportedKnown()
+              && f.store.get(f.address)->value.value("frequencyObservation").toObject()
+                     .value("hz").toInteger() == kObservationMaximum,
+          "coverage ceiling can be published as an exact known observation");
+    f.rejected(f.params(kObservationMaximum + 1), "request.out_of_range");
+    f.backend->caps.sliceFrequencyControl.maximumHz = kWireMaximum;
+    check(!f.target->available(), "wire-valid maximum beyond observation domain disables coverage");
+    f.rejected(f.params(), "capability.unavailable");
+    f.backend->caps.sliceFrequencyControl.maximumHz = kObservationMaximum;
+    f.report(kObservationMaximum + 1'000'000);
+    check(!f.radio.slice(0)->frequencyReportedKnown()
+              && f.store.get(f.address)->value.value("frequencyObservation").toObject()
+                     .value("hz").isNull(),
+          "report beyond the shared ceiling clears observation knowledge");
 }
 
 void lifetimeAndBinding()
@@ -361,6 +396,7 @@ int main(int argc, char** argv)
     authorizationAndSchema();
     authoritativeObservations();
     coverageAndSafety();
+    numericDomainBoundary();
     lifetimeAndBinding();
     requestBudget();
     return failures == 0 ? 0 : 1;
