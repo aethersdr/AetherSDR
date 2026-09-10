@@ -6891,22 +6891,32 @@ QJsonObject AutomationServer::doHealth()
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
 
-    // TWO SOURCES, merged, and the order matters.
+    // TWO SOURCES, merged when — and only when — both are in play.
     //
     // The backend answers only while one exists — it is constructed inside
     // connectToRadio() — so on a disconnected app it contributes nothing. The
-    // stream-free telemetry service answers always, because its lifetime is the
-    // model's rather than a connection's. Reading `health` on an app that is
-    // not connected used to return zero rows for exactly that reason, in the
-    // state the stream-free feature exists to serve.
+    // stream-free telemetry service outlives every backend, because its
+    // lifetime is the model's rather than a connection's. Reading `health` on
+    // an app that is not connected used to return zero rows for exactly that
+    // reason, in the state the stream-free feature exists to serve.
+    //
+    // GATED, because `health` is family-agnostic. Merging unconditionally gave
+    // a connected Flex or Icom snapshot the HL2's telemetrySource /
+    // telemetryPollMs / telemetryAgeMs attribution rows, so a Flex consumer
+    // could no longer read the snapshot as backend-only. hasStreamFreeTelemetry()
+    // is false until an HL2 backend is built or a `telemetry target` is aimed,
+    // which is exactly "the HL2 poller is in play".
     //
     // The backend WINS on key collision: its readings are in-band, arrive at
     // 10 Hz against the poller's 1-2 Hz, and their cadence is ours. The service
     // fills the gaps and owns the source/age/unanswered rows that say which
     // path spoke.
-    IRadioBackend::HealthSnapshot snap = hl2::hl2MergeHealth(
-        m_radioModel->streamFreeTelemetryRows(),   // base: stream-free
-        m_radioModel->backendHealthSnapshot());    // winner: in-band
+    IRadioBackend::HealthSnapshot snap =
+        m_radioModel->hasStreamFreeTelemetry()
+            ? hl2::hl2MergeHealth(
+                  m_radioModel->streamFreeTelemetryRows(),   // base: stream-free
+                  m_radioModel->backendHealthSnapshot())     // winner: in-band
+            : m_radioModel->backendHealthSnapshot();
     if (snap.isEmpty()) {
         // Still a real state: no backend AND nothing stream-free to say. Name it
         // rather than returning an empty object the caller has to guess about.

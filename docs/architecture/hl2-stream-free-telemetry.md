@@ -1,9 +1,20 @@
 # HL2 stream-free telemetry — Design Note
 
-**Status:** Draft. The decode half is built and tested
-(`MetisProtocol.cpp::parseDiscoveryReply`); this note is the plan for the
-*poller* that uses it, and exists chiefly to settle **when** to poll rather
-than leave that to a timer somebody picks later.
+**Status:** Implemented, automation bridge only. The decode half
+(`MetisProtocol.cpp::parseDiscoveryReply`), the cadence rule
+(`Hl2TelemetryCadence.h`), the poller and the service above the backend
+(`Hl2TelemetryService`) are all built and tested. This note began as the plan
+for the poller and stays because §1 is still the reason the cadence is what it
+is; it is no longer a proposal.
+
+**Reachable from:** the automation bridge — `health`, and `telemetry target
+<ip>` to aim the poller without connecting. **NOT** from the operator's Radio
+Health dialog, which still reads `backendHealthSnapshot()` alone and therefore
+still says "Not connected." in exactly the states this feature exists for.
+That is a deliberate omission rather than an oversight: the dialog is core UX,
+and `GOVERNANCE.md` wants an approved RFC before a PR changes it. Wiring it is
+its own change, behind its own RFC, and the cadence table below describes what
+the POLLER does, not what any panel currently shows.
 
 **Scope:** reading the radio's own state — PA temperature, forward and reverse
 power, PTT, ADC clip, TX FIFO, PTT hang time — **without an IQ stream**, and

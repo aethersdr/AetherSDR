@@ -9,7 +9,6 @@
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
-#include "core/backends/hl2/Hl2TelemetryService.h"  // stream-free telemetry (#15)
 
 #include <QHostAddress>
 #include "core/RadioConnection.h"
@@ -68,6 +67,10 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
 
 class AprsDigipeaterModel;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
+// Forward-declared, NOT included: Hl2TelemetryService.h pulls MetisProtocol.h
+// with it, and every consumer of this header is not an HL2 consumer. Held by
+// pointer below and constructed only where an HL2 is actually in play.
+namespace hl2 { class Hl2TelemetryService; }
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
 struct LicenseFeatureState {
@@ -353,9 +356,25 @@ public:
     // exactly the states they exist for: another client holding the radio, or
     // nothing connected yet. That was the original defect; this seam is the
     // fix. The service's lifetime is this model's, not a connection's.
-    [[nodiscard]] IRadioBackend::HealthSnapshot streamFreeTelemetryRows() const;
+    //
+    // NOT const: reading the rows IS the poller's demand signal, and a query
+    // that quietly restarts a demand window is a lie about what it does. The
+    // mutation is on the non-const path where it belongs.
+    //
+    // Empty when no HL2 poller exists — see hasStreamFreeTelemetry(). It does
+    // not construct one: a Flex health read must not bring an HL2 service into
+    // being.
+    [[nodiscard]] IRadioBackend::HealthSnapshot streamFreeTelemetryRows();
+    // Whether an HL2 stream-free poller exists in this session at all. The gate
+    // a family-agnostic consumer asks before merging these rows into a snapshot
+    // — without it a Flex or Icom `health` grows HL2 attribution keys.
+    [[nodiscard]] bool hasStreamFreeTelemetry() const
+    {
+        return m_hl2Telemetry != nullptr;
+    }
     // Reading the rows is the poller's demand signal, so a caller that only
-    // wants to arm it (without rendering) can say so explicitly.
+    // wants to arm it (without rendering) can say so explicitly. A no-op when
+    // no poller exists.
     void noteTelemetryDemand();
     // Aim the stream-free poller at a radio WITHOUT connecting. A null address
     // stops it. Read-only: the poller sends the EF FE 02 status request and
@@ -1615,6 +1634,10 @@ private:
     void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
+    // Construct the stream-free HL2 poller on first need and return it. The
+    // only place m_hl2Telemetry is created, so "which sessions pay for it" has
+    // one answer and it is visible at its two call sites.
+    hl2::Hl2TelemetryService& ensureHl2Telemetry();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
 
@@ -1649,13 +1672,19 @@ private:
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
     std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
-    // Stream-free HL2 telemetry (roadmap #15). A VALUE MEMBER, so its lifetime
-    // is this model's and not a connection's — it must answer when m_backend
-    // above is null, which is the whole reason it does not live inside the
-    // backend. It is idle until something reads it: the cadence rule polls at
-    // zero unless a health consumer has asked, so a Flex or Icom session pays
-    // nothing for its presence.
-    mutable hl2::Hl2TelemetryService m_hl2Telemetry;
+    // Stream-free HL2 telemetry (roadmap #15). Its lifetime is this model's and
+    // not a connection's — it must answer when m_backend above is null, which
+    // is the whole reason it does not live inside the backend.
+    //
+    // A POINTER, NOT A VALUE MEMBER, and null until an HL2 is in play. As a
+    // value member every RadioModel constructed it and started its 1 Hz state
+    // timer, Flex and Icom and Sim sessions included, and every consumer of
+    // this header compiled MetisProtocol.h. "Idle until demand" was true of the
+    // polling and not of the object. Created by ensureHl2Telemetry() from
+    // exactly two places: an HL2 backend being built, and an explicit poll
+    // target being aimed. Nothing else constructs it, and reading the rows
+    // deliberately does not.
+    std::unique_ptr<hl2::Hl2TelemetryService> m_hl2Telemetry;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;

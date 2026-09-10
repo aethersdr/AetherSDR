@@ -32,6 +32,8 @@
 #include <QObject>
 #include <QString>
 
+#include <memory>
+
 namespace AetherSDR::hl2 {
 
 class Hl2TelemetryPoller;
@@ -85,8 +87,11 @@ public:
     [[nodiscard]] std::optional<DiscoveryReply> lastReply() const;
 
 private:
+    // Pimpl by unique_ptr, not a raw owning pointer: the destructor is the only
+    // thing that has to see the complete type, and it is out of line below for
+    // exactly that reason.
     struct Impl;
-    Impl* d = nullptr;
+    std::unique_ptr<Impl> d;
 };
 
 }  // namespace AetherSDR::hl2

@@ -30,7 +30,7 @@ struct Hl2TelemetryService::Impl {
 
 Hl2TelemetryService::Hl2TelemetryService(QObject* parent)
     : QObject(parent)
-    , d(new Impl)
+    , d(std::make_unique<Impl>())
 {
     d->poller = new Hl2TelemetryPoller(this);
 
@@ -56,10 +56,9 @@ Hl2TelemetryService::Hl2TelemetryService(QObject* parent)
     tick->start();
 }
 
-Hl2TelemetryService::~Hl2TelemetryService()
-{
-    delete d;
-}
+// Out of line, and it has to be: Impl is incomplete in the header, so the
+// implicit destructor there could not delete it.
+Hl2TelemetryService::~Hl2TelemetryService() = default;
 
 void Hl2TelemetryService::setTarget(const QHostAddress& addr)
 {

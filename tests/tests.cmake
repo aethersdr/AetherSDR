@@ -4734,9 +4734,13 @@ target_link_libraries(hl2_telemetry_wire_test PRIVATE aethercore Qt6::Core Qt6::
 add_test(NAME hl2_telemetry_wire_test COMMAND hl2_telemetry_wire_test)
 
 # HL2 stream-free telemetry SERVICE -- must answer with no backend and no
-# connection, which is the state the whole feature exists for. Needs Qt (timer,
-# socket) but no aethercore and no radio: it polls 192.0.2.1, TEST-NET-1, which
-# is unroutable by RFC 5737 and can never answer.
+# connection, which is the state the whole feature exists for. Needs Qt (timer)
+# but no aethercore and no radio.
+#
+# SOCKET-FREE, and by construction rather than by care: it never gives the
+# service a target, and with no target and the broadcast fallback off the
+# poller sends nothing. Nothing is bound, nothing is sent, no peer exists. The
+# wire cases are the opt-in target below.
 add_executable(hl2_telemetry_service_test
     tests/hl2_telemetry_service_test.cpp
     src/core/backends/hl2/Hl2TelemetryService.cpp
@@ -4746,6 +4750,38 @@ add_executable(hl2_telemetry_service_test
 target_include_directories(hl2_telemetry_service_test PRIVATE src)
 target_link_libraries(hl2_telemetry_service_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME hl2_telemetry_service_test COMMAND hl2_telemetry_service_test)
+
+# The same poller's WIRE behaviour, off the default graph. AGENTS.md's
+# test-layer boundary keeps a socket-owning test out of the ordinary suite; the
+# option() shape (rather than EXCLUDE_FROM_ALL) is the one hl2_tx_loopback_test
+# above uses, so that when it IS enabled it stays a REGISTERED test and a
+# refused bind shows as Skipped rather than silently green.
+#
+# SOCKETS THIS TEST BINDS, per the socket-test canon: one IPv4 UDP listener on
+# 127.0.0.1:1025 (ShareAddress) -- the Metis discovery port -- which receives
+# only what the test's own service instances send it. Outbound: 127.0.0.1 (that
+# listener) and 192.0.2.1, TEST-NET-1, unroutable by RFC 5737. No listening
+# server, no peer process, and no synthetic radio firmware: the code under test
+# is ours and the socket is how the assertion reaches it.
+option(AETHER_ENABLE_HL2_TELEMETRY_SOCKET_TEST
+       "Build and register the opt-in HL2 stream-free telemetry wire test" OFF)
+if(AETHER_ENABLE_HL2_TELEMETRY_SOCKET_TEST)
+    add_executable(hl2_telemetry_wire_socket_test
+        tests/hl2_telemetry_wire_socket_test.cpp
+        src/core/backends/hl2/Hl2TelemetryService.cpp
+        src/core/backends/hl2/Hl2TelemetryPoller.cpp
+        src/core/backends/hl2/MetisProtocol.cpp
+    )
+    target_include_directories(hl2_telemetry_wire_socket_test PRIVATE src)
+    target_link_libraries(hl2_telemetry_wire_socket_test
+        PRIVATE Qt6::Core Qt6::Network)
+    add_test(NAME hl2_telemetry_wire_socket_test
+             COMMAND hl2_telemetry_wire_socket_test)
+    # A port this machine will not give us is an honest skip, never a passing
+    # wire proof.
+    set_tests_properties(hl2_telemetry_wire_socket_test
+                         PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
