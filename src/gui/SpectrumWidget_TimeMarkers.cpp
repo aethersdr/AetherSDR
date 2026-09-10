@@ -3,8 +3,11 @@
 #include "core/ThemeManager.h"
 
 #include <QAccessible>
+#include <QDateTime>
+#include <QFont>
 #include <QFontMetrics>
 #include <QPainter>
+#include <QRectF>
 #include <QTimeZone>
 #include <QtMath>
 #include <algorithm>
@@ -56,11 +59,13 @@ void SpectrumWidget::prepareWaterfallTimeMarkerAtlas(
     const QSize pixels(qCeil(atlasWidth * dpr),
                        qCeil((2 + labels.size() * labelHeight) * dpr));
     if (!m_wfTimeMarkerAtlasDirty && labels == m_wfTimeMarkerLabels
+        && m_wfTimeMarkerAtlasFont == labelFont
         && m_wfTimeMarkerAtlas.size() == pixels
         && m_wfTimeMarkerAtlas.devicePixelRatio() == dpr) {
         return;
     }
     m_wfTimeMarkerLabels = labels;
+    m_wfTimeMarkerAtlasFont = labelFont;
     m_wfTimeMarkerLabelHeight = labelHeight;
     m_wfTimeMarkerAtlas = QImage(pixels, QImage::Format_RGBA8888_Premultiplied);
     m_wfTimeMarkerAtlas.setDevicePixelRatio(dpr);

@@ -15,6 +15,7 @@
 #include <QPointer>
 #include <QMap>
 #include <QImage>
+#include <QFont>
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -1626,6 +1627,7 @@ private:
     qint64 m_wfIncomingTimestampMs{0};
     QVector<WaterfallTimeRow> m_wfVisibleTimeRows;
     QImage m_wfTimeMarkerAtlas;
+    QFont m_wfTimeMarkerAtlasFont;
     QVector<qint64> m_wfTimeMarkerLabels;
     bool m_wfTimeMarkerAtlasDirty{true};
     int m_wfTimeMarkerLabelHeight{0};
