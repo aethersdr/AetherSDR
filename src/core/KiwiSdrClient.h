@@ -153,7 +153,13 @@ signals:
     void waterfallAvailabilityChanged(bool available, const QString& detail);
     void recoverableDisconnect(const QString& detail);
 
+protected:
+    // Transport seam for socket-free validation of waterfall command ordering.
+    virtual bool waterfallTransportConnected() const;
+    virtual void sendWaterfallCommand(const QString& command);
+
 private:
+    friend class KiwiSdrWaterfallSetupTest;
     enum class StreamKind {
         Sound,
         Waterfall,
@@ -252,7 +258,6 @@ private:
     }
     void sendKeepalive();
     void sendSoundCommand(const QString& command);
-    void sendWaterfallCommand(const QString& command);
     void resetProtocolTrace();
     qint64 protocolTraceElapsedMs() const;
     void traceProtocolEvent(const QString& event);

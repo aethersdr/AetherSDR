@@ -4817,7 +4817,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         };
 
         auto styleKiwiCombo = [](QComboBox* combo) {
-            combo->setStyleSheet(kEditStyle);
+            applyComboStyle(combo);
             combo->setMinimumHeight(24);
         };
 
@@ -4999,7 +4999,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 styleKiwiEdit(passwordEdit);
                 rowLayout->addWidget(passwordEdit, 2, 2);
 
-                auto* typeCombo = new QComboBox;
+                auto* typeCombo = new GuardedComboBox;
                 fillReceiverTypeCombo(typeCombo);
                 typeCombo->setCurrentIndex(receiverTypeComboIndex(profile.family));
                 typeCombo->setAccessibleName("KiwiSDR receiver type");
@@ -5250,7 +5250,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             styleKiwiEdit(passwordEdit);
             rowLayout->addWidget(passwordEdit, 2, 2);
 
-            auto* typeCombo = new QComboBox;
+            auto* typeCombo = new GuardedComboBox;
             fillReceiverTypeCombo(typeCombo);
             typeCombo->setAccessibleName("New KiwiSDR receiver type");
             typeCombo->setAccessibleDescription(

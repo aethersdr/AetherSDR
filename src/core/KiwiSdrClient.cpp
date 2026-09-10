@@ -1352,10 +1352,8 @@ void KiwiSdrClient::sendWaterfallSetupCommands()
     sendWaterfallPostAuthCommands();
 }
 
-// Everything after auth/identity. Split out because Web-888 discards
-// waterfall SETs that arrive before its wf_setup config burst — the client
-// re-sends exactly this block once the first inbound MSG proves the server
-// is listening (docs/web888-cleanroom-design.md).
+// Everything after auth/identity. Web-888 replays this block once its
+// wf_setup marker has been processed (docs/web888-cleanroom-design.md).
 void KiwiSdrClient::sendWaterfallPostAuthCommands()
 {
     sendWaterfallCommand(QStringLiteral("SERVER DE CLIENT AetherSDR W/F"));
@@ -1446,16 +1444,10 @@ void KiwiSdrClient::sendWaterfallViewToServer()
         m_waterfallRequestValid = false;
         return;
     }
-#ifdef HAVE_WEBSOCKETS
-    if (!m_waterfallSocket
-        || m_waterfallSocket->state() != QAbstractSocket::ConnectedState) {
+    if (!waterfallTransportConnected()) {
         m_waterfallRequestValid = false;
         return;
     }
-#else
-    m_waterfallRequestValid = false;
-    return;
-#endif
 
     double viewCenterMhz = m_waterfallViewCenterMhz;
     double viewBandwidthMhz = m_waterfallViewBandwidthMhz;
@@ -2337,21 +2329,6 @@ void KiwiSdrClient::handleMessage(StreamKind stream, const QByteArray& frame)
 void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
 {
     traceInboundText(stream, text);
-    // Web-888 ignores waterfall SETs sent before its config burst. The first
-    // inbound MSG on the W/F socket proves the server is listening, so
-    // re-send the post-auth waterfall setup exactly once (Kiwi family: no-op).
-    if (stream == StreamKind::Waterfall
-        && m_receiverFamily == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
-        && !m_waterfallSetupResent) {
-        m_waterfallSetupResent = true;
-        qCDebug(lcKiwiSdr).noquote()
-            << "KiwiSDR waterfall setup re-sent after first W/F MSG"
-            << QStringLiteral("endpoint=%1").arg(logEndpoint())
-            << QStringLiteral("family=%1")
-               .arg(KiwiSdrProtocol::kiwiSdrReceiverFamilyId(m_receiverFamily));
-        traceProtocolEvent(QStringLiteral("WEB888 wf setup re-sent after burst"));
-        sendWaterfallPostAuthCommands();
-    }
     const QVector<KiwiSdrProtocol::MsgToken> msgTokens =
         KiwiSdrProtocol::parseMsgTokens(text);
 
@@ -2672,6 +2649,25 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 emitTelemetryChanged();
             }
         }
+    }
+
+    // RaspSDR 68a64e1b: several W/F messages precede the bare wf_setup token.
+    // Apply the entire metadata message before replaying setup, even if the
+    // marker appears before zoom_max in the message. An unchanged view must
+    // also be resent: our cached request does not prove the server retained it.
+    const bool setupComplete = std::any_of(
+        msgTokens.cbegin(), msgTokens.cend(),
+        [](const KiwiSdrProtocol::MsgToken& token) {
+            return token.key == QLatin1String("wf_setup") && !token.hasValue;
+        });
+    if (stream == StreamKind::Waterfall
+        && m_receiverFamily == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+        && !m_waterfallSetupResent && setupComplete
+        && waterfallTransportConnected() && !receiverControlSuppressed()) {
+        m_waterfallSetupResent = true;
+        m_waterfallRequestValid = false;
+        traceProtocolEvent(QStringLiteral("WEB888 wf setup re-sent after wf_setup"));
+        sendWaterfallPostAuthCommands();
     }
 }
 
@@ -3662,6 +3658,12 @@ void KiwiSdrClient::sendSoundCommand(const QString& command)
         << redactedKiwiCommand(command);
 }
 
+bool KiwiSdrClient::waterfallTransportConnected() const
+{
+    return m_waterfallSocket
+        && m_waterfallSocket->state() == QAbstractSocket::ConnectedState;
+}
+
 void KiwiSdrClient::sendWaterfallCommand(const QString& command)
 {
     const bool connected =
@@ -3712,6 +3714,11 @@ void KiwiSdrClient::handleSocketError(const QString& detail,
 #else
 void KiwiSdrClient::sendSoundCommand(const QString&)
 {
+}
+
+bool KiwiSdrClient::waterfallTransportConnected() const
+{
+    return false;
 }
 
 void KiwiSdrClient::sendWaterfallCommand(const QString&)

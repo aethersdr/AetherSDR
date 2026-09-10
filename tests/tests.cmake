@@ -1985,6 +1985,14 @@ set_target_properties(kiwi_sdr_manager_family_test PROPERTIES AUTOMOC ON)
 add_test(NAME kiwi_sdr_manager_family_test
          COMMAND kiwi_sdr_manager_family_test)
 
+# Socket-free client command-order test; transport is injected, no peer.
+add_executable(kiwi_sdr_waterfall_setup_test
+    tests/kiwi_sdr_waterfall_setup_test.cpp
+)
+target_include_directories(kiwi_sdr_waterfall_setup_test PRIVATE src)
+target_link_libraries(kiwi_sdr_waterfall_setup_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kiwi_sdr_waterfall_setup_test COMMAND kiwi_sdr_waterfall_setup_test)
+
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp
 )

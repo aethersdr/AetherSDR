@@ -262,7 +262,7 @@ QWidget* KiwiSdrApplet::buildReceiverRow(const KiwiSdrReceiverStatus& receiver)
         badge->setAccessibleName(tr("KiwiSDR receiver type"));
         badge->setAccessibleDescription(
             tr("Web-888 receiver, served by the Kiwi-compatible path"));
-        badge->setStyleSheet(
+        ThemeManager::instance().applyStyleSheet(badge,
             QStringLiteral("QLabel { color: {{color.accent.bright}}; "
                            "border: 1px solid {{color.accent.bright}}; "
                            "border-radius: 3px; font-size: 9px; "

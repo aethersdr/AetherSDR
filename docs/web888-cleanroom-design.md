@@ -66,9 +66,12 @@ existing, unchanged client code):
    accepts `SET` waterfall commands immediately after connect; Web-888 stages
    its `wf_setup` config burst first and the setup commands sent before it are
    not applied. `KiwiSdrClient` therefore re-sends the waterfall setup sequence
-   once after the first inbound W/F `MSG` — family-gated (Web888 only) and
+   once after processing the bare W/F `wf_setup` marker and all metadata in
+   its message — family-gated (Web888 only) and
    one-shot (`m_waterfallSetupResent`); a no-op for Kiwi, idempotent for
-   Web-888.
+   Web-888. The replay invalidates the cached view so an unchanged zoom/start
+   is sent again. Earlier messages, repeated markers, sound-stream markers,
+   disconnected transports, and monitor sessions do not consume the replay.
 3. **Server version markers.** `parseKiwiVersionFromServerHeader` now also
    recognizes `Web888_` and `ZynqSDR_Mongoose/` markers alongside `KiwiSDR_`,
    so the protocol summary shows the fork's version instead of "unknown".

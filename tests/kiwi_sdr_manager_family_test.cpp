@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 
 #include <cstdio>
 #include <memory>
@@ -55,6 +56,25 @@ void seedProfilesJson(const QString& json)
 
 int main(int argc, char** argv)
 {
+    // A second process reads the parent's already-saved isolated store. This
+    // is a settings reader, not a radio/synthetic-firmware peer.
+    if (argc == 2 && QByteArray(argv[1]) == "--verify-persisted-families") {
+        if (qEnvironmentVariableIsEmpty("AETHER_SETTINGS_DIR")) {
+            return fail("child settings store was not isolated");
+        }
+        QCoreApplication app(argc, argv);
+        AppSettings::instance().load();
+        KiwiSdrManager manager(nullptr, makeStore());
+        if (manager.profiles().size() != 2
+            || manager.profile(QStringLiteral("fork-1")).family
+                != KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+            || manager.profile(QStringLiteral("odd-1")).family
+                != KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi) {
+            return fail("receiver families did not survive a process restart");
+        }
+        return 0;
+    }
+
     TestSettingsProfile settingsProfile(QStringLiteral("aether-kiwi-family-test"));
     if (!settingsProfile.isValid()) {
         return fail("could not create isolated settings home");
@@ -113,6 +133,20 @@ int main(int argc, char** argv)
             || profiles.at(1).family
                 != KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi) {
             return fail("save/load round trip did not preserve receiver families");
+        }
+    }
+
+    {
+        QProcess reader;
+        reader.start(QCoreApplication::applicationFilePath(),
+                     {QStringLiteral("--verify-persisted-families")});
+        if (!reader.waitForFinished(10000)
+            || reader.exitStatus() != QProcess::NormalExit
+            || reader.exitCode() != 0) {
+            reader.kill();
+            reader.waitForFinished(1000);
+            qCritical().noquote() << reader.readAllStandardError();
+            return fail("separate-process family persistence check failed");
         }
     }
 
