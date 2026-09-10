@@ -285,8 +285,9 @@ public:
     // runtime from the Radio Setup → Network toggle. Idempotent: starting
     // while running is a no-op; stopping while stopped is a no-op.
     // sockName empty → the default PID-suffixed name. Returns true once a
-    // start is initiated (or already pending/running); observe the result signal
-    // below for the actual bind outcome.
+    // start is initiated (or already pending/running) and false only when the
+    // bind already failed synchronously; observe the result signal below for
+    // the actual bind outcome.
     bool startAutomationBridge(const QString& sockName = QString());
     void stopAutomationBridge();
     // Persist a new shared-secret token and push it to the running bridge

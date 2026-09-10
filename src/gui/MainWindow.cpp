@@ -3361,8 +3361,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     if (!dlg) return;
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
-    // Agent automation bridge toggle (#3646). Disable is persisted by the
-    // dialog; enable is persisted only after the bind succeeds. AETHER_AUTOMATION
+    // Agent automation bridge toggle (#3646). The dialog persists the click as
+    // the operator's intent; the async bind outcome then corrects it (#4181,
+    // AutomationBridgeSettings::recordStartOutcome()). AETHER_AUTOMATION
     // force-enables at launch and the dialog disables the toggle in that
     // case, so a stop request can't arrive for an env-forced bridge.
     connect(dlg, &RadioSetupDialog::automationBridgeToggled, this, [this](bool on) {
