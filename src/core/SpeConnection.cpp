@@ -21,6 +21,16 @@ SpeConnection::SpeConnection(QObject* parent)
             emit lcdFrameReceived(*frame);
             setLcdFresh(true);
             m_lcdStaleTimer.start();
+            // Pace the next request from the REPLY, not just from our own
+            // send: 600 is an exact multiple of the 100 ms Status cadence,
+            // so two free-running timers can phase-lock (Qt's coarse timers
+            // actively coalesce them) with every display reply straddling a
+            // status poll on the wire — and hold that alignment for many
+            // seconds until clock drift walks out of it, dropping several
+            // display frames in a row. Re-arming here folds the amp's own
+            // (variable) response latency into the period, so no stable
+            // phase relationship with the status poll can form.
+            m_lcdTimer.start();
         }
     });
 

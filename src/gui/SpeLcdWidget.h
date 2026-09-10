@@ -23,8 +23,15 @@ public:
     explicit SpeLcdWidget(QWidget* parent = nullptr);
 
     void setFrame(const Spe::Lcd::Frame& frame);
+    // Stale = refreshes stopped arriving but the connection is still up:
+    // the last image stays visible, dimmed. A dropped display frame or two
+    // on a lossy proxy link must read as a hiccup, not blank the mirror to
+    // the idle glass and back (the keys' freshness gate is the applet's
+    // concern, not this widget's).
+    void setStale(bool stale);
     // Back to the idle glass (dim "no display data" hint) — used when the
-    // amplifier goes silent or the connection drops.
+    // connection drops or a floating presentation opens with no current
+    // frame; a stale-but-connected mirror keeps its image via setStale.
     void clear();
 
     QSize minimumSizeHint() const override;
@@ -38,6 +45,7 @@ private:
 
     Spe::Lcd::Frame m_frame;
     bool m_hasFrame{false};
+    bool m_stale{false};
     QImage m_image;  // native-resolution render, integer-scaled at paint
 };
 

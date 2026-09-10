@@ -108,9 +108,10 @@ signals:
     void connectionFailed(const QString& errorString);
     void statusUpdated(const AetherSDR::Spe::Status& status);
     void lcdFrameReceived(const AetherSDR::Spe::Lcd::Frame& frame);
-    // True only after a checksum-valid LCD reply, and false again after two
-    // missed 600 ms refreshes or whenever LCD polling/transport stops. The
-    // floating menu keys use this independently of Status liveness.
+    // True only after a checksum-valid LCD reply, and false again after
+    // kLcdStaleTimeoutMs without one, or whenever LCD polling/transport
+    // stops. The floating menu keys use this independently of Status
+    // liveness.
     void lcdFreshChanged(bool fresh);
     // Fires on the first Status reply of a connection and again if the
     // reported ID ever changes (in practice: never mid-session). The GUI
@@ -176,7 +177,12 @@ private:
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
     static constexpr int kLcdPollIntervalMs = 600;
-    static constexpr int kLcdStaleTimeoutMs = kLcdPollIntervalMs * 2;
+    // Three missed refreshes, not two: on a telnet proxy link a single
+    // display reply is occasionally lost to mid-frame corruption (the
+    // parser resyncs on the next Status frame), and a one-loss margin made
+    // the freshness gate visibly flap on real stations. One survivable
+    // loss, two consecutive losses = stale.
+    static constexpr int kLcdStaleTimeoutMs = kLcdPollIntervalMs * 3;
 
     QString m_currentModelId;
 

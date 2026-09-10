@@ -343,6 +343,16 @@ With the mirror on screen, the FRONT PANEL keys stop being blind — the
 operator navigates the amplifier's menu watching the amplifier's screen,
 which is what unlocked the §4 ruling change. Those keys remain disabled
 until the first checksum-valid display arrives and are disabled again after
-two missed 600 ms refreshes. Every acknowledged keystroke requests an
-immediate display refresh and resets the periodic cadence, so a fast menu
-sequence does not have to wait a full polling interval to show its result.
+three missed 600 ms refreshes — one display frame lost to mid-frame
+corruption on a proxy link must read as a hiccup, not flap the gate. Losing
+freshness dims the last image on the glass rather than blanking it; the
+mirror only returns to the idle glass when the image is truly obsolete
+(disconnect, or a docked⇄floating switch). Every acknowledged keystroke
+requests an immediate display refresh, and the periodic cadence re-arms
+from each display *reply* rather than free-running: 600 ms is an exact
+multiple of the 100 ms Status poll, and two free-running timers can
+phase-lock with every display reply straddling a status poll on the wire,
+dropping display frames in bursts until clock drift walks the alignment
+out. Pacing from the reply folds the amplifier's variable response latency
+into the period, so no stable phase relationship can form and a fast menu
+sequence still never waits a full polling interval to show its result.

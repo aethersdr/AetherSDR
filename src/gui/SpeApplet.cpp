@@ -380,6 +380,10 @@ void SpeApplet::setFloating(bool floating)
         return;
     }
     m_floating = floating;
+    // A presentation switch starts the mirror over — whatever image is held
+    // is from the previous floating session, not merely stale, so drop it
+    // to the idle glass before the freshness gate re-applies.
+    m_lcd->clear();
     setLcdFresh(false);
     applyDensity();
     // The LCD mirror only exists in the floating presentation — start (or
@@ -395,9 +399,12 @@ void SpeApplet::setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame)
 void SpeApplet::setLcdFresh(bool fresh)
 {
     m_lcdFresh = fresh;
-    if (!fresh) {
-        m_lcd->clear();
-    }
+    // Dim, don't clear: losing freshness mid-session means refreshes
+    // stopped arriving, and blanking the mirror on every dropout made the
+    // display appear and disappear on lossy links. The keys still gate on
+    // m_lcdFresh; only the glass keeps its last image. Hard clears remain
+    // where the image is truly obsolete (disconnect, presentation switch).
+    m_lcd->setStale(!fresh);
     updateCommandsEnabled();
 }
 
