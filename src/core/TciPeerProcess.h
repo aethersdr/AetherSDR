@@ -22,6 +22,12 @@ struct TciPeerProcessInfo {
 // failure — this is decoration for a diagnostic log line, never a gate.
 // Blocking and potentially slow (a per-process descriptor sweep): call it
 // off the GUI thread.
+//
+// Same-user only: on Linux and macOS the sweep is restricted to processes
+// owned by this uid (checked, not merely a side effect of permissions).  On
+// Windows the kernel names the owning pid directly and the only limit is
+// OpenProcess() rights — an elevated instance can therefore name a client
+// running in another user's session.
 TciPeerProcessInfo resolveLoopbackPeerProcess(const QHostAddress& peerAddr,
                                              quint16 peerPort);
 

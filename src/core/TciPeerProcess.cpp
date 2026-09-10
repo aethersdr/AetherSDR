@@ -5,12 +5,18 @@
 #include <cstring>
 
 #if defined(Q_OS_LINUX)
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QTextStream>
+#include <QtEndian>
 #include <climits>
+#include <sys/stat.h>
 #include <unistd.h>
 #elif defined(Q_OS_MACOS)
 #include <libproc.h>
@@ -50,18 +56,18 @@ bool sameHost(const QHostAddress& a, const QHostAddress& b)
 #if defined(Q_OS_LINUX)
 
 // /proc/net/tcp{,6} print each 32-bit word of the address as %08X of the
-// native (little-endian) value, so "0100007F" is 127.0.0.1 and a v4-mapped
-// loopback is "0000000000000000FFFF00000100007F".  Undo that word by word.
+// word as stored in memory (the kernel's __be32, printed as a native
+// integer), so on a little-endian host "0100007F" is 127.0.0.1 and a
+// v4-mapped loopback is "0000000000000000FFFF00000100007F".  Undo it by
+// reading each word back as a native integer: its bytes, in memory order,
+// are the address in network order — correct on either endianness.
 QHostAddress parseProcNetAddress(const QString& hex)
 {
     if (hex.size() == 8) {
         bool ok = false;
         const quint32 w = hex.toUInt(&ok, 16);
         if (!ok) return {};
-        // Bytes of the LE word in memory order are the IPv4 octets.
-        const quint32 v4 = ((w & 0xFF) << 24) | ((w & 0xFF00) << 8)
-                         | ((w & 0xFF0000) >> 8) | (w >> 24);
-        return QHostAddress(v4);
+        return QHostAddress(qFromBigEndian<quint32>(w));
     }
     if (hex.size() == 32) {
         Q_IPV6ADDR a6{};
@@ -69,19 +75,22 @@ QHostAddress parseProcNetAddress(const QString& hex)
             bool ok = false;
             const quint32 w = hex.mid(i * 8, 8).toUInt(&ok, 16);
             if (!ok) return {};
-            a6[i * 4 + 0] = static_cast<quint8>(w & 0xFF);
-            a6[i * 4 + 1] = static_cast<quint8>((w >> 8) & 0xFF);
-            a6[i * 4 + 2] = static_cast<quint8>((w >> 16) & 0xFF);
-            a6[i * 4 + 3] = static_cast<quint8>(w >> 24);
+            memcpy(&a6[i * 4], &w, sizeof(w));
         }
         return QHostAddress(a6);
     }
     return {};
 }
 
-// The client's OWN row has local_address == our peer endpoint.  tcp6 first:
-// on an Any-bound listener the common loopback-IPv4 client lives there in
-// v4-mapped form, not in /proc/net/tcp.
+// The client's OWN row has local_address == our peer endpoint.  Both files
+// are needed: an AF_INET client lives in /proc/net/tcp even when our
+// Any-bound listener reports it as ::ffff:127.0.0.1 (that v4-mapped row in
+// tcp6 is OUR accepted socket, whose local port is the listen port), while a
+// ::1 or dual-stack client lives in /proc/net/tcp6.  A TIME_WAIT or
+// otherwise orphaned row for the same local port carries inode 0 and can be
+// listed ahead of the live one (measured: a client that reused its source
+// port listed "st 06 inode 0" first every time), so a zero inode is skipped,
+// not returned.
 bool findSocketInode(const QHostAddress& peer, quint16 port, quint64* inodeOut)
 {
     for (const char* path : {"/proc/net/tcp6", "/proc/net/tcp"}) {
@@ -97,7 +106,9 @@ bool findSocketInode(const QHostAddress& peer, quint16 port, quint64* inodeOut)
             bool ok = false;
             if (loc[1].toUShort(&ok, 16) != port || !ok) continue;
             if (!sameHost(parseProcNetAddress(loc[0]), peer)) continue;
-            *inodeOut = col[9].toULongLong();
+            const quint64 inode = col[9].toULongLong();
+            if (inode == 0) continue;   // TIME_WAIT/orphaned row, same port
+            *inodeOut = inode;
             return true;
         }
     }
@@ -127,10 +138,12 @@ QString rawLinkTarget(const QString& linkPath)
 // Home-built binaries appear in no .list and stay version-less.  rpm's
 // database is not plain text (sqlite blobs), so non-dpkg distros remain a
 // follow-up.  Runs on the resolver's worker thread, like the /proc sweep.
-QString dpkgVersionForExecutable(const QString& exePath)
+QString dpkgVersionForExecutableUncached(const QString& exePath)
 {
     if (exePath.isEmpty()) return {};
-    const QByteArray needle = exePath.toUtf8() + '\n';
+    // Every .list starts with the "/." root entry, so an exe path is always
+    // a later line: one "\n<path>\n" needle covers it.
+    const QByteArray needle = '\n' + exePath.toUtf8() + '\n';
     QString pkg;
     QDirIterator it(QStringLiteral("/var/lib/dpkg/info"),
                     {QStringLiteral("*.list")}, QDir::Files);
@@ -138,7 +151,7 @@ QString dpkgVersionForExecutable(const QString& exePath)
         QFile f(it.next());
         if (!f.open(QIODevice::ReadOnly)) continue;
         const QByteArray all = f.readAll();
-        if (!all.startsWith(needle) && !all.contains(QByteArray("\n") + needle))
+        if (!all.contains(needle))
             continue;
         pkg = QFileInfo(f.fileName()).fileName();
         pkg.chop(5);                                    // ".list"
@@ -163,6 +176,31 @@ QString dpkgVersionForExecutable(const QString& exePath)
     return {};
 }
 
+// The dpkg sweep reads every installed package's file list — thousands of
+// files on a desktop — and a TCI client reconnects far more often than its
+// binary changes, so remember the answer per executable.  The exe's mtime is
+// part of the key: a package upgrade replaces the file, which invalidates
+// the entry without any explicit expiry.  Worker-thread callers only, hence
+// the mutex.
+QString dpkgVersionForExecutable(const QString& exePath)
+{
+    if (exePath.isEmpty()) return {};
+    const QString key = exePath + QLatin1Char('@')
+        + QString::number(QFileInfo(exePath).lastModified().toSecsSinceEpoch());
+    static QMutex mutex;
+    static QHash<QString, QString> cache;
+    {
+        QMutexLocker lock(&mutex);
+        const auto hit = cache.constFind(key);
+        if (hit != cache.constEnd()) return hit.value();
+    }
+    const QString version = dpkgVersionForExecutableUncached(exePath);
+    QMutexLocker lock(&mutex);
+    if (cache.size() > 64) cache.clear();   // bounded; a handful of clients in practice
+    cache.insert(key, version);
+    return version;
+}
+
 TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
 {
     TciPeerProcessInfo info;
@@ -170,15 +208,24 @@ TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
     if (!findSocketInode(peer, port, &inode) || inode == 0) return info;
     const QString target = QStringLiteral("socket:[%1]").arg(inode);
 
-    // Same-user processes only (unprivileged readlink on /proc/<pid>/fd) —
-    // the normal case for a client the operator started.  Anything else just
-    // fails to resolve.
+    // This user's processes only — checked, not assumed: a client the
+    // operator started is the case #5087 is about, and an unprivileged
+    // readlink on another user's /proc/<pid>/fd would fail anyway, but an
+    // instance running as root or with CAP_SYS_PTRACE could read everyone's
+    // descriptor tables.  The uid of /proc/<pid> is the process owner, so
+    // the sweep never looks inside a process this user does not own (same
+    // guarantee the macOS backend gets from PROC_UID_ONLY).
+    const uid_t uid = ::getuid();
     const QDir proc(QStringLiteral("/proc"));
     const QStringList pids = proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString& pid : pids) {
         bool numeric = false;
         pid.toInt(&numeric);
         if (!numeric) continue;
+        struct stat st {};
+        if (::stat(QFile::encodeName(QStringLiteral("/proc/") + pid).constData(), &st) != 0
+            || st.st_uid != uid)
+            continue;
         const QDir fdDir(QStringLiteral("/proc/%1/fd").arg(pid));
         const QStringList fds = fdDir.entryList(QDir::Files | QDir::System
                                                 | QDir::NoDotAndDotDot);
@@ -241,7 +288,7 @@ TciPeerProcessInfo resolveMac(const QHostAddress& peer, quint16 port)
     // started is the case #5087 is about, and other users' processes would
     // refuse the fd listing anyway. Listing by uid keeps the sweep to what
     // it can read and says so in the code (maintainer ruling on #5130); the
-    // Linux sweep is same-user by the same effect (unprivileged readlink).
+    // Linux sweep checks the owner of each /proc/<pid> for the same reason.
     const uid_t uid = getuid();
     int bytes = proc_listpids(PROC_UID_ONLY, uid, nullptr, 0);
     if (bytes <= 0) return info;
@@ -306,8 +353,9 @@ QString fileVersionString(const QString& exePath)
     // same semantics as the macOS backend's CFBundleShortVersionString.
     // ProductVersion before FileVersion because that is where build metadata
     // lives (WSJT-X: "3.0.1 c04dd8"). The numeric VS_FIXEDFILEINFO quad is
-    // only a fallback for exes with no string table; its 4-part shape is
-    // masked by the log sanitizer's IPv4 rule, authored strings are not.
+    // only a fallback for exes with no string table.  (Any 4-part form,
+    // authored or numeric, survives the log sanitizer because the identity
+    // line spells the field version="…", which its IPv4 rule exempts.)
     // Candidate string-table blocks: the declared Translation pairs, then the
     // standard en-US and language-neutral Unicode blocks.  The fallbacks are
     // load-bearing: real exes ship a Translation entry that does not match
@@ -370,6 +418,7 @@ bool findOwnerPid(const QHostAddress& peer, quint16 port, DWORD* pidOut)
                 const MIB_TCPROW_OWNER_PID& r = t->table[i];
                 if (static_cast<quint16>(r.dwLocalPort) != wantPort) continue;
                 if (!sameHost(QHostAddress(ntohl(r.dwLocalAddr)), peer)) continue;
+                if (r.dwOwningPid == 0) continue;   // TIME_WAIT rows own no process
                 *pidOut = r.dwOwningPid;
                 return true;
             }
@@ -389,6 +438,7 @@ bool findOwnerPid(const QHostAddress& peer, quint16 port, DWORD* pidOut)
                 Q_IPV6ADDR a6{};
                 memcpy(&a6, r.ucLocalAddr, sizeof(a6));
                 if (!sameHost(QHostAddress(a6), peer)) continue;
+                if (r.dwOwningPid == 0) continue;   // TIME_WAIT rows own no process
                 *pidOut = r.dwOwningPid;
                 return true;
             }

@@ -132,6 +132,45 @@ QString tciCommandName(const QString& message)
 // "no TX slice" sentinel semantics are unchanged (see the broadcastPower
 // call site): -1, not 0, because trx 0 is a legitimate TX slice.
 
+// One spelling per client. An Any-bound listener reports a loopback IPv4
+// client as ::ffff:127.0.0.1 and a ::1 client as ::1; the Network
+// Diagnostics table collapses both to 127.0.0.1 so the saved alias key is
+// stable, and the identity log line uses the same form so a bundle line and
+// a dialog screenshot name one client one way (#5087).
+QHostAddress normalisedPeerAddress(QHostAddress ha)
+{
+    bool isV4 = false;
+    const quint32 v4 = ha.toIPv4Address(&isV4);
+    if (isV4)
+        ha = QHostAddress(v4);
+    else if (ha.isLoopback())
+        ha = QHostAddress(QHostAddress::LocalHost);
+    return ha;
+}
+
+// A process name is text the client chose (/proc/<pid>/comm via
+// prctl(PR_SET_NAME), proc_name on macOS), and the identity line is emitted
+// .noquote() so its key="value" grammar survives the log sanitizer. Escape
+// the characters that could forge a record — a quote, a backslash, a line
+// break — so a name can never close the field or start a new line (#5087).
+QString logFieldValue(const QString& raw)
+{
+    QString out;
+    out.reserve(raw.size());
+    for (const QChar c : raw) {
+        if (c == QLatin1Char('"') || c == QLatin1Char('\\')) {
+            out += QLatin1Char('\\');
+            out += c;
+        } else if (c.unicode() < 0x20 || c.unicode() == 0x7F) {
+            out += QStringLiteral("\\x%1").arg(static_cast<int>(c.unicode()), 2, 16,
+                                               QLatin1Char('0'));
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 TciServer::TciServer(RadioModel* model, QObject* parent)
@@ -840,25 +879,28 @@ void TciServer::resolvePeerProcess(QWebSocket* ws)
         const TciPeerProcessInfo info = watcher->result();
         watcher->deleteLater();
         if (!guard || !info.resolved) return;   // decoration, never a gate
-        for (auto& cs : m_clients) {
-            if (cs.socket != guard) continue;   // socket may have gone
-            cs.processName    = info.name;
-            cs.processExe     = info.exePath;
-            cs.processVersion = info.version;
-            // Name and version only. The executable path stays in memory for
-            // the Network Diagnostics tooltip but is never logged: a per-user
-            // install path carries the OS account name into a support bundle,
-            // and the path adds nothing to "which client, which version"
-            // (maintainer ruling on #5130).
-            qCInfo(lcCat).noquote().nospace()
-                << "TciServer: client " << peerAddr.toString() << ':' << peerPort
-                << " process=\"" << info.name << "\""
-                << (info.version.isEmpty()
-                        ? QString()
-                        : QStringLiteral(" version=\"%1\"").arg(info.version));
-            emit clientsChanged();
-            return;
-        }
+        ClientState* cs = clientStateFor(guard); // socket may have gone
+        if (!cs) return;
+        cs->processName    = info.name;
+        cs->processExe     = info.exePath;
+        cs->processVersion = info.version;
+        // Name and version only. The executable path stays in memory for
+        // the Network Diagnostics tooltip but is never logged: a per-user
+        // install path carries the OS account name into a support bundle,
+        // and the path adds nothing to "which client, which version"
+        // (maintainer ruling on #5130). The version field is spelled
+        // version="…" on purpose: the log sanitizer's IPv4 rule exempts
+        // exactly that prefix, so a 4-part authored version ("2.2.159.0")
+        // reaches the bundle intact instead of as "*.*.*. 0".
+        qCInfo(lcCat).noquote().nospace()
+            << "TciServer: client " << normalisedPeerAddress(peerAddr).toString()
+            << ':' << peerPort
+            << " process=\"" << logFieldValue(info.name) << "\""
+            << (info.version.isEmpty()
+                    ? QString()
+                    : QStringLiteral(" version=\"%1\"")
+                          .arg(logFieldValue(info.version)));
+        emit clientsChanged();
     });
     watcher->setFuture(QtConcurrent::run(resolveLoopbackPeerProcess,
                                          peerAddr, peerPort));
@@ -946,14 +988,7 @@ QVector<TciClientInfo> TciServer::connectedClients() const
         // alias key: collapse IPv4-mapped IPv6 (::ffff:a.b.c.d) to plain
         // IPv4, and IPv6 loopback (::1) to 127.0.0.1. Otherwise the same
         // physical client could key its saved Name under two spellings.
-        QHostAddress ha = cs.socket->peerAddress();
-        bool isV4 = false;
-        const quint32 v4 = ha.toIPv4Address(&isV4);
-        if (isV4)
-            ha = QHostAddress(v4);
-        else if (ha.isLoopback())
-            ha = QHostAddress(QHostAddress::LocalHost);
-        info.peerAddress  = ha.toString();
+        info.peerAddress  = normalisedPeerAddress(cs.socket->peerAddress()).toString();
         info.peerPort     = cs.socket->peerPort();
         info.processName  = cs.processName;
         info.processExe   = cs.processExe;
@@ -1034,6 +1069,10 @@ QJsonObject TciServer::disconnectSnapshot(
         {QStringLiteral("lastSocketErrorAgeMs"), age(client.lastSocketErrorAtMs)},
         {QStringLiteral("lastRxCommand"), client.lastRxCommand},
         {QStringLiteral("lastTxCommand"), client.lastTxCommand},
+        // Which program went away (#5087); empty when never resolved. The
+        // executable path is deliberately absent — see resolvePeerProcess().
+        {QStringLiteral("processName"), client.processName},
+        {QStringLiteral("processVersion"), client.processVersion},
         {QStringLiteral("ptt"), QJsonObject{
             {QStringLiteral("owned"), client.socket == m_tciPttClient},
             {QStringLiteral("requestedOn"), m_tciPttRequestedOn},
