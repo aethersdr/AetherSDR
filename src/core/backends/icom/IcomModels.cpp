@@ -683,7 +683,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kToneSquelchFmAccessModes,
                                        false, true, true, false, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
-        .rxAntenna = RxAntennaProfile{true, false},
+        .rxAntenna = RxAntennaProfile{true, true},
         .setMenu = SetMenuProfile{267, 89},
         .scope = ScopeCommandProfile{true, true, true, true, true},
         .meters = MeterCalibrationProfile{

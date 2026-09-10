@@ -26,6 +26,16 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+// Frequency observations describe the state owned by the backend, not a
+// promise that a queued hardware/DSP write has completed. Zero bounds mean
+// this backend has not established a range for the headless control method.
+struct SliceFrequencyControl {
+    enum class Authority { Unknown, Radio, Engine };
+    Authority authority{Authority::Unknown};
+    qint64 minimumHz{0};
+    qint64 maximumHz{0};
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -118,6 +128,12 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
+    // Independent slice creation on an existing pan through the neutral backend
+    // hook. RadioModel consults this only without a command plane; Flex and Sim
+    // retain their command adapters regardless of this value. Do not use this
+    // field alone to gate +RX in the UI. Separate from maxSlices: a paired
+    // receiver/pan topology can support several slices but not this operation.
+    bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
@@ -134,6 +150,7 @@ struct RadioCapabilities {
     // that told them it was not available.
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
+    SliceFrequencyControl sliceFrequencyControl;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only
@@ -323,6 +340,17 @@ struct RadioCapabilities {
     // NOT "does this radio have a frequency error" — every radio does. What
     // varies is whether correcting it is the client's job.
     bool hostFrequencyCalibration = false;
+
+    // The client corrects a REAL DDC0 CIC/decimation droop on this radio's
+    // own panadapter samples (AnanDroopCorrection.h) because nothing in the
+    // wire protocol characterises or corrects it on-radio. True only for the
+    // ANAN-G2 today. Gates the Droop Correction settings tab and the
+    // `droopcal` bridge verb, mirroring hostFrequencyCalibration above.
+    //
+    // NOT "does this radio have a droop" — the physics is per-model, not
+    // per-family-policy the way frequency correction is. What varies is
+    // whether the client has measured and can correct it.
+    bool hostDroopCalibration = false;
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot

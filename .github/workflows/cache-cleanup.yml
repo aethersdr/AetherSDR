@@ -12,9 +12,11 @@ name: Cache cleanup
 # that made the size limit configurable introduced a retention limit (days)
 # alongside it, manageable by enterprise/org/repo admins in Actions settings.
 # Whether it can be lowered on this org's Free plan is undocumented and the API
-# does not expose it, so this workflow assumes the default and does the job in
-# code. If retention is ever lowered, revisit whether prune-main is still
-# earning its keep — a short retention does much of the same work for free.
+# does not expose it (GET repos/{owner}/{repo}/actions/cache/usage-policy
+# returns 404 here, probed 2026-09-10 — don't re-run the trip), so this
+# workflow assumes the default and does the job in code. If retention is ever
+# lowered, revisit whether prune-main is still earning its keep — a short
+# retention does much of the same work for free.
 #
 # One cause is handled here — SUPERSEDED main entries. ci.yml saves a compiler
 # cache on every green main build, keyed on run_id because actions/cache entries
@@ -23,48 +25,61 @@ name: Cache cleanup
 # unreachable it is never accessed again, so nothing refreshes its LRU position
 # and nothing deletes it.
 #
-# That adds up faster than it looks. Measured entry sizes on refs/heads/main,
-# with the Linux cap raised to 2000M:
+# That adds up faster than it looks. Entry sizes on refs/heads/main once each
+# cache has filled to its cap, measured 2026-09-01..05 from the "Save" steps:
 #
-#   ccache-linux-build-   ~1.1 GiB      sccache-windows-   ~0.38 GiB
-#   ccache-ccache-macos-  ~0.18 GiB     ccache-sid-canary- ~0.57 GiB
+#   ccache-linux-build-   ~1.88 GiB     sccache-windows-   ~1.02 GiB
+#   ccache-ccache-macos-  ~0.44 GiB     ccache-sid-canary- ~0.94 GiB
 #
-# so a main CI run writes ~1.66 GiB across its three platforms, ~9.2x/day —
-# ~15 GiB/day of entries that are unreachable within the hour. Unmanaged, that
-# pins the repo at its allowance on its own, holding well under a day of caches
-# nothing will ever read.
+# (The figures this header carried before — 1.1 / 0.38 / 0.18 / 0.57 — were
+# taken on 2026-08-15, days after #5008, while the caches were still filling.
+# ccache and sccache both compress their own objects, so the entry is ~95% of
+# the directory, not the ~55% that earlier estimate assumed.)
 #
-# NOT handled here: caches on refs/pull/N/merge, which become unreadable when
-# the PR closes. A job for those was written and pulled back out before merge —
-# `pull_request` grants a read-only GITHUB_TOKEN for fork PRs and `permissions:`
-# cannot elevate it, so `gh cache delete` 403s; 22 of 25 open PRs are from
-# forks, so it would have failed on nearly every close. It also may not be
-# needed: PRs only WRITE a dependency cache (Qt, FFTW, DeepFilterNet) when the
-# key is not already readable, and the reason they were doing so is that main's
-# copy kept being evicted by the churn ci.yml's save-on-main split removes. Left
-# for a follow-up that can measure whether anything is still accumulating there,
-# and settle the trigger (a scheduled sweep avoids the privileged-trigger
-# question entirely).
+# So a main CI run writes ~4.3 GiB across its four compiler caches, ~9.2x/day
+# — ~40 GiB/day of entries that are unreachable within the hour. Unmanaged,
+# that pins the repo at its allowance on its own, holding a few hours of
+# caches nothing will ever read.
+#
+# The other causes are caches on refs that nothing will run against again:
+# refs/pull/N/merge once the PR closes, and refs/tags/v* once the release
+# workflows that ran on that tag have finished. Both are handled by
+# sweep-dead-refs below, on a schedule rather than on an event. See that job
+# for why the trigger is what it is.
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  # Daily, plus on demand. See sweep-dead-refs for why this is scheduled
+  # rather than fired from `pull_request: closed`.
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 # actions:write is the only elevated scope and it cannot reach anything outside
 # the cache API. It lives in this workflow rather than as a step in ci.yml
 # specifically so ci.yml keeps `contents: read` — nothing that compiles
 # PR-authored code ever holds a write scope.
 #
-# workflow_run runs in the BASE repository context with a full token even when
-# the run that triggered it came from a fork, which is why this job works where
-# a `pull_request`-triggered one would not.
+# pull-requests:read is a read scope, needed only by sweep-dead-refs to ask
+# whether a PR is still open. Listing it is not optional: naming ANY scope in a
+# `permissions:` block sets every unnamed one to `none`, and the job's lookup
+# would then fail on every ref while the job stayed green.
+#
+# All three triggers run in the BASE repository context with a full token:
+# workflow_run does so even when the run that triggered it came from a fork,
+# and schedule / workflow_dispatch only ever fire from the default branch. That
+# is why both jobs work where a `pull_request`-triggered one would not.
 permissions:
   actions: write
   contents: read
+  pull-requests: read
 
 jobs:
   prune-main:
+    # Only on a main push run — a scheduled or manual invocation is for the
+    # sweep below and has no new main entry to supersede anything.
     # workflow_run.event == 'push', NOT head_branch == 'main'. A fork's default
     # branch is usually also called main, so a head_branch test fires on fork PR
     # runs too — harmless in effect (the prune is idempotent and no fork run
@@ -80,11 +95,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          # Keep 2, not 1. Only the newest is ever restored, so the second is
-          # insurance: if a save lands a sparse or corrupt entry, deleting it by
-          # hand falls back to a known-good one instead of a cold build for
-          # everybody until the next green main run.
-          KEEP: "2"
+          # Keep 1. This was 2 from 2026-08-15 to 2026-09-10: only the newest
+          # is ever restored, and the second was insurance — if a save landed
+          # a sparse or corrupt entry, deleting it by hand would fall back to a
+          # known-good one instead of a cold build until the next green main
+          # run. That insurance was never used, and it cost more than it
+          # covered: with every cache filled to its cap the doubled set is
+          # ~8.6 GiB on main alone, which with the ~1.8 GiB of dependency
+          # entries is OVER the 10 GiB allowance before a PR writes anything.
+          # GitHub then evicts by LRU, the largest entry (Linux ccache) goes
+          # first, and every main run until the next green save is a cold
+          # build — 27–37 min instead of 3–6, on 10 of the 50 main runs between
+          # 2026-09-06 and 2026-09-10. A corrupt-entry recovery would have
+          # been ONE such cold build; the insurance was causing them weekly.
+          #
+          # The sparse case the insurance guarded against is closed by the
+          # `success()` gate on the Linux and Windows saves (ci.yml, "Save
+          # ccache objects" / "Save sccache objects"). It is NOT closed on
+          # macOS: ci.yml's "Set up ccache" step documents that the
+          # ccache-action saves from a post-job hook with no `success()` half,
+          # so a failed main build there can still write a sparse entry and
+          # KEEP=1 leaves no fallback. Accepted — that entry is 0.44 GiB on the
+          # lightest config and one cold macOS rebuild is the whole cost. If a
+          # corrupt entry ever lands on any prefix, `gh cache delete` it and
+          # take the one cold rebuild; do not go back to 2 without re-doing
+          # the budget in ci.yml's CCACHE_MAXSIZE comment.
+          KEEP: "1"
         run: |
           set -euo pipefail
 
@@ -155,6 +191,205 @@ jobs:
         # needed `if: always()` + `needs:`, which fired on every CI completion —
         # ~35 runners a day to print one line, nearly all of them after a prune
         # that had been skipped.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/actions/cache/usage" \
+            --jq '"Repo Actions cache: \(.active_caches_count) entries, \((.active_caches_size_in_bytes/1073741824)*100|floor/100) GiB of 10 GiB allowance"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ── Dead cause 2: the PR closed ─────────────────────────────────────────────
+  # A PR's caches live on refs/pull/N/merge, a ref only that PR can read. Once it
+  # closes nothing can ever read them again, but they hold budget for up to the
+  # full 7-day retention.
+  #
+  # ci.yml saves nothing from a PR ref any more: #5008 gave the COMPILER
+  # caches a restore-on-PR / save-on-main split, and #5548 gave the
+  # content-hash-keyed DEPENDENCY caches (Qt, FFTW3, DeepFilterNet3,
+  # qtkeychain) the same. Before that second step, a PR wrote a dependency
+  # entry whenever main's copy was unreadable — and with the repo at its
+  # allowance, LRU evicted main's copy between runs, so on 2026-09-10 four
+  # open PRs each held the same 1,297 MiB Qt entry main holds, plus a merged
+  # PR holding 1,720 MiB nothing could read. This step is now the backstop for
+  # whatever other PR-triggered workflows still write (setup-python and the
+  # like — small) and for anything that regresses to a bidirectional
+  # `actions/cache` step in ci.yml. If it starts reporting large sweeps
+  # again, look for that regression before anything else.
+  #
+  # WHY SCHEDULED, not `pull_request: closed`
+  #
+  # The obvious trigger cannot work. For a `pull_request` event whose head is a
+  # fork, GitHub issues a read-only GITHUB_TOKEN and a `permissions:` block can
+  # only lower that ceiling, never raise it — so actions:write is not granted,
+  # `gh cache delete` returns 403, and the job fails. Most closed PRs here come
+  # from forks (44 of the last 60 on 2026-09-10), so that is the common case.
+  #
+  # `pull_request_target` would get a writable token and is the documented-safe
+  # shape for a job that checks nothing out. It is deliberately not used: a
+  # schedule needs no privileged trigger at all, is idempotent, and self-heals —
+  # it picks up PRs closed while the workflow was broken, renamed or disabled,
+  # which an event-driven job silently misses forever.
+  #
+  # The cost is latency: a closed PR's caches live until the next run, and while
+  # the repo is over its allowance they compete with main's live entries for LRU.
+  # If that bites, the sweep is idempotent and cheap enough to also hang off the
+  # workflow_run trigger above; the schedule then stays as the backstop.
+  #
+  # A PR that is closed and later REOPENED can read its ref again, but this job
+  # will already have deleted it; the reopened PR's first run re-saves its
+  # dependency caches (~1.7 GiB across platforms). Accepted, not a bug.
+  #
+  # ── Dead cause 3: the tag's release run is over ─────────────────────────────
+  # appimage.yml, macos-dmg.yml and windows-installer.yml run on push:tags only.
+  # main never runs them, so the keys they cache (Opus, FFTW3, hidapi, Vulkan
+  # SDK, macos-deps, the DMG legs' ccache) exist ONLY on tag refs — and a run
+  # on refs/tags/v26.9.2 can read its own ref and main, never v26.9.1's. Every
+  # release therefore writes a full set that no later release can read: ~6
+  # entries from windows-installer, ~4 per DMG leg, one from appimage, held
+  # for the 7-day retention. The sharpest is macos-dmg's ccache-action, which
+  # append-timestamps its key and so writes a fresh ~0.5 GiB entry per leg per
+  # release under a prefix prune-main does not match.
+  #
+  # The one thing that CAN read a tag's caches is a re-run of the same tag's
+  # workflow — a retry after a flaky release step, typically within hours — so
+  # the rule is last-access age, not "not the newest tag": a tag-ref entry that
+  # nothing has touched for TAG_IDLE_HOURS is dead. 48 h is long enough for a
+  # next-morning retry and short enough that a release's set is gone before
+  # it can crowd main's compiler caches for the rest of the week.
+  sweep-dead-refs:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # A dispatch overlapping the cron would run two sweeps over the same refs;
+    # harmless to data but the two summaries would double-count. Queue instead.
+    concurrency:
+      group: cache-cleanup-sweep
+      cancel-in-progress: false
+    steps:
+      - name: Delete caches on dead refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_IDLE_HOURS: "48"
+        run: |
+          set -euo pipefail
+
+          # ONE listing serves both sweeps. gh paginates, so a high cap is
+          # free; what matters is which END gets cut if the cap is ever hit.
+          # Both predicates below select the LEAST recently accessed entries
+          # (a closed PR's are idle by definition; the tag rule IS idle time),
+          # so list oldest-access first: a truncation then drops entries we
+          # would have kept anyway. gh's default is newest first, which would
+          # drop exactly the candidates. 36 entries on 2026-09-10 (the usage
+          # API counted 23 active; the two endpoints differ), ~5 per open PR.
+          # Logged below if the cap is hit, because a silent truncation would
+          # look exactly like "nothing to clean".
+          LIMIT=500
+          caches=$(gh cache list --limit "$LIMIT" --sort last_accessed_at --order asc \
+                     --json id,ref,sizeInBytes,lastAccessedAt)
+          total=$(printf '%s' "$caches" | jq 'length')
+          [ "$total" -lt "$LIMIT" ] || echo "::warning::cache list hit the $LIMIT limit; some entries not examined this run"
+
+          # last_accessed_at, deliberately — the opposite of prune-main's
+          # created_at. There "newest written" is the entry to keep; here the
+          # question is whether anything is still READING the entry, and a
+          # re-run of the tag's workflow is the only thing that could be.
+          cutoff=$(date -u -d "-${TAG_IDLE_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+
+          # One jq pass emits, per candidate ref: kind, ref, total bytes, and
+          # id:size pairs — the sizes travel with the ids so the delete loop
+          # never re-scans the listing. Only refs/pull/N/merge and refs/tags/*
+          # are candidates; main's entries are prune-main's. The idle test is
+          # a string compare on RFC3339 UTC text, correct for the Z-suffixed
+          # form the API returns; jq orders null BELOW every string, so a
+          # missing lastAccessedAt is excluded explicitly rather than read as
+          # infinitely old (which would sweep a release's set while it is
+          # still retry-able).
+          candidates=$(printf '%s' "$caches" | jq -r --arg cutoff "$cutoff" '
+            [ .[] | select(.ref | test("^refs/pull/[0-9]+/merge$")) | . + {kind: "pr"} ]
+            + [ .[] | select(.ref | startswith("refs/tags/"))
+                    | select(.lastAccessedAt != null and .lastAccessedAt < $cutoff)
+                    | . + {kind: "tag"} ]
+            | group_by(.ref) | .[]
+            | "\(.[0].kind)\t\(.[0].ref)\t\(map(.sizeInBytes) | add)\t\(map("\(.id):\(.sizeInBytes)") | join(","))"')
+
+          if [ -z "$candidates" ]; then
+            echo "No PR-scoped caches and no tag-ref caches idle for ${TAG_IDLE_HOURS}h — nothing to sweep."
+            exit 0
+          fi
+
+          # Delete every id in one ref's group. By id, which is unambiguous;
+          # deleting by key would need --ref and could match another ref's
+          # identically-keyed entry. A single 404 (LRU took the entry between
+          # the list and now) neither aborts the loop nor counts toward the
+          # total. Leaves the bytes actually freed in ref_freed.
+          sweep_group() {
+            local pairs=$1 label=$2 pair id size
+            ref_freed=0
+            for pair in ${pairs//,/ }; do
+              id=${pair%%:*}
+              size=${pair##*:}
+              if gh cache delete "$id"; then
+                ref_freed=$(( ref_freed + size ))
+              else
+                echo "  $label: delete of $id failed or already gone"
+              fi
+            done
+          }
+
+          freed_bytes=0
+          swept=0
+          unresolved=0
+          errlog="$RUNNER_TEMP/pr-view.err"
+          : > "$errlog"
+          while IFS=$'\t' read -r kind ref bytes pairs; do
+            mib=$(( bytes / 1048576 ))
+            case "$kind" in
+              pr)
+                num=${ref#refs/pull/}
+                num=${num%/merge}
+                # An OPEN PR's caches are still live — leave them. Anything
+                # else (CLOSED or MERGED) can never be read again.
+                state=$(gh pr view "$num" --json state --jq .state 2>>"$errlog" || echo UNKNOWN)
+                if [ "$state" = "OPEN" ]; then
+                  continue
+                fi
+                if [ "$state" = "UNKNOWN" ]; then
+                  # A cache ref with no resolvable PR. Left alone deliberately:
+                  # deleting on a failed lookup would turn a transient API
+                  # error into data loss, and the next run retries for free.
+                  # Counted and surfaced below so a PERSISTENT cause (a
+                  # missing scope, a rate limit) cannot hide behind the same
+                  # message run after run.
+                  echo "  #$num: state unresolved, skipping this run"
+                  unresolved=$(( unresolved + 1 ))
+                  continue
+                fi
+                echo "#$num ($state): sweeping ${mib} MiB"
+                label="#$num"
+                ;;
+              tag)
+                echo "$ref: sweeping ${mib} MiB (idle > ${TAG_IDLE_HOURS}h)"
+                label=$ref
+                ;;
+            esac
+            sweep_group "$pairs" "$label"
+            if [ "$ref_freed" -gt 0 ]; then
+              freed_bytes=$(( freed_bytes + ref_freed ))
+              swept=$(( swept + 1 ))
+            fi
+          done <<< "$candidates"
+
+          echo "Swept $swept dead ref(s), freeing ~$(( freed_bytes / 1048576 )) MiB."
+          if [ "$unresolved" -gt 0 ]; then
+            echo "::warning::$unresolved PR state lookup(s) failed; their caches were left alone. gh stderr:"
+            cat "$errlog"
+          fi
+
+      # Same line prune-main prints, kept as a copy: a shared always() job was
+      # tried and rejected (see prune-main). If you change one, change both.
+      - name: Report repo cache usage
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

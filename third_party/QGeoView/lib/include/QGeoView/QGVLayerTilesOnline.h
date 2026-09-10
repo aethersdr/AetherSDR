@@ -26,6 +26,8 @@
 
 #include <QNetworkReply>
 
+class QGVImage;
+
 class QGV_LIB_DECL QGVLayerTilesOnline : public QGVLayerTiles
 {
     Q_OBJECT
@@ -34,8 +36,17 @@ public:
     QGVLayerTilesOnline();
     ~QGVLayerTilesOnline();
 
+    int pendingRequestCount() const;
+    quint64 decodedTileDeliveryCount() const;
+    quint64 failedTileRequestCount() const;
+
 protected:
     virtual QString tilePosToUrl(const QGV::GeoTilePos& tilePos) const = 0;
+    void onClean() override;
+    // AetherSDR: display-only tile customisation, after the original is cached.
+    // Ownership transfers to the layer through onTile().
+    virtual QGVImage* createTileImage(const QGV::GeoTilePos& tilePos,
+                                     const QImage& image);
 
 private:
     static QGV::GeoTilePos canonicalTile(const QGV::GeoTilePos& tilePos);
@@ -52,4 +63,6 @@ private:
     QMap<QGV::GeoTilePos, QNetworkReply*> mRequest;
     QMap<QGV::GeoTilePos, QList<int>> mWaiting;
     QCache<QUrl, QImage> mDecodedTileCache;
+    quint64 mDecodedTileDeliveryCount{0};
+    quint64 mFailedTileRequestCount{0};
 };

@@ -277,6 +277,32 @@ void PanadapterModel::setDisplayRates(int fps, int wfRate)
     }
 }
 
+void PanadapterModel::setRequestedFftSettings(int average, int fps)
+{
+    // Only call after dispatch. Do not emit *Reported, persist, or schedule a
+    // replay. The next valid radio publication always supersedes this intent,
+    // including a publication equal to the value before our request.
+    const bool provenanceChanged = (average >= 0 && average <= 100 && !m_averageIsRequest)
+        || (fps > 0 && fps <= 100 && !m_fpsIsRequest);
+    if (average >= 0 && average <= 100) {
+        m_averageIsRequest = true;
+        if (m_average != average) {
+            m_average = average;
+            emit averageChanged(average);
+        }
+    }
+    if (fps > 0 && fps <= 100) {
+        m_fpsIsRequest = true;
+        if (m_fps != fps) {
+            m_fps = fps;
+            emit fpsChanged(fps);
+        }
+    }
+    if (provenanceChanged) {
+        emit fftProvenanceChanged();
+    }
+}
+
 void PanadapterModel::applyStateExtension(const QVariantMap& fields)
 {
     // The Flex-specific display-pan fields, applied from the backend's
@@ -333,6 +359,8 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         bool ok = false;
         const int fps = fields.value(QStringLiteral("fps")).toInt(&ok);
         if (ok) {
+            m_radioReportedFps = fps;
+            m_fpsIsRequest = false;
             if (fps != m_fps) {
                 m_fps = fps;
                 emit fpsChanged(m_fps);
@@ -350,6 +378,8 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         bool ok = false;
         const int average = fields.value(QStringLiteral("average")).toInt(&ok);
         if (ok) {
+            m_radioReportedAverage = average;
+            m_averageIsRequest = false;
             if (average != m_average) {
                 m_average = average;
                 emit averageChanged(m_average);

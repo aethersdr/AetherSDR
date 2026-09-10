@@ -47,6 +47,11 @@
 #elif defined(HAVE_PIPEWIRE)
 #include "core/PipeWireAudioBridge.h"
 #endif
+// MainWindow.h only forward-declares the dial backend; the device lifecycle
+// handler below needs the complete type and the UlanziDialBackend alias on
+// every platform. This header does the per-platform selection itself, which
+// is what it exists for.
+#include "core/UlanziDialBackend.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -699,6 +704,11 @@ void MainWindow::updateExperimentalRadioSupport(bool connected)
 void MainWindow::wireRadioModel()
 {
     // ── Wire up radio model ────────────────────────────────────────────────
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (!connected) {
+            m_pendingDisplayWrites.flush();
+        }
+    });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
 
@@ -718,8 +728,10 @@ void MainWindow::wireRadioModel()
     // surface cannot spam the bar while still never failing silently.
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        if (connected)
+        if (connected) {
             m_commandDroppedNoticeShown = false;
+            m_sliceLifecycleNoticesShown.clear();
+        }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
             this, [this](const QString&) {
@@ -925,6 +937,20 @@ void MainWindow::wireRadioModel()
         statusBar()->showMessage(
             QString("%1 supports a maximum of %2 panadapters")
                 .arg(model).arg(limit), 4000);
+    });
+    // Same shape as the commandDropped notice above: RadioModel's qCWarning
+    // carries every occurrence; the operator sees each distinct refusal once
+    // per connect session.
+    connect(&m_radioModel, &RadioModel::sliceLifecycleFailed, this,
+            [this](const QString& operation, int, const QString& reason) {
+        const QString key = operation + QLatin1Char('\n') + reason;
+        if (m_sliceLifecycleNoticesShown.contains(key))
+            return;
+        m_sliceLifecycleNoticesShown.insert(key);
+        const QString what = operation == QLatin1String("remove")
+            ? tr("Cannot remove slice: %1").arg(reason)
+            : tr("Cannot create slice: %1").arg(reason);
+        statusBar()->showMessage(what, 6000);
     });
     connect(&m_radioModel, &RadioModel::sliceCreateFailed,
             this, [this](int limit, const QString& model) {
@@ -2536,8 +2562,9 @@ QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
 
 bool MainWindow::startAutomationBridge(const QString& sockName)
 {
-    if (m_automation && m_automation->isRunning())
-        return true;  // idempotent
+    if (m_automation) {
+        return true;  // already listening or waiting for the same async token read
+    }
 
     // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
     // endpoint; otherwise the default is PID-suffixed so two instances don't
@@ -2550,8 +2577,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                    : QStringLiteral("aethersdr-automation-%1")
                          .arg(QCoreApplication::applicationPid());
 
-    if (!m_automation)
-        m_automation = std::make_unique<AutomationServer>();
+    // Provably null here: the early return above covers every live server,
+    // listening or still waiting for its token.
+    m_automation = std::make_unique<AutomationServer>();
 
     // dumpTree reports the status-bar message (#4864) by reading a generic
     // dynamic property — core/ must not know the QStatusBar type
@@ -2621,35 +2649,98 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                 {QStringLiteral("error"), QStringLiteral("unknown device diagnostic")},
             };
         }
-#ifdef Q_OS_MAC
         if (!m_dialBackend) {
             return QJsonObject{
                 {QStringLiteral("ok"), false},
                 {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable")},
             };
         }
-        if (diagnostic == QLatin1String("ulanzi-start")) {
-            m_dialBackend->start();
-        } else if (diagnostic == QLatin1String("ulanzi-stop")) {
-            m_dialBackend->stop();
+
+        // AutoConnection executes inline on macOS (IOKit's main run loop),
+        // and queues to ExtControllers on Linux/Windows. Refuse before posting
+        // if that thread has stopped; invokeMethod alone accepts undeliverable
+        // queued calls to a QObject that still belongs to a finished thread.
+        const bool lifecycle = diagnostic != QLatin1String("ulanzi");
+        QThread* backendThread = m_dialBackend->thread();
+        bool queued = false;
+        if (lifecycle) {
+#if !defined(Q_OS_LINUX) && !defined(Q_OS_MAC) && !(defined(Q_OS_WIN) && defined(HAVE_HIDAPI))
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("supported"), false},
+                {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable in this build")},
+            };
+#endif
+            if (!backendThread || !backendThread->isRunning()) {
+                return QJsonObject{
+                    {QStringLiteral("ok"), false},
+                    {QStringLiteral("queued"), false},
+                    {QStringLiteral("error"), QStringLiteral("Ulanzi backend thread is not running")},
+                };
+            }
+            queued = backendThread != QThread::currentThread();
+            const bool accepted = diagnostic == QLatin1String("ulanzi-start")
+                ? QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                            Qt::AutoConnection)
+                : QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
+                                            Qt::AutoConnection);
+            if (!accepted) {
+                return QJsonObject{
+                    {QStringLiteral("ok"), false},
+                    {QStringLiteral("queued"), false},
+                    {QStringLiteral("error"), QStringLiteral("Ulanzi lifecycle dispatch failed")},
+                };
+            }
         }
+
+        const auto dialEnabled = [] {
+            return AppSettings::instance()
+                       .value(QStringLiteral("UlanziDialEnabled"),
+                              QStringLiteral("False"))
+                       .toString()
+                   == QLatin1String("True");
+        };
+
+        // queued means accepted for delivery, not completed. A later thread
+        // shutdown can still prevent delivery; do not report device state from
+        // before an asynchronous lifecycle request as its outcome.
+#ifdef Q_OS_MAC
         QJsonObject snapshot = m_dialBackend->diagnostics();
         snapshot[QStringLiteral("operation")] = diagnostic;
-        snapshot[QStringLiteral("enabled")] =
-            AppSettings::instance()
-                    .value(QStringLiteral("UlanziDialEnabled"),
-                           QStringLiteral("False"))
-                    .toString()
-            == QLatin1String("True");
+        snapshot[QStringLiteral("enabled")] = dialEnabled();
+        snapshot[QStringLiteral("queued")] = queued;
         return snapshot;
 #else
-        return QJsonObject{
-            {QStringLiteral("ok"), true},
-            {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
-            {QStringLiteral("supported"), false},
-            {QStringLiteral("message"),
-             QStringLiteral("Ulanzi HID diagnostics are currently macOS-only")},
-        };
+        // No diagnostics() on the Linux/Windows backends yet, so a bare
+        // `devices ulanzi` query still cannot be answered here. Report that as
+        // a REFUSAL rather than ok:true — a caller checking ok (the obvious
+        // field) previously read success from a call that did nothing at all,
+        // and only the separate supported:false said otherwise.
+        //
+        // A lifecycle call is different: dispatch was accepted, so it reports
+        // ok:true and carries what these backends can honestly answer. It
+        // does NOT carry supported:false -- no snapshot was asked for, and a
+        // script that reads `supported` as "did this work" would abort on a
+        // start that actually ran. That field belongs only on the refusal.
+        if (diagnostic == QLatin1String("ulanzi")) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
+                {QStringLiteral("supported"), false},
+                {QStringLiteral("error"),
+                 QStringLiteral("Ulanzi HID diagnostics are currently macOS-only; "
+                                "ulanzi-start and ulanzi-stop are supported here")},
+            };
+        }
+        QJsonObject result;
+        result[QStringLiteral("ok")] = true;
+        result[QStringLiteral("diagnostic")] = QStringLiteral("ulanzi");
+        result[QStringLiteral("operation")] = diagnostic;
+        // Reporting isConnected() here would describe the state BEFORE the
+        // queued request and read as a failed command, so it is left out.
+        result[QStringLiteral("queued")] = queued;
+        result[QStringLiteral("enabled")] = dialEnabled();
+        return result;
 #endif
     });
 
@@ -2660,9 +2751,17 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     QPointer<AutomationServer> guard(m_automation.get());
     const QString startName = name;
     AutomationBridgeSettings::loadToken(this, [this, guard, startName](const QString& tok) {
-        if (!guard || m_automation.get() != guard)
+        if (!guard || m_automation.get() != guard) {
             return;  // toggled off or restarted before the token arrived
-        guard->setAuthToken(tok);
+        }
+        // A token pushed while this read was pending (Rotate, or the dialog's
+        // auto-mint on enable) is newer than whatever the keychain returns —
+        // keep it, or a stale/empty read would bind the bridge with the
+        // wrong token while the Network tab shows the new one. A fresh server
+        // holds no token, so "empty" means nothing was pushed.
+        if (guard->authToken().isEmpty()) {
+            guard->setAuthToken(tok);
+        }
         if (tok.isEmpty()) {
             qWarning().noquote()
                 << "Automation bridge starting UNAUTHENTICATED — any same-user "
@@ -2672,6 +2771,24 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         if (!guard->start(startName)) {
             qWarning() << "Automation bridge failed to start (socket in use?)";
             m_automation.reset();
+            // Nothing is listening, so the persisted opt-in must not survive —
+            // otherwise every launch silently re-attempts the doomed start and
+            // the operator is never told (#4181). The env-var force-enable is
+            // not an opt-in we own; recordStartOutcome() leaves it alone then.
+            const bool forced = AutomationBridgeSettings::envForced();
+            AutomationBridgeSettings::recordStartOutcome(false, forced);
+            // On the launch path no Radio Setup dialog exists, so the result
+            // signal below can have no receiver. The status bar is the one
+            // surface always present to say why the toggle is off next time
+            // the operator looks; the server already logged errorString().
+            if (!forced) {
+                statusBar()->showMessage(
+                    QStringLiteral("Agent automation bridge could not bind its "
+                                   "socket (see the log) — the Radio Setup toggle "
+                                   "is now off."),
+                    15000);
+            }
+            emit automationBridgeStartResult(false);
             return;
         }
         // TX-automation gate — set AFTER start(), which reads
@@ -2690,8 +2807,19 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setReadOnly(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
             || AutomationBridgeSettings::readOnly());
+        // Persist at the owner that observed the successful bind. The modeless
+        // Radio Setup dialog may have closed while the token read was pending.
+        // An environment-forced start must not change the operator's opt-in.
+        AutomationBridgeSettings::recordStartOutcome(
+            true, AutomationBridgeSettings::envForced());
+        emit automationBridgeStartResult(true);
     });
-    return true;  // start initiated; the socket begins listening once the token resolves
+    // Normally the bridge is NOT listening yet — the socket binds inside the
+    // callback above, and callers wanting the outcome must watch
+    // automationBridgeStartResult. On the synchronous token paths (AETHER_MCP_TOKEN,
+    // legacy token, no keychain) the callback has already run, so a failed bind
+    // has already reset m_automation: report that rather than a stale "initiated".
+    return m_automation != nullptr;
 }
 
 void MainWindow::stopAutomationBridge()

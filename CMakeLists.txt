@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -695,8 +695,11 @@ set(CORE_SOURCES
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
-    src/core/control/ControlService.cpp       # aetherd v1 observe-only dispatch
+    src/core/control/ControlService.cpp       # aetherd v1 typed dispatch
+    src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
+    src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/ModelSliceFrequencyTarget.cpp # validated non-keying intents
     src/core/control/RadioCatalogue.cpp       # bounded normalized discovery resource
     src/core/control/LocalControlServer.cpp   # current-user local transport
     src/core/discovery/RadioDiscoverySource.h  # socket-free discovery interface (AUTOMOC)
@@ -723,6 +726,8 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)
     src/core/backends/anan/AnanSpectrum.cpp  # aetherd ANAN P2 Phase 1b (FFT panadapter, FFTW)
     src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/anan/AnanDroopCorrection.cpp # ANAN DDC0 droop compensation (pure apply math)
+    src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
@@ -742,6 +747,7 @@ set(CORE_SOURCES
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
+    src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -757,6 +763,7 @@ set(CORE_SOURCES
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
+    src/core/SharedCapturePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
@@ -825,6 +832,7 @@ set(CORE_SOURCES
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
+    src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
     src/core/RadioCertification.cpp
@@ -979,6 +987,7 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
     src/gui/WindowGeometryRestore.cpp
+    src/gui/WindowShowState.cpp
     src/gui/MainWindow_Controllers.cpp
     src/gui/MainWindow_DspApplets.cpp
     src/gui/MainWindow_Menus.cpp
@@ -994,13 +1003,19 @@ set(GUI_SOURCES
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
+    src/gui/map/CityLightsItem.cpp
+    src/gui/map/CityLightsSource.cpp
     src/gui/map/MapDisplayWidget.cpp
+    src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp
     src/gui/map/MapTerminatorItem.cpp
+    src/gui/map/WeatherRadarPlaybackItem.cpp
+    src/gui/map/WeatherRadarSource.cpp
+    src/gui/map/WeatherRadarTileLayer.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
@@ -2130,6 +2145,11 @@ target_link_libraries(aethercore PUBLIC
     aether_afskdemod
     ${CMAKE_DL_LIBS}   # NvidiaAfxFilter dlopen
 )
+if(WIN32)
+    # TciPeerProcess: GetExtendedTcpTable (iphlpapi) + the exe version
+    # resource (version) for the TCI client-identity log line (#5087).
+    target_link_libraries(aethercore PRIVATE iphlpapi version)
+endif()
 
 target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only

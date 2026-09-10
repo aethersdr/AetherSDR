@@ -210,16 +210,26 @@ commands. Create a new instance to restart discovery.
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
   - `tuningRangeHz` with `minimum` and `maximum`;
   - `declaredBands`, each with `name`, `lowHz`, and `highHz`;
+  - `sliceFrequencyControl` with `authority` (`radio`, `engine`, `unknown`),
+    `minimumHz` and `maximumHz`; zero bounds mean unavailable, not unlimited;
   - `canTransmit`, `maximumTransmitWatts`, `hasTuner`, `hasAmplifier`;
   - `extensions`, containing namespace names only, never extension payloads.
 
 `canTransmit` is observation only. It does not advertise a protocol TX method
 or grant and cannot key a radio.
 
+When the optional local connection target is installed, `connectionControl`
+adds bounded `state` and `errorCode` observations. Their schema and the separate
+control methods are specified in
+[`aetherd-local-connection-control.md`](aetherd-local-connection-control.md).
+
 ### `slice`
 
 - `id`, `letter`, `panadapterId`, `owned`.
 - `frequencyHz`, `mode`, `filter.lowHz`, `filter.highHz`.
+- `frequencyObservation.known`, `.hz`, `.authority`: last backend publication,
+  with `hz:null` while unknown. Authority is `radio`, `engine` or `unknown`;
+  engine configuration is not a hardware acknowledgement or DSP completion.
 - `active`, `txSlice`, `locked`.
 - `audio.gain`, `audio.pan`, `audio.muted`.
 - `receive.antenna`, `receive.rfGain`.
@@ -227,6 +237,11 @@ or grant and cannot key a radio.
 - `receive.squelch.enabled`, `receive.squelch.level`.
 
 Values come from `SliceModel`; radio/backend status remains authoritative.
+`frequencyHz` retains the existing effective (potentially optimistic desktop)
+value. The separate observation is invalidated across disconnect/reconnect and
+updates even when a backend echo equals that effective value. See
+[`aetherd-local-slice-frequency-control.md`](aetherd-local-slice-frequency-control.md)
+for control admission, observation and concurrent-intent semantics.
 
 ### `panadapter`
 
@@ -236,7 +251,12 @@ Values come from `SliceModel`; radio/backend status remains authoritative.
 - `bandwidthLimitsHz.minimum`, `bandwidthLimitsHz.maximum`; zero means the
   backend has not reported a limit.
 - `receive.antenna`, `receive.rfGain`.
-- `displayCadence.fps`, `displayCadence.averageFrames`.
+- `displayCadence.fps`, `displayCadence.averageFrames`: effective model values.
+- `displayCadence.fpsIsRequest`, `displayCadence.averageIsRequest`: true when
+  the effective value is dispatched intent awaiting a subsequent radio publication.
+- `displayCadence.radioReportedFps`, `displayCadence.radioReportedAverage`: last
+  radio publications, or `-1` before any publication. Same-value requests and
+  confirmations also update provenance; later radio publications always win.
 - `displayCadence.weightedAverage`, `weightedAverageKnown`.
 - `displayCadence.waterfallRate`; `-1` means the backend has not reported a
   value, otherwise this is the normalized 1–100 rate, not milliseconds.

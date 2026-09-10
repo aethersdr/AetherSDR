@@ -31,10 +31,33 @@ Two rules that fall out of that, both of which have already caused bugs:
 See [`HERMES.md`](../HERMES.md) §18 for the worked narrative, including the
 traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
+## Local slice frequency control
+
+`sliceFrequencyControl` is read by `ModelSliceFrequencyTarget` for admission
+and `RadioResourceAdapter` for explicit command-domain/provenance observations.
+It does not alter the existing GUI tuning range or desktop commands. Unlike
+the permissive UI disconnect convention above, local protocol mutations always
+require a live eligible slice; zero bounds or unknown authority fail closed.
+
+| Backend | Authority | Inclusive command domain (Hz) | Additional gate |
+|---|---|---|---|
+| Flex | radio | 0 / 0 (unknown) | Unavailable; no guessed legacy/transverter bounds |
+| HL2 | engine | 100,000–38,400,000 | TX-enabled sessions need normalized idle readback, currently absent |
+| Sim | engine | 1–1,000,000,000,000 | Explicit simulator API domain, not RF coverage |
+| Icom | radio | Profile `tuningMinHz` / `tuningMaxHz` | Declared band union and confirmed idle; no current daemon catalogue connection |
+| ANAN | engine | 0 / 0 (unknown) | Unavailable pending verified coverage |
+| RTL-SDR | engine | 24,000–1,766,000,000 | Backend/build availability; no TX capability |
+
+The default struct declares unknown authority and zero bounds. Every backend
+sets all three fields explicitly. Engine authority means backend-owned receive
+configuration, not physical acknowledgement or DSP convergence. For full
+semantics see [local frequency control](../aetherd-local-slice-frequency-control.md).
+
 ## Wired and consumed
 
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
+| `canCreateSlices` | ✅ | ❌ | ❌ | `RadioModel::addSliceOnPan`, only without a command plane | Admission to the neutral backend's independent slice-creation hook on an existing pan. Flex and Sim use their existing command adapters without consulting this field, so the values shown are declarations, not a UI availability rule; do not gate +RX on this field alone. Capacity remains `maxSlices`; paired/fixed receiver topologies do not gain independent creation. Icom, ANAN and RTL explicitly declare false; RTL remains one slice in RFC #5468 P01. |
 | `family` | `"flex"` | `"hl2"` | `"sim"` | `MainWindow::rfGainSettingsKey` | Scopes the persisted RF-gain key per family |
 | `model` | from provider | `"Hermes-Lite 2"` | `"AetherSDR Demo"` | `FlexBackend::capabilities` | Key into the ModelCapabilities table |
 | `manufacturer` | `"FlexRadio"` | `"Hermes-Lite"` | `"AetherSDR"` | `MainWindow::refreshRadioIdentityLabels` | Status-bar make row ABOVE the model, shown only when the model string does not already carry the brand (`FLEX-8400M` does, `IC-705` does not). Display only — nothing branches on it. Icom: `"Icom"` |
@@ -101,6 +124,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasPaCurrentTelemetry` | ❌ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Calibrated PA drain-current face in Radio Vitals, used only when PA-temperature telemetry is unavailable. Icom: ✅ only for the IC-9700 profile's documented 0–20 A Id calibration. Flex remains ❌ because its PACURRENT meter is known to clip below real full-power draw |
 | `hasMainFanTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Main Fan gauge in Radio Vitals. All current Icom models are ❌ because the backend does not publish fan-speed telemetry |
 | `hostFrequencyCalibration` | ❌ | ✅ | ❌ | `RadioSetupDialog` (Calibration page), `AutomationServer::doFreqCal` | Shows the Calibration page and enables the `freqcal` bridge verb. Means "**the client** owns the frequency-error correction", not "this radio has an error" — every radio does. Flex is ❌ because it calibrates itself (`radio set cal_freq` / `pll_start`), and that surface stays in the Frequency Offset group on the Receive page. HL2 is ✅ because its 76.8 MHz NCO scale is a `localparam` in the bitstream (`radio.v` M2) and no register in the HPSDR map accepts a correction — see `docs/architecture/hl2-frequency-calibration.md` |
+| `hostDroopCalibration` | ❌ | ❌ | ❌ | `RadioSetupDialog` (Droop Correction page), `AutomationServer::doDroopCal` | Shows the Droop Correction page and enables the `droopcal` bridge verb. Means "the client has measured and can correct a real DDC edge droop on this radio", not "this radio has no droop" — HL2's own DDC decimation chain looks architecturally similar and has never been characterised, so its ❌ is "not yet measured", not "known absent". ANAN: ✅ — the Saturn FPGA's DDC0 CIC/decimation chain has a real, bench-measured sin(x)/x droop near the edges of the displayed span (`AnanDroopCorrection.h`), corrected in-app via `AnanDroopCalibrator` |
 | `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | selects the active working store: native radio slots or the host database. The bank's ONE shared document lives at `radio_settings (local, '', MemoryBank)` since RFC #4603 PR 6, covered by settings backup/export; legacy `memories.json` is a frozen import source. Icom is always ❌ because its working model is the host database; model-specific Sync support is declared independently by `canRefreshMemories`. |
 | `canWriteMemories` | ✅ | ❌ | ❌ | `RadioModel::memoriesWritable`, memory dialog and panadapter memory panel | Separates native ownership from mutation support. Icom's radio-side store stays read-only, while the shared AetherSDR database remains writable for Add, Import, inline edits, Remove, and Tune on every Icom model. |
 | `canApplyMemories` | ✅ | ❌ | ❌ | `RadioModel::tryMemoryCommand` | True means the backend accepts its native memory-apply command. Initial Icom support is ❌ and applies recallable cached fields through the existing neutral slice setters instead of entering vendor Memory mode; split/RPS/DV/DD records are display-only. |

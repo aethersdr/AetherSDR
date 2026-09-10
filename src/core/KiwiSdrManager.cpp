@@ -71,6 +71,8 @@ struct ParsedKiwiCsvRow {
     int lineNumber{0};
     QString name;
     QString endpoint;
+    KiwiSdrProtocol::KiwiSdrReceiverFamily family{
+        KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi};
     bool autoConnect{false};
     bool keepAudioDuringTx{false};
     bool resumeAudioAfterTxDelay{false};
@@ -298,6 +300,25 @@ QList<ParsedKiwiCsvRow> parseKiwiSdrCsv(const QByteArray& bytes, QStringList& er
         }
         if (parsedRow.endpoint.isEmpty()) {
             errors << QStringLiteral("Line %1: ENDPOINT is required.").arg(row.lineNumber);
+        }
+
+        // RECEIVER_TYPE is optional (absent column or empty value → Kiwi) so
+        // schema-version-1 exports without it still import. An unrecognized
+        // non-empty value is an error rather than a silent Kiwi fallback,
+        // matching how the other columns validate.
+        const QString receiverType = value(QStringLiteral("RECEIVER_TYPE"));
+        if (!receiverType.isEmpty()) {
+            const QString normalizedType = receiverType.toLower();
+            if (normalizedType == QLatin1String("kiwi")
+                || normalizedType == QLatin1String("web888")
+                || normalizedType == QLatin1String("web-888")) {
+                parsedRow.family = KiwiSdrProtocol::kiwiSdrReceiverFamilyFromString(
+                    normalizedType);
+            } else {
+                errors << QStringLiteral(
+                    "Line %1: RECEIVER_TYPE must be KIWI or WEB888.")
+                              .arg(row.lineNumber);
+            }
         }
 
         auto boolField = [&](const QString& column, bool defaultValue) {
@@ -548,7 +569,9 @@ QString KiwiSdrManager::profilePasswordPersistenceDetail(
     return m_profilePasswordPersistenceDetails.value(id);
 }
 
-QString KiwiSdrManager::addProfile(const QString& name, const QString& endpoint)
+QString KiwiSdrManager::addProfile(
+    const QString& name, const QString& endpoint,
+    KiwiSdrProtocol::KiwiSdrReceiverFamily family)
 {
     const QString normalizedEndpoint = normalizedProfileEndpoint(endpoint);
     const QString displayName = name.trimmed().left(kKiwiSdrProfileNameMaxChars);
@@ -560,10 +583,13 @@ QString KiwiSdrManager::addProfile(const QString& name, const QString& endpoint)
     profile.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     profile.endpoint = normalizedEndpoint;
     profile.name = displayName;
+    profile.family = family;
     m_profiles.append(profile);
     saveSettings();
     qCInfo(lcKiwiSdr).noquote()
         << "Profile added" << profile.name << "endpoint=" << profile.endpoint
+        << QStringLiteral("family=%1")
+               .arg(KiwiSdrProtocol::kiwiSdrReceiverFamilyId(profile.family))
         << "id=" << profile.id;
     emit profilesChanged();
     return profile.id;
@@ -588,11 +614,20 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     updated.waterfallRate =
         std::clamp(updated.waterfallRate, 0, kKiwiSdrWaterfallRateMax);
     const QString oldEndpoint = m_profiles[idx].endpoint;
+    const bool oldFamily =
+        m_profiles[idx].family == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888;
     const bool wasAutoConnect = m_profiles[idx].autoConnect;
     m_profiles[idx] = updated;
     saveSettings();
     const bool endpointChanged = oldEndpoint != updated.endpoint;
-    if (endpointChanged) {
+    // A family flip changes the wire behavior (setup ordering), so it must
+    // re-establish the connection just like an endpoint change does.
+    const bool familyChanged =
+        oldFamily
+        != (updated.family
+            == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888);
+    const bool reconnectNeeded = endpointChanged || familyChanged;
+    if (reconnectNeeded) {
         cancelReconnect(updated.id);
         m_waterfallDisplayRanges.remove(updated.id);
         emit profileStreamReset(updated.id);
@@ -604,15 +639,19 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
                                   maxDbm = updated.waterfallMaxDbm,
                                   autoScale = updated.waterfallAutoScale,
                                   rate = updated.waterfallRate,
-                                  endpointChanged,
+                                  family = updated.family,
+                                  reconnectNeeded,
                                   endpoint = updated.endpoint,
                                   password = profilePassword(updated.id),
                                   reconnect = state(updated.id)
                                       != KiwiSdrClient::State::Disconnected](
                                      KiwiSdrClient* client) {
+            // Push the family before any reconnect so the new connection
+            // dials with the right setup behavior.
+            client->setReceiverFamily(family);
             client->setWaterfallDisplayRange(minDbm, maxDbm, autoScale);
             client->setWaterfallRateOverride(rate);
-            if (endpointChanged && reconnect) {
+            if (reconnectNeeded && reconnect) {
                 client->disconnectFromEndpoint();
                 if (!endpoint.isEmpty()) {
                     client->connectToEndpoint(endpoint, password);
@@ -639,14 +678,15 @@ QByteArray KiwiSdrManager::exportProfilesCsv() const
 {
     QStringList lines;
     lines << QStringLiteral(
-        "FORMAT_VERSION,NAME,ENDPOINT,AUTO_CONNECT,KEEP_AUDIO_DURING_TX,"
-        "RESUME_AUDIO_AFTER_TX_DELAY,WATERFALL_AUTO_SCALE,WATERFALL_MIN_DBM,"
-        "WATERFALL_MAX_DBM,WATERFALL_RATE");
+        "FORMAT_VERSION,NAME,ENDPOINT,RECEIVER_TYPE,AUTO_CONNECT,"
+        "KEEP_AUDIO_DURING_TX,RESUME_AUDIO_AFTER_TX_DELAY,WATERFALL_AUTO_SCALE,"
+        "WATERFALL_MIN_DBM,WATERFALL_MAX_DBM,WATERFALL_RATE");
     for (const KiwiSdrAntennaProfile& p : m_profiles) {
         const QStringList fields{
             QString::number(kKiwiSdrCsvSchemaVersion),
             kiwiCsvEscape(p.name),
             kiwiCsvEscape(p.endpoint),
+            kiwiSdrReceiverFamilyId(p.family).toUpper(),
             kiwiCsvBool(p.autoConnect),
             kiwiCsvBool(p.keepAudioDuringTx),
             kiwiCsvBool(p.resumeAudioAfterTxDelay),
@@ -706,6 +746,7 @@ KiwiSdrCsvImportResult KiwiSdrManager::importProfilesCsv(const QByteArray& bytes
         KiwiSdrAntennaProfile updated = profile(id);
         updated.name = row.name;
         updated.endpoint = row.endpoint;
+        updated.family = row.family;
         updated.autoConnect = row.autoConnect;
         updated.keepAudioDuringTx = row.keepAudioDuringTx;
         updated.resumeAudioAfterTxDelay = row.resumeAudioAfterTxDelay;
@@ -1205,6 +1246,7 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
     auto* c = new KiwiSdrClient;
     c->setDecodeAudioWhenInactive(false);
     c->setOperatorCallsign(m_operatorCallsign);
+    c->setReceiverFamily(profile(id).family);
     c->moveToThread(m_clientThread);
     connect(m_clientThread, &QThread::finished, c, &QObject::deleteLater);
     m_clients.insert(id, c);
@@ -1421,6 +1463,8 @@ void KiwiSdrManager::loadSettings()
         p.name = sanitizedName(obj.value(QStringLiteral("name")).toString(),
                                p.endpoint);
         p.autoConnect = obj.value(QStringLiteral("autoConnect")).toBool(false);
+        p.family = KiwiSdrProtocol::kiwiSdrReceiverFamilyFromString(
+            obj.value(QStringLiteral("family")).toString());
         p.keepAudioDuringTx =
             obj.value(QStringLiteral("keepAudioDuringTx")).toBool(false);
         p.resumeAudioAfterTxDelay =
@@ -1463,6 +1507,8 @@ void KiwiSdrManager::saveSettings() const
         obj.insert(QStringLiteral("id"), p.id);
         obj.insert(QStringLiteral("name"), p.name);
         obj.insert(QStringLiteral("endpoint"), normalizedProfileEndpoint(p.endpoint));
+        obj.insert(QStringLiteral("family"),
+                   KiwiSdrProtocol::kiwiSdrReceiverFamilyId(p.family));
         obj.insert(QStringLiteral("autoConnect"), p.autoConnect);
         obj.insert(QStringLiteral("keepAudioDuringTx"), p.keepAudioDuringTx);
         obj.insert(QStringLiteral("resumeAudioAfterTxDelay"),

@@ -111,11 +111,15 @@ After negotiation every request carries the assigned session:
   "id": "req-42",
   "sessionId": "019d2d95-2c8b-7f2a-a17d-cc77031b3040",
   "method": "slice.setFrequency",
-  "params": {"radioSession": "radio-1", "slice": "0", "hz": 14225000}
+  "params": {"radioSession": "radio-1", "slice": "0", "expectedRevision": 42, "hz": 14225000}
 }
 ```
 
 Success returns exactly one `result`; failure returns exactly one `error`:
+
+The implemented local frequency method's bounds, revision freshness (not CAS),
+readback provenance and acceptance semantics are specified in
+[`aetherd-local-slice-frequency-control.md`](aetherd-local-slice-frequency-control.md).
 
 ```json
 {"v":1,"id":"req-42","result":{"accepted":true}}
@@ -263,16 +267,19 @@ The service now enforces an explicit, immutable authorization context on each
 `ControlSession`. The default context is unauthenticated: after envelope
 parsing, `hello` returns `auth.required` and requests closure before parameter
 or version negotiation. Invalid envelopes still receive protocol errors. The
-existing local transport supplies observer authorization only for connections
-admitted through its current-user endpoint. Trusted in-process callers must
+existing local transport defaults to observer authorization for connections
+admitted through its current-user endpoint; explicit local-control opt-in adds
+control for those clients. Trusted in-process callers must
 also provide their authorization explicitly. Client names, session IDs, and
 JSON fields cannot grant access.
 
 An authenticated session with no grants can negotiate and call
 `capabilities.get`, but advertises empty grants/resource capabilities and gets
 `auth.grant_denied` for every resource method. Both the service and direct
-subscription entry points enforce observe permission. No control or transmit
-grant is representable in this implementation yet.
+subscription entry points enforce observe permission. Control is independently
+representable; transmit remains absent. The local connection-control sub-slice
+and its explicit daemon flag are specified in
+[`aetherd-local-connection-control.md`](aetherd-local-connection-control.md).
 
 The owning thread can revoke a session through `revokeAuthorization()`. It
 clears subscriptions and queued frames before notifying the transport, stops
@@ -282,8 +289,8 @@ already delivered bytes cannot be recalled. Revocation is idempotent and
 terminal even before negotiation or while a resync notice is pending. A newly
 verified connection creates a new session and must take a fresh baseline.
 There is no wire revocation method, daemon caller of the revocation hook, or
-credential provisioning in this slice; these are lifecycle hooks for subsequent
-authenticated non-TX control. The no-grants context likewise has no production
+credential provisioning in this slice; revocation remains a trusted embedding
+hook. The no-grants context likewise has no production
 producer yet. Output binding rejects duplicate bindings, missing callbacks, and
 mismatched calling/endpoint threads in release builds as well as debug builds.
 Both endpoints must remain on their owning thread after binding.

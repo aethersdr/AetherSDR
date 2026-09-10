@@ -44,6 +44,27 @@ concurrency:
 permissions:
   contents: read
 
+# Qt inputs shared by check-windows and check-macos. Declared once so the two
+# per-PR legs cannot drift apart: both aqt invocations and both cache keys
+# read these. 6.8.3 matches what community builders run and what
+# windows-installer.yml / macos-dmg.yml ship, so the per-PR build and the
+# release build agree by construction. aqt is pinned because it is the tool
+# that decides what Qt lands here — an unreviewed aqt upgrade is an
+# unreviewed change to the Qt CI builds against (same argument as
+# .github/docker/Dockerfile).
+env:
+  QT_VERSION: '6.8.3'
+  AQTINSTALL_VERSION: '3.3.0'
+  # py7zr is aqt's 7z extractor and is pinned separately, to the same series
+  # jurplel/install-qt-action pins (py7zrversion default ==1.0.*). Left to
+  # pip, aqtinstall==3.3.0 resolves py7zr>=0.22.0 to the newest 1.1.x, whose
+  # symlink sanitising throws `Bad7zFile: Specified path is bad: lib/cmake/…`
+  # part-way through the Windows extraction, at random (aqtinstall #995 —
+  # the reporter measured ~50%). It passed on two PR runs of #5552 and then
+  # failed the first main run, which is exactly the shape of that bug.
+  # Not in the Qt cache key: the extractor does not change what is laid down.
+  PY7ZR_VERSION: '1.0.0'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -55,51 +76,74 @@ jobs:
     # the cache and the compiler side.
     env:
       CCACHE_DIR: /ccache
-      # Raised 1000M -> 2000M. This cache was FULL and evicting internally: the
-      # last green main run before this change reported
+      # 1500M, revised twice. Read both steps before touching it again.
+      #
+      # 1000M -> 2000M (#5008, 2026-08-15). At 1000M this cache was FULL and
+      # evicting internally — the last green main run before that change:
       #
       #   Cache size (GB):  1.0 /  1.0 (95.41%)   Hits 2082/2210 (94.21%)
       #
-      # A cold build settles at ~0.5 GB, so 1000M looked like 2x headroom — but
-      # this entry does not hold one build, it accumulates objects across ~9.2
-      # main merges a day. At 1.0 GB it was continuously discarding its own
-      # oldest objects, so it only ever represented a narrow window of recent
-      # main, and a PR branched from a day-old main took misses on objects that
-      # had fallen out of ccache rather than out of the GitHub cache.
+      # A cold build settles at ~0.7 GB, but this entry does not hold one
+      # build: it accumulates objects across ~9.2 main merges a day. At 1.0 GB
+      # it only ever represented a narrow window of recent main, and a PR
+      # branched from a day-old main took misses on objects that had fallen
+      # out of ccache rather than out of the GitHub cache. 2000M fixed that:
+      # main runs 2026-09-01..05 report Hits 99.2–99.7%, PR runs 91–99%.
+      #
+      # 2000M -> 1500M (#5548 item 5, 2026-09-10). The #5008 budget assumed
+      # entries compress to ~55% of the ccache directory. They do not: ccache
+      # already compresses its objects, so the entry is ~95% of the directory
+      # — a full 2000M cache saved as a ~1.88 GiB entry (measured on every
+      # main save 2026-09-01..05). With the other caches also at their caps
+      # (sccache-windows 1.02 GiB, canary 0.94, macOS 0.44) and cache-cleanup
+      # keeping two of each, main alone held ~10.4 GiB against the 10 GiB
+      # allowance. GitHub evicted by LRU, this entry went first because it was
+      # the largest, and every main run until the next green save was a cold
+      # build: 27–37 min instead of 3–6, ten times between 2026-09-06 and
+      # 2026-09-10. cache-cleanup.yml now keeps one entry per prefix, which
+      # alone brings main to ~6.1 GiB; 1500M trims the largest entry further
+      # without giving back the whole 2000M window. Judge it by the "ccache
+      # stats" step: if main's hit rate settles below the ~99% seen at 2000M,
+      # the window is too narrow again and the budget below has room to go
+      # back up. If "Cache size" sits at 100% with a large `Cleanups` count
+      # AND the hit rate holds, leave it — a full cache that still hits is
+      # working as designed.
       #
       # Raised for THIS job only. The other two are not constrained and would
       # pay transfer time for nothing — do not raise them on symmetry grounds:
       #   check-macos     0.3 / 0.5 GB (57.63%)
       #   check-windows   628 MiB / 1 GiB (61%)
       #
-      # 2000M, not the 5000M the headroom would allow, because the binding
-      # constraint is TRANSFER TIME, not storage. Entries compress to ~55% of
-      # the ccache directory (1.0 GB of ccache -> a 556 MiB entry), and restore
-      # cost scales with it: 12 s at 556 MiB today, ~24 s at 2000M, ~60 s at
-      # 5000M — paid on EVERY run, against a benefit that only materialises
-      # for misses that were eviction-caused rather than genuinely new source.
-      # This is the reversible first step; read the `cleanups` counter and the
-      # hit rate in the "ccache stats" step before going further.
-      #
-      # Budget check at 2000M, against the repo's 10 GB cache allowance. Entry
-      # sizes are MEASURED on refs/heads/main, not projected, except Linux which
-      # is extrapolated from the 55% compression ratio at the new cap:
-      #   Linux    ~1.1 GiB entry x 2 retained  = 2.2 GiB
-      #   Windows  ~0.38 GiB x 2                = 0.8 GiB
-      #   macOS    ~0.18 GiB x 2                = 0.4 GiB
-      #   canary   ~0.57 GiB x 2                = 1.1 GiB
-      #   deps (Qt, DeepFilterNet, FFTW, qtkeychain; 9 entries)
+      # Budget at 1500M, against the repo's 10 GiB cache allowance, with
+      # cache-cleanup.yml's KEEP=1. Entry sizes are MEASURED on refs/heads/main
+      # from the "Save" steps, except Linux which is extrapolated from the
+      # ~95% ratio at the new cap:
+      #   Linux    ~1.4 GiB entry x 1 retained  = 1.4 GiB
+      #   Windows  ~1.02 GiB x 1                = 1.0 GiB
+      #   macOS    ~0.44 GiB x 1                = 0.4 GiB
+      #   canary   ~0.94 GiB x 1                = 0.9 GiB
+      #   deps (Qt 1.3, install-qt 0.4, DeepFilterNet, FFTW, qtkeychain)
       #                                         ~ 1.8 GiB
       #                                         --------
-      #                                         ~ 6.3 GiB
-      # The canary line is system-libs-canary.yml's cache, which an earlier
-      # revision of this table omitted — the same omission that left it out of
-      # cache-cleanup.yml's PREFIXES. Counting it moves the projection from
-      # ~5.1 to ~6.3 GiB: still comfortably inside the allowance, with less
-      # headroom than the earlier figure implied.
+      #                                         ~ 5.5 GiB
+      # That is the post-prune FLOOR, not what LRU evaluates. prune-main runs
+      # on workflow_run AFTER a main save, so between the save and the prune
+      # every prefix briefly holds two entries — a transient peak of about
+      # (1.4+1.02+0.44+0.94)x2 + 1.8 = ~9.4 GiB, and main runs are not
+      # serialised (cancel-in-progress is off for main), so those windows can
+      # overlap. Budget against the peak, not the floor.
+      # The canary line is system-libs-canary.yml's cache; it was missed by an
+      # earlier revision of this table and by cache-cleanup.yml's PREFIXES
+      # alike, so if you add a compiler cache in ANY workflow, add it to both.
+      # Dependency caches were also written on PR refs until #5548 item 1
+      # (~1.7 GiB per open PR that missed — ~12 GiB with the four open PRs
+      # measured on 2026-09-10, still over the line even after the prune
+      # change). Since item 1 they restore on PR and save on main only, so
+      # the figure above is the whole steady state; anything on refs/pull or
+      # refs/tags is transient and cache-cleanup.yml's sweep reclaims it.
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
-      CCACHE_MAXSIZE: 2000M
+      CCACHE_MAXSIZE: 1500M
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -130,8 +174,36 @@ jobs:
           restore-keys: |
             ccache-linux-build-
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # DEPENDENCY caches: restore on every run, save only on main — the same
+      # split the compiler caches got in #5008, applied here in #5548. These
+      # keys are content hashes, so unlike the compiler caches they need no
+      # run_id. The Save steps sit at the END of each job, gated on the ref,
+      # on `success()`, and on the MISS (cache-hit != 'true') — see the Save
+      # DeepFilterNet3 step at the bottom of this job for why all three.
+      #
+      # Why it matters: a plain `actions/cache` step saves on a miss from ANY
+      # ref, and a PR's entry lands on refs/pull/N/merge where nothing else can
+      # read it. In theory a PR only misses when main's copy is gone; in
+      # practice (2026-09-10) the repo sat at its 10 GiB allowance, LRU evicted
+      # main's Qt entry between runs, and four open PRs each held their own
+      # 1.3 GiB copy — which kept the repo at the allowance, which evicted
+      # main's compiler caches, which is a 30-minute cold build. Saving from
+      # main only breaks that loop; cache-cleanup.yml sweeps what remains.
+      #
+      # THE COST, accepted deliberately: a PR that changes one of these keys —
+      # bumps QT_VERSION, edits setup-deepfilter.sh / setup-fftw.ps1 /
+      # setup-qtkeychain.sh — misses on EVERY push until it merges, because
+      # the new entry only appears once main has built it. For the macOS Qt
+      # tree that is the ~6 min -> ~18 min this file already records below.
+      # Rare, self-limiting, and the right trade against a permanent
+      # 1.7 GiB × open-PRs tax; it is written here so the next Qt bump is not
+      # a surprise.
+      #
+      # `cache-hit` from actions/cache/restore is 'true' only on an exact key
+      # match. None of these steps use restore-keys, so the setup-step gating
+      # below is unchanged from the bidirectional form.
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -204,6 +276,25 @@ jobs:
         if: always()
         run: ccache --show-stats
 
+      # Dependency caches are saved LAST, after the build and tests, and only
+      # from a green main run — the same rule as the compiler-cache save
+      # below, and the one the bidirectional actions/cache step these replaced
+      # already gave for free (it saved from a post step with
+      # `post-if: success()`). A save placed right after the setup script
+      # would persist a tree the build never validated, under a content-hash
+      # key that no later run can overwrite and no sweeper matches on main;
+      # the only recovery would be a manual `gh cache delete`. The
+      # cache-hit != 'true' half is still needed: a save against a key that
+      # already exists only warns, and that warning on every main run would
+      # hide a real one. See the Restore DeepFilterNet3 step for the
+      # restore-on-PR / save-on-main reasoning.
+      - name: Save DeepFilterNet3
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
+
       # Save LAST, and only from a green main build.
       #
       # `success()` is not about correctness — ccache keys each object on a hash
@@ -239,9 +330,14 @@ jobs:
   # of regression we kept paying for.
   #
   # Caching strategy:
-  #   * Qt install        — handled by jurplel/install-qt-action's cache: true
-  #   * FFTW3 third_party — actions/cache, keyed on the setup script + version
+  #   * Qt install        — aqtinstall into an explicitly cached tree, the
+  #                         same shape as check-macos (was install-qt-action's
+  #                         cache: true until #5548 — see the Qt step)
+  #   * FFTW3 third_party — actions/cache restore/save, keyed on the setup
+  #                         script + version
   #   * MSVC object files — sccache over a LOCAL dir, persisted by actions/cache
+  #   All of the above restore on every run and save only from main; the
+  #   reasoning is on the Linux job's DeepFilterNet3 step.
   #
   # sccache used to run on the GitHub Actions cache backend
   # (SCCACHE_GHA_ENABLED), which stores each object as its own cache entry
@@ -280,37 +376,107 @@ jobs:
       # Local disk cache, not the GHA backend — see the note above. D: is the
       # fast runner volume and the one the workspace already lives on.
       SCCACHE_DIR: D:\sccache
-      # Left at 1G. The Linux ccache was raised to 2000M because it was
-      # measurably full (1.0/1.0 GB, 95.41%); this one measured 628 MiB of 1 GiB
-      # on the same run, so raising it would buy nothing and cost transfer time
-      # on every restore. Do not raise the three caps together on symmetry
-      # grounds — check the stats step first.
+      # Left at 1G. When the Linux ccache cap was first raised (#5008) this one
+      # measured 628 MiB of 1 GiB on the same run; it has since filled to its
+      # cap and saves as a ~1.02 GiB entry on every main run (2026-09-01..).
+      # That is budgeted in the Linux CCACHE_MAXSIZE comment above; before
+      # raising it, check the "sccache stats" hit rate, and re-do that budget.
+      # Do not move the caps together on symmetry grounds.
       SCCACHE_CACHE_SIZE: 1G
+      # QT_VERSION / AQTINSTALL_VERSION are workflow-level env (top of file).
+      # 6.8.3 exposes Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC
+      # COFF section limit, fixed by /bigobj) before they reach users. QT_ARCH
+      # is spelled exactly as windows-installer.yml spells it: Qt 6.8 LTS
+      # dropped the MSVC 2019 builds.
+      QT_ARCH: 'win64_msvc2022_64'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
+      # Qt via aqtinstall into an explicitly cached tree — the shape check-macos
+      # already uses, ported here in #5548. Until then this step was
+      # jurplel/install-qt-action with `cache: true`, which is aqt plus a
+      # bidirectional cache with no restore-only mode: every PR that missed
+      # wrote a 396 MiB entry onto its own refs/pull/N/merge, where nothing
+      # else could read it. Keyed on everything that changes the tree — Qt
+      # version, arch, module set, and the aqt version that resolved them.
+      #
+      # runner.workspace (D:\a\AetherSDR\Qt), NOT github.workspace as
+      # check-macos uses: that is where install-qt-action put it, and the path
+      # is in every Qt-including compile's -I flags, which sccache hashes.
+      # The first cut of this port moved the tree one directory down and the
+      # sccache hit rate on an otherwise-identical PR went from 99.26% to
+      # 19.09% (657 of 812 objects missed, Build 26 min instead of 6). Keeping
+      # the path keeps main's ~1 GiB sccache entry valid across the port.
+      - name: Restore Qt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-qt-win
         with:
-          # 6.8.3 matches what community Windows builders are running and
-          # exposes Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC
-          # COFF section limit, fixed by /bigobj) before they reach users.
-          version: '6.8.3'
-          modules: 'qtmultimedia qtwebsockets qtserialport qtshadertools'
-          cache: true
+          path: ${{ runner.workspace }}\Qt
+          key: qt-${{ env.QT_VERSION }}-windows-${{ env.QT_ARCH }}-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
 
-      - name: Cache FFTW3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Install Qt LTS via aqtinstall
+        if: steps.cache-qt-win.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          # aqt goes in a venv and is pinned, for the reason check-macos and
+          # .github/docker/Dockerfile give: it is the tool that decides what
+          # Qt lands here, so an unreviewed aqt upgrade is an unreviewed
+          # change to the Qt this job builds against.
+          python -m venv "$env:RUNNER_TEMP\aqtvenv"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\aqtvenv\Scripts\pip.exe" install -q "aqtinstall==$env:AQTINSTALL_VERSION" "py7zr==$env:PY7ZR_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\aqtvenv\Scripts\aqt.exe" install-qt windows desktop $env:QT_VERSION $env:QT_ARCH `
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools `
+            --outputdir "$env:RUNNER_WORKSPACE\Qt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Separate from the install so it also runs on a cache hit. Exports the
+      # same variables install-qt-action did (QT_ROOT_DIR, QT_PLUGIN_PATH,
+      # QML2_IMPORT_PATH, bin on PATH) plus Qt6_DIR and CMAKE_PREFIX_PATH so
+      # find_package(Qt6) resolves without a -D on the configure line. PATH
+      # goes through GITHUB_PATH so it prepends; the test steps below run Qt
+      # executables and need the DLLs resolvable.
+      - name: Export Qt environment
+        shell: pwsh
+        run: |
+          # aqt lays the tree down under <version>/<arch minus the win64_ host
+          # prefix>: win64_msvc2022_64 -> msvc2022_64.
+          $qtRoot = "$env:RUNNER_WORKSPACE\Qt\$env:QT_VERSION\" + ($env:QT_ARCH -replace '^win64_', '')
+          if (-not (Test-Path "$qtRoot\bin\qmake.exe")) {
+            # A bad entry on main is only clearable by hand: the key is a
+            # content hash nothing re-saves, and no sweeper matches qt-* there.
+            Write-Host "ERROR: no qmake at $qtRoot — aqt layout changed, or a stale cache entry"
+            Write-Host "       (clear a stale entry: gh cache delete --key <the Restore Qt key> --ref refs/heads/main)"
+            Get-ChildItem "$env:RUNNER_WORKSPACE\Qt\$env:QT_VERSION" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          @(
+            "QT_ROOT_DIR=$qtRoot",
+            "Qt6_DIR=$qtRoot\lib\cmake\Qt6",
+            "CMAKE_PREFIX_PATH=$qtRoot",
+            "QT_PLUGIN_PATH=$qtRoot\plugins",
+            "QML2_IMPORT_PATH=$qtRoot\qml"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$qtRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          & "$qtRoot\bin\qmake.exe" -query QT_VERSION
+
+      - name: Restore FFTW3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-fftw
         with:
           path: third_party/fftw3
           key: ${{ runner.os }}-fftw3-3.3.5-${{ hashFiles('scripts/setup/setup-fftw.ps1') }}
 
+      # Gated on the miss, as windows-installer.yml's copy of this step already
+      # is; the script's output is entirely inside the cached directory.
       - name: Install FFTW3
+        if: steps.cache-fftw.outputs.cache-hit != 'true'
         shell: pwsh
         run: .\scripts\setup\setup-fftw.ps1
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -511,6 +677,30 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "cross_needle_meter_test" --no-tests=error --output-on-failure
 
+      # Dependency caches: saved LAST and only from a green main run — see the
+      # Linux job's Save DeepFilterNet3 step for why the save is not placed
+      # next to the setup step.
+      - name: Save Qt
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-qt-win.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.workspace }}\Qt
+          key: ${{ steps.cache-qt-win.outputs.cache-primary-key }}
+
+      - name: Save FFTW3
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-fftw.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/fftw3
+          key: ${{ steps.cache-fftw.outputs.cache-primary-key }}
+
+      - name: Save DeepFilterNet3
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
+
       - name: sccache stats
         if: always()
         # Stop the server after reporting: it holds the cache files open, and
@@ -547,8 +737,7 @@ jobs:
     # other ships, and a mismatch would put a minos-15 library inside a bundle
     # that advertises 14.0.
     env:
-      QT_VERSION: '6.8.3'
-      AQTINSTALL_VERSION: '3.3.0'
+      # QT_VERSION / AQTINSTALL_VERSION are workflow-level env (top of file).
       MACOS_DEPLOYMENT_TARGET: '14.0'
 
     steps:
@@ -564,15 +753,14 @@ jobs:
             autoconf automake libtool
 
       # ~1.3 GB downloaded on every PR otherwise, and it showed: this job went
-      # from ~6 min to ~18 min the first time it took Qt from aqt.
-      # check-windows gets caching for free from jurplel/install-qt-action; aqt
-      # has no such wrapper, so cache the tree explicitly. Keyed on everything
-      # that changes its contents — the Qt version, the module set, and the aqt
-      # version that resolved them — so the entry is written once and then just
-      # restored, which is what keeps it from churning the repo's 10 GB cache
-      # budget the way a per-run key would.
-      - name: Cache Qt
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # from ~6 min to ~18 min the first time it took Qt from aqt. aqt has no
+      # caching wrapper, so cache the tree explicitly (check-windows now does
+      # the same). Keyed on everything that changes its contents — the Qt
+      # version, the module set, and the aqt version that resolved them — so
+      # the entry is written once and then just restored. Saved from main only;
+      # see the Linux job's DeepFilterNet3 step for why.
+      - name: Restore Qt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qt-mac
         with:
           path: ${{ github.workspace }}/Qt
@@ -588,7 +776,7 @@ jobs:
           # this job exists to make about Qt itself. Matches
           # .github/docker/Dockerfile, which pins for that reason.
           python3 -m venv "$RUNNER_TEMP/aqtvenv"
-          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}"
+          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}" "py7zr==${PY7ZR_VERSION}"
           "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir "${{ github.workspace }}/Qt"
@@ -599,7 +787,10 @@ jobs:
           set -o pipefail
           QT_ROOT="${{ github.workspace }}/Qt/$QT_VERSION/macos"
           if [ ! -x "$QT_ROOT/bin/qmake" ]; then
+            # A bad entry on main is only clearable by hand: the key is a
+            # content hash nothing re-saves, and no sweeper matches qt-* there.
             echo "ERROR: no qmake at $QT_ROOT — aqt layout changed, or a stale cache entry"
+            echo "       (clear a stale entry: gh cache delete --key <the Restore Qt key> --ref refs/heads/main)"
             ls -la "${{ github.workspace }}/Qt/$QT_VERSION/" || true
             exit 1
           fi
@@ -637,8 +828,8 @@ jobs:
           fi
           echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -648,8 +839,8 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
-      - name: Cache qtkeychain
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore qtkeychain
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qtkeychain-mac
         with:
           path: third_party/qtkeychain
@@ -780,6 +971,36 @@ jobs:
             xcrun -sdk macosx metallib - -o "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
           ls -l "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
 
+      # Dependency caches: saved LAST and only from a green main run — see the
+      # Linux job's Save DeepFilterNet3 step for why the save is not placed
+      # next to the setup step. The ccache-action above saves from its own
+      # post-job hook (with the KNOWN GAP its comment describes); these three
+      # are ordinary steps and do get the `success()` half.
+      #
+      # qtkeychain: macos-dmg.yml restores this same key on a tag ref and
+      # cannot read a PR's copy anyway; the entry it normally finds is the one
+      # this job wrote from main.
+      - name: Save Qt
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-qt-mac.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/Qt
+          key: ${{ steps.cache-qt-mac.outputs.cache-primary-key }}
+
+      - name: Save DeepFilterNet3
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
+
+      - name: Save qtkeychain
+        if: github.ref == 'refs/heads/main' && success() && steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/qtkeychain
+          key: ${{ steps.cache-qtkeychain-mac.outputs.cache-primary-key }}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Compiler-cache strategy: restore everywhere, save only on main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -859,9 +1080,11 @@ jobs:
 #   resolve to the most recent match, so run N's cache is unreachable the moment
 #   run N+1 saves, and an unreachable entry is never accessed again — so nothing
 #   refreshes its LRU position and nothing deletes it. Left alone, main writes
-#   ~1.66 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
-#   own. That job prunes each prefix to the newest 2. (Retention is itself a
-#   configurable policy as of 2025-11; see cache-cleanup.yml's header.)
+#   ~4.3 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
+#   own. That job prunes each prefix to the newest 1 (was 2 until #5548; the
+#   second copy alone put main over the allowance once every cache had filled
+#   to its cap). (Retention is itself a configurable policy as of 2025-11;
+#   see cache-cleanup.yml's header.)
 # - IF YOU ADD A run_id-KEYED COMPILER CACHE IN ANY WORKFLOW, add its key prefix
 #   to that job's PREFIXES list. Note "any workflow", not "this file": the first
 #   version of that list was written as "one prefix per compiler cache in
@@ -869,9 +1092,11 @@ jobs:
 #   is the same run_id-keyed pattern on the same push:main trigger. The scope
 #   that matters is the repository's 10 GB allowance, not this file's share.
 # - PR-scoped caches (Qt, FFTW, DeepFilterNet, qtkeychain on refs/pull/N/merge)
-#   are NOT swept. A job for them was written and pulled before merge: a
-#   `pull_request` trigger gets a read-only token on fork PRs and cannot be
-#   elevated, and 22 of 25 open PRs are forks. It may also prove unnecessary —
-#   PRs only WRITE those when the key is not already readable, which was itself
-#   a symptom of main's copies being evicted by the churn the split above
-#   removes. Deferred to a follow-up that can measure it first.
+#   are swept by cache-cleanup.yml's scheduled job once the PR closes (#5009;
+#   a `pull_request: closed` trigger gets a read-only token on fork PRs, so it
+#   runs daily instead), along with tag-ref caches idle for two days. Open
+#   PRs no longer write them at all: #5548 item 1 gave the dependency caches
+#   the same restore-on-PR / save-on-main split as above, so an entry on
+#   refs/pull/N/merge now means a step regressed to bidirectional
+#   `actions/cache` — that is the first thing to look for if the sweep
+#   starts reporting large numbers.

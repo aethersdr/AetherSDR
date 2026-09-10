@@ -310,7 +310,7 @@ so the seam is a `tests.cmake` entry, not a missing capability.
 
 ### Version and release files
 
-Current version: **26.9.1**.
+Current version: **26.9.2**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -486,12 +486,23 @@ available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata
 Neither option connects a radio. Icom manual setup, SmartLink and external
 directories are excluded. Catalogue fields and lifecycle are specified in
 `docs/aetherd-control-resource-v1-catalogue.md`.
-Sessions now require explicit trusted authorization; the local transport grants
-observe permission, and reads/subscriptions enforce it. The revocation hook
+Sessions require explicit trusted authorization; the local transport defaults
+to observe permission, and reads/subscriptions enforce it. The daemon's explicit
+`--allow-local-control` flag additionally grants non-TX control to current-user
+local clients. Typed catalogue-selected `radio.connect` / `radio.disconnect`
+are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
+revision checks and limits. Clients cannot supply arbitrary endpoints or
+credentials. Every negotiated session, observer or controller, now shares a
+per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
+it is terminal for that connection. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon
-path invokes it yet. Credential verification/provisioning and control/transmit
+path invokes it yet. Remote credential verification/provisioning and transmit
 grants are not implemented yet.
-Meters, read-only transmit state, authenticated non-TX control, and the desktop
+`slice.setFrequency` now dispatches a bounded, revision-checked intent for an
+existing owned slice, with explicit backend observation provenance and fail-closed
+TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
+not optimistically update the model. Unknown coverage/readback remains unavailable.
+Meters, read-only transmit state, other typed slice/pan receive controls, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
@@ -1004,6 +1015,10 @@ The KiwiSDR browser is a clean-room, API-policy-aware public-receiver directory
 FlexRadio protocol path. Kiwi panadapters are receive-only (TX is inhibited).
 See `docs/kiwisdr-public-directory.md` (directory / API-policy behaviour) and
 `docs/kiwisdr-cleanroom-design.md` (clean-room design notes, Principle IV).
+
+The Kiwi path also serves the Web-888 (a KiwiSDR server fork) as a receiver
+family: profiles carry a receiver type, and the client applies the small wire
+deltas. See `docs/web888-cleanroom-design.md`.
 
 ---
 

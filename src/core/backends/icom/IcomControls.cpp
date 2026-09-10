@@ -331,13 +331,13 @@ constexpr std::array kSpecs = {
 
     // ---- Receive antenna (0x12) ----------------------------------------
     ControlSpec{"rx.antenna", 0x12, 0x00, true, "Receive-only antenna",
-                Plane::Slice, Encoding::OnOff, Wiring::SendOnly,
+                Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "main/rx", 0, 1,
                 "setSliceRxAntenna", "sliceRxAntennaBtn", true,
                 "IC-7300MK2-specific: 00 uses ANT1 for receive; 01 selects the "
-                "RX-ANT input. Live B6 firmware returns bare FB to the official "
-                "read form. The operator command is therefore optimistic for "
-                "this session only; reconnect does not invent or replay state.",
+                "RX-ANT input. A bare 12 read returns 12 00 00/01 on the "
+                "tested B6 radio; 12 00 alone previously returned FB. Startup, "
+                "periodic and post-write reads adopt the radio selection.",
                 IcomFeature::RxAntenna},
 
     // ---- Control (0x1C) --------------------------------------------------

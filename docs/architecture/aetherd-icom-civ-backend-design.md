@@ -217,13 +217,46 @@ command path, including the IC-9700. These are state observations, never a
 reason to replay a saved client value: supported Icom profiles declare an empty
 `clientSettingsDomains`, so the radio remains authoritative across reconnects.
 
-The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
-`12 00` with no data reads the selection, but the live B6 radio returned only a
-bare `FB` acknowledgement. The backend therefore does not poll that ambiguous
-form or claim a subscription. An explicit AetherSDR ANT1/RX-ANT choice is sent
-and shown optimistically for that session only. Reconnect advertises both
-choices without claiming either one and never replays client state. This keeps
-the radio authoritative and does not affect IC-705, Flex, or HL2.
+The IC-7300MK2 RX-ANT switch uses a bare `12` read, which returned
+`12 00 00` (ANT1) and `12 00 01` (RX-ANT) during the September 2026 Persist run.
+The earlier `12 00` read form returned only `FB`; an acknowledgement alone is
+not selection readback. The MK2 profile enables startup, periodic and post-write
+reads of the working form. Valid replies update the receive antenna model and
+scrub mirror without sending a setting command. Reads and writes share one
+scheduler generation key. The matcher expects the reply subcommand even though
+the query has none, so readback completes the transaction without a timeout.
+Malformed and unsupported-model replies are rejected before scheduler completion
+or scrub bookkeeping; stale-session replies are discarded at entry. None can
+publish selection or make an unread antenna value eligible for scrub. IC-705/IC-9700 do not inherit this command coverage.
+
+### Client-only restart state
+
+The radio still owns its live SQL threshold. Icom Off writes zero, so the
+previous manual choice and the client Auto algorithm intent cannot be recovered
+from that register. The RX applet stores those two client values in schema-1
+`SquelchIntent` (`manualLevel`, `autoEnabled`) under the exact Icom radio scope.
+Explicit manual adjustments and mode changes queue a document save. Radio threshold
+adoption does not replay a saved threshold: a fresh enabled manual value wins.
+An Off reply preserves the remembered manual choice for a later operator click.
+Auto resumes only after a current-session enabled SQL report, including a report
+already held by a slice when its applet reattaches; an Off radio wins
+and cancels the saved Auto intent. Scope changes clear pending restoration, and
+newer/unreadable documents are neither interpreted nor overwritten. Flex and
+external Kiwi receive keep their existing SQL ownership paths.
+
+When `RadioModel::shapesDisplayRatesLocally()` is true, waterfall cadence is a
+client display preference, stored in schema-1 `ClientDisplay.waterfallRates`
+under the exact radio scope, indexed by pan slot. Slider/scroll, clone and reset
+intents save it; pan wiring restores it before seeding the local rate shaper.
+Radio publications and adaptive throttle caps never write that document. Flex
+radio-owned cadence continues to use readback and is never restored from this
+client feature. Both documents use atomic radio-feature writes, retain unrelated
+fields, reject invalid values and refuse unknown identities or future schemas.
+UI edits coalesce within 250 ms, capturing their original scope and values.
+Pending writes flush on disconnect, owner teardown and normal application quit;
+slice or pan reattachment flushes before reading saved intent. SQL report validity
+is cleared when session models are staged for reconnect, so cached state from a
+previous session cannot start Auto.
 
 ### Seam additions made for the second-model bring-up
 

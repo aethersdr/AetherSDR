@@ -90,6 +90,19 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           config-file: ./.github/codeql/codeql-config.yml
+          # TRAP caching is OFF. It only ever speeds up PR analyses: on the
+          # default branch the action logs "Analyzing default branch.
+          # Skipping downloading of TRAP caches", and this workflow has no
+          # pull_request trigger, so nothing ever restores one. What it DID
+          # do is upload a ~2.9 GiB entry keyed on the commit sha from every
+          # push:main run (5-23/day) into the repo's 10 GiB Actions cache
+          # allowance. The action's own cleanup needs actions:write, which
+          # this workflow deliberately does not grant, so it 403s silently
+          # and LRU eviction was the only thing removing them — taking
+          # ci.yml's compiler caches with it (#5548). Turning it on again
+          # needs a pull_request trigger to make it worth its budget, and a
+          # line in ci.yml's CCACHE_MAXSIZE budget table.
+          trap-caching: false
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo

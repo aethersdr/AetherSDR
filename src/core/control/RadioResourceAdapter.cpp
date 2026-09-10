@@ -22,6 +22,16 @@ QJsonArray strings(const auto& values)
     return result;
 }
 
+QString frequencyAuthority(SliceFrequencyControl::Authority authority)
+{
+    switch (authority) {
+    case SliceFrequencyControl::Authority::Radio: return QStringLiteral("radio");
+    case SliceFrequencyControl::Authority::Engine: return QStringLiteral("engine");
+    case SliceFrequencyControl::Authority::Unknown: return QStringLiteral("unknown");
+    }
+    return QStringLiteral("unknown");
+}
+
 QJsonObject capabilityValue(const RadioCapabilities& capabilities)
 {
     QJsonArray sampleRates;
@@ -42,6 +52,10 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
              {QStringLiteral("minimum"), capabilities.tuningMinHz},
              {QStringLiteral("maximum"), capabilities.tuningMaxHz}}},
         {QStringLiteral("declaredBands"), bands},
+        {QStringLiteral("sliceFrequencyControl"), QJsonObject{
+             {QStringLiteral("authority"), frequencyAuthority(capabilities.sliceFrequencyControl.authority)},
+             {QStringLiteral("minimumHz"), capabilities.sliceFrequencyControl.minimumHz},
+             {QStringLiteral("maximumHz"), capabilities.sliceFrequencyControl.maximumHz}}},
         {QStringLiteral("canTransmit"), capabilities.canTransmit},
         {QStringLiteral("maximumTransmitWatts"), capabilities.txPowerMaxWatts},
         {QStringLiteral("hasTuner"), capabilities.hasTuner},
@@ -54,20 +68,27 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
 
 RadioResourceAdapter::RadioResourceAdapter(
     RadioModel* radio, ControlResourceStore* resources,
-    QString radioSessionId, QObject* parent)
+    QString radioSessionId, QObject* parent, RadioConnectionTarget* connectionTarget)
     : QObject(parent),
       m_radio(radio),
       m_resources(resources),
-      m_radioSessionId(std::move(radioSessionId))
+      m_radioSessionId(std::move(radioSessionId)), m_connectionTarget(connectionTarget)
 {
     Q_ASSERT(m_radio);
     Q_ASSERT(m_resources);
     Q_ASSERT(!m_radioSessionId.isEmpty());
+    if (m_connectionTarget) {
+        connect(m_connectionTarget, &RadioConnectionTarget::stateChanged,
+                this, &RadioResourceAdapter::publishRadioSession);
+        connect(m_connectionTarget, &QObject::destroyed,
+                this, &RadioResourceAdapter::publishRadioSession);
+    }
 
     connect(m_radio, &RadioModel::infoChanged,
             this, &RadioResourceAdapter::publishRadioSession);
     connect(m_radio, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
+                m_frequencyAuthority.clear();
                 publishRadioSession();
                 if (connected) {
                     publishAll();
@@ -151,6 +172,7 @@ void RadioResourceAdapter::attachSlice(SliceModel* slice)
     const auto refresh = [this, slice] { publishSlice(slice); };
     connect(slice, &SliceModel::letterChanged, this, refresh);
     connect(slice, &SliceModel::frequencyChanged, this, refresh);
+    connect(slice, &SliceModel::frequencyReported, this, refresh);
     connect(slice, &SliceModel::panIdChanged, this, refresh);
     connect(slice, &SliceModel::modeChanged, this, refresh);
     connect(slice, &SliceModel::filterChanged, this, refresh);
@@ -210,6 +232,9 @@ void RadioResourceAdapter::attachPanadapter(PanadapterModel* panadapter)
     connect(panadapter, &PanadapterModel::rfGainChanged, this, refresh);
     connect(panadapter, &PanadapterModel::fpsChanged, this, refresh);
     connect(panadapter, &PanadapterModel::averageChanged, this, refresh);
+    connect(panadapter, &PanadapterModel::fftProvenanceChanged, this, refresh);
+    connect(panadapter, &PanadapterModel::averageReported, this, refresh);
+    connect(panadapter, &PanadapterModel::fpsReported, this, refresh);
     // The first valid report can be false, matching the model's default value.
     // Listen to Reported so weightedAverageKnown is published on that edge;
     // ControlResourceStore deduplicates later identical snapshots.
@@ -261,7 +286,8 @@ void RadioResourceAdapter::clearDynamicResources()
 void RadioResourceAdapter::publishRadioSession()
 {
     const RadioCapabilities capabilities = m_radio->backendCapabilities();
-    const QJsonObject value{
+    m_frequencyAuthority = frequencyAuthority(capabilities.sliceFrequencyControl.authority);
+    QJsonObject value{
         {QStringLiteral("id"), m_radioSessionId},
         {QStringLiteral("connected"), m_radio->isConnected()},
         {QStringLiteral("family"), m_radio->family()},
@@ -272,6 +298,18 @@ void RadioResourceAdapter::publishRadioSession()
              {QStringLiteral("version"), m_radio->version()},
              {QStringLiteral("manufacturer"), capabilities.manufacturer}}},
         {QStringLiteral("capabilities"), capabilityValue(capabilities)}};
+    if (m_connectionTarget) {
+        QString state;
+        switch (m_connectionTarget->state()) {
+        case RadioConnectionTarget::State::Idle: state = QStringLiteral("idle"); break;
+        case RadioConnectionTarget::State::Connecting: state = QStringLiteral("connecting"); break;
+        case RadioConnectionTarget::State::Connected: state = QStringLiteral("connected"); break;
+        case RadioConnectionTarget::State::Disconnecting: state = QStringLiteral("disconnecting"); break;
+        }
+        value.insert(QStringLiteral("connectionControl"), QJsonObject{
+            {QStringLiteral("state"), state},
+            {QStringLiteral("errorCode"), m_connectionTarget->errorCode()}});
+    }
     m_resources->upsert({QStringLiteral("radioSession"), {}, m_radioSessionId}, value);
 }
 
@@ -280,12 +318,22 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
     if (!slice || !m_slices.contains(slice)) {
         return;
     }
+    if (m_frequencyAuthority.isEmpty()) {
+        m_frequencyAuthority = frequencyAuthority(
+            m_radio->backendCapabilities().sliceFrequencyControl.authority);
+    }
     const QJsonObject value{
         {QStringLiteral("id"), QString::number(slice->sliceId())},
         {QStringLiteral("letter"), slice->letter()},
         {QStringLiteral("panadapterId"), slice->panId()},
         {QStringLiteral("owned"), m_radio->isSlotOurs(slice->sliceId())},
         {QStringLiteral("frequencyHz"), qRound64(slice->frequency() * 1'000'000.0)},
+        {QStringLiteral("frequencyObservation"), QJsonObject{
+             {QStringLiteral("known"), slice->frequencyReportedKnown()},
+             {QStringLiteral("hz"), slice->frequencyReportedKnown()
+                  ? QJsonValue(qRound64(slice->reportedFrequency() * 1'000'000.0))
+                  : QJsonValue(QJsonValue::Null)},
+             {QStringLiteral("authority"), m_frequencyAuthority}}},
         {QStringLiteral("mode"), slice->mode()},
         {QStringLiteral("filter"), QJsonObject{
              {QStringLiteral("lowHz"), slice->filterLow()},
@@ -336,6 +384,10 @@ void RadioResourceAdapter::publishPanadapter(PanadapterModel* panadapter)
         {QStringLiteral("displayCadence"), QJsonObject{
              {QStringLiteral("fps"), panadapter->fps()},
              {QStringLiteral("averageFrames"), panadapter->average()},
+             {QStringLiteral("averageIsRequest"), panadapter->averageIsRequest()},
+             {QStringLiteral("fpsIsRequest"), panadapter->fpsIsRequest()},
+             {QStringLiteral("radioReportedAverage"), panadapter->radioReportedAverage()},
+             {QStringLiteral("radioReportedFps"), panadapter->radioReportedFps()},
              {QStringLiteral("weightedAverage"), panadapter->weightedAverage()},
              {QStringLiteral("weightedAverageKnown"),
               panadapter->weightedAverageKnown()},

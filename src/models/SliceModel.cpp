@@ -664,6 +664,14 @@ void SliceModel::setSquelch(bool on, int level)
     const bool onChanged = (m_squelchOn != on);
     const bool levelChanged = (m_squelchLevel != level);
 
+    // Optimistic local changes are not fresh readback for a later reattach.
+    if (onChanged) {
+        m_squelchOnKnown = false;
+    }
+    if (levelChanged) {
+        m_squelchLevelKnown = false;
+    }
+
     m_squelchOn    = on;
     m_squelchLevel = level;
 
@@ -1190,6 +1198,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
     if (d.frequency.has_value()) {
         const double f = *d.frequency;
+        m_frequencyReportedKnown = std::isfinite(f)
+            && f > 0.0 && f <= kMaximumReportedFrequencyMhz;
+        m_reportedFrequency = m_frequencyReportedKnown ? f : 0.0;
         // qFuzzyCompare fails when either value is 0.0 — use explicit epsilon
         if (std::abs(m_frequency - f) > 1e-9) {
             m_frequency = f;
@@ -1559,6 +1570,8 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit agcOffLevelChanged(m_agcOffLevel);
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+        m_squelchOnKnown |= d.squelchOn.has_value();
+        m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())
             m_squelchOn = *d.squelchOn;
         if (d.squelchLevel.has_value()) {
@@ -1701,10 +1714,24 @@ void SliceModel::applyChanges(const SliceDelta& d)
         if (changed) emit stepChanged(m_stepHz, m_stepList);
     }
 
+    if (d.frequency.has_value() && !freqChanged) {
+        // Also report a same-value echo following an optimistic desktop tune.
+        // A changed value already notifies observation consumers below.
+        emit frequencyReported();
+    }
     if (freqChanged)
         emit frequencyChanged(m_frequency);
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
+}
+
+void SliceModel::invalidateFrequencyObservation()
+{
+    if (m_frequencyReportedKnown) {
+        m_frequencyReportedKnown = false;
+        m_reportedFrequency = 0.0;
+        emit frequencyReported();
+    }
 }
 
 void SliceModel::applyRecalledStepHz(int hz)

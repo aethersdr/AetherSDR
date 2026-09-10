@@ -131,6 +131,9 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
+    // bounds are commented out. Do not guess coverage (including transverters).
+    caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");
@@ -143,6 +146,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // derived-from-name truth used to *seed* the reported capabilities; a fuller
     // FlexBackend refines these from live radio status as touchpoints convert.
     const ModelCapabilities mc = capabilitiesFor(caps.model);
+    caps.canCreateSlices = true;
     caps.maxSlices = mc.maxSlices;
     // approx: pan capacity is not strictly slice count on real Flex hardware;
     // refined from live radio status in a later touchpoint conversion.
@@ -193,6 +197,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // group on the Receive page, and it is NOT this flag. False here means "the
     // client does not apply a frequency scalar", which is correct for a Flex.
     caps.hostFrequencyCalibration = false;
+    caps.hostDroopCalibration = false;   // no known DDC edge droop on this radio
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
     caps.hasSelectableMicInputs = true;

@@ -33,6 +33,7 @@ int main(int argc, char** argv)
 
     // 1. Check capabilities declaration (Principle VI: receive-only)
     const auto caps = backend->capabilities();
+    check(!caps.canCreateSlices, "RTL-SDR retains its fixed single receiver in P01");
     check(caps.family == "rtl", "capabilities.family is rtl");
     check(!caps.canTransmit, "RTL-SDR cannot transmit");
     check(caps.txPowerMaxWatts == 0.0, "RTL-SDR max TX power is 0");

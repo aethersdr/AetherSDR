@@ -1,6 +1,7 @@
 #include "MapTerminatorItem.h"
 
 #include "SolarTerminator.h"
+#include "BasemapStyle.h"
 #include "core/ThemeManager.h"
 
 #include <QGeoView/QGVMap.h>
@@ -57,6 +58,15 @@ void MapTerminatorItem::setDateTime(const QDateTime& dateTime)
     rebuildImage();
 }
 
+void MapTerminatorItem::setDarkBasemapEnabled(bool enabled)
+{
+    if (m_darkBasemapEnabled == enabled) {
+        return;
+    }
+    m_darkBasemapEnabled = enabled;
+    rebuildImage();
+}
+
 void MapTerminatorItem::onProjection(QGVMap* geoMap)
 {
     QGVDrawItem::onProjection(geoMap);
@@ -88,9 +98,13 @@ void MapTerminatorItem::rebuildImage()
                 resetBoundary();
                 refresh();
             });
+    ThemeManager& theme = ThemeManager::instance();
+    const QColor night = m_darkBasemapEnabled
+        ? BasemapStyle::nightColor(theme.color(BasemapStyle::kBackgroundToken))
+        : theme.color("color.background.0");
     watcher->setFuture(QtConcurrent::run(
         &MapTerminatorItem::renderImage, m_worldRect, m_dateTime,
-        ThemeManager::instance().color("color.background.0"), cancelled));
+        night, cancelled));
 }
 
 QImage MapTerminatorItem::renderImage(

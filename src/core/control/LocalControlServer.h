@@ -30,10 +30,15 @@ public:
     };
 
     explicit LocalControlServer(QObject* parent = nullptr);
-    LocalControlServer(QObject* parent, Limits limits);
+    LocalControlServer(QObject* parent, Limits limits,
+                       RadioConnectionTarget* connectionTarget = nullptr,
+                       bool allowLocalControl = false);
     ~LocalControlServer() override;
 
     [[nodiscard]] bool listen(const QString& name);
+    // Startup-only binding; never changes grants or replaces a lost target.
+    [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
+    [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
@@ -56,6 +61,7 @@ private:
     ControlResourceStore m_resources;
     ControlService m_service;
     Limits m_limits;
+    const SessionAuthorization m_localAuthorization;
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;
     std::unique_ptr<QLockFile> m_lock;
 };

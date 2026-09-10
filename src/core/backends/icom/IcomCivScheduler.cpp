@@ -38,6 +38,8 @@ void IcomCivScheduler::noteResponse(const Queued& request, std::int64_t nowMs)
     m_stats.maxResponseMs = std::max(m_stats.maxResponseMs, responseMs);
     m_stats.lastResponseAtMs = nowMs;
     m_stats.lastCompletedKey = request.request.key;
+    m_stats.lastCompletedCmd = request.request.frame.size() > 4
+        ? request.request.frame[4] : std::uint8_t{0};
 }
 
 // Two requests are duplicates only if they ask the SAME register the same way.

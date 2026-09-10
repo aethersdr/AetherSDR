@@ -59,6 +59,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.knob.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.knob.handle", QString("#c8d8e8"));
     m_tokens.insert("color.knob.handle.disabled", QString("#506070"));
+    m_tokens.insert("color.map.darkBackground", QString("#18212b"));
+    m_tokens.insert("color.map.darkDetail", QString("#c8d8e8"));
     m_tokens.insert("color.meter.bar.fill", QString("#405060"));
     {
         ThemeGradient g;
