@@ -1204,6 +1204,117 @@ int testPrimaryRowFrameForNativeTile()
 
 } // namespace
 
+// jensenpat's #5142 review, item 4: a deterministic regression over the whole
+// temporal sequence -- initial confirmed centre, an optimistic horizontal drag
+// that freezes it, several delayed exact-span sweeps arriving at MOVING
+// centres, then release. The defect he reproduced on an IC-7300MK2 is not a
+// single bad decision; it only appears once the viewport stops tracking the
+// sweeps, so a per-call test cannot see it.
+//
+// Asserted for every sweep in the sequence:
+//   * the row's claimed frame never reaches outside the tile that fed it, so
+//     no column it claims was zero-filled (his items 1 and 2);
+//   * a tile that DOES cover the viewport still takes the viewport frame, so
+//     the Flex path is unchanged;
+//   * a short sweep falls back to its own extent, which is what keeps the
+//     supplemental row reachable for the columns it cannot fill.
+int testNativeTileDragSequenceNeverClaimsUncoveredSpan()
+{
+    using namespace AetherSDR;
+    constexpr int kDestWidth = 800;
+    constexpr int kBins = 512;
+
+    // Viewport frozen at the pre-drag centre -- setFrequencyRangeInternal()
+    // rejects the moving centres while the drag is held.
+    const FrequencyFrame frozenViewport{14.200, 0.192};
+
+    struct Sweep { double centerMhz; double spanMhz; };
+    static constexpr Sweep kSweeps[] = {
+        {14.200, 0.192},   // exactly the viewport
+        {14.205, 0.192},   // drifted right, partial overlap
+        {14.215, 0.192},   // drifted further
+        {14.190, 0.192},   // drifted left
+        {14.200, 0.400},   // an oversized (Flex-like) tile
+        {14.400, 0.192},   // disjoint -- no overlap at all
+        {14.220, 0.048},   // narrow sweep well inside the viewport
+    };
+
+    for (const Sweep& sweep : kSweeps) {
+        const double lowMhz = sweep.centerMhz - sweep.spanMhz / 2.0;
+        const double highMhz = sweep.centerMhz + sweep.spanMhz / 2.0;
+        const FrequencyFrame rowFrame =
+            primaryRowFrameForNativeTile(frozenViewport, lowMhz, highMhz);
+
+        // The invariant. This is what failed before the fix: the row took the
+        // frozen viewport frame regardless, zero-filled everything the sweep
+        // did not reach, and stamped it as covered -- so remapHistoryRowInto()
+        // preferred those zeros permanently.
+        if (!nativeTileRowIsFullyCovered(rowFrame, lowMhz, highMhz,
+                                         kDestWidth, kBins))
+            return fail("a committed row claims columns its sweep never covered");
+
+        const double viewStart =
+            frozenViewport.centerMhz - frozenViewport.bandwidthMhz / 2.0;
+        const double viewEnd =
+            frozenViewport.centerMhz + frozenViewport.bandwidthMhz / 2.0;
+        const bool coversViewport = lowMhz <= viewStart && highMhz >= viewEnd;
+
+        if (coversViewport
+            && !nearlyEqual(rowFrame.centerMhz, frozenViewport.centerMhz, 1.0e-9))
+            return fail("a covering tile was not laid out against the viewport");
+        if (!coversViewport
+            && !nearlyEqual(rowFrame.bandwidthMhz, sweep.spanMhz, 1.0e-9))
+            return fail("a short sweep did not fall back to its own extent");
+    }
+
+    // Release: the radio acknowledges the final centre and the viewport catches
+    // up. The next sweep must settle on it directly.
+    const FrequencyFrame settled{14.220, 0.192};
+    const double settledLow = settled.centerMhz - settled.bandwidthMhz / 2.0;
+    const double settledHigh = settled.centerMhz + settled.bandwidthMhz / 2.0;
+    const FrequencyFrame settledRow =
+        primaryRowFrameForNativeTile(settled, settledLow, settledHigh);
+    if (!nearlyEqual(settledRow.centerMhz, settled.centerMhz, 1.0e-9)
+        || !nearlyEqual(settledRow.bandwidthMhz, settled.bandwidthMhz, 1.0e-9))
+        return fail("the post-release row did not settle on the acknowledged centre");
+    if (!nativeTileRowIsFullyCovered(settledRow, settledLow, settledHigh,
+                                     kDestWidth, kBins))
+        return fail("the post-release row claims columns it did not cover");
+    return 0;
+}
+
+// The rendering path is shared, so the invariant is asserted for every
+// producer's tile shape rather than Icom's alone -- jensenpat asked for that
+// in the same review. Only the tile geometry differs between them.
+int testNativeTileCoverageAcrossProducers()
+{
+    using namespace AetherSDR;
+    constexpr int kDestWidth = 640;
+    constexpr int kBins = 256;
+    const FrequencyFrame viewport{14.200, 0.192};
+
+    struct Producer { const char* name; double centerMhz; double spanMhz; };
+    static constexpr Producer kProducers[] = {
+        {"flex-oversized-tile", 14.200, 0.400},
+        {"icom-exact-span",     14.207, 0.192},
+        {"anan-ddc-span",       14.200, 0.192},
+        {"hl2-narrow",          14.200, 0.048},
+        {"sim-echoed",          14.200, 0.192},
+        {"kiwi-offset",         14.180, 0.100},
+    };
+
+    for (const Producer& producer : kProducers) {
+        const double lowMhz = producer.centerMhz - producer.spanMhz / 2.0;
+        const double highMhz = producer.centerMhz + producer.spanMhz / 2.0;
+        const FrequencyFrame rowFrame =
+            primaryRowFrameForNativeTile(viewport, lowMhz, highMhz);
+        if (!nativeTileRowIsFullyCovered(rowFrame, lowMhz, highMhz,
+                                         kDestWidth, kBins))
+            return fail("a producer's tile shape claims uncovered columns");
+    }
+    return 0;
+}
+
 int main()
 {
     if (const int result = testDssRowSpanSupported(); result != 0) {
@@ -1274,5 +1385,12 @@ int main()
     if (const int result = testStampFrameForHistoryRow(); result != 0) {
         return result;
     }
-    return testPrimaryRowFrameForNativeTile();
+    if (const int result = testPrimaryRowFrameForNativeTile(); result != 0) {
+        return result;
+    }
+    if (const int result = testNativeTileDragSequenceNeverClaimsUncoveredSpan();
+        result != 0) {
+        return result;
+    }
+    return testNativeTileCoverageAcrossProducers();
 }

@@ -8537,16 +8537,18 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     const FrequencyFrame primaryFrame = primaryRowFrameForNativeTile(
         FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz},
         lowFreqMhz, highFreqMhz);
-    const double panStartMhz =
-        primaryFrame.centerMhz - primaryFrame.bandwidthMhz / 2.0;
 
     QVector<quint8> levels(destWidth, 0);
     QVector<quint8> supplementalLevels(destWidth, 0);
     if (tileBw > 0) {
         for (int x = 0; x < destWidth; ++x) {
-            const double freq = panStartMhz
-                + (static_cast<double>(x) / destWidth) * primaryFrame.bandwidthMhz;
-            const double binF = (freq - lowFreqMhz) / tileBw;
+            // Same mapping the regression test drives directly -- see
+            // nativeTileBinForColumn(). Keeping one implementation is the
+            // point: a test that recomputed this could not catch a
+            // frame-vs-pixels disagreement, which is the defect class this
+            // PR exists for (jensenpat, #5142 review).
+            const double binF = nativeTileBinForColumn(
+                primaryFrame, lowFreqMhz, tileBw, x, destWidth);
             const int binIdx = static_cast<int>(binF);
             if (binIdx >= 0 && binIdx < srcSize) {
                 // Linear interpolation between adjacent bins
@@ -8586,8 +8588,10 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     const double incomingSupplementalBandwidthMhz =
         highFreqMhz - lowFreqMhz;
     const WaterfallBlankerFrameBundle incomingFrames{
-        // Must match panStartMhz above -- the row may only claim the span it
-        // was actually laid out across. The supplemental frame is untouched:
+        // Must be the SAME primaryFrame the rasterisation loop above laid the
+        // pixels out across -- the row may only claim the span it actually
+        // has data for. nativeTileRowIsFullyCovered() is that invariant,
+        // asserted over a full drag sequence in spectrum_preview_logic_test. The supplemental frame is untouched:
         // it's already derived from the tile's own real bounds
         // (lowFreqMhz/highFreqMhz), not the on-screen guess.
         primaryFrame,

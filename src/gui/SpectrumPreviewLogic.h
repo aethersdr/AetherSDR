@@ -135,6 +135,66 @@ struct FrequencyFrame {
     return coversViewport ? viewport : tileFrame;
 }
 
+// Where in the tile does destination column `x` land?
+//
+// This is the exact mapping updateWaterfallRow()'s rasterisation loop uses,
+// lifted out of the widget so it can be driven directly by a test. That
+// matters here specifically: the defect this PR fixes was a disagreement
+// between the frame a row CLAIMS and the pixels it actually has, and a test
+// that reimplemented the mapping would not have caught it (jensenpat, #5142
+// review, item 4).
+//
+// Returns a fractional bin index into the tile. Values outside
+// [0, binCount) mean the tile does not reach that column, and the caller
+// leaves the pixel at zero -- which is legitimate ONLY when the row's frame
+// does not claim that column. primaryRowFrameForNativeTile() is what keeps
+// those two facts in agreement.
+[[nodiscard]] inline double nativeTileBinForColumn(const FrequencyFrame& rowFrame,
+                                                   double tileLowMhz,
+                                                   double tileBinBandwidthMhz,
+                                                   int x,
+                                                   int destWidth) noexcept
+{
+    if (destWidth <= 0 || !(tileBinBandwidthMhz > 0.0))
+        return -1.0;
+    const double rowStartMhz = rowFrame.centerMhz - rowFrame.bandwidthMhz / 2.0;
+    const double freqMhz =
+        rowStartMhz
+        + (static_cast<double>(x) / static_cast<double>(destWidth))
+              * rowFrame.bandwidthMhz;
+    return (freqMhz - tileLowMhz) / tileBinBandwidthMhz;
+}
+
+// True when every column of a row laid out across `rowFrame` has real tile
+// data behind it -- i.e. the row claims nothing it zero-filled.
+//
+// This is the invariant jensenpat's items 1 and 2 asked for, stated once so a
+// test can assert it over a sequence rather than eyeballing a screenshot. It
+// must hold for EVERY row this widget commits to history, at any viewport and
+// any tile extent, because a row that fails it bakes a black rectangle into
+// retained history that no later supplemental row can repair.
+[[nodiscard]] inline bool nativeTileRowIsFullyCovered(const FrequencyFrame& rowFrame,
+                                                      double tileLowMhz,
+                                                      double tileHighMhz,
+                                                      int destWidth,
+                                                      int binCount) noexcept
+{
+    if (destWidth <= 0 || binCount <= 0)
+        return false;
+    const double tileSpanMhz = tileHighMhz - tileLowMhz;
+    if (!(tileSpanMhz > 0.0))
+        return false;
+    const double binBwMhz = tileSpanMhz / static_cast<double>(binCount);
+    for (int x = 0; x < destWidth; ++x) {
+        const double binF =
+            nativeTileBinForColumn(rowFrame, tileLowMhz, binBwMhz, x, destWidth);
+        const int binIdx = static_cast<int>(binF);
+        if (binIdx < 0 || binIdx >= binCount)
+            return false;
+    }
+    return true;
+}
+
 // A native waterfall tile supplies two independently calibrated rows: the
 // viewport row and the full-tile supplemental row. A blanked row must keep
 // their capture frames paired with the matching pixels.
