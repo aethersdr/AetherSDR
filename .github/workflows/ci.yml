@@ -75,7 +75,7 @@ jobs:
       # — a full 2000M cache saved as a ~1.88 GiB entry (measured on every
       # main save 2026-09-01..05). With the other caches also at their caps
       # (sccache-windows 1.02 GiB, canary 0.94, macOS 0.44) and cache-cleanup
-      # keeping two of each, main alone held ~10.6 GiB against the 10 GiB
+      # keeping two of each, main alone held ~10.4 GiB against the 10 GiB
       # allowance. GitHub evicted by LRU, this entry went first because it was
       # the largest, and every main run until the next green save was a cold
       # build: 27–37 min instead of 3–6, ten times between 2026-09-06 and
@@ -105,12 +105,22 @@ jobs:
       #                                         ~ 1.8 GiB
       #                                         --------
       #                                         ~ 5.5 GiB
+      # That is the post-prune FLOOR, not what LRU evaluates. prune-main runs
+      # on workflow_run AFTER a main save, so between the save and the prune
+      # every prefix briefly holds two entries — a transient peak of about
+      # (1.4+1.02+0.44+0.94)x2 + 1.8 = ~9.4 GiB, and main runs are not
+      # serialised (cancel-in-progress is off for main), so those windows can
+      # overlap. Budget against the peak, not the floor.
       # The canary line is system-libs-canary.yml's cache; it was missed by an
       # earlier revision of this table and by cache-cleanup.yml's PREFIXES
       # alike, so if you add a compiler cache in ANY workflow, add it to both.
       # Dependency caches are still written on PR refs until #5548 item 1
       # lands; that adds up to ~1.7 GiB per open PR that missed, on top of
-      # the figure above.
+      # the figure above — with the four open PRs measured on 2026-09-10 that
+      # is ~12 GiB, still over the line. This change makes main's OWN
+      # footprint survivable; the Linux entry can still be evicted by PR-ref
+      # churn until item 1 stops PRs writing dependency caches, so usage
+      # pinned at the allowance next week does not mean this did not work.
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
       CCACHE_MAXSIZE: 1500M
@@ -874,9 +884,11 @@ jobs:
 #   resolve to the most recent match, so run N's cache is unreachable the moment
 #   run N+1 saves, and an unreachable entry is never accessed again — so nothing
 #   refreshes its LRU position and nothing deletes it. Left alone, main writes
-#   ~1.66 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
-#   own. That job prunes each prefix to the newest 2. (Retention is itself a
-#   configurable policy as of 2025-11; see cache-cleanup.yml's header.)
+#   ~4.3 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
+#   own. That job prunes each prefix to the newest 1 (was 2 until #5548; the
+#   second copy alone put main over the allowance once every cache had filled
+#   to its cap). (Retention is itself a configurable policy as of 2025-11;
+#   see cache-cleanup.yml's header.)
 # - IF YOU ADD A run_id-KEYED COMPILER CACHE IN ANY WORKFLOW, add its key prefix
 #   to that job's PREFIXES list. Note "any workflow", not "this file": the first
 #   version of that list was written as "one prefix per compiler cache in
@@ -884,9 +896,8 @@ jobs:
 #   is the same run_id-keyed pattern on the same push:main trigger. The scope
 #   that matters is the repository's 10 GB allowance, not this file's share.
 # - PR-scoped caches (Qt, FFTW, DeepFilterNet, qtkeychain on refs/pull/N/merge)
-#   are NOT swept. A job for them was written and pulled before merge: a
-#   `pull_request` trigger gets a read-only token on fork PRs and cannot be
-#   elevated, and 22 of 25 open PRs are forks. It may also prove unnecessary —
-#   PRs only WRITE those when the key is not already readable, which was itself
-#   a symptom of main's copies being evicted by the churn the split above
-#   removes. Deferred to a follow-up that can measure it first.
+#   are swept by cache-cleanup.yml's scheduled job once the PR closes (#5009;
+#   a `pull_request: closed` trigger gets a read-only token on fork PRs, so it
+#   runs daily instead). Open PRs still write them whenever main's copy is not
+#   readable, which at the allowance is often — #5548 item 1 gives the
+#   dependency caches the same restore-on-PR / save-on-main split as above.

@@ -107,11 +107,17 @@ jobs:
           # 2026-09-06 and 2026-09-10. A corrupt-entry recovery would have
           # been ONE such cold build; the insurance was causing them weekly.
           #
-          # The sparse case the insurance guarded against is already closed
-          # by the `success()` gate on every save step in ci.yml. If a corrupt
-          # entry ever does land, `gh cache delete` it and take the one cold
-          # rebuild; do not go back to 2 without re-doing the budget in
-          # ci.yml's CCACHE_MAXSIZE comment.
+          # The sparse case the insurance guarded against is closed by the
+          # `success()` gate on the Linux and Windows saves (ci.yml, "Save
+          # ccache objects" / "Save sccache objects"). It is NOT closed on
+          # macOS: ci.yml's "Set up ccache" step documents that the
+          # ccache-action saves from a post-job hook with no `success()` half,
+          # so a failed main build there can still write a sparse entry and
+          # KEEP=1 leaves no fallback. Accepted — that entry is 0.44 GiB on the
+          # lightest config and one cold macOS rebuild is the whole cost. If a
+          # corrupt entry ever lands on any prefix, `gh cache delete` it and
+          # take the one cold rebuild; do not go back to 2 without re-doing
+          # the budget in ci.yml's CCACHE_MAXSIZE comment.
           KEEP: "1"
         run: |
           set -euo pipefail
