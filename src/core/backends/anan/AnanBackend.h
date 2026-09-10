@@ -260,7 +260,26 @@ private:
     // minimum; it is a fraction of the ~2s the restart path cost per zoom
     // step. Worth revisiting on the bench if a rate change still audibly
     // glitches, or shortening if it proves conservative.
+    //
+    // It also SUPERSEDES kRateChangeAudioSettleMs (300ms) on this path, and
+    // that is a deliberate judgement rather than an oversight. That 300ms
+    // exists so a freshly built WdspChannel gets a beat of quiet before its
+    // AGC, filters and DC-blocker are unmuted against live RF -- under the
+    // restart path its clock started at linkUp, i.e. at the first new-rate
+    // frame. Here the clock starts at the channel swap, so WDSP gets
+    // 250ms minus the handoff latency: strictly less, by an amount that has
+    // not been measured. Bench-tested at 48 and 1536 ksps without an audible
+    // artifact, which is the evidence for calling it sufficient -- but if a
+    // rate change ever thumps on unmute, split the two settles before
+    // reaching for a larger number. (aethersdr-agent, #5547 review.)
     static constexpr int kRateChangeLiveSettleMs = 250;
+
+    // The DDC-Specific packet is resent at these offsets (ms) inside the
+    // settle window above, on top of the immediate send. Three copies over
+    // ~140 ms, all well inside the 250 ms mute, so a lost datagram costs
+    // nothing audible. See finishRateChange()'s own comment for why one
+    // fire-and-forget send was not enough and why repeating is safe.
+    static constexpr int kRateChangeResendMs[] = {60, 140};
 
     QString m_mode = QStringLiteral("USB");
     int m_filterLowHz = 100;

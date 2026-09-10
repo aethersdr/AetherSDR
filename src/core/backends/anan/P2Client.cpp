@@ -1,10 +1,13 @@
 #include "core/backends/anan/P2Client.h"
 
+#include <QLoggingCategory>
 #include <QNetworkDatagram>
 #include <QTimer>
 #include <QUdpSocket>
 
 #include <span>
+
+Q_LOGGING_CATEGORY(lcAnanP2, "aether.anan.p2")
 
 namespace AetherSDR::anan {
 
@@ -62,6 +65,7 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_expectedSeq.fill(std::nullopt);
     m_activeDdcCount = 1;   // real value set once the DDC list is resolved below
     m_drops = 0;
+    m_warnedUnexpectedPorts.clear();
     m_linkUp = false;
     m_discoveryInfoSent = false;
 
@@ -102,11 +106,20 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ditherEnabled = params.ditherEnabled;
     m_randomEnabled = params.randomEnabled;
 
-    // Every DDC starts at the same frequency DDC0 was given (0/baseband
-    // unless a caller retuned first). Per-DDC tuning is a seam this class
-    // does not expose yet -- setDdc0FrequencyHz() moves DDC0 only -- so
-    // sending one shared word is honest about what is actually controllable
-    // rather than implying independent tuning that has no setter behind it.
+    // Every DDC starts at the same frequency: m_ddc0FreqWord, which start()
+    // zeroed above, so in practice baseband. Per-DDC tuning is a seam this
+    // class does not expose yet -- setDdc0FrequencyHz() moves DDC0 only --
+    // so sending one shared word is honest about what is actually
+    // controllable rather than implying independent tuning that has no
+    // setter behind it.
+    //
+    // The two other High Priority senders (setDdc0FrequencyHz() and
+    // onKeepaliveTick()) send the SAME shared word for the same count, so
+    // they cannot disagree with this packet. That matters because the
+    // keepalive fires every 100 ms: a single-DDC overload there would pin
+    // DDC1..N-1 at word 0 forever regardless of what this line sent, and the
+    // two would diverge permanently the moment DDC0 was retuned.
+    // (aethersdr-agent, #5547 review.)
     std::vector<std::uint32_t> freqWords(ddcs.size(), m_ddc0FreqWord);
 
     // Destination ports below are NOT interchangeable with kRadioPort -- see
@@ -153,7 +166,8 @@ void P2Client::setDdc0FrequencyHz(double hz)
     m_ddc0FreqWord = phaseWord(hz);
     if (m_running && m_socket)
         sendTo(*m_socket,
-              buildHighPriority(true, m_ddc0FreqWord, m_bypassAdc0Filters, m_bypassAdc1Filters),
+              buildHighPriority(true, sharedFreqWords(),
+                                m_bypassAdc0Filters, m_bypassAdc1Filters),
               m_host, kHighPriorityPort);
 }
 
@@ -193,7 +207,8 @@ void P2Client::onKeepaliveTick()
     // This IS the "any C&C packet" the watchdog needs (p.8) -- no need to
     // also replay General/DDC-Specific on this cadence, same as the spike.
     sendTo(*m_socket,
-          buildHighPriority(true, m_ddc0FreqWord, m_bypassAdc0Filters, m_bypassAdc1Filters),
+          buildHighPriority(true, sharedFreqWords(),
+                            m_bypassAdc0Filters, m_bypassAdc1Filters),
           m_host, kHighPriorityPort);
 }
 
@@ -237,6 +252,26 @@ void P2Client::onReadyRead()
             // DDC would corrupt that receiver's audio and its sequence
             // tracking, and counting it as a drop would blame this session
             // for someone else's traffic.
+            //
+            // "Not a drop" must not mean "not observable", though. If the
+            // radio's source port ever differs from basePort + n -- other
+            // firmware, a NAT or relay in the path, a future negotiated-port
+            // session -- then EVERY datagram lands here and the operator sees
+            // a dead receiver whose only diagnostic is onConnectTimeout()'s
+            // "no DDC0 IQ from the radio", which reads as a radio fault. One
+            // line naming the port turns that into a diagnosis. Logged once
+            // per distinct port per session: this is in the hot receive path
+            // and a mismatch is by nature every packet.
+            if (!m_warnedUnexpectedPorts.contains(dg.senderPort())) {
+                m_warnedUnexpectedPorts.insert(dg.senderPort());
+                qCWarning(lcAnanP2).nospace()
+                    << "ANAN: dropping DDC-shaped datagram from unexpected "
+                       "sender port " << dg.senderPort() << " (expected "
+                    << kDdc0DefaultPort << ".."
+                    << (kDdc0DefaultPort + m_activeDdcCount - 1)
+                    << " for " << m_activeDdcCount
+                    << " active DDC(s)) -- not counted as a drop";
+            }
             continue;
         }
         const std::size_t slot = static_cast<std::size_t>(*ddcIndex);

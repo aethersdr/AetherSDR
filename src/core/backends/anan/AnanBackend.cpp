@@ -956,9 +956,31 @@ void AnanBackend::finishRateChange(quint64 generation, bool ok, const QString& e
     // the OLD rate, until the radio's register write takes effect. That is
     // what the mute above covers, and what the short settle below waits out
     // -- a small fraction of the old restart's cost.
-    QMetaObject::invokeMethod(
-        m_client, "setDdcRateLive", Qt::QueuedConnection,
-        Q_ARG(int, 0), Q_ARG(int, m_pendingDspConfig.inputSampleRateHz / 1000));
+    // Sent THREE times across the settle window, not once. This is
+    // fire-and-forget UDP and nothing re-asserts it -- onKeepaliveTick()
+    // resends High Priority every 100 ms but never DDC-Specific. A single
+    // lost datagram would leave the radio streaming at the old rate while
+    // the new WdspChannel, emitPanState() and AnanDroopCalibrator::
+    // setLandedRate() all record the new one: wrong span, wrong audio pitch,
+    // no error, until the next zoom. The restart path this replaces had
+    // implicit confirmation -- a lost packet meant no stream, and the
+    // 6000 ms connect timeout said so -- and that detection is gone.
+    //
+    // Repeating is safe because the packet is idempotent: p2app's
+    // WriteP2DDCRateRegister() fires on change and its companion
+    // HandlerCheckDDCSettings() is empty, so a duplicate at the same rate is
+    // a no-op on the radio. Cheaper than adding an ack this protocol does
+    // not offer. (aethersdr-agent, #5547 review, Blocker 1.)
+    const int rateKsps = m_pendingDspConfig.inputSampleRateHz / 1000;
+    auto sendRate = [this, rateKsps, generation]() {
+        if (generation != m_connectGeneration)
+            return;
+        QMetaObject::invokeMethod(m_client, "setDdcRateLive", Qt::QueuedConnection,
+                                  Q_ARG(int, 0), Q_ARG(int, rateKsps));
+    };
+    sendRate();
+    for (const int delayMs : kRateChangeResendMs)
+        QTimer::singleShot(delayMs, this, sendRate);
 
     QTimer::singleShot(kRateChangeLiveSettleMs, this, [this, generation]() {
         // Same generation guard the restart path used: a newer rate

@@ -4,6 +4,7 @@
 
 #include <QHostAddress>
 #include <QObject>
+#include <QSet>
 #include <QString>
 
 #include <array>
@@ -242,6 +243,21 @@ private:
     // sender ports belong to it. Kept alongside m_activeDdcs (rather than
     // read from its size) because onReadyRead() consults it per datagram.
     int m_activeDdcCount = 1;
+
+    // One shared phase word per active DDC. Every High Priority sender uses
+    // this, so the keepalive (100 ms) can never contradict what start() sent:
+    // a single-DDC overload on that path would pin DDC1..N-1 at word 0
+    // regardless. Per-DDC tuning has no setter yet, so one word for all of
+    // them is the honest encoding -- see start()'s own comment.
+    [[nodiscard]] std::vector<std::uint32_t> sharedFreqWords() const
+    {
+        return std::vector<std::uint32_t>(
+            static_cast<std::size_t>(m_activeDdcCount), m_ddc0FreqWord);
+    }
+    // Sender ports already warned about, so a port mismatch -- which by
+    // nature affects every packet -- logs once per distinct port rather than
+    // per datagram. Session-scoped; cleared with the rest of the state.
+    QSet<quint16> m_warnedUnexpectedPorts;
 
     // Reused decode buffer, cleared and refilled per frame rather than
     // reallocated -- matches MetisClient's m_blocks for the same reason.
