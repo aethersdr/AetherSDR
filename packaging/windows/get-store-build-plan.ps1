@@ -35,6 +35,16 @@ if (-not $match) {
     throw "Could not read the AetherSDR version from $ProjectFile."
 }
 $sourceVersion = [version]$match.Matches[0].Groups[1].Value
+
+# Compare versions by value, not spelling: "26.9.2" and "26.9.2.0" name the
+# same release. System.Version treats a missing component as -1, so pad first.
+function Get-NormalizedVersion([string]$Text) {
+    $parsed = $Text -as [version]
+    if ($null -eq $parsed) { return $null }
+    $build = if ($parsed.Build -lt 0) { 0 } else { $parsed.Build }
+    $revision = if ($parsed.Revision -lt 0) { 0 } else { $parsed.Revision }
+    return [version]::new($parsed.Major, $parsed.Minor, $build, $revision)
+}
 if ($sourceVersion.Major -lt 1 -or $sourceVersion.Major -gt 65535 -or $sourceVersion.Minor -gt 65535) {
     throw "The source version's first two MSIX components must fit in 16 bits, with a nonzero first component."
 }
@@ -49,8 +59,8 @@ if ($release) {
     if ($sourceVersion.Build -lt 0 -or $sourceVersion.Build -gt 65535 -or $sourceVersion.Revision -gt 0) {
         $storeSkipReason = "Production Store versions require a three-component source version (or a zero fourth component), with patch in 0..65535. Nonzero CalVer hotfix revisions need an explicit Store version policy."
     }
-    elseif ($tagVersion -ne $match.Matches[0].Groups[1].Value) {
-        $storeSkipReason = "Release tag version '$tagVersion' does not match the source version. Bump CMakeLists.txt before tagging."
+    elseif ((Get-NormalizedVersion $tagVersion) -ne (Get-NormalizedVersion $sourceVersion.ToString())) {
+        $storeSkipReason = "Release tag version '$tagVersion' does not match the source version $sourceVersion. Bump CMakeLists.txt before tagging."
     }
     if ($storeSkipReason) {
         $storeEligible = $false
@@ -62,7 +72,7 @@ if ($release) {
 }
 else {
     if ($RunNumber -lt 1 -or $RunNumber -gt 65535) {
-        throw "RunNumber $RunNumber is outside the development MSIX component range 1..65535. See docs/WINDOWS-STORE-MSIX.md before changing or resetting flight numbering."
+        throw "RunNumber $RunNumber is outside the development MSIX component range 1..65535. See docs/WINDOWS-STORE-MSIX.md before changing or resetting development numbering."
     }
     $msixVersion = "$($sourceVersion.Major).$($sourceVersion.Minor).$RunNumber.0"
 }

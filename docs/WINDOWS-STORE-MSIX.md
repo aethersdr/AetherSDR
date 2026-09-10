@@ -339,18 +339,19 @@ submitted packages must end in `.0`.
 
 Production tag pushes use the source release version: `26.9.2` becomes
 `26.9.2.0`, independent of the workflow run number and flight configuration.
-The tag must exactly match `project(AetherSDR VERSION ...)`. Three-component
-versions and explicit zero fourth components are supported. A nonzero CalVer
+The tag must name the same version as `project(AetherSDR VERSION ...)`;
+`v26.9.2` and `v26.9.2.0` both match a `26.9.2` source. A nonzero CalVer
 hotfix revision, unsupported Store patch, or mismatched/suffixed tag yields a
-plan with `storeEligible = false`, an empty MSIX version and an explanatory
-warning. MSIX creation, Store symbol-package validation and production Store
-submission are skipped; the portable ZIP, Inno installer, debug-symbol artifact
-and GitHub release attachment remain enabled. The planner must not silently
-replace a release patch or discard a hotfix.
+plan with `storeEligible = false`, an empty MSIX version and a run annotation
+explaining why. MSIX creation, Store symbol-package validation and production
+Store submission are skipped; the portable ZIP, Inno installer, debug-symbol
+artifact and GitHub release attachment remain enabled. The planner never
+substitutes another version for a release it cannot package.
 
 Before uploading a production package, compare its version with the highest
-production package accepted in Partner Center. Restoring release-based numbering
-must not be treated as permission to downgrade an already accepted package.
+production package accepted in Partner Center; Partner Center rejects a lower
+version, and a package accepted under the earlier run-counter scheme outranks
+every release-based version in the same month.
 
 Development builds, including manual flights, retain `YY.M.<workflow run
 number>.0`. Their run number must fit `1..65535`; that limit does not apply to
@@ -358,15 +359,16 @@ production because production does not use it. Rerunning a development workflow
 reuses its version.
 
 **Developer flights intentionally rank ahead of production.** A flight such
-as `26.9.205.0` is higher than production `26.9.2.0`, allowing developers to
-receive the flight. That separation is intentional; the next production patch
-does not necessarily supersede it for flight users. This production correction
-does not redesign flight numbering or reset any accepted Store version.
+as `26.9.205.0` is higher than production `26.9.2.0`, so flight users keep
+receiving flights; the next production patch does not supersede a flight for
+them. Flight numbering is independent of production versioning.
 
 Local `create-msix.ps1` builds also default to the normalized source version.
 With `-CreateUpload`, a nonzero fourth component is rejected before staging
-files. The app's CalVer, portable ZIP, Inno installer and release tags are
-unchanged by MSIX packaging.
+files; a CalVer hotfix is not Store-published by the workflow, so to upload one
+by hand pass an explicit `-Version YY.M.BUILD.0` that is higher than the last
+accepted package. The app's CalVer, portable ZIP, Inno installer and release
+tags are unchanged by MSIX packaging.
 
 ### Promoting to fully automatic later
 

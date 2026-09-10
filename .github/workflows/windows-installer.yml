@@ -46,6 +46,11 @@ jobs:
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           }
           "AETHERSDR_MSIX_VERSION=$($plan.msixVersion)" >> $env:GITHUB_ENV
+          if (-not $plan.storeEligible) {
+            # A plain Write-Warning stays inside this step's collapsed log; the
+            # annotation puts the reason on the run summary where it is seen.
+            Write-Host "::warning title=Store package skipped::$($plan.storeSkipReason)"
+          }
           Write-Host "Store package version: $($plan.msixVersion)"
 
       # pwsh, not Windows PowerShell: the suite is developed and verified on
@@ -416,7 +421,7 @@ jobs:
           Write-Host "Required symbols present; $symbolCount PDBs staged."
 
       - name: Verify Store symbol package topology
-        if: steps.store-plan.outputs.storeEligible == 'true' && hashFiles('AetherSDR-*.appxsym') != ''
+        if: hashFiles('AetherSDR-*.appxsym') != ''
         run: |
           $appxSym = @(Get-ChildItem -File -Filter "AetherSDR-*.appxsym")
           $msixUpload = @(Get-ChildItem -File -Filter "AetherSDR-*.msixupload")
