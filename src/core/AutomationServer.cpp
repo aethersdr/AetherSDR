@@ -2200,6 +2200,37 @@ QString unreliableMeterNote(const QString& meterName, const QString& radioModel)
     return QString();
 }
 
+// A scalar constructor default is not a meter reading. Keep support, liveness
+// and units beside the value for the low-rate vitals as well as the TX meters.
+QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
+{
+    QJsonObject selected;
+    bool supported = false;
+    for (const QJsonValue& item : meters) {
+        const QJsonObject row = item.toObject();
+        if (row.value(QStringLiteral("name")).toString() != name
+            || row.value(QStringLiteral("source")).toString() == QLatin1String("AMP")) {
+            continue;
+        }
+        supported = true;
+        if (selected.isEmpty() || (row.value(QStringLiteral("has_value")).toBool()
+            && (!selected.value(QStringLiteral("has_value")).toBool()
+                || row.value(QStringLiteral("age_ms")).toDouble()
+                    < selected.value(QStringLiteral("age_ms")).toDouble()))) {
+            selected = row;
+        }
+    }
+    const qint64 age = selected.value(QStringLiteral("age_ms")).toInteger(-1);
+    const bool fed = selected.value(QStringLiteral("has_value")).toBool() && age >= 0;
+    const bool fresh = fed && age < 1500;
+    return {{QStringLiteral("status"), !supported ? QStringLiteral("unsupported")
+        : !fed ? QStringLiteral("never-fed")
+        : fresh ? QStringLiteral("fresh") : QStringLiteral("stale")},
+        {QStringLiteral("value"), fresh ? selected.value(QStringLiteral("value")) : QJsonValue()},
+        {QStringLiteral("unit"), selected.value(QStringLiteral("unit"))},
+        {QStringLiteral("ageMs"), age}};
+}
+
 // Live meter readout. The flat convenience fields are the headline TX meters
 // with their freshness age (ms since last update, -1 if never) so a reader can
 // reject stale values — critical because some meters (notably PACURRENT) are
@@ -2224,7 +2255,11 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         }
     }
 
+    const QJsonObject temperature = meterObservation(all, QStringLiteral("PATEMP"));
+    const QJsonObject voltage = meterObservation(all, QStringLiteral("+13.8A"));
     return QJsonObject{
+        {QStringLiteral("temperature"), temperature},
+        {QStringLiteral("voltage"), voltage},
         {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
         {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
         {QStringLiteral("fwdPowerAgeMs"),   age(m->fwdPowerUpdatedAtMs())},
@@ -2240,8 +2275,8 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("swr"),
          m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
-        {QStringLiteral("paTemp"),          m->paTemp()},             // °C
-        {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
+        {QStringLiteral("paTemp"),          temperature.value(QStringLiteral("value"))},
+        {QStringLiteral("supplyVolts"),     voltage.value(QStringLiteral("value"))},
         {QStringLiteral("alc"), QJsonObject{
             {QStringLiteral("value"), m->alcUpdatedAtMs() > 0 ? QJsonValue(m->alcValue()) : QJsonValue()},
             {QStringLiteral("unit"), m->alcUnit()},
@@ -6850,6 +6885,11 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")}};
     }
     if (action == QLatin1String("twotone")) {
+        // Icom setTune() generates one sine wave. The Flex tune_mode command
+        // has no Icom route; accepting this verb falsely certifies two-tone RF.
+        if (m_radioModel->family() == QLatin1String("icom")) {
+            return err(QStringLiteral("Icom two-tone generation is not implemented; use ordinary TUNE for a single tone"));
+        }
         if (!m_txAllowed)
             return err(QStringLiteral("blocked: txtest keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
@@ -8459,6 +8499,8 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             {QStringLiteral("settingsDirectory"), SettingsPaths::configDir()},
             {QStringLiteral("family"), m_radioModel->family()},
             {QStringLiteral("clientSettingsDomains"), static_cast<int>(caps.clientSettingsDomains)},
+            {QStringLiteral("backendDiagnostics"), m_radioModel->family() == QLatin1String("icom")
+                ? doCiv(QStringLiteral("scheduler"), {}) : QJsonObject{}},
             {QStringLiteral("radio"), radioSnapshot(m_radioModel)},
             {QStringLiteral("slices"), doGet(QStringLiteral("slices"), {}, {}).value(QStringLiteral("slices"))},
             {QStringLiteral("pans"), doGet(QStringLiteral("pans"), {}, {}).value(QStringLiteral("pans"))},

@@ -1046,6 +1046,15 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+`get meters` additionally reports `temperature` and `voltage` observations with
+`status`, `value`, `unit` (when declared), and `ageMs`. Unsupported, never-fed, and stale vitals
+have a null value; a fresh zero is still a real reading. The legacy `paTemp` and
+`supplyVolts` scalars use those same qualified values. `alc` retains the native
+unit and age; `swAlc` is a legacy conversion and must not be labeled physical
+Icom dBFS. `txtest twotone` refuses Icom: its current TUNE backend generates one
+sine wave and has no two-tone selection route. Ordinary TUNE remains available
+in supported modes.
+
 ### `radiocert persist`
 
 `radiocert persist` returns a **read-only persistence snapshot**, also allowed in
@@ -1060,6 +1069,22 @@ or session recreates objects. Pan snapshots also expose FFT average, weighted
 average (with its known flag), waterfall rate (legacy name
 `waterfallLineDuration`, **1..100, not milliseconds**, -1 unknown), center-known,
 WNB and available RX antennas.
+
+For Icom, `backendDiagnostics.result` also includes the read-only `civ scheduler`
+payload. Its `stateFreshness` separates `transportConnected`, CI-V `identified`,
+and `trackedStateReady`. The six tracked fields are selected-VFO frequency,
+mode/DATA/filter tuple (decimal wire codes), squelch percent, AGC code, RF power
+percent, and PTT. Each has a last decoded value, age, semantic key and status:
+`never-confirmed`, `pending`, `previous-context`, `stale`, or `confirmed`.
+Only validated receive publications refresh these fields, including unchanged
+replies. A setter or generic ACK cannot confirm them. Frequency/mode/filter
+changes and outgoing VFO select/exchange invalidate the prior context; session
+changes invalidate old observations. The diagnostic age budget is 5000 ms and
+does not change polling or authorize TX. Fields outside this list, including
+filter width and AGC threshold/off level, carry no freshness claim. CI-V has no
+transaction identifiers, so delayed unsolicited data cannot prove physical
+intent correlation or an unobserved front-panel VFO change with identical mode
+and frequency.
 
 The snapshot explicitly identifies its evidence as **client model and
 presentation**. Some model setters update optimistically. Equality here alone
@@ -3577,6 +3602,16 @@ producer in isolation:
    "lastTimeoutKey":"control.nr",
    "pendingPttIntent":false}}
 ```
+
+The scheduler also returns up to 128 `transactions`, `firstRetainedEventId`,
+`lastRetainedEventId`, and `stateFreshness` (see Persist above). Deduplicate
+completion events by `backendInstanceId` plus `eventId`, never by semantic
+`key`/`generation`/`completion`: periodic polls reuse those three fields.
+Event IDs increase across ring eviction, history clears and scheduler resets.
+A timeout and its eventual late reply are separate completion events. A jump
+past the previously collected ID is an evidence gap, not zero missing activity.
+A new backend starts a new UUID `backendInstanceId`, also present inside
+`stateFreshness`; use it even when a reconnect reuses the same process and radio.
 
 While a PTT request is awaiting confirmation the reply also carries
 `"pttIntent"` (the requested state) and `"pttIntentRemainingMs"` (how much of

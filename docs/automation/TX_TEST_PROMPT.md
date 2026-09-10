@@ -84,7 +84,16 @@ subscription path.
 - Begin with the lowest authorized Tune Power percentage.
 - Sample forward power, SWR, ALC, compression, voltage, current, and thermal
   data that the radio actually supports. Mark unsupported meters as such.
-- Reject stale ages and rail-pinned values.
+- Reject stale ages and rail-pinned values. Do not substitute scalar defaults
+  for unsupported temperature or voltage. Report ALC in its declared native unit.
+- Start the freshness deadline at the key command, including command latency.
+  A sample predating that command cannot qualify as this burst's telemetry.
+- In CW, a zero-carrier gap deliberately nulls the displayed SWR. It can continue
+  only after a qualified SWR was observed in this burst, with fresh zero-watt
+  power and fresh SWR receive timestamps. Missing/stale telemetry and a missing
+  ratio with positive power still stop the run; the timing budgets are unchanged.
+- Icom's current TUNE producer is a single sine wave. `txtest twotone` refuses
+  that family; do not record ordinary TUNE output as two-tone or IMD proof.
 - Verify the actual power gauge is live only while keyed.
 - Unkey immediately, then verify the gauge is zero both at the edge and after a
   late in-flight response could arrive.
@@ -106,6 +115,10 @@ bypass state. The sampling window repeats the context check and uses fresh
 peak SWR and every sampled meter row. Missing/unknown link state, a missing or
 stale calibrated power definition, and missing/stale SWR stop the run. Unkey
 is confirmed before restoring power; unknown TX flags never count as unkeyed.
+For Icom, model flags alone are insufficient: the harness additionally requires
+`stateFreshness.fields.ptt` to report a confirmed false value received during
+that unkey observation window and younger than 500 ms. Older app builds without
+this diagnostic cannot satisfy that Icom confirmation gate.
 
 ### 4. Restart proof
 

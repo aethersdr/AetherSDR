@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QMap>
+
 #include <QByteArray>
 #include <QObject>
 #include <QSet>
@@ -289,6 +291,18 @@ private:
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    void confirmState(const QString& key, const QVariant& value);
+    [[nodiscard]] QVariantMap stateFreshness() const;
+    struct ConfirmedState {
+        QVariant value;
+        qint64 atMs = -1;
+        std::uint64_t session = 0;
+        std::uint64_t context = 0;
+        bool pending = false;
+    };
+    QString m_diagnosticInstanceId;
+    QMap<QString, ConfirmedState> m_confirmedState;
+    std::uint64_t m_stateContext = 0;
     [[nodiscard]] QVariantList schedulerTransactionTrace(
         std::size_t limit = 32) const;
     [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,

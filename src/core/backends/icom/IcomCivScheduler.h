@@ -85,6 +85,7 @@ public:
     };
 
     struct TransactionEvent {
+        std::uint64_t eventId = 0; // Lifetime-unique, including after reset/history clear.
         std::string key;
         Priority priority = Priority::Control;
         std::uint64_t generation = 0;
@@ -224,6 +225,7 @@ private:
     // meters stays a delay rather than an indefinite hold.
     std::int64_t m_lastBackgroundDispatchMs = 0;
     Stats m_stats;
+    std::uint64_t m_transactionEventId = 0;
     std::deque<TransactionEvent> m_recentTransactions;
 };
 

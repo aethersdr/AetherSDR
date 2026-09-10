@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QLoggingCategory>
 #include <QTimer>
+#include <QUuid>
 #include <QVariant>
 
 #include <algorithm>
@@ -25,6 +26,11 @@
 
 namespace AetherSDR::icom {
 namespace {
+
+constexpr std::pair<const char*, const char*> kTrackedStateFields[] = {
+    {"frequency", "frequencyHz"}, {"mode", "modeDataFilter"},
+    {"civ.20.3", "squelchPercent"}, {"civ.22.18", "agcCode"},
+    {"civ.20.10", "rfPowerPercent"}, {"ptt", "ptt"}};
 
 // The pan intents are the two that most need to say what they DECIDED rather
 // than what they were asked, because both of them deliberately do something
@@ -238,6 +244,7 @@ IcomCivBackend::IcomCivBackend(QObject* parent)
     // freeze — meters, controls, PTT poll and operator writes alike —
     // recoverable only by reconnecting. QElapsedTimer cannot step backwards.
     m_clock.start();
+    m_diagnosticInstanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
     // TUNE is its own audio source. In particular it must keep producing when
     // PC Audio is disabled and AudioEngine has no capture callback to deliver.
@@ -1000,6 +1007,8 @@ void IcomCivBackend::disconnectRadio()
     // they say across a reconnect.
     m_controlsValueKnown.clear();
     m_controlsSeen.clear();
+    m_confirmedState.clear();
+    ++m_stateContext;
     m_controlsSent.clear();
     m_controlsScheduled.clear();
     m_framesObserved = 0;
@@ -1897,6 +1906,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         // operator turns the dial; 0x03 is the answer to our poll. Same payload,
         // and both are the truth — which is why they share a case.
         if (auto hz = decodeFreq(frame.data)) {
+            confirmState(QStringLiteral("frequency"), QVariant::fromValue<qulonglong>(*hz));
             m_frequencyHz = *hz;
             SliceDelta s;
             s.frequency = static_cast<double>(*hz) / 1e6;
@@ -2116,6 +2126,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         }
         case level::kRfPower: {
+            confirmState(QStringLiteral("civ.20.10"), pct);
             m_txPowerPercent = pct;
             TransmitDelta t; t.rfPower = pct;
             emit transmitChanged(t);
@@ -2155,6 +2166,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         }
         case level::kSquelch: {
+            confirmState(QStringLiteral("civ.20.3"), pct);
             m_squelchPercent = pct;
             SliceDelta d;
             d.squelchLevel = pct;
@@ -2342,6 +2354,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         case func::kAgc: {
             // 01 FAST, 02 MID, 03 SLOW.
+            if (frame.data.size() != 1 || v < 1 || v > 3) {
+                return;
+            }
+            confirmState(QStringLiteral("civ.22.18"), v);
             SliceDelta d;
             d.agcMode = v == 1 ? QStringLiteral("fast")
                       : v == 3 ? QStringLiteral("slow")
@@ -2412,6 +2428,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         const auto st = decodeVfoMode(frame.data);
         if (!st)
             return;
+        confirmState(QStringLiteral("mode"), QStringLiteral("%1/%2/%3")
+            .arg(static_cast<int>(st->mode)).arg(st->dataMode).arg(st->filter));
         const bool previousData = m_dataMode;
         m_mode = st->mode;
         m_dataMode = st->dataMode;
@@ -2903,7 +2921,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
 
     case cmd::kControl: {
-        if (frame.hasSub && frame.sub == control::kPtt && !frame.data.empty()) {
+        if (frame.hasSub && frame.sub == control::kPtt && frame.data.size() == 1
+            && frame.data[0] <= 1) {
             const bool keyed = frame.data[0] != 0;
             // A read can already be on the wire when the operator keys.  Its
             // pre-write OFF answer then arrives after the newer ON request.
@@ -2980,6 +2999,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // Republishing unchanged state is never merely wasteful on a path
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
+            confirmState(QStringLiteral("ptt"), keyed);
             if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
                     emit keyingStateConfirmed(keyed);
@@ -3506,6 +3526,19 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
     request.priority = priority;
     request.expectsReply = true;
     request.acceptsGenericReply = true;
+    const QString stateKey = QString::fromStdString(request.key);
+    const auto parsed = parseFrame(frame);
+    if (stateKey == QLatin1String("mode") || stateKey == QLatin1String("frequency")
+        || (parsed && parsed->cmd == 0x07)) { // Official CI-V: VFO select/exchange.
+        ++m_stateContext;
+    }
+    for (const auto& [trackedKey, label] : kTrackedStateFields) {
+        Q_UNUSED(label);
+        if (stateKey == QLatin1String(trackedKey)) {
+            m_confirmedState[stateKey].pending = true;
+            break;
+        }
+    }
     request.supersedes = supersedes;
     request.coalesce = coalesce;
     m_civScheduler.enqueue(std::move(request), nowMs());
@@ -3562,10 +3595,66 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
     serviceSchedulerWaiters(nowMs);
 }
 
+void IcomCivBackend::confirmState(const QString& key, const QVariant& value)
+{
+    // Called only after decode and stale-generation/PTT-intent rejection.
+    // ACKs, setters and control-map "seen" counters cannot confirm a value.
+    const auto previous = m_confirmedState.constFind(key);
+    if ((key == QLatin1String("frequency") || key == QLatin1String("mode"))
+        && previous != m_confirmedState.cend() && previous->value != value) {
+        ++m_stateContext;
+    }
+    m_confirmedState[key] = {value, nowMs(), m_sessionGeneration, m_stateContext, false};
+}
+
+QVariantMap IcomCivBackend::stateFreshness() const
+{
+    // Diagnostic budget, not a change to polling or a transmit permission.
+    constexpr qint64 kFreshMs = 5000;
+    QVariantMap fields;
+    bool ready = m_connected && m_civReported != 0 && !m_civAmbiguous;
+    for (const auto& [key, label] : kTrackedStateFields) {
+        const auto it = m_confirmedState.constFind(QString::fromLatin1(key));
+        const bool known = it != m_confirmedState.cend() && it->value.isValid();
+        const qint64 age = known ? std::max<qint64>(0, nowMs() - it->atMs) : -1;
+        const bool current = known && m_connected && it->session == m_sessionGeneration
+            && it->context == m_stateContext;
+        const QString status = it != m_confirmedState.cend() && it->pending ? QStringLiteral("pending")
+            : !known ? QStringLiteral("never-confirmed")
+            : !current ? QStringLiteral("previous-context")
+            : age > kFreshMs ? QStringLiteral("stale") : QStringLiteral("confirmed");
+        ready = ready && status == QLatin1String("confirmed");
+        fields.insert(QString::fromLatin1(label), QVariantMap{
+            {QStringLiteral("status"), status}, {QStringLiteral("ageMs"), age},
+            {QStringLiteral("value"), known ? it->value : QVariant()},
+            {QStringLiteral("semanticKey"), QString::fromLatin1(key)}});
+    }
+    return {{QStringLiteral("backendInstanceId"), m_diagnosticInstanceId},
+        {QStringLiteral("transportConnected"), m_connected},
+        {QStringLiteral("identified"), m_civReported != 0 && !m_civAmbiguous},
+        {QStringLiteral("trackedStateReady"), ready},
+        {QStringLiteral("freshnessBudgetMs"), kFreshMs},
+        {QStringLiteral("sessionGeneration"), QVariant::fromValue<qulonglong>(m_sessionGeneration)},
+        {QStringLiteral("contextGeneration"), QVariant::fromValue<qulonglong>(m_stateContext)},
+        {QStringLiteral("fields"), fields},
+        {QStringLiteral("limitation"), QStringLiteral(
+            "Selected-VFO receive publications only; untracked fields have no freshness claim. "
+            "CI-V has no transaction IDs; delayed unsolicited replies cannot be correlated to physical intent. "
+            "Readiness is diagnostic, not TX authorization.")}};
+}
+
 QVariantMap IcomCivBackend::schedulerDiagnostics() const
 {
     const IcomCivScheduler::Stats stats = m_civScheduler.stats();
     QVariantMap out;
+    out.insert(QStringLiteral("backendInstanceId"), m_diagnosticInstanceId);
+    out.insert(QStringLiteral("stateFreshness"), stateFreshness());
+    const auto& history = m_civScheduler.recentTransactions();
+    out.insert(QStringLiteral("transactions"), schedulerTransactionTrace(128));
+    out.insert(QStringLiteral("firstRetainedEventId"),
+        QVariant::fromValue<qulonglong>(history.empty() ? 0 : history.front().eventId));
+    out.insert(QStringLiteral("lastRetainedEventId"),
+        QVariant::fromValue<qulonglong>(history.empty() ? 0 : history.back().eventId));
     out.insert(QStringLiteral("idle"), m_civScheduler.idle());
     out.insert(QStringLiteral("slotMs"), IcomCivScheduler::kSlotMs);
     out.insert(QStringLiteral("readTimeoutMs"), IcomCivScheduler::kReadTimeoutMs);
@@ -3625,6 +3714,7 @@ QVariantList IcomCivBackend::schedulerTransactionTrace(std::size_t limit) const
     for (std::size_t i = begin; i < events.size(); ++i) {
         const IcomCivScheduler::TransactionEvent& event = events[i];
         QVariantMap row;
+        row.insert(QStringLiteral("eventId"), QVariant::fromValue<qulonglong>(event.eventId));
         row.insert(QStringLiteral("key"), QString::fromStdString(event.key));
         row.insert(QStringLiteral("priority"), priorityName(event.priority));
         row.insert(QStringLiteral("generation"),
