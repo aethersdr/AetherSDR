@@ -56,6 +56,9 @@ public:
     }
 
     State state() const override { return m_state; }
+    // Last lifecycle error. Deliberately survives settlement to Idle so a
+    // polling client can still learn why the attempt ended; the next accepted
+    // connectRadio() clears it (see docs/aetherd-local-connection-control.md).
     QString errorCode() const override { return m_error; }
 
     bool supports(const DiscoveredRadio& radio) const override

@@ -328,12 +328,12 @@ ServiceReply ControlService::handleConnection(
         return failure(request.id, *error);
     }
     const QJsonValue radioSession = request.params.value(QStringLiteral("radioSession"));
-    if (!radioSession.isString() || radioSession.toString().isEmpty()
-        || radioSession.toString().size() > ProtocolLimits::kMaxRequestIdChars) {
-        return reject(QStringLiteral("request.invalid_params"), QStringLiteral("radioSession must be a bounded identity"));
+    if (!radioSession.isString()) {
+        return reject(QStringLiteral("request.invalid_params"), QStringLiteral("radioSession must be a string"));
     }
-    // v1 deliberately exposes only the daemon's one engine session. A resource
-    // inserted for another session cannot redirect this target.
+    // v1 deliberately exposes only the daemon's one engine session; the exact
+    // match bounds the value. A resource inserted for another session cannot
+    // redirect this target.
     if (radioSession.toString() != QStringLiteral("radio-1")
         || !m_resources->get({QStringLiteral("radioSession"), {}, radioSession.toString()})) {
         return reject(QStringLiteral("resource.not_found"), QStringLiteral("radio session unavailable"));

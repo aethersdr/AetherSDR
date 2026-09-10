@@ -53,7 +53,10 @@ LocalControlServer::LocalControlServer(QObject* parent)
 LocalControlServer::LocalControlServer(QObject* parent, Limits limits,
                                      RadioConnectionTarget* connectionTarget,
                                      bool allowLocalControl)
-    : QObject(parent), m_resources(), m_service(&m_resources, connectionTarget), m_limits(limits),
+    // Mirror bindConnectionTarget(): a target is only installed when local
+    // control is granted, so an observer-only server never carries one.
+    : QObject(parent), m_resources(),
+      m_service(&m_resources, allowLocalControl ? connectionTarget : nullptr), m_limits(limits),
       m_localAuthorization(allowLocalControl ? SessionAuthorization::ObserverController
                                             : SessionAuthorization::Observer)
 {

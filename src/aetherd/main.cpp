@@ -50,6 +50,12 @@ int main(int argc, char* argv[])
     // Claim the endpoint before settings or model construction: even the
     // AppSettings singleton constructor can create directories/migrate paths.
     // Native settings must then load before RadioModel snapshots its settings.
+    // bindConnectionTarget() below requires that no client was accepted in
+    // between. Nothing here runs the event loop except a first-run legacy XML
+    // import (AppSettings::load -> importLegacyXml -> persistVaultToKeychain
+    // pumps a bounded QEventLoop); a client arriving in that window makes the
+    // bind refuse and the daemon exit 1, which is fail-closed and one-shot.
+    // Keep any further settings work after the bind, never ahead of it.
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});

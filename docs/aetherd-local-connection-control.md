@@ -73,7 +73,10 @@ An installed connection target adds `connectionControl` to `radioSession.value`:
 ```
 
 States are `idle`, `connecting`, `connected`, and `disconnecting`. Error codes
-are empty, `engine.failed`, or `engine.timeout`, never raw backend errors.
+are empty, `engine.failed`, or `engine.timeout`, never raw backend errors. The
+code is the last lifecycle error and persists through `idle` until the next
+accepted `radio.connect` clears it; the `disconnecting` observation carries it
+first.
 Existing connected/identity/capability fields remain model-authoritative.
 Transport connection can precede slice enumeration; wait for required resources
 instead of inferring RX readiness from the response or connection event alone.

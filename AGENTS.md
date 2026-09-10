@@ -492,7 +492,9 @@ to observe permission, and reads/subscriptions enforce it. The daemon's explicit
 local clients. Only typed catalogue-selected `radio.connect` / `radio.disconnect`
 are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
 revision checks and limits. Clients cannot supply arbitrary endpoints or
-credentials. The revocation hook
+credentials. Every negotiated session, observer or controller, now shares a
+per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
+it is terminal for that connection. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon
 path invokes it yet. Remote credential verification/provisioning and transmit
 grants are not implemented yet.
