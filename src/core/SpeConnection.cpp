@@ -19,22 +19,27 @@ SpeConnection::SpeConnection(QObject* parent)
         // a moving display must not keep stale telemetry/buttons looking live.
         if (const auto frame = Spe::Lcd::decode(raw)) {
             emit lcdFrameReceived(*frame);
-            setLcdFresh(true);
-            m_lcdStaleTimer.start();
-            m_lcdRetryTimer.stop();  // a good frame supersedes a pending retry
-            // Pace the next request from the REPLY, not just from our own
-            // send. Two free-running timers whose periods divide evenly
-            // (the original 600 ms cadence was an exact multiple of the
-            // 100 ms Status poll) phase-lock — Qt's coarse timers actively
-            // coalesce them — with every display reply straddling a status
-            // poll on the wire, and hold that alignment for many seconds
-            // until clock drift walks out of it, dropping several display
-            // frames in a row. Re-arming here folds the amp's own
-            // (variable) response latency into the period, so no stable
-            // phase relationship with the status poll can form — and it is
-            // also what lets kLcdPollIntervalMs be a small idle gap rather
-            // than a conservative worst-case-link period.
-            m_lcdTimer.start();
+            if (m_lcdWanted && m_connected) {
+                setLcdFresh(true);
+                m_lcdStaleTimer.start();
+                m_lcdRetryTimer.stop();  // a good frame supersedes a pending retry
+                // Pace the next request from the REPLY: the request path
+                // armed only the long lost-reply fallback, so this re-arm
+                // to the short gap is the one that sets the cadence. Two
+                // free-running timers whose periods divide evenly (the
+                // original 600 ms cadence was an exact multiple of the
+                // 100 ms Status poll) phase-lock — Qt's coarse timers
+                // actively coalesce them — with every display reply
+                // straddling a status poll on the wire, and hold that
+                // alignment for many seconds until clock drift walks out
+                // of it, dropping several display frames in a row. Pacing
+                // from the reply folds the amp's own (variable) response
+                // latency into the period, so no stable phase relationship
+                // with the status poll can form — and it is what lets
+                // kLcdPollIntervalMs be a small idle gap rather than a
+                // conservative worst-case-link period.
+                m_lcdTimer.start(kLcdPollIntervalMs);
+            }
         }
     });
 
@@ -60,6 +65,12 @@ SpeConnection::SpeConnection(QObject* parent)
     m_powerOnTimer.setSingleShot(true);
     connect(&m_powerOnTimer, &QTimer::timeout, this, &SpeConnection::powerOnStep);
 
+    // Single-shot on purpose: the cadence is reply-paced (armed with the
+    // short gap from each decoded display reply), and a request arms only
+    // the LONG lost-reply interval — so the next request cannot fire while
+    // the previous reply is still in flight unless the round trip exceeds
+    // kLcdLostReplyMs, which the design note states as the condition.
+    m_lcdTimer.setSingleShot(true);
     m_lcdTimer.setInterval(kLcdPollIntervalMs);
     connect(&m_lcdTimer, &QTimer::timeout, this, &SpeConnection::requestLcdFrame);
 
@@ -119,9 +130,11 @@ void SpeConnection::requestLcdFrame()
         return;
     }
     sendRaw(Spe::Lcd::buildRequest());
-    // An ACK-triggered refresh resets the periodic cadence, avoiding an
-    // immediate duplicate request from the timer that may already be near due.
-    m_lcdTimer.start();
+    // A request arms only the lost-reply fallback. The short-gap re-arm
+    // lives in the display callback, so on a slow link the loop waits for
+    // the reply (or this timeout) rather than free-running a fixed cadence
+    // into a still-transmitting frame — the review-caught failure mode.
+    m_lcdTimer.start(kLcdLostReplyMs);
 }
 
 void SpeConnection::setLcdFresh(bool fresh)

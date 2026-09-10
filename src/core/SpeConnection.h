@@ -179,16 +179,24 @@ private:
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
     // The IDLE GAP between a display reply and the next request, not a
-    // free-running period: the timer re-arms from each reply, so the
-    // effective cadence is gap + round trip + the link's own serialization
-    // time for the 371-byte frame (~32 ms at 115200, ~193 ms at 19200).
-    // That self-clocking is what makes a small gap safe on slow links — a
-    // second request is never in flight before the previous reply has
-    // fully arrived, so the amp is never asked to interleave display
-    // blocks and the cadence degrades gracefully instead of piling up.
-    // (At ≤9600 the 100 ms Status poll alone nearly saturates the wire —
-    // see the design note §11's proxy baud recommendation.)
+    // free-running period: m_lcdTimer is single-shot, a REQUEST arms only
+    // the kLcdLostReplyMs fallback, and only a decoded REPLY re-arms this
+    // short gap — so the effective cadence is gap + round trip + the
+    // link's serialization time for the 371-byte frame (~32 ms at 115200,
+    // ~193 ms at 19200), and a second request cannot be issued while the
+    // previous reply is still arriving unless the round trip exceeds
+    // kLcdLostReplyMs. That self-clocking is what makes a small gap safe
+    // on slow links: the amp is never asked to interleave display blocks
+    // and the cadence stretches instead of piling up. (At ≤9600 the
+    // 100 ms Status poll alone nearly saturates the wire — see the design
+    // note §11's proxy baud recommendation.)
     static constexpr int kLcdPollIntervalMs = 250;
+    // Lost-reply fallback: armed at request time, superseded by the reply
+    // re-arm above. Sized above the worst plausible round trip (a 9600
+    // baud proxy serial side spends ~390 ms serializing the frame alone),
+    // so within it a request is either answered or genuinely lost — never
+    // merely still in flight.
+    static constexpr int kLcdLostReplyMs = 1000;
     // Prompt-retry pause after a display frame fails validation (see the
     // parser's reject callback). Short enough that a mostly-corrupted
     // mid-transmit stream still lands a clean frame within the staleness
