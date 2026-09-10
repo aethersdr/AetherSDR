@@ -1447,6 +1447,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // rolls off and there is nothing to hear.
     c.tuningMinHz = 100'000.0;
     c.tuningMaxHz = 38'400'000.0;
+    c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
+                               100'000, 38'400'000};
     // THE RADIO'S POWER CLASS, which is what every forward-power gauge scales
     // its arc from. Declared as a band table because that is the seam the
     // clients already read: RadioModel::refreshTxPowerLimit turns it into

@@ -282,6 +282,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.maxPanadapters = m.hasScope ? m.receivers : 0;
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
+    c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
+                               static_cast<qint64>(m.tuningMinHz),
+                               static_cast<qint64>(m.tuningMaxHz)};
 
     const std::span<const IcomBand> bands = bandsFor(m);
     c.declaredBandRanges.reserve(static_cast<int>(bands.size()));

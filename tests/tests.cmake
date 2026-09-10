@@ -161,6 +161,14 @@ target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
 
+# Socket-free frequency control: a recording engine backend and normalized
+# observations exercise the production target/service. LocalControlServer
+# instances only test startup binding; neither listens or opens an endpoint.
+add_executable(control_slice_frequency_test tests/control_slice_frequency_test.cpp)
+target_include_directories(control_slice_frequency_test PRIVATE src tests)
+target_link_libraries(control_slice_frequency_test PRIVATE aethercore Qt6::Core)
+add_test(NAME control_slice_frequency_test COMMAND control_slice_frequency_test)
+
 # Real factory wiring, with local=false: simulator metadata only, no sockets,
 # device scans, radio connections or third-party firmware stand-ins.
 add_executable(radio_discovery_source_test tests/radio_discovery_source_test.cpp)
@@ -4736,6 +4744,7 @@ set(AETHER_SETTINGS_CONSUMERS
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
+    control_slice_frequency_test
     aetherd_discovery_startup_test
     slice_label_test
     ulanzi_mapping_migration_test

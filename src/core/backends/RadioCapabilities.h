@@ -26,6 +26,16 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+// Frequency observations describe the state owned by the backend, not a
+// promise that a queued hardware/DSP write has completed. Zero bounds mean
+// this backend has not established a range for the headless control method.
+struct SliceFrequencyControl {
+    enum class Authority { Unknown, Radio, Engine };
+    Authority authority{Authority::Unknown};
+    qint64 minimumHz{0};
+    qint64 maximumHz{0};
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -134,6 +144,7 @@ struct RadioCapabilities {
     // that told them it was not available.
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
+    SliceFrequencyControl sliceFrequencyControl;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only

@@ -131,6 +131,9 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
+    // bounds are commented out. Do not guess coverage (including transverters).
+    caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");

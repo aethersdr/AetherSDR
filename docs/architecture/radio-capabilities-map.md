@@ -31,6 +31,28 @@ Two rules that fall out of that, both of which have already caused bugs:
 See [`HERMES.md`](../HERMES.md) §18 for the worked narrative, including the
 traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
+## Local slice frequency control
+
+`sliceFrequencyControl` is read by `ModelSliceFrequencyTarget` for admission
+and `RadioResourceAdapter` for explicit command-domain/provenance observations.
+It does not alter the existing GUI tuning range or desktop commands. Unlike
+the permissive UI disconnect convention above, local protocol mutations always
+require a live eligible slice; zero bounds or unknown authority fail closed.
+
+| Backend | Authority | Inclusive command domain (Hz) | Additional gate |
+|---|---|---|---|
+| Flex | radio | 0 / 0 (unknown) | Unavailable; no guessed legacy/transverter bounds |
+| HL2 | engine | 100,000–38,400,000 | TX-enabled sessions need normalized idle readback, currently absent |
+| Sim | engine | 1–1,000,000,000,000 | Explicit simulator API domain, not RF coverage |
+| Icom | radio | Profile `tuningMinHz` / `tuningMaxHz` | Declared band union and confirmed idle; no current daemon catalogue connection |
+| ANAN | engine | 0 / 0 (unknown) | Unavailable pending verified coverage |
+| RTL-SDR | engine | 24,000–1,766,000,000 | Backend/build availability; no TX capability |
+
+The default struct declares unknown authority and zero bounds. Every backend
+sets all three fields explicitly. Engine authority means backend-owned receive
+configuration, not physical acknowledgement or DSP convergence. For full
+semantics see [local frequency control](../aetherd-local-slice-frequency-control.md).
+
 ## Wired and consumed
 
 | Field | Flex | HL2 | Sim | Read at | Effect |

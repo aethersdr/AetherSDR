@@ -126,6 +126,8 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // Tuning range — R820T: 24 MHz – 1.766 GHz (HF via direct sampling)
     c.tuningMinHz = 24'000;
     c.tuningMaxHz = 1'766'000'000;
+    c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
+                               24'000, 1'766'000'000};
 
     // Sample rates — non-contiguous legal windows for R820T
     c.sampleRatesHz = {

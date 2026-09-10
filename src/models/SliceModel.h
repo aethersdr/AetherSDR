@@ -39,6 +39,11 @@ public:
                                      : m_letter; }
     QString panId()      const { return m_panId; }       // e.g. "0x40000000"
     double  frequency()  const { return m_frequency; }   // MHz
+    // Separate from the optimistic desktop value. Only applyChanges writes
+    // this observation; a reused slice must wait for a fresh session report.
+    double reportedFrequency() const { return m_reportedFrequency; } // MHz
+    bool frequencyReportedKnown() const { return m_frequencyReportedKnown; }
+    void invalidateFrequencyObservation();
     QString mode()       const { return m_mode; }
     QStringList modeList() const { return m_modeList; }
     int     filterLow()  const { return m_filterLow; }   // Hz offset
@@ -365,6 +370,7 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    void frequencyReported();
     // Emitted after a local setter has issued a frequency command. Unlike
     // frequencyChanged, radio-status application does not emit this signal.
     void frequencyCommandIssued(double mhz);
@@ -542,6 +548,8 @@ private:
     QString m_letter;          // per-client display letter from `index_letter`
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")
     double  m_frequency{0.0};
+    double  m_reportedFrequency{0.0};
+    bool    m_frequencyReportedKnown{false};
     QString m_mode{"USB"};
     QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;

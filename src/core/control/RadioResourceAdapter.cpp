@@ -22,6 +22,16 @@ QJsonArray strings(const auto& values)
     return result;
 }
 
+QString frequencyAuthority(SliceFrequencyControl::Authority authority)
+{
+    switch (authority) {
+    case SliceFrequencyControl::Authority::Radio: return QStringLiteral("radio");
+    case SliceFrequencyControl::Authority::Engine: return QStringLiteral("engine");
+    case SliceFrequencyControl::Authority::Unknown: return QStringLiteral("unknown");
+    }
+    return QStringLiteral("unknown");
+}
+
 QJsonObject capabilityValue(const RadioCapabilities& capabilities)
 {
     QJsonArray sampleRates;
@@ -42,6 +52,10 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
              {QStringLiteral("minimum"), capabilities.tuningMinHz},
              {QStringLiteral("maximum"), capabilities.tuningMaxHz}}},
         {QStringLiteral("declaredBands"), bands},
+        {QStringLiteral("sliceFrequencyControl"), QJsonObject{
+             {QStringLiteral("authority"), frequencyAuthority(capabilities.sliceFrequencyControl.authority)},
+             {QStringLiteral("minimumHz"), capabilities.sliceFrequencyControl.minimumHz},
+             {QStringLiteral("maximumHz"), capabilities.sliceFrequencyControl.maximumHz}}},
         {QStringLiteral("canTransmit"), capabilities.canTransmit},
         {QStringLiteral("maximumTransmitWatts"), capabilities.txPowerMaxWatts},
         {QStringLiteral("hasTuner"), capabilities.hasTuner},
@@ -157,6 +171,7 @@ void RadioResourceAdapter::attachSlice(SliceModel* slice)
     const auto refresh = [this, slice] { publishSlice(slice); };
     connect(slice, &SliceModel::letterChanged, this, refresh);
     connect(slice, &SliceModel::frequencyChanged, this, refresh);
+    connect(slice, &SliceModel::frequencyReported, this, refresh);
     connect(slice, &SliceModel::panIdChanged, this, refresh);
     connect(slice, &SliceModel::modeChanged, this, refresh);
     connect(slice, &SliceModel::filterChanged, this, refresh);
@@ -307,6 +322,13 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
         {QStringLiteral("panadapterId"), slice->panId()},
         {QStringLiteral("owned"), m_radio->isSlotOurs(slice->sliceId())},
         {QStringLiteral("frequencyHz"), qRound64(slice->frequency() * 1'000'000.0)},
+        {QStringLiteral("frequencyObservation"), QJsonObject{
+             {QStringLiteral("known"), slice->frequencyReportedKnown()},
+             {QStringLiteral("hz"), slice->frequencyReportedKnown()
+                  ? QJsonValue(qRound64(slice->reportedFrequency() * 1'000'000.0))
+                  : QJsonValue(QJsonValue::Null)},
+             {QStringLiteral("authority"), frequencyAuthority(
+                  m_radio->backendCapabilities().sliceFrequencyControl.authority)}}},
         {QStringLiteral("mode"), slice->mode()},
         {QStringLiteral("filter"), QJsonObject{
              {QStringLiteral("lowHz"), slice->filterLow()},

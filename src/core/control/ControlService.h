@@ -4,6 +4,7 @@
 #include "ControlResourceStore.h"
 #include "ControlSession.h"
 #include "RadioConnectionTarget.h"
+#include "SliceFrequencyTarget.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -22,11 +23,13 @@ struct ServiceReply {
 class ControlService final {
 public:
     explicit ControlService(ControlResourceStore* resources,
-                            RadioConnectionTarget* connectionTarget = nullptr);
+                            RadioConnectionTarget* connectionTarget = nullptr,
+                            SliceFrequencyTarget* frequencyTarget = nullptr);
 
     // Trusted startup only: bind once, on the owning thread, before dispatch.
     // This lets the daemon claim its endpoint before constructing any models.
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
+    [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
 
     [[nodiscard]] ServiceReply handle(
         const QByteArray& bytes, ControlSession* session) const;
@@ -41,10 +44,14 @@ private:
     [[nodiscard]] static bool acceptsVersionOne(const QJsonObject& params);
     [[nodiscard]] ServiceReply handleConnection(
         const ProtocolRequest& request, const ControlSession& session) const;
+    [[nodiscard]] ServiceReply handleFrequency(
+        const ProtocolRequest& request, const ControlSession& session) const;
 
     ControlResourceStore* m_resources{nullptr};
     QPointer<RadioConnectionTarget> m_connectionTarget;
     bool m_targetBound{false};
+    QPointer<SliceFrequencyTarget> m_frequencyTarget;
+    bool m_frequencyTargetBound{false};
     mutable bool m_dispatchStarted{false};
 };
 

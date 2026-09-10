@@ -6311,6 +6311,7 @@ void RadioModel::stageSessionModelsForReconnect()
     for (SliceModel* slice : m_slices) {
         if (slice) {
             slice->invalidateSquelchState();
+            slice->invalidateFrequencyObservation();
             m_staleSlices.insert(slice->sliceId(), slice);
         }
     }
@@ -7266,6 +7267,11 @@ void RadioModel::onDisconnected()
     }
     m_radioTransmitting = false;
     emit radioTransmittingChanged(false);
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice) {
+            slice->invalidateFrequencyObservation();
+        }
+    }
     if (m_profileDatabaseImporting) {
         m_profileDatabaseImporting = false;
         emit profileDatabaseImportingChanged(false);

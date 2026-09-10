@@ -487,6 +487,11 @@ bool testPureSeamReconnectRepublishesSlice()
         return false;
     }
 
+    if (!check(waitUntil([&] { return originalSlice->frequencyReportedKnown(); }),
+               "reconnect fixture must wait for the simulator's typed frequency publication")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
     radio.disconnectFromRadio();
     if (!check(waitUntil([&] {
                    return !radio.isConnected()
@@ -497,6 +502,10 @@ bool testPureSeamReconnectRepublishesSlice()
     }
 
     radio.stageSessionModelsForReconnectForTest();
+    if (!check(!originalSlice->frequencyReportedKnown(),
+               "reconnect must invalidate the retained frequency observation")) {
+        return false;
+    }
     radio.connectionStateChanged(true);
     int occupancySignals = 0;
     QObject::connect(&radio, &RadioModel::slotOccupancyChanged,
@@ -514,6 +523,8 @@ bool testPureSeamReconnectRepublishesSlice()
     const std::optional<ResourceSnapshot> reclaimed = store.get(sliceAddress);
     const bool result = check(radio.slice(0) == originalSlice,
                               "the normalized backend seam must reclaim the existing SliceModel")
+        && check(originalSlice->frequencyReportedKnown(),
+                 "same-value backend report restores frequency observation on reclaim")
         && check(occupancySignals == 1,
                  "non-Flex slice reclaim must publish an occupancy edge")
         && check(reclaimed.has_value()
@@ -694,10 +705,10 @@ bool testSimBackendEndToEnd()
                                      {"maxSlices", "maxPanadapters", "sampleRatesHz",
                                       "tuningRangeHz", "declaredBands", "canTransmit",
                                       "maximumTransmitWatts", "hasTuner", "hasAmplifier",
-                                      "extensions"})
+                                      "extensions", "sliceFrequencyControl"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
-                                      "frequencyHz", "mode", "filter", "active",
+                                      "frequencyHz", "frequencyObservation", "mode", "filter", "active",
                                       "txSlice", "locked", "audio", "receive"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("filter")).toObject(),
                                      {"lowHz", "highHz"})

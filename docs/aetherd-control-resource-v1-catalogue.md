@@ -210,6 +210,8 @@ commands. Create a new instance to restart discovery.
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
   - `tuningRangeHz` with `minimum` and `maximum`;
   - `declaredBands`, each with `name`, `lowHz`, and `highHz`;
+  - `sliceFrequencyControl` with `authority` (`radio`, `engine`, `unknown`),
+    `minimumHz` and `maximumHz`; zero bounds mean unavailable, not unlimited;
   - `canTransmit`, `maximumTransmitWatts`, `hasTuner`, `hasAmplifier`;
   - `extensions`, containing namespace names only, never extension payloads.
 
@@ -225,6 +227,9 @@ control methods are specified in
 
 - `id`, `letter`, `panadapterId`, `owned`.
 - `frequencyHz`, `mode`, `filter.lowHz`, `filter.highHz`.
+- `frequencyObservation.known`, `.hz`, `.authority`: last backend publication,
+  with `hz:null` while unknown. Authority is `radio`, `engine` or `unknown`;
+  engine configuration is not a hardware acknowledgement or DSP completion.
 - `active`, `txSlice`, `locked`.
 - `audio.gain`, `audio.pan`, `audio.muted`.
 - `receive.antenna`, `receive.rfGain`.
@@ -232,6 +237,11 @@ control methods are specified in
 - `receive.squelch.enabled`, `receive.squelch.level`.
 
 Values come from `SliceModel`; radio/backend status remains authoritative.
+`frequencyHz` retains the existing effective (potentially optimistic desktop)
+value. The separate observation is invalidated across disconnect/reconnect and
+updates even when a backend echo equals that effective value. See
+[`aetherd-local-slice-frequency-control.md`](aetherd-local-slice-frequency-control.md)
+for control admission, observation and concurrent-intent semantics.
 
 ### `panadapter`
 

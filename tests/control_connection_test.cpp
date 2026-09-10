@@ -259,8 +259,10 @@ void validationAndLifecycle()
     f.catalogue.stop();
     check(error(invoke(f.service, f.controller, QStringLiteral("radio.connect"), valid))
               == QStringLiteral("capability.unavailable"), "stopped source cannot connect");
+    check(error(invoke(f.service, f.controller, QStringLiteral("slice.setFrequency")))
+              == QStringLiteral("capability.unavailable"), "absent frequency target cannot tune");
     for (const QString& method : {QStringLiteral("transmit.setMox"), QStringLiteral("tx.acquire"),
-                                 QStringLiteral("slice.setFrequency"), QStringLiteral("invoke")}) {
+                                 QStringLiteral("slice.setMode"), QStringLiteral("invoke")}) {
         check(error(invoke(f.service, f.controller, method)) == QStringLiteral("request.unknown_method"),
               "TX and out-of-scope control remain absent");
     }

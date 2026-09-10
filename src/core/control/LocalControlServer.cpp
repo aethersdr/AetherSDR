@@ -80,6 +80,13 @@ bool LocalControlServer::bindConnectionTarget(RadioConnectionTarget* target)
         && m_service.bindConnectionTarget(target);
 }
 
+bool LocalControlServer::bindFrequencyTarget(SliceFrequencyTarget* target)
+{
+    return thread() == QThread::currentThread() && m_clients.empty()
+        && m_localAuthorization == SessionAuthorization::ObserverController
+        && m_service.bindFrequencyTarget(target);
+}
+
 bool LocalControlServer::listen(const QString& name)
 {
     if (m_server.isListening() || m_lock || m_limits.maxClients < 1

@@ -489,7 +489,7 @@ directories are excluded. Catalogue fields and lifecycle are specified in
 Sessions require explicit trusted authorization; the local transport defaults
 to observe permission, and reads/subscriptions enforce it. The daemon's explicit
 `--allow-local-control` flag additionally grants non-TX control to current-user
-local clients. Only typed catalogue-selected `radio.connect` / `radio.disconnect`
+local clients. Typed catalogue-selected `radio.connect` / `radio.disconnect`
 are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
 revision checks and limits. Clients cannot supply arbitrary endpoints or
 credentials. Every negotiated session, observer or controller, now shares a
@@ -498,7 +498,11 @@ it is terminal for that connection. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon
 path invokes it yet. Remote credential verification/provisioning and transmit
 grants are not implemented yet.
-Meters, read-only transmit state, typed slice/pan receive controls, and the desktop
+`slice.setFrequency` now dispatches a bounded, revision-checked intent for an
+existing owned slice, with explicit backend observation provenance and fail-closed
+TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
+not optimistically update the model. Unknown coverage/readback remains unavailable.
+Meters, read-only transmit state, other typed slice/pan receive controls, and the desktop
 adapter have not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX

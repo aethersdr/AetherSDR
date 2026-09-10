@@ -36,7 +36,7 @@ int main(int argc, char* argv[])
     parser.addOption(simDiscoveryOption);
     const QCommandLineOption controlOption(
         QStringLiteral("allow-local-control"),
-        QStringLiteral("Grant current-user local clients non-TX connect/disconnect permission."));
+        QStringLiteral("Grant current-user local clients non-TX connection and receive-frequency control."));
     parser.addOption(controlOption);
     parser.process(app);
 
@@ -62,10 +62,17 @@ int main(int argc, char* argv[])
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
+    std::unique_ptr<AetherSDR::control::SliceFrequencyTarget> frequencyTarget;
     if (parser.isSet(controlOption)) {
         connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
         if (!connectionTarget || !server.bindConnectionTarget(connectionTarget.get())) {
             QTextStream(stderr) << "aetherd: cannot initialize connection control\n";
+            return 1;
+        }
+        frequencyTarget = AetherSDR::control::makeModelSliceFrequencyTarget(
+            &radioSession.radioModel(), connectionTarget.get());
+        if (!frequencyTarget || !server.bindFrequencyTarget(frequencyTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize frequency control\n";
             return 1;
         }
     }

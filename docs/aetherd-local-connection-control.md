@@ -1,8 +1,10 @@
 # AetherD v1 — local connection control
 
 This Stage 3 sub-slice of RFC #3849 adds only non-TX connection intents.
-Receive setters, transmit, remote transport, credentials and desktop migration
-remain excluded. The default daemon remains observe-only.
+Transmit, remote transport, credentials and desktop migration remain excluded.
+The subsequent [slice frequency slice](aetherd-local-slice-frequency-control.md)
+adds one receive setter under the same explicit opt-in. The default daemon
+remains observe-only.
 
 ## Authorization and startup
 
@@ -94,7 +96,8 @@ it never attaches to the desktop session or starts TCI/CAT servers.
 Grants describe authorization, not current state. Controllers see
 `radio.connect` only with an idle target and an available supported entry;
 `radio.disconnect` appears while the target is non-idle. Refresh capabilities
-after lifecycle/catalogue events. No receive setters or TX verbs appear.
+after lifecycle/catalogue events. The separately bound frequency target can
+add `slice.setFrequency` for an eligible existing slice; no TX verbs appear.
 
 Every post-negotiation frame (including malformed/rejected requests and repeated
 `hello`) shares a per-client monotonic token bucket of 100/s, burst 200,

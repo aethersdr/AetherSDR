@@ -344,6 +344,8 @@ RadioCapabilities AnanBackend::capabilities() const
     // both zero means "not reported", not a guess.
     c.tuningMinHz = 0.0;
     c.tuningMaxHz = 0.0;
+    // State is engine-owned, but verified coverage is still unavailable.
+    c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine, 0, 0};
     c.canTransmit = false;         // P2Client has no PTT capability -- see class comment
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = true;        // client-side WDSP, like the HL2

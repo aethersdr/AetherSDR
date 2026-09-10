@@ -699,6 +699,7 @@ set(CORE_SOURCES
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/ModelSliceFrequencyTarget.cpp # validated non-keying intents
     src/core/control/RadioCatalogue.cpp       # bounded normalized discovery resource
     src/core/control/LocalControlServer.cpp   # current-user local transport
     src/core/discovery/RadioDiscoverySource.h  # socket-free discovery interface (AUTOMOC)

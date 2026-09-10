@@ -111,11 +111,15 @@ After negotiation every request carries the assigned session:
   "id": "req-42",
   "sessionId": "019d2d95-2c8b-7f2a-a17d-cc77031b3040",
   "method": "slice.setFrequency",
-  "params": {"radioSession": "radio-1", "slice": "0", "hz": 14225000}
+  "params": {"radioSession": "radio-1", "slice": "0", "expectedRevision": 42, "hz": 14225000}
 }
 ```
 
 Success returns exactly one `result`; failure returns exactly one `error`:
+
+The implemented local frequency method's bounds, revision freshness (not CAS),
+readback provenance and acceptance semantics are specified in
+[`aetherd-local-slice-frequency-control.md`](aetherd-local-slice-frequency-control.md).
 
 ```json
 {"v":1,"id":"req-42","result":{"accepted":true}}
