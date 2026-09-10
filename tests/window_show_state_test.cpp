@@ -10,8 +10,9 @@
 //   2. QWidget::show() on a minimized window restores its SAVED state, which
 //      is still minimized — so the follow-up press does not recover it either.
 //
-// windowIsShowing() fixes (1) and showAndRaiseWindow() fixes (2), while the
-// isMinimized() guard inside it keeps a maximized window maximized (#3918).
+// windowIsShowing() fixes (1) and showAndRaiseWindow() fixes (2); clearing only
+// the Minimized bit (not showNormal()) keeps a maximized or fullscreen window in
+// that state across the reopen (#3918).
 //
 // Runs on the offscreen platform, where both behaviours reproduce.
 
@@ -40,10 +41,11 @@ void report(const char* name, bool ok)
 // The toggle exactly as MainWindow::toggleAetherialStrip() runs it.
 void toggle(QWidget* w)
 {
-    if (windowIsShowing(w))
+    if (windowIsShowing(w)) {
         w->hide();
-    else
+    } else {
         showAndRaiseWindow(w);
+    }
 }
 
 }  // namespace
@@ -94,8 +96,8 @@ int main(int argc, char** argv)
     report("toggle restores a minimized window", windowIsShowing(&w));
     report("restored window is no longer minimized", !w.isMinimized());
 
-    // --- Case 7: the isMinimized() guard — raising a maximized window must
-    // not drop it out of maximized state (#3918).
+    // --- Case 7: raising a maximized window must not drop it out of
+    // maximized state (#3918).
     w.showMaximized();
     app.processEvents();
     if (w.isMaximized()) {
@@ -117,9 +119,30 @@ int main(int argc, char** argv)
                windowIsShowing(&w));
         report("restored window is still maximized", w.isMaximized());
     } else {
-        // Some platforms decline to maximize; the guard is still pinned by
-        // case 6, so skip rather than fail on a platform quirk.
-        std::printf("[SKIP] maximized state unavailable on this platform\n");
+        // Cases 7-8 are the ONLY coverage of maximize preservation in this
+        // file, so a platform that declines to maximize leaves that guard
+        // unverified here (the offscreen platform on Linux, macOS and Windows
+        // does honour it).  Say so loudly rather than fail on a platform quirk.
+        std::printf("[SKIP] maximized state unavailable on this platform - "
+                    "maximize preservation (#3918) NOT verified by this run\n");
+    }
+
+    // --- Case 9: the same for FullScreen, which showNormal() also clears.
+    w.showFullScreen();
+    app.processEvents();
+    if (w.isFullScreen()) {
+        w.showMinimized();
+        app.processEvents();
+        report("Qt: minimizing keeps the FullScreen bit alongside Minimized",
+               w.isMinimized() && (w.windowState() & Qt::WindowFullScreen));
+        toggle(&w);
+        app.processEvents();
+        report("toggle restores a minimized-from-fullscreen window",
+               windowIsShowing(&w));
+        report("restored window is still fullscreen", w.isFullScreen());
+    } else {
+        std::printf("[SKIP] fullscreen state unavailable on this platform - "
+                    "fullscreen preservation NOT verified by this run\n");
     }
 
     if (g_failures == 0) {
