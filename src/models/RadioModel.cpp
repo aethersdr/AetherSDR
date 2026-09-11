@@ -2184,9 +2184,29 @@ RadioModel::RadioModel(QObject* parent)
         if (m_backend && !usesFlexCommandPlane())
             m_backend->setTxMonitor(on, level);
     });
+    // The ATU START keys the transmitter on a radio with a real tuner
+    // (IRadioBackend::setAtu), so it sits behind the same gate as MOX, TUNE and
+    // CW keying below: transmit-incapable backend, receive-only mode, and the
+    // pan TX inhibit. Until #5558 only the Flex wire-text copy of this intent
+    // was gated (the commandReady handler), and that text is dropped on every
+    // family without a Flex command plane — so on Icom the cycle ran
+    // regardless. Gated to non-Flex families for the same reason TUNE is: the
+    // wire text already carries the Flex intent through its own gate, and a
+    // second refusal here would notify twice.
+    //
+    // BYPASS is unconditional. A refused start must never leave the tuner
+    // un-bypassable, and bypass keys nothing.
     connect(&m_transmitModel, &TransmitModel::atuCommandIssued, this,
             [this](bool start) {
-        if (m_backend) m_backend->setAtu(start);
+        if (!m_backend || usesFlexCommandPlane())
+            return;
+        if (start
+            && (!refuseKeyOnTransmitIncapableBackend()
+                || !refuseKeyInReceiveOnlyMode()
+                || transmitStartBlockedByInhibit(QStringLiteral("atu-start")))) {
+            return;
+        }
+        m_backend->setAtu(start);
     });
     connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
             [this](bool on, int level) {
