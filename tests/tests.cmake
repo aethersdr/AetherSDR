@@ -2060,6 +2060,11 @@ target_include_directories(dss_renderer_test PRIVATE src)
 target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
 
+# Socket-free full-width to GPU half-width contract (RFC #5561).
+add_executable(fft_line_width_test tests/fft_line_width_test.cpp)
+target_include_directories(fft_line_width_test PRIVATE src)
+add_test(NAME fft_line_width_test COMMAND fft_line_width_test)
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )

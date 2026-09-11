@@ -2,6 +2,7 @@
 
 #include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
+#include "gui/FftLineWidth.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -14760,7 +14761,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     // the full value as the half drew every trace at twice its
                     // labelled width on the GPU path (RFC #5561 §A). Device
                     // pixels, no dpr scaling, as the old vertex bake did.
-                    m_fftLineWidth * 0.5f,                          // coreHalfWidthPx
+                    AetherSDR::fftLineHalfWidth(m_fftLineWidth),      // coreHalfWidthPx
                     kFftLineFeatherPx,                              // featherPx
                     kFftLineCoreAlpha,
                     kFftLineFeatherAlpha,
