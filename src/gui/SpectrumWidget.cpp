@@ -2558,7 +2558,7 @@ void SpectrumWidget::loadSettings()
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
-    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
+    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "1.0").toFloat();
     m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
@@ -14754,9 +14754,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     static_cast<float>(specH) * fbDpr,              // hPx
                     static_cast<float>(n),                          // columnCount
                     1.0f,                                           // hasData
-                    // Match the old vertex bake: stroke half-widths were
-                    // DEVICE-pixel offsets with no dpr scaling.
-                    m_fftLineWidth,                                 // coreHalfWidthPx
+                    // The slider is a FULL width in device px (the QPainter
+                    // path sets a cosmetic pen of exactly m_fftLineWidth), and
+                    // the shader takes a HALF width, so halve it here. Passing
+                    // the full value as the half drew every trace at twice its
+                    // labelled width on the GPU path (RFC #5561 §A). Device
+                    // pixels, no dpr scaling, as the old vertex bake did.
+                    m_fftLineWidth * 0.5f,                          // coreHalfWidthPx
                     kFftLineFeatherPx,                              // featherPx
                     kFftLineCoreAlpha,
                     kFftLineFeatherAlpha,

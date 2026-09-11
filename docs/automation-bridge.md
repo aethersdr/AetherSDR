@@ -1211,7 +1211,7 @@ comparing screenshots.
    "panIndex":1,"objectName":"",
    "fftAverage":0,"fftFps":25,"fftWeightedAvg":false,
    "fftHeatMap":true,"showGrid":true,
-   "fftLineWidth":2.0,"fftLineColor":"#00e5ff",
+   "fftLineWidth":1.0,"fftLineColor":"#00e5ff",
    "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
    "noiseFloorEnable":false,"noiseFloorPosition":75,
    "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,

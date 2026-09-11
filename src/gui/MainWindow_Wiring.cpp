@@ -4794,7 +4794,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFillAlpha(0.70f);
         sw->setFftFillColor(QColor(0x00, 0xe5, 0xff));
         sw->setFftLineColor(QColor(0x00, 0xe5, 0xff));
-        sw->setFftLineWidth(2.0f);
+        sw->setFftLineWidth(1.0f);
         sw->setFftWeightedAvg(false);
         sw->setFftHeatMap(true);
         sw->setWfColorScheme(0);
@@ -4845,7 +4845,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFftFillAlpha"),        "0.70");
         s.setValue(sw->settingsKey("DisplayFftFillColor"),        "#00e5ff");
         s.setValue(sw->settingsKey("DisplayFftLineColor"),        "#00e5ff");
-        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "2.0");
+        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "1.0");
         s.setValue(sw->settingsKey("DisplayFftHeatMap"),          "True");
         s.setValue(sw->settingsKey("DisplayWfColorScheme"),       "0");
         s.setValue(sw->settingsKey("DisplayWfColorGain"),         "50");

@@ -301,6 +301,8 @@ AETHER_NO_GPU=1 ./AetherSDR-*.AppImage
 
 That is the escape hatch if a GPU or driver renders the spectrum incorrectly — worth trying first on Raspberry Pi and other systems whose Mesa driver is newer than its hardware.
 
+Trace thickness is the **FFT Line** slider under the spectrum's right-click **Display** panel (Off to 5.0 px, per panadapter).
+
 ### Wayland and XWayland
 
 On a Wayland session AetherSDR chooses the Qt platform based on whether a
