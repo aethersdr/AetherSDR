@@ -176,6 +176,27 @@ target_include_directories(control_slice_frequency_test PRIVATE src tests)
 target_link_libraries(control_slice_frequency_test PRIVATE aethercore Qt6::Core)
 add_test(NAME control_slice_frequency_test COMMAND control_slice_frequency_test)
 
+# Socket-free typed receive admission; injected backend intents and separate
+# normalized observations, no synthetic firmware peer or network endpoint.
+add_executable(control_receive_test tests/control_receive_test.cpp)
+target_include_directories(control_receive_test PRIVATE src tests)
+target_link_libraries(control_receive_test PRIVATE aethercore Qt6::Core)
+add_test(NAME control_receive_test COMMAND control_receive_test)
+
+# Socket-free bounded telemetry and transmit observation. The test injects
+# samples and a monotonic clock, with no sockets, peers, timers waited on or TX.
+add_executable(control_telemetry_test tests/control_telemetry_test.cpp)
+target_include_directories(control_telemetry_test PRIVATE src tests)
+target_link_libraries(control_telemetry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME control_telemetry_test COMMAND control_telemetry_test)
+
+# not registered: explicit opt-in diagnostic. Launches OUR aetherd and binds
+# its unique QLocalServer endpoint (Unix-domain socket / Windows named pipe).
+# Built-in Demo only; no third-party firmware peer. Exit 77 on listen refusal.
+# Never part of the default build, CTest graph or per-PR CI gate.
+add_executable(aetherd_receive_smoke EXCLUDE_FROM_ALL tools/aetherd_receive_smoke.cpp)
+target_link_libraries(aetherd_receive_smoke PRIVATE Qt6::Core Qt6::Network)
+
 # Real factory wiring, with local=false: simulator metadata only, no sockets,
 # device scans, radio connections or third-party firmware stand-ins.
 add_executable(radio_discovery_source_test tests/radio_discovery_source_test.cpp)
@@ -4828,6 +4849,8 @@ set(AETHER_SETTINGS_CONSUMERS
     icom_control_profile_test
     control_resource_service_test
     control_slice_frequency_test
+    control_receive_test
+    control_telemetry_test
     aetherd_discovery_startup_test
     automation_bridge_start_outcome_test
     slice_label_test

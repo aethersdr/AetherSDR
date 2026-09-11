@@ -286,6 +286,13 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
                                static_cast<qint64>(m.tuningMinHz),
                                static_cast<qint64>(m.tuningMaxHz)};
+    // CI-V mode/filter presets and scope geometry need profile-specific
+    // contracts before the daemon can safely offer these generic intents.
+    c.receiveModeControl = std::nullopt;
+    c.receiveFilterControl = std::nullopt;
+    c.receiveAudioControl = std::nullopt;
+    c.receivePanCenterControl = std::nullopt;
+    c.receivePanBandwidthControl = std::nullopt;
 
     const std::span<const IcomBand> bands = bandsFor(m);
     c.declaredBandRanges.reserve(static_cast<int>(bands.size()));

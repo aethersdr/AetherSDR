@@ -1519,6 +1519,7 @@ void RadioModel::wireBackendReceiverState()
                 pan->setWaterfallId(neutralWfIdString(panIdx));
         }
         if (!pan) return;
+        pan->recordGeometryObservation(centerMhz, bandwidthMhz);
         const bool spanChanged = pan->setCenterBandwidth(centerMhz, bandwidthMhz);
         // A backend that snaps a requested span to fixed hardware rates (HL2
         // offers four) reports back the span it actually runs. When that equals
@@ -9338,6 +9339,28 @@ QString RadioModel::backendPanIdFor(const QString& modelPanId) const
     // backend that does not recognise it will refuse, which is the correct
     // outcome for a pan this session never mapped.
     return modelPanId;
+}
+
+std::optional<QString> RadioModel::receiveControlPanId(const QString& modelPanId) const
+{
+    const PanadapterModel* pan = m_panadapters.value(modelPanId, nullptr);
+    if (!pan) {
+        return {};
+    }
+    if (pan->ownerHandle() != 0) {
+        return pan->ownerHandle() == clientHandle()
+            ? std::optional<QString>(backendPanIdFor(modelPanId)) : std::nullopt;
+    }
+    // A wire-less engine owns the pan it materialized from its current backend
+    // mapping. Unknown ownership on a wire transport is never sufficient.
+    if (!m_connection) {
+        const QString id = backendPanIdFor(modelPanId);
+        const auto it = m_backendPanIndex.constFind(id);
+        if (it != m_backendPanIndex.constEnd() && neutralPanIdString(it.value()) == modelPanId) {
+            return id;
+        }
+    }
+    return {};
 }
 
 int RadioModel::neutralPanIndexFor(const QString& backendPanId)

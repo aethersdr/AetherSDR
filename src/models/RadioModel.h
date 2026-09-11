@@ -728,6 +728,9 @@ public:
     // 2.3 backend-signal handlers, single-sourced (#4065 review).
     PanadapterModel* resolvePan(const QString& panId) const;
     QList<PanadapterModel*> panadapters() const { return m_panadapters.values(); }
+    // Exact live identity + confirmed ownership for an untrusted local intent.
+    // Returns the backend's own id, not an invented or caller-supplied wire id.
+    std::optional<QString> receiveControlPanId(const QString& modelPanId) const;
 
     // Radio-authoritative display inventory vs what we own (#3856 Layer B).
     // Built from the accumulated "display pan"/"display waterfall" status maps;

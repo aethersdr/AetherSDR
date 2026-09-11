@@ -519,8 +519,13 @@ grants are not implemented yet.
 existing owned slice, with explicit backend observation provenance and fail-closed
 TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
 not optimistically update the model. Unknown coverage/readback remains unavailable.
-Meters, read-only transmit state, other typed slice/pan receive controls, and the desktop
-adapter have not landed; UI code still consumes models directly, and that
+The receive-control milestone adds typed mode/filter/gain/mute and pan
+center/bandwidth intents for qualified existing owned resources, separate
+backend receive observations, bounded latest-value `meter` resources and a
+read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
+per-backend support matrix and remaining no-op, geometry and TX-idle limits.
+This is not all-backend feature parity: unavailable operations remain absent.
+The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.

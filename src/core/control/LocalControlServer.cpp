@@ -87,7 +87,14 @@ bool LocalControlServer::bindFrequencyTarget(SliceFrequencyTarget* target)
         && m_service.bindFrequencyTarget(target);
 }
 
-bool LocalControlServer::listen(const QString& name)
+bool LocalControlServer::bindReceiveTarget(ReceiveControlTarget* target)
+{
+    return thread() == QThread::currentThread() && m_clients.empty()
+        && m_localAuthorization == SessionAuthorization::ObserverController
+        && m_service.bindReceiveTarget(target);
+}
+
+bool LocalControlServer::listen(const QString& name, ListenMode mode)
 {
     if (m_server.isListening() || m_lock || m_limits.maxClients < 1
         || m_limits.handshakeTimeoutMs < 1 || m_limits.maxQueuedOutputBytes < 1) {
@@ -127,11 +134,22 @@ bool LocalControlServer::listen(const QString& name)
     m_resources.upsert(
         {QStringLiteral("server"), {}, {}},
         serverValue(QStringLiteral("listening")));
+    return mode == ListenMode::ReserveEndpoint || startServing();
+}
+
+bool LocalControlServer::startServing()
+{
+    if (thread() != QThread::currentThread() || !m_server.isListening() || m_serving) {
+        return false;
+    }
+    m_serving = true;
+    acceptConnections();
     return true;
 }
 
 void LocalControlServer::close()
 {
+    m_serving = false;
     const bool wasListening = m_server.isListening();
     m_server.close();
     QList<QLocalSocket*> sockets;
@@ -157,6 +175,14 @@ void LocalControlServer::acceptConnections()
     while (m_server.hasPendingConnections()) {
         QLocalSocket* socket = m_server.nextPendingConnection();
         if (!socket) {
+            continue;
+        }
+        if (!m_serving) {
+            // Settings/model construction can pump a nested event loop. Do
+            // not create a session or dispatch into partially initialized
+            // targets. The endpoint remains claimed; clients may retry.
+            socket->abort();
+            socket->deleteLater();
             continue;
         }
         if (m_clients.size() >= static_cast<std::size_t>(m_limits.maxClients)) {
@@ -204,6 +230,11 @@ void LocalControlServer::acceptConnections()
                     socket->deleteLater();
                 });
         client->handshakeTimer.start();
+        // Data can precede our readyRead connection when acceptance was
+        // delayed by startup or another event callback.
+        if (socket->bytesAvailable() > 0) {
+            readClient(socket);
+        }
     }
 }
 

@@ -134,6 +134,23 @@ RadioCapabilities FlexBackend::capabilities() const
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};
+    // FlexLib 4.2.18 Slice.DemodMode and FilterLow/High. Waveform modes and
+    // pitch/mark-dependent CW/RTTY filters require a separate runtime contract.
+    caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Radio,
+        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DIGU"),
+         QStringLiteral("DIGL"), QStringLiteral("AM"), QStringLiteral("SAM"),
+         QStringLiteral("DSB"), QStringLiteral("CW"), QStringLiteral("FM"), QStringLiteral("NFM")}};
+    caps.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Radio, {
+        {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000}}};
+    caps.receiveAudioControl = std::nullopt; // legacy wire mixer path has not migrated
+    caps.receivePanCenterControl = std::nullopt; // unknown coverage including transverters
+    caps.receivePanBandwidthControl = std::nullopt; // legacy coupled geometry path
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");

@@ -55,6 +55,19 @@ semantics see [local frequency control](../aetherd-local-slice-frequency-control
 
 ## Wired and consumed
 
+### Local receive-control records
+
+The optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
+`receivePanCenterControl`, and `receivePanBandwidthControl` records are read by
+`ModelReceiveControlTarget` at action time and by `RadioResourceAdapter` for
+versioned metadata/observation provenance. All six backends declare each record
+explicitly. They do not change UI visibility or migrate legacy command routes.
+Null or unknown authority fails closed. Their full per-backend support matrix,
+range contracts, TX-idle restrictions and remaining no-op/coupling limitations
+are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).
+`control_receive_test` pins declarations and action-time admission; the optional
+RTL declaration check runs only when the RTL backend is built.
+
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
 | `canCreateSlices` | ✅ | ❌ | ❌ | `RadioModel::addSliceOnPan`, only without a command plane | Admission to the neutral backend's independent slice-creation hook on an existing pan. Flex and Sim use their existing command adapters without consulting this field, so the values shown are declarations, not a UI availability rule; do not gate +RX on this field alone. Capacity remains `maxSlices`; paired/fixed receiver topologies do not gain independent creation. Icom, ANAN and RTL explicitly declare false; RTL remains one slice in RFC #5468 P01. |
