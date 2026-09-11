@@ -30,6 +30,9 @@ connections are closed without admitting a session; clients may reconnect and
 retry `hello`. Serving begins only after all targets and initial resources are
 installed. Settings/model constructors may pump nested Qt event loops, but an
 early client must not cause startup binding to fail or observe partial state.
+`local_control_server_test` pins this ordering against the production server:
+a client arriving on a reserved endpoint is closed without a reply, serving
+begins exactly once, and the default listen mode still admits sessions.
 
 ## Methods
 
