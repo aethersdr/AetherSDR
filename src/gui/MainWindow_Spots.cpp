@@ -551,6 +551,50 @@ void MainWindow::wireSpotSubsystem()
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, [this] { m_passiveSpotExpiryMs.clear(); m_n1mmSpotIdByKey.clear(); });
 
+    // WSJT-X Rx/Tx frequency overlay instance timeout (#4526). Reuses the
+    // same 1 Hz timer above rather than adding a second QTimer for one more
+    // sweep. 45 s comfortably outlasts every mode's Status cadence (FT8 15 s,
+    // FT4 7.5 s, up to WSPR's 2-minute cycle WSJT-X still pings Status well
+    // inside) while still clearing a marker within a reasonable window after
+    // that WSJT-X instance exits without a clean Close or the network drops.
+    connect(passiveSpotExpiryTimer, &QTimer::timeout, this, [this] {
+        if (m_wsjtxInstanceLastSeenMs.isEmpty())
+            return;
+        constexpr qint64 kWsjtxInstanceTimeoutMs = 45000;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        bool anyExpired = false;
+        for (auto it = m_wsjtxInstanceLastSeenMs.begin(); it != m_wsjtxInstanceLastSeenMs.end(); ) {
+            if (now - it.value() > kWsjtxInstanceTimeoutMs) {
+                m_wsjtxInstances.remove(it.key());
+                it = m_wsjtxInstanceLastSeenMs.erase(it);
+                anyExpired = true;
+            } else {
+                ++it;
+            }
+        }
+        if (anyExpired) {
+            rebuildWsjtxMarkers();
+        }
+    });
+
+    // ── WSJT-X Rx/Tx frequency overlay (#4526) ──────────────────────────────
+    // Separate from the spotReceived/queueSpotCmd path above: this is the
+    // digital-mode program's live Rx/Tx position, sourced from Status (type
+    // 1), not a decoded station. statusReceived() previously had no
+    // consumer connected anywhere in the app.
+    connect(m_wsjtxClient, &WsjtxClient::statusReceived,
+            this, [this](const WsjtxStatus& status) {
+        m_wsjtxInstances[status.id] = status;
+        m_wsjtxInstanceLastSeenMs[status.id] = QDateTime::currentMSecsSinceEpoch();
+        rebuildWsjtxMarkers();
+    });
+    connect(m_wsjtxClient, &WsjtxClient::stopped, this, [this] {
+        if (m_wsjtxInstances.isEmpty()) return;
+        m_wsjtxInstances.clear();
+        m_wsjtxInstanceLastSeenMs.clear();
+        rebuildWsjtxMarkers();
+    });
+
     // N1MM/DXLog spots (#2906): the logger sends explicit add/update/delete, so
     // these bypass queueSpotCmd's freq dedup and key on
     // N1MMSpotParser::spotKey() (callsign+band); a long lifetime backstops a
@@ -676,6 +720,14 @@ void MainWindow::wireSpotSubsystem()
 
     connect(m_wsjtxClient, &WsjtxClient::spotReceived,
             this, [this, isDuplicateSpot, spotLifetimeSeconds, addPassiveSpotToModel](const DxSpot& spot) {
+        // Decoded-station spots and the Rx/Tx frequency overlay (#4526) share
+        // one WSJT-X listener but are otherwise independent — this toggle
+        // lets an operator run the overlay alone, with no decode markers and
+        // no "spot add" traffic to the radio, without stopping the listener
+        // Status (Rx/Tx) parsing depends on. Default on: preserves existing
+        // behavior for anyone who never sees this new checkbox.
+        if (AppSettings::instance().value("WsjtxPostSpotsEnabled", "True").toString() != "True")
+            return;
         if (!m_radioModel.isConnected()) return;
         if (isDuplicateSpot(spot)) return;
 
@@ -831,6 +883,34 @@ void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<
     QTimer::singleShot(kWsprSliceReadMs, client, [call] { call(-1); });
     // Spots from now on: none, so the reply stays small.
     client->fetchStatus(QDateTime::currentSecsSinceEpoch());
+}
+
+// Pushes the current set of live WSJT-X instances (m_wsjtxInstances) to every
+// panadapter's SpectrumWidget as WsjtxMarker entries (#4526). Called whenever
+// that set changes: a new/updated Status, an instance timing out, or the
+// listener stopping. AppSettings is the single source of truth for whether
+// the overlay paints at all — read fresh each call rather than cached, so
+// toggling "Show WSJT-X frequency overlay" in the Spots dialog takes effect
+// on the very next update without a separate settings-changed plumbing path
+// (SpectrumWidget::setShowWsjtxFreq() below still updates existing panes
+// immediately too, for the case where nothing new has arrived from WSJT-X).
+void MainWindow::rebuildWsjtxMarkers()
+{
+    const bool show =
+        AppSettings::instance().value("WsjtxShowFreqOverlay", "False").toString() == "True";
+
+    QVector<SpectrumWidget::WsjtxMarker> markers;
+    markers.reserve(m_wsjtxInstances.size());
+    for (auto it = m_wsjtxInstances.cbegin(); it != m_wsjtxInstances.cend(); ++it) {
+        const WsjtxStatus& st = it.value();
+        markers.append({st.id, st.rxFreqHz, st.txFreqHz, st.transmitting});
+    }
+
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        auto* sw = applet->spectrumWidget();
+        sw->setShowWsjtxFreq(show);
+        sw->setWsjtxMarkers(markers);
+    }
 }
 
 } // namespace AetherSDR

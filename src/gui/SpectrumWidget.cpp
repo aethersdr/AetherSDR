@@ -14767,6 +14767,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             drawSwrSweep(frequencyPainter, specRect);
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
+            drawWsjtxMarkers(frequencyPainter, specRect, wfRect);
             drawOffScreenSlices(frequencyPainter, specRect);
 
             m_overlayStatic.fill(Qt::transparent);
@@ -16533,6 +16534,32 @@ void SpectrumWidget::setSpotMarkers(const QVector<SpotMarker>& markers)
     markOverlayDirty();
 }
 
+void SpectrumWidget::setWsjtxMarkers(const QVector<WsjtxMarker>& markers)
+{
+    // MainWindow pushes an updated list on every WSJT-X Status (roughly once
+    // per decode cycle, more often while transmitting) — skip the overlay
+    // texture rebuild when nothing actually moved, matching setSpotMarkers()
+    // above.
+    const bool visualChange = [&] {
+        if (m_wsjtxMarkers.size() != markers.size()) return true;
+        for (int i = 0; i < markers.size(); ++i) {
+            const auto& a = m_wsjtxMarkers.at(i);
+            const auto& b = markers.at(i);
+            if (a.id != b.id || a.transmitting != b.transmitting ||
+                std::abs(a.rxFreqHz - b.rxFreqHz) > 0.5 ||
+                std::abs(a.txFreqHz - b.txFreqHz) > 0.5) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    m_wsjtxMarkers = markers;
+    if (!visualChange) {
+        return;
+    }
+    markOverlayDirty();
+}
+
 void SpectrumWidget::setSHistoryMarkers(const QVector<SpotMarker>& markers)
 {
     const bool visualChange = !spotMarkersVisuallyEqual(m_sHistoryMarkers, markers);
@@ -18202,6 +18229,70 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         if (!so.isActive) drawOne(so);
     for (const auto& so : m_sliceOverlays)
         if (so.isActive) drawOne(so);
+}
+
+// ─── WSJT-X Rx/Tx frequency overlay (#4526) ───────────────────────────────────
+//
+// Deliberately its own draw path rather than routed through drawSpotMarkers():
+// this is the digital-mode program's live Rx/Tx position (persistent lines,
+// like a slice VFO marker), not a fading DX spot, and the issue calls out
+// that the two must stay visually distinct so operators don't confuse a
+// bandmap tick with "this is where WSJT-X is right now". Decoded-station
+// markers are unaffected — those already exist via SpotHub's WSJT-X feed and
+// drawSpotMarkers(), per the triage on #4526.
+void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
+{
+    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty()) {
+        return;
+    }
+
+    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
+
+    // Green/red follows the issue's own suggested scheme and matches the
+    // existing RTTY mark/space cue colors (drawSliceMarkers, above) rather
+    // than inventing a third color pair for "two related but different
+    // frequencies" on the same panadapter.
+    const QColor rxColor = AetherSDR::ThemeManager::instance().color("color.accent.success");
+    const QColor txColor = AetherSDR::ThemeManager::instance().color("color.accent.danger");
+
+    auto drawFrequencyLine = [&](int x, const QColor& col) {
+        p.setPen(QPen(col, 1));
+        p.drawLine(x, specRect.top(), x, specRect.bottom());
+        if (!wfRect.isEmpty()) {
+            p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+        }
+    };
+
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(10);
+    labelFont.setBold(true);
+    p.setFont(labelFont);
+    const QFontMetrics fm(labelFont);
+    const int labelY = specRect.top() + fm.height();
+
+    for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
+        const double rxMhz = marker.rxFreqHz / 1.0e6;
+        if (rxMhz >= startMhz && rxMhz <= endMhz) {
+            const int x = mhzToX(rxMhz);
+            drawFrequencyLine(x, rxColor);
+            p.setPen(rxColor);
+            p.drawText(x + 3, labelY,
+                       QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
+        }
+
+        // Tx marker only when it means something: actively transmitting, or
+        // split (Tx differs from Rx) so a QSY-in-progress Reply doesn't read
+        // as a permanent second marker sitting on top of Rx (issue: "a
+        // distinct marker at Tx frequency when it differs").
+        const bool txDiffersFromRx = std::abs(marker.txFreqHz - marker.rxFreqHz) > 1.0;
+        if (marker.transmitting || txDiffersFromRx) {
+            const double txMhz = marker.txFreqHz / 1.0e6;
+            if (txMhz >= startMhz && txMhz <= endMhz) {
+                drawFrequencyLine(mhzToX(txMhz), txColor);
+            }
+        }
+    }
 }
 
 // ─── Frequency scale bar ──────────────────────────────────────────────────────

@@ -713,6 +713,10 @@ void MainWindow::buildMenuBar()
             // Rebuild markers so source-level visibility changes, such as the
             // Memories feed toggle, apply immediately without mutating the cache.
             m_radioModel.spotModel().refresh();
+            // WSJT-X Rx/Tx frequency overlay (#4526) — separate model, so
+            // toggling "Show Rx/Tx frequency" takes effect immediately even
+            // if no new WSJT-X Status arrives to trigger it otherwise.
+            rebuildWsjtxMarkers();
         };
         connect(dlg, &DxClusterDialog::settingsChanged, this, [this, refreshSpots] {
             refreshSpots();

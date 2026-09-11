@@ -11,6 +11,21 @@
 
 namespace AetherSDR {
 
+// Live Rx/Tx state from one WSJT-X instance's Status (type 1) message,
+// resolved to absolute frequencies (#4526). WSJT-X reports the dial
+// frequency plus separate Rx/Tx AUDIO offsets (Hz within the passband);
+// this is dial + offset for each, matching the addition parseDecode() has
+// always used for spot placement — WSJT-X's audio-offset convention adds
+// unconditionally regardless of the reported sideband, so there is no
+// LSB/USB special case here.
+struct WsjtxStatus {
+    QString id;
+    double  rxFreqHz{0.0};
+    double  txFreqHz{0.0};
+    bool    transmitting{false};
+    QString mode;
+};
+
 // WSJT-X UDP multicast client — listens for Decode messages (type 2)
 // from WSJT-X and emits spotReceived() for each decoded station.
 // Protocol: binary QDataStream on 224.0.0.1:2237 (default).
@@ -36,7 +51,11 @@ signals:
     void stopped();
     void spotReceived(const DxSpot& spot);
     void rawLineReceived(const QString& line);
-    void statusReceived(const QString& id, double dialFreqHz, const QString& mode);
+    // Was (id, dialFreqHz, mode); widened to WsjtxStatus for the Rx/Tx
+    // frequency overlay (#4526) rather than growing the signal's argument
+    // list further. Previously emitted with no consumer connected — see
+    // MainWindow_Spots.cpp for the wiring this enables.
+    void statusReceived(const WsjtxStatus& status);
 
 private slots:
     void onReadyRead();

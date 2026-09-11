@@ -234,6 +234,13 @@ private:
     QCheckBox*      m_wsjtxFilterCQ;
     QCheckBox*      m_wsjtxFilterPOTA;
     QCheckBox*      m_wsjtxFilterCallingMe;
+    // Live Rx/Tx frequency overlay on the panadapter/waterfall (#4526) —
+    // separate from the decoded-station spot filters above, which already
+    // ship. Default off pending maintainer sign-off on the feature.
+    QCheckBox*      m_wsjtxShowFreqOverlay{nullptr};
+    // Master switch for decode->spot posting, independent of the overlay
+    // above and of listening itself (#4526). Default on.
+    QCheckBox*      m_wsjtxPostSpots{nullptr};
 
     // POTA tab
     QSpinBox*       m_potaIntervalSpin;

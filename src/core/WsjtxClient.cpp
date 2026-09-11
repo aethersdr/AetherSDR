@@ -1,5 +1,6 @@
 #include "WsjtxClient.h"
 #include "LogManager.h"
+#include "WsjtxStatusFreq.h"
 
 #include <QDataStream>
 #include <QNetworkInterface>
@@ -135,7 +136,43 @@ void WsjtxClient::parseStatus(QDataStream& ds)
     const double dialFreqHz = static_cast<double>(dialFreq);
     m_dialTracker.noteStatus(id, dialFreqHz);
 
-    emit statusReceived(id, dialFreqHz, mode);
+    // Fields added for the Rx/Tx frequency overlay (#4526): DX Call, Report,
+    // Tx Mode, Tx Enabled, Transmitting, Decoding, Rx DF, Tx DF. Everything
+    // after Tx DF (DE call/grid, watchdog, ...) is not needed here and is
+    // left unread. Consumed defensively — an older or truncated Status still
+    // updates the dial (and therefore Decode placement, #3595) even when
+    // these later fields are short; the overlay just falls back to "no
+    // offset known" for this update rather than dropping it.
+    QString dxCall, report, txMode;
+    bool txEnabled = false;
+    bool transmitting = false;
+    bool decoding = false;
+    bool haveOffsets =
+        readQString(ds, dxCall) &&
+        readQString(ds, report) &&
+        readQString(ds, txMode) &&
+        readBool(ds, txEnabled) &&
+        readBool(ds, transmitting) &&
+        readBool(ds, decoding);
+
+    quint32 rxDf = 0;
+    quint32 txDf = 0;
+    if (haveOffsets && !ds.atEnd()) {
+        ds >> rxDf >> txDf;
+    } else {
+        haveOffsets = false;
+    }
+
+    const WsjtxResolvedFreq resolved = resolveWsjtxFreq(dialFreqHz, haveOffsets, rxDf, txDf);
+
+    WsjtxStatus status;
+    status.id = id;
+    status.mode = mode;
+    status.transmitting = transmitting;
+    status.rxFreqHz = resolved.rxFreqHz;
+    status.txFreqHz = resolved.txFreqHz;
+
+    emit statusReceived(status);
 }
 
 // ── Close message (type 6) — instance is exiting ────────────────────────────
