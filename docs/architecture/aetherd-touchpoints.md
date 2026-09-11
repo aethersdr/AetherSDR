@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 215 touchpoint headers (184 core, 31 models) — 215/215 tagged, 0/215 converted.
+**Totals:** 216 touchpoint headers (185 core, 31 models) — 216/216 tagged, 0/216 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -177,6 +177,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/hl2/Hl2Discovery.h` | 3 | vendor(hl2) — HPSDR Protocol 1 ('Metis') discovery for the Hermes-Lite 2, shaped to emit RadioInfo with family="hl2" so the existing picker slots consume it unchanged. Family wire code that belongs below the seam; reached today from ConnectionPanel.cpp, MainWindow.h and RadioSetupDialog.cpp. Pre-existing coupling, frozen into the EB3 baseline — the fix is a family-neutral discovery aggregator behind IRadioBackend, not a wider baseline. | unconverted |
 | `core/backends/hl2/Hl2EmergencyStop.h` | 1 | vendor(hl2) — Async-signal-safe release path for the Hermes-Lite 2 (an HL2 left streaming at a dead host keeps sending EP6, stops answering discovery, and needs a physical power cycle — reproduced three times). Family wire behavior invoked from main.cpp's signal handler; pre-existing coupling, frozen into the EB3 baseline. Generalizes to an engine-level 'release every backend on fatal signal' hook. | unconverted |
 | `core/backends/hl2/Hl2FreqCal.h` | 1 | mixed(hl2) — Pure frequency-error math and radio-scoped persistence fused with the HL2 crystal/NCO model. Surface as a namespaced HL2 extension without treating generic calibration math as wire code. | unconverted |
+| `core/backends/hl2/Hl2MiscOptionsSettings.h` | 1 | ui-support — Radio-scoped client persistence for the Hermes-Lite-2 misc-options page (ADC dither/random, reset-on-disconnect, TX latency, PTT hang, swap audio channels) under a RadioSettingsScope feature document; UI settings plumbing, not radio-owned wire state. | unconverted |
 | `core/backends/hl2/MetisProtocol.h` | 1 | vendor(hl2) — HPSDR Protocol 1 ('Metis') wire primitives for the HL2 backend — register map, EP2/EP6 framing, LNA gain register. Family wire code below the seam; reached today from ConnectionPanel.cpp, frozen into the EB3 baseline. Authority: openHPSDR Protocol 1 plus the Hermes-Lite 2 gateware RTL (Principle I, per-backend). | unconverted |
 | `core/backends/icom/IcomCredentials.h` | 1 | ui-support — OS-keychain and process-session storage for an Icom network password. Credential plumbing shared by connection UI and backend, never a control-protocol field or radio-state resource. | unconverted |
 | `core/backends/icom/IcomModels.h` | 1 | vendor(icom) — Icom CI-V model identity, model-specific capability tables, and model-ID reply decoding. Family-specific knowledge belongs behind the Icom backend; the client should consume canonical capabilities. | unconverted |

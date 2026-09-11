@@ -11,6 +11,7 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
+#include "core/backends/hl2/Hl2MiscOptionsSettings.h" // Hermes Lite 2 misc-options page
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -827,6 +828,21 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
     addPage(hardwareCategory, QStringLiteral("Peripherals"),
         QStringLiteral("controllers amplifier tuner antenna genius pgxl tgxl manual ip"), [this] { return buildPeripheralsTab(); });
+
+    // Hermes-Lite 2 misc options (issue #9). Gated on its own capability
+    // boolean, following the Calibration/APD precedent above — never a
+    // family check — and hidden immediately at construction since a
+    // reconnect to a non-HL2 radio must not leave an HL2-only page visible.
+    QTreeWidgetItem* hermesLiteItem = addPage(hardwareCategory, QStringLiteral("Hermes Lite 2"),
+        QStringLiteral("hermes lite adc dither randomization reset disconnect tx latency ptt hang swap audio"),
+        [this] { return buildHermesLiteOptionsTab(); });
+    m_hermesLiteOptionsPageIndex = m_pageIndexes.value(QStringLiteral("Hermes Lite 2"));
+    hermesLiteItem->setHidden(!m_model->backendCapabilities().hasHermesLiteOptions);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this, hermesLiteItem](bool, const RadioCapabilities&) {
+        hermesLiteItem->setHidden(!m_model->backendCapabilities().hasHermesLiteOptions);
+    });
+
     addPage(onlineCategory, QStringLiteral("Appearance & Behavior"),
         QStringLiteral("themes colors display font vision contrast click wheel ui enhancements"), [this] { return buildUiEnhancementsTab(); });
     addPage(onlineCategory, QStringLiteral("SmartLink"),
@@ -889,13 +905,15 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
+                const bool hermesLiteRow = item == m_pageItems.value(m_hermesLiteOptionsPageIndex);
                 const bool gated =
                     (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
-                    || (droopRow && !droopCalibrationAvailable(m_model->backend()));
+                    || (droopRow && !droopCalibrationAvailable(m_model->backend()))
+                    || (hermesLiteRow && !m_model->backendCapabilities().hasHermesLiteOptions);
                 if (!gated) {
                     item->setHidden(!matches);
                 }
@@ -9577,6 +9595,106 @@ QWidget* RadioSetupDialog::buildQrzTab()
 
     root->addWidget(cache);
     root->addStretch();
+    return page;
+}
+
+
+QWidget* RadioSetupDialog::buildHermesLiteOptionsTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto* group = new QGroupBox("Hermes Lite 2 Options");
+    group->setStyleSheet(kGroupStyle);
+    auto* grid = new QGridLayout(group);
+    grid->setHorizontalSpacing(16);
+    grid->setVerticalSpacing(10);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto makeCheck = [&theme](const QString& text, const QString& accessibleDesc) {
+        auto* cb = new QCheckBox(text);
+        theme.applyStyleSheet(cb,
+            QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }")
+            + kCheckBoxIndicator);
+        cb->setAccessibleName(text);
+        cb->setAccessibleDescription(accessibleDesc);
+        return cb;
+    };
+    auto apply = [this](const QString& verb, const QVariant& value) {
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), verb, 0, value);
+    };
+
+    auto* ditherCheck = makeCheck(QStringLiteral("ADC Dither"),
+        QStringLiteral("Enable ADC dither noise shaping"));
+    ditherCheck->setChecked(Hl2MiscOptionsSettings::adcDither(m_model->settingsScope()));
+    connect(ditherCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setAdcDither"), QVariant(on));
+    });
+    grid->addWidget(ditherCheck, 0, 0);
+
+    auto* randomCheck = makeCheck(QStringLiteral("ADC Randomization"),
+        QStringLiteral("Enable ADC output randomization"));
+    randomCheck->setChecked(Hl2MiscOptionsSettings::adcRandom(m_model->settingsScope()));
+    connect(randomCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setAdcRandom"), QVariant(on));
+    });
+    grid->addWidget(randomCheck, 1, 0);
+
+    auto* resetCheck = makeCheck(QStringLiteral("Reset On Disconnect"),
+        QStringLiteral("Reset the radio when this application disconnects"));
+    resetCheck->setChecked(Hl2MiscOptionsSettings::resetOnDisconnect(m_model->settingsScope()));
+    connect(resetCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setResetOnDisconnect"), QVariant(on));
+    });
+    grid->addWidget(resetCheck, 2, 0);
+
+    auto* swapCheck = makeCheck(QStringLiteral("Swap Audio Channels"),
+        QStringLiteral("Swap left and right transmit audio channels"));
+    swapCheck->setChecked(Hl2MiscOptionsSettings::swapAudioChannels(m_model->settingsScope()));
+    swapCheck->setToolTip(QStringLiteral(
+        "This backend's transmit audio path carries no stereo signal today, "
+        "so this setting is persisted for parity with the reference client "
+        "but has no audible effect yet."));
+    connect(swapCheck, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QStringLiteral("options.setSwapAudioChannels"), QVariant(on));
+    });
+    grid->addWidget(swapCheck, 3, 0);
+
+    auto* latencyLabel = new QLabel(QStringLiteral("TX Latency"));
+    latencyLabel->setStyleSheet(kLabelStyle);
+    grid->addWidget(latencyLabel, 0, 1);
+    auto* latencySpin = new QSpinBox;
+    // 0..127: the wire field's 7-bit width (MetisProtocol.h's kTxLatencyMax).
+    // A UI-only bound — Hl2MiscOptionsSettings::setTxLatency() is the real
+    // enforcement (Core, not GUI, so it stays behind the radio seam); this
+    // just keeps the spinbox from accepting a value that write would refuse.
+    latencySpin->setRange(0, 127);
+    latencySpin->setValue(Hl2MiscOptionsSettings::txLatency(m_model->settingsScope()));
+    latencySpin->setKeyboardTracking(false);
+    latencySpin->setAccessibleName(QStringLiteral("TX latency"));
+    connect(latencySpin, &QSpinBox::valueChanged, this, [apply](int v) {
+        apply(QStringLiteral("options.setTxLatency"), QVariant(v));
+    });
+    grid->addWidget(latencySpin, 0, 2);
+
+    auto* hangLabel = new QLabel(QStringLiteral("PTT Hang"));
+    hangLabel->setStyleSheet(kLabelStyle);
+    grid->addWidget(hangLabel, 1, 1);
+    auto* hangSpin = new QSpinBox;
+    // 0..31: the wire field's 5-bit width (MetisProtocol.h's kPttHangMax).
+    // Same UI-only-bound reasoning as the TX latency spinbox above.
+    hangSpin->setRange(0, 31);
+    hangSpin->setValue(Hl2MiscOptionsSettings::pttHang(m_model->settingsScope()));
+    hangSpin->setKeyboardTracking(false);
+    hangSpin->setAccessibleName(QStringLiteral("PTT hang"));
+    connect(hangSpin, &QSpinBox::valueChanged, this, [apply](int v) {
+        apply(QStringLiteral("options.setPttHang"), QVariant(v));
+    });
+    grid->addWidget(hangSpin, 1, 2);
+
+    vbox->addWidget(group);
+    vbox->addStretch();
     return page;
 }
 

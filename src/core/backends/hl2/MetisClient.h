@@ -61,6 +61,12 @@ public:
         // register is rebuilt from — see setSampleRate() for why a field that
         // shares a register with another has to be carried, not re-defaulted.
         std::uint8_t ocFilterByte = kOcNone;
+        // ADC dither / randomization. Ride the SAME config register as
+        // ocFilterByte above, for the same reason: every ccConfig() rebuild
+        // has to carry them, or an unrelated config-register change (a band
+        // filter switch, a receiver-count change) would silently reset them.
+        bool adcDither = false;
+        bool adcRandom = false;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -184,6 +190,22 @@ public:
     // Queue a one-shot filter-pipeline reset (MetisProtocol kC0Sync) to be sent
     // on the next EP2 frame, ahead of the round robin.
     Q_INVOKABLE void requestPipelineReset();
+
+    // ADC dither / randomization. Same rebuild-and-one-shot treatment as
+    // setBandFilter(), since both live in the config register: latched into
+    // Params, then pushed ahead of the round robin so the change reaches the
+    // radio within one EP2 frame rather than waiting for the rotation.
+    Q_INVOKABLE void setAdcDither(bool enabled);
+    Q_INVOKABLE void setAdcRandom(bool enabled);
+
+    // TX latency + PTT hang (register 0x17). Not time-critical the way a band
+    // filter is, so — like setLnaGainDb() — this only updates the stored bank;
+    // the round robin re-asserts it periodically rather than one-shotting it.
+    Q_INVOKABLE void setTxLatencyPttHang(int txLatency, int pttHang);
+
+    // Reset-on-disconnect (register 0x3A). Same treatment as TX latency/PTT
+    // hang: latched, re-asserted by the round robin.
+    Q_INVOKABLE void setResetOnDisconnect(bool enabled);
 
     // Receivers this client can both RUN and TUNE: the RX1..RX7 NCO registers
     // are one contiguous run (0x02..0x08) and RX8..RX12 are not. See ccRxFreq().
@@ -377,6 +399,8 @@ private:
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
     Cc m_ccTxDrive{};
+    Cc m_ccTxLatencyPttHang = ccTxLatencyPttHang(20, 12);  // reference-client defaults
+    Cc m_ccResetOnDisconnect = ccResetOnDisconnect(false);
 
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples

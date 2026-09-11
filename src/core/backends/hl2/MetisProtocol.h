@@ -218,6 +218,24 @@ inline constexpr std::uint8_t kC0AdcAssignOrTxGain = 0x1C;
 // watchdog enable at [27:24] and the master enable at [11:8].
 inline constexpr std::uint8_t kC0Sync = 0x72;
 
+// addr 0x17: TX latency + PTT hang. A dedicated register, never shared with
+// anything above — distinct from kC0Sync (addr 0x39) despite both being
+// "timing" controls; do not conflate the two. DATA[12:8] (C3[4:0]) is PTT
+// hang, DATA[6:0] (C4[6:0]) is TX latency. Sourced from the W5TSU fork of the
+// MI0BOT Hermes-Lite-2 Thetis fork (ChannelMaster/networkproto1.c, case 17,
+// "TX latency and PTT hang 0x17") — tier 3 on the source-precedence ladder;
+// not independently re-verified against the HL2 gateware RTL.
+inline constexpr std::uint8_t kC0TxLatencyPttHang = 0x2E;
+inline constexpr int kPttHangMax = 0x1F;     // 5-bit field
+inline constexpr int kTxLatencyMax = 0x7F;   // 7-bit field
+
+// addr 0x3A: reset-on-disconnect. DATA[0] (C4 bit 0), no other bits used.
+// A dedicated register — confirmed NOT the same as kC0Sync (addr 0x39, the
+// filter-pipeline reset that wedged a radio; see the warning above). Sourced
+// from the same Thetis fork (case 18, "Reset on disconnect 0x3a"), same
+// tier-3 caveat as kC0TxLatencyPttHang.
+inline constexpr std::uint8_t kC0ResetOnDisconnect = 0x74;
+
 // Config-register (C0=0x00) bit flags.
 //
 // NOTE: neither of these does anything on a Hermes-Lite 2. The HL2 gateware
@@ -230,6 +248,16 @@ inline constexpr std::uint8_t kConfigMercury = 0x40;  // C1 bit6: ADC-as-DDC-sou
                                                       // openHPSDR Hermes/Mercury. No-op on HL2.
 inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets this
                                                       // unconditionally. No-op on HL2.
+
+// C3 bits 3/4 of the config register: ADC dither and ADC randomization.
+// Same tier-3 sourcing and same not-yet-gateware-verified caveat as the two
+// registers above — reproduced from the Thetis fork's case 0 ("general
+// settings") rather than re-derived. Thetis's own UI labels these controls
+// "Band Volts" and "Disable PS Sync", neither of which describes what its
+// code actually does (SetADCDither / SetADCRandom); AetherSDR names them for
+// the real mechanism.
+inline constexpr std::uint8_t kConfigAdcDither = 0x08;  // C3 bit3
+inline constexpr std::uint8_t kConfigAdcRandom = 0x10;  // C3 bit4
 
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
@@ -297,7 +325,17 @@ using Cc = std::array<std::uint8_t, 5>;
 // (they land in DATA[23:17]). Bit 7 is the RX-antenna bit and lives elsewhere in
 // the register, so it is masked off here rather than silently switching antennas
 // on a caller who passed a full I2C byte.
-Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone) noexcept;
+//
+// adcDither/adcRandom default false, so every existing caller keeps sending a
+// zero C3 exactly as before.
+Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone,
+            bool adcDither = false, bool adcRandom = false) noexcept;
+// TX latency (7-bit) + PTT hang (5-bit), packed into their own dedicated
+// register (kC0TxLatencyPttHang). Both clamped to their field width.
+Cc ccTxLatencyPttHang(int txLatency, int pttHang) noexcept;
+// Reset-on-disconnect flag, packed into its own dedicated register
+// (kC0ResetOnDisconnect) — distinct from kC0Sync, see the warning there.
+Cc ccResetOnDisconnect(bool enabled) noexcept;
 // NCO frequency in Hz (32-bit big-endian across C1..C4) for receiver `rxIndex`,
 // zero-based: RX1 is index 0 at register 0x02, up to RX7 at 0x08. Clamped to
 // that run — see the note in the .cpp about why RX8..RX12 are not reachable by

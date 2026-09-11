@@ -98,6 +98,47 @@ int main()
         check((c[0] & 0x01) == 0, "config C0 is even (MOX=0, cannot key)");
     }
 
+    // ---- config register: ADC dither / randomization (C3 bits 3/4) ----
+    {
+        check(ccConfig(SampleRate::R48k, 1)[3] == 0x00,
+              "dither/random default false -> C3 still zero (pre-existing callers unaffected)");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, true, false)[3] == 0x08,
+              "dither alone sets C3 bit3");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, false, true)[3] == 0x10,
+              "random alone sets C3 bit4");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone, true, true)[3] == 0x18,
+              "dither+random set both C3 bits 3 and 4");
+        // The OC filter byte lives in C2 and must be unaffected by the new C3 args.
+        check(ccConfig(SampleRate::R48k, 1, kOcLpf160, true, true)[2]
+                  == ccConfig(SampleRate::R48k, 1, kOcLpf160)[2],
+              "dither/random do not disturb the OC filter byte in C2");
+    }
+
+    // ---- TX latency + PTT hang (register 0x17, C0=0x2E) ----
+    {
+        const Cc c = ccTxLatencyPttHang(20, 12);
+        check(c[0] == 0x2E, "tx-latency/ptt-hang C0 is register 0x17 (addr<<1)");
+        check(c[3] == 12, "C3 = PTT hang");
+        check(c[4] == 20, "C4 = TX latency");
+        check(ccTxLatencyPttHang(200, 100)[4] == kTxLatencyMax,
+              "TX latency clamps to its 7-bit field width (127)");
+        check(ccTxLatencyPttHang(20, 100)[3] == kPttHangMax,
+              "PTT hang clamps to its 5-bit field width (31)");
+        check((c[0] & 0x01) == 0, "tx-latency/ptt-hang C0 is even (MOX=0, cannot key)");
+    }
+
+    // ---- Reset on disconnect (register 0x3A, C0=0x74) ----
+    {
+        const Cc off = ccResetOnDisconnect(false);
+        const Cc on = ccResetOnDisconnect(true);
+        check(off[0] == 0x74, "reset-on-disconnect C0 is register 0x3A (addr<<1)");
+        check(on[0] == 0x74, "reset-on-disconnect C0 is the same register whichever way it's set");
+        check(off[0] != kC0Sync, "reset-on-disconnect is NOT the hazardous sync/reset register (0x39)");
+        check(off[4] == 0x00, "disabled encodes C4 = 0");
+        check(on[4] == 0x01, "enabled encodes C4 = 1");
+        check(off[1] == 0 && off[2] == 0 && off[3] == 0, "reset-on-disconnect C1..C3 are zero");
+    }
+
     // ---- J16 open-collector filter byte: DATA[23:17] == C2[7:1] ----
     //
     // The SHIFT is the whole point. DATA[16] is not part of the field, so an

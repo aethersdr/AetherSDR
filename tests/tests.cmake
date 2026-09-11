@@ -570,6 +570,13 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# Radio-scoped settings persistence for Hl2MiscOptionsSettings
+# (RadioSettingsScope-backed, not flat AppSettings).
+add_executable(hl2_misc_options_settings_test tests/hl2_misc_options_settings_test.cpp)
+target_include_directories(hl2_misc_options_settings_test PRIVATE src tests)
+target_link_libraries(hl2_misc_options_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_misc_options_settings_test COMMAND hl2_misc_options_settings_test)
+
 # HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
 add_executable(hl2_io_board_policy_test
     tests/hl2_io_board_policy_test.cpp

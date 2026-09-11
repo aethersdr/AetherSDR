@@ -73,7 +73,8 @@ const char* ocFilterName(std::uint8_t oc) noexcept
     }
 }
 
-Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
+Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte,
+            bool adcDither, bool adcRandom) noexcept
 {
     const auto c1 = static_cast<std::uint8_t>((static_cast<std::uint8_t>(rate) & 0x03) | kConfigMercury);
     if (numRx < 1) numRx = 1;
@@ -83,11 +84,31 @@ Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
     // part of the field, and writing the byte unshifted would put the 160 m
     // relay's bit there and every real selection one filter too low.
     const auto c2 = static_cast<std::uint8_t>((ocFilterByte & 0x7F) << 1);
+    // ADC dither/randomization: C3 bits 3/4. Zero (both flags false) matches
+    // every pre-existing call site's expectation of an all-zero C3.
+    const auto c3 = static_cast<std::uint8_t>((adcDither ? kConfigAdcDither : 0)
+                                             | (adcRandom ? kConfigAdcRandom : 0));
     // Receiver count is DATA[6:3] — a FOUR-bit field (0000=1 .. 1011=12), so the
     // mask is 0x0F. It was 0x07 while only one receiver ever ran, which silently
     // capped the encodable count at 8 and would have wrapped 9..12 into 1..4.
     const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x0F) << 3));
-    return {kC0Config, c1, c2, 0x00, c4};
+    return {kC0Config, c1, c2, c3, c4};
+}
+
+Cc ccTxLatencyPttHang(int txLatency, int pttHang) noexcept
+{
+    if (txLatency < 0) txLatency = 0;
+    if (txLatency > kTxLatencyMax) txLatency = kTxLatencyMax;
+    if (pttHang < 0) pttHang = 0;
+    if (pttHang > kPttHangMax) pttHang = kPttHangMax;
+    return {kC0TxLatencyPttHang, 0x00, 0x00,
+            static_cast<std::uint8_t>(pttHang & kPttHangMax),
+            static_cast<std::uint8_t>(txLatency & kTxLatencyMax)};
+}
+
+Cc ccResetOnDisconnect(bool enabled) noexcept
+{
+    return {kC0ResetOnDisconnect, 0x00, 0x00, 0x00, static_cast<std::uint8_t>(enabled ? 0x01 : 0x00)};
 }
 
 Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept

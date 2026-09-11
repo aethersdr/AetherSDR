@@ -1330,5 +1330,11 @@
   "note": "Capability-gated client for the ANAN calibration extension. Uses only IRadioBackend requests and replies; concrete calibration ownership, rate control and DSP stay below the backend seam.",
   "split": "Client protocol adapter only; no vendor implementation dependency.",
   "confidence": "high"
+ },
+ "core/backends/hl2/Hl2MiscOptionsSettings.h": {
+  "tag": "ui-support",
+  "note": "Radio-scoped client persistence for the Hermes-Lite-2 misc-options page (ADC dither/random, reset-on-disconnect, TX latency, PTT hang, swap audio channels) under a RadioSettingsScope feature document; UI settings plumbing, not radio-owned wire state.",
+  "split": "",
+  "confidence": "high"
  }
 }

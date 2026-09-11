@@ -861,6 +861,13 @@ struct RadioCapabilities {
     bool hasGpsHardware = false;
     bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
+    // The radio exposes the Hermes-Lite-specific misc options page (ADC
+    // dither/randomization, reset-on-disconnect, TX latency, PTT hang, swap
+    // audio channels). True only for the HL2 today; named for the settings
+    // surface rather than the family so a page-visibility check reads the
+    // capability, never a family string.
+    bool hasHermesLiteOptions = false;
+
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile
     // fields here. Example: {"flex": {"multiFlex": true, "guiClientId": "…"}}.

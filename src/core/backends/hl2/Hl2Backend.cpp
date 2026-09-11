@@ -20,6 +20,7 @@
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
+#include "core/backends/hl2/Hl2MiscOptionsSettings.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -1547,6 +1548,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasDownwardExpander = false;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
 
+    // Unconditional, like the other HL2 hardware-presence flags above: the
+    // control is inert with nothing attached/listening, so there is no
+    // "do you have this board" precondition to check first.
+    c.hasHermesLiteOptions = true;
+
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
     // The host modulator implements a continuous transmit passband.
@@ -1834,6 +1840,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // function keeps startFreqHz in the true-RF domain.
     mp.rxFrequencyHz = ncoCommandHz(startFreqHz);
     mp.lnaGainDb = m_lnaGainDb;
+    mp.adcDither = Hl2MiscOptionsSettings::adcDither(hl2SettingsScope());
+    mp.adcRandom = Hl2MiscOptionsSettings::adcRandom(hl2SettingsScope());
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
     if (m_boardMaxRx <= 0) {
@@ -2345,6 +2353,16 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // UI yet, so anything higher would be an un-commanded power level chosen by
     // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+
+    // Registers with no room elsewhere in this function's per-receiver setup:
+    // pushed once here, then re-asserted by MetisClient's own round robin for
+    // the life of the session.
+    QMetaObject::invokeMethod(m_metis, "setTxLatencyPttHang", Qt::QueuedConnection,
+        Q_ARG(int, Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())),
+        Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
+    QMetaObject::invokeMethod(m_metis, "setResetOnDisconnect", Qt::QueuedConnection,
+        Q_ARG(bool, Hl2MiscOptionsSettings::resetOnDisconnect(hl2SettingsScope())));
+
     emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
@@ -4019,6 +4037,26 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
+RadioSettingsScope Hl2Backend::hl2SettingsScope() const
+{
+    return RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial);
+}
+
+bool Hl2Backend::hl2SettingsScopeForWrite(RadioSettingsScope& outScope) const
+{
+    // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope
+    // falls back exact-radio -> family-wide on read, so a row written with no
+    // identity is silently adopted by every HL2 that has none of its own —
+    // the same contamination applyFreqCalPpb() already guards against.
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting a settings change —"
+                         << "no radio identity yet; applying for this session only";
+        return false;
+    }
+    outScope = hl2SettingsScope();
+    return true;
+}
+
 namespace {
 
 // WDSP's AGC mode integer as the string the bridge and the operator use, so a
@@ -4189,6 +4227,79 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("effectiveClockHz"),
                      Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
                     {QStringLiteral("scale"), m_freqCalScale},
+                });
+            }
+            return;
+        }
+        // "Hermes Lite 2" misc-options page (ticket #10). Each setter persists
+        // to Hl2MiscOptionsSettings (the source of truth the page reads on
+        // open) and, if a session is live, re-pushes to the wire immediately
+        // rather than waiting for the operator to reconnect.
+        if (verb == QLatin1String("options.setAdcDither")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setAdcDither(scope, on);
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setAdcDither", Qt::QueuedConnection, Q_ARG(bool, on));
+            return;
+        }
+        if (verb == QLatin1String("options.setAdcRandom")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setAdcRandom(scope, on);
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setAdcRandom", Qt::QueuedConnection, Q_ARG(bool, on));
+            return;
+        }
+        if (verb == QLatin1String("options.setResetOnDisconnect")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setResetOnDisconnect(scope, on);
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setResetOnDisconnect", Qt::QueuedConnection, Q_ARG(bool, on));
+            return;
+        }
+        if (verb == QLatin1String("options.setTxLatency")) {
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setTxLatency(scope, arg.toInt());
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setTxLatencyPttHang", Qt::QueuedConnection,
+                    Q_ARG(int, Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())),
+                    Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
+            return;
+        }
+        if (verb == QLatin1String("options.setPttHang")) {
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setPttHang(scope, arg.toInt());
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setTxLatencyPttHang", Qt::QueuedConnection,
+                    Q_ARG(int, Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())),
+                    Q_ARG(int, Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())));
+            return;
+        }
+        if (verb == QLatin1String("options.setSwapAudioChannels")) {
+            // No wire push: this backend's transmit audio slot is always zero
+            // (ep2WriteTxIq's EADDR-reuse invariant), so there is nothing on
+            // the wire to re-push. See Hl2MiscOptionsSettings.h.
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2MiscOptionsSettings::setSwapAudioChannels(scope, arg.toBool());
+            return;
+        }
+        if (verb == QLatin1String("options.get")) {
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("adcDither"), Hl2MiscOptionsSettings::adcDither(hl2SettingsScope())},
+                    {QStringLiteral("adcRandom"), Hl2MiscOptionsSettings::adcRandom(hl2SettingsScope())},
+                    {QStringLiteral("resetOnDisconnect"), Hl2MiscOptionsSettings::resetOnDisconnect(hl2SettingsScope())},
+                    {QStringLiteral("txLatency"), Hl2MiscOptionsSettings::txLatency(hl2SettingsScope())},
+                    {QStringLiteral("pttHang"), Hl2MiscOptionsSettings::pttHang(hl2SettingsScope())},
+                    {QStringLiteral("swapAudioChannels"), Hl2MiscOptionsSettings::swapAudioChannels(hl2SettingsScope())},
                 });
             }
             return;
