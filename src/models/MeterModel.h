@@ -89,7 +89,7 @@ public:
     // meter that is published and rendered nowhere becomes visible.
     QList<int> definedIndices() const { return m_defs.keys(); }
     // Bounded traversal for telemetry consumers; never copies the full map.
-    QList<int> firstDefinedIndices(int limit) const;
+    QList<int> firstDefinedIndices(int limit, std::optional<int> after = {}) const;
     qsizetype definitionCount() const { return m_defs.size(); }
 
     // Current converted value for a meter index. Returns 0 if unknown.

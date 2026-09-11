@@ -83,6 +83,9 @@ public:
         if (!m_watchedSlices.contains(slice)) {
             m_watchedSlices.insert(slice);
             connect(slice, &SliceModel::receiveModeReported, this, [this, slice] {
+                // An old-mode report may already be queued ahead of the intent's
+                // effect. It is not a rejection/acknowledgement; releasing here
+                // would admit an old-mode filter behind the pending mode write.
                 const auto pending = m_pendingModes.constFind(slice);
                 if (pending != m_pendingModes.constEnd()
                     && slice->receiveObservation().mode == pending.value()) {

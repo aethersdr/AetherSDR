@@ -16,8 +16,9 @@ bool boundedText(const QString& text, qsizetype limit)
     if (text.size() > limit || !text.isValidUtf16()) {
         return false;
     }
-    for (QChar ch : text) {
-        if (ch.isNull() || ch.category() == QChar::Other_Control) {
+    for (char32_t ch : text.toUcs4()) {
+        if (ch == 0 || QChar::category(ch) == QChar::Other_Control
+            || QChar::category(ch) == QChar::Other_Format) {
             return false;
         }
     }
@@ -32,11 +33,20 @@ RadioTelemetryAdapter::RadioTelemetryAdapter(RadioModel* radio, ControlResourceS
 {
     m_clock.start();
     MeterModel* meters = &radio->meterModel();
-    connect(meters, &MeterModel::meterDefinitionChanged, this, [this](int id) { define(id); });
+    connect(meters, &MeterModel::meterDefinitionChanged, this, [this](int id) {
+        const qsizetype before = m_meters.size();
+        define(id);
+        if (m_meters.size() < before) {
+            fillVacancies();
+        }
+    });
     connect(meters, &MeterModel::meterUpdated, this, &RadioTelemetryAdapter::sample);
     connect(meters, &MeterModel::meterRemoved, this, [this](int id) {
-        m_meters.remove(id);
+        const bool removed = m_meters.remove(id) > 0;
         m_store->remove({QStringLiteral("meter"), m_sessionId, QString::number(id)});
+        if (removed) {
+            fillVacancies();
+        }
     });
     connect(meters, &MeterModel::metersCleared, this, &RadioTelemetryAdapter::clear);
     connect(radio, &RadioModel::connectionStateChanged, this, &RadioTelemetryAdapter::resetConnection);
@@ -48,7 +58,13 @@ RadioTelemetryAdapter::RadioTelemetryAdapter(RadioModel* radio, ControlResourceS
     });
     connect(radio, &RadioModel::radioTransmitConfirmed, this, [this](bool active) {
         if (m_radio->isConnected()) {
-            m_confirmedTransmit = active;
+            if (!active && (m_radio->isRadioTransmitting()
+                || m_radio->transmitModel().isTransmitting()
+                || m_radio->transmitModel().isMox() || m_radio->transmitModel().isTuning())) {
+                m_confirmedTransmit.reset();
+            } else {
+                m_confirmedTransmit = active;
+            }
             publishTransmit();
         }
     });
@@ -115,9 +131,7 @@ void RadioTelemetryAdapter::resetConnection()
     m_confirmedTransmit.reset();
     m_canTransmit = m_radio->backendCapabilities().canTransmit;
     if (m_radio->isConnected()) {
-        for (int id : m_radio->meterModel().firstDefinedIndices(kMaxMeters)) {
-            define(id);
-        }
+        fillVacancies();
         if (m_radio->meterModel().definitionCount() > kMaxMeters && !m_limited) {
             m_limited = true;
             emit deliveryChanged();
@@ -126,6 +140,29 @@ void RadioTelemetryAdapter::resetConnection()
     }
     publishTransmit();
     flush();
+}
+
+void RadioTelemetryAdapter::fillVacancies()
+{
+    if (!m_radio->isConnected()) {
+        return;
+    }
+    // Page through definitions, not samples. Invalid early entries must not
+    // hide later valid ones; copying the complete model would defeat the cap.
+    std::optional<int> after;
+    while (m_meters.size() < kMaxMeters) {
+        const QList<int> ids = m_radio->meterModel().firstDefinedIndices(kMaxMeters, after);
+        if (ids.isEmpty()) {
+            break;
+        }
+        for (int id : ids) {
+            define(id);
+            if (m_meters.size() == kMaxMeters) {
+                return;
+            }
+        }
+        after = ids.last();
+    }
 }
 
 void RadioTelemetryAdapter::define(int index)

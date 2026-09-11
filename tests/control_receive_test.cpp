@@ -291,6 +291,37 @@ void modeAndFilterOrdering()
     f.reject(ReceiveOperation::Mode, f.params(ReceiveOperation::Mode), "capability.unavailable");
 }
 
+void delayedIdleCannotAuthorizeReceive()
+{
+    for (int kind = 0; kind < 4; ++kind) {
+        Fixture f;
+        f.backend->caps.canTransmit = true;
+        const auto activity = [&](bool active) {
+            if (kind == 0) {
+                f.radio.transmitModel().setTransmitting(active);
+            } else {
+                TransmitDelta delta;
+                if (kind == 2) { delta.tune = active; } else { delta.mox = active; }
+                if (kind == 3) {
+                    f.radio.handleStatusForTest("interlock", {{"state", active ? "TRANSMITTING" : "READY"}});
+                }
+                else { f.radio.transmitModel().applyChanges(delta); }
+                if (kind == 1) { f.radio.transmitModel().moxChanged(active); }
+            }
+        };
+        f.radio.radioTransmitConfirmed(false);
+        activity(true);
+        f.radio.radioTransmitConfirmed(false);
+        f.reject(ReceiveOperation::AudioGain, f.params(ReceiveOperation::AudioGain), "request.conflict");
+        activity(false);
+        f.reject(ReceiveOperation::AudioGain, f.params(ReceiveOperation::AudioGain), "request.conflict");
+        f.radio.radioTransmitConfirmed(false);
+        check(f.send(ReceiveOperation::AudioGain, f.params(ReceiveOperation::AudioGain)).contains("result"),
+              "only fresh post-activity idle reopens receive admission");
+        check(f.backend->keys == 0, "injected activity never dispatches keying");
+    }
+}
+
 void safetyAndLifetime()
 {
     for (const auto& [op, method] : kReceiveMethods) {
@@ -391,6 +422,12 @@ void productionCapabilityContracts()
         unsafeFlexFilter |= mode.mode == "CW" || mode.mode == "FM" || mode.mode == "NFM" || mode.mode == "RTTY";
     }
     check(!unsafeFlexFilter, "pitch/preset/shift-dependent Flex filters are not guessed");
+    QStringList flexCommands;
+    flex.setSliceCommandSink([&](const QString& command) { flexCommands.append(command); });
+    flex.setSliceMode(0, "LSB");
+    flex.setSliceFilter(0, -2800, -100);
+    check(flexCommands == QStringList{"slice set 0 mode=LSB", "filt 0 -2800 -100"},
+        "Flex records have implemented typed verbs behind an injected command sink");
     SimBackend sim;
     const auto simCaps = sim.capabilities();
     check(simCaps.receiveModeControl && simCaps.receiveModeControl->modes == QStringList{"USB", "LSB"}
@@ -403,9 +440,21 @@ void productionCapabilityContracts()
         && hl2Caps.receivePanCenterControl && !hl2Caps.receivePanBandwidthControl,
         "HL2 exposes receive controls but not topology-changing bandwidth");
     SliceDelta observed;
-    QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2, [&](int, const SliceDelta& delta) { observed = delta; });
+    int gainReports = 0;
+    QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2, [&](int, const SliceDelta& delta) {
+        observed = delta;
+        ++gainReports;
+    });
     hl2.setSliceAudioGain(0, 37);
     check(observed.audioGain == 37, "HL2 publishes backend mixer gain as normalized observation");
+    const int beforeDuplicate = gainReports;
+    hl2.setSliceAudioGain(0, 37);
+    check(gainReports == beforeDuplicate, "duplicate HL2 gain does not republish the full slice");
+    hl2.setSliceAudioGain(0, 150);
+    check(observed.audioGain == 100 && gainReports == beforeDuplicate + 1, "changed HL2 gain is clamped and reported");
+    hl2.setSliceAudioGain(0, 101);
+    check(gainReports == beforeDuplicate + 1, "equal clamped HL2 gain is also change gated");
+    hl2.setSliceAudioGain(0, 37);
     hl2.setSliceAudioMute(0, true);
     check(observed.audioMute == true && observed.audioGain == 37, "HL2 mute readback preserves mixer gain");
     hl2.setSliceMode(0, "LSB");
@@ -442,6 +491,7 @@ int main(int argc, char** argv)
     dispatchAndReadback();
     modeAndFilterOrdering();
     safetyAndLifetime();
+    delayedIdleCannotAuthorizeReceive();
     rangesAndBudget();
     productionCapabilityContracts();
     return failures == 0 ? 0 : 1;

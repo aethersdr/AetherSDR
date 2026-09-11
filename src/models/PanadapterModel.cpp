@@ -150,6 +150,8 @@ void PanadapterModel::recordGeometryObservation(double centerMhz, double bandwid
         if (mhz < 0 && std::isfinite(mhz)) {
             return; // normalized absent-field sentinel
         }
+        // Unlike the legacy display setter, non-finite reports invalidate
+        // control observations: retaining old geometry would admit stale intents.
         field = std::isfinite(mhz) && mhz >= 0.000001 && mhz <= 9'007'199'254.0
             ? std::optional<qint64>(qRound64(mhz * 1'000'000.0)) : std::nullopt;
     };

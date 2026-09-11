@@ -63,6 +63,8 @@ another mode or filter intent until its matching mode publication, disconnect
 or backend replacement. It cannot accumulate a command queue. If a backend
 never reports the selected mode, clients must reconnect or wait for fresh
 matching state; timeout does not fabricate success or unlock old-mode filters.
+An unrelated/old-mode publication cannot safely release this interlock: it may
+have been queued before the intent took effect and is not an explicit rejection.
 
 Revisions are freshness checks, not compare-and-swap or exclusive ownership.
 Other receive intents may be accepted against the same observed revision before
@@ -97,7 +99,7 @@ capability, ownership and resource changes; advertisement reserves nothing.
 | Sim | USB, LSB | unavailable: echo-only | unavailable | unavailable: fixed VFO scene | unavailable: fixed span |
 | Flex | USB/LSB, DIGU/DIGL, AM/SAM/DSB, CW, FM/NFM | USB/LSB, DIGU/DIGL, AM/SAM/DSB | unavailable: legacy wire route | unavailable: unknown coverage | unavailable: coupled legacy geometry |
 | HL2 | USB/LSB, DIGU/DIGL, AM/SAM, CW | USB/LSB, DIGU/DIGL, AM/SAM | supported | 100 kHz–38.4 MHz | unavailable: radio-wide rate can retire receivers |
-| ANAN | not yet qualified | not yet qualified | not yet qualified | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate |
+| ANAN | not yet qualified | not yet qualified | not yet qualified | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams |
 | RTL-SDR | AM/SAM, FM/FMN/WFM, USB/LSB, CW/CWR | unavailable: DSP does not consume cuts | supported | unavailable: also retunes slice | 225001 Hz–3 MHz; observe actual result |
 | Icom | not yet qualified | profile/preset contract needed | not yet qualified | not yet qualified | not yet qualified |
 

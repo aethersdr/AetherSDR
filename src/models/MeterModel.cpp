@@ -217,10 +217,11 @@ void MeterModel::defineMeter(const MeterDef& def)
     emit meterDefinitionChanged(def.index);
 }
 
-QList<int> MeterModel::firstDefinedIndices(int limit) const
+QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) const
 {
     QList<int> indices;
-    for (auto it = m_defs.cbegin(); it != m_defs.cend() && indices.size() < limit; ++it) {
+    for (auto it = after ? m_defs.upperBound(*after) : m_defs.cbegin();
+         it != m_defs.cend() && indices.size() < limit; ++it) {
         indices.append(it.key());
     }
     return indices;

@@ -195,6 +195,90 @@ void transmitIsObservationOnly()
           "read-only transmit resource exposes no TX command");
 }
 
+void admissionBackfillsValidDefinitions()
+{
+    Fixture f;
+    f.backend->connected = false;
+    f.radio.connectionStateChanged(false);
+    for (int id = 0; id < 130; ++id) {
+        MeterDef def = f.definition(id);
+        if (id < 64) { def.description = QString(129, 'x'); }
+        f.radio.meterModel().defineMeter(def);
+    }
+    f.backend->connected = true;
+    f.radio.connectionStateChanged(true);
+    f.adapter->flush();
+    check(f.store.snapshot({{"meter", "radio-1", {}}}).size() == 64
+        && f.store.get({"meter", "radio-1", "127"}),
+        "initial admission fills 64 valid slots past invalid early definitions");
+    f.radio.meterModel().updateValues({128}, {-12800});
+    f.radio.meterModel().removeMeter(64);
+    f.adapter->flush();
+    check(f.store.snapshot({{"meter", "radio-1", {}}}).size() == 64
+        && f.store.get({"meter", "radio-1", "128"}) && !f.sample(128).value("known").toBool(),
+        "removal promotes excluded definition without importing its retained sample");
+    MeterDef invalid = f.definition(65); invalid.name.clear();
+    f.radio.meterModel().defineMeter(invalid);
+    f.adapter->flush();
+    check(!f.store.get({"meter", "radio-1", "65"}) && f.store.get({"meter", "radio-1", "129"})
+        && f.store.snapshot({{"meter", "radio-1", {}}}).size() == 64,
+        "invalidating a selected definition also fills the vacancy");
+    check(f.adapter->meterDelivery().value("limited").toBool(), "backfill does not erase incomplete-view history");
+}
+
+void unicodeAndMeterAdvertisement()
+{
+    Fixture f;
+    ControlService service(&f.store);
+    ControlSession client(&f.store, 262144, SessionAuthorization::Observer);
+    call(service, client, "hello", {{"versions", QJsonArray{1}}});
+    const auto advertised = [&] { return service.capabilities(client).value("capabilities").toArray(); };
+    check(advertised().contains("transmitState.read") && !advertised().contains("meter.read"),
+        "transmit singleton does not advertise absent meter resources");
+    for (const QString& bad : {QString(QChar(0x202e)), QString(QChar(0x2066)),
+                              QString::fromUcs4(U"\U000e0001"), QString(QChar(0x0009))}) {
+        MeterDef def = f.definition(0); def.description = bad;
+        f.radio.meterModel().defineMeter(def); f.adapter->flush();
+        check(!f.store.get({"meter", "radio-1", "0"}), "Unicode control/format metadata is excluded, including supplementary characters");
+    }
+    MeterDef valid = f.definition(0); valid.description = QString::fromUtf8("Signal — 接收");
+    f.radio.meterModel().defineMeter(valid); f.adapter->flush();
+    check(f.store.get({"meter", "radio-1", "0"}).has_value() && advertised().contains("meter.read"),
+        "ordinary Unicode definition is readable before its first sample");
+    f.radio.meterModel().removeMeter(0);
+    check(!advertised().contains("meter.read"), "last meter removal retires its advertisement");
+}
+
+void delayedIdleCannotSurviveActivity()
+{
+    for (int kind = 0; kind < 4; ++kind) {
+        Fixture f;
+        f.backend->txCapable = true;
+        f.radio.capabilitiesChanged(true, f.backend->capabilities());
+        const auto activity = [&](bool active) {
+            if (kind == 0) {
+                f.radio.transmitModel().setTransmitting(active);
+            } else {
+                TransmitDelta delta;
+                if (kind == 2) { delta.tune = active; } else { delta.mox = active; }
+                if (kind == 3) {
+                    f.radio.handleStatusForTest("interlock", {{"state", active ? "TRANSMITTING" : "READY"}});
+                }
+                else { f.radio.transmitModel().applyChanges(delta); }
+                if (kind == 1) { f.radio.transmitModel().moxChanged(active); }
+            }
+        };
+        f.radio.radioTransmitConfirmed(false);
+        activity(true);
+        f.radio.radioTransmitConfirmed(false);
+        check(f.transmitState() == "unknown", "conflicting idle is not telemetry evidence during activity");
+        activity(false);
+        check(f.transmitState() == "unknown", "falling activity edge cannot revive delayed idle telemetry");
+        f.radio.radioTransmitConfirmed(false);
+        check(f.transmitState() == "idle", "fresh post-activity idle restores telemetry");
+    }
+}
+
 void teardownDoesNotRepublish()
 {
     Fixture f;
@@ -244,5 +328,8 @@ int main(int argc, char** argv)
     transmitIsObservationOnly();
     teardownDoesNotRepublish();
     swrRequiresApplicablePower();
+    admissionBackfillsValidDefinitions();
+    unicodeAndMeterAdvertisement();
+    delayedIdleCannotSurviveActivity();
     return failures == 0 ? 0 : 1;
 }

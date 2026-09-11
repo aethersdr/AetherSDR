@@ -293,15 +293,18 @@ for control admission, observation and concurrent-intent semantics.
 
 At most 64 valid observed definitions per session are projected; new identities
 at capacity are dropped and `radioSession.meterDelivery.limited` discloses the
-incomplete view. Existing identities continue updating. A removed slot can take
-a later new definition; previously dropped identities are not automatically
-backfilled. This is a latest-value diagnostic projection, not lossless metering.
+incomplete view. Existing identities continue updating. Removal or invalidation
+of a selected definition fills the vacancy from remaining valid definitions in
+index order, without importing retained samples. Initial admission skips invalid
+definitions before reaching the 64-entry bound. The limited flag remains latched
+until clear/reconnect. This is a latest-value diagnostic projection, not lossless metering.
 
 - `id`: decimal normalized meter index (0–65535).
 - `definition`: `source`, `sourceIndex`, `name`, `unit`, `minimum`, `maximum`,
   `description`. Source/name are nonempty and bounded to 32 UTF-16 code units;
   unit to 16 and description to 128. Text must be valid UTF-16 without NUL or
-  Unicode controls. Bounds must be finite and ordered. Invalid definitions are
+  Unicode control or format characters (including supplementary code points).
+  Bounds must be finite and ordered. Invalid definitions are
   excluded, not truncated. No raw frames or proprietary extension payloads.
 - `sample`: `known` (a sample was observed in this connection), `fresh` (at most
   2000 ms old), `valid`, `ageMs`, `value`. Age is monotonic, -1 before a sample,

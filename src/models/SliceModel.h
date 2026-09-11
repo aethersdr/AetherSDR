@@ -579,7 +579,7 @@ private:
     QStringList m_modeList;
     int     m_filterLow{-1500};
     int     m_filterHigh{1500};
-    quint64 m_userFilterEpoch{0};   // bumped only by setFilterWidth() (RFC #3878)
+    quint64 m_userFilterEpoch{0};   // setFilterWidth() and daemon filter intent (RFC #3878)
     // Adaptive RX filter — client-side config + runtime state (RFC #3878).
     // The filter edges themselves stay radio-authoritative (never persisted);
     // only enabled + the two bounds are persisted by the GUI.

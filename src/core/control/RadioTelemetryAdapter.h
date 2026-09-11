@@ -41,6 +41,7 @@ private:
         bool swr{false};
     };
     void define(int index);
+    void fillVacancies();
     void sample(int index, float value);
     void clear();
     void resetConnection();

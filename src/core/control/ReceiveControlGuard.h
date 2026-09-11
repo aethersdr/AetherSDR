@@ -19,7 +19,14 @@ public:
         : m_radio(radio), m_connection(connection)
     {
         connect(radio, &RadioModel::radioTransmitConfirmed, this,
-                [this](bool transmitting) { m_confirmedIdle = !transmitting; });
+                [this](bool transmitting) {
+                    // Never save conflicting idle readback for a later falling edge.
+                    m_confirmedIdle = !transmitting && m_radio->isConnected()
+                        && !m_radio->isRadioTransmitting()
+                        && !m_radio->transmitModel().isTransmitting()
+                        && !m_radio->transmitModel().isMox()
+                        && !m_radio->transmitModel().isTuning();
+                });
         const auto invalidateOnActive = [this](bool active) {
             if (active) {
                 m_confirmedIdle = false;

@@ -606,8 +606,10 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
         available.append(QStringLiteral("radioCatalogue.read"));
     }
     if (observe && m_resources->get({QStringLiteral("transmitState"), QStringLiteral("radio-1"), {}})) {
-        available.append(QStringLiteral("meter.read"));
         available.append(QStringLiteral("transmitState.read"));
+    }
+    if (observe && !m_resources->snapshot({{QStringLiteral("meter"), QStringLiteral("radio-1"), {}}}).isEmpty()) {
+        available.append(QStringLiteral("meter.read"));
     }
     if (session.canControl() && m_connectionTarget) {
         if (m_connectionTarget->state() == RadioConnectionTarget::State::Idle) {

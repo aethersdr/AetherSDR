@@ -2697,7 +2697,11 @@ void Hl2Backend::setSliceAudioGain(int sliceId, int gainPercent)
     // 0..100 -> 0.0..1.0 LINEAR, matching what a Flex does with audio_level
     // rather than inventing a dB curve here. Unity at 100 keeps a single
     // unmuted slice at exactly the level it has today.
-    r->audioGain = std::clamp(gainPercent, 0, 100) / 100.0f;
+    const float scaled = std::clamp(gainPercent, 0, 100) / 100.0f;
+    if (r->audioGain == scaled) {
+        return;
+    }
+    r->audioGain = scaled;
     emitSliceState(ddcForSlice(sliceId));
 }
 
