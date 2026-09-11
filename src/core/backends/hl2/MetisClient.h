@@ -271,6 +271,30 @@ public:
     Q_INVOKABLE void setTxTestTone(double offsetHz, double amplitude);
     [[nodiscard]] bool txTestToneEnabled() const noexcept { return m_toneAmp > 0.0; }
 
+    // The generic, ACK'd I2C read — the I/O Board pin-state poll (below the
+    // vendor-header seam: RadioSetupDialog reaches this only through
+    // Hl2Backend's scoped ioboard.readInputPins/readOutputPins extension
+    // verbs, never with a caller-chosen bus/address/register of its own; see
+    // Hl2Backend::invokeExtension()). Funnels through ONE internal queue
+    // (m_i2cJobs) so a reply arriving between two overlapping calls always
+    // resolves to the call that is actually still outstanding — the real
+    // HPSDR I2C mechanism has no transaction id, matched purely by arrival
+    // order. See dispatchNextI2cJob().
+    //
+    // The AUTOMATIC N2ADR/KP4RX TX-frequency push (band following) is a
+    // DIFFERENT, write-only mechanism — setIoBoardTxFrequencyHz() — that
+    // deliberately does NOT set RQST and so never awaits an ACK, and so
+    // never needs this queue at all: see ccI2c2Write()'s own comment in
+    // MetisProtocol.h for why the two paths are kept separate.
+    Q_INVOKABLE void sendI2cRead(int bus, int deviceAddress, int control);
+    // The I/O Board's documented startup reset (ccIoBoardReset): write 1 to
+    // REG_CONTROL so stale register data from a previous session or a
+    // different SDR program can't be acted on before the first real
+    // TX-frequency push arrives. Goes through the generic ACK'd queue above
+    // (m_i2cJobs), since this is a one-shot connect-time write, not part of
+    // the per-tune frequency push.
+    Q_INVOKABLE void resetIoBoardRegisters();
+
 signals:
     void linkUp();                                                  // first EP6 seen
     void linkDown();                                               // stopped
@@ -302,6 +326,13 @@ signals:
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
     void connectFailed(const QString& reason);
+    // A sendI2cRead() request was answered: `error` is either the radio's
+    // 0x3F "no such transaction" sentinel (decodeI2cResponse()) or the
+    // kI2cTimeoutMs timeout firing with nothing having answered — both look
+    // identical to a caller, which only needs to know the request did not
+    // succeed. `data` is the returned byte, meaningful only when error is
+    // false.
+    void i2cResponseReceived(bool error, int data);
 
 private slots:
     void onReadyRead();
@@ -325,6 +356,11 @@ private:
     // real C&C frame; a stream started before any C&C has landed emits ADC-idle
     // samples (Q pinned to zero) until one does.
     void sendPrimingBurst(int countPerBank);
+
+    // Sends the front of m_i2cJobs if nothing is currently awaiting an ACK.
+    // Called after every enqueue and after every completion (ACK or
+    // timeout) — see the class-level note on sendI2cRead().
+    void dispatchNextI2cJob();
 
     // EP2 cadence follows the frame geometry, not the EP6 arrival rate: the
     // radio consumes one EP2 frame per kTxSamplesPerPacket samples, so at 48 kHz
@@ -361,6 +397,15 @@ private:
     quint64 m_ep2Sent = 0;                // EP2 frames sent since m_ep2Clock
     qint64  m_ep2IntervalUs = 2625;       // derived from the sample rate
     bool    m_watchdogEnabled = true;     // gateware watchdog (anti-wedge)
+
+    // I2C request scheduling: pure, socket-free I2cJobQueue; this class only
+    // owns the timer and the actual send. In flight from the moment
+    // dispatchNextI2cJob() actually sends the front job until either onReadyRead()
+    // decodes a matching ACK or m_i2cTimeoutTimer fires — whichever comes first —
+    // at which point dispatchNextI2cJob() sends the next one.
+    I2cJobQueue m_i2cJobs;
+    QTimer* m_i2cTimeoutTimer = nullptr;
+    static constexpr int kI2cTimeoutMs = 500;
 
     QUdpSocket* m_socket = nullptr;
     QHostAddress m_host;

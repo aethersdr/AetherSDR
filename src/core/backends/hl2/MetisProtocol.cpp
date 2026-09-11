@@ -241,6 +241,54 @@ std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept
     return r;
 }
 
+Cc ccI2cRead(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control) noexcept
+{
+    const std::uint8_t addr = (bus == I2cBus::Bus1) ? kAddrI2cBus1 : kAddrI2cBus2;
+    const auto c0 = static_cast<std::uint8_t>(static_cast<std::uint8_t>(addr << 1) | 0x80);  // RQST
+    if (deviceAddress > 0x7F)
+        deviceAddress = static_cast<std::uint8_t>(deviceAddress >> 1);
+    // C1: read + stop. C2: stop-request flag | 7-bit device address.
+    return {c0, 0x07, static_cast<std::uint8_t>(0x80 | (deviceAddress & 0x7F)), control, 0x00};
+}
+
+Cc ccI2cWrite(I2cBus bus, std::uint8_t deviceAddress, std::uint8_t control, std::uint8_t data) noexcept
+{
+    const std::uint8_t addr = (bus == I2cBus::Bus1) ? kAddrI2cBus1 : kAddrI2cBus2;
+    const auto c0 = static_cast<std::uint8_t>(static_cast<std::uint8_t>(addr << 1) | 0x80);  // RQST
+    if (deviceAddress > 0x7F)
+        deviceAddress = static_cast<std::uint8_t>(deviceAddress >> 1);
+    // C1: write + stop. C2: stop-request flag | 7-bit device address.
+    return {c0, 0x06, static_cast<std::uint8_t>(0x80 | (deviceAddress & 0x7F)), control, data};
+}
+
+I2cResult decodeI2cResponse(const Ep6Response& r) noexcept
+{
+    I2cResult out;
+    if (!r.ack)
+        return out;                      // not a reply to any RQST
+    if (r.raddr == kI2cErrorRaddr) {
+        out.matched = true;
+        out.error = true;
+        return out;
+    }
+    if (r.raddr != kAddrI2cBus1 && r.raddr != kAddrI2cBus2)
+        return out;                      // an ACK for some other RQST
+    out.matched = true;
+    out.data = static_cast<std::uint8_t>(r.data & 0xFF);
+    return out;
+}
+
+// ccIoBoardTxFrequency() is defined above (the write-only I2C2 mechanism
+// upstream's HL2 IO-board band-following feature uses) — not redefined
+// here. ccIoBoardReset() below reuses that same fixed address
+// (kIoBoardI2cAddr) but goes through the generic ACK'd I2cBus::Bus2 write,
+// since it is a one-shot connect-time write, not part of the per-tune
+// frequency push.
+Cc ccIoBoardReset() noexcept
+{
+    return ccI2cWrite(I2cBus::Bus2, kIoBoardI2cAddr, kIoBoardRegControl, 0x01);
+}
+
 void Hl2Telemetry::apply(const Ep6Response& r) noexcept
 {
     ptt = r.ptt;

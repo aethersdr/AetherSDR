@@ -568,6 +568,22 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 
     connect(m_metis, &MetisClient::telemetryUpdated, this,
             [this](const Hl2Telemetry& t) { publishTelemetry(t); });
+    // Routes a sendI2cRead() reply back to whichever ioboard.readInputPins/
+    // readOutputPins call is still outstanding — m_pendingI2cRequestId is
+    // reset to 0 here so the single-flight gate in invokeExtension() admits
+    // the next request. A requestId of 0 means a poll tick's caller chose
+    // not to hear back (fire-and-forget); nothing to route in that case.
+    connect(m_metis, &MetisClient::i2cResponseReceived, this,
+            [this](bool error, int data) {
+        const quint64 requestId = m_pendingI2cRequestId;
+        m_pendingI2cRequestId = 0;
+        if (requestId == 0)
+            return;
+        emit extensionResult(requestId, QVariantMap{
+            {QStringLiteral("error"), error},
+            {QStringLiteral("data"), data},
+        });
+    });
     // Mirror the drop counter onto this thread so healthSnapshot() can read it
     // without touching an object that lives on the I/O thread.
     connect(m_metis, &MetisClient::dropsUpdated, this,
@@ -1547,6 +1563,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasDownwardExpander = false;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
 
+    // Unconditional, like the other HL2 hardware-presence flags above: the
+    // pin-state poll is inert with nothing attached, so there is no "do you
+    // have this board" precondition to check first.
+    c.hasIoBoardAccessory = true;
+
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
     // The host modulator implements a continuous transmit passband.
@@ -2345,6 +2366,14 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // UI yet, so anything higher would be an un-commanded power level chosen by
     // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+
+    // I/O Board startup reset — the accessory's own README recommendation:
+    // "When your SDR program starts, write 1 to REG_CONTROL to set all
+    // registers back to zero," so stale data from a previous session or a
+    // different SDR program isn't acted on before the first real pin-state
+    // read (the I/O Board settings page's poll) arrives.
+    QMetaObject::invokeMethod(m_metis, "resetIoBoardRegisters", Qt::QueuedConnection);
+
     emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
@@ -4244,6 +4273,39 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("receivers"), rxList},
                 });
             }
+            return;
+        }
+        // The I/O Board's own pin-status poll (RadioSetupDialog's 1Hz
+        // auto-poll row): no bus/address/register args — this ONE known
+        // device's bus/address/register are this backend's own knowledge
+        // (MetisProtocol.h's kIoBoard* constants), not something the GUI
+        // layer should hold directly (RadioSetupDialog.cpp stays below the
+        // vendor-header seam; see tools/check_engine_boundary.py's EB3).
+        // Gated on a live session and on no OTHER I2C request already
+        // pending, so a stale reply can never be misrouted to whichever
+        // caller happens to ask next.
+        if (verb == QLatin1String("ioboard.readInputPins")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, 2), Q_ARG(int, hl2::kIoBoardI2cAddr),
+                Q_ARG(int, hl2::kIoBoardRegInputPins));
+            return;
+        }
+        if (verb == QLatin1String("ioboard.readOutputPins")) {
+            if (!m_metis || m_pendingI2cRequestId != 0) {
+                if (requestId != 0)
+                    emit extensionResult(requestId, QVariantMap{{QStringLiteral("error"), true}});
+                return;
+            }
+            m_pendingI2cRequestId = requestId;
+            QMetaObject::invokeMethod(m_metis, "sendI2cRead", Qt::QueuedConnection,
+                Q_ARG(int, 2), Q_ARG(int, hl2::kIoBoardI2cAddr),
+                Q_ARG(int, hl2::kIoBoardRegOutputPins));
             return;
         }
     }

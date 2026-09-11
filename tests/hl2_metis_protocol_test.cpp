@@ -730,6 +730,124 @@ int main()
               "all 40 bits reach the wire");
     }
 
+    // ---- I/O Board: generic ACK'd I2C request/reply (register 0x3C/0x3D) ----
+    {
+        const Cc readReq = ccI2cRead(I2cBus::Bus1, 0xD4, 0x0F);
+        check(readReq[0] == static_cast<std::uint8_t>((kAddrI2cBus1 << 1) | 0x80),
+              "I2C bus 1 read sets RQST (C0 bit 7) on the bus-1 register");
+        check(readReq[1] == 0x07, "I2C read is C1 = 0x07 (read + stop)");
+        check(readReq[2] == (0x80 | (0xD4 >> 1)),
+              "an 8-bit-shifted device address is normalized to 7 bits before C2");
+
+        const Cc writeReq = ccI2cWrite(I2cBus::Bus2, 0x50, 0x03, 0xAB);
+        check(writeReq[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
+              "I2C bus 2 write sets RQST on the bus-2 register, distinct from bus 1");
+        check(writeReq[1] == 0x06, "I2C write is C1 = 0x06 (write + stop)");
+        check(writeReq[2] == (0x80 | 0x50), "a 7-bit device address passes through unshifted");
+        check(writeReq[3] == 0x03, "C3 carries the target register");
+        check(writeReq[4] == 0xAB, "C4 carries the write data");
+
+        // A successful bus-1 reply: ACK, RADDR = kAddrI2cBus1, data byte in C4.
+        std::uint8_t frame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        frame[3] = static_cast<std::uint8_t>((kAddrI2cBus1 << 1) | 0x80);
+        frame[7] = 0x42;   // C4 = returned byte
+        const auto resp = parseEp6Response(frame);
+        check(resp.has_value() && resp->ack, "constructed ACK frame decodes as ack=true");
+        const auto decoded = decodeI2cResponse(*resp);
+        check(decoded.matched && !decoded.error && decoded.data == 0x42,
+              "a bus-1 ACK reply decodes to matched, no error, byte 0x42");
+
+        // The error sentinel (RADDR = 0x3F).
+        std::uint8_t errFrame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        errFrame[3] = static_cast<std::uint8_t>((kI2cErrorRaddr << 1) | 0x80);
+        const auto errResp = parseEp6Response(errFrame);
+        const auto errDecoded = decodeI2cResponse(*errResp);
+        check(errDecoded.matched && errDecoded.error,
+              "the 0x3F sentinel decodes to matched + error, never a silent success");
+
+        // A classic free-running frame (ack=false) is not an I2C reply at all.
+        std::uint8_t classic[8] = {0x7F, 0x7F, 0x7F, 0x00, 0, 0, 0, 0};
+        const auto classicResp = parseEp6Response(classic);
+        check(!decodeI2cResponse(*classicResp).matched,
+              "a classic (non-ACK) frame never decodes as an I2C reply");
+
+        // An ACK for some OTHER RQST (not I2C) must not be misread as one.
+        std::uint8_t otherFrame[8] = {0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0};
+        otherFrame[3] = static_cast<std::uint8_t>((0x00 << 1) | 0x80);  // some unrelated RADDR
+        const auto otherResp = parseEp6Response(otherFrame);
+        check(!decodeI2cResponse(*otherResp).matched,
+              "an ACK for an unrelated RADDR is not mistaken for an I2C reply");
+    }
+
+    // ---- N2ADR/KP4RX I/O Board: startup reset ----
+    //
+    // ccIoBoardTxFrequency() itself is pinned in the "IO board transmit-
+    // frequency batch" block above (upstream's write-only I2C2 mechanism —
+    // see MetisProtocol.h's comment on why the automatic push and this
+    // reset use two different I2C paths). This block covers only what
+    // this branch adds: the documented startup reset, which goes through
+    // the GENERIC ACK'd I2cBus::Bus2 write since it is a one-shot
+    // connect-time write, not part of the per-tune push.
+    {
+        const Cc reset = ccIoBoardReset();
+        check(reset[0] == static_cast<std::uint8_t>((kAddrI2cBus2 << 1) | 0x80),
+              "the startup reset is also on I2C bus 2");
+        check(reset[2] == (0x80 | kIoBoardI2cAddr), "the startup reset targets the same fixed address");
+        check(reset[3] == kIoBoardRegControl, "the startup reset targets REG_CONTROL");
+        check(reset[4] == 0x01, "the startup reset writes 1 (per the firmware's documented reset convention)");
+    }
+
+    // ---- I2cJobQueue: MetisClient's I2C scheduling, pinned socket-free ----
+    //
+    // The real HPSDR I2C mechanism has no transaction id — the radio's ACK is
+    // matched purely by arrival order — so MetisClient must never have two
+    // requests in flight at once. This is the scheduling logic itself
+    // (dispatchNextI2cJob's gate), extracted out of MetisClient so it can be
+    // pinned here rather than only by a live fake-radio fixture (see
+    // tests/tests.cmake's note on the retired ones: "deterministic
+    // assertions... extracted into socket-free tests").
+    {
+        I2cJobQueue q;
+        check(q.empty() && !q.awaiting(), "a fresh queue starts empty and idle");
+        check(!q.dispatchNext().has_value(), "nothing to dispatch from an empty queue");
+
+        const Cc jobA = ccIoBoardReset();
+        const Cc jobB = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddr, kIoBoardRegInputPins);
+        const Cc jobC = ccI2cRead(I2cBus::Bus2, kIoBoardI2cAddr, kIoBoardRegOutputPins);
+        q.enqueue(jobA);
+        q.enqueue(jobB);
+        q.enqueue(jobC);
+        check(q.size() == 3, "three enqueued jobs are all held until dispatched");
+
+        // Only the FRONT job goes out, and the queue is marked awaiting —
+        // this is the one-outstanding-transaction gate itself.
+        const auto first = q.dispatchNext();
+        check(first.has_value() && (*first)[3] == jobA[3], "the first dispatch is job A, in FIFO order");
+        check(q.awaiting(), "dispatching marks the queue as awaiting a reply");
+        check(q.size() == 2, "the dispatched job left the queue");
+        check(!q.dispatchNext().has_value(),
+              "a second dispatch is refused while one is still outstanding — "
+              "never two I2C requests on the wire at once");
+
+        // The outstanding job completes (an ACK, or the timeout — this class
+        // does not care which): the next one may now go.
+        q.complete();
+        check(!q.awaiting(), "completing clears the in-flight flag");
+        const auto second = q.dispatchNext();
+        check(second.has_value() && (*second)[3] == jobB[3], "the second dispatch is job B, still FIFO order");
+
+        // A timeout (no ACK ever arrived) completes it exactly the same way
+        // a real ACK would — the queue does not distinguish, and must not
+        // wedge either way.
+        q.complete();
+        const auto third = q.dispatchNext();
+        check(third.has_value() && (*third)[3] == jobC[3], "the third dispatch is job C — a timeout unblocks the queue");
+        check(q.empty(), "all three jobs have now left the queue");
+
+        q.complete();
+        check(!q.dispatchNext().has_value(), "an empty, idle queue has nothing left to dispatch");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_metis_protocol_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

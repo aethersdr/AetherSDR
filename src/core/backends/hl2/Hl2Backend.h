@@ -304,6 +304,12 @@ private:
     // build before this one had.
     int m_freqCalPpb = 0;
     double m_freqCalScale = 1.0;
+    // The requestId of the I/O Board I2C transaction currently in flight, or
+    // 0 when none is — the real HPSDR I2C mechanism has no transaction id of
+    // its own, so this is what lets the eventual reply (MetisClient::
+    // i2cResponseReceived) find its way back to the right caller, and what
+    // ioboard.readInputPins/readOutputPins check before starting another.
+    quint64 m_pendingI2cRequestId = 0;
     // Identity of the connected radio (its MAC, from the connect request), so
     // the calibration loads and stores per radio rather than globally: it
     // describes one physical crystal. Empty until connectRadio().

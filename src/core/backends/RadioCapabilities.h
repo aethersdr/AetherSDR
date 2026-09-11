@@ -861,6 +861,13 @@ struct RadioCapabilities {
     bool hasGpsHardware = false;
     bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
+    // The radio can carry a separate I/O Board accessory (a distinct I2C
+    // peripheral from the HL2 itself, with its own register map) and expose
+    // its live pin states. True unconditionally for the HL2: polling is
+    // inert with nothing attached, the same reasoning that already makes the
+    // automatic band-filter path safe to run unconditionally.
+    bool hasIoBoardAccessory = false;
+
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile
     // fields here. Example: {"flex": {"multiFlex": true, "guiClientId": "…"}}.

@@ -149,6 +149,17 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
                 "no IQ stream from the radio within %1 ms of start")
                     .arg(kConnectTimeoutMs));
     });
+
+    m_i2cTimeoutTimer = new QTimer(this);
+    m_i2cTimeoutTimer->setSingleShot(true);
+    m_i2cTimeoutTimer->setInterval(kI2cTimeoutMs);
+    connect(m_i2cTimeoutTimer, &QTimer::timeout, this, [this] {
+        if (!m_i2cJobs.awaiting())
+            return;
+        m_i2cJobs.complete();
+        emit i2cResponseReceived(/*error=*/true, /*data=*/0);
+        dispatchNextI2cJob();
+    });
 }
 
 MetisClient::~MetisClient()
@@ -690,6 +701,29 @@ void MetisClient::flushTxIq()
     m_txIq.clear();
 }
 
+void MetisClient::sendI2cRead(int bus, int deviceAddress, int control)
+{
+    const auto b = (bus == 2) ? I2cBus::Bus2 : I2cBus::Bus1;   // bus param is 1-based (matches the reference UI's "I2C 1"/"I2C 2")
+    m_i2cJobs.enqueue(ccI2cRead(b, static_cast<std::uint8_t>(deviceAddress),
+                                static_cast<std::uint8_t>(control)));
+    dispatchNextI2cJob();
+}
+
+void MetisClient::resetIoBoardRegisters()
+{
+    m_i2cJobs.enqueue(ccIoBoardReset());
+    dispatchNextI2cJob();
+}
+
+void MetisClient::dispatchNextI2cJob()
+{
+    const auto job = m_i2cJobs.dispatchNext();
+    if (!job)
+        return;
+    m_oneShot.push_back(*job);
+    m_i2cTimeoutTimer->start();
+}
+
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 {
     static const Cc kCcAdc = ccAdcAssign();
@@ -917,6 +951,14 @@ void MetisClient::onReadyRead()
             if (const auto resp = parseEp6Response(bytes.data() + fs)) {
                 m_telemetry.apply(*resp);
                 telemetryChanged = true;
+                if (m_i2cJobs.awaiting()) {
+                    if (const auto i2c = decodeI2cResponse(*resp); i2c.matched) {
+                        m_i2cJobs.complete();
+                        m_i2cTimeoutTimer->stop();
+                        emit i2cResponseReceived(i2c.error, i2c.data);
+                        dispatchNextI2cJob();
+                    }
+                }
             }
         }
         // Coalesce to ~10 Hz: telemetry free-runs continuously, so a frame
