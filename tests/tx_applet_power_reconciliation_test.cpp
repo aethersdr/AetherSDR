@@ -5,8 +5,12 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QLabel>
+#include <QHelpEvent>
+#include <QMenu>
+#include <QToolTip>
 #include <QSignalSpy>
 #include <QPushButton>
 #include <QSlider>
@@ -379,6 +383,94 @@ void testTuneAvailability()
 
 } // namespace
 
+// #5510 — a disabled menu entry must be able to say WHY it is disabled.
+//
+// The ATU right-click menu has always set an explanatory tooltip on a disabled
+// "Pre-tune bands…", but Qt has suppressed per-action tooltips since 5.1 unless
+// the menu opts in, and a disabled QAction does not highlight on hover either.
+// The operator therefore saw an inert item with no feedback at all and reported
+// it as a broken control. These assertions pin the opt-in and the reason text;
+// deleting menu.setToolTipsVisible(true) fails the first one.
+void testAtuContextMenuExplainsWhyPreTuneIsDisabled()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+
+    // The reporter's state: the radio HAS an ATU memory database, but memories
+    // are switched off, so the sweep is legitimately unavailable.
+    model.setHasTunerMemories(true);
+    TransmitDelta memoriesOff;
+    memoriesOff.memoriesEnabled = false;
+    model.applyChanges(memoriesOff);
+
+    QMenu menu;
+    applet.buildAtuContextMenu(menu);
+
+    report("ATU menu opts into per-action tooltips",
+           menu.toolTipsVisible(),
+           menu.toolTipsVisible()
+               ? QString()
+               : QStringLiteral("QMenu::toolTipsVisible() is false, so every "
+                                "disabled-item explanation is unreachable"));
+
+    QAction* preTune = nullptr;
+    for (QAction* action : menu.actions()) {
+        if (action->text().startsWith(QStringLiteral("Pre-tune"))) {
+            preTune = action;
+            break;
+        }
+    }
+
+    report("ATU menu offers a Pre-tune entry", preTune != nullptr);
+    if (preTune == nullptr) {
+        return;
+    }
+
+    report("Pre-tune is disabled while ATU memories are off",
+           !preTune->isEnabled());
+    report("Disabled Pre-tune carries a reason",
+           !preTune->toolTip().isEmpty(),
+           preTune->toolTip());
+
+    // Assert the RENDER, not the property. toolTipsVisible() being true only means
+    // the menu opted in; what the operator needs is Qt actually painting the text
+    // over a DISABLED entry. Qt's QMenu::actionAt() does not filter on enabled
+    // state, but that is Qt's behaviour to demonstrate here, not ours to assume.
+    menu.popup(QPoint(50, 50));
+    QCoreApplication::processEvents();
+    const QRect tipRect = menu.actionGeometry(preTune);
+    QHelpEvent tipEvent(QEvent::ToolTip, tipRect.center(),
+                        menu.mapToGlobal(tipRect.center()));
+    QApplication::sendEvent(&menu, &tipEvent);
+    QCoreApplication::processEvents();
+    const QString shownTip = QToolTip::text();
+    report("Disabled Pre-tune actually renders its reason",
+           shownTip == preTune->toolTip(),
+           shownTip.isEmpty() ? QStringLiteral("<nothing rendered>") : shownTip);
+    QToolTip::hideText();
+    menu.close();
+    QCoreApplication::processEvents();
+
+    // Control: the SAME construction with memories on must enable the entry, so
+    // the assertion above cannot pass just because the item is always disabled.
+    TransmitDelta memoriesOn;
+    memoriesOn.memoriesEnabled = true;
+    model.applyChanges(memoriesOn);
+
+    QMenu enabledMenu;
+    applet.buildAtuContextMenu(enabledMenu);
+    QAction* enabledPreTune = nullptr;
+    for (QAction* action : enabledMenu.actions()) {
+        if (action->text().startsWith(QStringLiteral("Pre-tune"))) {
+            enabledPreTune = action;
+            break;
+        }
+    }
+    report("Pre-tune is enabled once ATU memories are on",
+           enabledPreTune != nullptr && enabledPreTune->isEnabled());
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(
@@ -404,6 +496,7 @@ int main(int argc, char** argv)
     testAtuSuccessTogglesToBypass();
     testAtuCapabilityUsesThreeVisibleStates();
     testTuneAvailability();
+    testAtuContextMenuExplainsWhyPreTuneIsDisabled();
 
     std::printf("\n%s\n",
                 g_failed == 0
