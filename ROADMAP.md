@@ -146,8 +146,9 @@ Substantial features requested on the
 
 **Packet / APRS / mapping** (building on the new map engine + AFSK demod)
 
-- **APRS digipeater** tab (MVP: WIDE1-1 fill-in)
-  ([#3571](https://github.com/aethersdr/AetherSDR/issues/3571)).
+- **APRS-IS** internet gateway for the AetherModem APRS stack
+  ([#3571](https://github.com/aethersdr/AetherSDR/issues/3571) leftover;
+  fill-in digipeater shipped).
 - **Live NEXRAD / weather-radar tile overlay** on the map
   ([#3574](https://github.com/aethersdr/AetherSDR/issues/3574)).
 - **IQ-stream transmission over TCI** for CW/RTTY skimmers

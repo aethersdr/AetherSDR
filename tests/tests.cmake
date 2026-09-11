@@ -3181,6 +3181,15 @@ target_include_directories(aprs_messenger_test PRIVATE src)
 target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
 add_test(NAME aprs_messenger_test COMMAND aprs_messenger_test)
 
+add_executable(aprs_fill_in_digipeater_test
+    tests/aprs_fill_in_digipeater_test.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_fill_in_digipeater_test PRIVATE src)
+target_link_libraries(aprs_fill_in_digipeater_test PRIVATE Qt6::Core)
+add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
+
 add_executable(tnc_terminal_test
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp

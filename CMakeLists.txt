@@ -924,6 +924,7 @@ set(CORE_SOURCES
     src/core/aprs/AprsMessenger.cpp
     src/core/aprs/AprsBeacon.cpp
     src/core/aprs/AprsSettings.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
 )
 
 if(APPLE)
@@ -1043,6 +1044,7 @@ set(GUI_SOURCES
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/AprsRateGraph.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/AprsMessagesDialog.cpp
