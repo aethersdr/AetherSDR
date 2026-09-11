@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QColor>
+#include <QString>
 #include <QVector>
 #include <QWidget>
 
@@ -16,7 +16,7 @@ public:
     explicit AprsRateGraph(QWidget* parent = nullptr);
 
     void setTitle(const QString& title);
-    void setAccent(const QColor& color);
+    void setAccentToken(const QString& token);
     void setWindowMinutes(int minutes);
     int windowMinutes() const { return m_windowMin; }
 
@@ -36,7 +36,7 @@ private:
     void advanceBucket();
 
     QString m_title;
-    QColor m_accent{0, 180, 216};
+    QString m_accentToken{QStringLiteral("color.accent")};
     int m_windowMin{15};
     static constexpr int kBucketSecs = 10;
     static constexpr int kMaxHours = 6;

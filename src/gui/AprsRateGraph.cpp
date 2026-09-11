@@ -1,5 +1,8 @@
 #include "gui/AprsRateGraph.h"
 
+#include "core/ThemeManager.h"
+
+#include <QColor>
 #include <QDateTime>
 #include <QPainter>
 #include <QPainterPath>
@@ -21,9 +24,9 @@ void AprsRateGraph::setTitle(const QString& title)
     update();
 }
 
-void AprsRateGraph::setAccent(const QColor& color)
+void AprsRateGraph::setAccentToken(const QString& token)
 {
-    m_accent = color;
+    m_accentToken = token.isEmpty() ? QStringLiteral("color.accent") : token;
     update();
 }
 
@@ -86,8 +89,12 @@ void AprsRateGraph::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     const QRectF r = QRectF(rect()).adjusted(1, 1, -1, -1);
-    p.setPen(QPen(QColor(0, 180, 216, 50), 1));
-    p.setBrush(QColor(12, 18, 28));
+    const auto& theme = ThemeManager::instance();
+    const QColor accent = theme.color(this, m_accentToken);
+    QColor border = accent;
+    border.setAlpha(50);
+    p.setPen(QPen(border, 1));
+    p.setBrush(theme.color(this, QStringLiteral("color.background.0")));
     p.drawRoundedRect(r, 4, 4);
 
     const int want = qBound(1, (m_windowMin * 60) / kBucketSecs, kBuckets);
@@ -121,16 +128,16 @@ void AprsRateGraph::paintEvent(QPaintEvent*)
         }
         fill.lineTo(plot.right(), plot.bottom());
         fill.closeSubpath();
-        QColor wash = m_accent;
+        QColor wash = accent;
         wash.setAlpha(50);
         p.fillPath(fill, wash);
-        QPen pen(m_accent, 1.6);
+        QPen pen(accent, 1.6);
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
         p.drawPath(path);
     }
 
-    p.setPen(QColor(200, 214, 229));
+    p.setPen(theme.color(this, QStringLiteral("color.text.secondary")));
     QFont f = font();
     f.setPixelSize(11);
     f.setLetterSpacing(QFont::PercentageSpacing, 108);

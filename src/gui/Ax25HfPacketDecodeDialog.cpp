@@ -4693,15 +4693,15 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
     graphRow->setSpacing(10);
     m_digiHeardGraph = new AprsRateGraph(graphFrame);
     m_digiHeardGraph->setTitle(QStringLiteral("MESSAGES"));
-    m_digiHeardGraph->setAccent(QColor(0, 180, 216));
+    m_digiHeardGraph->setAccentToken(QStringLiteral("color.accent"));
     m_digiHeardGraph->setWindowMinutes(15);
     m_digiRepeatGraph = new AprsRateGraph(graphFrame);
     m_digiRepeatGraph->setTitle(QStringLiteral("DIGIPEATS"));
-    m_digiRepeatGraph->setAccent(QColor(210, 164, 72));
+    m_digiRepeatGraph->setAccentToken(QStringLiteral("color.accent.warning"));
     m_digiRepeatGraph->setWindowMinutes(15);
     m_digiDropGraph = new AprsRateGraph(graphFrame);
     m_digiDropGraph->setTitle(QStringLiteral("SKIPPED"));
-    m_digiDropGraph->setAccent(QColor(140, 150, 168));
+    m_digiDropGraph->setAccentToken(QStringLiteral("color.text.secondary"));
     m_digiDropGraph->setWindowMinutes(15);
     graphRow->addWidget(m_digiHeardGraph, 1);
     graphRow->addWidget(m_digiRepeatGraph, 1);
