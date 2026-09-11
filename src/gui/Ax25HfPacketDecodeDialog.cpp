@@ -2,6 +2,7 @@
 
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
+#include "core/DigitalVoiceFeature.h"
 #include "core/DaxTxPolicy.h"
 #include "core/TxKeyingMarker.h"
 #include "core/LogManager.h"
@@ -1357,14 +1358,14 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     updateTabChrome(m_tabStack->currentIndex());
 
     // D-STAR is a SmartSDR waveform surface. Apply the live capability now
-    // (the dialog may be constructed after connect) and follow revisions.
+    // so a dialog constructed after connect (AetherModem menu, KISS autostart)
+    // is honest. Subsequent revisions come from
+    // MainWindow::applyCapabilitiesToUi — one owner, not a second subscribe.
     if (m_radio) {
-        connect(m_radio, &RadioModel::capabilitiesChanged, this,
-                [this](bool connected, const RadioCapabilities& caps) {
-                    setDstarTabAvailable(!connected || caps.hasWaveforms);
-                });
         setDstarTabAvailable(!m_radio->isConnected()
                              || m_radio->backendCapabilities().hasWaveforms);
+    } else {
+        setDstarTabAvailable(true);
     }
 }
 
@@ -3610,12 +3611,18 @@ void Ax25HfPacketDecodeDialog::setDstarTabAvailable(bool available)
     if (!m_dstarTab) {
         return;
     }
-    m_dstarTab->setVisible(available);
-    if (!available && m_tabStack && m_dstarPage
+    const bool show = available && kLocalDigitalVoiceWaveformAvailable;
+    m_dstarTab->setVisible(show);
+    if (show) {
+        return;
+    }
+    if (m_radio) {
+        m_radio->dstarModel().stop();
+    }
+    if (m_tabStack && m_dstarPage
         && m_tabStack->currentWidget() == m_dstarPage && m_ax25Tab) {
         m_ax25Tab->setChecked(true);
         m_tabStack->setCurrentIndex(0);
-        updateTabChrome(0);
     }
 }
 

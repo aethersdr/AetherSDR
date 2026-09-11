@@ -146,8 +146,9 @@ public:
 
     // D-STAR in AetherModem is a SmartSDR waveform surface (ThumbDV helper +
     // radio-side D-STAR waveform). Hide the tab when the connected radio
-    // cannot load waveforms. True on disconnect (permissive) and when
-    // RadioCapabilities::hasWaveforms is true.
+    // cannot load waveforms, or when this build has no helper. True on
+    // disconnect (permissive) and when RadioCapabilities::hasWaveforms is
+    // true. Hiding also stops a running helper so it is not orphaned.
     void setDstarTabAvailable(bool available);
 
 protected:

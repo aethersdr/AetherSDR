@@ -64,14 +64,19 @@ namespace AetherSDR {
 void MainWindow::scheduleDigitalVoiceAutoStart()
 {
     if (!kLocalDigitalVoiceWaveformAvailable
-        || !DigitalVoiceWaveformSettings::autoStart()) {
+        || !DigitalVoiceWaveformSettings::autoStart()
+        || !m_radioModel.backendCapabilities().hasWaveforms) {
         return;
     }
 
     QTimer::singleShot(3000, this, [this] {
         // The helper must reach the radio directly; a SmartLink/WAN session's
         // advertised LAN address is not a usable transport endpoint.
-        if (!m_radioModel.isConnected() || m_radioModel.isWan()) {
+        // hasWaveforms is the same gate as File ▸ Waveforms… and the
+        // AetherModem D-STAR tab: without a SmartSDR waveform API the
+        // helper cannot register and would run with no reachable Stop.
+        if (!m_radioModel.isConnected() || m_radioModel.isWan()
+            || !m_radioModel.backendCapabilities().hasWaveforms) {
             return;
         }
         m_radioModel.dstarModel().start(
