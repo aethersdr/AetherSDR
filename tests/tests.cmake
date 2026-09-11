@@ -2072,6 +2072,15 @@ add_executable(fft_line_width_test tests/fft_line_width_test.cpp)
 target_include_directories(fft_line_width_test PRIVATE src)
 add_test(NAME fft_line_width_test COMMAND fft_line_width_test)
 
+# Transient menu/dialog ownership under nested event-loop teardown (#5566).
+# Socket-free; also runs in the unfiltered full-suite and sanitizer lanes.
+add_executable(scoped_child_widget_test tests/scoped_child_widget_test.cpp)
+target_include_directories(scoped_child_widget_test PRIVATE src)
+target_link_libraries(scoped_child_widget_test PRIVATE Qt6::Widgets)
+add_test(NAME scoped_child_widget_test COMMAND scoped_child_widget_test)
+set_tests_properties(scoped_child_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )
