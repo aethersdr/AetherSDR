@@ -707,6 +707,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/aprs/AprsFillInDigipeater.h": {
+  "tag": "universal",
+  "note": "APRS New-N WIDE1-1 fill-in digipeater; radio-agnostic packet operating feature over the canonical TX path.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/aprs/AprsMessenger.h": {
   "tag": "universal",
   "note": "APRS messaging (send/ack/retry) over canonical TX path; radio-agnostic.",
