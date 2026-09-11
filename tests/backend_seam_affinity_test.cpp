@@ -14,13 +14,25 @@
 // added to IRadioBackend without a probe entry fails this test, so the
 // contract cannot silently stop covering a new signal.
 //
-// Coverage: SimBackend is driven through its whole surface standalone
-// (connect, the data plane, slice verbs, pan create/remove, an extension
-// verb, disconnect) and must exercise a minimum set of signals so the test
-// is not vacuous. The other families are constructed through the production
-// factory (RadioModel::rebuildBackendForTest), asked the synchronous
-// questions, and torn down — no socket, no device — and whatever they emit
-// on that path is checked the same way.
+// WHAT THIS TEST ACTUALLY COVERS, per family:
+//
+//   sim   — rules 1, 2 and 6 for real. Driven through RadioModel across its
+//           whole surface (connect, the data plane, slice verbs, pan
+//           create/remove, extension verbs, disconnect, and a SECOND session
+//           so rule 6 is judged per session), with a minimum-emission floor so
+//           the assertions cannot pass vacuously. Forcing the sim's
+//           audioFrameReady forward to Qt::DirectConnection fails this test.
+//
+//   flex, hl2, anan, icom, rtl — rule 1 (the backend is constructed on its
+//           owner's thread) plus "construction and the synchronous getters
+//           emit nothing they should not". These are never connected, so they
+//           emit nothing and rules 2 and 6 are NOT exercised for them here;
+//           the report says so rather than printing a pass over zero
+//           observations. Live-emission affinity for hl2 is pinned by
+//           hl2_connect_reentrancy_test, which drives connectRadio() with the
+//           DSP build on the I/O thread and carries the same probe. For the
+//           remaining families it is a survey result until the probe is
+//           dropped into a test that drives one of them.
 
 #include "SeamThreadAffinityProbe.h"
 #include "TestSettingsProfile.h"
@@ -61,12 +73,27 @@ void spin(int ms)
     loop.exec();
 }
 
-void reportProbe(const QString& family, const Probe& p)
+// `exercised` says whether this family was actually driven. A probe that
+// recorded nothing cannot judge rules 2 or 6, and saying so beats printing a
+// pass over zero observations.
+void reportProbe(const QString& family, const Probe& p, bool exercised)
 {
+    const QStringList observed = p.observed();
     std::printf("  %s observed: %s\n", qPrintable(family),
-                qPrintable(p.observed().join(QStringLiteral(", "))));
+                observed.isEmpty() ? "(nothing)"
+                                   : qPrintable(observed.join(QStringLiteral(", "))));
     for (const QString& v : p.violations()) {
         std::printf("  VIOLATION [%s]: %s\n", qPrintable(family), qPrintable(v));
+    }
+    if (!exercised || observed.isEmpty()) {
+        std::printf("  NOTE [%s]: 0 emissions — rules 2 and 6 not exercised for this family\n",
+                    qPrintable(family));
+        // Still meaningful: a backend that emitted something during bare
+        // construction or a synchronous getter would show up here.
+        check(p.violations().isEmpty(),
+              QStringLiteral("%1: construction and the synchronous getters emit nothing off-thread")
+                  .arg(family));
+        return;
     }
     check(p.violations().isEmpty(),
           QStringLiteral("%1: every seam signal emitted on the backend's thread").arg(family));
@@ -148,7 +175,26 @@ void simulatorFullSurface()
     check(p.count(QStringLiteral("spectrumFrameReady")) >= 5, "sim: spectrum data plane observed");
     check(p.count(QStringLiteral("extensionResult")) + p.count(QStringLiteral("extensionError")) >= 2,
           "sim: extension replies observed");
-    reportProbe(QStringLiteral("sim"), p);
+
+    // A SECOND session. Rule 6 is per session — a reconnect legitimately
+    // follows a disconnect — so the gate is reset and the new session's
+    // traffic is judged on its own. Without the reset every emission after the
+    // first disconnect would read as a violation.
+    const int audioAfterFirstSession = p.count(QStringLiteral("audioFrameReady"));
+    p.resetDisconnectGate();
+    model.connectToRadio(demoInfo());
+    for (int i = 0; i < 60 && !model.isConnected(); ++i) spin(50);
+    check(model.isConnected(), "sim: second session connected");
+    spin(500);
+    check(p.count(QStringLiteral("connected")) == 2, "sim: connected twice across two sessions");
+    check(p.count(QStringLiteral("audioFrameReady")) > audioAfterFirstSession,
+          "sim: the second session streams audio of its own");
+    model.disconnectFromRadio();
+    for (int i = 0; i < 60 && model.isConnected(); ++i) spin(50);
+    spin(400);
+    check(p.count(QStringLiteral("disconnected")) == 2, "sim: disconnected twice");
+
+    reportProbe(QStringLiteral("sim"), p, /*exercised=*/true);
 }
 
 // Every other family: built by the production factory, asked the synchronous
@@ -181,7 +227,7 @@ void constructedFamilies()
         (void)b->currentOperatingState();
         b->disconnectRadio();
         spin(200);
-        reportProbe(family, p);
+        reportProbe(family, p, /*exercised=*/false);
         // Teardown happens on the next rebuild (or ~RadioModel); the probe's
         // context outlives it only within this iteration, so a late emission
         // during destruction would reach a dead lambda — the family-switch test

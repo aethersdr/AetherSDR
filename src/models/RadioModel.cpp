@@ -799,15 +799,23 @@ void RadioModel::setupBackend(const QString& family)
     m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
     // IRadioBackend contract rule 5. teardownBackend() bumps this before the
-    // old backend dies, and every handler below that a BACKEND-OWNED object can
-    // reach (the harvested RadioConnection / PanadapterStream as much as the
-    // seam signals in wireBackendReceiverState) checks it before touching the
-    // model. Qt delivers a queued call that was posted before the sender was
-    // disconnected or destroyed, so without this a trailing status line from
-    // the previous session — the simulator's synthetic "slice 0
-    // client_handle=…" was the one backend_family_switch_test caught — lands
-    // on the NEXT session's models, reads as a foreign client's slice, and
-    // removes it.
+    // old backend dies, and every handler below that INTERPRETS a delivery from
+    // a backend-owned object captures it and returns early once it no longer
+    // matches. Qt delivers a queued call that was posted before the sender was
+    // disconnected or destroyed — it purges on receiver destruction only — so
+    // without this a trailing status line from the previous session lands on
+    // the NEXT session's models. The one that bit: the simulator's synthetic
+    // "slice 0 client_handle=0xDE300001", which the new session read as a
+    // foreign client's slice and removed (backend_family_switch_test injects it
+    // deterministically).
+    //
+    // Deliberately NOT applied to the three panFeed* forwards below. Those are
+    // signal-to-signal, which is what preserves the original thread hop and the
+    // renderer's batching (see the comment on them); routing them through a
+    // lambda to add a check would undo that for a stale FRAME, whose worst case
+    // is one trace row drawn for a pan id the new session does not have — the
+    // renderer already resolves by pan id and drops what it cannot place. If
+    // that ever stops being true, they need the guard and a different forward.
     const quint64 generation = m_backendReceiverGeneration;
 
     {
@@ -1819,6 +1827,21 @@ void RadioModel::wireBackendReceiverState()
 void RadioModel::teardownBackend()
 {
     ++m_backendReceiverGeneration;
+    // Answer, then drop, every command still waiting on the backend that is
+    // about to die. The generation guard on commandResponse means a reply
+    // arriving after this point is discarded, so without this the callback —
+    // a std::function capturing this and whatever the caller held — would sit
+    // in the map for the life of the process, and the caller would wait for a
+    // reply that can no longer be delivered. kNoCommandPlaneCode is the same
+    // answer sendCmd() gives when there is no command plane to write to.
+    if (!m_pendingCallbacks.isEmpty()) {
+        const QMap<quint32, ResponseCallback> pending = std::move(m_pendingCallbacks);
+        m_pendingCallbacks.clear();
+        for (const ResponseCallback& cb : pending) {
+            if (cb)
+                cb(kNoCommandPlaneCode, QStringLiteral("the radio connection was replaced"));
+        }
+    }
     m_sliceLifecycleCommandSinkForTest = {};
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
@@ -2019,9 +2042,11 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<AmpDelta>();
     qRegisterMetaType<TunerDelta>();
     // IRadioBackend contract rule 4: every seam payload registers here. These
-    // two were declared (Q_DECLARE_METATYPE) but never registered, so a queued
-    // notchChanged or linkStatsUpdated would have been dropped with only a
-    // "Cannot queue arguments" log line to show for it.
+    // two were declared (Q_DECLARE_METATYPE) and never registered. That does
+    // NOT break queued delivery on Qt 6 — moc embeds the parameter's QMetaType
+    // and a PMF connection self-registers — so this is not a bug fix; it is the
+    // name-based paths (QMetaType::fromName, QVariant, string SIGNAL/SLOT,
+    // QSignalSpy capture) and the single-list invariant the rule is about.
     qRegisterMetaType<NotchDelta>();
     qRegisterMetaType<IRadioBackend::LinkStats>();
 
@@ -3637,13 +3662,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     if (wantFamily != m_family || !m_backend) {
         qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
                            << "->" << wantFamily << "for" << info.address.toString();
-        // F1 (#4448): a family switch is a hard radio change — drop every live and
-        // staged slice/pan model so none can be reclaimed as a model of the new
-        // family with mismatched (or missing) command/TX/DV wiring.
-        dropAllSessionModelsForFamilySwitch();
-        teardownBackend();
-        setupBackend(wantFamily);
-        emit backendRebuilt();
+        rebuildBackendForFamily(wantFamily);
         if (!m_backend) {
             return;
         }
@@ -7722,7 +7741,13 @@ void RadioModel::startNetworkMonitor()
         disconnect(m_networkPingConnection);
         m_networkPingConnection = {};
     }
-    m_networkPingConnection = connect(m_connection, &RadioConnection::pingRttMeasured, this, [this](int ms) {
+    // Generation-guarded like every other handler bound to the backend-owned
+    // RadioConnection (rule 5): an RTT sample measured by the dying session's
+    // worker must not be posted onto the next one's network quality.
+    m_networkPingConnection = connect(m_connection, &RadioConnection::pingRttMeasured, this,
+                                      [this, generation = m_backendReceiverGeneration](int ms) {
+        if (generation != m_backendReceiverGeneration)
+            return;
         m_pingMissCount = 0;
         m_lastPingRtt = ms;
         evaluateNetworkQuality();
@@ -9348,13 +9373,24 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     wireBackendReceiverState();
 }
 
-bool RadioModel::rebuildBackendForTest(const QString& family)
+void RadioModel::rebuildBackendForFamily(const QString& family)
 {
-    // Mirrors the family-switch block in connectToRadio(); keep the two in step.
+    // THE family switch, in one place. connectToRadio() calls it for a real
+    // target and rebuildBackendForTest() calls it for a socket-free one, so a
+    // test cannot exercise an ordering production does not have.
+    //
+    // F1 (#4448): a family switch is a hard radio change — drop every live and
+    // staged slice/pan model first so none can be reclaimed as a model of the
+    // new family with mismatched (or missing) command/TX/DV wiring.
     dropAllSessionModelsForFamilySwitch();
     teardownBackend();
     setupBackend(family);
     emit backendRebuilt();
+}
+
+bool RadioModel::rebuildBackendForTest(const QString& family)
+{
+    rebuildBackendForFamily(family);
     return m_backend != nullptr;
 }
 

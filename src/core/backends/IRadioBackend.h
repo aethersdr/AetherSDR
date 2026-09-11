@@ -111,12 +111,32 @@ struct MemoryRecallDetails {
 //     (healthSnapshot(), linkStats(), dspChains()) and the backend answers
 //     from its own cache — see the SYNCHRONOUS note on healthSnapshot().
 //
-//  4. QUEUED PAYLOADS ARE REGISTERED IN ONE PLACE. Every value type that
-//     crosses the seam (the *Delta structs, MeterDef, LinkStats) is declared
-//     with Q_DECLARE_METATYPE in its own header AND registered with
-//     qRegisterMetaType in RadioModel's constructor, so a queued or
-//     QMetaMethod-based connection of any seam signal delivers. A new payload
-//     type adds itself to both, in the same change that introduces it.
+//     TRANSITIONAL EXCEPTION, and the only one: FlexBackend::connection() /
+//     panStream() and SimBackend's equivalents are backend-owned wire objects
+//     living on worker threads that RadioModel still harvests and drives
+//     directly — including Qt::BlockingQueuedConnection invokes — while the
+//     command plane moves behind the seam (#5262 M4, #5554 §2.6). They are the
+//     only objects above the seam that may wait on a backend thread, no new
+//     call site may join them, and every handler bound to them is
+//     generation-guarded per rule 5. When M4 lands, this paragraph goes.
+//
+//  4. SEAM PAYLOADS ARE DECLARED AND REGISTERED IN ONE PLACE. Every value
+//     type that crosses the seam (the *Delta structs, MeterDef, LinkStats) is
+//     declared with Q_DECLARE_METATYPE in its own header AND registered with
+//     qRegisterMetaType in RadioModel's constructor. A new payload type adds
+//     itself to both, in the same change that introduces it.
+//
+//     This is NOT what makes a queued connection deliver. On Qt 6 moc embeds
+//     each signal parameter's QMetaType in the meta-object and a
+//     pointer-to-member-function connection self-registers at connect time, so
+//     a queued seam signal delivers with neither line present — the Qt 5
+//     "Cannot queue arguments of type …" failure this rule used to cite does
+//     not reproduce here. The registration is for the NAME-based paths that do
+//     not go through moc's embedded type: QMetaType::fromName, QVariant round
+//     trips, string-based SIGNAL/SLOT connects, and QSignalSpy argument
+//     capture (tests/hl2_backend_test.cpp relies on exactly that). Registering
+//     in one place keeps those working and keeps the answer to "is this a seam
+//     payload?" in a single list.
 //
 //  5. TEARDOWN IS BOUNDED AND ORDERED. disconnectRadio() returns with no
 //     worker still able to reach a seam signal: it stops its sources, quits
@@ -128,9 +148,16 @@ struct MemoryRecallDetails {
 //     wait on a BlockingQueuedConnection whose target thread may itself be
 //     waiting on this thread — that is the wait cycle the family-switch test
 //     exists to catch. RadioModel::teardownBackend() disconnects every seam
-//     signal BEFORE destroying the backend, so a late queued emission from
-//     the dying backend is dropped rather than delivered to a receiver whose
-//     generation has moved on.
+//     signal BEFORE destroying the backend, but THAT IS NOT SUFFICIENT and a
+//     consumer must not believe it is: QObject::disconnect stops new posts and
+//     Qt purges a queued QMetaCallEvent only when the RECEIVER dies, so a call
+//     already posted by a dying backend (or by a wire object on its worker
+//     thread) is still delivered afterwards. What actually drops it is the
+//     receiver generation: teardownBackend() bumps a counter, and every
+//     handler bound to a backend-owned object captures it and returns early
+//     when it no longer matches (RadioModel::setupBackend()). Believing the
+//     disconnect was enough is what let a torn-down session's trailing status
+//     line delete the next session's slice.
 //
 //  6. A BACKEND EMITS NOTHING AFTER disconnected(). A frame a worker sent
 //     before it was stopped may still be queued when disconnectRadio()

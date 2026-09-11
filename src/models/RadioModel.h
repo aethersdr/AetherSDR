@@ -1550,6 +1550,9 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // The family switch itself: drop session models, tear down, build, announce.
+    // One body, called by connectToRadio() and rebuildBackendForTest().
+    void rebuildBackendForFamily(const QString& family);
     // Push the backend's RadioCapabilities into the models that own each flag,
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
@@ -1664,13 +1667,12 @@ public:
     // Install a socket-free backend with the same normalized receiver-state
     // bindings used by production. Replacement drops old session models.
     void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
-    // The production family switch — dropAllSessionModelsForFamilySwitch(),
-    // teardownBackend(), setupBackend(), backendRebuilt() — exactly as
-    // connectToRadio() runs it, but WITHOUT the dial that follows. Builds the
-    // REAL backend for `family` through makeBackend(), so a test can cycle every
-    // family through construction, the full setupBackend() wiring and teardown
-    // with no socket, no device and no radio. Returns false when the family
-    // has no backend in this build (RTL without librtlsdr).
+    // The production family switch WITHOUT the dial that follows it: calls the
+    // same rebuildBackendForFamily() connectToRadio() calls, so the two cannot
+    // drift. Builds the REAL backend for `family` through makeBackend(), so a
+    // test can cycle every family through construction, the full setupBackend()
+    // wiring and teardown with no socket, no device and no radio. Returns false
+    // when the family has no backend in this build (RTL without librtlsdr).
     bool rebuildBackendForTest(const QString& family);
     // Replace only the ordinary lifecycle command transport, including replies.
     // Tests can pin Flex/Sim encoding without constructing a wire object/peer.

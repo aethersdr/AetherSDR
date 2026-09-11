@@ -479,10 +479,16 @@ anything in this table's territory (see the temporary notice at the top of
 "AI Agent Guidelines"). **Every implementor honours the THREADING AND
 LIFETIME CONTRACT at the top of `IRadioBackend.h`** (backend lives on its
 owner's thread, every seam signal is emitted from it, workers are private,
-payloads registered in one place, teardown bounded and ordered);
-`backend_seam_affinity_test` and `backend_family_switch_test` pin it, and
-`tests/SeamThreadAffinityProbe.h` drops the same tripwire into any test
-that drives a backend:
+payloads declared and registered in one place, teardown bounded and
+ordered). What is pinned versus surveyed: `backend_seam_affinity_test`
+pins rules 1, 2 and 6 for the simulator and rule 1 plus a cold
+construct/teardown for every other family; `hl2_connect_reentrancy_test`
+pins rule 2 for HL2 while its DSP build runs on the I/O thread;
+`backend_family_switch_test` pins rule 5 across the production switch with
+a deterministic stale-delivery injection. Live-emission affinity for flex,
+anan, icom and rtl is a survey result until
+`tests/SeamThreadAffinityProbe.h` — which drops the same tripwire into any
+test that drives a backend — is carried by a test that drives one:
 
 | Family | Backend | Notes |
 |---|---|---|
