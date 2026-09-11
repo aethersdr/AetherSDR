@@ -347,6 +347,12 @@ RadioCapabilities AnanBackend::capabilities() const
     c.tuningMaxHz = 0.0;
     // State is engine-owned, but verified coverage is still unavailable.
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine, 0, 0};
+    c.receiveModeControl = std::nullopt; // mode/passband transition contract not yet qualified
+    c.receiveFilterControl = std::nullopt;
+    c.receiveAudioControl = std::nullopt;
+    c.receivePanCenterControl = std::nullopt; // center also retunes the slice
+    c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
+                                                         48'000, 1'536'000};
     c.canTransmit = false;         // P2Client has no PTT capability -- see class comment
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = true;        // client-side WDSP, like the HL2

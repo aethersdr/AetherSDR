@@ -29,16 +29,22 @@ public:
         qint64 maxQueuedOutputBytes{kMaxQueuedOutputBytes};
     };
 
+    enum class ListenMode { Serve, ReserveEndpoint };
+
     explicit LocalControlServer(QObject* parent = nullptr);
     LocalControlServer(QObject* parent, Limits limits,
                        RadioConnectionTarget* connectionTarget = nullptr,
                        bool allowLocalControl = false);
     ~LocalControlServer() override;
 
-    [[nodiscard]] bool listen(const QString& name);
+    // ReserveEndpoint claims the private endpoint but closes early arrivals.
+    // Startup code must finish binding targets before calling startServing().
+    [[nodiscard]] bool listen(const QString& name, ListenMode mode = ListenMode::Serve);
+    [[nodiscard]] bool startServing();
     // Startup-only binding; never changes grants or replaces a lost target.
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
     [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
+    [[nodiscard]] bool bindReceiveTarget(ReceiveControlTarget* target);
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
@@ -64,6 +70,7 @@ private:
     const SessionAuthorization m_localAuthorization;
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;
     std::unique_ptr<QLockFile> m_lock;
+    bool m_serving{false};
 };
 
 } // namespace AetherSDR::control

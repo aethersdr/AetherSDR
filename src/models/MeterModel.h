@@ -88,6 +88,9 @@ public:
     // the producer->consumer direction as well as the reverse, which is how a
     // meter that is published and rendered nowhere becomes visible.
     QList<int> definedIndices() const { return m_defs.keys(); }
+    // Bounded traversal for telemetry consumers; never copies the full map.
+    QList<int> firstDefinedIndices(int limit) const;
+    qsizetype definitionCount() const { return m_defs.size(); }
 
     // Current converted value for a meter index. Returns 0 if unknown.
     float value(int index) const;
@@ -246,6 +249,9 @@ public:
     bool hasSupplyVoltage() const { return m_hasSupplyVoltsValue; }
 
 signals:
+    void meterDefinitionChanged(int index);
+    void meterRemoved(int index);
+    void metersCleared();
     // Emitted when the S-meter value changes (dBm).
     // sliceIndex identifies which slice's LEVEL meter this is.
     void sLevelChanged(int sliceIndex, float dbm);

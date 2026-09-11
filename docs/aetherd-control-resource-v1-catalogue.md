@@ -6,9 +6,9 @@ slice of RFC #3849. It supplements
 the envelope, limits, errors, authentication, and TX rules in that document
 remain normative.
 
-Only the five resource types below exist in this slice. `meter` and
-`transmitState` remain unimplemented. No method in this catalogue mutates a
-model or can reach a radio backend intent.
+The seven resource types below are observational. No method in this catalogue
+mutates a model or can reach a backend intent. Typed receive intents are
+specified separately in [local receive control](aetherd-local-receive-control.md).
 
 ## Resource identities and selectors
 
@@ -20,14 +20,18 @@ An exact identity has one of these shapes:
 {"type":"radioSession","id":"radio-1"}
 {"type":"slice","radioSession":"radio-1","id":"0"}
 {"type":"panadapter","radioSession":"radio-1","id":"0x40000000"}
+{"type":"meter","radioSession":"radio-1","id":"0"}
+{"type":"transmitState","radioSession":"radio-1"}
 ```
 
 `resource.get` requires an exact identity. `resource.subscribe` also accepts
 an omitted `id` as an all-current-and-future selector for `radioSession`,
-`slice`, or `panadapter`; `slice` and `panadapter` still require
+`slice`, `panadapter`, or `meter`; these children still require
 `radioSession`. Unknown fields and unsupported resource types are rejected.
 `server` and `radioCatalogue` are singletons: neither accepts `id` or
 `radioSession`, including empty or null values.
+`transmitState` is one singleton per radio session: `radioSession` is required
+and `id` is forbidden.
 
 ## Methods
 
@@ -80,6 +84,10 @@ operation. Events still pending for existing subscriptions retain sequences
 greater than the returned boundary, and newly generated events advance beyond
 them, so an event delivered after the baseline cannot leave a snapshot/event
 gap or reuse the baseline sequence.
+
+A baseline exceeding the 256 KiB message limit (including reserved envelope
+space) returns `transport.limit_exceeded` before installing any subscription.
+Use narrower selectors; no partial baseline or silent truncation is returned.
 
 ### `resource.unsubscribe`
 
@@ -205,6 +213,9 @@ commands. Create a new instance to restart discovery.
 ### `radioSession`
 
 - `id`, `connected`, `family`.
+- `meterDelivery`: `maxEntries` (64), `publishIntervalMs` (100),
+  `staleAfterMs` (2000), and `limited`. The latter stays true until meter clear
+  or connection reset after an invalid/over-capacity definition is excluded.
 - `identity`: `name`, `model`, `serial`, `version`, `manufacturer`.
 - `capabilities`:
   - `maxSlices`, `maxPanadapters`, `sampleRatesHz`;
@@ -214,6 +225,12 @@ commands. Create a new instance to restart discovery.
     `minimumHz` and `maximumHz`; zero bounds mean unavailable, not unlimited;
   - `canTransmit`, `maximumTransmitWatts`, `hasTuner`, `hasAmplifier`;
   - `extensions`, containing namespace names only, never extension payloads.
+  - Optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
+    `receivePanCenterControl`, `receivePanBandwidthControl`: null when
+    unqualified. Records carry `authority` (`radio`, `engine`, `unknown`). Mode
+    carries `modes`; filter carries per-mode minimum/maximum low cut, high cut
+    and width; audio carries gain bounds 0–100; pan records carry inclusive
+    `minimumHz`/`maximumHz`. See the receive-control contract for eligibility.
 
 `canTransmit` is observation only. It does not advertise a protocol TX method
 or grant and cannot key a radio.
@@ -232,6 +249,13 @@ control methods are specified in
   engine configuration is not a hardware acknowledgement or DSP completion.
 - `active`, `txSlice`, `locked`.
 - `audio.gain`, `audio.pan`, `audio.muted`.
+- `receiveObservation.mode` and `receiveObservation.audio.gain` / `.muted`:
+  `{known, value, authority}` with null value when unknown. Mode is a string,
+  gain an integer 0–100, mute a boolean. `receiveObservation.filter` carries
+  `known`, nullable `lowHz`/`highHz`, and `authority`; both cuts and a mode are
+  required for a known ordered passband. These are backend publications,
+  separate from the legacy optimistic mode/filter/audio values above. A changed
+  mode invalidates previous cuts; partial fields do not invent missing partners.
 - `receive.antenna`, `receive.rfGain`.
 - `receive.agc.mode`, `receive.agc.threshold`, `receive.agc.offLevel`.
 - `receive.squelch.enabled`, `receive.squelch.level`.
@@ -245,7 +269,11 @@ for control admission, observation and concurrent-intent semantics.
 
 ### `panadapter`
 
-- `id`.
+- `id`, `owned` (exact current-session ownership, unknown is false).
+- `geometryObservation`: nullable `centerHz`/`bandwidthHz`, `centerKnown` /
+  `bandwidthKnown`, `centerAuthority` / `bandwidthAuthority`. Only normalized
+  backend geometry updates these fields. Reconnect or an ownership change
+  invalidates them, including when legacy visible geometry is retained.
 - `centerHz`, `centerKnown`, `bandwidthHz`.
 - `dbmRange.minimum`, `dbmRange.maximum`.
 - `bandwidthLimitsHz.minimum`, `bandwidthLimitsHz.maximum`; zero means the
@@ -261,5 +289,49 @@ for control admission, observation and concurrent-intent semantics.
 - `displayCadence.waterfallRate`; `-1` means the backend has not reported a
   value, otherwise this is the normalized 1–100 rate, not milliseconds.
 
-FFT bins, waterfall rows, audio, and other high-rate data never enter these
+### `meter`
+
+At most 64 valid observed definitions per session are projected; new identities
+at capacity are dropped and `radioSession.meterDelivery.limited` discloses the
+incomplete view. Existing identities continue updating. A removed slot can take
+a later new definition; previously dropped identities are not automatically
+backfilled. This is a latest-value diagnostic projection, not lossless metering.
+
+- `id`: decimal normalized meter index (0–65535).
+- `definition`: `source`, `sourceIndex`, `name`, `unit`, `minimum`, `maximum`,
+  `description`. Source/name are nonempty and bounded to 32 UTF-16 code units;
+  unit to 16 and description to 128. Text must be valid UTF-16 without NUL or
+  Unicode controls. Bounds must be finite and ordered. Invalid definitions are
+  excluded, not truncated. No raw frames or proprietary extension payloads.
+- `sample`: `known` (a sample was observed in this connection), `fresh` (at most
+  2000 ms old), `valid`, `ageMs`, `value`. Age is monotonic, -1 before a sample,
+  capped at 2001 once stale so an idle resource stops churning. `value` is a
+  finite converted physical number in the definition's units only when valid;
+  otherwise null. SWR additionally uses MeterModel's existing sample/power
+  validity gate; stale/inapplicable SWR is never a healthy-looking ratio.
+
+The adapter retains one latest sample per admitted meter, publishes at most
+every 100 ms, and refreshes liveness on unchanged samples. Metadata changes
+invalidate old samples (including units); identical definitions do not. Clear,
+disconnect and backend replacement remove resources and discard samples. A new
+connection needs new samples, even if a legacy model retained an old value.
+Meter updates never touch slice/pan command revisions. Existing per-client
+coalescing, resync and hard transport caps still apply.
+
+### `transmitState`
+
+- `connected`, `canTransmit`: backend/session observations only, never grants.
+- `state`: `unknown`, `unsupported` (connected RX-only backend), `idle`, or
+  `transmitting`. Only explicit normalized transmit readback establishes idle
+  or transmitting. Local command activity, backend/capability changes and
+  disconnect invalidate prior idle knowledge. False construction defaults or a
+  falling command edge cannot establish idle. Many backends currently have no
+  normalized readback and correctly remain unknown.
+- `localRequests`: `mox`, `tune`, `transmitting`. These are explicitly local
+  model/request values, not evidence of RF, physical PTT or idle state.
+
+This resource is readable with `observe`, including on an observe-only daemon.
+It introduces no TX verb, grant, lease, policy decision or safety guarantee.
+
+FFT bins, waterfall rows, audio, and other high-rate streams never enter these
 JSON resources; they belong to the later bounded binary data plane.

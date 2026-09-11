@@ -3,7 +3,8 @@
 This Stage 3 sub-slice of RFC #3849 adds only non-TX connection intents.
 Transmit, remote transport, credentials and desktop migration remain excluded.
 The subsequent [slice frequency slice](aetherd-local-slice-frequency-control.md)
-adds one receive setter under the same explicit opt-in. The default daemon
+adds frequency tuning, and the [receive-control milestone](aetherd-local-receive-control.md)
+adds qualified mode/filter/audio/geometry controls under the same explicit opt-in. The default daemon
 remains observe-only.
 
 ## Authorization and startup
@@ -23,6 +24,12 @@ The daemon binds its endpoint before either step, then binds the connection
 target once before request dispatch. A failed listen never constructs models
 or touches settings. Icom manual setup, SmartLink and external directories
 remain excluded.
+
+Endpoint reservation is not protocol readiness. During initialization, early
+connections are closed without admitting a session; clients may reconnect and
+retry `hello`. Serving begins only after all targets and initial resources are
+installed. Settings/model constructors may pump nested Qt event loops, but an
+early client must not cause startup binding to fail or observe partial state.
 
 ## Methods
 

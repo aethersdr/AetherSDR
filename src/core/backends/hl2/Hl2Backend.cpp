@@ -1450,6 +1450,21 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.tuningMaxHz = 38'400'000.0;
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                100'000, 38'400'000};
+    c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DIGU"),
+         QStringLiteral("DIGL"), QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("CW")}};
+    // Conservative carrier-relative subdomains of the existing WDSP passband.
+    c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
+        {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
+    c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
+                                                      100'000, 38'400'000};
+    c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
     // THE RADIO'S POWER CLASS, which is what every forward-power gauge scales
     // its arc from. Declared as a band table because that is the seam the
     // clients already read: RadioModel::refreshTxPowerLimit turns it into
@@ -2671,6 +2686,7 @@ void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
     if (ddc >= 0 && static_cast<std::size_t>(ddc) < m_mixPending.size())
         m_mixPending[static_cast<std::size_t>(ddc)].clear();
     qCDebug(lcHl2) << "HL2: slice" << sliceId << (mute ? "muted" : "unmuted");
+    emitSliceState(ddc);
 }
 
 void Hl2Backend::setSliceAudioGain(int sliceId, int gainPercent)
@@ -2682,6 +2698,7 @@ void Hl2Backend::setSliceAudioGain(int sliceId, int gainPercent)
     // rather than inventing a dB curve here. Unity at 100 keeps a single
     // unmuted slice at exactly the level it has today.
     r->audioGain = std::clamp(gainPercent, 0, 100) / 100.0f;
+    emitSliceState(ddcForSlice(sliceId));
 }
 
 void Hl2Backend::setSliceAudioPan(int sliceId, int panPercent)
@@ -5633,6 +5650,8 @@ void Hl2Backend::emitSliceState(int ddc)
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
     d.filterHigh = r->filterHighHz;
+    d.audioGain = qRound(r->audioGain * 100.0f);
+    d.audioMute = r->audioMuted;
     // The AGC pair the DSP is actually running.
     //
     // Never published before, which is why a RESTORED AGC would have been

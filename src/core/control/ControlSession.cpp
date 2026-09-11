@@ -172,25 +172,36 @@ std::optional<ProtocolError> ControlSession::subscribe(
                              QStringLiteral("maximum subscriptions reached"), {}, false};
     }
 
+    QJsonArray resources;
+    const QList<ResourceSnapshot> snapshots = m_resources->snapshot(selectors);
+    for (const ResourceSnapshot& snapshot : snapshots) {
+        resources.append(snapshot.toJson());
+    }
+    const QString subscriptionId = QStringLiteral("sub-%1").arg(m_nextSubscription);
+    const QJsonObject baseline{{QStringLiteral("subscription"), subscriptionId},
+                              {QStringLiteral("sequence"), static_cast<qint64>(m_drainedSequence)},
+                              {QStringLiteral("resources"), resources}};
+    // Reserve more than the largest escaped request id + response envelope.
+    // Refuse before registration, including during resync: an oversized atomic
+    // baseline cannot be split into partial success or silently drop resources.
+    constexpr qint64 kEnvelopeReserve = 1024;
+    const qint64 limit = ProtocolLimits::kMaxMessageBytes;
+    if (QJsonDocument(baseline).toJson(QJsonDocument::Compact).size() + kEnvelopeReserve > limit) {
+        return ProtocolError{QStringLiteral("transport.limit_exceeded"),
+                             QStringLiteral("subscription baseline is too large; narrow selectors"), {}, false};
+    }
     if (m_resyncRequired) {
         // A fresh atomic baseline supersedes an undrained resync notice. Do not
         // deliver that older invalidation after the successful subscribe reply.
         m_pending.clear();
         m_pendingBytes = 0;
     }
-    const QString subscriptionId = QStringLiteral("sub-%1").arg(m_nextSubscription++);
+    ++m_nextSubscription;
     m_subscriptions.insert(subscriptionId, selectors);
     rebuildSelectorIndex();
     m_resyncRequired = false;
 
-    QJsonArray resources;
-    const QList<ResourceSnapshot> snapshots = m_resources->snapshot(selectors);
-    for (const ResourceSnapshot& snapshot : snapshots) {
-        resources.append(snapshot.toJson());
-    }
-    *result = {{QStringLiteral("subscription"), subscriptionId},
-               {QStringLiteral("sequence"), static_cast<qint64>(m_drainedSequence)},
-               {QStringLiteral("resources"), resources}};
+    *result = baseline;
     return std::nullopt;
 }
 

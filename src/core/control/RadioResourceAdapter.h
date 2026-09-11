@@ -2,11 +2,13 @@
 
 #include "ControlResourceStore.h"
 #include "RadioConnectionTarget.h"
+#include "RadioTelemetryAdapter.h"
 
 #include <QObject>
 #include <QSet>
 #include <QPointer>
 #include <QString>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -52,6 +54,8 @@ private:
     // same edges that republish the radio session (capabilities, rebuild,
     // connection). Empty means "read it on the next publish".
     QString m_frequencyAuthority;
+    QJsonObject m_receiveAuthorities;
+    std::unique_ptr<RadioTelemetryAdapter> m_telemetry;
     QSet<PanadapterModel*> m_panadapters;
 };
 

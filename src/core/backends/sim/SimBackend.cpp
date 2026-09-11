@@ -258,6 +258,12 @@ RadioCapabilities SimBackend::capabilities() const
     // advertised hardware tuning range. Off-scene signals simply become silent.
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                   1, 1'000'000'000'000};
+    caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+                                                {QStringLiteral("USB"), QStringLiteral("LSB")}};
+    caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
+    caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
+    caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
+    caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
     caps.hasRemoteOnControl = false;
     caps.canUpgradeFirmware = false;

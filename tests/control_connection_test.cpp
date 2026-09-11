@@ -261,8 +261,10 @@ void validationAndLifecycle()
               == QStringLiteral("capability.unavailable"), "stopped source cannot connect");
     check(error(invoke(f.service, f.controller, QStringLiteral("slice.setFrequency")))
               == QStringLiteral("capability.unavailable"), "absent frequency target cannot tune");
+    check(error(invoke(f.service, f.controller, QStringLiteral("slice.setMode")))
+              == QStringLiteral("capability.unavailable"), "absent receive target cannot change mode");
     for (const QString& method : {QStringLiteral("transmit.setMox"), QStringLiteral("tx.acquire"),
-                                 QStringLiteral("slice.setMode"), QStringLiteral("invoke")}) {
+                                 QStringLiteral("slice.create"), QStringLiteral("invoke")}) {
         check(error(invoke(f.service, f.controller, method)) == QStringLiteral("request.unknown_method"),
               "TX and out-of-scope control remain absent");
     }

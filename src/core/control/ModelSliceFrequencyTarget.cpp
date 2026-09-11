@@ -1,4 +1,5 @@
 #include "SliceFrequencyTarget.h"
+#include "ReceiveControlGuard.h"
 
 #include "RadioConnectionTarget.h"
 #include "core/backends/IRadioBackend.h"
@@ -38,46 +39,12 @@ bool validCoverage(const RadioCapabilities& caps)
 class ModelSliceFrequencyTarget final : public SliceFrequencyTarget {
 public:
     ModelSliceFrequencyTarget(RadioModel* radio, RadioConnectionTarget* connection)
-        : m_radio(radio), m_connection(connection)
-    {
-        // A command edge or construction default is NOT an idle observation.
-        connect(radio, &RadioModel::radioTransmitConfirmed, this, [this](bool tx) {
-            m_confirmedIdle = !tx;
-        });
-        connect(radio, &RadioModel::radioTransmittingChanged, this, [this](bool tx) {
-            if (tx) {
-                m_confirmedIdle = false;
-            }
-        });
-        // A locally initiated keying interval can precede radio readback.
-        // Do not reuse an idle observation from before that interval ends.
-        const auto invalidateOnActive = [this](bool active) {
-            if (active) {
-                m_confirmedIdle = false;
-            }
-        };
-        TransmitModel* transmit = &radio->transmitModel();
-        connect(transmit, &TransmitModel::transmittingChanged, this, invalidateOnActive);
-        connect(transmit, &TransmitModel::moxChanged, this, invalidateOnActive);
-        connect(transmit, &TransmitModel::tuneChanged, this, invalidateOnActive);
-        connect(radio, &RadioModel::connectionStateChanged, this, [this](bool connected) {
-            if (!connected) {
-                m_confirmedIdle = false;
-            }
-        });
-        connect(radio, &RadioModel::backendRebuilt, this, [this] {
-            m_confirmedIdle = false;
-        });
-        connect(connection, &RadioConnectionTarget::stateChanged, this, [this] {
-            if (!m_connection || m_connection->state() != RadioConnectionTarget::State::Connected) {
-                m_confirmedIdle = false;
-            }
-        });
-    }
+        : m_radio(radio), m_guard(radio, connection)
+    {}
 
     bool available() const override
     {
-        if (!ready()) {
+        if (thread() != QThread::currentThread() || !m_guard.ready()) {
             return false;
         }
         for (SliceModel* slice : m_radio->slices()) {
@@ -115,28 +82,15 @@ public:
     }
 
 private:
-    bool ready() const
-    {
-        return thread() == QThread::currentThread()
-            && m_radio && m_radio->thread() == thread()
-            && m_connection && m_connection->thread() == thread()
-            && m_connection->state() == RadioConnectionTarget::State::Connected
-            && m_radio->isConnected() && m_radio->backend()
-            && m_radio->backend()->thread() == thread();
-    }
-
     std::optional<ProtocolError> checkSlice(int sliceId) const
     {
-        if (!ready()) {
+        if (thread() != QThread::currentThread()) {
             return refusal("request.conflict", "radio connection is not ready");
         }
+        if (const std::optional<ProtocolError> error = m_guard.checkSlice(sliceId)) {
+            return error;
+        }
         SliceModel* slice = m_radio->slice(sliceId);
-        if (!slice || !m_radio->isSlotOurs(sliceId) || m_radio->isSlotForeign(sliceId)) {
-            return refusal("resource.not_found", "owned slice unavailable");
-        }
-        if (slice->isLocked()) {
-            return refusal("request.conflict", "slice is locked");
-        }
         const RadioCapabilities caps = m_radio->backendCapabilities();
         if (!validCoverage(caps) || !slice->frequencyReportedKnown()) {
             return refusal("capability.unavailable", "frequency coverage or observation unavailable");
@@ -144,19 +98,11 @@ private:
         // TX-slice designation alone is not keying: this receive intent may
         // retune it while confirmed idle. Any lease/inhibit policy coupling
         // belongs to the Stage 4 arbiter before TX-capable daemon enablement.
-        if (caps.canTransmit
-            && (!m_confirmedIdle || m_radio->isRadioTransmitting()
-                || m_radio->transmitModel().isTransmitting()
-                || m_radio->transmitModel().isMox()
-                || m_radio->transmitModel().isTuning())) {
-            return refusal("request.conflict", "transmitter is active or idle state is unconfirmed");
-        }
-        return std::nullopt;
+        return m_guard.checkTransmit(caps);
     }
 
     QPointer<RadioModel> m_radio;
-    QPointer<RadioConnectionTarget> m_connection;
-    bool m_confirmedIdle{false};
+    ReceiveControlGuard m_guard;
 };
 
 } // namespace
@@ -164,10 +110,7 @@ private:
 std::unique_ptr<SliceFrequencyTarget> makeModelSliceFrequencyTarget(
     RadioModel* radio, RadioConnectionTarget* connection)
 {
-    if (!radio || !connection || radio->thread() != QThread::currentThread()
-        || connection->thread() != QThread::currentThread()
-        || radio->isConnected() || radio->isConnectAttemptInFlight()
-        || connection->state() != RadioConnectionTarget::State::Idle) {
+    if (!ReceiveControlGuard::canBind(radio, connection)) {
         return {};
     }
     return std::make_unique<ModelSliceFrequencyTarget>(radio, connection);

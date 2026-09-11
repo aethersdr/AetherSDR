@@ -1167,6 +1167,32 @@ void SliceModel::emitLetterRefresh()
 
 void SliceModel::applyChanges(const SliceDelta& d)
 {
+    const ReceiveObservation previousObservation = m_receiveObservation;
+    if (d.mode) {
+        // A mode change invalidates the old mode's passband. Partial filter
+        // reports may restore each edge independently, never from UI state.
+        if (m_receiveObservation.mode != d.mode) {
+            m_receiveObservation.filterLowHz.reset();
+            m_receiveObservation.filterHighHz.reset();
+        }
+        m_receiveObservation.mode = d.mode->isEmpty() || d.mode->size() > 32
+            ? std::nullopt : d.mode;
+    }
+    if (d.filterLow) {
+        m_receiveObservation.filterLowHz = d.filterLow;
+    }
+    if (d.filterHigh) {
+        m_receiveObservation.filterHighHz = d.filterHigh;
+    }
+    if (d.audioGain) {
+        const double gain = *d.audioGain;
+        m_receiveObservation.gain = std::isfinite(gain) && gain >= 0 && gain <= 100
+                && std::floor(gain) == gain
+            ? std::optional<int>(static_cast<int>(gain)) : std::nullopt;
+    }
+    if (d.audioMute) {
+        m_receiveObservation.muted = d.audioMute;
+    }
     // aetherd RFC 2.3: the Flex slice-status wire decode moved to
     // FlexBackend::decodeSliceStatus, which emits sliceChanged(sliceId, changes)
     // with normalized, canonically-named typed values. This applies those
@@ -1723,10 +1749,20 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit frequencyChanged(m_frequency);
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
+    if (previousObservation != m_receiveObservation) {
+        emit receiveObservationChanged();
+    }
+    if (d.mode) {
+        emit receiveModeReported();
+    }
 }
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    if (m_receiveObservation != ReceiveObservation{}) {
+        m_receiveObservation = {};
+        emit receiveObservationChanged();
+    }
     if (m_frequencyReportedKnown) {
         m_frequencyReportedKnown = false;
         m_reportedFrequency = 0.0;
