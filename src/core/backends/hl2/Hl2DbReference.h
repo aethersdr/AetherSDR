@@ -41,17 +41,14 @@ namespace AetherSDR::hl2 {
 // calibrated, so that shift bought nothing and would have looked to the
 // operator exactly like the regression this class exists to prevent.
 //
-// THE AGC THRESHOLD LIVES HERE TOO
+// THE AGC-CEILING CONVERSION LIVES HERE TOO
 //
 // The operator's AGC-T (0..100 operator units) maps to WDSP's AGC gain ceiling
 // in dB by a single scale (kAgcCeilingDbPerUnit). That conversion was copied
-// into six call sites in Hl2Backend and is the same drift surface as the LNA
-// offset: all three numbers -- LNA gain, calibration offset, AGC ceiling --
-// describe one signal-reference chain from the antenna to the demodulator, so
-// they belong to one object with one conversion each. The LNA term is
-// radio-wide (one AD9866 behind every DDC), so the shared instance carries the
-// live value; the AGC-T value is per-receiver, so agcCeilingDbForThreshold()
-// is also exposed as a pure static for the per-receiver call sites.
+// into six call sites in Hl2Backend -- the same drift surface as the LNA
+// offset, and part of the same antenna->demodulator signal-reference chain, so
+// it belongs here. It is a PURE STATIC: the AGC-T value itself is per-receiver
+// state that stays on Hl2Backend::Receiver; this object only owns the maths.
 class Hl2DbReference {
 public:
     // Matches Hl2Backend/MetisClient's default LNA setting.
@@ -84,23 +81,6 @@ public:
     void setReferenceLnaGainDb(double db) noexcept { m_referenceLnaGainDb = db; }
     double referenceLnaGainDb() const noexcept { return m_referenceLnaGainDb; }
 
-    // The last operator-set AGC-T, in 0..100 units. The shared instance tracks
-    // it (HERMES.md §5 "flat memory" — one remembered pair) so the full
-    // signal-reference triplet is queryable from one place; per-receiver call
-    // sites that need a specific receiver's ceiling use the static above.
-    void setAgcThresholdOperatorUnits(int units) noexcept
-    {
-        m_agcThresholdOperatorUnits = units;
-    }
-    int agcThresholdOperatorUnits() const noexcept
-    {
-        return m_agcThresholdOperatorUnits;
-    }
-    double agcCeilingDb() const noexcept
-    {
-        return agcCeilingDbForThreshold(m_agcThresholdOperatorUnits);
-    }
-
     // The whole point: subtracting the gain we applied is what keeps a signal
     // of constant strength reading the same dBm across a gain change.
     double toDbm(double dbfs) const noexcept
@@ -118,7 +98,6 @@ private:
     double m_lnaGainDb = kDefaultLnaGainDb;
     double m_referenceLnaGainDb = kDefaultLnaGainDb;
     double m_fullScaleDbm = 0.0;
-    int m_agcThresholdOperatorUnits = 65;   // slice model's default
 };
 
 }  // namespace AetherSDR::hl2

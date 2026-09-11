@@ -2635,10 +2635,6 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // seedReceiverAgc); this makes the capture side agree with it.
     m_agcMode = r->agcMode;
     m_agcThresholdDb = r->agcThresholdDb;
-    // The shared signal-reference object tracks the same remembered value, so
-    // the LNA offset and the AGC ceiling — the two ends of the antenna→
-    // demodulator reference chain — are queryable from one place.
-    m_dbRef.setAgcThresholdOperatorUnits(r->agcThresholdDb);
     // WDSP IS TOLD WHAT THE RECEIVER NOW HOLDS, not what the caller asked for.
     // Deriving from `m` meant a refused mode still reached the DSP as
     // wdspAgcMode()'s medium fallback while r->agcMode, the applet echo and the
