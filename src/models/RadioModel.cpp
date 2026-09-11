@@ -798,6 +798,17 @@ void RadioModel::setupBackend(const QString& family)
     // RadioModel: `this`, or a value member such as m_transmitModel.
     m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
+    // IRadioBackend contract rule 5. teardownBackend() bumps this before the
+    // old backend dies, and every handler below that a BACKEND-OWNED object can
+    // reach (the harvested RadioConnection / PanadapterStream as much as the
+    // seam signals in wireBackendReceiverState) checks it before touching the
+    // model. Qt delivers a queued call that was posted before the sender was
+    // disconnected or destroyed, so without this a trailing status line from
+    // the previous session — the simulator's synthetic "slice 0
+    // client_handle=…" was the one backend_family_switch_test caught — lands
+    // on the NEXT session's models, reads as a foreign client's slice, and
+    // removes it.
+    const quint64 generation = m_backendReceiverGeneration;
 
     {
         // aetherd Gap A/B: build the backend for m_family. The Flex-specific
@@ -1278,7 +1289,8 @@ void RadioModel::setupBackend(const QString& family)
     // bridge/TCI/RADE); RadioModel is the command plane that makes it so.
     if (m_panStream)
     connect(m_panStream, &PanadapterStream::daxStreamCreateNeeded,
-            this, [this](int ch) {
+            this, [this, generation](int ch) {
+        if (generation != m_backendReceiverGeneration) return;
         if (!isConnected()) {
             // Dropped create (connect gap): tell the manager so the latch
             // clears and its retry cadence re-fires — otherwise the channel
@@ -1306,8 +1318,9 @@ void RadioModel::setupBackend(const QString& family)
     });
     if (m_panStream)
     connect(m_panStream, &PanadapterStream::daxStreamRemoveNeeded,
-            this, [this](quint32 streamId, int ch) {
+            this, [this, generation](quint32 streamId, int ch) {
         Q_UNUSED(ch);
+        if (generation != m_backendReceiverGeneration) return;
         if (!isConnected()) return;
         sendCommand(QString("stream remove 0x%1").arg(streamId, 0, 16));
     });
@@ -1322,23 +1335,44 @@ void RadioModel::setupBackend(const QString& family)
     // through the neutral IRadioBackend signals below instead, which is why the
     // block after this one is gated on !m_connection.
     if (m_connection) {
-    connect(m_connection, &RadioConnection::statusReceived,
-            this, &RadioModel::onStatusReceived);
-    connect(m_connection, &RadioConnection::messageReceived,
-            this, &RadioModel::onMessageReceived);
-    connect(m_connection, &RadioConnection::connected,
-            this, &RadioModel::onConnected);
-    connect(m_connection, &RadioConnection::disconnected,
-            this, &RadioModel::onDisconnected);
-    connect(m_connection, &RadioConnection::errorOccurred,
-            this, &RadioModel::onConnectionError);
-    connect(m_connection, &RadioConnection::versionReceived,
-            this, &RadioModel::onVersionReceived);
+    // Each goes through a generation-checked lambda rather than straight to
+    // the member slot: see the rule-5 note at the top of this function.
+    connect(m_connection, &RadioConnection::statusReceived, this,
+            [this, generation](const QString& object, const QMap<QString, QString>& kvs) {
+        if (generation != m_backendReceiverGeneration) return;
+        onStatusReceived(object, kvs);
+    });
+    connect(m_connection, &RadioConnection::messageReceived, this,
+            [this, generation](const ParsedMessage& msg) {
+        if (generation != m_backendReceiverGeneration) return;
+        onMessageReceived(msg);
+    });
+    connect(m_connection, &RadioConnection::connected, this,
+            [this, generation] {
+        if (generation != m_backendReceiverGeneration) return;
+        onConnected();
+    });
+    connect(m_connection, &RadioConnection::disconnected, this,
+            [this, generation] {
+        if (generation != m_backendReceiverGeneration) return;
+        onDisconnected();
+    });
+    connect(m_connection, &RadioConnection::errorOccurred, this,
+            [this, generation](const QString& msg) {
+        if (generation != m_backendReceiverGeneration) return;
+        onConnectionError(msg);
+    });
+    connect(m_connection, &RadioConnection::versionReceived, this,
+            [this, generation](const QString& version) {
+        if (generation != m_backendReceiverGeneration) return;
+        onVersionReceived(version);
+    });
 
     // Response callbacks: RadioConnection emits commandResponse on worker thread,
     // we dispatch to the matching callback on the main thread. (#502)
     connect(m_connection, &RadioConnection::commandResponse,
-            this, [this](quint32 seq, int code, const QString& body) {
+            this, [this, generation](quint32 seq, int code, const QString& body) {
+        if (generation != m_backendReceiverGeneration) return;
         auto it = m_pendingCallbacks.find(seq);
         if (it != m_pendingCallbacks.end()) {
             it.value()(code, body);
@@ -1393,8 +1427,11 @@ void RadioModel::setupBackend(const QString& family)
 
     // Forward VITA-49 meter packets to MeterModel (cross-thread, auto-queued)
     if (m_panStream)
-    connect(m_panStream, &PanadapterStream::meterDataReady,
-            &m_meterModel, &MeterModel::updateValues);
+    connect(m_panStream, &PanadapterStream::meterDataReady, this,
+            [this, generation](auto&&... values) {
+        if (generation != m_backendReceiverGeneration) return;
+        m_meterModel.updateValues(std::forward<decltype(values)>(values)...);
+    });
 
     // HAND THE FRESH BACKEND THE MIC GAIN THE MODEL ALREADY HOLDS.
     //
@@ -1981,6 +2018,12 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<ProfileDelta>();
     qRegisterMetaType<AmpDelta>();
     qRegisterMetaType<TunerDelta>();
+    // IRadioBackend contract rule 4: every seam payload registers here. These
+    // two were declared (Q_DECLARE_METATYPE) but never registered, so a queued
+    // notchChanged or linkStatsUpdated would have been dropped with only a
+    // "Cannot queue arguments" log line to show for it.
+    qRegisterMetaType<NotchDelta>();
+    qRegisterMetaType<IRadioBackend::LinkStats>();
 
     // Publish the host-side memory bank once the event loop turns. Deferred
     // rather than done here because MainWindow connects to memoryChanged AFTER
@@ -9303,6 +9346,16 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     m_backend = std::move(backend);
     m_family = family;
     wireBackendReceiverState();
+}
+
+bool RadioModel::rebuildBackendForTest(const QString& family)
+{
+    // Mirrors the family-switch block in connectToRadio(); keep the two in step.
+    dropAllSessionModelsForFamilySwitch();
+    teardownBackend();
+    setupBackend(family);
+    emit backendRebuilt();
+    return m_backend != nullptr;
 }
 
 QString RadioModel::neutralPanIdStringForTest(int panIdx)

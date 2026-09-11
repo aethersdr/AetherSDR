@@ -476,7 +476,13 @@ selected at connect time by a `family` string through `makeBackend()`.
 The seam's known gaps and the multi-radio migration order are tracked in
 #5262 (M0–M6) and the review meta-issue #5554 — read both before changing
 anything in this table's territory (see the temporary notice at the top of
-"AI Agent Guidelines"):
+"AI Agent Guidelines"). **Every implementor honours the THREADING AND
+LIFETIME CONTRACT at the top of `IRadioBackend.h`** (backend lives on its
+owner's thread, every seam signal is emitted from it, workers are private,
+payloads registered in one place, teardown bounded and ordered);
+`backend_seam_affinity_test` and `backend_family_switch_test` pin it, and
+`tests/SeamThreadAffinityProbe.h` drops the same tripwire into any test
+that drives a backend:
 
 | Family | Backend | Notes |
 |---|---|---|

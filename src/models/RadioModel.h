@@ -1664,6 +1664,14 @@ public:
     // Install a socket-free backend with the same normalized receiver-state
     // bindings used by production. Replacement drops old session models.
     void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // The production family switch — dropAllSessionModelsForFamilySwitch(),
+    // teardownBackend(), setupBackend(), backendRebuilt() — exactly as
+    // connectToRadio() runs it, but WITHOUT the dial that follows. Builds the
+    // REAL backend for `family` through makeBackend(), so a test can cycle every
+    // family through construction, the full setupBackend() wiring and teardown
+    // with no socket, no device and no radio. Returns false when the family
+    // has no backend in this build (RTL without librtlsdr).
+    bool rebuildBackendForTest(const QString& family);
     // Replace only the ordinary lifecycle command transport, including replies.
     // Tests can pin Flex/Sim encoding without constructing a wire object/peer.
     void setSliceLifecycleCommandSinkForTest(
