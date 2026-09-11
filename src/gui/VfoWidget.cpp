@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
 #include "FmTonePresentation.h"
 #include "gui/CtcssToneLabel.h"
@@ -6697,7 +6698,8 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
     if ((obj == m_freqLabel || obj == m_collapsedFreqLabel) && event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton && m_slice) {
-            QMenu menu(this);
+            ScopedChildWidget<QMenu> menuOwner(this);
+            QMenu& menu = *menuOwner.get();
             AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; }"
                 "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
             menu.addAction("Add Spot", this, [this] {
