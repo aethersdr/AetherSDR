@@ -779,9 +779,13 @@ void TxApplet::setBandPlanManager(BandPlanManager* bandPlan)
     m_bandPlanMgr = bandPlan;
 }
 
-void TxApplet::showAtuContextMenu(const QPoint& pos)
+void TxApplet::buildAtuContextMenu(QMenu& menu)
 {
-    QMenu menu(m_atuBtn);
+    // Qt has suppressed per-action tooltips since 5.1 unless the menu opts in,
+    // so the "why is this disabled" text below never reached the operator: a
+    // correctly-greyed Pre-tune item read as a dead control, because a disabled
+    // QAction also does not highlight on hover. (#5510)
+    menu.setToolTipsVisible(true);
 
     auto* preTune = menu.addAction(QString::fromUtf8("Pre-tune bands\xE2\x80\xA6"));
     const bool memOn = m_model && m_model->memoriesEnabled();
@@ -797,15 +801,22 @@ void TxApplet::showAtuContextMenu(const QPoint& pos)
     clearMem->setEnabled(m_radioHasTunerMemories);
     connect(clearMem, &QAction::triggered,
             this, &TxApplet::confirmAndClearAtuMemories);
+}
 
+void TxApplet::showAtuContextMenu(const QPoint& pos)
+{
+    QMenu menu(m_atuBtn);
+    buildAtuContextMenu(menu);
     menu.exec(m_atuBtn->mapToGlobal(pos));
 }
 
-void TxApplet::showTuneContextMenu(const QPoint& pos)
+void TxApplet::buildTuneContextMenu(QMenu& menu)
 {
     if (!m_model) return;
 
-    QMenu menu(m_tuneBtn);
+    // Same opt-in as the ATU menu: without it these entries' tooltips, which
+    // say what the next Tune press will actually transmit, never render.
+    menu.setToolTipsVisible(true);
 
     // Reflect the radio's current tune_mode in the check marks so the user
     // can see what the next Tune press will do.  Selecting either entry is
@@ -832,7 +843,14 @@ void TxApplet::showTuneContextMenu(const QPoint& pos)
         if (m_model)
             m_model->setTuneMode(QStringLiteral("two_tone"));
     });
+}
 
+void TxApplet::showTuneContextMenu(const QPoint& pos)
+{
+    if (!m_model) return;
+
+    QMenu menu(m_tuneBtn);
+    buildTuneContextMenu(menu);
     menu.exec(m_tuneBtn->mapToGlobal(pos));
 }
 
