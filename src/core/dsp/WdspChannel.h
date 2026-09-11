@@ -131,12 +131,13 @@ public:
     // Runtime RX bandpass FIR length change (the selectivity/latency trade —
     // longer sharpens the skirt and the minimum notch width, and adds group
     // delay). RXASetNC internally stops and restarts the channel, so this is
-    // control-path work guarded exactly like setAgc(); never call it from
-    // processIq(). The RXA-NBP notch database and the frequency shift are NBP
-    // state that survives the restart, so callers need not replay them.
-    // Receive channels only. Returns true when the channel now runs `taps`
-    // (including a no-op when it already did); false on a transmit channel, a
-    // non-positive count, or control-operation contention.
+    // control-path work carrying the same beginControlOperation() /
+    // g_setupMutex discipline as setAgc(); never call it from processIq(). The
+    // notch database survives the realloc; the frequency shift is re-asserted
+    // here in case it does not, so callers need replay neither. Receive
+    // channels only. Returns true when the channel now runs `taps` (including a
+    // no-op when it already did); false on a transmit channel, a non-positive
+    // count, or control-operation contention.
     bool setFilterTaps(int taps) noexcept;
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
@@ -266,6 +267,9 @@ public:
     [[nodiscard]] double meter(Meter which) const noexcept;
 
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
+    // The RX frequency shift currently in effect (0 = stage off). Lets a test
+    // confirm setFilterTaps() did not drop it.
+    [[nodiscard]] double shiftHz() const noexcept { return m_shiftHz; }
     [[nodiscard]] std::size_t outputBlockSize() const noexcept;
     [[nodiscard]] int channelIdForTest() const noexcept { return m_channelId; }
 

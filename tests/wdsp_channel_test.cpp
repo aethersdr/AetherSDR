@@ -465,8 +465,15 @@ bool runFilterTapsTest()
     WdspChannel::Config config;
     config.inputBlockSize = 256;
     config.dspBlockSize = 256;
+    config.inputSampleRate = 48000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
     config.blockForOutput = true;
     config.filterTaps = 2048;
+    // AGC off with unity fixed gain: the impulse-delay measurement below needs
+    // an undistorted impulse response.
+    config.agcMode = 0;
+    config.agcFixedGainDb = 0.0;
 
     std::string error;
     std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
@@ -475,6 +482,49 @@ bool runFilterTapsTest()
     }
     const int id = channel->channelIdForTest();
 
+    // Group delay: settle past the startup mute ramp on silence (RXASetNC
+    // re-triggers it, so every call settles), then feed a continuous in-band
+    // tone and return the first output-sample index that reaches half the
+    // eventual steady amplitude. That onset index is filter delay + rise time;
+    // the mute ramp is identical for both tap lengths, so it cancels in the
+    // delta and what is left is the (8192-2048)/2 FIR-delay difference.
+    const auto toneOnsetSamples = [&](WdspChannel& ch) -> long {
+        const double w = 2.0 * std::numbers::pi * (-1500.0) / 48000.0;
+        std::vector<float> inI(config.inputBlockSize, 0.0f);
+        std::vector<float> inQ(config.inputBlockSize, 0.0f);
+        std::vector<float> outL(ch.outputBlockSize());
+        std::vector<float> outR(ch.outputBlockSize());
+        for (int blk = 0; blk < 30; ++blk) {
+            ch.processIq(inI, inQ, outL, outR);   // silence — settle the ramp
+        }
+        std::vector<float> out;
+        long phase = 0;
+        for (int blk = 0; blk < 200; ++blk) {
+            for (std::size_t n = 0; n < inI.size(); ++n, ++phase) {
+                inI[n] = 0.2f * static_cast<float>(std::cos(w * phase));
+                inQ[n] = 0.2f * static_cast<float>(std::sin(w * phase));
+            }
+            ch.processIq(inI, inQ, outL, outR);
+            out.insert(out.end(), outL.begin(), outL.end());
+        }
+        double peak = 0.0;
+        for (const float s : out) {
+            peak = std::max(peak, std::fabs(static_cast<double>(s)));
+        }
+        if (peak <= 0.0) {
+            return -1;
+        }
+        const double threshold = peak * 0.5;
+        for (long i = 0; i < static_cast<long>(out.size()); ++i) {
+            if (std::fabs(static_cast<double>(out[i])) >= threshold) {
+                return i;
+            }
+        }
+        return -1;
+    };
+
+    const long delayShort = toneOnsetSamples(*channel);
+
     if (!require(channel->setFilterTaps(8192),
                  "setFilterTaps(8192) failed on an RX channel") ||
         !require(channel->config().filterTaps == 8192,
@@ -482,8 +532,24 @@ bool runFilterTapsTest()
         !require(channel->channelIdForTest() == id,
                  "setFilterTaps closed and reopened the channel") ||
         !require(channel->setFilterTaps(8192),
-                 "setFilterTaps() to the current value should be a no-op success") ||
-        !require(channel->setFilterTaps(2048),
+                 "setFilterTaps() to the current value should be a no-op success")) {
+        return false;
+    }
+
+    // Adding the long FIR must add the deeper group delay — the +64 ms the
+    // notch-latency gate exists to avoid paying when no notch is placed.
+    // (8192 - 2048) / 2 = 3072 samples at the 48 kHz DSP rate.
+    const long delayLong = toneOnsetSamples(*channel);
+    const long delta = delayLong - delayShort;
+    if (!require(delta > 2700 && delta < 3400,
+                 "8192 taps did not add ~3072 samples (~64 ms) of group delay "
+                 "over 2048")) {
+        std::cerr << "  measured delay: short=" << delayShort
+                  << " long=" << delayLong << " delta=" << delta << '\n';
+        return false;
+    }
+
+    if (!require(channel->setFilterTaps(2048),
                  "setFilterTaps(2048) failed") ||
         !require(channel->config().filterTaps == 2048,
                  "config().filterTaps did not fall back to 2048") ||
@@ -494,9 +560,10 @@ bool runFilterTapsTest()
         return false;
     }
 
-    // Notch database survives a tap change (the whole point of doing it in
-    // place rather than via reconfigure()).
-    if (!require(channel->setNotchTuneFrequency(7'000'000.0),
+    // The notch database AND the frequency shift survive a tap change (the
+    // whole point of doing it in place rather than via reconfigure()).
+    if (!require(channel->setShift(1000.0), "could not set the RX shift") ||
+        !require(channel->setNotchTuneFrequency(7'000'000.0),
                  "could not set the notch tune frequency") ||
         !require(channel->addNotch(0, 7'001'500.0, 50.0, true),
                  "could not add a notch at 8192 taps")) {
@@ -504,7 +571,9 @@ bool runFilterTapsTest()
     }
     channel->setFilterTaps(8192);
     if (!require(channel->notchCount() == 1,
-                 "the notch did not survive a redundant setFilterTaps")) {
+                 "the notch did not survive a redundant setFilterTaps") ||
+        !require(channel->shiftHz() == 1000.0,
+                 "setFilterTaps dropped the RX frequency shift")) {
         return false;
     }
 

@@ -342,6 +342,11 @@ private:
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
+    // Notch-latency gate (Plan 4.1): drive the RX FIR length from m_notches —
+    // long iff a notch exists. add/remove/clear call this after mutating the
+    // mirror.
+    void syncFilterTapsToNotchState();
+
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz

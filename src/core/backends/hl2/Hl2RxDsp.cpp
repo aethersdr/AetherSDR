@@ -224,20 +224,24 @@ void Hl2RxDsp::addNotch(int index, double centerHz, double widthHz, bool active)
         return;
     // The first notch pulls the RX FIR up to the notch-capable length BEFORE
     // WDSP places it, so a 50 Hz request is honoured rather than widened
-    // (Plan 4.1). A refusal here (control-op contention) bails without adding,
-    // same as the WDSP-refused case below — the operator retries and the
-    // chain stays consistent.
+    // (Plan 4.1). A refusal here (control-op contention) bails without adding —
+    // the operator retries and the chain stays consistent.
     if (m_channel && m_notches.empty()
-        && !m_channel->setFilterTaps(kRxFilterTapsLong))
+        && !m_channel->setFilterTaps(kRxFilterTapsLong)) {
         return;
+    }
     // Order matters: WDSP first, and the mirror only if it took it. The mirror
     // is what configure() replays after a rate change, so an entry WDSP refused
     // (database full, or a beginControlOperation that lost to a concurrent
     // reconfigure) would put every index above it permanently out of step —
     // and the desync would outlive the rebuild that might have resynced it.
     // With no channel yet the mirror still takes it; that replay is the point.
-    if (m_channel && !m_channel->addNotch(index, centerHz, widthHz, active))
+    if (m_channel && !m_channel->addNotch(index, centerHz, widthHz, active)) {
+        // The add did not take — undo the pre-flip so the FIR length still
+        // matches the (unchanged) notch count.
+        syncFilterTapsToNotchState();
         return;
+    }
     m_notches.insert(m_notches.begin() + index, Notch {centerHz, widthHz, active});
 }
 
@@ -251,15 +255,24 @@ void Hl2RxDsp::clearNotches()
     // put every index one notch out — and the caller this exists for is seeding,
     // which would then stack a second copy on top of the set it meant to replace.
     for (int index = static_cast<int>(m_notches.size()) - 1; index >= 0; --index) {
-        if (m_channel && !m_channel->removeNotch(index))
+        if (m_channel && !m_channel->removeNotch(index)) {
             return;
+        }
         m_notches.pop_back();
     }
-    // No notches left — drop the RX FIR back to the low-latency length
-    // (Plan 4.1). Best-effort: the notches are already gone, so a refusal here
-    // just leaves the chain a bit longer than it needs until the next rebuild.
-    if (m_channel && m_notches.empty())
-        m_channel->setFilterTaps(kRxFilterTapsShort);
+    syncFilterTapsToNotchState();
+}
+
+// The one place the notch-latency gate (Plan 4.1) is expressed: the RX FIR
+// runs long iff a notch exists. add/remove/clear call this after mutating
+// m_notches. Best-effort — a refused length change only over-spends latency
+// until the next rebuild, and configure() re-derives it from m_notches.
+void Hl2RxDsp::syncFilterTapsToNotchState()
+{
+    if (m_channel) {
+        m_channel->setFilterTaps(m_notches.empty() ? kRxFilterTapsShort
+                                                   : kRxFilterTapsLong);
+    }
 }
 
 void Hl2RxDsp::editNotch(int index, double centerHz, double widthHz, bool active)
@@ -276,13 +289,11 @@ void Hl2RxDsp::removeNotch(int index)
 {
     if (index < 0 || index >= static_cast<int>(m_notches.size()))
         return;
-    if (m_channel && !m_channel->removeNotch(index))
+    if (m_channel && !m_channel->removeNotch(index)) {
         return;   // see addNotch(): the mirror must not lose what WDSP kept
+    }
     m_notches.erase(m_notches.begin() + index);
-    // Last notch gone — back to the low-latency FIR length (Plan 4.1),
-    // best-effort as in clearNotches().
-    if (m_channel && m_notches.empty())
-        m_channel->setFilterTaps(kRxFilterTapsShort);
+    syncFilterTapsToNotchState();
 }
 
 void Hl2RxDsp::setNotchesEnabled(bool on)
