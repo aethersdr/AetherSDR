@@ -179,14 +179,14 @@ bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
         return false;
 
     auto& slot = m_activeDdcs[static_cast<std::size_t>(ddcIndex)];
-    if (slot.rateKsps == rateKsps)
-        return false;   // nothing to send; caller decides whether that is worth reporting
-
+    const bool rateChanged = slot.rateKsps != rateKsps;
     slot.rateKsps = rateKsps;
     // Whole packet, every DDC's row -- see this function's declaration
     // comment. Same destination port start() used: p2app tells DDC-Specific
     // from High Priority by which port it arrives on, so this is not
-    // interchangeable with kRadioPort.
+    // interchangeable with kRadioPort. Sent even when rateChanged is false:
+    // AnanBackend retries this call at 60/140 ms for UDP loss, and those
+    // retries must not no-op after the first write (#5547).
     sendTo(*m_socket,
           buildDdcSpecific(m_activeDdcs, /*numAdcs=*/2,
                            m_ditherEnabled, m_randomEnabled),
@@ -195,8 +195,12 @@ bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
     // The stream's sample cadence changes underneath us from here, so the
     // sequence expectation for THIS DDC is no longer meaningful -- clear it
     // rather than let the next frame look like a gap and inflate the drop
-    // counter for what is a deliberate, operator-initiated change.
-    m_expectedSeq[static_cast<std::size_t>(ddcIndex)].reset();
+    // counter for what is a deliberate, operator-initiated change. Retries
+    // of the same rate leave the tracker alone: the cadence did not change
+    // again.
+    if (rateChanged) {
+        m_expectedSeq[static_cast<std::size_t>(ddcIndex)].reset();
+    }
     return true;
 }
 

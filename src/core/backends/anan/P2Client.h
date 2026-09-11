@@ -117,9 +117,11 @@ public:
     Q_INVOKABLE void setDdc0FrequencyHz(double hz);
 
     // Change one DDC's sample rate on a LIVE session -- no stop, no restart,
-    // no reconnect. Returns false (changing nothing) if the session is not
-    // running, ddcIndex is not one this session enabled, or the rate already
-    // matches.
+    // no reconnect. Returns false (sending nothing) if the session is not
+    // running or ddcIndex is not one this session enabled. A matching rate
+    // still sends: the packet is fire-and-forget UDP and the caller retries
+    // across the settle window, so skipping an unchanged slot would drop
+    // those retransmits.
     //
     // Supported by the radio, verified in p2app's own source rather than
     // assumed: IncomingDDCSpecific.c services DDC-Specific packets in a
