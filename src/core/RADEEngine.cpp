@@ -211,11 +211,12 @@ void RADEEngine::resetTx()
 #endif
 }
 
-void RADEEngine::setEooRequested(bool requested)
+void RADEEngine::setEooRequested(bool requested, quint64 requestId)
 {
 #ifdef HAVE_RADE
     if (m_eooRequested == requested) return;
     m_eooRequested = requested;
+    m_eooRequestId = requestId;
     if (requested) {
         qCDebug(lcRade) << "RADEEngine: EOO requested — draining pipeline...";
         // Trigger a feed with empty audio to kick the drain logic if no more mic audio is coming
@@ -223,6 +224,7 @@ void RADEEngine::setEooRequested(bool requested)
     }
 #else
     Q_UNUSED(requested);
+    Q_UNUSED(requestId);
 #endif
 }
 
@@ -383,7 +385,7 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
 
         m_eooSent = true;
         m_eooFinished = true;
-        emit eooFinished();
+        emit eooFinished(m_eooRequestId);
         qCDebug(lcRade) << "RADEEngine: EOO transmission complete — eooFinished emitted";
     }
 #else

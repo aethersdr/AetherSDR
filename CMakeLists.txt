@@ -791,6 +791,7 @@ set(CORE_SOURCES
     src/core/CwSidetoneQAudioSink.cpp
     src/core/CwxLocalKeyer.cpp
     src/core/IambicKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
     src/core/PanadapterStream.cpp
@@ -950,6 +951,7 @@ set(MODEL_SOURCES
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_TxCoordinator.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
     src/models/ModelCapabilities.cpp

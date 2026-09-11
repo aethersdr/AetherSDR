@@ -15,6 +15,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <atomic>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -39,6 +40,9 @@ class OpusCodec;
 
 class PanadapterStream : public QObject {
     Q_OBJECT
+    friend class TxOperationIntegrationTestAccess;
+    // Inject the terminal transport in socket-free queue/cancellation tests.
+    std::function<void(const QByteArray&)> m_packetSinkForTest;
 
 public:
     static constexpr int VITA49_HEADER_BYTES = 28;

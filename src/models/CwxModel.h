@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -38,6 +39,12 @@ public:
     // recognised as stale and ignored rather than re-arming the watch. (#3949)
     int   drainEpoch()  const { return m_drainEpoch; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
+
+    // Actual-send operation fence, separate from a UI's read-only can-send
+    // predicate. Checking whether a button is enabled must never acquire TX.
+    using TransmissionPermit = std::function<bool()>;
+    using TransmissionAdmission = std::function<TransmissionPermit()>;
+    void setTransmissionAdmission(TransmissionAdmission admission) { m_transmissionAdmission = std::move(admission); }
 
     // Actions
     void send(const QString& text);      // Send mode: full string
@@ -114,7 +121,9 @@ signals:
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
-    void emitExpandedSend(const QVector<SpeedSegment>& segs);
+    TransmissionPermit admitTransmission();
+    void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit);
+    TransmissionAdmission m_transmissionAdmission;
 
     int     m_speed{20};
     int     m_delay{5};

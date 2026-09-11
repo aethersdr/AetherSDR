@@ -1266,6 +1266,28 @@ void MainWindow::wireRadioModel()
     }
 
     // TX/RX transition → audio source switching
+    connect(&m_radioModel.transmitModel(), &TransmitModel::pttReleaseCancelled,
+            this, [this] {
+#ifdef HAVE_RADE
+        ++m_radeEooRequestId;
+        if (m_radeFallbackReleaseFence) {
+            m_radeFallbackReleaseFence->store(false, std::memory_order_release);
+        }
+        m_radePttRelease = {};
+        m_radeEooPending = false;
+        m_radeTxActive = false;
+        if (m_radeEngine) {
+            QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine] {
+                engine->resetTx();
+            }, Qt::QueuedConnection);
+        }
+#endif
+        // Cancellation must not wait for EOO, even when optimistic MOX was
+        // already false and neither of the state-edge handlers below fires.
+        if (m_audio) {
+            m_audio->setTransmitting(false);
+        }
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             this, [this](bool tx) {
         // Keep TX audio source strictly aligned with the local MOX edge for all
@@ -1306,7 +1328,8 @@ void MainWindow::wireRadioModel()
                 // when this fires (RadioModel emits it synchronously with moxChanged).
                 // Suppress now; eooFinished posts setTransmitting(false) to the
                 // AudioEngine queue after the EOO packets.
-                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
+                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()
+                    && m_radeEooPending && m_radePttRelease.current()) {
                     qCDebug(lcRade) << "MainWindow: txAudioGateChanged(false) suppressed — RADE EOO pending";
                 } else {
                     m_audio->setTransmitting(false);

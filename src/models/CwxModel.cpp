@@ -99,7 +99,17 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
     return segs;
 }
 
-void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
+CwxModel::TransmissionPermit CwxModel::admitTransmission()
+{
+    const TransmissionPermit permit = m_transmissionAdmission ? m_transmissionAdmission() : TransmissionPermit{};
+    if (m_transmissionAdmission && (!permit || !permit())) {
+        return {};
+    }
+    const int epoch = m_drainEpoch;
+    return [this, permit, epoch] { return epoch == m_drainEpoch && (!permit || permit()); };
+}
+
+void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit)
 {
     // Find last segment with non-empty text — that block's cwx send goes via
     // replyCommandReady so RadioModel can capture the radio_index and detect
@@ -111,11 +121,17 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
 
     int cmdWpm = m_speed;
     for (int i = 0; i < segs.size(); ++i) {
+        if (!permit()) {
+            return;
+        }
         const SpeedSegment& seg = segs[i];
         if (seg.wpm != cmdWpm) {
             emit commandReady(QString("cwx wpm %1").arg(seg.wpm));
             ++m_pendingWpmEchoes;   // swallow this transient's echo (#272)
             cmdWpm = seg.wpm;
+        }
+        if (!permit()) {
+            return;
         }
         QString encoded = seg.text;
         encoded.replace(' ', QChar(0x7f));
@@ -130,11 +146,14 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
             else
                 emit commandReady(cmd);
         }
+        if (!permit()) {
+            return;
+        }
         if (!seg.text.isEmpty())
             emit transmissionRequested(seg.text, seg.wpm);
     }
     // Restore authoritative WPM if transient changes were made
-    if (cmdWpm != m_speed) {
+    if (permit() && cmdWpm != m_speed) {
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
         ++m_pendingWpmEchoes;   // swallow the restore's echo too (#272)
     }
@@ -145,16 +164,24 @@ void CwxModel::send(const QString& text)
     if (text.isEmpty()) {
         return;
     }
+    const TransmissionPermit permit = admitTransmission();
+    if (!permit) {
+        return;
+    }
     if (!m_speedModifiersEnabled) {
         emit transmissionRequested(text, m_speed);
         return;
     }
-    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
+    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep), permit);
 }
 
 void CwxModel::sendChar(const QString& ch)
 {
     if (ch.isEmpty()) return;
+    const TransmissionPermit permit = admitTransmission();
+    if (!permit) {
+        return;
+    }
     QString encoded = ch;
     encoded.replace(' ', QChar(0x7f));
     // Live-mode chars go via the reply path (not fire-and-forget commandReady)
@@ -164,12 +191,18 @@ void CwxModel::sendChar(const QString& ch)
     emit replyCommandReady(
         QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++),
         m_drainEpoch, ch.length());
-    emit transmissionRequested(ch, m_speed);
+    if (permit()) {
+        emit transmissionRequested(ch, m_speed);
+    }
 }
 
 void CwxModel::sendMacro(int idx)
 {
     if (idx < 1 || idx > 12) return;
+    const TransmissionPermit permit = admitTransmission();
+    if (!permit) {
+        return;
+    }
     const QString text = m_macros[idx - 1];
     if (text.isEmpty()) {
         // Local copy not yet synced (the macroN= status is still pending in the
@@ -188,7 +221,7 @@ void CwxModel::sendMacro(int idx)
     // single cwx send identical in effect to the radio-side expansion, but
     // the unified path ensures + / - prefixes are never forwarded to the
     // radio where they would be misread as prosigns (AR / hyphen).
-    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
+    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep), permit);
 }
 
 void CwxModel::saveMacro(int idx, const QString& text)

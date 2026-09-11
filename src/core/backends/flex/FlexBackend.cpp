@@ -466,6 +466,25 @@ void FlexBackend::setKeying(bool key)
     send(QStringLiteral("xmit %1").arg(key ? 1 : 0));
 }
 
+void FlexBackend::setTune(bool on, int tunePowerPercent)
+{
+    // FlexLib 4.2.18 Radio.TXTune. Power is a separate radio setting; do not
+    // re-send it here. Host-modulating backends need it on this same verb.
+    Q_UNUSED(tunePowerPercent);
+    send(QStringLiteral("transmit tune %1").arg(on ? 1 : 0));
+}
+
+void FlexBackend::setAtu(bool start)
+{
+    // FlexLib 4.2.18 Radio.ATUTuneStart / ATUTuneBypass.
+    send(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"));
+}
+
+void FlexBackend::abortCwText()
+{
+    send(QStringLiteral("cwx clear"));
+}
+
 void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
