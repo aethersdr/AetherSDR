@@ -45,13 +45,27 @@ Why this shape earns its cost: each audit gets a small, single-purpose
 context instead of position 400 of 640 lines; the scope table and the
 "attacks survived" list are schema-required, so they cannot be skipped; and
 no finding reaches the author until an agent with no stake in it has tried
-to refute it. Expect roughly 8 agents plus 2 per raised finding; the
-verifiers are what make a clean verdict trustworthy, so do not trim them.
+to refute it — including findings the drive node discovers, and including
+the degraded case where a verifier never returns (the finding is dropped,
+not promoted). The `reproduce` lens alone decides whether a finding exists;
+the `calibrate` lens can only adjust its severity.
 
 Every node reads [`nodes/stance.md`](nodes/stance.md) and then its own file
 under [`nodes/`](nodes/). Those files are the rules; this file is the
-control flow. Edit the rules there, the graph in
-[`workflow.js`](workflow.js), and keep this file about what you do inline.
+control flow; the graph is [`workflow.js`](workflow.js).
+
+**Rule source of truth: [`/pr-review`](../pr-review/SKILL.md).** The
+`nodes/*.md` files are a per-node mirror of its sections, split so each
+agent gets only its own rules. When a rule changes in `pr-review`, re-sync
+the matching node file; do not let a rule be corrected here and not there.
+The verifier lens contract in `nodes/verify.md` and the build/drive node
+splits are graph-specific and have no `pr-review` counterpart.
+
+**Agent budget.** Expect roughly 8 agents plus 2 per raised finding (the
+two verifier lenses). A finding-heavy PR — ten findings is ~28 agents —
+exceeds the default workflow-size guideline of about 15; that is expected
+for this skill and not a reason to trim the verifiers, but say so to the
+operator if the count runs high.
 
 **If the `Workflow` tool is not available in this session** (Codex, Copilot,
 a remote session without it), do not emulate the graph by hand — invoke

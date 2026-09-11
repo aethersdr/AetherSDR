@@ -11,9 +11,11 @@ the PR body, and the linked-issue numbers the coordinator found.
 - Build a short requirements list from the issue (symptom, repro, acceptance
   expectations, explicit non-goals), then map each requirement to the diff:
   which hunk addresses it? Return that mapping in `requirementMap`. Flag
-  requirements the diff does not touch as findings; note diff changes that no
-  requirement explains in `unexplained` (the scope node will rule on them —
-  do not duplicate its verdicts, just hand it the list).
+  requirements the diff does not touch as findings; list diff changes that no
+  requirement explains in `unexplained` for the synthesis node, which
+  reconciles that list against the scope node's table (the scope node runs
+  in parallel with you and does not see your output — do not rule on scope
+  yourself, and do not assume it will see this list).
 - Coverage: does admissible coverage fail without the fix and pass with it?
   Prefer the smallest socket-free behavioral seam. Missing coverage is a
   blocker only when the reported behavior has a deterministic,

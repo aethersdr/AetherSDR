@@ -20,6 +20,10 @@ export const meta = {
 
 const A = args
 if (!A || !A.pr) throw new Error('graph-review: args.pr is required')
+for (const k of ['title', 'author', 'body', 'headSha', 'baseSha', 'linkedIssues', 'files', 'commits', 'headWorktree', 'tmpDir', 'scratchDir', 'preflight', 'ciSummary', 'skillDir']) {
+  if (A[k] === undefined || A[k] === null) throw new Error(`graph-review: args.${k} is required (see SKILL.md step 2)`)
+}
+if (!Array.isArray(A.preflight.socketTargets)) throw new Error('graph-review: args.preflight.socketTargets must be an array')
 const NODES = `${A.skillDir}/nodes`
 
 const SEV = { enum: ['blocker', 'maintainer-decision', 'nit'] }
@@ -37,7 +41,7 @@ const FINDING = {
     fix: { type: 'string' },
     needsRuntime: { type: 'boolean' },
   },
-  required: ['title', 'severity', 'category', 'file', 'line', 'inDiff', 'evidence', 'fix', 'needsRuntime'],
+  required: ['title', 'severity', 'category', 'file', 'line', 'inDiff', 'evidence', 'ruleCited', 'fix', 'needsRuntime'],
 }
 const CLAIM = {
   type: 'object',
@@ -63,6 +67,8 @@ const AUDIT = {
     checklistHolds: { type: 'string' },
     requirementMap: { type: 'array', items: { type: 'object', properties: { requirement: { type: 'string' }, hunk: { type: 'string' }, addressed: { type: 'boolean' } }, required: ['requirement', 'hunk', 'addressed'] } },
     unexplained: { type: 'array', items: { type: 'string' } },
+    automatedPassRan: { type: 'boolean' },
+    automatedPassNote: { type: 'string' },
     classifications: { type: 'array', items: { type: 'object', properties: { change: { type: 'string' }, kind: { enum: ['fix', 'preference'] }, authority: { type: 'string' } }, required: ['change', 'kind', 'authority'] } },
   },
   required: ['summary', 'findings', 'runtimeClaims', 'attacksSurvived'],
@@ -130,6 +136,8 @@ PR-head worktree (READ-ONLY for you): ${A.headWorktree}
 ${A.baseWorktree ? 'Merge-base worktree (READ-ONLY for you): ' + A.baseWorktree : ''}
 Preflight: ${A.preflight.socketTestFound ? 'SOCKET TEST FOUND — targets ' + A.preflight.socketTargets.join(', ') + ' must not be built or run' : 'no socket-owning test in the PR'}
 CI: ${A.ciSummary}
+Prior review-bot comments (LEADS ONLY — verify each yourself, keep only what you confirm, attribute it as "automated pass found …", drop what you can refute):
+${A.botComments || 'none'}
 Files:
 ${A.files.join('\n')}
 Commits (author date):
@@ -159,17 +167,25 @@ const DIMENSIONS = ['issue-fit', 'scope', 'governance', 'quality']
 let findingSeq = 0
 const tag = (f, origin) => ({ ...f, id: `F${++findingSeq}`, origin })
 
+// Two lenses, asymmetric by design (nodes/verify.md):
+//   reproduce — decides whether the defect EXISTS; its refutation drops the finding.
+//   calibrate — decides severity and rule-citation; it may only raise/lower severity.
+// Fail closed: a finding whose reproduce lens never returned is NOT verified and is dropped.
 const verifyOne = async (f) => {
   const lenses = ['reproduce', 'calibrate']
   const votes = await parallel(lenses.map(lens => () => agent(
     `${CONTEXT}\nYou are a **verify** node with the **${lens}** lens. Read ${NODES}/verify.md.\n` +
     `The finding to refute (produced by the ${f.origin} node):\n${JSON.stringify(f, null, 2)}\n` +
-    `Default to refuted=true if the evidence is thin. Return the VERDICT structure.`,
-    { label: `verify:${lens}:${f.id}`, phase: 'Verify', schema: VERDICT })))
+    `Return the VERDICT structure.`,
+    { label: `verify:${lens}:${f.id}`, phase: 'Verify', schema: VERDICT }).then(v => (v ? { ...v, lens } : null))))
   const vs = votes.filter(Boolean)
-  const refuted = vs.some(v => v.refuted)
-  const adj = vs.map(v => v.severityAdjusted).find(Boolean)
-  return { ...f, refuted, severity: refuted ? f.severity : (adj || f.severity), verifierNotes: vs.map((v, i) => `${lenses[i]}: ${v.reason}${v.evidence ? ' — ' + v.evidence : ''}`) }
+  const repro = vs.find(v => v.lens === 'reproduce')
+  const calib = vs.find(v => v.lens === 'calibrate')
+  const refuted = repro ? repro.refuted : true
+  const severity = refuted ? f.severity : ((calib && calib.severityAdjusted) || f.severity)
+  const notes = vs.map(v => `${v.lens}: ${v.reason}${v.evidence ? ' — ' + v.evidence : ''}`)
+  if (!repro) notes.push('reproduce lens failed to return — finding NOT verified; dropped rather than reported unverified')
+  return { ...f, refuted, severity, verifiers: vs.length, verifierNotes: notes }
 }
 
 const auditChain = pipeline(
@@ -257,7 +273,12 @@ for (const f of confirmed) {
 }
 const finalConfirmed = confirmed.filter(f => !f.refuted)
 const driveRefuted = confirmed.filter(f => f.refuted)
-const newFromDrive = (drive && drive.newFindings || []).map(f => tag(f, 'drive'))
+// Drive-node discoveries get the same two-lens refutation as everything else.
+const driveVerified = (await parallel(((drive && drive.newFindings) || [])
+  .map(f => tag(f, 'drive'))
+  .map(f => () => verifyOne(f)))).filter(Boolean)
+const newFromDrive = driveVerified.filter(f => !f.refuted)
+const driveNewRefuted = driveVerified.filter(f => f.refuted)
 
 // ---------------------------------------------------------------------------
 // Phase 4: synthesis.
@@ -265,16 +286,19 @@ const newFromDrive = (drive && drive.newFindings || []).map(f => tag(f, 'drive')
 phase('Synthesize')
 const scopeAudit = audits.find(a => a.dim === 'scope')
 const issueAudit = audits.find(a => a.dim === 'issue-fit')
+const qualityAudit = audits.find(a => a.dim === 'quality')
 const synth = await agent(
   `${CONTEXT}\nYou are the **synthesize** node. Read ${NODES}/synthesize.md.\n` +
   `Preflight notice (include verbatim if non-empty): ${A.preflight.notice || ''}\n\n` +
   `Issue-fit verdict: ${issueAudit ? issueAudit.audit.verdict : 'n/a'}\n${issueAudit ? issueAudit.audit.summary : ''}\n` +
-  `Requirement map:\n${JSON.stringify(issueAudit && issueAudit.audit.requirementMap || [], null, 2)}\n\n` +
+  `Requirement map:\n${JSON.stringify(issueAudit && issueAudit.audit.requirementMap || [], null, 2)}\n` +
+  `Diff content issue-fit could not explain (reconcile against the scope table):\n${JSON.stringify(issueAudit && issueAudit.audit.unexplained || [], null, 2)}\n\n` +
+  `Automated code-review pass: ${qualityAudit && qualityAudit.audit.automatedPassRan ? 'RAN' : 'DID NOT RUN — say so; never imply it ran'}${qualityAudit && qualityAudit.audit.automatedPassNote ? ' — ' + qualityAudit.audit.automatedPassNote : ''}\n\n` +
   `Scope table:\n${JSON.stringify(scopeAudit && scopeAudit.audit.scopeTable || [], null, 2)}\n` +
   `Body checklist holds: ${scopeAudit && scopeAudit.audit.checklistHolds || 'not assessed'}\n` +
   `Preference classifications:\n${JSON.stringify(scopeAudit && scopeAudit.audit.classifications || [], null, 2)}\n\n` +
   `CONFIRMED findings (${finalConfirmed.length + newFromDrive.length}):\n${JSON.stringify([...finalConfirmed, ...newFromDrive], null, 2)}\n\n` +
-  `REFUTED findings — do NOT report as findings; summarize one line each under "What I tried to break" (${refuted.length + driveRefuted.length}):\n${JSON.stringify([...refuted, ...driveRefuted].map(f => ({ id: f.id, title: f.title, origin: f.origin, verifierNotes: f.verifierNotes })), null, 2)}\n\n` +
+  `REFUTED findings — do NOT report as findings; summarize one line each under "What I tried to break" (${refuted.length + driveRefuted.length + driveNewRefuted.length}):\n${JSON.stringify([...refuted, ...driveRefuted, ...driveNewRefuted].map(f => ({ id: f.id, title: f.title, origin: f.origin, verifierNotes: f.verifierNotes })), null, 2)}\n\n` +
   `Attacks survived (union):\n${JSON.stringify(audits.flatMap(a => a.audit.attacksSurvived || []), null, 2)}\n\n` +
   `Build:\n${JSON.stringify(build, null, 2)}\n` +
   `Inversions requested but not run: ${JSON.stringify(missedInversions)}\n\n` +
@@ -285,9 +309,10 @@ const synth = await agent(
 return {
   synth,
   stats: {
-    findingsRaised: allFindings.length + newFromDrive.length,
+    findingsRaised: allFindings.length + driveVerified.length,
     confirmed: finalConfirmed.length + newFromDrive.length,
-    refuted: refuted.length + driveRefuted.length,
+    refuted: refuted.length + driveRefuted.length + driveNewRefuted.length,
+    automatedPassRan: !!(qualityAudit && qualityAudit.audit.automatedPassRan),
     runtimeClaims: dedupClaims.length,
     drove: !!(drive && drive.drove),
     buildOk: !!(build && build.ok),

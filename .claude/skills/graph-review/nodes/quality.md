@@ -24,9 +24,16 @@ the test and the mutation in `testsToInvert` for the build node. A
 regression test that still passes with the fix reverted is a `blocker` in
 its own right — it pins nothing and will read as coverage forever after.
 
-If a `code-review` skill or bot comment exists on the PR, treat its output
-as leads: verify each yourself and keep only what you confirmed, attributed
-("automated pass found …" in `evidence`). Drop anything you can refute.
+**Automated pass.** If a `code-review` skill is available and
+model-invocable, run it at medium effort on this PR first and set
+`automatedPassRan: true`. Treat its output — and any review-bot comment the
+context block carries — as leads: verify each yourself and keep only what you
+confirmed, attributed ("automated pass found …" in `evidence`). Drop anything
+you can refute. If the skill is not invocable (some builds mark it
+`disable-model-invocation`, and the call fails), set `automatedPassRan:
+false` with the reason in `automatedPassNote` and do the equivalent pass
+yourself. Never imply the automated pass ran when it did not; the synthesis
+node states which it was.
 
 Prefer the claim the PR most depends on and would most like you to take on
 faith — that is the one to push hardest.
