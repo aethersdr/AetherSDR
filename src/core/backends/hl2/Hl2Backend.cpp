@@ -20,6 +20,8 @@
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
+#include "core/backends/hl2/Hl2FilterBoard.h"
+#include "core/backends/hl2/Hl2FilterBoardSettings.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -1546,6 +1548,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasSelectableMicInputs = false;
     c.hasDownwardExpander = false;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
+
+    // Unconditional, like the other HL2 hardware-presence flags above: each
+    // control is inert with nothing attached/listening, so there is no
+    // "do you have this board" precondition to check first.
+    c.hasJ16FilterBoard = true;
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};
@@ -4019,6 +4026,26 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
+RadioSettingsScope Hl2Backend::hl2SettingsScope() const
+{
+    return RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial);
+}
+
+bool Hl2Backend::hl2SettingsScopeForWrite(RadioSettingsScope& outScope) const
+{
+    // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope
+    // falls back exact-radio -> family-wide on read, so a row written with no
+    // identity is silently adopted by every HL2 that has none of its own —
+    // the same contamination applyFreqCalPpb() already guards against.
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting a settings change —"
+                         << "no radio identity yet; applying for this session only";
+        return false;
+    }
+    outScope = hl2SettingsScope();
+    return true;
+}
+
 namespace {
 
 // WDSP's AGC mode integer as the string the bridge and the operator use, so a
@@ -4189,6 +4216,68 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("effectiveClockHz"),
                      Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
                     {QStringLiteral("scale"), m_freqCalScale},
+                });
+            }
+            return;
+        }
+        // "Filter Board" page (ticket #12): manual J16 relay override.
+        if (verb == QLatin1String("filterboard.setManualEnabled")) {
+            const bool on = arg.toBool();
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope)) {
+                // Enabling with nothing stored yet would apply an EMPTY table —
+                // every relay released — while the page's grid shows the seeded
+                // defaults it was built from: the wire and the display would
+                // disagree the moment this switch flips. Seed-and-store first so
+                // what gets applied always matches what the operator is looking
+                // at (#9's HERMES-§17 caution: a control must never show one
+                // state while the wire holds another).
+                if (on && Hl2FilterBoardSettings::table(scope).isEmpty())
+                    Hl2FilterBoardSettings::setTable(scope, hl2::seedManualFilterTableFromAutomatic());
+                Hl2FilterBoardSettings::setManualEnabled(scope, on);
+            }
+            applyBandFilter("filter board: manual mode toggled");
+            return;
+        }
+        if (verb == QLatin1String("filterboard.setBand")) {
+            // {band, rx, tx} — one band's independent RX/TX masks.
+            const QVariantMap m = arg.toMap();
+            const QString band = m.value(QStringLiteral("band")).toString();
+            RadioSettingsScope scope;
+            if (!band.isEmpty() && hl2SettingsScopeForWrite(scope)) {
+                hl2::ManualFilterTable table = Hl2FilterBoardSettings::table(scope);
+                table[band] = hl2::ManualFilterBand{
+                    static_cast<std::uint8_t>(m.value(QStringLiteral("rx")).toInt() & 0x7F),
+                    static_cast<std::uint8_t>(m.value(QStringLiteral("tx")).toInt() & 0x7F)};
+                Hl2FilterBoardSettings::setTable(scope, table);
+                applyBandFilter("filter board: manual band edited");
+            }
+            return;
+        }
+        if (verb == QLatin1String("filterboard.restoreDefaults")) {
+            RadioSettingsScope scope;
+            if (hl2SettingsScopeForWrite(scope))
+                Hl2FilterBoardSettings::setTable(scope, hl2::seedManualFilterTableFromAutomatic());
+            applyBandFilter("filter board: restored N2ADR defaults");
+            if (requestId != 0)
+                emit extensionResult(requestId, QVariant(true));
+            return;
+        }
+        if (verb == QLatin1String("filterboard.get")) {
+            if (requestId != 0) {
+                hl2::ManualFilterTable table = Hl2FilterBoardSettings::table(hl2SettingsScope());
+                if (table.isEmpty())
+                    table = hl2::seedManualFilterTableFromAutomatic();
+                QVariantMap bands;
+                for (auto it = table.constBegin(); it != table.constEnd(); ++it) {
+                    bands[it.key()] = QVariantMap{
+                        {QStringLiteral("rx"), static_cast<int>(it->rxMask)},
+                        {QStringLiteral("tx"), static_cast<int>(it->txMask)},
+                    };
+                }
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("manualEnabled"), Hl2FilterBoardSettings::manualEnabled(hl2SettingsScope())},
+                    {QStringLiteral("bands"), bands},
                 });
             }
             return;
@@ -5574,10 +5663,31 @@ void Hl2Backend::applyBandFilter(const char* reason)
     //
     // TRANSMIT is not affected by the bypass decision, because transmit is what
     // the low-pass is legally there for. See the TX-receiver override below.
+    //
+    // MANUAL OVERRIDE (ticket #12): when the operator has opted into it, every
+    // lookup below goes through the manual per-band/per-direction table
+    // instead of ocFilterByteForHz() — same call shape, same bypass/override
+    // policy, just a different source for "what filter does this frequency
+    // want". Automatic stays the unconditional default; nothing here runs
+    // unless Hl2FilterBoardSettings::manualEnabled() is true.
+    const bool manual = Hl2FilterBoardSettings::manualEnabled(hl2SettingsScope());
+    const hl2::ManualFilterTable manualTable = manual ? Hl2FilterBoardSettings::table(hl2SettingsScope())
+                                                       : hl2::ManualFilterTable{};
+    auto ocByteFor = [manual, &manualTable](double hz, hl2::FilterDirection dir) -> std::uint8_t {
+        // bandKeyForHz() is Hl2Bands.h's TX-drive/LNA-memory vocabulary, NOT
+        // the Filter Board's own (kFilterBoardBands in Hl2FilterBoard.h) —
+        // this works today only because the ten HF band keys both tables use
+        // happen to agree. If either table's edges or key set ever diverges
+        // from the other, this lookup needs its own frequency-to-band-key
+        // function instead of borrowing this one.
+        return manual ? hl2::manualFilterByte(manualTable, hl2::bandKeyForHz(hz), dir)
+                       : ocFilterByteForHz(hz);
+    };
+
     int oc = -1;
     bool spanned = false;
     for (std::size_t i = 0; i < m_rx.size(); ++i) {
-        const int want = static_cast<int>(ocFilterByteForHz(m_rx[i].sliceFreqHz));
+        const int want = static_cast<int>(ocByteFor(m_rx[i].sliceFreqHz, hl2::FilterDirection::Receive));
         if (oc < 0)
             oc = want;
         else if (want != oc)
@@ -5593,7 +5703,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
         // receive-side convenience justifies that.
         if (m_keyed || m_tuning) {
             const Receiver* txRx = rx(m_txDdc);
-            oc = txRx ? static_cast<int>(ocFilterByteForHz(txRx->sliceFreqHz))
+            oc = txRx ? static_cast<int>(ocByteFor(txRx->sliceFreqHz, hl2::FilterDirection::Transmit))
                       : static_cast<int>(kOcNone);
         } else {
             oc = static_cast<int>(kOcNone);

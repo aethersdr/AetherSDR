@@ -570,6 +570,22 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# Manual J16 filter-board table — pure encode/lookup, Qt::Core only (no
+# sockets, no aethercore, no other Qt module).
+add_executable(hl2_filter_board_test
+    tests/hl2_filter_board_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_filter_board_test PRIVATE src)
+target_link_libraries(hl2_filter_board_test PRIVATE Qt6::Core)
+add_test(NAME hl2_filter_board_test COMMAND hl2_filter_board_test)
+
+# Radio-scoped settings persistence for Hl2FilterBoardSettings
+# (RadioSettingsScope-backed, not flat AppSettings).
+add_executable(hl2_filter_board_settings_test tests/hl2_filter_board_settings_test.cpp)
+target_include_directories(hl2_filter_board_settings_test PRIVATE src tests)
+target_link_libraries(hl2_filter_board_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_filter_board_settings_test COMMAND hl2_filter_board_settings_test)
+
 # HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
 add_executable(hl2_io_board_policy_test
     tests/hl2_io_board_policy_test.cpp

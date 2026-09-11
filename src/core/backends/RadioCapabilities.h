@@ -861,6 +861,13 @@ struct RadioCapabilities {
     bool hasGpsHardware = false;
     bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
+    // The radio has a companion J16 filter-relay board it can drive (seven
+    // open-collector outputs, kOc* in MetisProtocol.h). True unconditionally
+    // for the HL2: the writes are inert with nothing listening on the I2C bus
+    // when no board is attached, the same reasoning that already makes the
+    // automatic band-filter path safe to run unconditionally.
+    bool hasJ16FilterBoard = false;
+
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile
     // fields here. Example: {"flex": {"multiFlex": true, "guiClientId": "…"}}.

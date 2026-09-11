@@ -19,6 +19,10 @@
 #include <utility>
 #include <vector>
 
+namespace AetherSDR {
+class RadioSettingsScope;
+}
+
 namespace AetherSDR::hl2 {
 
 class MetisClient;
@@ -298,6 +302,18 @@ private:
     // Clamp, persist, adopt, re-push — the single path for a calibration change
     // whoever asked for it (setup dialog, automation bridge, connect).
     void applyFreqCalPpb(int ppb, bool persist);
+
+    // Radio-scoped feature-document identity for this connected HL2
+    // (AGENTS.md "Radio-Scoped Feature Documents"), used by
+    // Hl2FilterBoardSettings. Safe to use for READS even before
+    // m_radioSerial is known — an empty radioId reads the family-wide
+    // default row, which is the correct fallback.
+    RadioSettingsScope hl2SettingsScope() const;
+    // The same scope, but refuses (logs and returns false) when
+    // m_radioSerial is still empty — a WRITE must never land in the
+    // family-wide row by accident (AGENTS.md: "guard against writing one by
+    // accident when the serial isn't known yet"), unlike a read's fallback.
+    bool hl2SettingsScopeForWrite(RadioSettingsScope& outScope) const;
 
     // The operator's calibration for THIS radio and the derived scale applied to
     // every commanded frequency. 0 / 1.0 is "uncalibrated" — the behaviour every

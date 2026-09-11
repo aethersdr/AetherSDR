@@ -11,6 +11,8 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
+#include "core/backends/hl2/Hl2FilterBoard.h" // manual J16 filter-board table
+#include "core/backends/hl2/Hl2FilterBoardSettings.h" // "FilterBoard" root key
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -827,6 +829,21 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
     addPage(hardwareCategory, QStringLiteral("Peripherals"),
         QStringLiteral("controllers amplifier tuner antenna genius pgxl tgxl manual ip"), [this] { return buildPeripheralsTab(); });
+
+    // Filter Board manual J16 relay override (issue #9). Gated on its own
+    // capability boolean, following the Calibration/APD precedent above —
+    // never a family check — and hidden immediately at construction since a
+    // reconnect to a non-HL2 radio must not leave an HL2-only page visible.
+    QTreeWidgetItem* filterBoardItem = addPage(hardwareCategory, QStringLiteral("Filter Board"),
+        QStringLiteral("j16 relay band filter manual open collector n2adr"),
+        [this] { return buildFilterBoardTab(); });
+    m_filterBoardPageIndex = m_pageIndexes.value(QStringLiteral("Filter Board"));
+    filterBoardItem->setHidden(!m_model->backendCapabilities().hasJ16FilterBoard);
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this, filterBoardItem](bool, const RadioCapabilities&) {
+        filterBoardItem->setHidden(!m_model->backendCapabilities().hasJ16FilterBoard);
+    });
+
     addPage(onlineCategory, QStringLiteral("Appearance & Behavior"),
         QStringLiteral("themes colors display font vision contrast click wheel ui enhancements"), [this] { return buildUiEnhancementsTab(); });
     addPage(onlineCategory, QStringLiteral("SmartLink"),
@@ -889,13 +906,15 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
+                const bool filterBoardRow = item == m_pageItems.value(m_filterBoardPageIndex);
                 const bool gated =
                     (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
-                    || (droopRow && !droopCalibrationAvailable(m_model->backend()));
+                    || (droopRow && !droopCalibrationAvailable(m_model->backend()))
+                    || (filterBoardRow && !m_model->backendCapabilities().hasJ16FilterBoard);
                 if (!gated) {
                     item->setHidden(!matches);
                 }
@@ -9577,6 +9596,143 @@ QWidget* RadioSetupDialog::buildQrzTab()
 
     root->addWidget(cache);
     root->addStretch();
+    return page;
+}
+
+
+QWidget* RadioSetupDialog::buildFilterBoardTab()
+{
+    using AetherSDR::hl2::ManualFilterBand;
+    using AetherSDR::hl2::ManualFilterTable;
+    using AetherSDR::hl2::kFilterBoardBands;
+    using AetherSDR::hl2::kFilterBoardBandCount;
+
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto apply = [this](const QString& verb, const QVariant& value) {
+        m_model->invokeBackendExtension(QStringLiteral("hl2"), verb, 0, value);
+    };
+
+    // ---- manual-mode toggle + restore-defaults ----
+    auto* topRow = new QHBoxLayout;
+    auto* manualCheck = new QCheckBox(QStringLiteral("Enable manual filter control"));
+    theme.applyStyleSheet(manualCheck,
+        QStringLiteral("QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }")
+        + kCheckBoxIndicator);
+    manualCheck->setChecked(Hl2FilterBoardSettings::manualEnabled(m_model->settingsScope()));
+    manualCheck->setAccessibleName(QStringLiteral("Enable manual filter control"));
+    manualCheck->setAccessibleDescription(
+        QStringLiteral("Hand-configure the J16 filter board instead of switching it automatically by frequency"));
+    topRow->addWidget(manualCheck);
+    topRow->addStretch();
+    auto* restoreBtn = new QPushButton(QStringLiteral("Restore N2ADR Defaults"));
+    restoreBtn->setAccessibleName(QStringLiteral("Restore N2ADR defaults"));
+    theme.applyStyleSheet(restoreBtn,
+        "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.primary}}; padding: 4px 12px; }"
+        "QPushButton:hover { background: {{color.background.2}}; }");
+    topRow->addWidget(restoreBtn);
+    vbox->addLayout(topRow);
+
+    // ---- the grid: one row per band, 7 RX + 7 TX pin checkboxes ----
+    auto* table = new QTableWidget(kFilterBoardBandCount, 15);
+    QStringList headers;
+    headers << QStringLiteral("Band");
+    for (int i = 1; i <= 7; ++i) headers << QStringLiteral("RX%1").arg(i);
+    for (int i = 1; i <= 7; ++i) headers << QStringLiteral("TX%1").arg(i);
+    table->setHorizontalHeaderLabels(headers);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    theme.applyStyleSheet(table,
+        "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
+        "border: 1px solid {{color.background.1}}; gridline-color: {{color.background.1}}; }"
+        "QHeaderView::section { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        "border: none; padding: 4px; }");
+
+    // Each cell's checkbox toggled callback re-reads every pin in its row and
+    // sends the whole band's {rx, tx} pair — matching Hl2FilterBoardSettings'
+    // whole-band write shape (Principle XIV), never a lone bit.
+    QVector<QVector<QCheckBox*>> rxBoxes(kFilterBoardBandCount), txBoxes(kFilterBoardBandCount);
+
+    ManualFilterTable initial = Hl2FilterBoardSettings::table(m_model->settingsScope());
+    if (initial.isEmpty())
+        initial = AetherSDR::hl2::seedManualFilterTableFromAutomatic();
+
+    for (int row = 0; row < kFilterBoardBandCount; ++row) {
+        const QString band = QString::fromLatin1(kFilterBoardBands[row]);
+        auto* bandItem = new QTableWidgetItem(band);
+        bandItem->setFlags(bandItem->flags() & ~Qt::ItemIsEditable);
+        table->setItem(row, 0, bandItem);
+
+        const ManualFilterBand entry = initial.value(band);
+        auto sendRow = [this, apply, table, band, row]() {
+            int rx = 0, tx = 0;
+            for (int pin = 0; pin < 7; ++pin) {
+                if (auto* cb = qobject_cast<QCheckBox*>(table->cellWidget(row, 1 + pin)))
+                    if (cb->isChecked()) rx |= (1 << pin);
+                if (auto* cb = qobject_cast<QCheckBox*>(table->cellWidget(row, 8 + pin)))
+                    if (cb->isChecked()) tx |= (1 << pin);
+            }
+            apply(QStringLiteral("filterboard.setBand"), QVariant(QVariantMap{
+                {QStringLiteral("band"), band},
+                {QStringLiteral("rx"), rx},
+                {QStringLiteral("tx"), tx},
+            }));
+        };
+
+        for (int pin = 0; pin < 7; ++pin) {
+            auto* rxCb = new QCheckBox;
+            theme.applyStyleSheet(rxCb, kCheckBoxIndicator);
+            rxCb->setChecked((entry.rxMask & (1 << pin)) != 0);
+            rxCb->setAccessibleName(QStringLiteral("%1 receive pin %2").arg(band).arg(pin + 1));
+            connect(rxCb, &QCheckBox::toggled, this, [sendRow](bool) { sendRow(); });
+            table->setCellWidget(row, 1 + pin, rxCb);
+            rxBoxes[row].append(rxCb);
+
+            auto* txCb = new QCheckBox;
+            theme.applyStyleSheet(txCb, kCheckBoxIndicator);
+            txCb->setChecked((entry.txMask & (1 << pin)) != 0);
+            txCb->setAccessibleName(QStringLiteral("%1 transmit pin %2").arg(band).arg(pin + 1));
+            connect(txCb, &QCheckBox::toggled, this, [sendRow](bool) { sendRow(); });
+            table->setCellWidget(row, 8 + pin, txCb);
+            txBoxes[row].append(txCb);
+        }
+    }
+
+    auto setGridEnabled = [table](bool enabled) {
+        for (int row = 0; row < kFilterBoardBandCount; ++row)
+            for (int col = 1; col < 15; ++col)
+                if (auto* w = table->cellWidget(row, col))
+                    w->setEnabled(enabled);
+    };
+    setGridEnabled(manualCheck->isChecked());
+
+    connect(manualCheck, &QCheckBox::toggled, this, [apply, setGridEnabled](bool on) {
+        setGridEnabled(on);
+        apply(QStringLiteral("filterboard.setManualEnabled"), QVariant(on));
+    });
+    connect(restoreBtn, &QPushButton::clicked, this,
+            [this, table, rxBoxes, txBoxes]() {
+        const auto seeded = AetherSDR::hl2::seedManualFilterTableFromAutomatic();
+        for (int row = 0; row < kFilterBoardBandCount; ++row) {
+            const QString band = QString::fromLatin1(kFilterBoardBands[row]);
+            const auto entry = seeded.value(band);
+            for (int pin = 0; pin < 7; ++pin) {
+                QSignalBlocker rxBlock(rxBoxes[row][pin]);
+                QSignalBlocker txBlock(txBoxes[row][pin]);
+                rxBoxes[row][pin]->setChecked((entry.rxMask & (1 << pin)) != 0);
+                txBoxes[row][pin]->setChecked((entry.txMask & (1 << pin)) != 0);
+            }
+        }
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+            QStringLiteral("filterboard.restoreDefaults"), 0, QVariant());
+    });
+
+    vbox->addWidget(table, 1);
     return page;
 }
 

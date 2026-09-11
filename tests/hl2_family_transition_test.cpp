@@ -87,6 +87,8 @@ int main(int argc, char** argv)
           "#4449: HL2 host-modulates (PC runs the modulator, no on-radio jacks)");
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
+    check(model.backendCapabilities().hasJ16FilterBoard,
+          "HL2 advertises hasJ16FilterBoard (Filter Board settings page)");
 
     // ── The normalized RX-audio bus ────────────────────────────────────────
     //
@@ -209,6 +211,8 @@ int main(int argc, char** argv)
           "round-trip: Flex regains canReboot after HL2 -> Flex");
     check(model.panStream() != nullptr,
           "round-trip: Flex owns a PanadapterStream again");
+    check(!model.backendCapabilities().hasJ16FilterBoard,
+          "round-trip: the HL2-only Filter Board page does not survive onto a Flex");
     // A host-modulated claim must not survive into a family that DOES need a
     // real dax_tx stream, or the dialog would arm against a stream that was
     // never created and transmit a silent 111.6 s frame.

@@ -1330,5 +1330,17 @@
   "note": "Capability-gated client for the ANAN calibration extension. Uses only IRadioBackend requests and replies; concrete calibration ownership, rate control and DSP stay below the backend seam.",
   "split": "Client protocol adapter only; no vendor implementation dependency.",
   "confidence": "high"
+ },
+ "core/backends/hl2/Hl2FilterBoard.h": {
+  "tag": "mixed(hl2)",
+  "note": "Manual J16 relay-mask table and lookup are generic per-band/per-direction policy; the ten filter-board bands, the kOc* bit layout and seedManualFilterTableFromAutomatic() are HL2/N2ADR-board-specific.",
+  "split": "Core: ManualFilterTable/ManualFilterBand shape and manualFilterByte() lookup. HL2: band vocabulary, kOc* bits, automatic-mapping seed.",
+  "confidence": "high"
+ },
+ "core/backends/hl2/Hl2FilterBoardSettings.h": {
+  "tag": "ui-support",
+  "note": "Radio-scoped client persistence for the Filter Board manual-override page (manual-enabled flag + per-band RX/TX relay table) under a RadioSettingsScope feature document; UI settings plumbing, not radio-owned wire state.",
+  "split": "",
+  "confidence": "high"
  }
 }
