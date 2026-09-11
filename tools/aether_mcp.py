@@ -307,7 +307,7 @@ def _remove_owned_socket(instance):
         pass  # app-owned socket cleanup is best-effort after process exit
 
 
-def _signal_owned_process(process, sig):
+def _signal_owned_process(process, *, force=False):
     """Signal the child's whole session, not just its PID.
 
     The child is launched with start_new_session=True, so it is a session
@@ -315,13 +315,14 @@ def _signal_owned_process(process, sig):
     group; signalling the group reaps them too. Fall back to the single
     process if the group is already gone or on Windows (no POSIX groups)."""
     if sys.platform != "win32":
+        sig = signal.SIGKILL if force else signal.SIGTERM
         try:
             os.killpg(os.getpgid(process.pid), sig)
             return
         except (ProcessLookupError, PermissionError, OSError):
             pass  # group already reaped, or racing exit — fall back below
     try:
-        (process.kill if sig == signal.SIGKILL else process.terminate)()
+        (process.kill if force else process.terminate)()
     except OSError:
         pass
 
@@ -333,11 +334,11 @@ def _stop_owned_app():
         return {"ok": True, "running": False}
     process = instance["process"]
     if process.poll() is None:
-        _signal_owned_process(process, signal.SIGTERM)
+        _signal_owned_process(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _signal_owned_process(process, signal.SIGKILL)
+            _signal_owned_process(process, force=True)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
