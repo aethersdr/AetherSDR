@@ -7,6 +7,7 @@
 #include <QString>
 #include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
+#include "WsjtxDialTracker.h"
 
 namespace AetherSDR {
 
@@ -50,6 +51,7 @@ private:
     void parseMessage(const QByteArray& data);
     void parseStatus(QDataStream& ds);
     void parseDecode(QDataStream& ds);
+    void parseClose(QDataStream& ds);
     QString extractCallsign(const QString& message) const;
 
     QUdpSocket* m_socket{nullptr};
@@ -59,9 +61,10 @@ private:
     quint16     m_port{2237};
     std::atomic<bool> m_listening{false};
 
-    // Track dial frequency from Status messages (type 1)
-    double m_dialFreqHz{0.0};
-    QString m_mode;
+    // Dial frequency from Status messages (type 1), kept PER INSTANCE ID so
+    // two WSJT-X instances sharing this port each place their decodes on
+    // their own band (#3595) — see WsjtxDialTracker.
+    WsjtxDialTracker m_dialTracker;
 };
 
 } // namespace AetherSDR
