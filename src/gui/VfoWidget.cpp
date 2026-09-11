@@ -844,25 +844,28 @@ void VfoWidget::buildUI()
     m_txAntBtn->setStyleSheet(kFlatBtn + "QPushButton { color: #ff4444; }");
     connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
         if (!m_slice) return;
-        const QPointer<VfoWidget> self(this);
-        const QPointer<SliceModel> slice(m_slice);
-        ScopedChildWidget<QMenu> menuOwner(this);
-        QMenu& menu = *menuOwner.get();
+        // Same non-blocking shape as the RX antenna menu above: no nested
+        // event loop, so widget teardown or a slice change while the popup is
+        // open cannot strand a suspended frame (#5566).
+        QPointer<SliceModel> slice = m_slice;
+        QMenu* menu = new QMenu(m_txAntBtn);
+        connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         const QStringList options = txAntennaOptions();
         for (const QString& ant : options) {
-            auto* act = menu.addAction(antennaMenuLabel(ant, options));
+            auto* act = menu->addAction(antennaMenuLabel(ant, options));
             act->setData(ant);
             act->setCheckable(true);
             act->setChecked(ant == m_slice->txAntenna());
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        QAction* selected = menu.exec(
-            m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
-        if (!self || !menuOwner || !slice || self->m_slice != slice.data() || !selected) {
-            return;
-        }
-        slice->setTxAntenna(selected->data().toString());
+        connect(menu, &QMenu::triggered, this, [slice](QAction* sel) {
+            if (!sel || !slice) {
+                return;
+            }
+            slice->setTxAntenna(sel->data().toString());
+        });
+        menu->popup(m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
     });
     hdr->addWidget(m_txAntBtn);
 

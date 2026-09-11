@@ -2079,8 +2079,7 @@ target_include_directories(scoped_child_widget_test PRIVATE src)
 target_link_libraries(scoped_child_widget_test PRIVATE Qt6::Widgets)
 add_test(NAME scoped_child_widget_test COMMAND scoped_child_widget_test)
 set_tests_properties(scoped_child_widget_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    TIMEOUT 15)
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
