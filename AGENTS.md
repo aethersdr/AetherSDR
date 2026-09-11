@@ -37,6 +37,19 @@ look, feel, and every function SmartSDR is capable of. The reference radio is a
 
 ## AI Agent Guidelines
 
+> **TEMPORARY — read before opening any PR that touches `src/core/backends/`,
+> `RadioModel`, `RadioSession`, `TransmitModel`, `ConnectionPanel`, discovery,
+> or `RadioCapabilities`.** The 2026-09-10 backend architecture review is
+> tracked in **#5554** (meta: every open seam/multi-radio issue plus the new
+> findings). Before you submit, check that your change does not add to any
+> item listed there — no new `usesFlexCommandPlane()` / family-string
+> branches, no new raw Flex wire text above the seam, no new `dynamic_cast`
+> to a concrete backend, no new capability declared without a verb behind
+> it, no copy of HL2 scaffolding into another host-DSP family, and no new
+> keying-class verb that skips the TX gate in `RadioModel`. If your PR
+> resolves one of those items, link it. This notice is removed when #5554's
+> §2 items each have their own issue and #5262 M1 has landed.
+
 When helping with AetherSDR:
 - Prefer C++20 / Qt6 idioms (std::ranges, concepts if clean, Qt signals/slots over lambdas when possible)
 - Keep classes small and single-responsibility
@@ -459,7 +472,11 @@ clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
 `IRadioBackend` (`src/core/backends/`) now has **six** implementors,
-selected at connect time by a `family` string through `makeBackend()`:
+selected at connect time by a `family` string through `makeBackend()`.
+The seam's known gaps and the multi-radio migration order are tracked in
+#5262 (M0–M6) and the review meta-issue #5554 — read both before changing
+anything in this table's territory (see the temporary notice at the top of
+"AI Agent Guidelines"):
 
 | Family | Backend | Notes |
 |---|---|---|
