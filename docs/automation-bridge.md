@@ -245,7 +245,7 @@ For a look-but-don't-touch session — handing an assistant visibility
 without letting it change anything — check **"Observe only"** in Radio
 Setup → Network. The bridge then refuses **every** mutating verb and
 answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
-`dumpTree`, `grab`, the read-only `log` actions, `floors`, the inventory-only
+`dumpTree`, `grab`, `cell`, the read-only `log` actions, `floors`, the inventory-only
 `streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
 and `streams reset/resync/refresh`; the latter two stream actions clear local
 diagnostics or request a fresh radio inventory. It is
@@ -1973,7 +1973,8 @@ Read one item-view cell as data — no hover, no timing. Works for any
 `QAbstractItemView` (`QTableWidget`, `QTreeWidget`, `QListWidget`, model
 views) because it reads the model's roles rather than `QTableWidget::item()`.
 `toolTip` is the item's `Qt::ToolTipRole`, the same text a hover would raise,
-so a per-cell tip is assertable in one round trip.
+so a per-cell tip is assertable in one round trip. `cell` is a pure read and
+is allowed in observe-only mode; the `tooltip ... cell` form is not.
 
 ```text
 → cell networkDiagnosticsTciClients 0 1

@@ -2721,6 +2721,10 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         QStringLiteral("floors"),   QStringLiteral("hitTest"),
         // Reads backend telemetry; keys nothing and sets nothing.
         QStringLiteral("health"),   QStringLiteral("devices"),
+        // Reads one item-view cell's roles and selection state; scrolls
+        // nothing. The `tooltip ... cell` form stays outside: it scrolls the
+        // view and raises a tip.
+        QStringLiteral("cell"),
     };
     if (kSafe.contains(name)) {
         return true;
