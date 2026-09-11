@@ -238,20 +238,48 @@ private:
     // connect keeps the shorter, tighter default.
     static constexpr int kRateChangeConnectTimeoutMs = 6000;
     // Minimum idle time between stop() and start() on a rate-change restart.
-    // Bench-discovered (2026-08-19), not a spec citation: with the DSP
-    // rebuild moved off the stop/start path (background-rebuild fix), the
-    // radio started NOT responding to a restart fired only ~100ms after
-    // stop() -- "no DDC0 IQ within 6000ms", followed by a full disconnect/
-    // reconnect to recover. The OLD synchronous-rebuild architecture never
-    // hit this: the slow rebuild sat BETWEEN stop() and start(), so the
-    // radio always got real idle time before a restart, as an unintended
-    // side effect of what was otherwise a bug. This constant restores that
-    // gap on purpose instead of by accident. Value is a bench guess, not
-    // yet a confirmed minimum -- see finishRateChange()'s own comment.
-    // 500ms was tried first (2026-08-19) and was NOT reliably enough: a
-    // chained rapid zoom sequence still hit the 6s timeout and forced a
-    // full reconnect. Raised to 2000ms to test next.
-    static constexpr int kRateChangeRestartSettleMs = 2000;
+    // Settle window after a LIVE rate change, covering only the handoff:
+    // the new WdspChannel is already installed when the radio is told to
+    // switch, so for a moment it is fed samples still arriving at the old
+    // rate, until p2app's register write takes effect. Audio is muted across
+    // this window (finishRateChange()).
+    //
+    // Supersedes kRateChangeRestartSettleMs (2000ms), which existed for a
+    // problem that no longer occurs and whose history is worth keeping:
+    // bench-discovered 2026-08-19, once the DSP rebuild moved off the
+    // stop/start path, the radio stopped responding to a restart fired only
+    // ~100ms after stop() -- "no DDC0 IQ within 6000ms", then a full
+    // disconnect/reconnect to recover. The old synchronous-rebuild
+    // architecture never hit it only because the slow rebuild sat BETWEEN
+    // stop() and start(), giving the radio idle time by accident. 500ms was
+    // tried and was not reliably enough; 2000ms was the working value. A
+    // live rate change never stops the session at all, so none of that
+    // applies -- there is no restart for the radio to be unready for.
+    //
+    // 250ms is a starting value for the handoff itself, not a confirmed
+    // minimum; it is a fraction of the ~2s the restart path cost per zoom
+    // step. Worth revisiting on the bench if a rate change still audibly
+    // glitches, or shortening if it proves conservative.
+    //
+    // It also SUPERSEDES kRateChangeAudioSettleMs (300ms) on this path, and
+    // that is a deliberate judgement rather than an oversight. That 300ms
+    // exists so a freshly built WdspChannel gets a beat of quiet before its
+    // AGC, filters and DC-blocker are unmuted against live RF -- under the
+    // restart path its clock started at linkUp, i.e. at the first new-rate
+    // frame. Here the clock starts at the channel swap, so WDSP gets
+    // 250ms minus the handoff latency: strictly less, by an amount that has
+    // not been measured. Bench-tested at 48 and 1536 ksps without an audible
+    // artifact, which is the evidence for calling it sufficient -- but if a
+    // rate change ever thumps on unmute, split the two settles before
+    // reaching for a larger number. (aethersdr-agent, #5547 review.)
+    static constexpr int kRateChangeLiveSettleMs = 250;
+
+    // The DDC-Specific packet is resent at these offsets (ms) inside the
+    // settle window above, on top of the immediate send. Three copies over
+    // ~140 ms, all well inside the 250 ms mute, so a lost datagram costs
+    // nothing audible. See finishRateChange()'s own comment for why one
+    // fire-and-forget send was not enough and why repeating is safe.
+    static constexpr int kRateChangeResendMs[] = {60, 140};
 
     QString m_mode = QStringLiteral("USB");
     int m_filterLowHz = 100;

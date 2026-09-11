@@ -950,18 +950,59 @@ void AnanBackend::finishRateChange(quint64 generation, bool ok, const QString& e
     // guarantees it lands on m_dsp before any new session's first frame can
     // possibly exist.
     QMetaObject::invokeMethod(m_dsp, "setAudioMuted", Qt::QueuedConnection, Q_ARG(bool, true));
-    QMetaObject::invokeMethod(m_client, "stop", Qt::QueuedConnection);
-    // Give the radio real idle time before asking it to restart -- see
-    // kRateChangeRestartSettleMs's own comment for why this is now needed
-    // on purpose (the background-rebuild fix removed the accidental delay
-    // the old synchronous rebuild used to leave here). Re-checks generation
-    // after the wait: a newer rate change/connect/disconnect during the
-    // settle window supersedes this one, same guard startP2ClientSession()
-    // itself already relies on for its own queued calls.
-    QTimer::singleShot(kRateChangeRestartSettleMs, this, [this, generation]() {
+
+    // LIVE rate change: tell the radio the new rate on the RUNNING session
+    // rather than stopping and restarting it. p2app services DDC-Specific in
+    // a continuous loop and applies a rate change with a direct FPGA
+    // register write, with no teardown of its own -- verified in its source,
+    // see P2Client::setDdcRateLive()'s own comment. That answers the
+    // question beginRateChange()'s comment left open, and removes the whole
+    // stop -> settle -> restart -> reconnect-timeout sequence (seconds) that
+    // made every zoom step visibly stall.
+    //
+    // The channel swap already happened (queued just above this call), so
+    // for a brief moment the NEW channel is fed samples still arriving at
+    // the OLD rate, until the radio's register write takes effect. That is
+    // what the mute above covers, and what the short settle below waits out
+    // -- a small fraction of the old restart's cost.
+    // Sent THREE times across the settle window, not once. This is
+    // fire-and-forget UDP and nothing re-asserts it -- onKeepaliveTick()
+    // resends High Priority every 100 ms but never DDC-Specific. A single
+    // lost datagram would leave the radio streaming at the old rate while
+    // the new WdspChannel, emitPanState() and AnanDroopCalibrator::
+    // setLandedRate() all record the new one: wrong span, wrong audio pitch,
+    // no error, until the next zoom. The restart path this replaces had
+    // implicit confirmation -- a lost packet meant no stream, and the
+    // 6000 ms connect timeout said so -- and that detection is gone.
+    //
+    // Repeating is safe because the packet is idempotent: p2app's
+    // WriteP2DDCRateRegister() fires on change and its companion
+    // HandlerCheckDDCSettings() is empty, so a duplicate at the same rate is
+    // a no-op on the radio. Cheaper than adding an ack this protocol does
+    // not offer. (aethersdr-agent, #5547 review, Blocker 1.)
+    const int rateKsps = m_pendingDspConfig.inputSampleRateHz / 1000;
+    auto sendRate = [this, rateKsps, generation]() {
         if (generation != m_connectGeneration)
             return;
-        startP2ClientSession(generation);
+        QMetaObject::invokeMethod(m_client, "setDdcRateLive", Qt::QueuedConnection,
+                                  Q_ARG(int, 0), Q_ARG(int, rateKsps));
+    };
+    sendRate();
+    for (const int delayMs : kRateChangeResendMs)
+        QTimer::singleShot(delayMs, this, sendRate);
+
+    QTimer::singleShot(kRateChangeLiveSettleMs, this, [this, generation]() {
+        // Same generation guard the restart path used: a newer rate
+        // change/connect/disconnect during the settle window supersedes this.
+        if (generation != m_connectGeneration)
+            return;
+        QMetaObject::invokeMethod(m_dsp, "setAudioMuted", Qt::QueuedConnection,
+                                  Q_ARG(bool, false));
+        m_rateChanging = false;
+        emitPanState();
+        // A zoom the operator kept turning while this ran: apply the latest
+        // request now rather than stranding the display a step behind.
+        retryPendingRateChange();
     });
 }
 

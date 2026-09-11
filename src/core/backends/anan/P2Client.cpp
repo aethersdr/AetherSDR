@@ -1,10 +1,13 @@
 #include "core/backends/anan/P2Client.h"
 
+#include <QLoggingCategory>
 #include <QNetworkDatagram>
 #include <QTimer>
 #include <QUdpSocket>
 
 #include <span>
+
+Q_LOGGING_CATEGORY(lcAnanP2, "aether.anan.p2")
 
 namespace AetherSDR::anan {
 
@@ -56,8 +59,13 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ddc0FreqWord = 0;
     m_bypassAdc0Filters = params.bypassAdc0Filters;
     m_bypassAdc1Filters = params.bypassAdc1Filters;
-    m_expectedSeq.reset();
+    // Every DDC's sequence tracker, not just DDC0's -- a stale expectation
+    // carried across a restart would report a phantom gap on the new
+    // session's first frame.
+    m_expectedSeq.fill(std::nullopt);
+    m_activeDdcCount = 1;   // real value set once the DDC list is resolved below
     m_drops = 0;
+    m_warnedUnexpectedPorts.clear();
     m_linkUp = false;
     m_discoveryInfoSent = false;
 
@@ -82,16 +90,47 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     // onReadyRead() already drops anything that isn't DDC0-shaped.
     sendTo(*m_socket, buildDiscovery(), m_host, kRadioPort);
     sendTo(*m_socket, buildGeneral(), m_host, kRadioPort);
+
+    // Resolve the session's DDC list ONCE: either the caller's explicit
+    // multi-DDC list, or a one-element list from the DDC0 shorthand. See
+    // Params::activeDdcs for why these are not merged.
+    std::vector<DdcConfig> ddcs = params.activeDdcs;
+    if (ddcs.empty())
+        ddcs.push_back(DdcConfig{params.ddc0RateKsps, params.ddc0AdcIndex});
+    if (static_cast<int>(ddcs.size()) > kMaxDdcs)
+        ddcs.resize(kMaxDdcs);
+    m_activeDdcCount = static_cast<int>(ddcs.size());
+    // Retained for setDdcRateLive() -- see its own comment for why the whole
+    // list (not just the count) has to survive start().
+    m_activeDdcs = ddcs;
+    m_ditherEnabled = params.ditherEnabled;
+    m_randomEnabled = params.randomEnabled;
+
+    // Every DDC starts at the same frequency: m_ddc0FreqWord, which start()
+    // zeroed above, so in practice baseband. Per-DDC tuning is a seam this
+    // class does not expose yet -- setDdc0FrequencyHz() moves DDC0 only --
+    // so sending one shared word is honest about what is actually
+    // controllable rather than implying independent tuning that has no
+    // setter behind it.
+    //
+    // The two other High Priority senders (setDdc0FrequencyHz() and
+    // onKeepaliveTick()) send the SAME shared word for the same count, so
+    // they cannot disagree with this packet. That matters because the
+    // keepalive fires every 100 ms: a single-DDC overload there would pin
+    // DDC1..N-1 at word 0 forever regardless of what this line sent, and the
+    // two would diverge permanently the moment DDC0 was retuned.
+    // (aethersdr-agent, #5547 review.)
+    std::vector<std::uint32_t> freqWords(ddcs.size(), m_ddc0FreqWord);
+
     // Destination ports below are NOT interchangeable with kRadioPort -- see
     // kDdcSpecificPort/kHighPriorityPort's comment. p2app tells these two
     // packet types apart by which port they arrive on.
     sendTo(*m_socket,
-          buildDdcSpecific(params.ddc0RateKsps, /*numAdcs=*/2,
-                           params.ditherEnabled, params.randomEnabled,
-                           params.ddc0AdcIndex),
+          buildDdcSpecific(ddcs, /*numAdcs=*/2,
+                           params.ditherEnabled, params.randomEnabled),
           m_host, kDdcSpecificPort);
     sendTo(*m_socket,
-          buildHighPriority(true, m_ddc0FreqWord, m_bypassAdc0Filters, m_bypassAdc1Filters),
+          buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters),
           m_host, kHighPriorityPort);
 
     m_keepaliveTimer->start();
@@ -127,8 +166,42 @@ void P2Client::setDdc0FrequencyHz(double hz)
     m_ddc0FreqWord = phaseWord(hz);
     if (m_running && m_socket)
         sendTo(*m_socket,
-              buildHighPriority(true, m_ddc0FreqWord, m_bypassAdc0Filters, m_bypassAdc1Filters),
+              buildHighPriority(true, sharedFreqWords(),
+                                m_bypassAdc0Filters, m_bypassAdc1Filters),
               m_host, kHighPriorityPort);
+}
+
+bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
+{
+    if (!m_running || !m_socket)
+        return false;
+    if (ddcIndex < 0 || ddcIndex >= static_cast<int>(m_activeDdcs.size()))
+        return false;
+
+    auto& slot = m_activeDdcs[static_cast<std::size_t>(ddcIndex)];
+    const bool rateChanged = slot.rateKsps != rateKsps;
+    slot.rateKsps = rateKsps;
+    // Whole packet, every DDC's row -- see this function's declaration
+    // comment. Same destination port start() used: p2app tells DDC-Specific
+    // from High Priority by which port it arrives on, so this is not
+    // interchangeable with kRadioPort. Sent even when rateChanged is false:
+    // AnanBackend retries this call at 60/140 ms for UDP loss, and those
+    // retries must not no-op after the first write (#5547).
+    sendTo(*m_socket,
+          buildDdcSpecific(m_activeDdcs, /*numAdcs=*/2,
+                           m_ditherEnabled, m_randomEnabled),
+          m_host, kDdcSpecificPort);
+
+    // The stream's sample cadence changes underneath us from here, so the
+    // sequence expectation for THIS DDC is no longer meaningful -- clear it
+    // rather than let the next frame look like a gap and inflate the drop
+    // counter for what is a deliberate, operator-initiated change. Retries
+    // of the same rate leave the tracker alone: the cadence did not change
+    // again.
+    if (rateChanged) {
+        m_expectedSeq[static_cast<std::size_t>(ddcIndex)].reset();
+    }
+    return true;
 }
 
 void P2Client::onKeepaliveTick()
@@ -138,7 +211,8 @@ void P2Client::onKeepaliveTick()
     // This IS the "any C&C packet" the watchdog needs (p.8) -- no need to
     // also replay General/DDC-Specific on this cadence, same as the spike.
     sendTo(*m_socket,
-          buildHighPriority(true, m_ddc0FreqWord, m_bypassAdc0Filters, m_bypassAdc1Filters),
+          buildHighPriority(true, sharedFreqWords(),
+                            m_bypassAdc0Filters, m_bypassAdc1Filters),
           m_host, kHighPriorityPort);
 }
 
@@ -170,13 +244,55 @@ void P2Client::onReadyRead()
             continue;
         }
 
-        if (m_expectedSeq && frame->seq != *m_expectedSeq) {
+        // Which DDC sent this. The IQ packet carries no DDC index of its
+        // own, so the sender port is the only discriminator -- see
+        // ddcIndexForSenderPort()'s comment for how that is verified.
+        const auto ddcIndex = ddcIndexForSenderPort(
+            static_cast<std::uint16_t>(dg.senderPort()), m_activeDdcCount);
+        if (!ddcIndex) {
+            // DDC-shaped, but from a port this session did not enable --
+            // another client's stream to this host, or a DDC left running by
+            // a previous session. Dropping it is right: attributing it to a
+            // DDC would corrupt that receiver's audio and its sequence
+            // tracking, and counting it as a drop would blame this session
+            // for someone else's traffic.
+            //
+            // "Not a drop" must not mean "not observable", though. If the
+            // radio's source port ever differs from basePort + n -- other
+            // firmware, a NAT or relay in the path, a future negotiated-port
+            // session -- then EVERY datagram lands here and the operator sees
+            // a dead receiver whose only diagnostic is onConnectTimeout()'s
+            // "no DDC0 IQ from the radio", which reads as a radio fault. One
+            // line naming the port turns that into a diagnosis. Logged once
+            // per distinct port per session: this is in the hot receive path
+            // and a mismatch is by nature every packet.
+            if (!m_warnedUnexpectedPorts.contains(dg.senderPort())) {
+                m_warnedUnexpectedPorts.insert(dg.senderPort());
+                qCWarning(lcAnanP2).nospace()
+                    << "ANAN: dropping DDC-shaped datagram from unexpected "
+                       "sender port " << dg.senderPort() << " (expected "
+                    << kDdc0DefaultPort << ".."
+                    << (kDdc0DefaultPort + m_activeDdcCount - 1)
+                    << " for " << m_activeDdcCount
+                    << " active DDC(s)) -- not counted as a drop";
+            }
+            continue;
+        }
+        const std::size_t slot = static_cast<std::size_t>(*ddcIndex);
+
+        // Per-DDC gap detection; see m_expectedSeq's own comment for why a
+        // shared counter would manufacture drops once a second DDC streams.
+        if (m_expectedSeq[slot] && frame->seq != *m_expectedSeq[slot]) {
             ++m_drops;
             emit dropsUpdated(m_drops);
         }
-        m_expectedSeq = frame->seq + 1;
+        m_expectedSeq[slot] = frame->seq + 1;
 
-        if (!m_linkUp) {
+        // linkUp stays keyed on DDC0: it is the receiver every session has,
+        // and the connect timeout's message says "no DDC0 IQ". A session
+        // whose DDC1 streamed but whose DDC0 never did is a real failure,
+        // not a connected session.
+        if (!m_linkUp && *ddcIndex == 0) {
             m_linkUp = true;
             m_connectTimeoutTimer->stop();
             emit linkUp();
@@ -184,7 +300,9 @@ void P2Client::onReadyRead()
 
         m_decodeScratch.clear();
         decodeIq(*frame, m_decodeScratch);
-        emit ddc0IqReady(m_decodeScratch);
+        emit ddcIqReady(*ddcIndex, m_decodeScratch);
+        if (*ddcIndex == 0)
+            emit ddc0IqReady(m_decodeScratch);
     }
 }
 

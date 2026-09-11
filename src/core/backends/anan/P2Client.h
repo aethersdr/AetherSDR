@@ -4,8 +4,10 @@
 
 #include <QHostAddress>
 #include <QObject>
+#include <QSet>
 #include <QString>
 
+#include <array>
 #include <complex>
 #include <cstdint>
 #include <optional>
@@ -75,6 +77,21 @@ public:
         int ddc0AdcIndex = 0;          // 0 = ADC0, 1 = ADC1/RX2
         bool bypassAdc0Filters = true;
         bool bypassAdc1Filters = true;
+
+        // Multi-DDC session. EMPTY (the default) means "single DDC0
+        // session", built from ddc0RateKsps/ddc0AdcIndex above -- so every
+        // existing caller keeps the exact bench-validated single-DDC
+        // behaviour without naming this field at all.
+        //
+        // When non-empty this is authoritative and the two shorthand fields
+        // are ignored: entry n configures DDC n. Capped at
+        // P2Protocol's kMaxDdcs by the packet builders.
+        //
+        // Deliberately not merged into the shorthand fields: a caller that
+        // sets BOTH would otherwise have two disagreeing sources of truth
+        // for DDC0's rate, and silently picking one is exactly the kind of
+        // thing that reads as a radio fault on the bench.
+        std::vector<DdcConfig> activeDdcs;
     };
 
     // start()/stop() and setDdc0FrequencyHz() MUST execute on this object's
@@ -99,6 +116,34 @@ public:
     // tick) and is what the keepalive resends from then on.
     Q_INVOKABLE void setDdc0FrequencyHz(double hz);
 
+    // Change one DDC's sample rate on a LIVE session -- no stop, no restart,
+    // no reconnect. Returns false (sending nothing) if the session is not
+    // running or ddcIndex is not one this session enabled. A matching rate
+    // still sends: the packet is fire-and-forget UDP and the caller retries
+    // across the settle window, so skipping an unchanged slot would drop
+    // those retransmits.
+    //
+    // Supported by the radio, verified in p2app's own source rather than
+    // assumed: IncomingDDCSpecific.c services DDC-Specific packets in a
+    // continuous thread loop and, on any change, calls
+    // WriteP2DDCRateRegister(), which is a direct
+    // RegisterWrite(VADDRDDCRATES, ...) to the FPGA. Its companion
+    // "something changed" hook, HandlerCheckDDCSettings(), is an EMPTY
+    // function -- p2app writes the rate register and keeps streaming. There
+    // is no teardown on the radio side to mirror.
+    //
+    // This answers the question AnanBackend::beginRateChange()'s own comment
+    // left open ("whether the radio would accept a live rate change without
+    // a session restart at all is a separate, unverified protocol
+    // question"). The caller still has to rebuild ITS OWN WdspChannel, whose
+    // input sample rate really did change -- that part is unavoidable and is
+    // why AnanBackend builds the new channel in the background first.
+    //
+    // Resends the whole DDC-Specific packet, not a partial one: the packet
+    // carries the enable bitmap and every DDC's row, so a partial resend
+    // would disable the others.
+    Q_INVOKABLE bool setDdcRateLive(int ddcIndex, int rateKsps);
+
     [[nodiscard]] bool isRunning() const noexcept { return m_running; }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
 
@@ -110,7 +155,16 @@ signals:
     // Mic Data / Status traffic, which onReadyRead() rejects and does not
     // count as a connection).
     void connectionError(const QString& reason);
+    // DDC0's decoded IQ. Kept as its own signal because DDC0 is the one
+    // receiver every session always has, and it is what linkUp()/the connect
+    // timeout are keyed on. Emitted for ddcIndex 0 only; ddcIqReady() below
+    // fires for the same block as well.
     void ddc0IqReady(const std::vector<std::complex<float>>& block);
+    // Decoded IQ for ANY active DDC, demultiplexed by the datagram's sender
+    // port (see P2Protocol::ddcIndexForSenderPort()). This is the general
+    // form; a multi-receiver consumer routes on ddcIndex rather than
+    // connecting per-DDC signals.
+    void ddcIqReady(int ddcIndex, const std::vector<std::complex<float>>& block);
     void dropsUpdated(quint64 totalDrops);
     // This session's own Discovery reply -- the SAME radio start() already
     // sent a Discovery packet to, on this socket, per the class comment.
@@ -164,14 +218,54 @@ private:
     bool m_bypassAdc0Filters = true;
     bool m_bypassAdc1Filters = true;
 
+    // The session's resolved DDC list and the dither/random flags that went
+    // with it, RETAINED (rather than consumed and dropped in start()) so
+    // setDdcRateLive() can rebuild a complete DDC-Specific packet: that
+    // packet carries every DDC's row plus the enable bitmap, so resending it
+    // with only the changed rate known would disable every other DDC.
+    std::vector<DdcConfig> m_activeDdcs;
+    bool m_ditherEnabled = true;
+    bool m_randomEnabled = true;
+
     bool m_running = false;
     bool m_linkUp = false;
 
-    std::optional<std::uint32_t> m_expectedSeq;   // for DDC0 sequence-gap detection
+    // Sequence-gap detection is PER DDC: every DDC runs its own independent
+    // sequence counter on its own socket, so a single shared "expected next"
+    // would report a gap on every alternating frame the moment a second DDC
+    // started streaming -- a fault indication manufactured entirely by the
+    // client. Indexed by ddcIndex; nullopt until that DDC's first frame.
+    std::array<std::optional<std::uint32_t>, kMaxDdcs> m_expectedSeq{};
+    // Drops stay a single session-wide counter (what dropsUpdated() has
+    // always reported) -- an operator watching for a lossy link cares that
+    // the session is dropping, not which receiver.
     quint64 m_drops = 0;
 
-    // Reused decode buffer, cleared and refilled per DDC0 frame rather than
+    // How many DDCs this session enabled, so onReadyRead() knows which
+    // sender ports belong to it. Kept alongside m_activeDdcs (rather than
+    // read from its size) because onReadyRead() consults it per datagram.
+    int m_activeDdcCount = 1;
+
+    // One shared phase word per active DDC. Every High Priority sender uses
+    // this, so the keepalive (100 ms) can never contradict what start() sent:
+    // a single-DDC overload on that path would pin DDC1..N-1 at word 0
+    // regardless. Per-DDC tuning has no setter yet, so one word for all of
+    // them is the honest encoding -- see start()'s own comment.
+    [[nodiscard]] std::vector<std::uint32_t> sharedFreqWords() const
+    {
+        return std::vector<std::uint32_t>(
+            static_cast<std::size_t>(m_activeDdcCount), m_ddc0FreqWord);
+    }
+    // Sender ports already warned about, so a port mismatch -- which by
+    // nature affects every packet -- logs once per distinct port rather than
+    // per datagram. Session-scoped; cleared with the rest of the state.
+    QSet<quint16> m_warnedUnexpectedPorts;
+
+    // Reused decode buffer, cleared and refilled per frame rather than
     // reallocated -- matches MetisClient's m_blocks for the same reason.
+    // Shared across DDCs deliberately: onReadyRead() fully consumes each
+    // block (the emit is a same-thread direct connection) before touching
+    // the next datagram, so there is never more than one live at a time.
     std::vector<std::complex<float>> m_decodeScratch;
 };
 
