@@ -2198,12 +2198,14 @@ RadioModel::RadioModel(QObject* parent)
     // un-bypassable, and bypass keys nothing.
     connect(&m_transmitModel, &TransmitModel::atuCommandIssued, this,
             [this](bool start) {
-        if (!m_backend || usesFlexCommandPlane())
+        if (!m_backend || usesFlexCommandPlane()) {
             return;
+        }
+        // Match the wire-text gate key so one refused intent produces one notice.
         if (start
             && (!refuseKeyOnTransmitIncapableBackend()
                 || !refuseKeyInReceiveOnlyMode()
-                || transmitStartBlockedByInhibit(QStringLiteral("atu-start")))) {
+                || transmitStartBlockedByInhibit(QStringLiteral("tune-start")))) {
             return;
         }
         m_backend->setAtu(start);

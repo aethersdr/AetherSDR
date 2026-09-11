@@ -141,14 +141,20 @@ static void panInhibitBlocksStart()
     Fixture f(QStringLiteral("icom"), /*canTransmit=*/true);
     f.radio.setPanTransmitInhibited(f.slice->panId(), true,
                                     QStringLiteral("Transmit is inhibited on this panadapter"));
+    // Exclude the notification raised when the inhibit itself was enabled.
+    f.interlocks.clear();
     f.radio.transmitModel().atuStart();
     check(f.backend->atuStarts == 0, "pan TX inhibit: start dispatches nothing");
     bool inhibitKey = false;
     for (const QString& key : f.interlocks) {
         inhibitKey = inhibitKey || key.startsWith(QStringLiteral("pan-tx-inhibit:"))
-                                   && key.endsWith(QStringLiteral(":atu-start"));
+                                   && key.endsWith(QStringLiteral(":tune-start"));
     }
-    check(inhibitKey, "pan TX inhibit: refusal carries the atu-start key");
+    check(inhibitKey, "pan TX inhibit: refusal carries the shared tune-start key");
+    check(f.interlocks.size() == 1, "pan TX inhibit: exactly one refusal is reported");
+    f.radio.transmitModel().atuStart();
+    check(f.backend->atuStarts == 0, "pan TX inhibit: repeated start remains blocked");
+    check(f.interlocks.size() == 1, "pan TX inhibit: repeated refusal is deduplicated");
     f.radio.transmitModel().atuBypass();
     check(f.backend->atuBypasses == 1, "pan TX inhibit: bypass still dispatches");
     f.radio.setPanTransmitInhibited(f.slice->panId(), false);

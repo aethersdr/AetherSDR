@@ -161,9 +161,6 @@ target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
 
-# Socket-free frequency control: a recording engine backend and normalized
-# observations exercise the production target/service. LocalControlServer
-# instances only test startup binding; neither listens or opens an endpoint.
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -171,6 +168,9 @@ target_include_directories(atu_seam_gate_test PRIVATE src tests)
 target_link_libraries(atu_seam_gate_test PRIVATE aethercore Qt6::Core)
 add_test(NAME atu_seam_gate_test COMMAND atu_seam_gate_test)
 
+# Socket-free frequency control: a recording engine backend and normalized
+# observations exercise the production target/service. LocalControlServer
+# instances only test startup binding; neither listens or opens an endpoint.
 add_executable(control_slice_frequency_test tests/control_slice_frequency_test.cpp)
 target_include_directories(control_slice_frequency_test PRIVATE src tests)
 target_link_libraries(control_slice_frequency_test PRIVATE aethercore Qt6::Core)
@@ -4792,6 +4792,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    atu_seam_gate_test
     backend_slice_lifecycle_test
     client_display_settings_test
     rx_applet_squelch_reconciliation_test
