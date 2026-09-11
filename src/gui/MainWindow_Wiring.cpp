@@ -4689,6 +4689,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
     }
 
+    // ── WSJT-X Rx/Tx frequency overlay (#4526) ──────────────────────────────
+    // A pan created after WSJT-X is already reporting Status (e.g. a new
+    // panadapter opened mid-session) gets today's marker state immediately,
+    // rather than waiting for the next Status message before it appears.
+    rebuildWsjtxMarkers();
+
     // ── S History Markers ─────────────────────────────────────────────────
     sw->setShowSHistory(m_sHistoryEnabled);
     sw->setShowSHistoryQrm(m_sHistoryQrmEnabled);

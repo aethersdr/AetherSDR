@@ -936,6 +936,23 @@ public:
     };
     void setSpotMarkers(const QVector<SpotMarker>& markers);
 
+    // Live WSJT-X Rx/Tx frequency overlay (#4526). One entry per WSJT-X
+    // instance currently reporting Status — MainWindow expires an instance's
+    // entry after it goes quiet, so this list is never fed a stale marker
+    // that just sits there after WSJT-X exits or loses network. Deliberately
+    // separate from SpotMarker/drawSpotMarkers(): this is the digital-mode
+    // program's live Rx/Tx position, not a DX spot, and the issue calls out
+    // that the two must stay visually distinct.
+    struct WsjtxMarker {
+        QString id;             // WSJT-X instance id, for tooltip/debugging only
+        double  rxFreqHz{0.0};
+        double  txFreqHz{0.0};
+        bool    transmitting{false};
+    };
+    void setWsjtxMarkers(const QVector<WsjtxMarker>& markers);
+    void setShowWsjtxFreq(bool on) { m_showWsjtxFreq = on; markOverlayDirty(); }
+    bool showWsjtxFreq() const { return m_showWsjtxFreq; }
+
     struct SpotCluster {
         QRect rect;
         QVector<SpotMarker> spots;
@@ -1159,6 +1176,7 @@ private:
     void drawTnfMarkers(QPainter& p, const QRect& specRect,
                         const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
+    void drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
     void drawSquelchLine(QPainter& p, const QRect& specRect);
@@ -2245,6 +2263,8 @@ private:
     int  m_notchMaxWidthHz{12000};
     bool m_tnfGlobalEnabled{true};
     QVector<SpotMarker> m_spotMarkers;
+    QVector<WsjtxMarker> m_wsjtxMarkers;
+    bool m_showWsjtxFreq{false};
     QVector<SwrSweepPoint> m_swrSweepPoints;
     bool   m_swrSweepRunning{false};
     double m_swrSweepCurrentFreqMhz{-1.0};

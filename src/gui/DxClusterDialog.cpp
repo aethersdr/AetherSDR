@@ -1456,6 +1456,25 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
                        "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name());
     };
 
+    // ── Post decoded stations as spots (#4526) ───────────────────────────
+    // Master switch for the filter row below: unchecking this stops WSJT-X
+    // decodes from becoming spots at all — no waterfall markers, no "spot
+    // add" traffic to the radio — while leaving the listener (and the Rx/Tx
+    // frequency overlay, which depends on the same listener's Status
+    // messages) running. Lets an operator use the overlay on its own
+    // without decode-spot clutter. Default on: existing installs keep
+    // today's behavior unless this new box is unchecked.
+    m_wsjtxPostSpots = new QCheckBox("Post decoded stations as spots");
+    m_wsjtxPostSpots->setChecked(
+        s.value("WsjtxPostSpotsEnabled", "True").toString() == "True");
+    ThemeManager::instance().applyStyleSheet(m_wsjtxPostSpots, cbStyle);
+    connect(m_wsjtxPostSpots, &QCheckBox::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("WsjtxPostSpotsEnabled", on ? "True" : "False");
+        s.save();
+    });
+    layout->addWidget(m_wsjtxPostSpots);
+
     // CQ color + checkbox
     QColor cqColor(s.value("WsjtxColorCQ", "#00FF00").toString());
     m_wsjtxColorCQ = new QPushButton;
@@ -1549,6 +1568,27 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     filterRow->addWidget(defaultLabel);
 
     layout->addLayout(filterRow);
+
+    // ── Panadapter overlay (#4526) ──────────────────────────────────────
+    // Decoded-station markers above already exist via the Spot Filter row
+    // and SpotHub's normal spot rendering; this is the separate, persistent
+    // Rx/Tx frequency marker feature. Kept in this tab next to the address/
+    // port fields it depends on rather than a new Digital Modes panel, per
+    // the #4526 triage — a maintainer call on whether that split is worth a
+    // second dialog, not a decision to make unilaterally here.
+    auto* overlayRow = new QHBoxLayout;
+    m_wsjtxShowFreqOverlay = new QCheckBox("Show Rx/Tx frequency on panadapter and waterfall");
+    m_wsjtxShowFreqOverlay->setChecked(
+        s.value("WsjtxShowFreqOverlay", "False").toString() == "True");
+    ThemeManager::instance().applyStyleSheet(m_wsjtxShowFreqOverlay, cbStyle);
+    connect(m_wsjtxShowFreqOverlay, &QCheckBox::toggled, this, [this](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("WsjtxShowFreqOverlay", on ? "True" : "False");
+        s.save();
+        emit settingsChanged();
+    });
+    overlayRow->addWidget(m_wsjtxShowFreqOverlay, 1);
+    layout->addLayout(overlayRow);
 
     // ── Console output ──────────────────────────────────────────────────
     // Decodes label + spot lifetime slider
