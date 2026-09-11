@@ -1355,6 +1355,17 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // Apply the per-tab chrome (hide the shared log on the Terminal tab) now that
     // the layout is fully built.
     updateTabChrome(m_tabStack->currentIndex());
+
+    // D-STAR is a SmartSDR waveform surface. Apply the live capability now
+    // (the dialog may be constructed after connect) and follow revisions.
+    if (m_radio) {
+        connect(m_radio, &RadioModel::capabilitiesChanged, this,
+                [this](bool connected, const RadioCapabilities& caps) {
+                    setDstarTabAvailable(!connected || caps.hasWaveforms);
+                });
+        setDstarTabAvailable(!m_radio->isConnected()
+                             || m_radio->backendCapabilities().hasWaveforms);
+    }
 }
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
@@ -3591,6 +3602,20 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
             s.lastCall = peer;
             s.save();
         }
+    }
+}
+
+void Ax25HfPacketDecodeDialog::setDstarTabAvailable(bool available)
+{
+    if (!m_dstarTab) {
+        return;
+    }
+    m_dstarTab->setVisible(available);
+    if (!available && m_tabStack && m_dstarPage
+        && m_tabStack->currentWidget() == m_dstarPage && m_ax25Tab) {
+        m_ax25Tab->setChecked(true);
+        m_tabStack->setCurrentIndex(0);
+        updateTabChrome(0);
     }
 }
 
