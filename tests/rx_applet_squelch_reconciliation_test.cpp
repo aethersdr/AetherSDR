@@ -135,12 +135,13 @@ private slots:
         rx.setSlice(&slice);
         QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
         QCOMPARE(rx.sqlManualLevel(), 26);
-        rx.cycleSqlModeExternal();
-        status(slice, true, slice.squelchLevel()); // confirm the explicit Auto threshold
+        rx.cycleSqlModeExternal(); // Icom: Manual -> Off, never Auto
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
         rx.setSlice(nullptr);
         commands.clear();
         rx.setSlice(&slice);
-        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        QVERIFY(rx.sqlMode() != RxApplet::SqlMode::Auto);
         QVERIFY(commands.isEmpty());
         rx.setSlice(nullptr);
         slice.invalidateSquelchState(); // reclaimed model from a disconnected session
@@ -151,32 +152,20 @@ private slots:
         QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
     }
 
-    void icomClientIntentSurvivesRecreation_data()
-    {
-        QTest::addColumn<bool>("automatic");
-        QTest::newRow("manual-memory-while-off") << false;
-        QTest::newRow("explicit-auto") << true;
-    }
-
     void icomClientIntentSurvivesRecreation()
     {
-        QFETCH(bool, automatic);
         RadioModel radio;
         RadioModelWakeTestAccess::identity(radio, QStringLiteral("icom"),
-            automatic ? QStringLiteral("icom:auto-test") : QStringLiteral("icom:off-test"));
+            QStringLiteral("icom:off-test"));
         {
             SliceModel first(0);
             RxApplet rx;
             rx.setRadioModel(&radio);
             rx.setSlice(&first);
             status(first, true, 26, QStringLiteral("USB"));
-            rx.cycleSqlModeExternal(); // Manual -> Auto
-            first.setSquelch(true, 8); // algorithm changes threshold, not manual choice
-            status(first, true, 8);
-            if (!automatic) {
-                rx.cycleSqlModeExternal(); // Auto -> Off
-                status(first, false, 0);
-            }
+            rx.cycleSqlModeExternal(); // Icom: Manual -> Off
+            status(first, false, 0);
+            QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
             QCOMPARE(first.manualSquelchLevel(), 26);
             rx.setSlice(nullptr);
         }
@@ -189,18 +178,36 @@ private slots:
         QCOMPARE(restarted.sqlMode(), RxApplet::SqlMode::Off);
         for (const auto& args : algorithm) { QVERIFY(!args[0].toBool()); }
         QVERIFY(commands.isEmpty()); // no attach/default threshold replay
-        status(second, automatic, automatic ? 8 : 0, QStringLiteral("USB"));
-        QCOMPARE(restarted.sqlMode(), automatic ? RxApplet::SqlMode::Auto : RxApplet::SqlMode::Off);
+        status(second, false, 0, QStringLiteral("USB"));
+        QCOMPARE(restarted.sqlMode(), RxApplet::SqlMode::Off);
         QCOMPARE(second.manualSquelchLevel(), 26);
         QVERIFY(commands.isEmpty()); // adopting state is passive
-        if (automatic) {
-            restarted.cycleSqlModeExternal(); // Auto -> Off
-            status(second, false, 0);
-        }
         restarted.cycleSqlModeExternal(); // Off -> Manual is explicit intent
         QCOMPARE(second.squelchLevel(), 26);
         QCOMPARE(restarted.sqlManualLevel(), 26);
         QCOMPARE(control<QSlider>(restarted, QStringLiteral("Squelch threshold"))->value(), 26);
+    }
+
+    void icomPersistedAutoEnabledIsStrippedAndIgnored()
+    {
+        RadioModel radio;
+        RadioModelWakeTestAccess::identity(radio, QStringLiteral("icom"),
+            QStringLiteral("icom:strip-auto"));
+        QVERIFY(radio.settingsScope().setFeature(QStringLiteral("SquelchIntent"), 1,
+            {{QStringLiteral("manualLevel"), 26}, {QStringLiteral("autoEnabled"), true}}));
+        SliceModel slice(0);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setSlice(&slice);
+        status(slice, true, 26, QStringLiteral("USB"));
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        QVERIFY(rx.sqlMode() != RxApplet::SqlMode::Auto);
+        rx.cycleSqlModeExternal();
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Off);
+        QVERIFY(!radio.settingsScope().featureExact(QStringLiteral("SquelchIntent"))
+                     .contains(QStringLiteral("autoEnabled")));
+        QCOMPARE(radio.settingsScope().featureExact(QStringLiteral("SquelchIntent"))
+                     .value(QStringLiteral("manualLevel")).toInt(), 26);
     }
 
     void icomRadioTruthAndScopeWin()
@@ -217,7 +224,7 @@ private slots:
         status(slice, true, 43, QStringLiteral("USB"));
         QCOMPARE(rx.sqlManualLevel(), 43); // fresh radio value overrides saved cache
         QVERIFY(commands.isEmpty());
-        rx.cycleSqlModeExternal(); // saves Auto and current manual 43
+        rx.cycleSqlModeExternal(); // Icom: Manual -> Off; still keeps manual 43
         rx.setSlice(nullptr);
         RadioModelWakeTestAccess::identity(radio, QStringLiteral("icom"), QStringLiteral("icom:other"));
         SliceModel other(0);
@@ -234,7 +241,7 @@ private slots:
         QCOMPARE(rx.sqlManualLevel(), 43);
         rx.setSlice(nullptr); // disconnect flushes the bounded pending write
         QVERIFY(!radio.settingsScope().featureExact(QStringLiteral("SquelchIntent"))
-                     .value(QStringLiteral("autoEnabled")).toBool());
+                     .contains(QStringLiteral("autoEnabled")));
     }
 
     void icomFutureIntentIsPreserved()

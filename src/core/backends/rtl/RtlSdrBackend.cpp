@@ -107,6 +107,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hasVoxDelay = false;
     c.hasAgcThreshold = false;
     c.hasModeIndependentSquelch = false;
+    c.hasClientAutoSquelch = true; // host spectrum estimator; no radio Auto bit
     c.agcModes = {QStringLiteral("off"), QStringLiteral("slow"),
                   QStringLiteral("med"), QStringLiteral("fast")};
     // Unused TX presentation retains the shared legacy shape; canTransmit

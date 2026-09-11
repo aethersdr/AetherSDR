@@ -532,6 +532,13 @@ struct RadioCapabilities {
     // The radio accepts manual SQL in CW/data modes and owns its persistence.
     // False preserves the existing mode-specific client squelch policy.
     bool hasModeIndependentSquelch = false;
+    // Client-side auto-squelch (spectrum noise-floor estimator driving SQL).
+    // This is not a radio register: no supported family exposes an Auto bit.
+    // False: SQL cycles Off ↔ Manual only, Auto is never restored, and any
+    // persisted autoEnabled key is ignored and stripped. Icom is false —
+    // Off is threshold zero, and replaying Auto as client intent is how the
+    // estimator turned itself back on across bands and sessions.
+    bool hasClientAutoSquelch = false;
     bool hasAmCarrierLevel = false;
     bool hasVoxDelay = false;
 

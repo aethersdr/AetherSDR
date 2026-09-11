@@ -47,9 +47,8 @@ class RxApplet : public QWidget {
     Q_OBJECT
 
 public:
-    // 3-way squelch state.  Off → Manual → Auto cycle on SQL button click.
-    // Mirrored by VfoWidget's SQL button via the sqlModeChanged signal so
-    // both UI surfaces present the same state and value.
+    // Squelch state. Off → Manual → Auto when RadioCapabilities::hasClientAutoSquelch
+    // is set; otherwise Off ↔ Manual only (Icom). Mirrored by VfoWidget.
     enum class SqlMode : uint8_t { Off, Manual, Auto };
 
     explicit RxApplet(QWidget* parent = nullptr);
@@ -67,8 +66,7 @@ public:
     int     sqlManualLevel() const;
     int     sqlManualMaximum() const;
     int     autoSqlMarginDb() const;
-    // Externally cycle the mode (Off → Manual → Auto → Off) — same path the
-    // RxApplet's own SQL button takes.  Emits sqlModeChanged.
+    // Externally cycle SQL mode — same path the RxApplet SQL button takes.
     void    cycleSqlModeExternal();
     // Programmatic slider drag from another UI surface.  Branches by mode
     // exactly like the in-applet slider does: Manual writes the current
@@ -325,10 +323,11 @@ private:
     // Only client intent is retained, never a live threshold to replay at attach.
     RadioSettingsScope m_clientSquelchScope;
     std::optional<int> m_clientManualSqlLevel;
-    bool m_restoreAutoSql{false};
     bool m_clientSqlAwaitingReport{false};
     void loadClientSquelchIntent();
     void saveClientSquelchIntent();
+    bool clientAutoSquelchAvailable() const;
+    void dropClientAutoSquelchIfUnsupported();
     AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
     QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();

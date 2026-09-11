@@ -317,6 +317,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasSelectableMicInputs = false;
     caps.hasDownwardExpander = false;
     caps.hasAgcThreshold = true;
+    caps.hasClientAutoSquelch = true; // host spectrum estimator; no radio Auto bit
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;

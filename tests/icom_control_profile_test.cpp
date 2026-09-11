@@ -170,6 +170,7 @@ int main(int argc, char** argv)
         check(caps.hasAgcThreshold && caps.hasAmCarrierLevel && caps.hasVoxDelay,
               "Flex retains AGC threshold, AM carrier, and VOX delay");
         check(!caps.hasModeIndependentSquelch, "Flex retains its mode-specific SQL policy");
+        check(caps.hasClientAutoSquelch, "Flex keeps the host auto-squelch estimator");
         check(caps.cwSpeedMinWpm == 5 && caps.cwSpeedMaxWpm == 100
                   && caps.cwPitchMinHz == 100 && caps.cwPitchMaxHz == 6000
                   && caps.cwPitchStepHz == 10,
@@ -201,6 +202,8 @@ int main(int argc, char** argv)
             check(pitch == 601 && caps.cwPitchStepHz == 10,
                   "IC-705 retains its existing pitch conversion and step");
             check(!caps.hasModeIndependentSquelch, "IC-705 SQL policy remains unchanged");
+            check(!caps.hasClientAutoSquelch,
+                  "Icom does not advertise client auto-squelch");
             check(caps.hasFmRepeaterOffset, "IC-705 retains native repeater offsets");
             check(caps.hasCwTune, "IC-705 CW Tune policy remains unchanged");
         }
@@ -227,6 +230,8 @@ int main(int argc, char** argv)
                   "unsupported Icom AGC Off never writes Fast to the radio");
             check(caps.hasModeIndependentSquelch,
                   "IC-7300MK2 allows its native squelch in data and CW modes");
+            check(!caps.hasClientAutoSquelch,
+                  "IC-7300MK2 does not advertise client auto-squelch");
             check(!caps.hasFmRepeaterOffset, "MK2 does not advertise absent duplex commands");
             check(!caps.hasCwTune, "MK2 does not advertise an unimplemented CW tune carrier");
             {

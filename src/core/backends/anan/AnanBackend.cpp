@@ -333,6 +333,7 @@ RadioCapabilities AnanBackend::capabilities() const
     RadioCapabilities c;
     c.family = QStringLiteral("anan");
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
+    c.hasClientAutoSquelch = true; // host spectrum estimator; no radio Auto bit
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");
     c.canCreateSlices = false;

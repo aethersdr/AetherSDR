@@ -205,6 +205,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // TransmitModel::setDexp/setDexpLevel.
     caps.hasDownwardExpander = true;
     caps.hasAgcThreshold = true;
+    caps.hasClientAutoSquelch = true; // host spectrum estimator; no radio Auto bit
     caps.hasAmCarrierLevel = true;
     caps.hasVoxDelay = true;
 

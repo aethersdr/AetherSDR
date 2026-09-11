@@ -1383,12 +1383,49 @@ void RxApplet::applySqlModeVisuals()
     }
 }
 
+bool RxApplet::clientAutoSquelchAvailable() const
+{
+    if (usingExternalReceiveSquelch()) {
+        return true;
+    }
+    if (!m_radioModel) {
+        return true;
+    }
+    // Icom identity is the settings scope (same as SquelchIntent). Tests and
+    // pre-connect UI keep a Flex default backend, so the backend flag alone
+    // would still advertise Auto. The Icom backend also declares the flag
+    // false for connected sessions.
+    if (m_radioModel->settingsScope().family() == QLatin1String("icom")) {
+        return false;
+    }
+    return m_radioModel->backendCapabilities().hasClientAutoSquelch;
+}
+
+void RxApplet::dropClientAutoSquelchIfUnsupported()
+{
+    if (clientAutoSquelchAvailable()) {
+        return;
+    }
+    if (m_sqlMode == SqlMode::Auto) {
+        const bool sqOn = m_slice && m_slice->receiveSquelchOn();
+        setSqlMode(sqOn ? SqlMode::Manual : SqlMode::Off,
+                   /*propagateToRadio=*/false);
+    }
+    if (m_flexSqlMode == SqlMode::Auto) {
+        m_flexSqlMode = m_sqlMode;
+    }
+}
+
 void RxApplet::cycleSqlMode()
 {
-    const SqlMode next =
-        (m_sqlMode == SqlMode::Off)    ? SqlMode::Manual :
-        (m_sqlMode == SqlMode::Manual) ? SqlMode::Auto   :
-                                          SqlMode::Off;
+    SqlMode next;
+    if (!clientAutoSquelchAvailable()) {
+        next = (m_sqlMode == SqlMode::Off) ? SqlMode::Manual : SqlMode::Off;
+    } else {
+        next = (m_sqlMode == SqlMode::Off)    ? SqlMode::Manual :
+               (m_sqlMode == SqlMode::Manual) ? SqlMode::Auto   :
+                                                 SqlMode::Off;
+    }
     setSqlMode(next, /*propagateToRadio=*/true);
 }
 
@@ -1498,7 +1535,6 @@ void RxApplet::loadClientSquelchIntent()
     m_pendingSquelchWrites.flush();
     m_clientSquelchScope = {};
     m_clientManualSqlLevel.reset();
-    m_restoreAutoSql = false;
     m_clientSqlAwaitingReport = false;
     if (!m_slice || !m_radioModel || usingExternalReceiveSquelch()) {
         return;
@@ -1512,7 +1548,7 @@ void RxApplet::loadClientSquelchIntent()
     m_clientSquelchScope = scope;
     m_clientSqlAwaitingReport = true;
     int version = 0;
-    const QJsonObject doc = scope.featureExact(QStringLiteral("SquelchIntent"), &version);
+    QJsonObject doc = scope.featureExact(QStringLiteral("SquelchIntent"), &version);
     if (version != 1) {
         return;
     }
@@ -1520,12 +1556,18 @@ void RxApplet::loadClientSquelchIntent()
     const int level = manual.toInt(-1);
     if (manual.isDouble() && manual.toDouble() == level && level >= 0 && level <= 100) {
         m_clientManualSqlLevel = level;
-        if (!m_slice->squelchStateKnown() || !m_slice->squelchOn()
-            || doc.value(QStringLiteral("autoEnabled")).toBool(false)) {
+        if (!m_slice->squelchStateKnown() || !m_slice->squelchOn()) {
             m_slice->setManualSquelchLevel(level);
         }
     }
-    m_restoreAutoSql = doc.value(QStringLiteral("autoEnabled")).toBool(false);
+    // Drop the retired Auto latch. Icom has no radio Auto bit; writing
+    // autoEnabled made the client re-arm SQL after Off / band / reconnect.
+    if (doc.contains(QStringLiteral("autoEnabled"))) {
+        doc.remove(QStringLiteral("autoEnabled"));
+        if (!scope.setFeature(QStringLiteral("SquelchIntent"), 1, doc)) {
+            qWarning() << "SquelchIntent: failed to strip retired autoEnabled";
+        }
+    }
 }
 
 void RxApplet::saveClientSquelchIntent()
@@ -1536,8 +1578,7 @@ void RxApplet::saveClientSquelchIntent()
     }
     const RadioSettingsScope scope = m_clientSquelchScope;
     const int manualLevel = sqlManualLevel();
-    const bool autoEnabled = m_sqlMode == SqlMode::Auto;
-    m_pendingSquelchWrites.schedule(QStringLiteral("squelch"), [scope, manualLevel, autoEnabled] {
+    m_pendingSquelchWrites.schedule(QStringLiteral("squelch"), [scope, manualLevel] {
         int version = 0;
         AppSettings::FeatureReadStatus status;
         QJsonObject doc = scope.featureExact(
@@ -1548,7 +1589,7 @@ void RxApplet::saveClientSquelchIntent()
             return;
         }
         doc.insert(QStringLiteral("manualLevel"), manualLevel);
-        doc.insert(QStringLiteral("autoEnabled"), autoEnabled);
+        doc.remove(QStringLiteral("autoEnabled"));
         if (!scope.setFeature(QStringLiteral("SquelchIntent"), 1, doc)) {
             qWarning() << "SquelchIntent: settings write did not persist";
         }
@@ -1557,6 +1598,10 @@ void RxApplet::saveClientSquelchIntent()
 
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 {
+    if (m == SqlMode::Auto && !clientAutoSquelchAvailable()) {
+        m = (m_slice && m_slice->receiveSquelchOn()) ? SqlMode::Manual
+                                                     : SqlMode::Off;
+    }
     if (propagateToRadio) {
         m_clientSqlAwaitingReport = false;
     }
@@ -1977,6 +2022,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         });
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool, const RadioCapabilities&) {
+            dropClientAutoSquelchIfUnsupported();
             configureRepeaterReverseControl();
             configureFmToneControls();
             syncAgcSliderFromSlice();
@@ -2017,6 +2063,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         }
         refreshAllMutedDim();
     }
+    dropClientAutoSquelchIfUnsupported();
     updateAntennaButtons();
     configureRepeaterReverseControl();
     configureFmToneControls();
@@ -2583,16 +2630,8 @@ void RxApplet::connectSlice(SliceModel* s)
                 return;
             }
             m_clientSqlAwaitingReport = false;
-            if (m_clientManualSqlLevel && (!on || m_restoreAutoSql)) {
+            if (m_clientManualSqlLevel && !on) {
                 m_slice->setManualSquelchLevel(*m_clientManualSqlLevel);
-            }
-            // Wait for real readback before enabling the algorithm. A radio
-            // now reporting Off wins over old client Auto intent. An enabled
-            // manual radio threshold is otherwise adopted by the usual path.
-            if (on && m_restoreAutoSql) {
-                setSqlMode(SqlMode::Auto, /*propagateToRadio=*/false);
-            } else if (!on && m_restoreAutoSql) {
-                saveClientSquelchIntent();
             }
         }
         if (!externalReceive && !on && m_clientSquelchScope.hasRadioIdentity()
@@ -2660,14 +2699,12 @@ void RxApplet::connectSlice(SliceModel* s)
                 mode = SqlMode::Auto;
             }
         } else if (m_clientSqlAwaitingReport) {
-            // A previous radio/slice's Auto mode is not this radio's intent.
+            // A previous radio/slice's SQL mode is not this radio's intent.
             // Wait for its first SQL report instead of starting on defaults.
-            if (s->squelchStateKnown()) {
-                mode = s->squelchOn() && m_restoreAutoSql ? SqlMode::Auto : mode;
-            } else {
+            if (!s->squelchStateKnown()) {
                 mode = SqlMode::Off;
             }
-        } else if (m_flexSqlMode == SqlMode::Auto) {
+        } else if (clientAutoSquelchAvailable() && m_flexSqlMode == SqlMode::Auto) {
             mode = SqlMode::Auto;
         } else {
             m_flexSqlMode = mode;

@@ -500,6 +500,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasAgcThreshold = false; // 16 12 selects AGC mode, not Flex AGC-T.
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
+    // No CI-V Auto-SQL bit. Do not persist or restore a client Auto latch:
+    // Off is threshold zero, and replaying Auto is how SQL re-armed itself.
+    c.hasClientAutoSquelch = false;
     c.hasCwTune = profile.hasCwTune;
     c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
     c.hasVoxDelay = false; // setVox implements enable/gain only.
