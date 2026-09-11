@@ -2256,6 +2256,17 @@ target_include_directories(spot_auto_scroll_test PRIVATE src)
 target_link_libraries(spot_auto_scroll_test PRIVATE Qt6::Core)
 add_test(NAME spot_auto_scroll_test COMMAND spot_auto_scroll_test)
 
+# SpotHub WSJT-X feed: per-instance dial frequency for Decode placement
+# (#3595). Header-only and Qt-Core-only so it runs without WsjtxClient's
+# QUdpSocket / LogManager dependency graph. Socket-free by design — the UDP
+# framing is unchanged by the fix.
+add_executable(wsjtx_dial_tracker_test
+    tests/wsjtx_dial_tracker_test.cpp
+)
+target_include_directories(wsjtx_dial_tracker_test PRIVATE src)
+target_link_libraries(wsjtx_dial_tracker_test PRIVATE Qt6::Core)
+add_test(NAME wsjtx_dial_tracker_test COMMAND wsjtx_dial_tracker_test)
+
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
     src/core/N1MMSpotParser.cpp
