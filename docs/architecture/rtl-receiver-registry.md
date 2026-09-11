@@ -2,6 +2,8 @@
 
 `RtlReceiverRegistry` is a compiled engine foundation for the
 [approved RTL multi-RX RFC](https://github.com/aethersdr/AetherSDR/issues/5468).
+F4 is the local plan ID for the RFC's Foundation-stage
+"testable capture/processing lifecycle" bullet.
 Its default preparation function creates real `WdspChannel` receivers and
 preallocates their output buffers. It represents multiple receivers from the
 start and enforces their admission, session identity, publication and retirement.
@@ -46,8 +48,10 @@ when the addressable UI slot range is larger. A removed live handle remains
 charged until its bank is actually retired and destroyed, so failed-removal
 retries retain the complete still-active set.
 Admission validates all handles, distinct slots, bounded DSP buffers and
-parameters, and the entire set against the fixed capture using the production
-`SharedCapturePolicy` helper. It never recenters a capture or adjusts a sibling.
+parameters, and whole-set passband containment within the fixed capture using
+the production `SharedCapturePolicy` helper. Its center domain is deliberately
+the singleton supplied center; this does not validate tuner range or grid
+legality. It never recenters a capture or adjusts a sibling.
 WDSP blocking-output mode is refused because these receivers run in the
 acquisition context.
 
@@ -81,6 +85,10 @@ canceling a session invalidates pending/results immediately and returns without
 waiting for FFTW. An already running FFTW call is allowed to finish, then its
 obsolete result is destroyed on the worker pool. The same executor survives
 replacement registry objects, even when endpoint metadata is identical.
+
+A preparation callable that throws a standard or non-standard exception reports
+`PreparationFailed`. Its partial bank and reservations are retired off the
+callback, while the active bank remains usable and later requests can proceed.
 
 Each registry has three fixed bank positions: preparing/offered, active, and
 retiring. It cannot accumulate another prepared bank behind an unconsumed
@@ -116,6 +124,12 @@ channel has really closed. There is no independent RTL pool counter that can
 overcommit WDSP. Local resident-limit and shared-pool failures are distinct
 observable preparation errors.
 
+This is a deliberate public API addition to the shared DSP class. A caller can
+reserve all 32 slots without creating channels, and the reservation has no
+timeout or per-backend quota. Callers must release reservations promptly when
+preparation is canceled or fails; other backends receive pool exhaustion while
+those slots are held. Maintainer review must explicitly consider that API scope.
+
 The normal WDSP setup lock, production wisdom import and atomic export remain
 unchanged. F4 sets no planner time limit. The repository's existing isolated,
 bounded test-planner setup applies to the registered correctness tests; those
@@ -150,6 +164,10 @@ The sample method uses fixed stack storage and lock-free atomic state only.
 It does not allocate, take a mutex, copy/release a shared pointer, plan, change
 filters, invoke a preparation callable or destroy a receiver. Preparing a
 replacement cannot mutate the bank a callback currently borrows.
+Finite-value validation performs an O(N) read of up to 65,536 complex samples
+after the metadata checks, even if no active bank or usable offer remains.
+M1's extraction will read that IQ again; integrated callback-budget measurements
+must include both passes. Allocation freedom alone does not establish headroom.
 
 On the next sample boundary, the reader adopts the complete ready bank and
 marks the previous bank `Retired` only after its preceding synchronous call
@@ -180,8 +198,8 @@ build:
   rejection, coalescing and independent-owner refusal, no-reader startup,
   publication pressure, resident/pool bounds, owner destruction/recreation,
   same-owner reconnect, stopped acquisition, retained-context ceiling, and
-  actual default WDSP preparation/processing. CTest bounds the concurrency
-  target's total runtime.
+  actual default WDSP preparation/processing, and recovery after standard and
+  non-standard preparation exceptions. CTest bounds each target to 120 seconds.
 
 The registry tests establish these ownership contracts, not reception quality,
 GUI convergence or race freedom on their own. Run the production units under
@@ -191,3 +209,9 @@ DSP tests, normalized lifecycle/error routing, USB readback transactions,
 audio integration and the approved hardware/bridge/radiocert gates. Native
 Linux aarch64 runtime/performance and per-architecture advertised limits remain
 independent release requirements.
+
+M1 must validate requested and returned capture centers against the actual
+tuner's supported center domains and grid before supplying descriptors here.
+The registry's singleton center domain is not hardware-domain validation or
+evidence of a successful tune; actual USB readback and capture transactions
+remain the integration owner's responsibility.

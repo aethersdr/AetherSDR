@@ -254,7 +254,6 @@ struct RtlReceiverRegistry::Executor : std::enable_shared_from_this<Executor> {
                                     request = pending->request;
                                     state->banks[i].request = *request;
                                     state->banks[i].stage.store(Stage::Preparing, std::memory_order_relaxed);
-                                    state->status.preparing = true;
                                     pending.reset();
                                     break;
                                 }
@@ -307,13 +306,15 @@ struct RtlReceiverRegistry::Executor : std::enable_shared_from_this<Executor> {
             } catch (const std::exception& exception) {
                 result = Result::PreparationFailed;
                 error = exception.what();
+            } catch (...) {
+                result = Result::PreparationFailed;
+                error = "The preparation callable threw a non-standard exception";
             }
             {
                 const std::scoped_lock lock(mutex);
                 BankSlot& slot = state->banks[static_cast<std::size_t>(index)];
                 const bool current = !state->closing.load() && state->session.load() == request->session &&
                     state->revision.load() == request->revision;
-                state->status.preparing = false;
                 if (current) {
                     state->status.result = result;
                     state->status.error = std::move(error);
@@ -487,6 +488,8 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submit(const Capture& capture, 
         used[slot] = true;
         passbands[i] = spec.passband;
     }
+    // The capture is fixed here: this singleton domain checks passband fit,
+    // not tuner legality. M1 must validate the hardware domain/readback first.
     const SharedCapturePolicy::CenterDomain domain {capture.centerHz, capture.centerHz, capture.centerHz, 1};
     const SharedCapturePolicy::RestoreResult fitting = SharedCapturePolicy::restoreFixedCapture(capture,
         std::span(passbands).first(desired.size()), std::span(&domain, 1),

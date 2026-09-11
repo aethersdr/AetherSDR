@@ -568,6 +568,7 @@ add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
 target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
+set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
 
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)

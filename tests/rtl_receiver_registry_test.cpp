@@ -12,6 +12,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -415,6 +416,62 @@ void pressureFailureAndValidation()
     check(until(registry, [](const auto& status) { return status.residentReceivers == 0; }), "pressure session drains");
 }
 
+void preparationExceptions()
+{
+    const auto stats = std::make_shared<Stats>();
+    const auto failureMode = std::make_shared<std::atomic<int>>(0);
+    Registry registry({2, 2, 4}, [stats, failureMode](const Registry::ReceiverSpec& value,
+        WdspChannel::Reservation&, std::string&) -> std::unique_ptr<Registry::Receiver> {
+        if (value.handle.slot == 1) {
+            if (failureMode->load() == 1) { throw std::runtime_error("injected standard exception"); }
+            if (failureMode->load() == 2) { throw 7; }
+        }
+        return std::make_unique<FakeReceiver>(stats);
+    });
+    const std::uint64_t session = registry.beginSession(capture());
+    const auto a = registry.reserveSlot(0);
+    const auto b = registry.reserveSlot(1);
+    if (!a || !b) { check(false, "exception recovery handles"); return; }
+    std::array desired {spec(*a), spec(*b)};
+    auto reader = registry.attachReader();
+    Probe probe;
+    probe.session = session;
+    check(registry.submit(capture(), desired) == Registry::Result::Accepted, "initial exception-test bank admitted");
+    check(ready(registry, 1) && deliver(reader, probe), "initial exception-test bank active");
+    for (int mode : {1, 2}) {
+        const double previousFilter = probe.filterHighHz;
+        const int previousDestruction = stats->destroyed.load();
+        desired[0].dsp.filterHighHz = 2100 + mode * 100;
+        failureMode->store(mode);
+        check(registry.submit(capture(), desired) == Registry::Result::Accepted, "throwing replacement admitted");
+        check(until(registry, [](const Registry::Status& status) {
+            return status.result == Registry::Result::PreparationFailed && !status.preparing &&
+                !status.pending && status.residentReceivers == 2;
+        }), "exception reports failure and releases partial-bank capacity");
+        const std::string expected = mode == 1 ? "injected standard exception" :
+            "The preparation callable threw a non-standard exception";
+        check(registry.service().error == expected, "exception diagnostic retained");
+        check(stats->live == 2 && stats->destroyed == previousDestruction + 1,
+            "receiver created before exception is destroyed while active bank survives");
+        check(deliver(reader, probe) && probe.count == 2 && probe.handles[0] == *a &&
+            probe.handles[1] == *b && probe.filterHighHz == previousFilter,
+            "exception preserves active configuration and handles");
+        check(WdspChannel::reserveChannels(30).has_value(), "exception returns all partial-bank pool reservations");
+        check(!WdspChannel::reserveChannels(31), "active bank still owns its two pool slots");
+        failureMode->store(0);
+        check(registry.submit(capture(), desired) == Registry::Result::Accepted, "same handles retry after exception");
+        check(ready(registry, 1 + mode * 2), "executor prepares another request after exception");
+        check(deliver(reader, probe) && probe.filterHighHz == desired[0].dsp.filterHighHz,
+            "successful retry publishes replacement configuration");
+        check(until(registry, [](const Registry::Status& status) { return status.residentReceivers == 2; }),
+            "retry retires previous active bank");
+    }
+    reader.stop();
+    check(until(registry, [](const Registry::Status& status) { return status.residentReceivers == 0; }),
+        "exception recovery session drains");
+    check(stats->live == 0 && WdspChannel::reserveChannels(32).has_value(), "exception recovery returns entire pool");
+}
+
 void capacityAndStoppedPreparation()
 {
     const auto stats = std::make_shared<Stats>();
@@ -576,6 +633,7 @@ int main(int argc, char** argv)
     publicationAndSlots(); drain();
     coalescingAndOwnerLifetime(); drain();
     pressureFailureAndValidation(); drain();
+    preparationExceptions(); drain();
     capacityAndStoppedPreparation(); drain();
     reconnectAndRegistryBound(); drain();
     actualPreparedDsp(); drain();
