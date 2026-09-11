@@ -844,7 +844,10 @@ void VfoWidget::buildUI()
     m_txAntBtn->setStyleSheet(kFlatBtn + "QPushButton { color: #ff4444; }");
     connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
         if (!m_slice) return;
-        QMenu menu(this);
+        const QPointer<VfoWidget> self(this);
+        const QPointer<SliceModel> slice(m_slice);
+        ScopedChildWidget<QMenu> menuOwner(this);
+        QMenu& menu = *menuOwner.get();
         const QStringList options = txAntennaOptions();
         for (const QString& ant : options) {
             auto* act = menu.addAction(antennaMenuLabel(ant, options));
@@ -854,8 +857,12 @@ void VfoWidget::buildUI()
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        if (auto* sel = menu.exec(m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height()))))
-            m_slice->setTxAntenna(sel->data().toString());
+        QAction* selected = menu.exec(
+            m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
+        if (!self || !menuOwner || !slice || self->m_slice != slice.data() || !selected) {
+            return;
+        }
+        slice->setTxAntenna(selected->data().toString());
     });
     hdr->addWidget(m_txAntBtn);
 
@@ -5647,10 +5654,17 @@ void VfoWidget::rebuildFilterButtons()
         }
         btn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
-            QMenu menu;
-            menu.addAction("Set Custom Edges...", [this, i] {
+            ScopedChildWidget<QMenu> menuOwner(this);
+            QMenu& menu = *menuOwner.get();
+            // Rebuilding presets deletes btn; old actions must not address the
+            // replacement mode's preset arrays after a nested event loop.
+            menu.addAction("Set Custom Edges...", btn,
+                           [this, i, button = QPointer<QPushButton>(btn)] {
                 if (!m_slice) return;
-                QDialog dlg(this);
+                const QPointer<VfoWidget> self(this);
+                const QPointer<SliceModel> slice(m_slice);
+                ScopedChildWidget<QDialog> dialogOwner(this);
+                QDialog& dlg = *dialogOwner.get();
                 dlg.setWindowTitle("Set Custom Filter Edges");
                 auto* form = new QFormLayout(&dlg);
                 auto* loSpin = new QSpinBox(&dlg);
@@ -5674,7 +5688,11 @@ void VfoWidget::rebuildFilterButtons()
                 QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
                 QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
                 form->addRow(btns);
-                if (dlg.exec() != QDialog::Accepted) return;
+                const int result = dlg.exec();
+                if (!self || !dialogOwner || !button || !slice
+                    || self->m_slice != slice.data() || result != QDialog::Accepted) {
+                    return;
+                }
                 int lo = loSpin->value();
                 int hi = hiSpin->value();
                 if (hi <= lo) return;
@@ -5685,7 +5703,7 @@ void VfoWidget::rebuildFilterButtons()
                 rebuildFilterButtons();
                 m_slice->setFilterWidth(lo, hi);
             });
-            menu.addAction("Reset to Default", [this, i] {
+            menu.addAction("Reset to Default", btn, [this, i] {
                 if (!m_slice) return;
                 const auto& factory = filterPresetsFor(m_slice->mode()).filterWidths;
                 if (i >= factory.size()) return;

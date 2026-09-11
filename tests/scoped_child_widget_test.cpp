@@ -4,8 +4,15 @@
 #include <QApplication>
 #include <QDialog>
 #include <QMenu>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QTimer>
+#include <QWidget>
+#include <QPoint>
+#include <QObject>
+#include <QEvent>
+#include <QString>
+#include <QVariant>
 
 #include <cstdio>
 #include <memory>
@@ -97,6 +104,27 @@ void nestedDialogLifetime()
           returnedFromDialog && menuObserver.isNull() && dialogObserver.isNull());
 }
 
+void selectedActionLifetime()
+{
+    QWidget parent;
+    QPointer<QAction> actionObserver;
+    {
+        AetherSDR::ScopedChildWidget<QMenu> child(&parent);
+        QAction* action = child.get()->addAction("Select antenna");
+        action->setData(QStringLiteral("ANT1"));
+        actionObserver = action;
+        QTimer::singleShot(0, child.get(), [&] {
+            child.get()->setActiveAction(action);
+            QKeyEvent key(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(child.get(), &key);
+        });
+        QAction* selected = child.get()->exec(QPoint(20, 20));
+        check("selected action remains readable after exec",
+              selected == action && selected->data().toString() == QStringLiteral("ANT1"));
+    }
+    check("selected action is released with menu", actionObserver.isNull());
+}
+
 void actionLifetime()
 {
     QWidget parent;
@@ -123,6 +151,7 @@ int main(int argc, char** argv)
     dialogLifetime(false, true);
     dialogLifetime(true, false);
     nestedDialogLifetime();
+    selectedActionLifetime();
     actionLifetime();
     return failures ? 1 : 0;
 }
