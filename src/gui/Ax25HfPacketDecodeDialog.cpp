@@ -2,6 +2,7 @@
 
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
+#include "core/DigitalVoiceFeature.h"
 #include "core/DaxTxPolicy.h"
 #include "core/TxKeyingMarker.h"
 #include "core/LogManager.h"
@@ -23,6 +24,7 @@
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
+#include "gui/DStarAvailabilityGate.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1355,6 +1357,17 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // Apply the per-tab chrome (hide the shared log on the Terminal tab) now that
     // the layout is fully built.
     updateTabChrome(m_tabStack->currentIndex());
+
+    // D-STAR is a SmartSDR waveform surface. Apply the live capability now
+    // so a dialog constructed after connect (AetherModem menu, KISS autostart)
+    // is honest. Subsequent revisions come from
+    // MainWindow::applyCapabilitiesToUi — one owner, not a second subscribe.
+    if (m_radio) {
+        setDstarTabAvailable(m_radio->isConnected(),
+                             m_radio->backendCapabilities().hasWaveforms);
+    } else {
+        setDstarTabAvailable(false, false);
+    }
 }
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
@@ -3591,6 +3604,27 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
             s.lastCall = peer;
             s.save();
         }
+    }
+}
+
+void Ax25HfPacketDecodeDialog::setDstarTabAvailable(bool connected, bool hasWaveforms)
+{
+    if (!m_dstarTab) {
+        return;
+    }
+    const bool show = dstarTabAvailable(connected, hasWaveforms,
+                                        kLocalDigitalVoiceWaveformAvailable);
+    m_dstarTab->setVisible(show);
+    if (show) {
+        return;
+    }
+    if (m_radio) {
+        m_radio->dstarModel().stop();
+    }
+    if (m_tabStack && m_dstarPage
+        && m_tabStack->currentWidget() == m_dstarPage && m_ax25Tab) {
+        m_ax25Tab->setChecked(true);
+        m_tabStack->setCurrentIndex(0);
     }
 }
 

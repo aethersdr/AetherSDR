@@ -144,6 +144,13 @@ public:
     QJsonObject automationCommand(const QString& verb, const QString& action,
                                   const QString& value);
 
+    // D-STAR in AetherModem is a SmartSDR waveform surface (ThumbDV helper +
+    // radio-side D-STAR waveform). Hide the tab when the connected radio
+    // cannot load waveforms, or when this build has no helper. True on
+    // disconnect (permissive) and when RadioCapabilities::hasWaveforms is
+    // true. Hiding also stops a running helper so it is not orphaned.
+    void setDstarTabAvailable(bool connected, bool hasWaveforms);
+
 protected:
     // Command history (Up/Down) on the terminal input line.
     bool eventFilter(QObject* watched, QEvent* event) override;

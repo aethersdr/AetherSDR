@@ -2365,6 +2365,12 @@ target_include_directories(waveform_install_gate_test PRIVATE src)
 target_link_libraries(waveform_install_gate_test PRIVATE Qt6::Core)
 add_test(NAME waveform_install_gate_test COMMAND waveform_install_gate_test)
 
+# D-STAR capability/build visibility and delayed-start admission. Pure policy:
+# no QApplication, settings, helper process, serial device, or sockets.
+add_executable(dstar_availability_gate_test tests/dstar_availability_gate_test.cpp)
+target_include_directories(dstar_availability_gate_test PRIVATE src)
+add_test(NAME dstar_availability_gate_test COMMAND dstar_availability_gate_test)
+
 # DVK indicator availability — TX-slice mode + the radio's DVK entitlement.
 # Header-only, pure logic.
 add_executable(dvk_availability_gate_test

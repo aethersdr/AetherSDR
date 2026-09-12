@@ -810,7 +810,9 @@ struct RadioCapabilities {
     bool hasFullDuplex = false;
 
     // The radio accepts installable waveform/mode plugins (SmartSDR waveforms),
-    // so a client can offer to manage them.
+    // so a client can offer to manage them. Also gates the AetherModem D-STAR
+    // tab: that page drives the local ThumbDV helper against a SmartSDR D-STAR
+    // waveform, which is empty on every family that cannot load waveforms.
     bool hasWaveforms = false;
 
     // Several GUI clients can hold independent sessions on the radio at once,

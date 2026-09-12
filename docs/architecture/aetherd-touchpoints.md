@@ -49,7 +49,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/CwxLocalKeyer.h` | 2 | universal — Local CW sidetone keyer: text+WPM in, key-down edges out; radio-agnostic despite Flex 'CWX' naming. | unconverted |
 | `core/DaxTxPolicy.h` | 1 | vendor(flex) — Policy deciding when to claim a Flex dax_tx stream vs deferring to SmartSDR DAX2; whole surface is DAX/VITA-49. | unconverted |
 | `core/DeviceDiagnostics.h` | 1 | ui-support — Host audio-device diagnostics (Qt device BT/USB heuristics, JSON snapshots for troubleshooting), not radio state | unconverted |
-| `core/DigitalVoiceFeature.h` | 7 | universal — Build-flag and availability filtering for digital-voice modes. Radio-agnostic mode-list logic over the DV registry. | unconverted |
+| `core/DigitalVoiceFeature.h` | 8 | universal — Build-flag and availability filtering for digital-voice modes. Radio-agnostic mode-list logic over the DV registry. | unconverted |
 | `core/DigitalVoiceModeRegistry.h` | 1 | universal — Registry of digital-voice mode descriptors (id, settings id, display name, radio mode, underlying mode, waveform name). Canonical mode metadata; no wire coupling. | unconverted |
 | `core/DigitalVoiceWaveformProcess.h` | 2 | mixed(flex) — Supervisor for the host-side DV waveform helper process (ThumbDV) — QProcess lifecycle plus a UDP control/data path. The supervision half is universal, but the health surface it publishes counts Flex VITA sequence gaps, so the header is not vendor-neutral as it stands. | unconverted |
 | `core/DigitalVoiceWaveformSettings.h` | 2 | ui-support — AppSettings-backed DV waveform configuration (backend selection, executable paths). Client-side persistence plumbing, not radio state. | unconverted |
