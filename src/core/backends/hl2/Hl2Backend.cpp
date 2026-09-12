@@ -516,6 +516,20 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // it is published rather than assumed, so the indicator starts from a
         // stated value instead of whatever the widget happened to hold.
         publishWideState();
+        // THE OPERATOR'S AUTOMATIC-GAIN SWITCH, restored last.
+        //
+        // Last because setAutoRfGain() refuses to arm from a baseline above
+        // kAutoRfGainMaxBaselineDb, and the restored baseline only reaches
+        // m_lnaGainDb in pushInitialState() above. Arming earlier would consult
+        // a number that had not been restored yet and refuse — or worse, not.
+        //
+        // A REFUSAL HERE IS CORRECT AND IS LOGGED BY setAutoRfGain: the control
+        // stays off, the operator's preference stays recorded, and they are
+        // told why. What must not happen is arming silently against a gain axis
+        // this radio is not trusted on.
+        if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
+            setAutoRfGain(true);
+        }
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
@@ -1683,9 +1697,6 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
     // not implemented, not because they could not be.
     c.hasHostNoiseBlanker = true;
-    // The receive-gain control this backend owns (Hl2AutoGainPolicy.h). Off by
-    // default; the capability only says the switch exists.
-    c.hasAutoRfGain = true;
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -5406,6 +5417,16 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         m_lnaDefaultDb = qBound(kLnaGainMinDb,
                                 rfGain.value(QStringLiteral("defaultDb")).toInt(),
                                 kLnaGainMaxDb);
+    // ARMED LATER, NOT HERE. Restore runs before the link is up, and the
+    // control refuses to arm from a baseline it does not trust -- a decision it
+    // cannot make until the restored baseline has actually been applied. So
+    // this records the WISH and the connect edge acts on it.
+    //
+    // Absent means off, which is the right default: a session that predates
+    // this key never armed anything, and reading a missing key as "on" would
+    // switch a control on for an operator who never asked.
+    m_autoRfGainWanted =
+        rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =
         rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
     for (auto it = lnaByBand.constBegin(); it != lnaByBand.constEnd(); ++it)
@@ -5608,8 +5629,18 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
     }
 
+    // THE OPERATOR'S AUTOMATIC-GAIN SWITCH, and it belongs HERE rather than in
+    // an AppSettings key. docs/HERMES.md is explicit: a value the radio cannot
+    // store goes in this family's OperatingState, "never in a flat AppSettings
+    // key". It rides the rfGain object because that is the axis it acts on.
+    //
+    // THE SWITCH ONLY. The OFFSET the loop is holding is deliberately NOT
+    // persisted and is absent from this object: an automatic transient that
+    // outlived the session that produced it would be indistinguishable, next
+    // launch, from a gain the operator chose. See m_lnaAutoOffsetDb.
     QJsonObject rfGain{{QStringLiteral("defaultDb"), m_lnaDefaultDb},
-                       {QStringLiteral("lnaDbByBand"), lnaByBand}};
+                       {QStringLiteral("lnaDbByBand"), lnaByBand},
+                       {QStringLiteral("autoEnabled"), m_autoRfGainEnabled}};
     QJsonObject txSetpoints{{QStringLiteral("driveByBand"), driveByBand}};
     if (m_driveDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("defaultPercent"), m_driveDefaultPercent);
@@ -5751,6 +5782,7 @@ void Hl2Backend::setAutoRfGain(bool on)
         // session would hold the loop off for no reason, or -- worse -- fail to.
         m_sinceUnkey.invalidate();
         m_autoRfGainEnabled = true;
+        m_autoRfGainWanted = true;
         // A law that releases on a measurement needs the stream that carries
         // it. Ordered AFTER m_autoRfGainEnabled, which is what it reads.
         applyBandscopeForAutoGain();
@@ -5758,6 +5790,11 @@ void Hl2Backend::setAutoRfGain(bool on)
                       << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
     } else {
         m_autoRfGainEnabled = false;
+        // The operator turning it OFF is a preference, and is persisted as one.
+        // A REFUSAL does not reach here -- that path returns before this -- so a
+        // radio that declined to arm keeps the operator's "on" recorded and
+        // arms on the next connect that allows it.
+        m_autoRfGainWanted = false;
         applyBandscopeForAutoGain();
         m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
         m_autoGainState = AetherSDR::hl2::AutoGainState{};

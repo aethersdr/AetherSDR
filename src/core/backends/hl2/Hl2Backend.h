@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/backends/AutoRfGainControl.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/dsp/WdspChannel.h"
 
@@ -44,7 +45,13 @@ class Hl2TxDsp;
 // The wire and both DSP chains run on a dedicated I/O thread. That is not only
 // about keeping WDSP off the UI: this backend paces EP2, and the gateware
 // watchdog halts the stream if EP2 stops arriving.
-class Hl2Backend : public IRadioBackend {
+// Implements IAutoRfGainControl directly rather than through a separate
+// object: the control's whole state already lives here (the law, the offset,
+// the clocks), and a forwarding shim would only move the same members behind a
+// second pointer. The interface methods below are THIN FORWARDERS to this
+// class's own names -- the interface is the vocabulary shared code is allowed
+// to use; these names are this family's.
+class Hl2Backend : public IRadioBackend, public IAutoRfGainControl {
     Q_OBJECT
 
 public:
@@ -92,7 +99,7 @@ public:
                       PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
-    void setAutoRfGain(bool on) override;
+    void setAutoRfGain(bool on);
 
 private:
     // The actual span change, after the throttle above has settled. The DDC rate
@@ -189,14 +196,41 @@ public:
     //             kept so the two can be compared on the bench.
     // "binary" -- binaryHighLowConfig(): the two-state per-band switch.
     //
-    // ALL THREE ARE THE SAME FUNCTION AND THE SAME STATE MACHINE; only the
-    // numbers differ. That is the whole reason the law is parameterised, and
-    // this setter is what makes it a bench decision rather than a rebuild.
+    // ALL FOUR ARE THE SAME FUNCTION AND THE SAME STATE MACHINE; only the
+    // numbers differ, and "bandscope" differs further only in requiring a
+    // measurement before a release. That is the whole reason the law is
+    // parameterised, and this setter is what makes it a bench decision rather
+    // than a rebuild.
     //
     // Selecting a mode also installs that mode's floor, because the floor is
     // part of the configuration; re-issue the floor afterwards to override it.
-    // Returns false and changes nothing if the name is not one of the three.
-    bool setAutoRfGainMode(const QString& mode) override;
+    // Returns false and changes nothing if the name is not one of the four.
+    bool setAutoRfGainMode(const QString& mode);
+
+    // ---- IAutoRfGainControl (AutoRfGainControl.h) ----
+    //
+    // Thin forwarders on purpose; see the note on the class declaration.
+    //
+    // autoRfGainControl() answers unconditionally: this backend ALWAYS has the
+    // control, whether or not a radio is presently answering. Whether an
+    // operator should be shown it is a different question and belongs to
+    // RadioModel::autoRfGain(), which is where the not-permissive-on-disconnect
+    // rule lives -- one place rather than two that must agree.
+    IAutoRfGainControl* autoRfGainControl() override { return this; }
+    void setArmed(bool on) override { setAutoRfGain(on); }
+    [[nodiscard]] bool isArmed() const override { return m_autoRfGainEnabled; }
+    void setFloorDb(int floorDb) override { setAutoRfGainFloorDb(floorDb); }
+    [[nodiscard]] int floorDb() const override { return autoRfGainFloorDb(); }
+    [[nodiscard]] int maxFloorDb() const override { return kAutoRfGainFloorMaxDb; }
+    bool setLaw(const QString& name) override { return setAutoRfGainMode(name); }
+    [[nodiscard]] QString law() const override { return m_autoGainMode; }
+    [[nodiscard]] QStringList laws() const override
+    {
+        // The order IS the recommendation: the first is the default and the
+        // one whose release rests on a measurement. See setAutoRfGainMode.
+        return {QStringLiteral("bandscope"), QStringLiteral("ramp"),
+                QStringLiteral("probe"), QStringLiteral("binary")};
+    }
     [[nodiscard]] QString autoRfGainMode() const { return m_autoGainMode; }
 
     // The highest baseline from which the automatic control will arm.
@@ -889,6 +923,16 @@ private:
     // HOLDS -- which is the correct behaviour, because the clip evidence has no
     // idle path and silence is not a clean converter.
     bool m_autoRfGainEnabled = false;
+    // THE OPERATOR'S PREFERENCE, as distinct from whether the control is
+    // running. Persisted in currentOperatingState()'s rfGain object -- this
+    // family's own state, which is where docs/HERMES.md says a value the radio
+    // cannot store belongs, rather than a flat AppSettings key owned by the
+    // shared GUI.
+    //
+    // The two differ whenever the control DECLINED to arm: the wish stays true,
+    // the control stays off, and the next connect from a baseline it trusts
+    // honours the operator without them having to ask twice.
+    bool m_autoRfGainWanted = false;
     AetherSDR::hl2::AutoGainState m_autoGainState;
     AetherSDR::hl2::AutoGainConfig m_autoGainConfig;
     // The name of the configuration above, for the health row and for the

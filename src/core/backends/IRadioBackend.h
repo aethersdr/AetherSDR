@@ -29,6 +29,9 @@
 
 namespace AetherSDR {
 
+// Borrowed handle returned by autoRfGainControl(); see AutoRfGainControl.h.
+class IAutoRfGainControl;
+
 // Neutral, family-agnostic connect descriptor. Core fields cover the common
 // case; vendor-specific parameters (SmartLink token, Kiwi endpoint path, …)
 // ride in `params` so the interface never grows a per-vendor connect signature.
@@ -352,42 +355,17 @@ public:
         Q_UNUSED(gainDb);
     }
 
-    // Arm or disarm the backend's own receive-gain control, where it has one
-    // (RadioCapabilities::hasAutoRfGain). RADIO-WIDE rather than per-pan, like
-    // setPanRfGain's target on a single-converter radio: there is one front end.
+    // The backend's own automatic receive-gain control, or nullptr when it has
+    // none. See AutoRfGainControl.h for the vocabulary and for why this is a
+    // borrowed interface pointer rather than a capability bool and three verbs.
     //
-    // Disarming must restore the operator's own gain to the hardware in ONE
-    // action, from whatever state the control was in. A backend that left the
-    // radio attenuated after the switch was turned off would be a control that
-    // does not undo itself.
+    // BORROWED AND NOT TO BE CACHED: valid only for the duration of the call
+    // that obtained it.
     //
-    // Default no-op AND a capability flag that defaults false: a family with no
-    // such control shows no switch, so nothing can call this.
-    virtual void setAutoRfGain(bool on) { Q_UNUSED(on); }
-
-    // How far below the operator's own gain that control may go, in dB. The
-    // second of the two numbers the operator owns; everything else about such a
-    // loop is a decision they have no evidence to make.
-    //
-    // Default no-op behind the same capability flag as setAutoRfGain.
-    virtual void setAutoRfGainFloorDb(int floorDb) { Q_UNUSED(floorDb); }
-
-    // Which control law that loop runs. A backend may offer more than one --
-    // the HL2's release condition is a genuinely open question (#5535) and the
-    // bench has to be able to argue with the answer without a rebuild.
-    //
-    // A STRING RATHER THAN AN ENUM ON PURPOSE: the set of laws is a backend's
-    // private business, this seam carries no opinion about it, and a backend
-    // that does not recognise the name leaves its law alone and says so.
-    //
-    // Default no-op behind the same capability flag as setAutoRfGain.
-    // Returns false, and changes nothing, when the name is not one this
-    // backend has a law for. Callers report that rather than guessing.
-    virtual bool setAutoRfGainMode(const QString& mode)
-    {
-        Q_UNUSED(mode);
-        return false;
-    }
+    // Default nullptr AND that default is the point: a family with no such
+    // control never learns the concept exists, and shared code does not have to
+    // know which families do.
+    virtual IAutoRfGainControl* autoRfGainControl() { return nullptr; }
 
     // The discrete front-end stages above. `step` indexes the label list the
     // backend published; a backend clamps rather than refuses, exactly as

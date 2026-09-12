@@ -1,4 +1,5 @@
 #include "core/RadioCertification.h"
+#include "core/backends/AutoRfGainControl.h"
 
 #include "core/RadioCertificationMath.h"
 #include "core/AppSettings.h"
@@ -523,16 +524,13 @@ void RadioCertification::stageControlEffect(const Options& o)
         // Restored afterwards on every path out of this block, because a
         // certification run must not leave the operator's radio in a different
         // state from the one it found.
-        // The ARMED state, not the capability: read from the backend's own
-        // health snapshot, which is the only place it is published. A radio
-        // that has the feature but never had it switched on must not have it
+        // The ARMED state, not merely the presence of the control. A radio that
+        // has the feature but never had it switched on must not have it
         // switched ON by a certification run.
-        const bool autoGainWasOn =
-            m_radio->hasAutoRfGain()
-            && m_radio->backendHealthSnapshot()
-                   .values.value(QStringLiteral("autoRfGain")).toBool();
+        auto* autoGain = m_radio->autoRfGain();
+        const bool autoGainWasOn = autoGain && autoGain->isArmed();
         if (autoGainWasOn) {
-            m_radio->setAutoRfGain(false);
+            autoGain->setArmed(false);
             spin(200);
         }
         const int startGain = pan->rfGain();
@@ -574,8 +572,8 @@ void RadioCertification::stageControlEffect(const Options& o)
         // Re-arm AFTER the gain is back where it was, so the loop's first
         // window is about the operator's own setting rather than this stage's
         // probe value.
-        if (autoGainWasOn) {
-            m_radio->setAutoRfGain(true);
+        if (autoGainWasOn && autoGain) {
+            autoGain->setArmed(true);
         }
         m[QStringLiteral("autoRfGainSuspended")] = autoGainWasOn;
 
