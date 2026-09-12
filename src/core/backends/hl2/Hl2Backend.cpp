@@ -449,16 +449,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // The bandscope belongs to the SESSION: MetisClient::start() comes up
         // with wide_spectrum clear and ep4_seq_no restarted, so carrying the
         // previous link's state here would report a stream nothing enabled.
-        m_bandscopeEnabled = false;
-        m_ep4Packets = 0;
-        m_ep4Drops = 0;
-        m_ep4Rewinds = 0;
-        m_ep4Blocks = 0;
-        m_ep4Timeouts = 0;
-        // Back to "never seen", which is what makes the level rows go ABSENT
-        // again rather than keep showing the previous radio's last reading.
-        m_bandscopeBlock = AetherSDR::hl2::Ep4Stats{};
-        m_bandscopeBlockClock.invalidate();
+        resetBandscopeMirrors();
         m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
@@ -512,6 +503,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
             m_linkStatsTimer->stop();
             resetIoBoardSchedule();
+            resetBandscopeMirrors();
             emit disconnected();
         }
     });
@@ -530,6 +522,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
         m_linkStatsTimer->stop();
         resetIoBoardSchedule();
+        resetBandscopeMirrors();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -4393,8 +4386,18 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         }
         // The wideband bandscope (endpoint 0x04). NO UI AND NO SETTING, on
         // purpose: it is a diagnostic, nothing in the app makes a decision from
-        // it, and it is off again at the next connect. An operator who wants it
-        // asks for it here, once.
+        // it, and it is off again at the next connect.
+        //
+        // AND NO CALLER, WHICH IS NOT THE SAME THING. An earlier version of
+        // this comment said "an operator who wants it asks for it here, once",
+        // and there is no HERE: nothing in src/ invokes this verb. There is no
+        // UI, no setting, and no AutomationServer route — that server
+        // hand-routes every verb it exposes, and this one is not among them. So
+        // as this PR stands the health rows read off/0/0/0/0/0 on every install
+        // and the ADC rows never appear at all. Whether inert-until-a-consumer
+        // is the right shape to land is a maintainer's call and is not made
+        // here; what this comment must not do is describe a path that does not
+        // exist (PR #5650 review, finding 2).
         //
         // What this starts is MetisClient's DUTY-CYCLE GATE, not the stream:
         // one 2048-sample block per sampling period, 16 datagrams a second,
@@ -4985,9 +4988,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         static_cast<qulonglong>(m_ep4Rewinds));
     // The gate's own health. Blocks ACCEPTED is not ep4Packets/4: most of what
     // arrives is armed, flushed or trailing, and none of that becomes a
-    // reading. Timeouts should read zero — the guard is sized from the measured
-    // arming delay in the gateware's own units (bandscopeGuardMs), so a
-    // non-zero value means the radio stopped answering the run byte.
+    // reading. Timeouts should read zero in steady state, but a non-zero value
+    // does NOT on its own mean the radio stopped answering the run byte — and
+    // this row used to say it did. bandscopeGuardMs names two benign ways it
+    // fires, and they are the honest reading: if the arming delay is clocked by
+    // EP6 samples rather than packets, the first cycle after a receiver-count
+    // change is abandoned; and the EP4 rate at two, and at four or more,
+    // receivers is UNMEASURED, with the block term sized from the slower of the
+    // two counts that were measured. Read it as "look at bandscopeGuardMs's
+    // assumptions first", not as a hardware fault, or an operator who has just
+    // added a fourth panadapter goes hunting for one (PR #5650 review).
     put("bandscopeBlocks", QStringLiteral("Bandscope blocks accepted"),
         static_cast<qulonglong>(m_ep4Blocks));
     put("bandscopeTimeouts", QStringLiteral("Bandscope block timeouts"),
@@ -6145,6 +6155,20 @@ void Hl2Backend::resetIoBoardSchedule()
         m_ioBoardThrottle->stop();
     m_ioBoardSchedule.reset();
     m_ioBoardBandKey.clear();
+}
+
+void Hl2Backend::resetBandscopeMirrors()
+{
+    m_bandscopeEnabled = false;
+    m_ep4Packets = 0;
+    m_ep4Drops = 0;
+    m_ep4Rewinds = 0;
+    m_ep4Blocks = 0;
+    m_ep4Timeouts = 0;
+    // Back to "never seen", which is what makes the level rows go ABSENT again
+    // rather than keep showing the previous session's last reading.
+    m_bandscopeBlock = AetherSDR::hl2::Ep4Stats{};
+    m_bandscopeBlockClock.invalidate();
 }
 
 void Hl2Backend::applyBandFilter(const char* reason)
