@@ -454,6 +454,30 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
         }
     }
 
+    if (!m_running.load(std::memory_order_relaxed)) {
+        // Stopped, but still clocked, and this is where the two are reconciled.
+        // Once the down-slew has finished, fexchange2 returns having touched
+        // NOTHING — WDSP's exchange bit is clear, so it does not write the
+        // output and does not zero it either, and whatever the caller's buffer
+        // held is what the caller will emit, block after block, for the whole
+        // stopped period. Making "stopped" mean "silence" is therefore this
+        // class's job, not WDSP's.
+        //
+        // HONEST NOTE ON WHAT THIS IS WORTH. Removing these two lines does not
+        // currently fail runStartStopTest: WDSP's own downslew2 happens to
+        // leave the tail of its last written block at zero, so today the stale
+        // buffer IS silence. That is an implementation detail of vendored
+        // third-party code (which this repo already carries four patches to),
+        // not a contract. Kept as the contract, and costed accordingly — a
+        // memset paid only while the channel is stopped.
+        //
+        // Zero FIRST, not instead of the call: while the ramp is still running
+        // fexchange2 overwrites this with the slewed tail — that is the
+        // anti-click envelope actually being heard — and calling it is also the
+        // only thing that advances the ramp to completion at all.
+        std::ranges::fill(outputLeft, 0.0f);
+        std::ranges::fill(outputRight, 0.0f);
+    }
     fexchange2(m_channelId,
                const_cast<float*>(channelI),
                const_cast<float*>(channelQ),
@@ -473,6 +497,29 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
     return ProcessResult::Ok;
 }
 
+bool WdspChannel::setRunning(bool running) noexcept
+{
+    // Idempotent, and deliberately BEFORE the handshake: WDSP's own
+    // SetChannelState already no-ops when the state matches, so taking the
+    // control fence here would make a redundant T/R edge able to fail purely
+    // because a block was in flight.
+    if (m_running.load(std::memory_order_relaxed) == running) {
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        // dmode 0 in BOTH directions — see the header. The drain is
+        // processIq()'s job and this thread cannot wait for it.
+        SetChannelState(m_channelId, running ? 1 : 0, 0);
+    }
+    m_running.store(running, std::memory_order_relaxed);
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
 {
     if (!validateConfig(config, error) || !beginControlOperation()) {
@@ -482,10 +529,21 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
         return false;
     }
 
+    const bool wasRunning = m_running.load(std::memory_order_relaxed);
     close();
     m_config = config;
     m_outputBlockSize = computeOutputBlockSize(m_config);
     open();
+    if (!wasRunning) {
+        // Restore the state this found, the way WDSP's own rebuilds do
+        // (channel.c SetDSPBuffsize: oldstate = SetChannelState(0,1) ... then
+        // SetChannelState(oldstate, 0)). open() always starts the channel,
+        // because that is what an initial build wants; a rebuild of a STOPPED
+        // channel must not put it back on the air behind the caller's back.
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetChannelState(m_channelId, 0, 0);
+        m_running.store(false, std::memory_order_relaxed);
+    }
     endControlOperation();
     return true;
 }
@@ -921,6 +979,7 @@ void WdspChannel::open() noexcept
     openNoiseBlanker();
     // Fully configured -- now run. dmode 0: nothing to flush on the way up.
     SetChannelState(m_channelId, 1, 0);
+    m_running.store(true, std::memory_order_relaxed);
     m_open = true;
 }
 
@@ -930,11 +989,23 @@ void WdspChannel::close() noexcept
         return;
     }
     const std::scoped_lock setupLock(g_setupMutex);
-    // Stop and FLUSH before teardown (dmode 1 blocks until the channel has
-    // drained, bounded by WDSP's own 100 ms timeout). CloseChannel on a running
-    // channel frees buffers out from under the mute ramp and skips the flush
-    // entirely, which is both a click on the way out and a race.
+    // TEARDOWN, and the only CloseChannel in this process. Stop first:
+    // CloseChannel on a running channel frees buffers out from under the mute
+    // ramp and skips the flush entirely, which is both a click on the way out
+    // and a race.
+    //
+    // dmode 1 here, unlike setRunning()'s stop, and it does NOT mean the same
+    // thing. The flush flag it waits on is cleared by fexchange2, and this runs
+    // behind the control fence (the destructor has drained the callbacks;
+    // reconfigure() holds beginControlOperation()), so by construction nothing
+    // will clear it and the wait runs to WDSP's 100 ms timeout. The value of
+    // the blocking form is the timeout branch itself: it force-clears the
+    // exchange, flush and down-slew flags, which is exactly the state
+    // CloseChannel wants to find. A channel already stopped through
+    // setRunning() takes none of this — SetChannelState no-ops when the state
+    // already matches, so the wait is skipped too.
     SetChannelState(m_channelId, 0, 1);
+    m_running.store(false, std::memory_order_relaxed);
     CloseChannel(m_channelId);
     // After the channel has stopped and drained: while it is still running a
     // callback can be inside processIq(), and destroying the stage under one
