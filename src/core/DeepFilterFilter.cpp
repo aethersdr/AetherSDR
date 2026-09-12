@@ -177,10 +177,18 @@ static QByteArray findModelPath()
     return {};
 }
 
-DeepFilterFilter::DeepFilterFilter()
-    : m_up(std::make_unique<Resampler>(24000, 48000))
-    , m_down(std::make_unique<Resampler>(48000, 24000))
+DeepFilterFilter::DeepFilterFilter(int sampleRate)
+    : m_sampleRate(sampleRate)
+    , m_stereoAdapter(0, sampleRate)
 {
+    if (!m_stereoAdapter.isValid()) {
+        qWarning() << "DeepFilterFilter: unsupported sample rate" << sampleRate;
+        return;
+    }
+    if (sampleRate == 24000) {
+        m_up = std::make_unique<Resampler>(24000, 48000);
+        m_down = std::make_unique<Resampler>(48000, 24000);
+    }
     QByteArray modelPath = findModelPath();
     if (modelPath.isEmpty()) {
         return;
@@ -192,7 +200,7 @@ DeepFilterFilter::DeepFilterFilter()
         // The bundled DFN3 model uses fft_size=960, hop_size=480 and two
         // lookahead frames. Its documented delay is
         // (fft_size - hop_size) + lookahead * hop_size = 3 hops at 48 kHz.
-        m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize / 2);
+        m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize * m_sampleRate / 48000);
         qDebug() << "DeepFilterFilter: initialized, frame size =" << m_frameSize;
     } else {
         qWarning() << "DeepFilterFilter: df_create() failed!";
@@ -208,6 +216,9 @@ DeepFilterFilter::~DeepFilterFilter()
 
 void DeepFilterFilter::reset()
 {
+    if (!m_stereoAdapter.isValid()) {
+        return;
+    }
     if (m_state) {
         df_free(m_state);
         m_state = nullptr;
@@ -217,11 +228,13 @@ void DeepFilterFilter::reset()
         m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
         if (m_state) {
             m_frameSize = static_cast<int>(df_get_frame_length(m_state));
-            m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize / 2);
+            m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize * m_sampleRate / 48000);
         }
     }
-    m_up = std::make_unique<Resampler>(24000, 48000);
-    m_down = std::make_unique<Resampler>(48000, 24000);
+    if (m_sampleRate == 24000) {
+        m_up = std::make_unique<Resampler>(24000, 48000);
+        m_down = std::make_unique<Resampler>(48000, 24000);
+    }
     m_inAccum.clear();
     m_outAccum.clear();
     m_stereoAdapter.reset();
@@ -240,10 +253,10 @@ void DeepFilterFilter::setPostFilterBeta(float beta)
     m_paramsDirty.store(true);
 }
 
-QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
+QByteArray DeepFilterFilter::process(const QByteArray& pcmStereo)
 {
-    if (!m_state || m_frameSize <= 0 || pcm24kStereo.isEmpty()) {
-        return pcm24kStereo;
+    if (!m_state || m_frameSize <= 0 || pcmStereo.isEmpty()) {
+        return pcmStereo;
     }
 
     // Apply any pending parameter changes (main thread writes atomic, audio thread reads here)
@@ -252,17 +265,20 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
         df_set_post_filter_beta(m_state, m_postFilterBeta.load());
     }
 
-    const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
-    const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
-    m_stereoAdapter.pushDryStereo(pcm24kStereo);
+    const auto* src = reinterpret_cast<const float*>(pcmStereo.constData());
+    const int stereoFrames = pcmStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    m_stereoAdapter.pushDryStereo(pcmStereo);
 
-    // 1. Downmix, then upsample 24kHz mono float32 → 48kHz mono float32 via r8brain.
+    // 1. Downmix, then upsample legacy24 or pass native48 directly to the model.
     // The dry stereo stays queued so DeepFilterNet attenuation preserves balance.
-    m_mono24k.resize(stereoFrames);
+    m_monoInput.resize(stereoFrames);
     for (int i = 0; i < stereoFrames; ++i) {
-        m_mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+        m_monoInput[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
     }
-    QByteArray mono48k = m_up->process(m_mono24k.data(), stereoFrames);
+    QByteArray mono48k = m_up
+        ? m_up->process(m_monoInput.data(), stereoFrames)
+        : QByteArray(reinterpret_cast<const char*>(m_monoInput.data()),
+                     stereoFrames * static_cast<int>(sizeof(float)));
 
     // Already float32 in [-1, 1] range — DeepFilterNet's native format
     const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
@@ -305,12 +321,14 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
             m_inAccum.clear();
         }
 
-        // 3. Downsample processed 48kHz mono float32 → 24kHz mono float32,
-        //    then apply the shared attenuation to delayed dry stereo.
+        // 3. Convert the model output only for legacy24, then restore the
+        //    existing delayed stereo level balance at the configured rate.
         const int outputMonoSamples = completeFrames * m_frameSize;
 
-        QByteArray downsampled = m_down->process(
-            m_processed48k.data(), outputMonoSamples);
+        QByteArray downsampled = m_down
+            ? m_down->process(m_processed48k.data(), outputMonoSamples)
+            : QByteArray(reinterpret_cast<const char*>(m_processed48k.data()),
+                         outputMonoSamples * static_cast<int>(sizeof(float)));
         const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
         const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
 
@@ -318,7 +336,7 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
     }
 
     // 4. Return exactly the same number of bytes as input
-    const int needed = pcm24kStereo.size();
+    const int needed = pcmStereo.size();
     if (m_outAccum.size() >= needed) {
         QByteArray result = m_outAccum.left(needed);
         m_outAccum.remove(0, needed);

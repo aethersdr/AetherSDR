@@ -13,20 +13,22 @@ typedef void* SpectralBleachHandle;
 namespace AetherSDR {
 
 // SpecbleachFilter - wrapper around libspecbleach for NR4 noise reduction.
-// Processes 24 kHz stereo float32 audio (same interface as RNNoiseFilter).
+// Processes stereo float32 audio at an immutable 24 or 48 kHz sample rate.
 // Thread-safe parameter setters (main thread writes, audio thread reads).
 class SpecbleachFilter {
 public:
-    SpecbleachFilter();
+    explicit SpecbleachFilter(int sampleRate = 24000);
     ~SpecbleachFilter();
 
     SpecbleachFilter(const SpecbleachFilter&) = delete;
     SpecbleachFilter& operator=(const SpecbleachFilter&) = delete;
 
-    // Process stereo float32 PCM at 24 kHz. Returns processed audio.
-    QByteArray process(const QByteArray& pcm24kStereo);
+    // Process stereo float32 PCM at the configured sample rate. Returns processed audio.
+    QByteArray process(const QByteArray& pcmStereo);
 
     bool isValid() const { return m_handle != nullptr; }
+    // Reset the noise profile and stereo adapter. Recreate on a new source
+    // or discontinuity to also discard libspecbleach's internal overlap state.
     void reset();
 
     // User-adjustable parameters (thread-safe)
@@ -46,7 +48,10 @@ public:
     float maskingDepth() const { return m_maskingDepth.load(); }
     float suppressionStrength() const { return m_suppression.load(); }
 
+    int sampleRate() const { return m_sampleRate; }
+
 private:
+    const int m_sampleRate;
     void applyParams();
 
     SpectralBleachHandle m_handle{nullptr};

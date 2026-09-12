@@ -8,12 +8,17 @@
 
 namespace AetherSDR {
 
-static constexpr int kSampleRate = 24000;
 static constexpr float kFrameSizeMs = 40.0f;  // 40ms frames (~960 samples)
 
-SpecbleachFilter::SpecbleachFilter()
+SpecbleachFilter::SpecbleachFilter(int sampleRate)
+    : m_sampleRate(sampleRate)
+    , m_stereoAdapter(0, sampleRate)
 {
-    m_handle = specbleach_initialize(kSampleRate, kFrameSizeMs);
+    if (!m_stereoAdapter.isValid()) {
+        qWarning() << "SpecbleachFilter: unsupported sample rate" << sampleRate;
+        return;
+    }
+    m_handle = specbleach_initialize(sampleRate, kFrameSizeMs);
     if (!m_handle) {
         qWarning() << "SpecbleachFilter: failed to initialize";
         return;
@@ -60,19 +65,19 @@ void SpecbleachFilter::applyParams()
     m_paramsDirty = false;
 }
 
-QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
+QByteArray SpecbleachFilter::process(const QByteArray& pcmStereo)
 {
     if (!m_handle)
-        return pcm24kStereo;
+        return pcmStereo;
 
     // Apply parameter changes if dirty
     if (m_paramsDirty.load())
         applyParams();
 
-    const int totalFloats = pcm24kStereo.size() / static_cast<int>(sizeof(float));
+    const int totalFloats = pcmStereo.size() / static_cast<int>(sizeof(float));
     const int monoSamples = totalFloats / 2;
     if (monoSamples <= 0)
-        return pcm24kStereo;
+        return pcmStereo;
 
     // Resize buffers if needed
     if (static_cast<int>(m_monoIn.size()) < monoSamples) {
@@ -81,7 +86,7 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
     }
 
     // Stereo float32 → mono float (average L+R)
-    const auto* in = reinterpret_cast<const float*>(pcm24kStereo.constData());
+    const auto* in = reinterpret_cast<const float*>(pcmStereo.constData());
     for (int i = 0; i < monoSamples; ++i)
         m_monoIn[i] = (in[i * 2] + in[i * 2 + 1]) * 0.5f;
 
@@ -94,10 +99,10 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
     if (m_frameCount < kLearningFrames) {
         ++m_frameCount;
         m_stereoAdapter.reset();
-        return pcm24kStereo;
+        return pcmStereo;
     }
 
-    m_stereoAdapter.pushDryStereo(pcm24kStereo);
+    m_stereoAdapter.pushDryStereo(pcmStereo);
     return m_stereoAdapter.takeProcessedMono(m_monoOut.data(), monoSamples);
 }
 
