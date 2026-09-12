@@ -543,13 +543,25 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_alcPeakDbfs = dbfs;
         emit meterUpdate(QStringLiteral("TX:ALC"), dbfs);
     });
-    // alcGain drives no meter — TX:ALC is fed from alcPeak above, for the reason
-    // given there — but it is the number that answers "is the ALC holding?", so
-    // it is mirrored for healthSnapshot() and the bridge. Before this it was
-    // emitted into nothing, which is why a chain that was quietly refusing to
-    // lift a quiet mic could only be diagnosed by reading the source.
-    connect(m_txDsp, &Hl2TxDsp::alcGain, this,
-            [this](float db) { m_alcGainDb = db; });
+    // The GAIN the ALC is applying, which is a second meter and not a second
+    // view of the first: TX:ALC above is a LEVEL fed from alcPeak, for the
+    // reason given there, and the two move in opposite directions.
+    //
+    // This is the number that answers "is the ALC holding, and by how much".
+    // It was mirrored into m_alcGainDb for healthSnapshot() and the bridge and
+    // rendered NOWHERE, so a chain quietly refusing to lift a quiet mic could
+    // be diagnosed from a JSON snapshot or from the source and not from the
+    // panel in front of the operator — while the gauge labelled ALC sat pinned
+    // near the target by construction. TX:ALCGAIN is that gauge's feed.
+    //
+    // Both consumers stay: the mirror is a plain read on this thread for the
+    // snapshot, and the meter is the operator-visible surface. Publishing one
+    // does not make the other redundant, and dropping the mirror would put
+    // healthSnapshot() back to re-deriving a value it is already handed.
+    connect(m_txDsp, &Hl2TxDsp::alcGain, this, [this](float db) {
+        m_alcGainDb = db;
+        emit meterUpdate(QStringLiteral("TX:ALCGAIN"), db);
+    });
     // The modulator's own copy of the mic gain, for healthSnapshot(). Reported
     // ALONGSIDE m_micLevel rather than instead of it: the operator's request and
     // the modulator's state are different facts, and a diagnosis needs to see
@@ -5226,6 +5238,28 @@ void Hl2Backend::defineMeters()
     // is per-waveform-slice, and there is no such thing here.
     def(8, QStringLiteral("TX"),  QStringLiteral("COMPPEAK"), QStringLiteral("dB"),
         0.0, 25.0,     QStringLiteral("Speech processor compression"));
+    // The gain the ALC is applying — the companion to meter 7, not a second
+    // form of it. Seven is the post-ALC LEVEL and sits near the target
+    // whatever the operator does; this is how hard the stage is working to put
+    // it there, and it is the half that moves when a mic is too quiet.
+    //
+    // The range is the modulator's own, not a display preference. The top is
+    // Hl2TxDsp::Config::alcMaxGainDb (40 dB of makeup on the mic path), so a
+    // reading at the ceiling means the ALC has run out of gain rather than that
+    // the meter has run out of scale. The bottom is reduction, which has no
+    // configured limit — the loop reduces toward alcTargetPeak/blockPeak — so
+    // -20 is a PRESENTATION floor rather than a measured one, wide enough for
+    // the reductions this chain produces on real audio. The largest figure
+    // recorded anywhere in the tree is the -21.41 dB in processAudioBlock's
+    // own comment, which is a full-scale client-leveled block and not speech;
+    // that lands just off the bottom of the face and reads "hard down", which
+    // is the right answer for it.
+    //
+    // sourceIndex stays at its default 0 for the same reason COMPPEAK's does:
+    // one transmitter, so it lands in MeterModel's by-slice map under the
+    // implicit slice rather than the explicit TX-waveform map.
+    def(9, QStringLiteral("TX"),  QStringLiteral("ALCGAIN"), QStringLiteral("dB"),
+        -20.0, 40.0,   QStringLiteral("Gain the ALC is applying"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

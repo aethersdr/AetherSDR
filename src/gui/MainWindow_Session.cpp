@@ -1378,6 +1378,10 @@ void MainWindow::wireRadioModel()
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->resetAlc();
+            // Same reason as resetAlc: the last gain the ALC applied describes
+            // a transmission that has ended, and left on the face it reads as
+            // the gain being applied now.
+            m_appletPanel->phoneCwApplet()->resetAlcGain();
         }
         if (tx) {
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "

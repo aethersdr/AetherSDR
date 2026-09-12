@@ -1,5 +1,7 @@
-// The Phone/CW microphone Level gauge must remain empty until live telemetry
-// arrives and must not carry a prior radio's reading across disconnect.
+// Phone/CW gauges must not report what no radio has told them. The mic Level
+// gauge must remain empty until live telemetry arrives and must not carry a
+// prior radio's reading across disconnect; the ALC Gain gauge must not be on
+// the shared panel at all for a radio that publishes no ALCGAIN meter.
 
 #include "TestSettingsProfile.h"
 #include "gui/HGauge.h"
@@ -130,6 +132,52 @@ int main(int argc, char** argv)
     meters.updateValues({20}, {50});
     meters.removeMeter(20);
     checkAlc(0.0f, "active meter removal sets both ALC gauges to empty");
+
+    // The ALC Gain gauge answers the same question one step earlier: the
+    // Phone panel is shared with Flex, Icom and the sim, none of which
+    // publish TX:ALCGAIN, so the row must not exist for them at all.
+    QWidget* alcGainWidget =
+        applet.findChild<QWidget*>(QStringLiteral("phoneAlcGainGauge"));
+    check(alcGainWidget != nullptr, "Phone exposes the ALC Gain gauge");
+    if (alcGainWidget) {
+        auto* alcGainGauge = static_cast<HGauge*>(alcGainWidget);
+        check(alcGainGauge->isHidden(),
+              "a radio that has not declared an ALCGAIN meter shows no ALC Gain row");
+        applet.setHasAlcGainMeter(true);
+        check(!alcGainGauge->isHidden(),
+              "declaring an ALCGAIN meter reveals the ALC Gain row");
+        applet.updateAlcGain(12.0f);
+        check(alcGainGauge->value() == 12.0f,
+              "a gain sample reaches the revealed ALC Gain gauge");
+        applet.setHasAlcGainMeter(false);
+        check(alcGainGauge->isHidden(),
+              "a radio without the meter takes the ALC Gain row back down");
+        // THE FLOOR, NOT ZERO. This assertion said 0.0f and passed, which
+        // pinned the defect as correct behaviour: on a -20..+40 face, 0 dB
+        // renders as a bar one third full AND is a real reading ("the ALC is
+        // holding at unity"), so the cleared state was drawn as a confident
+        // measurement. An empty bar is the only rendering of "no reading" this
+        // widget has.
+        check(alcGainGauge->value() == -20.0f,
+              "hiding the ALC Gain row empties the bar rather than parking it "
+              "at a readable 0 dB");
+    }
+
+    // The same via the model accessor the GUI actually gates on.
+    check(!meters.hasAlcGainMeter(),
+          "a radio publishing ALC but not ALCGAIN has no ALC Gain meter");
+    MeterDef alcGain;
+    alcGain.index = 30;
+    alcGain.source = "TX-";
+    alcGain.sourceIndex = 8;
+    alcGain.name = "ALCGAIN";
+    alcGain.unit = "dB";
+    meters.defineMeter(alcGain);
+    check(meters.hasAlcGainMeter(),
+          "defining ALCGAIN is what makes the meter present");
+    meters.clear();
+    check(!meters.hasAlcGainMeter(),
+          "disconnect takes the ALCGAIN meter away with the radio");
 
     return failures == 0 ? 0 : 1;
 }
