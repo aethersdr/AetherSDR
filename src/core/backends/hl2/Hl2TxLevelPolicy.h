@@ -64,20 +64,33 @@ namespace AetherSDR::hl2 {
 // audibly quieter than "50" without the mute. The case survives on the plainer
 // ground that the bottom of a travel labelled as a level means off.
 //
-// SCOPE, because "mic" undersells it: this multiplier is applied to everything
-// entering Hl2TxDsp::processAudioBlock, and on a host-modulating backend that
-// includes digital-mode and WSPR-beacon audio arriving through submitTxAudio,
-// not only voice. It is a straight proportional control on the air, the same on
-// every path, all the way up to the ALC's target — the ALC behind it only
-// reduces and has no makeup half left to hand the gain back with, so TX gain 5
-// (-18 dB) is a real -18 dB. It stops being straight only where it has to:
-// drive a full-scale source through the top of this slider's +40 dB and the ALC
-// limits, rather than letting the modulator's hard clamp flat-top it, so the
-// last stretch of travel buys reduced headroom rather than more power. At 0
-// nothing transmits, as a plain 0.0x multiply on every path. That is the honest
-// reading of a slider at the bottom of its travel on a host modulator — there
-// is one modulator and it is off — but it is worth knowing before parking the
-// control at 0 between voice sessions.
+// SCOPE, and it is narrower than it used to be. This multiplier is applied to
+// audio entering Hl2TxDsp::processAudioBlock tagged TxAudioSource::Microphone
+// or ClientLeveled — the operator's voice, and TCI/DAX client audio, where it
+// is the proportional attenuator #4796 left it. On those two paths it is a
+// straight proportional control on the air, the same on each, all the way up to
+// the ALC's target — the ALC behind it only reduces and has no makeup half left
+// to hand the gain back with, so TX gain 5 (-18 dB) is a real -18 dB. It stops
+// being straight only where it has to: drive a full-scale source through the
+// top of this slider's +40 dB and the ALC limits, rather than letting the
+// modulator's hard clamp flat-top it, so the last stretch of travel buys
+// reduced headroom rather than more power.
+//
+// IT DOES NOT REACH ENGINE-GENERATED AUDIO, SO 0 DOES NOT SILENCE A BEACON.
+// Hl2TxDsp::processAudioBlock substitutes 1.0 for this multiplier when the
+// source is TxAudioSource::EngineGenerated, so the WSPR beacon, the AX.25 modem
+// and the RADE waveform go out at the level their generator chose and this
+// slider does not move them — at 0 or anywhere else.
+//
+// That is deliberate: a microphone control has no business moving, or muting,
+// an unattended transmission, and yoking a beacon to the level an operator
+// picked for their voice was the defect. But it retires a claim this comment
+// used to make — "at 0 nothing transmits, as a plain 0.0x multiply on every
+// path" — and that claim was a safety property an operator could have leaned
+// on. IT IS NO LONGER TRUE. Parking this control at 0 between voice sessions
+// silences the microphone and the TCI/DAX path; it does not silence the
+// transmitter. Whatever is generating an unattended transmission is what stops
+// it — the beacon's own control, not this one.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
 {
     if (level <= 0)

@@ -1395,9 +1395,10 @@ public:
         return m_backend != nullptr && m_flexBackend == nullptr;
     }
     // Forward processed transmit audio to a host-modulating backend. No-op when
-    // the backend modulates on the radio side. `clientLeveled` carries
-    // AudioEngine's source decision through: true for external TCI/DAX client
-    // audio, whose level the sender owns (#4796).
+    // the backend modulates on the radio side. `source` carries AudioEngine's
+    // origin decision through unchanged — Microphone, ClientLeveled or
+    // EngineGenerated. This seam neither reads it nor branches on it; the
+    // backend does (#4796, and the mic-slider bypass for EngineGenerated).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source);
     // Ordered completion barrier for a finite modem stream. The token lets the

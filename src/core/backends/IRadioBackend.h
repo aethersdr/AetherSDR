@@ -27,6 +27,8 @@
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
 
+namespace AetherSDR {
+
 // Where a block of transmit audio originated. See submitTxAudio() below for
 // why this is three states and not the bool it replaced.
 //
@@ -35,13 +37,16 @@
 // a queued connection cannot marshal a type Qt has never been told about,
 // and the failure is a runtime warning and a dropped signal, not a compile
 // error.
+//
+// It lives inside AetherSDR like every other name this header declares. It was
+// briefly at global scope, which this header reaches into most of the tree —
+// AudioEngine.h and Hl2TxDsp.h now include it — so the convention is not a
+// formality here.
 enum class TxAudioSource {
     Microphone = 0,
     ClientLeveled,
     EngineGenerated,
 };
-
-namespace AetherSDR {
 
 // Neutral, family-agnostic connect descriptor. Core fields cover the common
 // case; vendor-specific parameters (SmartLink token, Kiwi endpoint path, …)
@@ -1370,4 +1375,4 @@ private:
 // linkStatsUpdated delivers rather than silently dropping.
 Q_DECLARE_METATYPE(AetherSDR::IRadioBackend::LinkStats)
 
-Q_DECLARE_METATYPE(TxAudioSource)
+Q_DECLARE_METATYPE(AetherSDR::TxAudioSource)

@@ -30,6 +30,7 @@
 #include <vector>
 
 using namespace AetherSDR::hl2;
+using AetherSDR::TxAudioSource;
 
 static int g_failures = 0;
 static void check(bool ok, const char* what)
