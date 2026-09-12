@@ -217,15 +217,15 @@ void MainWindow::wireDiscovery()
     // Qt::UniqueConnection cannot catch it: these are two DIFFERENT signals
     // arriving at the same slot, so nothing looks duplicate to Qt.
     connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
-            m_audio, [this](const QByteArray& pcm) {
+            m_audio, [this](const PcmFrame& pcm) {
         if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
         // Playback mute. The Flex path mutes by disconnecting the stream's
-        // audioDataReady from feedAudioData; against a null PanadapterStream
+        // pcmFrameReady from feedPcmFrame; against a null PanadapterStream
         // that disconnect is a silent no-op, so a seam backend would keep
         // feeding live receive UNDER the playback. Reachable in practice only
         // now that the recorder captures RX on such a radio at all. (#4537.)
         if (m_rxMutedForPlayback) return;
-        m_audio->feedAudioData(pcm);
+        m_audio->feedPcmFrame(pcm);
     });
 
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioDiscovered,
@@ -2238,7 +2238,7 @@ void MainWindow::wireCatPorts()
     tciServer()->wireSpotModel();
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming.
-    // TCI audio feeds exclusively from DAX (not audioDataReady) so that
+    // TCI audio feeds exclusively from DAX (not pcmFrameReady) so that
     // audio_mute doesn't kill TCI audio (#1331). Stream-bound, so it goes through
     // the shared helper the post-swap rebind also calls (#4448).
     wirePanStreamTciSinks();
@@ -2269,8 +2269,9 @@ void MainWindow::wireCatPorts()
     // through wirePanStreamTciSinks() above — so there is no double-feed and no
     // change to the Flex path.
     connect(&m_radioModel, &RadioModel::backendSliceAudioFrameReady,
-            this, [this](int sliceId, const QByteArray& pcm) {
-        if (tciServer())
+            this, [this](int sliceId, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (tciServer() && !pcm.isEmpty())
             tciServer()->onDaxAudioReady(sliceId + 1, pcm);
     });
 
@@ -2285,11 +2286,11 @@ void MainWindow::wireCatPorts()
 
 }
 
-// The RX-audio sinks fed by PanadapterStream::audioDataReady, in one place so
+// The RX-audio sinks fed by PanadapterStream::pcmFrameReady, in one place so
 // buildUI() and rewirePanStreamAfterBackendSwap() bind an identical set. The
 // stream is owned by the Flex backend and is destroyed/rebuilt on a family
 // swap (RadioModel::teardownBackend/setupBackend), which drops these — and Flex
-// RX audio itself rides audioDataReady, so a missed one is silence, not a
+// RX audio itself rides pcmFrameReady, so a missed one is silence, not a
 // degraded feature. Keeping the list here (not open-coded in two places) is why
 // a new sink added to buildUI cannot silently go un-rebound after a swap.
 // Deliberately NOT IRadioBackend::ownsRxAudio(), despite the near-identical
@@ -2338,8 +2339,8 @@ void MainWindow::wirePanStreamRxAudioSinks()
     // The backend's own audio wins; the stream's other RX taps below stay wired.
     // Primary RX audio → QAudioSink (skipped when the backend owns its audio).
     if (!backendFeedsEngineDirectly()) {
-        connect(ps, &PanadapterStream::audioDataReady,
-                m_audio, &AudioEngine::feedAudioData,
+        connect(ps, &PanadapterStream::pcmFrameReady,
+                m_audio, &AudioEngine::feedPcmFrame,
                 Qt::UniqueConnection);
     }
 
@@ -2370,20 +2371,27 @@ void MainWindow::wireRxDemodAudioSinks()
 {
     if (m_qsoRecorder) {
         connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-                m_qsoRecorder, &QsoRecorder::feedRxAudio);
+                m_qsoRecorder, [recorder = m_qsoRecorder](const PcmFrame& frame) {
+            const QByteArray pcm = frame.legacyStereo24();
+            if (!pcm.isEmpty()) {
+                recorder->feedRxAudio(pcm);
+            }
+        });
     }
 
     // CW decoder RX feed — gated live on the toggle (#2417).
     connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_cwDecoder, [this](const QByteArray& pcm) {
-                if (CwDecodeSettings::rxEnabled())
+            &m_cwDecoder, [this](const PcmFrame& frame) {
+                const QByteArray pcm = frame.legacyStereo24();
+                if (!pcm.isEmpty() && CwDecodeSettings::rxEnabled())
                     m_cwDecoder.feedAudio(pcm);
             });
 
     // RTTY decoder RX feed — gated on the decoder being running.
     connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_rttyDecoder, [this](const QByteArray& pcm) {
-                if (m_rttyDecoder.isRunning())
+            &m_rttyDecoder, [this](const PcmFrame& frame) {
+                const QByteArray pcm = frame.legacyStereo24();
+                if (!pcm.isEmpty() && m_rttyDecoder.isRunning())
                     m_rttyDecoder.feedAudio(pcm);
             });
 }
@@ -2407,8 +2415,13 @@ void MainWindow::wirePanStreamTciSinks()
     auto* ps = m_radioModel.panStream();
     if (!ps || !tciServer())
         return;
-    connect(ps, &PanadapterStream::daxAudioReady,
-            tciServer(), &TciServer::onDaxAudioReady);
+    connect(ps, &PanadapterStream::daxPcmReady,
+            tciServer(), [server = tciServer()](int channel, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (!pcm.isEmpty()) {
+            server->onDaxAudioReady(channel, pcm);
+        }
+    });
     connect(ps, &PanadapterStream::iqDataReady,
             tciServer(), &TciServer::onIqDataReady);
     connect(ps, &PanadapterStream::waterfallRowReady,

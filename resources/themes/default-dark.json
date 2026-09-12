@@ -48,6 +48,8 @@
           "accent.warning": "{color.amber.500}",
           "accent.danger":  "{color.red.500}",
           "accent.success": "{color.green.500}",
+          "waterfall.timeMarker.foreground": "#c8d8e8",
+          "waterfall.timeMarker.background": "#dc0f0f1a",
           "waterfall.live":    "{color.red.500}",
           "waterfall.history": "{color.gray.500}",
           "tx.mox.border":       "#d08020",

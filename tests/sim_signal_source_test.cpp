@@ -77,13 +77,14 @@ public:
     explicit Collector(AetherSDR::SimSignalSource* src)
     {
         connect(src, &AetherSDR::SimSignalSource::audioFrameReady, this,
-                [this](const QByteArray& b) {
+                [this](const AetherSDR::PcmFrame& frame) {
+                    const QByteArray b = frame.legacyStereo24();
                     ++audio;
                     samples += b.size() / qint64(2 * sizeof(float));
                     lastAudio = b;
                 });
         connect(src, &AetherSDR::SimSignalSource::sliceAudioFrameReady, this,
-                [this](int id, const QByteArray&) {
+                [this](int id, const AetherSDR::PcmFrame&) {
                     ++slice;
                     lastSliceId = id;
                 });

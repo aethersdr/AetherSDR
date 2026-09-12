@@ -546,6 +546,21 @@ void RadioModel::flushPendingOperatingState()
     persistOperatingState(true);
 }
 
+bool RadioModel::backendDeclaresExtension(const QString& ns) const
+{
+    // extensionNamespaces is the backend's declaration of which verb families it
+    // answers, and IRadioBackend.h states the contract normatively: "Clients
+    // discover available namespaces via capabilities().extensionNamespaces."
+    //
+    // M0 (#5263) gave the field its first production readers in MainWindow's
+    // `sim` gate, so M1's "a declared handshake nobody reads" was already not
+    // quite literal. The precise claim it leaves true is the one this fixes: no
+    // invokeExtension PRE-CHECK read it — every one asked the family string
+    // instead, which is a subtly different question and excludes any future
+    // backend that answers the same verbs without carrying that family name.
+    return m_backend && m_backend->capabilities().extensionNamespaces.contains(ns);
+}
+
 void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
                                         quint64 requestId, const QVariant& arg)
 {
@@ -557,7 +572,15 @@ void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
 
 void RadioModel::setPcAudioEnabled(bool on)
 {
-    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+    // Gated on the DECLARED NAMESPACE, not on the family string (#5262 M1).
+    // The question this asks is "will this backend answer the icom namespace?",
+    // and extensionNamespaces is the handshake that states it — a backend
+    // pre-checks it before issuing invokeExtension(). Keying off family instead
+    // is the trap docs/architecture/radio-capabilities-map.md names: a gate that
+    // "looks identical to one that works" while asking a different question.
+    // It also silently excludes anything that speaks the icom verbs without
+    // being family "icom" — a gateway, or an Icom variant backend.
+    if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
     m_backend->invokeExtension(QStringLiteral("icom"),
@@ -566,7 +589,8 @@ void RadioModel::setPcAudioEnabled(bool on)
 
 void RadioModel::notePcAudioEnabled(bool on)
 {
-    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+    // Same rule as setPcAudioEnabled above: the namespace is the contract.
+    if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
     m_backend->invokeExtension(QStringLiteral("icom"),
@@ -895,20 +919,7 @@ void RadioModel::setupBackend(const QString& family)
             [this](int, const QByteArray&) {
         m_lastSpectrumMs = QDateTime::currentMSecsSinceEpoch();
     });
-    connect(m_backend.get(), &IRadioBackend::audioFrameReady, this,
-            [this](const QByteArray&) {
-        m_lastAudioMs = QDateTime::currentMSecsSinceEpoch();
-    });
-
-    // Demodulated RX audio from backends that produce it in-process (HL2).
-    // Signal-to-signal: the payload is already the engine's native format.
-    connect(m_backend.get(), &IRadioBackend::audioFrameReady,
-            this, &RadioModel::backendAudioFrameReady);
-
-    // Per-slice demodulated audio. Signal-to-signal like the mixed feed above:
-    // the payload is already the engine's native format.
-    connect(m_backend.get(), &IRadioBackend::sliceAudioFrameReady,
-            this, &RadioModel::backendSliceAudioFrameReady);
+    wireBackendPcm();
 
     // Pick the one producer for the normalized RX-audio bus. Done here, once
     // per backend, so every consumer of rxDemodAudioReady is family-blind and
@@ -1837,6 +1848,9 @@ void RadioModel::teardownBackend()
 {
     resetTxOperations();
     ++m_backendReceiverGeneration;
+    if (m_backend) {
+        m_backend->retirePcmStreams();
+    }
     // Answer, then drop, every command still waiting on the backend that is
     // about to die. The generation guard on commandResponse means a reply
     // arriving after this point is discarded, so without this the callback —
@@ -2049,6 +2063,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
+    qRegisterMetaType<PcmFrame>();
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
@@ -3105,6 +3120,30 @@ int RadioModel::activeTxSliceNum() const
     return -1;
 }
 
+void RadioModel::wireBackendPcm()
+{
+    const quint64 generation = m_backendReceiverGeneration;
+    connect(m_backend.get(), &IRadioBackend::audioFrameReady, this,
+            [this, generation](const PcmFrame& frame) {
+        if (generation != m_backendReceiverGeneration
+            || frame.stream().purpose != PcmPurpose::Speaker
+            || !m_backendPcmGate.accept(frame)) {
+            return;
+        }
+        m_lastAudioMs = QDateTime::currentMSecsSinceEpoch();
+        emit backendAudioFrameReady(frame);
+    });
+    connect(m_backend.get(), &IRadioBackend::sliceAudioFrameReady, this,
+            [this, generation](int sliceId, const PcmFrame& frame) {
+        if (generation != m_backendReceiverGeneration
+            || frame.stream().purpose != PcmPurpose::Slice
+            || frame.stream().sliceId != sliceId || !m_slicePcmGate.accept(frame)) {
+            return;
+        }
+        emit backendSliceAudioFrameReady(sliceId, frame);
+    });
+}
+
 void RadioModel::wireRxDemodAudioBus()
 {
     // Exactly one producer, ever. Drop the previous binding first: on a family
@@ -3119,15 +3158,25 @@ void RadioModel::wireRxDemodAudioBus()
         // Chained off backendAudioFrameReady rather than the backend's own
         // signal so both relays cross the thread boundary identically.
         m_rxDemodBusConn = connect(this, &RadioModel::backendAudioFrameReady,
-                                   this, &RadioModel::rxDemodAudioReady);
+                                   this, [this](const PcmFrame& frame) {
+            if (!m_demodPcmGate.accept(frame)) {
+                return;
+            }
+            emit rxDemodAudioReady(frame);
+        });
         return;
     }
     if (m_panStream) {
         // Flex: the VITA-49 slice audio, unchanged and still feeding the engine
         // by its own existing connection. This is an ADDITIONAL subscriber to
         // the same signal, so the audible path is untouched.
-        m_rxDemodBusConn = connect(m_panStream, &PanadapterStream::audioDataReady,
-                                   this, &RadioModel::rxDemodAudioReady);
+        m_rxDemodBusConn = connect(m_panStream, &PanadapterStream::pcmFrameReady,
+                                   this, [this](const PcmFrame& frame) {
+            if (!m_demodPcmGate.accept(frame)) {
+                return;
+            }
+            emit rxDemodAudioReady(frame);
+        });
     }
 }
 
@@ -4056,8 +4105,10 @@ void RadioModel::finishRadioWake(const QString& message, bool success)
 
 bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 {
-    if (m_radioWakeActive || m_family != QLatin1String("icom") || !isConnected()
-        || !m_backend || m_lastInfo.address.isNull()) {
+    // Namespace, not family (#5262 M1): this reaches for the icom `power.wake`
+    // verb, so the question is whether the backend answers that namespace.
+    if (m_radioWakeActive || !backendDeclaresExtension(QStringLiteral("icom"))
+        || !isConnected() || m_lastInfo.address.isNull()) {
         if (error) { *error = tr("Connect to the Icom network first, and finish any active wake."); }
         return false;
     }
@@ -9619,6 +9670,8 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     teardownBackend();
     m_backend = std::move(backend);
     m_family = family;
+    wireBackendPcm();
+    wireRxDemodAudioBus();
     wireBackendReceiverState();
     // Injected backends bypass onConnected(), but replacement must still drain
     // the old session before test callers can exercise the new one.

@@ -4211,7 +4211,7 @@ void TciServer::onWaterfallRowReady(quint32 streamId, const QVector<float>& bins
 
 // ── DAX channel management for TCI audio (#1331) ─────────────────────────────
 //
-// TCI audio feeds from daxAudioReady (not audioDataReady) so that audio_mute
+// TCI audio feeds from daxPcmReady (not pcmFrameReady) so that audio_mute
 // doesn't kill TCI audio. We auto-assign a DAX channel to each slice that
 // doesn't already have one, and release it when the last TCI audio client
 // disconnects.
@@ -4271,7 +4271,7 @@ void TciServer::ensureDaxForTci()
     // Acquire the needed channels from the centralized manager (#3305). It
     // creates the radio-side stream only when the channel gains its FIRST
     // holder — never a duplicate subscription (duplicate streams made
-    // daxAudioReady fire twice per period, doubling apparent audio speed) —
+    // daxPcmReady fire twice per period, doubling apparent audio speed) —
     // and reuses anything the DAX bridge or a previous arm already created.
     // Acquire is idempotent, so re-arm paths can call this freely.
     //

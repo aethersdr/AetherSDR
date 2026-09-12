@@ -1118,22 +1118,22 @@ signals:
                                   quint32 timecode, qint64 emittedNs);
     void panFeedWaterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
     // Demodulated RX audio from a backend that produces it in-process (HL2).
-    // 24 kHz stereo float32 — the format AudioEngine::feedAudioData expects.
+    // Owning typed PCM. A1 compatibility producers retain 24 kHz stereo.
     // Flex never emits this; its audio arrives on the PanadapterStream path.
-    void backendAudioFrameReady(const QByteArray& pcm);
+    void backendAudioFrameReady(const AetherSDR::PcmFrame& pcm);
     // ONE slice's demodulated audio, relayed from IRadioBackend. The per-slice
     // counterpart of backendAudioFrameReady, which is the mixed speaker feed.
     // Only a backend that demodulates in this process emits it; Flex per-slice
     // audio arrives as DAX channels instead.
-    void backendSliceAudioFrameReady(int sliceId, const QByteArray& pcm);
+    void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
 
     // ── The normalized demodulated-RX-audio bus ────────────────────────────
     //
-    // The audio the OPERATOR HEARS, whoever produced it: 24 kHz interleaved
-    // stereo float32, byte-identical to what both producers already emit.
+    // The audio the OPERATOR HEARS, whoever produced it, with immutable
+    // producer format and lifetime. A1 preserves existing 24 kHz stereo PCM.
     //
     // Exactly one producer is connected at a time — PanadapterStream::
-    // audioDataReady for a Flex, IRadioBackend::audioFrameReady for a backend
+    // pcmFrameReady for a Flex, IRadioBackend::audioFrameReady for a backend
     // that answers ownsRxAudio() — and that choice is made in ONE place
     // (wireRxDemodAudioBus). Consumers subscribe once and never rebind, because
     // this signal belongs to RadioModel, which OUTLIVES the backend swap that
@@ -1145,14 +1145,14 @@ signals:
     // radio without one they bound to nothing: no error, no log line, the
     // toggle worked and nothing ever decoded. See docs/HERMES.md §18.
     //
-    // Deliberately NOT the speaker path. AudioEngine::feedAudioData keeps its
-    // existing per-family wiring untouched, so nothing audible changes on any
-    // radio; this carries the taps that listen alongside it.
+    // This carries taps alongside playback. AudioEngine::feedPcmFrame keeps
+    // the existing speaker routing and delegates accepted 24 kHz stereo to
+    // feedAudioData; fixed-rate tap adapters unwrap after queued delivery.
     //
     // Named for the tap it carries. A future filter-flat, pre-AGC feed for
     // modems is a SEPARATE signal (rxWidebandAudioReady), not a mode flag on
     // this one — see docs/HERMES.md §18.5.
-    void rxDemodAudioReady(const QByteArray& pcm24kStereoFloat);
+    void rxDemodAudioReady(const AetherSDR::PcmFrame& pcm);
     // The backend was replaced because the operator picked a radio of another
     // family. Consumers holding backend-owned objects (PanadapterStream) must
     // re-establish anything that binds to them directly.
@@ -1370,6 +1370,14 @@ public:
     // that lands on the next radio.
     void invokeBackendExtension(const QString& ns, const QString& verb,
                                 quint64 requestId = 0, const QVariant& arg = {});
+
+    // Whether the connected backend DECLARES it answers an extension namespace.
+    // The gate to use before invoking a family-specific verb —
+    // extensionNamespaces is the handshake for exactly that (IRadioBackend.h:
+    // "Clients discover available namespaces via capabilities()
+    // .extensionNamespaces"), and a family-string comparison asks a subtly
+    // different question. (#5262 M1)
+    [[nodiscard]] bool backendDeclaresExtension(const QString& ns) const;
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend
@@ -1608,6 +1616,7 @@ private:
     // Bind the one producer for rxDemodAudioReady. Idempotent; call after
     // m_backend and m_panStream are both settled for the new family.
     void wireRxDemodAudioBus();
+    void wireBackendPcm();
 
     // aetherd RFC step 2 (§5.5): the radio-facing seam. Held via std::unique_ptr
     // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
@@ -2424,6 +2433,13 @@ public:
     PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
     QVector<PanadapterStream::AudioStreamDiagnostics> audioStreamDiagnostics() const;
     void resetAudioStreamDiagnostics();
+
+private:
+    // Per-consumer replay cursors for the three typed PCM relays wired in
+    // wireBackendPcm()/wireRxDemodAudioBus(). Data, not slots.
+    PcmFrameGate m_backendPcmGate;
+    PcmFrameGate m_slicePcmGate;
+    PcmFrameGate m_demodPcmGate;
 };
 
 } // namespace AetherSDR

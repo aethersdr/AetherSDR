@@ -15,6 +15,7 @@
 #include <QPointer>
 #include <QMap>
 #include <QImage>
+#include <QFont>
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -27,6 +28,7 @@
 #include "DssRenderer.h"
 #include "SpectrumPreviewLogic.h"
 #include "WaterfallHistoryBuffer.h"
+#include "WaterfallTimeMarkers.h"
 
 class QVariantAnimation;
 class QSoundEffect;
@@ -139,6 +141,13 @@ public:
     // Per-pan settings persistence
     void setPanIndex(int idx);
     int panIndex() const { return m_panIndex; }
+    // Read-only by design: the interval is set through the context menu (or
+    // DisplaySettings), never by reflection. Exposing it for reads keeps the
+    // automation bridge's dss snapshot honest without adding settable surface.
+    Q_PROPERTY(int waterfallTimeMarkerSeconds READ waterfallTimeMarkerSeconds)
+    int waterfallTimeMarkerSeconds() const { return m_wfTimeMarkerSeconds; }
+    void setWaterfallTimeMarkerSeconds(int seconds);
+
     QString settingsKey(const QString& base) const;
     void loadSettings();
 
@@ -1091,6 +1100,7 @@ private:
         QImage waterfall;
         QImage waterfallSupplemental;
         int wfWriteRow{0};
+        QVector<WaterfallTimeRow> visibleTimeRows;
         QVector<double> visibleRowCenterMhz;
         QVector<double> visibleRowBwMhz;
         QVector<double> visibleSupplementalCenterMhz;
@@ -1217,6 +1227,14 @@ private:
         const QRgb* supplementalRowData = nullptr,
         double supplementalCenterMhz = -1.0,
         double supplementalBandwidthMhz = -1.0);
+    QVector<WaterfallTimeMarker> visibleWaterfallTimeMarkers(qreal height) const;
+    void prepareWaterfallTimeMarkerAtlas(const QVector<WaterfallTimeMarker>& markers);
+    void drawWaterfallTimeMarkers(QPainter& painter, const QRect& rect);
+#ifdef AETHER_GPU_SPECTRUM
+    void prepareWaterfallTimeMarkersGpu(QRhiResourceUpdateBatch* batch, const QRect& rect, const QSize& logicalSize);
+    void drawWaterfallTimeMarkersGpu(QRhiCommandBuffer* cb);
+    void releaseWaterfallTimeMarkersGpu();
+#endif
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
@@ -1608,6 +1626,14 @@ private:
     float m_wfMaxDbm{-50.0f};
 
     // Scrolling waterfall image (Format_RGB32)
+    int m_wfTimeMarkerSeconds{0};
+    qint64 m_wfIncomingTimestampMs{0};
+    QVector<WaterfallTimeRow> m_wfVisibleTimeRows;
+    QImage m_wfTimeMarkerAtlas;
+    QFont m_wfTimeMarkerAtlasFont;
+    QVector<qint64> m_wfTimeMarkerLabels;
+    bool m_wfTimeMarkerAtlasDirty{true};
+    int m_wfTimeMarkerLabelHeight{0};
     QImage m_waterfall;
     // Same ring topology as m_waterfall. Native FLEX tiles are rasterized over
     // their full (wider) frequency frame here; the primary viewport row wins
@@ -2023,6 +2049,10 @@ private:
     bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM
+    QRhiTexture* m_wfTimeMarkerTexture{nullptr};
+    QRhiShaderResourceBindings* m_wfTimeMarkerSrb{nullptr};
+    QRhiBuffer* m_wfTimeMarkerVbo{nullptr};
+    int m_wfTimeMarkerQuadCount{0};
     bool m_rhiInitialized{false};
     bool m_rhiFailureForcedForAutomation{false};
     SpectrumRhiFailureState m_rhiFailure;

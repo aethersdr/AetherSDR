@@ -38,6 +38,7 @@
 #include <QWheelEvent>
 #include <QNativeGestureEvent>
 #include <QMenu>
+#include <QActionGroup>
 #include <QToolTip>
 #include <QDialog>
 #include <QFormLayout>
@@ -1285,6 +1286,14 @@ QVariantMap SpectrumWidget::automationDssSnapshot() const
         static_cast<qulonglong>(m_frequencyRangeCommandCount);
     m[QStringLiteral("historyOffsetRows")] = m_wfHistoryOffsetRows;
     m[QStringLiteral("maxHistoryOffsetRows")] = maxWaterfallHistoryOffsetRows();
+    m[QStringLiteral("waterfallTimeMarkerSeconds")] = m_wfTimeMarkerSeconds;
+    QVariantList timeMarkers;
+    for (const WaterfallTimeMarker& marker : visibleWaterfallTimeMarkers(m_waterfall.height())) {
+        timeMarkers.append(QVariantMap{
+            {QStringLiteral("timestampMs"), marker.timestampMs},
+            {QStringLiteral("y"), marker.y}});
+    }
+    m[QStringLiteral("waterfallTimeMarkers")] = timeMarkers;
     m[QStringLiteral("waterfallRows")] = m_waterfall.height();
     m[QStringLiteral("waterfallWidth")] = m_waterfall.width();
     m[QStringLiteral("waterfallWriteRow")] = m_wfWriteRow;
@@ -2315,6 +2324,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // recolours as it is scrolled back in.
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, [this]() {
+        m_wfTimeMarkerAtlasDirty = true;
         rebuildWfStopsCacheFromTheme();
         recolorWaterfallViewport();
         markOverlayDirty();
@@ -2334,6 +2344,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         "color.background.2",
         "color.background.3",
         "color.background.spectrum",
+        "color.waterfall.timeMarker.foreground",
+        "color.waterfall.timeMarker.background",
         "color.spectrum.trace",
         "color.spectrum.peakHold",
         "color.spectrum.average",
@@ -2490,6 +2502,8 @@ QString SpectrumWidget::settingsKey(const QString& base) const
 void SpectrumWidget::setPanIndex(int idx)
 {
     m_panIndex = idx;
+    m_wfTimeMarkerSeconds = DisplaySettings::waterfallTimeMarkerSeconds(idx);
+    update();
     // Let the overlay menu (the +RX/+TNF/Band/ANT/Display/Memory/DAX button
     // rail) key its persisted collapsed/expanded state to this slot.
     if (m_overlayMenu) {
@@ -2499,6 +2513,7 @@ void SpectrumWidget::setPanIndex(int idx)
 
 void SpectrumWidget::loadSettings()
 {
+    m_wfTimeMarkerSeconds = DisplaySettings::waterfallTimeMarkerSeconds(m_panIndex);
     auto& s = AppSettings::instance();
     // These four values are stored by the radio (including in profiles). Older
     // releases persisted a competing client copy and reasserted it after status
@@ -5409,7 +5424,12 @@ void SpectrumWidget::appendVisibleRow(const QRgb* rowData,
 
     QElapsedTimer timer;
     timer.start();
+    if (m_wfVisibleTimeRows.size() != h) {
+        m_wfVisibleTimeRows = QVector<WaterfallTimeRow>(h);
+    }
+    const qint64 previousMs = m_wfVisibleTimeRows[m_wfWriteRow].timestampMs;
     m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
+    m_wfVisibleTimeRows[m_wfWriteRow] = {m_wfIncomingTimestampMs, previousMs};
     auto* row = reinterpret_cast<QRgb*>(m_waterfall.bits() + m_wfWriteRow * m_waterfall.bytesPerLine());
     std::memcpy(row, rowData, m_waterfall.width() * sizeof(QRgb));
     if (m_waterfallSupplemental.size() != m_waterfall.size()) {
@@ -5464,6 +5484,7 @@ void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
                                       double supplementalCenterMhz,
                                       double supplementalBandwidthMhz)
 {
+    m_wfIncomingTimestampMs = timestampMs;
     // A hidden Flex/Kiwi source keeps only its small viewport and 96-row live
     // DSS surface warm. Retained scrollback belongs to the visible source; it
     // is rebuilt from new rows after a source switch (#4081, #4083).
@@ -5935,6 +5956,7 @@ void SpectrumWidget::paintWaterfallRowsFromHistory(
         resetVisibleWaterfallFrequencyFrames(centerMhz, bandwidthMhz);
     }
 
+    m_wfVisibleTimeRows = QVector<WaterfallTimeRow>(height);
     const int w = m_waterfall.width();
     const bool haveFrames = m_wfHistoryRowCenterMhz.size()
         == m_waterfallHistory.capacityRows();
@@ -5965,6 +5987,10 @@ void SpectrumWidget::paintWaterfallRowsFromHistory(
 
         const int destinationRow =
             waterfallVisibleRowForAge(writeRowOrigin, age, height);
+        const int previousIndex = historyRowIndexForAge(m_wfHistoryOffsetRows + age + 1);
+        m_wfVisibleTimeRows[destinationRow] = {
+            m_wfHistoryTimestamps.value(rowIndex),
+            m_wfHistoryTimestamps.value(previousIndex)};
         auto* dst = reinterpret_cast<QRgb*>(
             m_waterfall.scanLine(destinationRow));
         // With no stamped frames the rows carry no capture information at all,
@@ -6103,6 +6129,7 @@ void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
         m_waterfallSupplemental.fill(Qt::black);
     }
     m_wfWriteRow = 0;
+    m_wfVisibleTimeRows = QVector<WaterfallTimeRow>(m_waterfall.height());
     resetVisibleWaterfallFrequencyFrames(centerMhz, bandwidthMhz);
     m_wfVisiblePaletteToken = waterfallPaletteToken();
 
@@ -6507,6 +6534,8 @@ void SpectrumWidget::clearDisplay()
 
 void SpectrumWidget::clearCurrentWaterfallRows()
 {
+    m_wfVisibleTimeRows = QVector<WaterfallTimeRow>(m_waterfall.height());
+    m_wfIncomingTimestampMs = 0;
     if (!m_waterfall.isNull()) {
         m_waterfall.fill(Qt::black);
     }
@@ -6668,6 +6697,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.waterfall = std::move(m_waterfall);
     updated.waterfallSupplemental = std::move(m_waterfallSupplemental);
     updated.wfWriteRow = m_wfWriteRow;
+    updated.visibleTimeRows = std::move(m_wfVisibleTimeRows);
     updated.visibleRowCenterMhz = std::move(m_wfVisibleRowCenterMhz);
     updated.visibleRowBwMhz = std::move(m_wfVisibleRowBwMhz);
     updated.visibleSupplementalCenterMhz =
@@ -6790,6 +6820,10 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
         m_waterfallStreamSizeHint = m_waterfall.size();
     }
     m_wfWriteRow = restored.wfWriteRow;
+    // The viewport-size guard above preserves matching timestamp rows. Both
+    // marker readers also tolerate a mismatch: drawing skips it and append
+    // reinitializes the metadata before writing the next row.
+    m_wfVisibleTimeRows = std::move(restored.visibleTimeRows);
     m_wfVisibleRowCenterMhz = std::move(restored.visibleRowCenterMhz);
     m_wfVisibleRowBwMhz = std::move(restored.visibleRowBwMhz);
     m_wfVisibleSupplementalCenterMhz =
@@ -10123,6 +10157,24 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             }
 
             menu.addSeparator();
+            QMenu* timeMenu = menu.addMenu(tr("Waterfall Time Markers"));
+            timeMenu->setObjectName(QStringLiteral("waterfallTimeMarkersMenu"));
+            QActionGroup* timeGroup = new QActionGroup(timeMenu);
+            timeGroup->setExclusive(true);
+            for (const int seconds : kWaterfallMarkerIntervals) {
+                const QString label = seconds == 0 ? tr("Off")
+                    : seconds < 60 ? tr("%1 seconds").arg(seconds)
+                    : seconds == 60 ? tr("1 minute")
+                    : tr("%1 minutes").arg(seconds / 60);
+                QAction* action = timeMenu->addAction(label);
+                action->setObjectName(QStringLiteral("waterfallTimeMarkers%1").arg(seconds));
+                action->setCheckable(true);
+                action->setChecked(seconds == m_wfTimeMarkerSeconds);
+                timeGroup->addAction(action);
+                connect(action, &QAction::triggered, this, [this, seconds]() {
+                    setWaterfallTimeMarkerSeconds(seconds);
+                });
+            }
             QAction* tuneGuideAction = menu.addAction("Show Tune Guides");
             tuneGuideAction->setCheckable(true);
             tuneGuideAction->setChecked(m_showTuneGuides);
@@ -14805,6 +14857,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<quint64>(panStatsFftTimer.nsecsElapsed() / 1000);
     }
 
+    prepareWaterfallTimeMarkersGpu(batch,
+        QRect(wfRect.x(), wfRect.y(),
+              std::min(wfContentW, waterfallTimeScaleRect(wfRect).left() - wfRect.left()),
+              wfRect.height()), logicalSize);
     cb->resourceUpdate(batch);
 
     // Begin render pass
@@ -14987,6 +15043,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         cb->draw(4);
     }
 
+    drawWaterfallTimeMarkersGpu(cb);
     cb->endPass();
 
     // VFO flag/widget repositioning now runs earlier (repositionVfoFlags(),
@@ -15041,6 +15098,7 @@ void SpectrumWidget::render(QRhiCommandBuffer* cb)
 
 void SpectrumWidget::releaseResources()
 {
+    releaseWaterfallTimeMarkersGpu();
     releaseWaterfallFramePipelineResources();
     delete m_wfPipeline;     m_wfPipeline = nullptr;
     delete m_wfSrb;          m_wfSrb = nullptr;
@@ -15412,6 +15470,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     } else {
         drawDbmScale(p, specRect);
     }
+    drawWaterfallTimeMarkers(p, QRect(wfRect.x(), wfRect.y(),
+        std::min(wfContentRect.width(), waterfallTimeScaleRect(wfRect).left() - wfRect.left()),
+        wfRect.height()));
     drawTimeScale(p, wfRect);
 
     if (PerfTelemetry::instance().enabled()) {

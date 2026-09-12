@@ -3315,7 +3315,7 @@ Actions:
 
 | action | value | effect |
 |---|---|---|
-| `snapshot` | optional pan target | Read `live`, current center/bandwidth MHz, waterfall/DSS history row counts, visible DSS row count, the current front-row peak bin/min/max/span, localized plateau metrics (`dssVisibleFrontMinValueBins`, `dssVisibleFrontLongestFlatRunBins`, and visible maxima), and flat/non-flat visible-row counts. |
+| `snapshot` | optional pan target | Read `live`, current center/bandwidth MHz, waterfall/DSS history row counts, visible DSS row count, the current front-row peak bin/min/max/span, localized plateau metrics (`dssVisibleFrontMinValueBins`, `dssVisibleFrontLongestFlatRunBins`, and visible maxima), flat/non-flat visible-row counts, and the waterfall time-marker state (`waterfallTimeMarkerSeconds`, `waterfallTimeMarkers`). |
 | `reset` | `native` or `kiwi` | Clear the selected stream's current/history rows and make that stream active for subsequent injection. |
 | `inject` | `<count> <firstPeakBin> <stepBin> [native\|kiwi [rowLowMhz rowHighMhz]]` | Add synthetic rows with one strong peak per row. `count` is rejected if it exceeds the retained waterfall history capacity. Native injection adds one fallback-style waterfall/DSS row per input row; Kiwi injection drives `updateKiwiSdrWaterfallRow()`. Kiwi frame arguments override the source row's frequency span, so tests can cover partial-overlap rows. |
 | `scrollback` | `<offsetRows>` | Enter waterfall history mode and rebuild the 3D surface using the same offset. |
@@ -3328,6 +3328,32 @@ on the same paused historical row, then set `scrollback 0` and confirm the newly
 injected peak becomes visible. The total row counts are still returned, but the
 `*RowsAdded` fields are the deterministic assertion surface if live data is also
 arriving between bridge requests.
+
+### Waterfall time markers
+
+`dss snapshot` reports the clock-aligned waterfall time markers (#5537):
+
+| field | meaning |
+|---|---|
+| `waterfallTimeMarkerSeconds` | Selected interval for this pan slot, in seconds. `0` means Off (the default). Only `0`, `15`, `30`, `60`, `300`, `600` and `900` are valid; anything else fails closed to `0`. |
+| `waterfallTimeMarkers` | Markers currently inside the waterfall viewport, newest first. Each entry is `{"timestampMs", "y"}`: `timestampMs` is the **clock boundary** the marker labels (always an exact multiple of the interval, never the packet arrival time), and `y` is its offset in pixels from the top of the waterfall rect. |
+
+The interval is set from the panadapter context menu (**Waterfall Time
+Markers**) and persists per pan slot in the `Display` settings document. It is
+not settable over the bridge; seed `DisplaySettings` or use the menu.
+
+Markers are attached to the signal row that was captured when the boundary was
+crossed, so they scroll with the waterfall rather than with wall-clock time.
+Two useful assertions:
+
+- Every `timestampMs` is divisible by `waterfallTimeMarkerSeconds * 1000`.
+- A marker's `y` advances at `1000 / waterfallTimeScaleMsPerRow` pixels per
+  second while live, and holds still under `dss scrollback`.
+
+An empty array is normal: a screenful of waterfall is only
+`waterfallRows * waterfallTimeScaleMsPerRow` milliseconds deep (typically
+11-19 s), so intervals longer than that window have no marker on screen most
+of the time.
 
 To reproduce a low-coverage Kiwi row, read `centerMhz` and `bandwidthMhz` from
 `dss snapshot`, then inject a Kiwi source row whose span overlaps less than 5%

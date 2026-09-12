@@ -87,6 +87,7 @@ QHostAddress chooseLanBindAddress(RadioConnection* conn,
 PanadapterStream::PanadapterStream(QObject* parent)
     : QObject(parent)
 {
+    m_pcmProducer.start();
     // Socket and timer connections are deferred to init() which runs
     // on the network thread after moveToThread(). (#561)
 }
@@ -205,6 +206,7 @@ void PanadapterStream::setReceiveBufferSizeBytes(int bytes)
 bool PanadapterStream::start(RadioConnection* conn)
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
+    m_pcmProducer.start();
 
     if (conn && conn->isSyntheticDemo()) {
         // Demo radio: nothing to bind and nothing to generate.
@@ -294,6 +296,10 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         qCWarning(lcVita49) << "PanadapterStream: cannot rebind UDP socket before init";
         return false;
     }
+    // Rotate the epoch only once the rebind is actually going ahead. Starting
+    // above the guard revoked every queued frame and reset continuity on a
+    // stream that then kept running unchanged.
+    m_pcmProducer.start();
 
     if (m_routedPrimeTimer)
         m_routedPrimeTimer->stop();
@@ -358,6 +364,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpPort)
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
+    m_pcmProducer.start();
 
     resetAudioStreamStats();
 
@@ -406,6 +413,11 @@ void PanadapterStream::startWanUdpRegister(quint32 clientHandle)
 
 void PanadapterStream::stop()
 {
+    m_pcmProducer.invalidate();
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_daxPcm.clear();
+    }
     if (m_wanRegisterTimer) {
         m_wanRegisterTimer->stop();
     }
@@ -474,6 +486,7 @@ void PanadapterStream::clearRegisteredStreams()
     m_wfFrames.clear();
     m_dbmRanges.clear();
     m_pendingDbmRanges.clear();
+    m_daxPcm.clear();
     m_daxStreamIds.clear();
     m_iqStreamIds.clear();
     m_loggedDaxPacketStreams.clear();
@@ -801,7 +814,10 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             // Float32 stereo big-endian from radio → native float32 stereo
             const int payloadStart = VITA49_HEADER_BYTES;
             const int payloadBytes = data.size() - payloadStart - (hasTrailer ? 4 : 0);
-            if (payloadBytes < 4) return;
+            if (payloadBytes < 8 || payloadBytes % 8 != 0
+                || payloadBytes / 8 > PcmFrame::kMaxFrames) {
+                return;
+            }
             const int numFloats = payloadBytes / 4;
             const uchar* src = raw + payloadStart;
             pcm.resize(numFloats * static_cast<int>(sizeof(float)));
@@ -809,11 +825,17 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             for (int i = 0; i < numFloats; ++i) {
                 const quint32 u = qFromBigEndian<quint32>(src + i * 4);
                 std::memcpy(&dst[i], &u, 4);
+                if (!std::isfinite(dst[i])) {
+                    return;
+                }
             }
         } else if (pcc == PCC_IF_NARROW_REDUCED) {
             const int payloadStart = VITA49_HEADER_BYTES;
             const int payloadBytes = data.size() - payloadStart - (hasTrailer ? 4 : 0);
-            if (payloadBytes < 2) return;
+            if (payloadBytes < 2 || payloadBytes % 2 != 0
+                || payloadBytes / 2 > PcmFrame::kMaxFrames) {
+                return;
+            }
             const int monoSamples = payloadBytes / 2;
             const uchar* src = raw + payloadStart;
             pcm.resize(monoSamples * 2 * static_cast<int>(sizeof(float)));
@@ -826,7 +848,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         } else {
             return;
         }
-        emit daxAudioReady(channel, pcm);
+        publishLegacyDaxAudio(streamId, channel, pcm);
         return;
     }
 
@@ -1120,6 +1142,40 @@ void PanadapterStream::setPacketLossConcealment(bool on)
     }
 }
 
+void PanadapterStream::publishLegacyDaxAudio(quint32 streamId, int channel,
+                                            const QByteArray& pcm)
+{
+    std::optional<PcmFrame> frame;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        if (m_daxStreamIds.value(streamId, -1) != channel) {
+            return;
+        }
+        auto it = m_daxPcm.find(streamId);
+        if (it == m_daxPcm.end()) {
+            if (m_daxPcm.size() >= PcmFrameGate::kMaxStreams) {
+                return;
+            }
+            auto producer = std::make_unique<PcmProducer>();
+            // DAX channel identity is supplied alongside the frame. A channel
+            // is not a stable slice slot; A4 owns that attribution/conversion.
+            producer->start(PcmPurpose::Auxiliary);
+            it = m_daxPcm.emplace(streamId, std::move(producer)).first;
+        }
+        frame = it->second->legacyStereo24(pcm);
+    }
+    if (frame) {
+        emit daxPcmReady(channel, *frame);
+    }
+}
+
+void PanadapterStream::publishLegacyAudio(const QByteArray& pcm)
+{
+    if (const auto frame = m_pcmProducer.legacyStereo24(pcm)) {
+        emit pcmFrameReady(*frame);
+    }
+}
+
 void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId)
 {
     // One-time: log the RX audio VITA-49 header for comparison with our TX packets
@@ -1143,7 +1199,10 @@ void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool 
     // Byte-swap to native float32 and emit directly — no int16 conversion.
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
-    if (payloadBytes < 4) return;
+    if (payloadBytes < 8 || payloadBytes % 8 != 0
+        || payloadBytes / 8 > PcmFrame::kMaxFrames) {
+        return;
+    }
 
     const int numFloats = payloadBytes / 4;
     const uchar* src = raw + payloadStart;
@@ -1154,11 +1213,14 @@ void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool 
     for (int i = 0; i < numFloats; ++i) {
         const quint32 u = qFromBigEndian<quint32>(src + i * 4);
         std::memcpy(&dst[i], &u, 4);
+        if (!std::isfinite(dst[i])) {
+            return;
+        }
     }
 
     auto& plc = m_audioPlc[streamId];
     pcm = applyConcealmentFade(std::move(pcm), plc, m_plcEnabled.load());
-    emit audioDataReady(pcm);
+    publishLegacyAudio(pcm);
 }
 
 void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId)
@@ -1183,7 +1245,10 @@ void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bo
     // Payload: big-endian int16 mono. Convert to float32 stereo.
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
-    if (payloadBytes < 2) return;
+    if (payloadBytes < 2 || payloadBytes % 2 != 0
+        || payloadBytes / 2 > PcmFrame::kMaxFrames) {
+        return;
+    }
 
     const int monoSamples = payloadBytes / 2;
     const uchar* src = raw + payloadStart;
@@ -1199,7 +1264,7 @@ void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bo
 
     auto& plc = m_audioPlc[streamId];
     pcm = applyConcealmentFade(std::move(pcm), plc, m_plcEnabled.load());
-    emit audioDataReady(pcm);
+    publishLegacyAudio(pcm);
 }
 
 // ─── Meter data decode ───────────────────────────────────────────────────────
@@ -1269,7 +1334,7 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
         plc.tailL = dst[numSamples - 2];
         plc.tailR = dst[numSamples - 1];
     }
-    emit audioDataReady(pcm);
+    publishLegacyAudio(pcm);
 }
 
 void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer)
@@ -1458,16 +1523,20 @@ void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
     QMutexLocker lock(&m_streamMutex);
     // Enforce one active stream per channel. A stale stream from a previous
     // session or a duplicate subscription created by another code path would
-    // cause daxAudioReady to fire twice per audio period — doubling perceived
+    // cause daxPcmReady to fire twice per audio period — doubling perceived
     // speed. Remove any prior mapping for this channel before inserting.
     for (auto it = m_daxStreamIds.begin(); it != m_daxStreamIds.end(); ) {
         if (it.value() == channel && it.key() != streamId) {
             qCDebug(lcVita49) << "PanadapterStream: evicting stale DAX stream"
                               << Qt::hex << it.key() << "from channel" << channel;
+            m_daxPcm.erase(it.key());
             it = m_daxStreamIds.erase(it);
         } else {
             ++it;
         }
+    }
+    if (m_daxStreamIds.value(streamId, -1) != channel) {
+        m_daxPcm.erase(streamId);
     }
     m_daxStreamIds[streamId] = channel;
     m_loggedDaxPacketStreams.remove(streamId);
@@ -1500,6 +1569,7 @@ void PanadapterStream::unregisterDaxStream(quint32 streamId)
     int channel = 0;
     {
         QMutexLocker lock(&m_streamMutex);
+        m_daxPcm.erase(streamId);
         m_daxStreamIds.remove(streamId);
         m_loggedDaxPacketStreams.remove(streamId);
         // DAX audio streams use the PLC path too; drop the per-stream PLC
