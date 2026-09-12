@@ -61,6 +61,19 @@ public:
     // on a Flex unplug.
     void setHasAudioPeakingFilter(bool has);
 
+    // Does THIS session's radio publish an ALCGAIN meter? Gates the ALC Gain
+    // gauge, which is otherwise a face that can never move: the HL2 is the
+    // only family in the tree that publishes the meter, and the shared Phone
+    // panel is also Flex's, Icom's and the sim's. Pushed from
+    // MainWindow::applyCapabilitiesToUi off MeterModel::hasAlcGainMeter(),
+    // and again when a sample arrives, because meters are DEFINED after
+    // capabilities are published on the connect edge.
+    //
+    // NOT permissive while disconnected, unlike the APF row above: this gauge
+    // is new, and "no radio attached" must render as the panel that shipped
+    // before it rather than as a gauge nothing can drive.
+    void setHasAlcGainMeter(bool has);
+
 signals:
     void micLevelChanged(int level);  // slider value 0-100
 
@@ -78,6 +91,18 @@ public slots:
     void updateMeters(float micLevel, float compLevel,
                       float micPeak, float compPeak);
     void updateCompression(float compPeak);
+
+    // The gain the transmitter's ALC is applying, in dB (0 = unity). A
+    // different reading from updateAlc() below, not a second scaling of it:
+    // that one is the post-ALC LEVEL, which sits near the ALC's target however
+    // the operator has set their gain, and this is how hard the stage is
+    // working to put it there — the half that answers "is the ALC holding, and
+    // by how much" when a transmission goes out quiet.
+    void updateAlcGain(float gainDb);
+    // Back to unity with no claim behind it, for unkey and disconnect. The
+    // caller decides WHEN, because "the ALC is applying no gain" and "nothing
+    // has told us what the ALC is doing" are the same number on this face.
+    void resetAlcGain();
 
     // Notify the applet when RADE mode activates/deactivates so the mic level
     // slider and meter behave correctly (client-side gain + RX metering).
@@ -119,6 +144,16 @@ private:
     MicMeterSessionState m_micLevelMeterSession{MicMeterSessionState::Disconnected};
     bool m_micLevelMeterAvailable{true};
     HGauge* m_compGauge{nullptr};
+    // Phone panel only, beside Compression — the two gauges that report what
+    // the transmit chain is DOING to the operator's audio, as opposed to the
+    // Level and ALC gauges above and below them, which report levels. Not
+    // mirrored onto the CW panel the way the ALC gauge is: the remedy this
+    // meter points at is the mic slider, which is a Phone control.
+    HGauge* m_alcGainGauge{nullptr};
+    // Hidden until a radio says it publishes the meter — see
+    // setHasAlcGainMeter(). False by default so the gauge is built hidden and
+    // a family that never publishes ALCGAIN gets the panel it had before.
+    bool m_hasAlcGainMeter{false};
 
     QComboBox* m_micProfileCombo{nullptr};
 

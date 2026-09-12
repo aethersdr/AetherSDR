@@ -266,6 +266,55 @@ void MainWindow::wireDspApplets()
             m_appletPanel->phoneCwApplet()->resetAlc();
         }
     });
+    // The ALC's applied GAIN, beside the ALC's output level above. Gated the
+    // same way and additionally on the model having a SAMPLE: unity gain and
+    // "nothing has said what the ALC is doing" are the same 0 dB on the face,
+    // so without hasAlcGainValue() a cleared meter would render as a confident
+    // "the ALC is holding at unity" — the fabricated-reading failure §1.8
+    // describes, where a dead meter and a real reading of nothing look alike.
+    // WHETHER THE ROW EXISTS IS A DEFINITION QUESTION, and it is answered on
+    // the definition signals — never on the arrival of a value.
+    //
+    // It was answered inside the alcGainChanged handler below, and that is a
+    // value signal: submitTxAudio() returns early on !m_keyed, so alcGain never
+    // fires outside TX. The gauge was therefore absent during exactly the
+    // pre-transmission mic-gain setup it exists to inform, inserted itself into
+    // the panel mid-over, and in CW-only operation never appeared at all. The
+    // regime the meter earns its place in is the quiet-mic one — the ALC hits
+    // its makeup ceiling near -41.4 dBFS, below the Level gauge's -40 floor, so
+    // both existing gauges are pinned there and only this one can show the
+    // difference. Gating on a value hid it precisely there.
+    //
+    // applyCapabilitiesToUi() alone cannot cover it either: Hl2Backend calls
+    // defineMeters() from inside its own connected handler, AFTER RadioModel
+    // has published capabilities, so at the moment the panel is configured the
+    // meter does not exist yet. These three are the model's own account of
+    // which meters exist -- defined, removed, and the disconnect that drops
+    // them all (clear() emits only metersCleared, never a meterRemoved per
+    // index). Idempotent: setHasAlcGainMeter() early-returns on no change.
+    {
+        auto syncAlcGainRow = [this] {
+            m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
+                m_radioModel.meterModel().hasAlcGainMeter());
+        };
+        connect(&m_radioModel.meterModel(), &MeterModel::meterDefinitionChanged,
+                this, [syncAlcGainRow](int) { syncAlcGainRow(); });
+        connect(&m_radioModel.meterModel(), &MeterModel::meterRemoved,
+                this, [syncAlcGainRow](int) { syncAlcGainRow(); });
+        connect(&m_radioModel.meterModel(), &MeterModel::metersCleared,
+                this, syncAlcGainRow);
+    }
+    connect(&m_radioModel.meterModel(), &MeterModel::alcGainChanged,
+            this, [this](float gainDb) {
+        // READING ONLY. Presence is settled above, on the definition signals.
+        const bool live = m_radioModel.isRadioTransmitting()
+                       && m_radioModel.meterModel().hasAlcGainValue();
+        if (live) {
+            m_appletPanel->phoneCwApplet()->updateAlcGain(gainDb);
+        } else {
+            m_appletPanel->phoneCwApplet()->resetAlcGain();
+        }
+    });
     // Client-side PC mic metering — radio CODEC meters only see hardware mics.
     // Apply VU-style ballistics: fast attack, slow decay (~20 dB/sec).
     {

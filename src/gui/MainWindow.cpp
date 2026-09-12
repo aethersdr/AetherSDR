@@ -7551,6 +7551,15 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
         m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
             m_radioModel.hasAudioPeakingFilter());
+        // The ALC Gain gauge, on the meter EXISTING rather than on a
+        // capability flag: only the HL2 publishes TX:ALCGAIN, and the Phone
+        // panel is shared. `connected &&` rather than the permissive
+        // `!connected ||` used above — a disconnected panel must be the panel
+        // that shipped before this gauge, and the disconnect edge is what
+        // takes the row back down after an HL2 session so the next Flex
+        // connect does not inherit it.
+        m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
+            connected && m_radioModel.meterModel().hasAlcGainMeter());
     }
 
     // ── The 8-band graphic EQ ───────────────────────────────────────────────

@@ -29,6 +29,16 @@
 
 namespace AetherSDR {
 
+// The ALC Gain gauge's face, named because two places need the SAME numbers
+// and one of them is "no reading".
+//
+// Not a display preference: the top is the HL2 modulator's makeup ceiling
+// (Hl2TxDsp::Config::alcMaxGainDb), so a reading pressed against it means the
+// ALC has run out of gain rather than that the face has run out of scale.
+// -20 covers the reductions this chain produces.
+static constexpr float kAlcGainGaugeMinDb = -20.0f;
+static constexpr float kAlcGainGaugeMaxDb = 40.0f;
+
 // ── Triangle button (same as RxApplet) ──────────────────────────────────────
 
 class CwTriBtn : public QPushButton {
@@ -266,6 +276,51 @@ void PhoneCwApplet::buildPhonePanel()
     });
     m_compGauge->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_compGauge);
+
+    // ── ALC Gain gauge (dB: -20 to +40) ──────────────────────────────────
+    // Beside Compression because they answer the same kind of question — how
+    // much is the chain changing my audio — where the ALC gauge below answers
+    // where the audio ended up. The two are easily confused and the difference
+    // is the whole reason this one exists: a post-ALC level meter sits pinned
+    // near its target by construction, so an operator whose microphone is 30 dB
+    // too quiet sees an ALC gauge that looks perfect.
+    //
+    // The range is the modulator's, not a preference: +40 dB is the HL2
+    // modulator's makeup ceiling (Hl2TxDsp::Config::alcMaxGainDb), so a reading
+    // at the top means the ALC has run out of gain rather than that the face
+    // has run out of scale. -20 covers the reductions this chain produces.
+    //
+    // The colour breaks are the modulator's too, not taste. The face's top is
+    // alcMaxGainDb, so yellow at +20 is "half the makeup is spent" and red at
+    // +30 is "three quarters of it is, and the last 10 dB is all that stands
+    // between this microphone and an ALC that cannot reach its target" --
+    // which is a setup fault to fix at the gain control, not in software. The
+    // reduction half is deliberately uncoloured: the ALC taking level away is
+    // it working, at any depth this chain produces.
+    m_alcGainGauge = new HGauge(kAlcGainGaugeMinDb, kAlcGainGaugeMaxDb, 30.0f,
+        "ALC Gain", "dB",
+        {{-20, "-20dB"}, {-10, "-10"}, {0, "0"}, {10, "+10"}, {20, "+20"},
+         {30, "+30"}, {40, "+40"}}, nullptr, 20.0f);
+    m_alcGainGauge->setObjectName(QStringLiteral("phoneAlcGainGauge"));
+    // The floor, not 0: see resetAlcGain(). A gauge built hidden must not be
+    // holding a third-full bar for the moment it is revealed.
+    m_alcGainGauge->setValueImmediate(kAlcGainGaugeMinDb);
+    m_alcGainGauge->setAccessibleName("ALC gain gauge");
+    m_alcGainGauge->setAccessibleDescription(
+        "Gain the transmit ALC is applying, in dB; 0 is unity");
+    m_alcGainGauge->setHoverValueFormatter([](float v) {
+        // Signed, unlike Compression's face below, because both directions are
+        // real here: the ALC both adds makeup and takes level away.
+        return QStringLiteral("%1%2 dB")
+            .arg(v > 0.0f ? QStringLiteral("+") : QString())
+            .arg(QString::number(v, 'f', 1));
+    });
+    m_alcGainGauge->setHoverValuePopupEnabled(true);
+    // Built hidden. The Phone panel is shared with Flex, Icom and the sim,
+    // none of which publish an ALCGAIN meter, and a row they cannot drive is
+    // a change to their panel. setHasAlcGainMeter() is what reveals it.
+    m_alcGainGauge->setVisible(m_hasAlcGainMeter);
+    vbox->addWidget(m_alcGainGauge);
 
     // ── ALC gauge (post-SW-ALC SSB-peak, dBFS) ──────────────────────────
     // Mirrored in m_cwPanel; both gauges read from MeterModel::alcValueChanged
@@ -1356,6 +1411,49 @@ void PhoneCwApplet::updateCompression(float compPeak)
     // MeterModel exposes a positive physical amount; the face fills in reverse.
     const float compressionDb = qBound(0.0f, compPeak, m_compressionMaximumDb);
     m_compGauge->setValue(-compressionDb);
+}
+
+void PhoneCwApplet::updateAlcGain(float gainDb)
+{
+    if (!m_alcGainGauge)
+        return;
+    // No clamp here: HGauge clamps to its own range, and clamping twice would
+    // hide the case worth seeing — a gain pressed against the modulator's
+    // ceiling, which reads as "the ALC has nothing left" rather than as a
+    // meter at the end of its travel.
+    m_alcGainGauge->setValue(gainDb);
+}
+
+void PhoneCwApplet::resetAlcGain()
+{
+    if (!m_alcGainGauge)
+        return;
+    // THE FACE FLOOR, NOT ZERO, and the distinction is the whole point of
+    // hasAlcGainValue(). This face runs -20..+40, so HGauge renders 0 dB as a
+    // bar one third full -- and 0 dB is also a real reading, "the ALC is
+    // holding at unity". Driving to 0 on unkey, on disconnect and as the first
+    // thing shown after a TX-slice change therefore painted a confident
+    // measurement in the one state where nothing has been measured. resetAlc()
+    // beside it drives to its own floor for the same reason; an empty bar is
+    // the only rendering of "no reading" this widget has.
+    m_alcGainGauge->setValue(kAlcGainGaugeMinDb);
+    m_alcGainGauge->clearPeak();
+}
+
+void PhoneCwApplet::setHasAlcGainMeter(bool has)
+{
+    if (m_hasAlcGainMeter == has)
+        return;
+    m_hasAlcGainMeter = has;
+    if (!m_alcGainGauge)
+        return;
+    // Discard the departing radio's last gain before hiding, for the same
+    // reason setMicLevelMeterState() resets the Level gauge at the lifecycle
+    // boundary: a reading kept behind a hidden widget comes back as the next
+    // radio's when the gauge is shown again.
+    if (!has)
+        resetAlcGain();
+    m_alcGainGauge->setVisible(has);
 }
 
 void PhoneCwApplet::setAlcMeterUnit(const QString& unit)
