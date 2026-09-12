@@ -173,6 +173,138 @@ void testTransientResetRetainsNoiseProfile()
     }
 }
 
+// A weak wanted signal arriving just after unkey is the symptom #3821 is
+// actually about ("weak callbacks masked by band noise"). The rows above
+// measure suppression on noise alone, where deeper is always better — they
+// cannot tell a better noise estimate apart from over-suppression that eats
+// the other station. A retained floor is wrong in both directions after a
+// receiver-AGC step: too low after an upward step, too high after a downward
+// one, and the too-high case is the one that could chop speech.
+//
+// So measure what matters: the wanted signal's SNR gain, not its raw level.
+// A weak carrier switches on 1.0 s after the edge (non-stationary, so the
+// minimum-statistics tracker cannot have learned it as noise) and its
+// amplitude is recovered by quadrature correlation over the same post-ramp
+// window. The warm reset must not deliver less SNR improvement than the full
+// reset it replaced, in any AGC direction.
+void testWarmResetKeepsWeakSignalSnr()
+{
+    constexpr int kSampleRate = 24000;
+    constexpr int kFftSize = 1024;
+    constexpr int kOverlap = 4;
+    constexpr int kBlockSamples = 73;
+    constexpr int kSettleSamples = 6 * kSampleRate;
+    constexpr int kResumeSamples = 6 * kSampleRate;
+    constexpr double kToneHz = 1000.0;
+    const int burstStart = kSampleRate;             // 1.0 s after the edge
+    const int burstEnd = 17 * kSampleRate / 10;     // 1.7 s
+
+    std::vector<float> settle(kSettleSamples);
+    std::vector<float> resumeNoise(kResumeSamples);
+    std::uint32_t randomState = 0x33383231u;
+    const auto nextWhite = [&randomState]() {
+        randomState = 1664525u * randomState + 1013904223u;
+        return 2.0 * (static_cast<double>(randomState) / 4294967295.0) - 1.0;
+    };
+    for (float& sample : settle) {
+        sample = static_cast<float>(0.25 * nextWhite());
+    }
+    for (float& sample : resumeNoise) {
+        sample = static_cast<float>(0.25 * nextWhite());
+    }
+
+    const auto toneAmplitude = [&](const std::vector<float>& buffer,
+                                   int firstSample, int lastSample,
+                                   int latencySamples) {
+        double real = 0.0;
+        double imag = 0.0;
+        for (int i = firstSample; i < lastSample; ++i) {
+            const double phase = 2.0 * M_PI * kToneHz * i / kSampleRate;
+            real += buffer[i + latencySamples] * std::cos(phase);
+            imag += buffer[i + latencySamples] * std::sin(phase);
+        }
+        const double count = lastSample - firstSample;
+        return 2.0 * std::sqrt(real * real + imag * imag) / count;
+    };
+
+    const auto runResumed = [&](bool transientReset, double resumeScale) {
+        SpectralNR nr(kFftSize, kSampleRate, kOverlap);
+        std::vector<float> settledOutput(kSettleSamples);
+        for (int offset = 0; offset < kSettleSamples; offset += kBlockSamples) {
+            nr.process(settle.data() + offset, settledOutput.data() + offset,
+                       std::min(kBlockSamples, kSettleSamples - offset));
+        }
+        if (transientReset) {
+            nr.resetTransient();
+        } else {
+            nr.reset();
+        }
+        // The wanted signal rides the receiver AGC exactly as the noise does,
+        // so its input SNR is identical across the three scale rows.
+        const double toneAmp = 0.02 * resumeScale;
+        Run run;
+        run.input.resize(kResumeSamples);
+        for (int i = 0; i < kResumeSamples; ++i) {
+            double value = resumeNoise[i] * resumeScale;
+            if (i >= burstStart && i < burstEnd) {
+                value += toneAmp
+                    * std::sin(2.0 * M_PI * kToneHz * i / kSampleRate);
+            }
+            run.input[i] = static_cast<float>(value);
+        }
+        run.output.assign(kResumeSamples, 0.0f);
+        for (int offset = 0; offset < kResumeSamples; offset += kBlockSamples) {
+            nr.process(run.input.data() + offset, run.output.data() + offset,
+                       std::min(kBlockSamples, kResumeSamples - offset));
+        }
+        return run;
+    };
+
+    const int firstSample = 11 * kSampleRate / 10;  // 1.1 s
+    const int lastSample = 8 * kSampleRate / 5;     // 1.6 s
+    for (const double scale : {1.0, 0.5, 2.0}) {
+        const Run warm = runResumed(true, scale);
+        const Run full = runResumed(false, scale);
+
+        // Broadband gain over the window, and the wanted carrier's gain over
+        // the same window. Their difference is the SNR the operator gets.
+        const double warmBroadbandDb = rmsGainDb(warm.input, warm.output,
+                                                 firstSample, lastSample,
+                                                 kFftSize);
+        const double fullBroadbandDb = rmsGainDb(full.input, full.output,
+                                                 firstSample, lastSample,
+                                                 kFftSize);
+        const double inputTone =
+            toneAmplitude(warm.input, firstSample, lastSample, 0);
+        const double warmToneDb = 20.0 * std::log10(
+            std::max(toneAmplitude(warm.output, firstSample, lastSample,
+                                   kFftSize), 1e-12) / inputTone);
+        const double fullToneDb = 20.0 * std::log10(
+            std::max(toneAmplitude(full.output, firstSample, lastSample,
+                                   kFftSize), 1e-12) / inputTone);
+        const double warmSnrDb = warmToneDb - warmBroadbandDb;
+        const double fullSnrDb = fullToneDb - fullBroadbandDb;
+
+        std::printf("%+.0f dB step, weak signal: warm SNR %+.2f dB vs full "
+                    "%+.2f dB (tone warm %+.2f dB, full %+.2f dB)\n",
+                    20.0 * std::log10(scale), warmSnrDb, fullSnrDb,
+                    warmToneDb, fullToneDb);
+        // Two invariants, and the second one has a measured margin rather
+        // than a round number. The warm path must still IMPROVE the weak
+        // signal's SNR (measured +2.03 / +1.97 / +2.04 dB across the three
+        // rows), and it must not fall meaningfully behind the full reset it
+        // replaced. It leads at 0 dB (+2.03 vs +1.61) and +6 dB (+2.04 vs
+        // +1.15), and trails by 0.44 dB at -6 dB — the downward-AGC-step
+        // direction the resetTransient() comment calls out as the bounded
+        // one, where the retained floor is temporarily too high. 1.0 dB
+        // leaves that known gap room without letting a real regression pass.
+        check(warmSnrDb > 1.0,
+              "warm reset still improves weak-signal SNR after the edge");
+        check(warmSnrDb >= fullSnrDb - 1.0,
+              "warm reset stays within 1 dB of a full reset's weak-signal SNR");
+    }
+}
+
 std::uint64_t diagnosticCount(const AudioEngine& engine, const char* key)
 {
     const QJsonObject main = engine.nr2RuntimeDiagnostics()
@@ -219,6 +351,7 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testTransientResetRetainsNoiseProfile();
+    testWarmResetKeepsWeakSignalSnr();
     testAudioEngineTxRxEdgeUsesWarmReset();
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

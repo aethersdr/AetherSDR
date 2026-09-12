@@ -9115,8 +9115,9 @@ void AudioEngine::setRadioTransmitting(bool tx, bool ownedByUs)
     // unkey (#3821); with the profile retained, suppression is back at full
     // depth as the ramp completes. If the band or the AGC level moved during
     // TX the estimator adapts from the retained floor — quickly downward,
-    // and upward within one minimum-statistics window (~1.5 s), which is no
-    // slower than the full convergence it replaced.
+    // and upward over the following minimum-statistics windows: measured
+    // settled by ~2.5 s in nr2_tx_rx_reset_test, no slower than the full
+    // convergence it replaced.
     //
     // Scoped to NR2 for now: it's the reported filter and this keeps testing
     // localized. RN2/NR4/DFNR/MNR share the same bypass + stale-state path and

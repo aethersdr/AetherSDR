@@ -564,10 +564,11 @@ void SpectralNR::resetTransient()
     // so the scale corrector never observes the step and scalePowerHistory()
     // will not rescale the retained noise estimate for it. The fallout is
     // bounded rather than corrected: minimum statistics re-levels a floor that
-    // is now too high within a few frames, and one that is too low within one
-    // window (m_U * m_V frames, ~1.5 s) — no slower than the full reset()
-    // this path replaced. Pinned by the ±6 dB step rows in
-    // nr2_tx_rx_reset_test.
+    // is now too high within a few frames, and one that is too low over the
+    // following windows — still climbing at 1.6 s (−15.5 dB against a
+    // −27.4 dB settled depth on the +6 dB row) and settled by 2.5 s, no
+    // slower than the full reset() this path replaced. Pinned by the
+    // ±6 dB step rows in nr2_tx_rx_reset_test, which measure both windows.
     std::fill(m_commonWantedProtected.begin(),
               m_commonWantedProtected.end(), 0);
     std::fill(m_commonReferencePsd.begin(),
