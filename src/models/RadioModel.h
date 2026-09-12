@@ -1370,6 +1370,14 @@ public:
     // that lands on the next radio.
     void invokeBackendExtension(const QString& ns, const QString& verb,
                                 quint64 requestId = 0, const QVariant& arg = {});
+
+    // Whether the connected backend DECLARES it answers an extension namespace.
+    // The gate to use before invoking a family-specific verb —
+    // extensionNamespaces is the handshake for exactly that (IRadioBackend.h:
+    // "Clients discover available namespaces via capabilities()
+    // .extensionNamespaces"), and a family-string comparison asks a subtly
+    // different question. (#5262 M1)
+    [[nodiscard]] bool backendDeclaresExtension(const QString& ns) const;
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend
