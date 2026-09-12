@@ -4,6 +4,8 @@
 #include "gui/map/GlobeMapView.h"
 #include "gui/map/WeatherRadarTexture.h"
 #include "gui/map/WeatherRadarTileLayer.h"
+#include "gui/map/RegionalRadarComposite.h"
+#include "gui/map/OperaRadarNetwork.h"
 
 #include <QGeoView/QGVMap.h>
 #include <QGeoView/QGVMapQGView.h>
@@ -13,6 +15,9 @@
 #include <QApplication>
 #include <QBuffer>
 #include <QLabel>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QOpenGLContext>
@@ -198,6 +203,263 @@ private:
     }
 
 private slots:
+    void coverageTooltipClearsWhenLeavingOrDisabling()
+    {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        GlobeMapView globe;
+        globe.resize(600, 400);
+        RadarSite site;
+        site.id = QStringLiteral("TEST");
+        globe.setRadarSites({site}, true);
+        globe.m_overlayMatricesValid = true;
+        globe.m_overlayModel.setToIdentity();
+        globe.m_overlayViewProjection.setToIdentity();
+        QPointF point;
+        QVERIFY(globe.projectPoint(globe.geoPoint(0, 0),
+            globe.m_overlayModel, globe.m_overlayViewProjection, &point));
+        globe.updateHover(point);
+        QVERIFY(!globe.m_hoverCard->isHidden());
+        globe.updateHover(QPointF(0, 0));
+        QVERIFY(globe.m_hoverCard->isHidden());
+        globe.updateHover(point);
+        QVERIFY(!globe.m_hoverCard->isHidden());
+        globe.setRadarSites({site}, false);
+        QVERIFY(globe.m_hoverCard->isHidden());
+        QGV::setNetworkManager(nullptr);
+    }
+
+    void playbackCoverageRemainsPinnedDuringRebuffer()
+    {
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        MapDisplayWidget map;
+        map.m_weatherRadarNetwork = &network;
+        map.m_weatherRadarSource = WeatherRadarSource::composite(15);
+        QGVMap* flat = map.m_flatView->findChild<QGVMap*>();
+        flat->geoView()->setViewport(new QWidget());
+        map.resize(600, 400);
+        map.show();
+        QCoreApplication::processEvents();
+        map.m_weatherRadarVisible = true;
+        map.m_weatherRadarPlaybackRequested = true;
+        const qint64 stamp = QDateTime::currentSecsSinceEpoch() / 600 * 600 - 600;
+        for (int providers : {8, 7}) {
+            map.cancelWeatherRadarFrameRequests();
+            const QByteArray catalog = QJsonDocument(QJsonObject{
+                {QStringLiteral("times"), QJsonArray{stamp - 600, stamp}},
+                {QStringLiteral("providers"), providers}}).toJson();
+            QVERIFY(map.useWeatherRadarTimeline(catalog, 2));
+            const auto checkRequests = [&] {
+                int pending = 0;
+                for (const auto& reply : network.allReplies) {
+                    if (!reply || reply->isFinished() || reply->url().scheme() != "radar-composite") {
+                        continue;
+                    }
+                    QCOMPARE(QUrlQuery(reply->url()).queryItemValue("providers").toInt(), providers);
+                    ++pending;
+                }
+                QVERIFY(pending > 0);
+            };
+            checkRequests();
+            map.cancelWeatherRadarFrameRequests();
+            map.bufferWeatherRadarFrames(); // Same path used by a zoom refresh.
+            checkRequests();
+            QCOMPARE(map.m_weatherRadarSource.enabledProviders(), 15); // Preserve user settings.
+        }
+        const QByteArray primaryCatalog = QJsonDocument(QJsonObject{
+            {QStringLiteral("times"), QJsonArray{stamp - 600, stamp}},
+            {QStringLiteral("providers"), 8}}).toJson();
+        map.cancelWeatherRadarFrameRequests();
+        QVERIFY(map.useWeatherRadarTimeline(primaryCatalog, 2));
+        const auto failedReplies = network.allReplies;
+        for (const auto& reply : failedReplies) {
+            if (reply && !reply->isFinished() && reply->url().scheme() == "radar-composite") {
+                reply->complete(true);
+            }
+        }
+        QCOMPARE(map.m_weatherRadarPlaybackProviders, 7);
+        QVERIFY(map.m_weatherRadarTimelineReply != nullptr);
+        QCOMPARE(QUrlQuery(map.m_weatherRadarTimelineReply->url())
+            .queryItemValue("providers").toInt(), 7); // Entire fallback movie, not mixed frames.
+        GlobeMapView globe;
+        globe.resize(2000, 2000);
+        const QSize size = globe.weatherRadarPlaybackSize(QRectF(0, 0, 3000000, 3000000));
+        QVERIFY(qint64(size.width()) * size.height() <= kMaximumWeatherRadarPixels);
+        map.stopWeatherRadarAnimation();
+        QGV::setNetworkManager(nullptr);
+    }
+
+    void globeCoverageMovesWithRenderedSurface()
+    {
+        if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
+            QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
+        }
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        GlobeMapView globe;
+        globe.resize(600, 400);
+        globe.show();
+        QTRY_VERIFY(globe.isValid());
+        globe.cancelTileRequests();
+        globe.m_detailSelectionDirty = false;
+        globe.m_atlas.fill(Qt::black);
+        globe.m_atlasDirty = true;
+        globe.m_terminatorVisible = false;
+        globe.m_basemapDarkEnabled = false;
+        RadarSite site;
+        site.rangeKm = 460;
+        site.ring = radarRangeRing(0, 0, site.rangeKm);
+        globe.setRadarSites({site}, true);
+        globe.m_navigation.reset(0, 0);
+        const auto shade = [](const QColor& pixel) {
+            return std::max({pixel.red(), pixel.green(), pixel.blue()});
+        };
+        // grabFramebuffer reads the globe pass alone, without processing the
+        // separate vector QWidget's queued paint. Coverage must already be in
+        // this frame at its new geographic location after every rotation.
+        QImage frame = globe.grabFramebuffer();
+        const QPoint center(frame.width() / 2, frame.height() / 2);
+        const int single = shade(frame.pixelColor(center));
+        QVERIFY(single > 2 && single <= 12);
+        globe.setRadarSites({site, site}, true);
+        frame = globe.grabFramebuffer();
+        QCOMPARE(shade(frame.pixelColor(center)), single); // No darker overlaps.
+        const GLuint resident = globe.m_radarCoverageBuffer.bufferId();
+        for (int longitude = 4; longitude <= 60; longitude += 4) {
+            globe.m_navigation.reset(0, longitude);
+            frame = globe.grabFramebuffer();
+            QPointF point;
+            QVERIFY(globe.projectPoint(globe.geoPoint(0, 0),
+                globe.m_overlayModel, globe.m_overlayViewProjection, &point));
+            const QPoint pixel = (point * globe.devicePixelRatioF()).toPoint();
+            QVERIFY(frame.rect().contains(pixel));
+            QVERIFY(shade(frame.pixelColor(pixel)) > 2);
+            if (longitude > 8) {
+                QCOMPARE(shade(frame.pixelColor(center)), 0); // No trailing footprint.
+            }
+            QCOMPARE(globe.m_radarCoverageBuffer.bufferId(), resident);
+            QVERIFY(!globe.m_radarCoverageDirty);
+        }
+        globe.m_navigation.reset(0, 180);
+        frame = globe.grabFramebuffer();
+        QCOMPARE(shade(frame.pixelColor(center)), 0); // No far-side coverage.
+        globe.m_navigation.reset(0, 0);
+        globe.setRadarSites({site}, false);
+        frame = globe.grabFramebuffer();
+        QCOMPARE(shade(frame.pixelColor(center)), 0);
+        QGV::setNetworkManager(nullptr);
+    }
+
+    void globeAdmitsNativeRegionalLiveTiles_data()
+    {
+        QTest::addColumn<int>("providers");
+        QTest::newRow("regional-512") << 7;
+        QTest::newRow("global-512") << 15;
+    }
+    void globeAdmitsNativeRegionalLiveTiles()
+    {
+        QFETCH(int,providers);
+        const int tileSize=512;
+        ControlledRadarNetwork network;
+        QGV::setNetworkManager(&network);
+        GlobeMapView globe;
+        globe.setWeatherRadarSource(WeatherRadarSource::composite(providers));
+        globe.setWeatherRadarVisible(true);
+        bool sawNativeTile = false;
+        QImage pixels(tileSize,tileSize,QImage::Format_ARGB32_Premultiplied);
+        pixels.fill(Qt::green);
+        QByteArray png;
+        QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly); pixels.save(&buffer,"PNG");
+        for (int pass = 0; pass < 100; ++pass) {
+            const auto replies = network.allReplies;
+            bool completed = false;
+            for (const auto& reply : replies) {
+                if (reply && !reply->isFinished()) {
+                    sawNativeTile |= reply->url().scheme() == QStringLiteral("radar-composite");
+                    reply->completeJson(png);
+                    completed = true;
+                }
+            }
+            if (!completed) { break; }
+        }
+        QGV::setNetworkManager(nullptr);
+        QVERIFY2(sawNativeTile,"The globe must dispatch its in-process radar tile requests");
+        QCOMPARE(globe.m_weatherRadarAtlas.size(),QSize(tileSize*4,tileSize*4));
+        QCOMPARE(globe.m_weatherRadarAtlas.pixelColor(128,128),QColor(Qt::green));
+        QCOMPARE(globe.m_weatherRadarAtlas.pixelColor(tileSize*4-128,tileSize*4-128),QColor(Qt::green));
+    }
+
+    void globePlaybackOverviewKeepsFullAtlasResolution()
+    {
+        GlobeMapView globe;
+        const QRectF world(-kRadarMercatorExtent,-kRadarMercatorExtent,kRadarWorldWidth,kRadarWorldWidth);
+        globe.resize(640,480);
+        QCOMPARE(globe.weatherRadarPlaybackSize(world),QSize(2048,2048));
+        globe.resize(3840,2160);
+        QCOMPARE(globe.weatherRadarPlaybackSize(world),QSize(2048,2048));
+    }
+
+    void regionalCompositeKeepsIndependentCoverage()
+    {
+        QVector<QImage> images(3);
+        for (QImage& image : images) { image = QImage(3,1,QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent); }
+        images[0].setPixelColor(0,0,Qt::red);
+        images[1].setPixelColor(0,0,Qt::green);
+        images[1].setPixelColor(1,0,Qt::green);
+        images[2].setPixelColor(2,0,Qt::blue);
+        const QImage all = composeRegionalRadar(images,QSize(3,1));
+        QCOMPARE(all.pixelColor(0,0),QColor(Qt::red));
+        QCOMPARE(all.pixelColor(1,0),QColor(Qt::green));
+        QCOMPARE(all.pixelColor(2,0),QColor(Qt::blue));
+        images[0] = {};
+        const QImage partial = composeRegionalRadar(images,QSize(3,1));
+        QCOMPARE(partial.pixelColor(0,0),QColor(Qt::green));
+        QCOMPARE(partial.pixelColor(2,0),QColor(Qt::blue));
+    }
+
+    void compositeObservationNeverUsesFutureOrStaleWeather()
+    {
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        const QVector<WeatherRadarObservation> observations{{now.addSecs(-300),now.addSecs(-300),{42}},
+            {now.addSecs(60),now.addSecs(60),{43}}};
+        const auto chosen = radarObservationAt(observations,now);
+        QVERIFY(chosen.has_value());
+        QCOMPARE(chosen->rasterIds,QVector<qint64>{42});
+        QVERIFY(!radarObservationAt(observations,now.addSecs(-600)));
+        QVERIFY(!radarObservationAt(observations,now.addSecs(900)));
+    }
+
+    void changingRegionsRetiresPreviousProduct()
+    {
+        MapDisplayWidget map;
+        map.setWeatherRadarRegions(7);
+        map.m_weatherRadarTimelineCache = QByteArrayLiteral("old catalog");
+        map.m_weatherRadarFrames.append(QDateTime::currentDateTimeUtc());
+        map.setWeatherRadarRegions(4);
+        QCOMPARE(map.m_weatherRadarSource.enabledProviders(),4);
+        QVERIFY(map.m_weatherRadarFrames.isEmpty());
+        QVERIFY(map.m_weatherRadarTimelineCache.isEmpty());
+        QVERIFY(WeatherRadarSource::composite(7).frameId() != WeatherRadarSource::composite(4).frameId());
+        QCOMPARE(map.m_weatherRadarSource.latestFrame().enabledProviders(),4);
+        QCOMPARE(map.m_weatherRadarSource.historicalFrame(QDateTime::currentDateTimeUtc()).enabledProviders(),4);
+    }
+
+    void noRegionsReturnsTransparentPixelsWithoutNetwork()
+    {
+        installOperaRadarNetwork();
+        MapProviderNetworkAccessManager network;
+        const WeatherRadarSource source = WeatherRadarSource::composite(0);
+        QNetworkReply* reply = network.get(QNetworkRequest(source.tileUrl(0,0,0)));
+        QSignalSpy finished(reply,&QNetworkReply::finished);
+        QTRY_COMPARE(finished.size(),1);
+        QCOMPARE(reply->error(),QNetworkReply::NoError);
+        const QImage image = QImage::fromData(reply->readAll());
+        QCOMPARE(image.size(),QSize(512,512));
+        QCOMPARE(image.pixelColor(128,128).alpha(),0);
+        reply->deleteLater();
+    }
+
     void cityLightsGlobeDrawsAboveDetailAndBelowRadar()
     {
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {

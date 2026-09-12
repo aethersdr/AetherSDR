@@ -1,4 +1,5 @@
 #pragma once
+#include "RadarCoverage.h"
 
 #include "WeatherRadarSource.h"
 
@@ -102,6 +103,8 @@ public:
     void setBasemapDarkEnabled(bool enabled);
     void setBasemapBrightness(int percent);
     void setCityLightsBrightness(int percent);
+    void setRadarSites(const QVector<RadarSite>& sites, bool visible);
+    void setDetailedAttributionVisible(bool visible);
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const;
     int pendingWeatherRadarRequests() const;
@@ -183,6 +186,7 @@ private:
     void updateAttributionStyle();
     void updateMapAttribution();
 
+    class RadarCoverageItem* m_radarCoverageItem{nullptr};
     DarkBasemapLayer* m_basemapLayer{nullptr};
     QGVItem* m_basemapDimmer{nullptr};
     QGVMap*  m_map{nullptr};
@@ -200,6 +204,7 @@ private:
     bool m_weatherRadarPlaybackActive{false};
     bool m_weatherRadarEnabled{false};
     QLabel* m_attribution{nullptr};
+    bool m_detailedAttributionVisible{true};
     MapTerminatorItem* m_terminatorItem{nullptr};
     QTimer* m_terminatorTimer{nullptr};
     QVector<MapMarkerItem*> m_homeMarkers;

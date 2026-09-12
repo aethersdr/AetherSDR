@@ -1,4 +1,6 @@
 #include "MapDisplayWidget.h"
+#include "OperaRadarNetwork.h"
+#include "RegionalRadarComposite.h"
 #include "MapProviderNetworkAccessManager.h"
 #include "CityLightsSource.h"
 #include "GlobeMapView.h"
@@ -75,6 +77,7 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     , m_stack(new QStackedLayout(this))
     , m_flatView(new MapView(this, flatMapViewportMode()))
 {
+    installOperaRadarNetwork();
     m_cityLightsSource = new CityLightsSource(this);
     connect(m_cityLightsSource, &CityLightsSource::imageChanged,
             this, &MapDisplayWidget::presentCityLights);
@@ -141,7 +144,7 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
             }
         } else if (!m_weatherRadarTimelineLoading && !m_weatherRadarRebuffering) {
             applyWeatherRadarSource(
-                WeatherRadarSource::currentNoaaFrame());
+                m_weatherRadarSource.latestFrame());
         }
     });
     m_weatherRadarPlaybackTimer = new QTimer(this);
@@ -295,6 +298,15 @@ bool MapDisplayWidget::dayNightTerminatorVisible() const
     return m_terminatorVisible;
 }
 
+void MapDisplayWidget::setDetailedAttributionVisible(bool visible)
+{
+    m_detailedAttributionVisible = visible;
+    m_flatView->setDetailedAttributionVisible(visible);
+    if (m_globeView != nullptr) {
+        m_globeView->setDetailedAttributionVisible(visible);
+    }
+}
+
 void MapDisplayWidget::setCityLightsVisible(bool visible)
 {
     m_cityLightsVisible = visible;
@@ -391,6 +403,98 @@ void MapDisplayWidget::hideEvent(QHideEvent* event)
     m_cityLightsSource->setEnabled(false);
 }
 
+void MapDisplayWidget::presentRadarSites()
+{
+    const QVector<RadarSite> sites = m_radarSiteCatalogs[0] + m_radarSiteCatalogs[1];
+    m_flatView->setRadarSites(sites, m_radarCoverageVisible);
+    if (m_globeView) { m_globeView->setRadarSites(sites, m_radarCoverageVisible); }
+    emit radarCoverageStatusChanged(!m_radarCoverageVisible ? QString{} :
+        tr("%1 radar sites · nominal range%2").arg(sites.size())
+            .arg(!m_radarSiteReplies.isEmpty() ? tr(" · loading")
+                : (m_radarSiteFailed[0] || m_radarSiteFailed[1]) ? tr(" · partial data; a site source is unavailable") : QString{}));
+}
+
+void MapDisplayWidget::setRadarCoverageVisible(bool visible)
+{
+    m_radarCoverageVisible = visible;
+    if (!visible) {
+        const auto replies = m_radarSiteReplies;
+        for (QNetworkReply* reply : replies) { reply->abort(); }
+        presentRadarSites();
+        return;
+    }
+    presentRadarSites();
+    if (!m_radarSiteReplies.isEmpty()
+        || (m_radarSitesRequestedAt.isValid() && m_radarSitesRequestedAt.secsTo(QDateTime::currentDateTimeUtc()) < 60)) {
+        return;
+    }
+    const bool refresh = !m_radarSitesRequestedAt.isValid()
+        || m_radarSitesRequestedAt.secsTo(QDateTime::currentDateTimeUtc()) > 24 * 3600;
+    m_radarSitesRequestedAt = QDateTime::currentDateTimeUtc();
+    const QStringList urls{
+        QStringLiteral("https://api.weather.gov/radar/stations"),
+        QStringLiteral("https://eumetnet.eu/wp-content/themes/aeron-child/observations-programme/current-activities/opera/database/OPERA_Database/Data/OPERA_RADARS_DB_17062026.json")};
+    for (int index = 0; index < urls.size(); ++index) {
+        if (!refresh && !m_radarSiteCatalogs[index].isEmpty()) { continue; }
+        QNetworkRequest request{QUrl(urls[index])};
+        request.setHeader(QNetworkRequest::UserAgentHeader,
+            QStringLiteral("AetherSDR (https://github.com/aethersdr/AetherSDR)"));
+        request.setTransferTimeout(20000);
+        QNetworkReply* reply = m_weatherRadarNetwork->get(request);
+        m_radarSiteReplies.insert(reply);
+        connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64) {
+            if (received > 2 * 1024 * 1024) { reply->abort(); }
+        });
+        connect(reply, &QNetworkReply::finished, this, [this, reply, index] {
+            m_radarSiteReplies.remove(reply);
+            const QVector<RadarSite> sites = reply->error() == QNetworkReply::NoError
+                ? parseRadarSites(reply->read(2 * 1024 * 1024 + 1), index == 1) : QVector<RadarSite>{};
+            m_radarSiteFailed[index] = sites.isEmpty();
+            if (!sites.isEmpty()) { m_radarSiteCatalogs[index] = sites; }
+            reply->deleteLater();
+            presentRadarSites();
+        });
+    }
+    presentRadarSites();
+}
+
+void MapDisplayWidget::setWeatherRadarProvider(WeatherRadarSource::Provider provider)
+{
+    switchWeatherRadarSource(WeatherRadarSource(provider));
+}
+
+void MapDisplayWidget::setWeatherRadarRegions(int enabledProviders)
+{
+    switchWeatherRadarSource(WeatherRadarSource::composite(enabledProviders));
+}
+
+void MapDisplayWidget::switchWeatherRadarSource(const WeatherRadarSource& source)
+{
+    if (m_weatherRadarSource.provider() == source.provider()
+        && m_weatherRadarSource.enabledProviders() == source.enabledProviders()) {
+        return;
+    }
+    resetWeatherRadarAnimation(false);
+    m_weatherRadarTimelineCache.clear();
+    m_weatherRadarTimelineCachedAt = {};
+    m_weatherRadarFrameCache.clear();
+    // Clear the former product before changing its attribution and units.
+    m_flatView->setWeatherRadarVisible(false);
+    m_flatView->clearWeatherRadarPlayback();
+    if (m_globeView != nullptr) {
+        m_globeView->setWeatherRadarVisible(false);
+        m_globeView->clearWeatherRadarPlayback();
+    }
+    m_weatherRadarSource = source;
+    m_flatView->setWeatherRadarSource(m_weatherRadarSource);
+    m_flatView->setWeatherRadarVisible(m_weatherRadarVisible);
+    if (m_globeView != nullptr) {
+        m_globeView->setWeatherRadarSource(m_weatherRadarSource);
+        m_globeView->setWeatherRadarVisible(m_weatherRadarVisible);
+    }
+    emit weatherRadarFrameChanged({}, true);
+}
+
 void MapDisplayWidget::setWeatherRadarVisible(bool visible)
 {
     if (m_weatherRadarVisible == visible) {
@@ -403,7 +507,7 @@ void MapDisplayWidget::setWeatherRadarVisible(bool visible)
         // Seed both renderers before enabling either one. This prevents an
         // inactive renderer from briefly requesting a stale historical frame
         // when radar is re-enabled after playback.
-        m_weatherRadarSource = WeatherRadarSource::currentNoaaFrame();
+        m_weatherRadarSource = m_weatherRadarSource.latestFrame();
         m_flatView->setWeatherRadarSource(m_weatherRadarSource);
         if (m_globeView != nullptr) {
             m_globeView->setWeatherRadarSource(m_weatherRadarSource);
@@ -431,6 +535,9 @@ void MapDisplayWidget::setWeatherRadarVisible(bool visible)
 void MapDisplayWidget::updateWeatherRadarLoadingStatus()
 {
     const bool playback = m_weatherRadarPlaybackRequested;
+    emit radarProviderStatusChanged(m_weatherRadarVisible
+        ? regionalRadarStatus((playback ? playbackWeatherRadarSource()
+            : m_weatherRadarSource).enabledProviders()) : QString{});
     const int pending = playback
         ? m_weatherRadarBufferQueue.size() + m_activeWeatherRadarFrameRequests
             + m_weatherRadarDownloadDecodePending.size()
@@ -597,31 +704,17 @@ void MapDisplayWidget::requestWeatherRadarTimeline(int historyHours, bool backgr
         && m_weatherRadarTimelineCachedAt.msecsTo(now)
                <= kTimelineCacheLifetimeMs) {
         const QVector<WeatherRadarObservation> observations =
-            WeatherRadarSource::parseNoaaTimeline(
+            m_weatherRadarSource.parseTimeline(
                 m_weatherRadarTimelineCache, historyHours);
         if (observations.size() >= 2) {
-            m_weatherRadarFrames.clear();
-            m_weatherRadarFrameSampleTimes.clear();
-            m_weatherRadarFrameRasterIds.clear();
-            m_weatherRadarFrames.reserve(observations.size());
-            m_weatherRadarFrameSampleTimes.reserve(observations.size());
-            m_weatherRadarFrameRasterIds.reserve(observations.size());
-            for (const WeatherRadarObservation& observation
-                 : observations) {
-                m_weatherRadarFrames.append(observation.frameTime);
-                m_weatherRadarFrameSampleTimes.append(
-                    observation.sampleTime);
-                m_weatherRadarFrameRasterIds.append(
-                    observation.rasterIds);
-            }
-            bufferWeatherRadarFrames();
+            useWeatherRadarTimeline(m_weatherRadarTimelineCache, historyHours);
             return;
         }
         m_weatherRadarTimelineCache.clear();
         m_weatherRadarTimelineCachedAt = {};
     }
 
-    QNetworkRequest request(WeatherRadarSource::noaaTimelineUrl());
+    QNetworkRequest request(playbackWeatherRadarSource().timelineUrl());
     request.setHeader(QNetworkRequest::UserAgentHeader,
         QStringLiteral("AetherSDR/%1 (https://github.com/aethersdr/AetherSDR)")
             .arg(QCoreApplication::applicationVersion()));
@@ -657,17 +750,17 @@ void MapDisplayWidget::requestWeatherRadarTimeline(int historyHours, bool backgr
                         // Slow/offline NOAA must not stop or erase the movie.
                         // The one-minute timer retries; displayed age stays honest.
                         qCWarning(lcWeatherRadarPlayback)
-                            << "NOAA history refresh failed; retaining loaded frames:" << error;
+                            << "Radar history refresh failed; retaining loaded frames:" << error;
                         m_weatherRadarTimelineFailed = true;
                         return;
                     }
-                    qCWarning(lcWeatherRadarPlayback) << "NOAA history load failed; retrying:" << error;
+                    qCWarning(lcWeatherRadarPlayback) << "Radar history load failed; retrying:" << error;
                     retryWeatherRadarHistory();
                     return;
                 }
                 if (background) {
                     const QVector<WeatherRadarObservation> observations =
-                        WeatherRadarSource::parseNoaaTimeline(payload, historyHours);
+                        m_weatherRadarSource.parseTimeline(payload, historyHours);
                     if (!m_weatherRadarAnimating || observations.size() < 2) {
                         m_weatherRadarTimelineFailed = true;
                         return; // Preserve the last valid catalog on bad responses.
@@ -720,7 +813,7 @@ void MapDisplayWidget::appendWeatherRadarObservations(
                 && !m_weatherRadarRetryFrames.contains(observation.frameTime))) {
             continue; // Keep existing immutable raster identities and decoded images.
         }
-        const WeatherRadarSource source = WeatherRadarSource::historicalNoaaFrame(
+        const WeatherRadarSource source = playbackWeatherRadarSource().historicalFrame(
             observation.frameTime, observation.sampleTime, observation.rasterIds);
         const QUrl url = source.imageUrl(m_weatherRadarPlaybackRequestBounds,
                                          m_weatherRadarPlaybackSize);
@@ -760,12 +853,14 @@ bool MapDisplayWidget::useWeatherRadarTimeline(
     const QByteArray& payload, int historyHours)
 {
     const QVector<WeatherRadarObservation> observations =
-        WeatherRadarSource::parseNoaaTimeline(payload, historyHours);
+        m_weatherRadarSource.parseTimeline(payload, historyHours);
     if (observations.size() < 2) {
         retryWeatherRadarHistory();
         return false;
     }
     m_weatherRadarTimelineFailed = false;
+    m_weatherRadarPlaybackProviders = m_weatherRadarSource
+        .playbackSourceForTimeline(payload).enabledProviders();
     m_weatherRadarFrames.clear();
     m_weatherRadarFrameSampleTimes.clear();
     m_weatherRadarFrameRasterIds.clear();
@@ -839,13 +934,14 @@ void MapDisplayWidget::bufferWeatherRadarFrames(bool retainPlayback)
     }
     const WeatherRadarViewGeometry view = weatherRadarCurrentView();
     m_weatherRadarRequestedView = weatherRadarPaddedView(view,
-        m_projectionMode == ProjectionMode::Flat ? 2048 : 4096);
+        m_projectionMode == ProjectionMode::Flat ? 2048 : 4096,
+        kMaximumWeatherRadarPixels);
     m_weatherRadarPlaybackRequestBounds = m_weatherRadarRequestedView.bounds;
     m_weatherRadarPlaybackBounds = weatherRadarRendererBounds(m_weatherRadarPlaybackRequestBounds);
     m_weatherRadarPlaybackSize = m_weatherRadarRequestedView.size;
     for (int index = 0; index < m_weatherRadarFrames.size(); ++index) {
         const WeatherRadarSource source =
-            WeatherRadarSource::historicalNoaaFrame(
+            playbackWeatherRadarSource().historicalFrame(
                 m_weatherRadarFrames.at(index),
                 m_weatherRadarFrameSampleTimes.at(index),
                 m_weatherRadarFrameRasterIds.at(index));
@@ -1010,7 +1106,7 @@ void MapDisplayWidget::decodeWeatherRadarDownload(int index, const QByteArray& b
     CachedWeatherRadarFrame frame;
     frame.bytes = bytes;
     frame.frameTime = m_weatherRadarFrames.at(index);
-    frame.sourceId = WeatherRadarSource::historicalNoaaFrame(frame.frameTime,
+    frame.sourceId = playbackWeatherRadarSource().historicalFrame(frame.frameTime,
         m_weatherRadarFrameSampleTimes.at(index), m_weatherRadarFrameRasterIds.at(index)).frameId();
     frame.geometry = geometry;
     m_weatherRadarDownloadDecodePending.insert(index);
@@ -1024,7 +1120,8 @@ void MapDisplayWidget::decodeWeatherRadarDownload(int index, const QByteArray& b
             if (generation != m_weatherRadarBufferGeneration) {
                 return; // Zoom/stop invalidates delivery, not the visible image.
             }
-            if (!frame.decodedImage.isNull() && !decoded.second && !trustedCache) {
+            if (!frame.decodedImage.isNull() && !decoded.second && !trustedCache
+                && m_weatherRadarSource.provider() == WeatherRadarSource::Provider::NoaaMrms) {
                 // Do not guess whether transparency is clear weather or an
                 // expired raster. Check the exact locked IDs AFTER the export.
                 // Hold this bounded work slot and the prior visible original.
@@ -1307,10 +1404,26 @@ void MapDisplayWidget::applyFinalizedWeatherRadarBuffering()
         usableOldIndexes.append(static_cast<int>(index));
     }
     if (usableFrames.size() < 2) {
+        const bool useBackups = !m_weatherRadarAnimating
+            && m_weatherRadarSource.provider() == WeatherRadarSource::Provider::Composite
+            && m_weatherRadarPlaybackProviders == 8
+            && (m_weatherRadarSource.enabledProviders() & 7) != 0;
         // Retain successful originals for the next attempt, including a
         // complete preview; never clear the overlay because NOAA timed out.
         m_weatherRadarAnimating = false;
         m_weatherRadarPlaybackTimer->stop();
+        if (useBackups) {
+            // Metadata may be healthy while the tile service is down. Select
+            // a whole regional movie before starting, rather than alternating
+            // regional and global images at individual frame boundaries.
+            m_weatherRadarPlaybackProviders = m_weatherRadarSource.enabledProviders() & 7;
+            m_weatherRadarTimelineCache.clear();
+            m_weatherRadarTimelineCachedAt = {};
+            m_weatherRadarRetryFrames.clear();
+            m_weatherRadarExpiredFrames.clear();
+            requestWeatherRadarTimeline(m_weatherRadarHistoryHours);
+            return;
+        }
         retryWeatherRadarHistory();
         return;
     }
@@ -1766,7 +1879,7 @@ bool MapDisplayWidget::presentWeatherRadarFrame(
     if (!accepted) {
         return false; // Keep the preceding original visible while uploading.
     }
-    m_weatherRadarSource = WeatherRadarSource::historicalNoaaFrame(
+    m_weatherRadarSource = m_weatherRadarSource.historicalFrame(
         frameTime, m_weatherRadarFrameSampleTimes.at(index),
         m_weatherRadarFrameRasterIds.at(index));
     auto cached = m_weatherRadarFrameCache.find(m_weatherRadarFrameCacheKeys.at(index));
@@ -1810,6 +1923,14 @@ void MapDisplayWidget::preloadNextWeatherRadarFrame()
             m_weatherRadarFrames.at(nextIndex),
             weatherRadarRendererBounds(m_weatherRadarFrameBounds.at(nextIndex)));
     }
+}
+
+WeatherRadarSource MapDisplayWidget::playbackWeatherRadarSource() const
+{
+    return m_weatherRadarSource.provider() == WeatherRadarSource::Provider::Composite
+            && m_weatherRadarPlaybackProviders >= 0
+        ? WeatherRadarSource::composite(m_weatherRadarPlaybackProviders)
+        : m_weatherRadarSource;
 }
 
 void MapDisplayWidget::applyWeatherRadarSource(
@@ -1859,6 +1980,7 @@ void MapDisplayWidget::resetWeatherRadarAnimation(bool returnToLive)
     m_weatherRadarExpiredFrames.clear();
     m_weatherRadarRetryFrames.clear();
     m_weatherRadarDetailRefresh = false;
+    m_weatherRadarPlaybackProviders = -1;
     m_weatherRadarTimelineFailed = false;
     m_weatherRadarLoadingStatus.reset();
     m_weatherRadarPresentedImageKey = 0;
@@ -1896,7 +2018,7 @@ void MapDisplayWidget::resetWeatherRadarAnimation(bool returnToLive)
     }
     if (returnToLive && m_weatherRadarVisible) {
         const WeatherRadarSource live =
-            WeatherRadarSource::currentNoaaFrame();
+            m_weatherRadarSource.latestFrame();
         applyWeatherRadarSource(live);
         m_weatherRadarTimer->start();
         emit weatherRadarFrameChanged(live.frameTime(), true);
@@ -1981,6 +2103,7 @@ void MapDisplayWidget::ensureGlobeView()
         return;
     }
     m_globeView = new GlobeMapView(this);
+    m_globeView->setDetailedAttributionVisible(m_detailedAttributionVisible);
     m_stack->addWidget(m_globeView);
     connect(m_globeView, &GlobeMapView::markerClicked,
             this, &MapDisplayWidget::markerClicked);
@@ -2031,6 +2154,7 @@ void MapDisplayWidget::ensureGlobeView()
     }
     m_globeView->setPathsVisible(m_pathsVisible);
     m_globeView->setDayNightTerminatorVisible(m_terminatorVisible);
+    m_globeView->setRadarSites(m_radarSiteCatalogs[0] + m_radarSiteCatalogs[1], m_radarCoverageVisible);
     m_globeView->setWeatherRadarSource(m_weatherRadarSource);
     m_globeView->setWeatherRadarVisible(m_weatherRadarVisible);
     m_globeView->setLegend(m_legendEntries);
@@ -2076,6 +2200,7 @@ void MapDisplayWidget::synchronizeGlobeView()
     }
     m_globeView->setPathsVisible(m_pathsVisible);
     m_globeView->setDayNightTerminatorVisible(m_terminatorVisible);
+    m_globeView->setRadarSites(m_radarSiteCatalogs[0] + m_radarSiteCatalogs[1], m_radarCoverageVisible);
     m_globeView->setWeatherRadarSource(m_weatherRadarSource);
     m_globeView->setWeatherRadarVisible(m_weatherRadarVisible);
     m_globeView->setLegend(m_legendEntries);

@@ -61,6 +61,8 @@ public:
     void setDayNightTerminatorVisible(bool visible);
     bool dayNightTerminatorVisible() const;
     void setCityLightsVisible(bool visible);
+    // The host supplies the expanded credits; OSM stays visible on the map.
+    void setDetailedAttributionVisible(bool visible);
     bool cityLightsVisible() const { return m_cityLightsVisible; }
     void setBasemapDarkEnabled(bool enabled);
     void setBasemapBrightness(int percent);
@@ -68,7 +70,11 @@ public:
     void setCityLightsFaintLights(int percent);
     void setCityLightsWarmth(int percent);
     int cityLightsBrightness() const { return m_cityLightsBrightness; }
+    void setRadarCoverageVisible(bool visible);
     void setWeatherRadarVisible(bool visible);
+    void setWeatherRadarProvider(WeatherRadarSource::Provider provider);
+    void setWeatherRadarRegions(int enabledProviders);
+    void switchWeatherRadarSource(const WeatherRadarSource& source);
     bool weatherRadarVisible() const { return m_weatherRadarVisible; }
     void startWeatherRadarAnimation(int historyHours);
     void stopWeatherRadarAnimation();
@@ -85,6 +91,8 @@ public:
     QString globeUnavailableReason() const { return m_globeUnavailableReason; }
 
 signals:
+    void radarCoverageStatusChanged(const QString& status);
+    void radarProviderStatusChanged(const QString& status);
     void cityLightsStatusChanged(const QString& status);
     void markerClicked(const MapDisplayWidget::Marker& marker);
     void projectionModeChanged(ProjectionMode mode);
@@ -120,6 +128,7 @@ private:
     void synchronizeGlobeView();
     void handleGlobeUnavailable(const QString& reason);
     void applyWeatherRadarSource(const WeatherRadarSource& source);
+    WeatherRadarSource playbackWeatherRadarSource() const;
     void requestWeatherRadarTimeline(int historyHours, bool background = false);
     void appendWeatherRadarObservations(const QVector<WeatherRadarObservation>& observations);
     bool useWeatherRadarTimeline(const QByteArray& payload,
@@ -161,6 +170,13 @@ private:
     void refreshCityLightsView();
     void presentCityLights();
 
+    void presentRadarSites();
+    QVector<RadarSite> m_radarSiteCatalogs[2];
+    QSet<QNetworkReply*> m_radarSiteReplies;
+    bool m_radarCoverageVisible{false};
+    bool m_detailedAttributionVisible{true};
+    QDateTime m_radarSitesRequestedAt;
+    bool m_radarSiteFailed[2]{false, false};
     CityLightsSource* m_cityLightsSource{nullptr};
     bool m_cityLightsVisible{false};
     bool m_basemapDarkEnabled{false};
@@ -189,6 +205,7 @@ private:
     QNetworkAccessManager* m_weatherRadarNetwork{nullptr};
     QNetworkReply* m_weatherRadarTimelineReply{nullptr};
     WeatherRadarSource m_weatherRadarSource;
+    int m_weatherRadarPlaybackProviders{-1};
     QVector<QDateTime> m_weatherRadarFrames;
     QVector<QDateTime> m_weatherRadarFrameSampleTimes;
     QVector<QVector<qint64>> m_weatherRadarFrameRasterIds;

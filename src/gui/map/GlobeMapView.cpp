@@ -6,6 +6,7 @@
 #include "SolarTerminator.h"
 #include "WeatherRadarStyle.h"
 #include "WeatherRadarTexture.h"
+#include "WeatherRadarViewGeometry.h"
 #include "core/ThemeManager.h"
 
 #include <QGeoView/QGVGlobal.h>
@@ -28,6 +29,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPainterPath>
+#include <QSurfaceFormat>
 #include <QPinchGesture>
 #include <QResizeEvent>
 #include <QSet>
@@ -61,7 +63,7 @@ constexpr int kWeatherRadarTransitionMs = 240;
 constexpr int kMaximumVisibleDetailTiles = 160;
 constexpr int kMaximumCachedDetailTiles = 256;
 constexpr int kDetailTileSegments = 8;
-constexpr qint64 kMaximumTileBytes = 1024 * 1024;
+constexpr qint64 kMaximumTileBytes = 2 * 1024 * 1024;
 constexpr int kRadarUploadStripeRows = 384;
 constexpr double kWebMercatorExtent = 20037508.342789244;
 // The globe radius is 1.0. Keep the camera just outside the surface while
@@ -167,6 +169,9 @@ GlobeMapView::GlobeMapView(QWidget* parent)
     , m_pendingWeatherRadarAtlas(kAtlasSize, kAtlasSize,
                                  WeatherRadarTexture::kImageFormat)
 {
+    QSurfaceFormat surfaceFormat = format();
+    surfaceFormat.setStencilBufferSize(8);
+    setFormat(surfaceFormat);
     setObjectName(QStringLiteral("pskReporterGlobe"));
     setAccessibleName(tr("PSK Reporter globe"));
     setAccessibleDescription(tr(
@@ -233,8 +238,9 @@ GlobeMapView::GlobeMapView(QWidget* parent)
             });
 
     m_attribution = new QLabel(
-        QStringLiteral("© OpenStreetMap contributors"), this);
-    m_attribution->setAttribute(Qt::WA_TransparentForMouseEvents);
+        QStringLiteral("© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"), this);
+    m_attribution->setObjectName(QStringLiteral("globeMapAttribution"));
+    m_attribution->setOpenExternalLinks(true);
     m_legend = new QLabel(this);
     m_legend->setTextFormat(Qt::RichText);
     m_legend->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -320,6 +326,11 @@ void GlobeMapView::cleanupOpenGlResources()
     // before doneCurrent(), just like the textures and buffers above.
     m_program.reset();
     m_radarProgram.reset();
+    m_radarCoverageProgram.reset();
+    if (m_radarCoverageBuffer.isCreated()) {
+        m_radarCoverageBuffer.destroy();
+    }
+    m_radarCoverageDirty = true;
     m_indexCount = 0;
     m_overlayMatricesValid = false;
     doneCurrent();
@@ -745,10 +756,33 @@ void GlobeMapView::paintGL()
             glEnable(GL_DEPTH_TEST);
         }
     }
+    drawRadarCoverage(matrix);
     if (vectorOverlayTransformChanged || m_vectorOverlayDirty) {
         m_vectorOverlay->update();
         m_vectorOverlayDirty = false;
     }
+}
+
+void GlobeMapView::setRadarSites(const QVector<RadarSite>& sites, bool visible)
+{
+    m_radarSites = sites;
+    m_radarCoverageVisible = visible;
+    if (m_hoverMarker < 0) {
+        m_hoverCard->hide();
+    }
+    m_radarCoverageVertices.clear();
+    for (const RadarSite& site : sites) {
+        const QVector3D center = geoPoint(site.lat, site.lon);
+        for (qsizetype i = 1; i < site.ring.size(); ++i) {
+            m_radarCoverageVertices.append(center);
+            m_radarCoverageVertices.append(geoPoint(site.ring[i - 1].y(), site.ring[i - 1].x()));
+            m_radarCoverageVertices.append(geoPoint(site.ring[i].y(), site.ring[i].x()));
+        }
+    }
+    m_radarCoverageDirty = true;
+    m_vectorOverlayDirty = true;
+    updateMapAttribution();
+    update();
 }
 
 void GlobeMapView::paintVectorOverlay(QPainter& painter)
@@ -758,6 +792,77 @@ void GlobeMapView::paintVectorOverlay(QPainter& painter)
     }
     paintPaths(painter, m_overlayModel, m_overlayViewProjection);
     paintMarkers(painter, m_overlayModel, m_overlayViewProjection);
+}
+
+void GlobeMapView::drawRadarCoverage(const QMatrix4x4& matrix)
+{
+    if (!m_radarCoverageVisible || m_radarCoverageVertices.isEmpty()) {
+        return;
+    }
+    if (m_radarCoverageProgram == nullptr) {
+        m_radarCoverageProgram = std::make_unique<QOpenGLShaderProgram>();
+        static constexpr char vertex[] = R"(
+            attribute highp vec3 position;
+            uniform highp mat4 matrix;
+            void main() { gl_Position = matrix * vec4(position, 1.0); }
+        )";
+        static constexpr char fragment[] = R"(
+            uniform lowp vec4 coverageColor;
+            void main() { gl_FragColor = coverageColor; }
+        )";
+        if (!m_radarCoverageProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, vertex)
+            || !m_radarCoverageProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, fragment)
+            || !m_radarCoverageProgram->link()) {
+            qCWarning(lcPskReporterGlobe) << "Radar coverage shader:" << m_radarCoverageProgram->log();
+            return;
+        }
+    }
+    if (!m_radarCoverageProgram->isLinked()) {
+        return;
+    }
+    if (!m_radarCoverageBuffer.isCreated()) {
+        m_radarCoverageBuffer.create();
+        m_radarCoverageDirty = true;
+    }
+    m_radarCoverageBuffer.bind();
+    if (m_radarCoverageDirty) {
+        m_radarCoverageBuffer.allocate(m_radarCoverageVertices.constData(),
+            int(m_radarCoverageVertices.size() * sizeof(QVector3D)));
+        m_radarCoverageDirty = false;
+    }
+    // Keep coverage in the same frame and transform as the globe. The site
+    // geometry stays resident during navigation; only the matrix changes.
+    // Stencil shades each covered pixel once, including overlapping sites.
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CW);
+    glStencilMask(0xff);
+    glClearStencil(0);
+    glClear(GL_STENCIL_BUFFER_BIT);
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 0, 0xff);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    m_radarCoverageProgram->bind();
+    m_radarCoverageProgram->setUniformValue("matrix", matrix);
+    const QColor color = ThemeManager::instance().color("color.text.secondary");
+    constexpr float alpha = 12.0F / 255.0F;
+    m_radarCoverageProgram->setUniformValue("coverageColor", QVector4D(
+        color.redF() * alpha, color.greenF() * alpha, color.blueF() * alpha, alpha));
+    const int position = m_radarCoverageProgram->attributeLocation("position");
+    m_radarCoverageProgram->enableAttributeArray(position);
+    m_radarCoverageProgram->setAttributeBuffer(position, GL_FLOAT, 0, 3, sizeof(QVector3D));
+    glDrawArrays(GL_TRIANGLES, 0, int(m_radarCoverageVertices.size()));
+    m_radarCoverageProgram->disableAttributeArray(position);
+    m_radarCoverageProgram->release();
+    m_radarCoverageBuffer.release();
+    glDisable(GL_BLEND);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glFrontFace(GL_CCW);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void GlobeMapView::uploadAtlas()
@@ -1322,6 +1427,7 @@ void GlobeMapView::requestAtlasTiles()
 
 void GlobeMapView::requestWeatherRadarAtlas()
 {
+    const int radarAtlasSize=kTileCount*m_weatherRadarSource.tilePixelSize();
     m_weatherRadarLoadFailed = false;
     const QString frameId = m_weatherRadarSource.frameId();
     m_pendingTiles.erase(std::remove_if(m_pendingTiles.begin(),
@@ -1332,13 +1438,13 @@ void GlobeMapView::requestWeatherRadarAtlas()
     // exports have regional dimensions and bounds; treating one as the next
     // global atlas stretches stale U.S. pixels across unrelated countries.
     if (!m_weatherRadarPlaybackActive
-        && m_weatherRadarAtlas.size() == QSize(kAtlasSize, kAtlasSize)
+        && m_weatherRadarAtlas.size() == QSize(radarAtlasSize, radarAtlasSize)
         && m_weatherRadarTextureBounds
             == QVector4D(0.0F, 0.0F, 1.0F, 1.0F)) {
         m_pendingWeatherRadarAtlas = m_weatherRadarAtlas;
     } else {
         m_pendingWeatherRadarAtlas = QImage(
-            kAtlasSize, kAtlasSize, WeatherRadarTexture::kImageFormat);
+            radarAtlasSize, radarAtlasSize, WeatherRadarTexture::kImageFormat);
         m_pendingWeatherRadarAtlas.fill(Qt::transparent);
     }
     m_pendingWeatherRadarFrameId = frameId;
@@ -1376,9 +1482,13 @@ void GlobeMapView::requestNextTiles()
             : QUrl(QStringLiteral(
                 "https://tile.openstreetmap.org/%1/%2/%3.png")
                 .arg(tile.zoom).arg(tile.x).arg(tile.y));
-        if (!url.isValid() || url.scheme() != QStringLiteral("https")) {
+        const bool nativeRadar = tile.weatherRadar && url.host() == QStringLiteral("image")
+            && (url.scheme() == QStringLiteral("opera-radar")
+                || url.scheme() == QStringLiteral("radar-composite"));
+        if (!url.isValid() || (url.scheme() != QStringLiteral("https") && !nativeRadar)) {
             continue;
         }
+        const int tilePixelSize=tile.weatherRadar ? m_weatherRadarSource.tilePixelSize() : kTileSize;
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader,
                           QGV::getTileUserAgent());
@@ -1403,7 +1513,7 @@ void GlobeMapView::requestNextTiles()
             m_weatherRadarReplies.remove(reply);
         });
         connect(reply, &QNetworkReply::finished, this,
-                [this, reply, tile] {
+                [this, reply, tile, tilePixelSize] {
                     m_tileReplies.remove(reply);
                     m_weatherRadarReplies.remove(reply);
                     m_activeTileRequests = std::max(
@@ -1418,8 +1528,8 @@ void GlobeMapView::requestNextTiles()
                     if (!bytes.isEmpty() && bytes.size() <= kMaximumTileBytes) {
                         QImage image;
                         image.loadFromData(bytes, "PNG");
-                        if (!image.isNull() && image.width() == kTileSize
-                            && image.height() == kTileSize) {
+                        if (!image.isNull() && image.width() == tilePixelSize
+                            && image.height() == tilePixelSize) {
                             validImage = true;
                             if (tile.weatherRadar) {
                                 if (tile.baseAtlas && tile.radarFrameId
@@ -1429,8 +1539,8 @@ void GlobeMapView::requestNextTiles()
                                     radarPainter.setCompositionMode(
                                         QPainter::CompositionMode_Source);
                                     radarPainter.drawImage(
-                                        tile.x * kTileSize,
-                                        tile.y * kTileSize, image);
+                                        tile.x * tilePixelSize,
+                                        tile.y * tilePixelSize, image);
                                     radarPainter.end();
                                     if (m_loadedWeatherRadarFrameId.isEmpty()
                                         && !m_weatherRadarPlaybackActive) {
@@ -1872,14 +1982,23 @@ void GlobeMapView::setCityLightsImage(const QImage& image, const QRectF& bounds)
     update();
 }
 
+void GlobeMapView::setDetailedAttributionVisible(bool visible)
+{
+    m_detailedAttributionVisible = visible;
+    updateMapAttribution();
+}
+
 void GlobeMapView::updateMapAttribution()
 {
-    QString text = QStringLiteral("© OpenStreetMap contributors");
-    if (m_cityLightsVisible) {
+    QString text = QStringLiteral("© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors");
+    if (m_detailedAttributionVisible && m_cityLightsVisible) {
         text += QStringLiteral(" · Lights: NASA/GSFC, 2016");
     }
-    if (m_weatherRadarVisible) {
-        text += QStringLiteral(" · Radar: NOAA/NWS");
+    if (m_detailedAttributionVisible && m_weatherRadarVisible) {
+        text += QStringLiteral(" · ") + m_weatherRadarSource.attribution();
+    }
+    if (m_detailedAttributionVisible && m_radarCoverageVisible) {
+        text += QStringLiteral(" · Sites: NOAA/NWS, EUMETNET OPERA · nominal range");
     }
     m_attribution->setText(text);
     layoutOverlays();
@@ -1978,21 +2097,33 @@ void GlobeMapView::refreshWeatherRadar()
     if (!m_weatherRadarVisible) {
         return;
     }
-    setWeatherRadarSource(WeatherRadarSource::currentNoaaFrame());
+    setWeatherRadarSource(m_weatherRadarSource.latestFrame());
 }
 
 void GlobeMapView::setWeatherRadarSource(
     const WeatherRadarSource& source)
 {
+    if (source.provider() != m_weatherRadarSource.provider()
+        || source.enabledProviders() != m_weatherRadarSource.enabledProviders()) {
+        cancelWeatherRadarRequests();
+        m_weatherRadarAtlas.fill(Qt::transparent);
+        m_pendingWeatherRadarAtlas.fill(Qt::transparent);
+        m_loadedWeatherRadarFrameId.clear();
+        m_weatherRadarAtlasDirty = true;
+        m_replaceWeatherRadarTexture = true;
+        m_pendingRadarTextureBounds = QVector4D(0.0F, 0.0F, 1.0F, 1.0F);
+    }
     if (m_weatherRadarPlaybackActive) {
         // Catalog/view synchronization must never start a live atlas request
         // which can later overwrite the playback front texture. Originals
         // enter only via show/preload; Stop explicitly exits playback first.
         m_weatherRadarSource = source;
+        updateMapAttribution();
         return;
     }
     if (!m_weatherRadarVisible) {
         m_weatherRadarSource = source;
+        updateMapAttribution();
         return;
     }
     if (source.frameId() == m_loadedWeatherRadarFrameId
@@ -2003,6 +2134,7 @@ void GlobeMapView::setWeatherRadarSource(
         return;
     }
     m_weatherRadarSource = source;
+    updateMapAttribution();
     m_pendingRadarTextureBounds = QVector4D(0.0F, 0.0F, 1.0F, 1.0F);
     m_detailSelectionDirty = true;
     requestWeatherRadarAtlas();
@@ -2057,6 +2189,13 @@ QSize GlobeMapView::weatherRadarPlaybackSize(const QRectF& bounds) const
     if (!normalized.isValid() || normalized.isEmpty()) {
         return QSize(1024, 1024);
     }
+    // A whole-world Mercator texture uses only a fraction of its pixels on
+    // the visible hemisphere. Keep the same detail as the live radar atlas
+    // even in a small window; four megapixels also fits native export limits.
+    if (normalized.width() >= 2*kWebMercatorExtent-1
+        && normalized.height() >= 2*kWebMercatorExtent-1) {
+        return QSize(2048,2048);
+    }
     constexpr int kMaximumDimension = 4096;
     constexpr int kMinimumLongDimension = 1024;
     constexpr int kMinimumShortDimension = 512;
@@ -2068,16 +2207,16 @@ QSize GlobeMapView::weatherRadarPlaybackSize(const QRectF& bounds) const
         physicalViewportLongDimension, kMinimumLongDimension,
         kMaximumDimension);
     if (normalized.width() >= normalized.height()) {
-        return QSize(longDimension,
+        return weatherRadarLimitedSize(QSize(longDimension,
             std::clamp(qRound(longDimension * normalized.height()
                               / normalized.width()),
-                       kMinimumShortDimension, kMaximumDimension));
+                       kMinimumShortDimension, kMaximumDimension)));
     }
-    return QSize(
+    return weatherRadarLimitedSize(QSize(
         std::clamp(qRound(longDimension * normalized.width()
                           / normalized.height()),
                    kMinimumShortDimension, kMaximumDimension),
-        longDimension);
+        longDimension));
 }
 
 
@@ -2126,7 +2265,7 @@ bool GlobeMapView::showWeatherRadarPlaybackFrame(
         m_preloadedWeatherRadarFrameTime = {};
         m_preloadedWeatherRadarAtlas = {};
         m_preloadedWeatherRadarUploadRow = 0;
-        m_weatherRadarSource = WeatherRadarSource::historicalNoaaFrame(frameTime);
+        m_weatherRadarSource = m_weatherRadarSource.historicalFrame(frameTime);
         m_loadedWeatherRadarFrameId = m_weatherRadarSource.frameId();
         update();
         return true;
@@ -2134,7 +2273,7 @@ bool GlobeMapView::showWeatherRadarPlaybackFrame(
     if (startingPlayback) {
         // Install the first original in paintGL; the live radar remains
         // visible until the replacement and its bounds are resident.
-        m_weatherRadarSource = WeatherRadarSource::historicalNoaaFrame(frameTime);
+        m_weatherRadarSource = m_weatherRadarSource.historicalFrame(frameTime);
         m_pendingCurrentPlaybackRadarAtlas = image;
         m_pendingCurrentPlaybackFrameTime = frameTime;
         m_pendingRadarTextureBounds = textureBounds;
@@ -2520,9 +2659,27 @@ void GlobeMapView::updateHover(const QPointF& position)
             closestDistance = distance;
         }
     }
+    if (closest < 0 && m_radarCoverageVisible && m_overlayMatricesValid) {
+        for (const RadarSite& site : m_radarSites) {
+            QPointF center;
+            if (projectPoint(geoPoint(site.lat, site.lon), m_overlayModel, m_overlayViewProjection, &center)
+                && QLineF(center, position).length() < 8) {
+                m_hoverMarker = -1;
+                m_hoverCard->setTextFormat(Qt::PlainText);
+                m_hoverCard->setText(site.description());
+                m_hoverCard->adjustSize();
+                m_hoverCard->move(position.toPoint() + QPoint(12, 12));
+                m_hoverCard->show(); m_hoverCard->raise();
+                return;
+            }
+        }
+    }
+    m_hoverCard->setTextFormat(Qt::AutoText);
     if (m_hoverMarker == closest) {
         if (closest >= 0) {
             showHoverCard(closest, position);
+        } else {
+            m_hoverCard->hide();
         }
         return;
     }
