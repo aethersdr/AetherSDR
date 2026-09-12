@@ -207,6 +207,8 @@ void ThemeManager::seedGeneratedDefaults()
     }
     m_tokens.insert("color.waterfall.history", QString("#506070"));
     m_tokens.insert("color.waterfall.live", QString("#ff4d4d"));
+    m_tokens.insert("color.waterfall.timeMarker.background", QString("#dc0f0f1a"));
+    m_tokens.insert("color.waterfall.timeMarker.foreground", QString("#c8d8e8"));
     {
         ThemeFont f;
         f.family = QStringLiteral("DSEG7 Modern");

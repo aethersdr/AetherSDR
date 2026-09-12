@@ -206,3 +206,12 @@ PSK Reporter dark-map luminance ramp. Both bundled themes use the same dark
 cartographic palette; selecting the light app theme does not turn an explicitly
 enabled dark map light. These tokens affect only basemap images, not data
 overlays, attribution, or window chrome.
+
+### Waterfall time markers
+
+`color.waterfall.timeMarker.foreground` is the pale gray-blue foreground for
+UTC row annotations. Lines use 55% of its opacity; timestamp text uses its full
+opacity. `color.waterfall.timeMarker.background` provides a compact translucent
+dark text backing. Both bundled themes retain the same colors because waterfall
+signal palettes do not invert when application chrome changes theme. These
+annotations are independent of RX/TX, warning, and selection colors.
