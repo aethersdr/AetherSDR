@@ -191,6 +191,17 @@ private:
     // and the encode intent lambdas run there — so a plain QString needs no sync.
     QString m_ampHandle;
     QString m_tunerHandle;
+
+    // The model name the last capabilitiesChanged() announcement described
+    // (#5594, M1). Flex's whole capability table is derived from the model name
+    // — capabilitiesFor(caps.model) seeds maxSlices, the DSP tier and the rest —
+    // and that name arrives in a `radio ...` status AFTER the connect edge, so
+    // without this the descriptor silently changed with nothing announcing it.
+    // Held here rather than compared through m_modelProvider so the guard does
+    // not depend on radioChanged being delivered synchronously.
+    // Cleared by clearExtensionHandles() on disconnect: a reconnect to a
+    // DIFFERENT radio must announce again.
+    QString m_announcedModel;
 };
 
 }  // namespace AetherSDR

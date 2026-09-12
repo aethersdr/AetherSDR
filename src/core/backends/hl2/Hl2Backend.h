@@ -8,6 +8,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
 #include "core/backends/hl2/Hl2Receivers.h"
@@ -522,6 +523,14 @@ private:
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
     [[nodiscard]] int receiverCeiling() const;
+    // Announce a capability revision if — and only if — receiverCeiling() has
+    // actually moved since the last announcement (#5594, M1). The ceiling is
+    // reported as both maxSlices and maxPanadapters, and it FALLS when the
+    // operator zooms out: at 384 kHz a fourth receiver cannot be delivered on
+    // 100BASE-T, so the honest limit is 3. Guarded because a zoom sweep crosses
+    // several rates in a drag and an announcement per rate would be a storm;
+    // the great majority of zooms do not move the ceiling at all.
+    void announceReceiverCeilingRevision();
     // Re-evaluate the shared band filter and publish the resulting WIDE state.
     void publishWideState();
     // Destroy the DSP chains but KEEP each receiver's operator-set state. The
@@ -615,6 +624,10 @@ private:
     // because createPanadapter() has to answer "may I add one?" on this thread,
     // and the wire object lives on the I/O thread.
     int m_boardMaxRx = 0;
+    // Guards capabilitiesChanged() against a zoom sweep (#5594, M1). The
+    // decision lives in Hl2CapabilityAnnouncer.h so it is pinned socket-free;
+    // this class only supplies receiverCeiling() and does the emitting.
+    ReceiverCeilingAnnouncer m_ceilingAnnouncer;
     // What to assume when the board never reported its receiver count — a short
     // discovery reply, or a unicast probe that went unanswered. The shipping
     // hl2b5up_main gateware is built with NR=4 (variants/hl2b5up_main/
