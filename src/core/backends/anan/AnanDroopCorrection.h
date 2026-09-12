@@ -7,19 +7,26 @@
 
 namespace AetherSDR::anan {
 
-// The Saturn FPGA's DDC0 decimation chain (two cascaded CIC decimators plus
-// a halfband FIR -- see reference/saturn/New_protocol_FPGA_Block_diagrams.pdf,
-// "Receiver(3)") imposes a REAL sin(x)/x amplitude droop near the edges of
-// the displayed span, baked into the raw IQ samples themselves. This is not
-// a rendering artifact and not fixable by touching bin count or reported
-// bandwidth -- an earlier attempt at exactly that broke zoom-out (see
-// AnanBackend::emitPanState()'s own comment). This header applies a per-bin
-// dB correction, measured empirically per DDC0 rate by the in-app
-// AnanDroopCalibrator sweep (src/core/backends/anan/AnanDroopCalibrator.h),
-// to the actual FFT magnitude before display. AnanRxDsp holds the live
-// table set (loaded from per-radio settings at connect, or produced by a
-// fresh sweep); this header only owns the data shape and the pure apply
-// math, not table selection or storage.
+// The Saturn FPGA's DDC0 decimation chain imposes a REAL amplitude roll-off
+// near the edges of the displayed span, baked into the raw IQ samples
+// themselves. The chain is a 6-stage CIC decimator (differential delay 1,
+// R = 10..320) followed by a 1024-tap decimate-by-8 anti-alias FIR, and
+// across the DDC OUTPUT band the roll-off is almost entirely that FIR's
+// transition band: the CIC term contributes at most 0.34 dB and varies by
+// 0.003 dB between the fastest and slowest rate. It is NOT the CIC's
+// sin(x)/x droop, which earlier revisions of this comment claimed -- that
+// mattered, because a sin(x)/x story implies a per-rate curve while the real
+// cause gives one curve for all six rates (see AnanDroopDefaults.h).
+//
+// This is not a rendering artifact and not fixable by touching bin count or
+// reported bandwidth -- an earlier attempt at exactly that broke zoom-out
+// (see AnanBackend::emitPanState()'s own comment). This header applies a
+// per-bin dB correction to the actual FFT magnitude before display. Two
+// sources feed it: the derived defaults seeded at connect
+// (AnanDroopDefaults.h) and, on top, whatever the in-app AnanDroopCalibrator
+// sweep (AnanDroopCalibrator.h) measured for that specific radio. AnanRxDsp
+// holds the live table set; this header only owns the data shape and the
+// pure apply math, not table selection or storage.
 
 inline constexpr int kDroopCorrectionFftSize = 1024;
 

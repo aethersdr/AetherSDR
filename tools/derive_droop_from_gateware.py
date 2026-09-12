@@ -31,7 +31,8 @@ Sources (both GPL-3, same as AetherSDR):
   FPGA/IP/DDCIP/.../DDC_Block_fir_compiler_0_0.xci   decimate 8, 2 channels
   FPGA/IP/DDCIP/.../DDC_Block_cic_compiler_{0,1}_0.xci  6 stages, dd 1
 
-See spike/DECISIONS.md D-32.
+The reasoning above is the whole argument; AnanDroopDefaults.h carries the
+in-tree summary and the provenance of the emitted table.
 
 USAGE
 -----
@@ -50,6 +51,12 @@ import numpy as np
 NBINS = 1024
 # FIR decimation, from DDC_Block_fir_compiler_0_0.xci "Decimation_Rate".
 FIR_DECIM = 8
+# Tap count of that same FIR. Checked after parsing: a .coe whose comments
+# happen to contain a bare number would otherwise shift the entire derived
+# curve by a tap, and the emitted table would still look symmetric, monotone
+# and in range -- so nothing downstream, including the unit test, would catch
+# it.
+FIR_TAPS = 1024
 # CIC, from DDC_Block_cic_compiler_0_0.xci.
 CIC_STAGES = 6
 CIC_DIFF_DELAY = 1
@@ -68,6 +75,10 @@ def read_coe(path):
     body = text.split("coefdata=", 1)[1]
     taps = np.array([float(t) for t in
                      re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", body)])
+    if len(taps) != FIR_TAPS:
+        sys.exit(f"{path}: parsed {len(taps)} taps, expected {FIR_TAPS} -- the "
+                 "Saturn DDC FIR is 1024-tap; refusing to derive a curve from "
+                 "a miscounted coefficient set")
     return taps, digest
 
 
@@ -134,7 +145,7 @@ def parse_measured_inc(path):
     return tables
 
 
-def emit_inc(table, digest, out):
+def emit_inc(table, digest, out, gateware):
     out.write("// GENERATED FILE -- do not edit by hand.\n")
     out.write("// Regenerate with derive_droop_from_gateware.py.\n//\n")
     out.write("// DERIVED, not measured: the Saturn DDC's own FIR coefficients\n")
@@ -143,9 +154,10 @@ def emit_inc(table, digest, out):
     out.write("// sees the same normalised frequency at every rate, and the CIC\n")
     out.write("// term varies by 0.003 dB across the whole range.\n//\n")
     out.write(f"// Source coefficients sha256 {digest}\n")
-    out.write("// Saturn gateware 27. Clamped to [0, 90] dB, matching\n")
+    out.write(f"// Saturn gateware {gateware}. Clamped to [0, 90] dB, matching\n")
     out.write("// AnanDroopCalibrator::computeCorrection()'s own cap.\n\n")
-    out.write("inline constexpr std::array<float, 1024> kDroopCorrectionGw27 = {\n")
+    out.write(f"inline constexpr std::array<float, 1024> "
+              f"kDroopCorrectionGw{gateware} = {{\n")
     for i in range(0, NBINS, 8):
         row = ", ".join(f"{v:.4f}f" for v in table[i:i + 8])
         out.write(f"    {row},\n")
@@ -164,9 +176,18 @@ def main():
     ap.add_argument("--cap", type=float, default=DEFAULT_CAP_DB,
                     help="clamp the correction to [0, CAP] dB (default 90, "
                          "matching computeCorrection())")
-    ap.add_argument("--crop", type=float, default=0.04,
+    ap.add_argument("--crop", type=float, default=0.09,
                     help="SpectrumWidget kEdgeTaperFraction, for the "
-                         "'what is actually on screen' report (default 0.04)")
+                         "'what is actually on screen' report. Default 0.09, "
+                         "the value in both render paths on main; that fade is "
+                         "a gradient, so these bins are dimmed rather than "
+                         "absent -- see the NOTE this report prints")
+    ap.add_argument("--gateware", type=int, default=27,
+                    help="gateware version the coefficients come from; names "
+                         "the emitted symbol (kDroopCorrectionGw<N>) and its "
+                         "provenance header. Changing it requires updating "
+                         "AnanDroopDefaults.cpp's reference and "
+                         "kDefaultsGatewareVersion (default 27)")
     args = ap.parse_args()
 
     taps, digest = read_coe(args.coe)
@@ -184,8 +205,13 @@ def main():
           f"{table[k0]:.2f} dB; {int((shown > 0.25).sum())} of {len(shown)} "
           f"displayed bins need >0.25 dB")
     if table[k0] < 0.25:
-        print("               NOTE: at this crop the correction is a no-op "
-              "-- the roll-off is already off-screen.")
+        print("               NOTE: treated as a hard crop, the correction is "
+              "a no-op here -- the roll-off is inside the cropped region.")
+        print("               main's kEdgeTaperFraction is a GRADIENT fade, "
+              "not a crop: these bins are still drawn, dimmed toward the")
+        print("               background from the boundary outwards. So the "
+              "correction still applies to visible bins, but the largest")
+        print("               corrections sit in the most-dimmed ones.")
 
     if args.verify:
         measured = parse_measured_inc(args.verify)
@@ -202,7 +228,7 @@ def main():
                   f"rms {np.sqrt((d ** 2).mean()):5.2f}  "
                   f"max|d| {np.abs(d).max():5.2f} dB")
         print("\nmid-band, where the derived curve is 0.000 dB "
-              "(all of this is sweep noise -- see D-31):")
+              "(all of this is the sweep's own run-to-run scatter):")
         for rate in sorted(measured):
             m = measured[rate][mid]
             print(f"  {rate:5d} ksps  mean {m.mean():+6.2f}  "
@@ -211,7 +237,7 @@ def main():
 
     if args.emit_inc:
         out = sys.stdout if args.emit_inc == "-" else open(args.emit_inc, "w")
-        emit_inc(table, digest, out)
+        emit_inc(table, digest, out, args.gateware)
         if out is not sys.stdout:
             out.close()
             print(f"\nwrote {args.emit_inc}")

@@ -285,6 +285,13 @@ AnanBackend::AnanBackend(QObject* parent)
         // anywhere connecting it to the defaults. Logged here rather than at
         // the seed site because connectRadio() zeroes m_discoveredFirmwareVer
         // and the discovery reply fills it in afterwards.
+        //
+        // firmwareVer only, deliberately: P2Protocol.h's own rule is that
+        // board type is a discovery-time picker filter and must not decide
+        // what the backend does. The honest limit of that is worth naming --
+        // the shipped curve comes from SATURN filter coefficients
+        // specifically, so a non-Saturn board reporting this same build
+        // number is the one mismatch this warning cannot see.
         if (firmwareVer != kDefaultsGatewareVersion) {
             qCWarning(lcAnanDefaults).nospace()
                 << "ANAN: radio reports gateware " << firmwareVer
