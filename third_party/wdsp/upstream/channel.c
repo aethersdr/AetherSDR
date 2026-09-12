@@ -367,6 +367,77 @@ int SetChannelState (int channel, int state, int dmode)
 			// released by a ramp that completes; the next genuine stop releases it and the
 			// flag clears then. Clearing it here would not wake that thread, only lie to
 			// the dmode-1 wait in case 0.
+			//
+			// AetherSDR patch 8 (K5PTB, PR #5628): CANCELLING THE RAMP IS NOT ENOUGH. The
+			// flush_slews() below cancels a ramp that is still PENDING. It cannot cancel a
+			// flush that a ramp which already COMPLETED has requested: at that completion
+			// fexchange0/fexchange2 cleared exchange and released Sem_Flush (iobuffs.c:502,
+			// :561) and the flushChannel thread is now runnable but may not have been
+			// scheduled. It takes csDSP then csEXCH, flushes, and does
+			//     InterlockedBitTestAndSet (&a->exec_bypass, 0);
+			// (channel.c). Arm in that window and flushChannel sets exec_bypass AFTER this
+			// case has cleared it, so wdspmain() skips dexchange()/xrxa() entirely
+			// (main.c) and the worker produces nothing for a channel whose state reads 1.
+			// MEASURED on this tree (macOS arm64, RelWithDebInfo), a stress probe that stops,
+			// clocks N blocks at the 256/48 kHz cadence, starts with NO gap, and then asks
+			// for audio. Non-blocking, spacings 0-10, 40 trials each: 42 of 440 dead — 24 at
+			// spacing 3 and 18 at spacing 4, and ZERO at 0-2, which is the window inside the
+			// ramp that flush_slews() below already covered. The ramp is exactly three
+			// blocks long here (BEGIN 1 + DOWNSLEW ntdown+1 + ZERO out_size+1 = 739 samples
+			// at out_size 256), so spacing 3 is the first spacing at which it COMPLETES, and
+			// that is where this dies. A control that sleeps 20 ms before each start —
+			// giving the flush thread its slot — is 0 of 440 over the same sweep.
+			//
+			// Blocking mode is worse: the same restart HANGS THE HOST FOREVER, 20 of 20 at
+			// spacing 3. With exec_bypass set, wdspmain() never reaches dexchange(), so
+			// Sem_OutReady is never released and fexchange2's
+			//     if (a->bfo) WaitForSingleObject (a->Sem_OutReady, INFINITE);
+			// never returns. Six thread samples of six separate stalls all showed that same
+			// two-thread starvation — host parked in fexchange2 holding csEXCH, flushChannel
+			// already finished and back on Sem_Flush, worker idle on Sem_BuffReady. A
+			// three-way lock cycle (flushChannel holding csDSP and blocking on the csEXCH
+			// the parked host holds, worker then blocking on csDSP) is reachable from the
+			// same window on a different interleaving, but was not what any sample caught.
+			//
+			// So WAIT the flush out before arming. "exchange clear AND flushflag set" names
+			// exactly the completed-ramp case and nothing else:
+			//   - a ramp still pending leaves exchange SET, so this falls straight through
+			//     to the flush_slews() cancel below, which is the right treatment for it;
+			//   - case 0's dmode-1 timeout force-clears exchange AND flushflag together, so
+			//     an abandoned ramp does not wait here either;
+			//   - a freshly built channel has flushflag cleared by pre_main_build, so
+			//     OpenChannel's start never waits;
+			//   - every in-tree restore call (SetDSPBuffsize, SetDSPSamplerate, RXASetNC,
+			//     TXASetNC) reaches case 1 only after its own SetChannelState(0,1), which
+			//     leaves flushflag clear on both of its exits. None of them wait either.
+			// The only caller that can reach this wait is a host that stopped with dmode 0
+			// and clocked the ramp out, which is the case that was broken.
+			//
+			// OUTSIDE csEXCH, and that is load-bearing: flushChannel needs csEXCH to finish
+			// and clear flushflag, so waiting while holding it would guarantee the timeout
+			// instead of the flush. Waiting here cannot join the three-way cycle either,
+			// because this thread holds NO channel lock while it waits, and the host cannot
+			// be inside fexchange* on it — WdspChannel::setRunning() and open() both take
+			// the control fence, which refuses while a processIq() callback is in flight.
+			// Nothing that must run to satisfy this wait can be blocked by it: csDSP is
+			// never held across an unbounded wait (dexchange() only memcpys and releases),
+			// and flush_iobuffs()'s Sem_BuffReady drain is a 1 ms-timeout poll.
+			//
+			// BOUNDED by the same count/timeout as case 0, for the same reason patch 4
+			// bounds its handshake: a flush thread that never runs must not hang a start
+			// forever. Falling through after the cap leaves exactly today's behaviour, no
+			// worse. Cost of the wait, measured over 132 starts across spacings 0-10:
+			// setRunning(true) mean 251 us, max 3.1 ms, against mean 0.83 us / max 3.1 us
+			// with this block reverted. It is 0 in every path listed above; the ~3 ms is
+			// one Sleep(1) granularity plus flush_iobuffs()'s own 1 ms-timeout drain, paid
+			// only by the restart that would otherwise have killed the channel.
+			while (!_InterlockedAnd (&ch[channel].exchange, 1) &&
+					_InterlockedAnd (&ch[channel].flushflag, 1) &&
+					count < timeout)
+			{
+				Sleep (1);
+				count++;
+			}
 			EnterCriticalSection (&ch[channel].csEXCH);
 			flush_slews (a);
 			InterlockedBitTestAndSet (&a->slew.upflag, 0);

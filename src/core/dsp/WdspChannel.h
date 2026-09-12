@@ -191,9 +191,29 @@ public:
     // all. The channel was silently dead, isRunning() said true, and only a
     // reconfigure() recovered it. AetherSDR patch 5 (see
     // third_party/wdsp/AETHERSDR-PATCHES.md) makes case 1 cancel a pending
-    // down-ramp first, so stop/start pairs are safe at any spacing, including
-    // none — which is what the §13 row 9a T/R edge needs. Pinned by
-    // runRestartDuringRampTest.
+    // down-ramp first.
+    //
+    // That fixed the ramp that is still PENDING and nothing else, and this
+    // header said "safe at any spacing, including none" on the strength of it.
+    // THAT WAS TRUE ONLY FOR THE REGIME WE HAD TESTED — restarts inside the
+    // ramp — and false just outside it (K5PTB, review of #5628). A ramp that
+    // has COMPLETED has already released Sem_Flush, and the flushChannel
+    // thread sets exec_bypass whenever it next gets scheduled, which can be
+    // after case 1 has cleared it: the worker is then bypassed, so the channel
+    // produces nothing, or — in the blocking form — parks the host in
+    // fexchange2 forever on a semaphore the bypassed worker will never
+    // release. Measured on this tree, restarting with no gap at the spacing
+    // where the ramp completes: 42 of 440 non-blocking trials dead, and 20 of
+    // 20 blocking trials hung. Patch 6 waits that flush out before arming, and
+    // both are 0.
+    //
+    // SO, PLAINLY, WHAT IS SAFE. With patches 5 and 6 together, a stop/start
+    // pair is safe at any spacing including none, EXCEPT that the start may
+    // block up to WDSP's 100 ms timeout waiting for the flush thread — in
+    // practice under 3 ms, and 0 unless the previous stop's ramp was clocked
+    // out. What is NOT claimed: none of this has run on hardware, and the
+    // measurement behind it is a synthetic probe, not a T/R edge. Pinned by
+    // runRestartDuringRampTest, whose scenarios now straddle the ramp.
     //
     // Control-path work, guarded exactly like setMode(): returns false if a
     // control operation is already in flight, and must not be called from

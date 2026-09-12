@@ -1,6 +1,7 @@
 #include "core/dsp/WdspChannel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -620,14 +621,37 @@ bool runRestartDuringRampTest()
         std::size_t blocksBetween;  // clocked between the stop and the start
         bool viaReconfigure;        // reach the stopped state through reconfigure()
     };
-    // 256 samples at 48 kHz is 5.33 ms a block, against muteSlewDownSec 0.010
-    // plus downslew2's block-sized ZERO and OFF tails — roughly four blocks of
-    // ramp. So one block is squarely INSIDE the window and zero blocks is the
-    // ramp never started at all. Both are what a T/R edge produces (§13 row 9a).
+    // THE RAMP IS EXACTLY THREE BLOCKS LONG HERE, and the arithmetic matters
+    // because the two failures this test pins live on opposite sides of it.
+    // downslew2 spends one sample in BEGIN, ntdown + 1 = 481 in DOWNSLEW
+    // (muteSlewDownSec 0.010 at 48 kHz), and out_size + 1 = 257 in ZERO, then
+    // runs OFF to the end of whatever block it is in and clears downflag there:
+    // 739 samples, so the third 256-sample block is the one that COMPLETES it.
+    // Blocking mode makes that deterministic — every fexchange2 waits for
+    // output, so every clocked block advances the ramp, with no underrun to
+    // skip one.
+    //
+    // Spacings 0 and 1 are INSIDE the ramp: it is still pending at the start,
+    // and AetherSDR patch 5's flush_slews() cancel is what makes them safe.
+    // Spacings 3, 4 and 5 are AT and PAST its completion, which is a different
+    // defect with a different fix: by then fexchange2 has already released
+    // Sem_Flush, and the flushChannel thread — runnable, not necessarily
+    // scheduled — will set exec_bypass whenever it gets a slot, possibly after
+    // case 1 has cleared it. That is patch 6's window, and 3 is where it bites:
+    // the probe behind that patch measured 20 of 20 blocking trials hung at
+    // spacing 3 and none at 4 or 5, so 3 is the row with the mutation
+    // sensitivity and 4 and 5 are the shoulders that say where it stops.
+    //
+    // Both spacings are what a T/R edge produces (§13 row 9a); which side of
+    // the ramp it lands on is a question about the operator's timing, not
+    // about this API, so both have to be safe.
     const Scenario scenarios[] = {
         {"stop then start with no clocking at all", 0, false},
         {"stop then start inside the down-slew window", 1, false},
         {"start after reconfigure() of a stopped channel", 0, true},
+        {"stop, clock the ramp exactly out, then start with no gap", 3, false},
+        {"stop, clock one block past the ramp, then start with no gap", 4, false},
+        {"stop, clock two blocks past the ramp, then start with no gap", 5, false},
     };
 
     for (const Scenario& scenario : scenarios) {
@@ -699,10 +723,46 @@ bool runRestartDuringRampTest()
         }
 
         // Discard the up-ramp (muteSlewUpSec 0.025 is under five blocks), then
-        // ask the CHANNEL, not the mirror. This is the assertion that fails
-        // without patch 5.
-        clock(64);
-        const double energy = clock(64);
+        // ask the CHANNEL, not the mirror.
+        //
+        // ON ITS OWN THREAD, UNDER A DEADLINE, and that is not defensive
+        // dressing. The past-the-ramp scenarios have two distinct failure
+        // modes and only one of them is an assertion. Without patch 5 the
+        // channel goes SILENT: exchange is clear, fexchange2 returns having
+        // touched nothing, and the energy assertion below catches it. Without
+        // patch 6 in blocking mode the channel HANGS: exec_bypass is set, so
+        // wdspmain never reaches dexchange, Sem_OutReady is never released,
+        // and fexchange2's `if (a->bfo) WaitForSingleObject (..., INFINITE)`
+        // never returns. Clocked inline that is a ctest TIMEOUT — a red with
+        // no message, at the suite's default cap, minutes later. Clocked here
+        // it is a named failure in twenty seconds.
+        //
+        // _Exit rather than `return false`, because the clocking thread is
+        // parked in the kernel on a semaphore nothing will ever release: it
+        // cannot be joined, and unwinding past it would run ~WdspChannel on a
+        // channel that thread is still inside. Exit codes are all ctest reads.
+        std::atomic<bool> finished{false};
+        double energy = 0.0;
+        std::thread measurement([&] {
+            clock(64);
+            energy = clock(64);
+            finished.store(true, std::memory_order_release);
+        });
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (!finished.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (!finished.load(std::memory_order_acquire)) {
+            std::cerr << "FAIL: a restart taken in the flush window HUNG the "
+                         "host — fexchange2 is parked on Sem_OutReady and the "
+                         "worker is bypassed, so no block will ever come back\n"
+                      << "       scenario: " << scenario.name << '\n';
+            std::cerr.flush();
+            std::_Exit(1);
+        }
+        measurement.join();
         if (!require(energy > 0.01,
                      "a channel restarted before its down-ramp had been clocked "
                      "out went permanently silent while isRunning() reported "
