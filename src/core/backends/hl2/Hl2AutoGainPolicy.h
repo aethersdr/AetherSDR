@@ -229,15 +229,22 @@ struct AutoGainConfig {
     // `tripOffsetDb + tripMarginDb`, which converges a hunt on a plant whose
     // knee sits still.
     //
-    // PROBING SETS IT FALSE, AND THAT IS FORCED RATHER THAN CHOSEN. ON8ST's
-    // diurnal objection on #5535 is that the knee MOVES -- 10-20 dB predicted
-    // between a quiet afternoon and a loud evening. A remembered offset that
-    // permanently floors the release is exactly the lookup table that objection
-    // destroys: dig 18 dB out of an evening and the loop can never return below
-    // 12 dB again, so it is deaf at lunchtime. With the floor off, what stops
-    // the loop hunting is the widening probe interval and the bounded cost of a
-    // failed probe -- a memory in TIME rather than in decibels, which is the
-    // only kind that survives a knee that moves.
+    // PROBING SETS IT FALSE, AND THE REASON HAS BEEN NARROWED SINCE IT WAS
+    // WRITTEN. This comment used to say the knee moves 10-20 dB between a quiet
+    // afternoon and a loud evening. ON8ST WITHDREW THE DIURNAL ATTRIBUTION on
+    // #5535 (2026-09-12): the return-to-baseline control fired, two of three
+    // bands did not return, and the +/-2 dB floor quoted was two sweeps 90 min
+    // apart on one night. Overnight repeatability was never measured.
+    //
+    // WHAT SURVIVES IS THE PART THIS FIELD ACTUALLY NEEDS, and he says so in the
+    // same breath: "the range and the variability stand, the hour as cause does
+    // not". The knee is not a constant. A remembered offset that permanently
+    // floors the release is a lookup table keyed on a number that moves for
+    // reasons nobody has established: dig 18 dB out once and the loop can never
+    // return below 12 dB again. With the floor off, what stops the loop hunting
+    // is the widening probe interval and the bounded cost of a failed probe --
+    // a memory in TIME rather than in decibels, which is the only kind that
+    // survives a knee whose movement is measured but unexplained.
     bool tripFloorBindsRelease = true;
 
     // ---- THE MEASURED-HEADROOM RELEASE (Hl2BandscopeHeadroom.h) ------------
@@ -420,8 +427,24 @@ struct AutoGainConfig {
 //       Four whole probe steps. Chosen so that EVERY move the loop makes is a
 //       full 6 dB and never a remainder truncated against the ceiling -- a 2 dB
 //       remainder is narrower than the measured knee and could stall inside it.
-//       24 dB also covers the 10-20 dB diurnal excursion ON8ST predicts on
-//       #5535 with one step in hand. The operator owns this number.
+//       The operator owns this number.
+//
+//       AND IT IS PROBABLY LARGER THAN THE HARDWARE HAS. This 24 was sized
+//       when the LNA axis was believed to span 31 dB. ON8ST retracted that on
+//       #5535 (2026-09-12): the gain folds `& 0x1F` above code 31
+//       (Hermes-Lite2 #177, design intent per softerhardware) and codes 28-31
+//       sit within 0.07 dB on his board, leaving about 17.8 dB USABLE -- one
+//       board, measured once, confirmed by nobody else.
+//
+//       IT IS NOT CHANGED HERE, deliberately. How deep an automatic control
+//       may dig is one of exactly two numbers the operator owns, the
+//       replacement figure rests on a single unreplicated board, and #5535 is
+//       unanswered. Picking a new ceiling from one measurement would be
+//       deciding in code the thing the RFC exists to decide. What the loop
+//       does meanwhile is safe rather than silent: Hl2GainSplit.h clamps to
+//       the register floor and reports the offset ACTUALLY applied, and the
+//       AtFloor branch below lights the "the front end needs attenuation ahead
+//       of the radio" warning rather than attacking into a fold forever.
 //
 //   baseProbeIntervalMs = 30000
 //       The floor on it is the cost: one failed probe per interval is 100 ms of
