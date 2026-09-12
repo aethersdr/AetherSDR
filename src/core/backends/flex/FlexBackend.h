@@ -71,6 +71,9 @@ public:
     void setNotchesEnabled(bool on) override;
     void sendSliceWaveformCommand(int sliceId, const QString& command);
     void setKeying(bool key) override;
+    void setTune(bool on, int tunePowerPercent = -1) override;
+    void setAtu(bool start) override;
+    void abortCwText() override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
 

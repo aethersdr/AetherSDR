@@ -9,8 +9,7 @@
 //   1. a blocked start dispatches NOTHING to the backend;
 //   2. a permitted start dispatches EXACTLY ONCE;
 //   3. bypass is dispatched regardless of the gate.
-// Flex is covered too: its ATU travels as wire text through the existing
-// gate, so the seam verb must not fire there at all.
+// Flex is covered too: all families now take the same typed seam exactly once.
 
 #include "TestSettingsProfile.h"
 #include "models/RadioModel.h"
@@ -162,13 +161,13 @@ static void panInhibitBlocksStart()
     check(f.backend->atuStarts == 1, "inhibit lifted: start dispatches once");
 }
 
-static void flexStaysOnTheWirePath()
+static void flexUsesTheSameTypedPath()
 {
     Fixture f(QStringLiteral("flex"), /*canTransmit=*/true);
     f.radio.transmitModel().atuStart();
     f.radio.transmitModel().atuBypass();
-    check(f.backend->atuStarts == 0 && f.backend->atuBypasses == 0,
-          "flex: the seam verb is never used (ATU travels as wire text)");
+    check(f.backend->atuStarts == 1 && f.backend->atuBypasses == 1,
+          "flex: the same typed seam dispatches each intent exactly once");
 }
 
 int main(int argc, char** argv)
@@ -180,7 +179,7 @@ int main(int argc, char** argv)
     receiveOnlyBackendBlocksStart();
     receiveOnlyModeBlocksStart();
     panInhibitBlocksStart();
-    flexStaysOnTheWirePath();
+    flexUsesTheSameTypedPath();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
