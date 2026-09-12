@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -4334,7 +4335,12 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // flag, which is the multi-slice form of the same disagreement.
     for (const auto& ids : m_ids.all()) {
         const Receiver* r = rx(ids.ddcIndex);
-        if (!r || !r->dsp)
+        // `!r` is a receiver that does not exist; a receiver with no DSP chain
+        // is one between rebuilds, and that is "not reported", not "not there".
+        // Dropping its rows would take their labels with them — the sibling
+        // loop below guards on `!r` alone and the noise-blanker extension verb
+        // reports `hasChain: false` rather than omitting, for the same reason.
+        if (!r)
             continue;
         const QString suffix = m_ids.size() > 1
                                    ? QStringLiteral(" (RX%1)").arg(ids.uiNumber + 1)
@@ -4342,7 +4348,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         // ABSENT UNTIL A BLOCK HAS BEEN PROCESSED, which is HealthSnapshot's
         // "absent means not reported" contract doing work no default could:
         // 0.00 dBFS in particular would read as a hard clip.
-        const std::optional<double> peak = r->dsp->adcPeakDbfs();
+        const std::optional<double> peak =
+            r->dsp ? r->dsp->adcPeakDbfs() : std::nullopt;
         const bool realPeak = peak && hl2::adcMeterReadingIsReal(*peak);
         put(QStringLiteral("adcSlicePeakDbfs%1").arg(ids.uiNumber).toUtf8().constData(),
             QStringLiteral("ADC peak, post-DDC slice (uncalibrated dBFS)") + suffix,
@@ -4351,20 +4358,40 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         // receive chain is clocked with silence there, so Hl2RxDsp deliberately
         // holds the last receive value rather than measuring our own mute — and
         // it stops advancing again if the IQ stream stalls. Without an age on
-        // it, a frozen number reads as a current one.
-        const std::optional<std::int64_t> ago = r->dsp->adcPeakObservedAgoMs();
+        // it, a frozen number reads as a current one. The pairing row below
+        // does not merely display this age, it is GATED on it: see
+        // kSliceStaleMs.
+        const std::optional<std::int64_t> ago =
+            r->dsp ? r->dsp->adcPeakObservedAgoMs() : std::nullopt;
         put(QStringLiteral("adcSliceObservedAgoMs%1").arg(ids.uiNumber).toUtf8().constData(),
             QStringLiteral("Post-DDC slice peak observed (ms ago)") + suffix,
             ago ? QVariant(static_cast<qulonglong>(*ago)) : QVariant());
         // THE PAIRING. One sentence naming both sides and the gap between
         // them, so the operator reads the relationship instead of deriving it
         // from a dB figure and a boolean two rows apart.
+        // The freshness gate is the whole reason this is not just two rows read
+        // together. `peak` is HELD through every transmission while
+        // m_telemetry.adcOverload keeps moving — EP6 responses ride the same
+        // datagrams as the IQ — so without the age the sentence would pair a
+        // frozen side against a live one and, on a radio whose transmitter
+        // shares the receiver's port, assert that the operator's own carrier is
+        // "elsewhere in 0-38.4 MHz". kSliceStaleMs carries the reasoning.
+        //
+        // NaN rather than 0.0 for the don't-care: 0.0 dBFS is a REAL reading
+        // (full scale), so a don't-care spelled 0.0 is only safe while
+        // `realPeak` short-circuits ahead of it. NaN is inert either way.
         const hl2::AdcPairing verdict =
-            hl2::adcPairing(realPeak, realPeak ? *peak : 0.0,
+            hl2::adcPairing(realPeak,
+                            realPeak ? *peak : std::numeric_limits<double>::quiet_NaN(),
+                            ago && *ago <= hl2::kSliceStaleMs,
                             m_telemetry.adcOverload.has_value(),
                             m_telemetry.adcOverload.value_or(false));
         const QString headroom =
             realPeak ? QString::number(hl2::sliceHeadroomDb(*peak), 'f', 1) : QString();
+        // A slice peak can sit ABOVE wire full scale — I and Q each at +-1 puts
+        // the magnitude at sqrt(2), about +3 dB — and "within -1.5 dB of full
+        // scale" is not a sentence. Say what is actually true instead.
+        const bool overFullScale = realPeak && hl2::sliceHeadroomDb(*peak) < 0.0;
         QVariant pairing;
         switch (verdict) {
         case hl2::AdcPairing::Unknown:
@@ -4382,17 +4409,27 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
                           .arg(headroom);
             break;
         case hl2::AdcPairing::SliceOnly:
-            pairing = QStringLiteral(
-                          "DISAGREE — slice within %1 dB of full scale, converter not "
-                          "overloading; the level is arriving through the DDC, not at "
-                          "the front end")
-                          .arg(headroom);
+            pairing = overFullScale
+                          ? QStringLiteral(
+                                "DISAGREE — slice above full scale, converter not "
+                                "overloading; the level is arriving through the DDC, "
+                                "not at the front end")
+                          : QStringLiteral(
+                                "DISAGREE — slice within %1 dB of full scale, converter "
+                                "not overloading; the level is arriving through the "
+                                "DDC, not at the front end")
+                                .arg(headroom);
             break;
         case hl2::AdcPairing::BothHot:
-            pairing = QStringLiteral(
-                          "agree — converter overloading and the slice is within %1 dB "
-                          "of full scale; the strong signal is in this slice")
-                          .arg(headroom);
+            pairing = overFullScale
+                          ? QStringLiteral(
+                                "agree — converter overloading and the slice is above "
+                                "full scale; the strong signal is in this slice")
+                          : QStringLiteral(
+                                "agree — converter overloading and the slice is within "
+                                "%1 dB of full scale; the strong signal is in this "
+                                "slice")
+                                .arg(headroom);
             break;
         }
         put(QStringLiteral("adcPairing%1").arg(ids.uiNumber).toUtf8().constData(),

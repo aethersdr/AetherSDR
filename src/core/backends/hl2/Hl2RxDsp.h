@@ -202,7 +202,14 @@ public:
         return static_cast<double>(v);
     }
     // How old that reading is. A number with no age on it invites being read as
-    // current, and this one stops advancing the moment the IQ stream does.
+    // current, and this one stops advancing the moment the IQ stream does —
+    // or the moment the chain is muted for transmit.
+    //
+    // NOT ONLY A DISPLAY ROW. Hl2Backend feeds this age to Hl2AdcPairing.h's
+    // freshness input, which is what keeps the pairing verdict from combining
+    // a held slice peak with a live overload flag; see kSliceStaleMs. The
+    // value and this stamp are stored together or not at all, so an age here
+    // is always the age of the value adcPeakDbfs() returns.
     [[nodiscard]] std::optional<std::int64_t> adcPeakObservedAgoMs() const
     {
         const std::int64_t at = m_adcPeakAtNs.load(std::memory_order_relaxed);

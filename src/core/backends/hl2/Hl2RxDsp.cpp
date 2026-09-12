@@ -1,5 +1,7 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 
+#include "core/backends/hl2/Hl2AdcPairing.h"
+
 #include <QLoggingCategory>
 #include <QMetaType>
 
@@ -444,12 +446,24 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // transmission — a measurement of our own mute, presented as a
         // measurement of the band. The last receive reading is held instead,
         // and adcPeakObservedAgoMs() is what tells the reader it is standing
-        // still.
+        // still — and, since the freshness gate went in, what stops
+        // Hl2AdcPairing.h turning a held number into a causal sentence about
+        // now. See kSliceStaleMs: on an HL2 the transmitter shares the
+        // receiver's port, so the held-value window is exactly the window in
+        // which a pre-DDC overload is OUR OWN carrier.
+        //
+        // A SENTINEL IS NOT A READING, so it does not get a timestamp either.
+        // healthSnapshot() already refuses to show a sentinel as a level, but
+        // the age is a separate row and a separate gate: stamping one would
+        // publish "observed 30 ms ago" beside "peak: not reported", and would
+        // tell Hl2AdcPairing.h the slice side is current when there is no
+        // slice side. Storing both or neither keeps value and age inseparable.
         if (!m_audioMuted) {
-            m_adcPeakDbfs.store(
-                static_cast<float>(m_channel->meter(WdspChannel::Meter::AdcPeak)),
-                std::memory_order_relaxed);
-            m_adcPeakAtNs.store(steadyNowNs(), std::memory_order_relaxed);
+            const double pk = m_channel->meter(WdspChannel::Meter::AdcPeak);
+            if (adcMeterReadingIsReal(pk)) {
+                m_adcPeakDbfs.store(static_cast<float>(pk), std::memory_order_relaxed);
+                m_adcPeakAtNs.store(steadyNowNs(), std::memory_order_relaxed);
+            }
         }
     }
 
