@@ -7,6 +7,7 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "core/RadioConnection.h"
+#include "ScopedChildWidget.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -44,6 +45,18 @@
 namespace AetherSDR {
 
 namespace {
+
+void showMemoryMessage(QWidget* parent, QMessageBox::Icon icon,
+                       const QString& title, const QString& text)
+{
+    ScopedChildWidget<QMessageBox> boxOwner(parent);
+    QMessageBox& box = *boxOwner.get();
+    box.setIcon(icon);
+    box.setWindowTitle(title);
+    box.setText(text);
+    box.setStandardButtons(QMessageBox::Ok);
+    box.exec();
+}
 
 class MemoryTableItem : public QTableWidgetItem {
 public:
@@ -1013,12 +1026,14 @@ void MemoryDialog::onAdd()
 
 void MemoryDialog::onExport()
 {
+    const QPointer<MemoryDialog> self(this);
+    const QPointer<RadioModel> modelGuard(m_model);
     const QString filterProfile = m_filterCombo->currentData().toString();
     const QList<MemoryCsvRecord> records =
         currentExportRecords(m_model->memories(), filterProfile);
 
     if (records.isEmpty()) {
-        QMessageBox::information(this, "Export Memories",
+        showMemoryMessage(this, QMessageBox::Information, "Export Memories",
                                  filterProfile.isEmpty()
                                      ? "There are no memories to export."
                                      : "There are no memories in the current filter to export.");
@@ -1030,13 +1045,14 @@ void MemoryDialog::onExport()
         "Export Memories",
         defaultExportFilePath(),
         "CSV Files (*.csv)");
-    if (path.isEmpty())
+    if (!self || !modelGuard || self->m_model != modelGuard.data() || path.isEmpty()) {
         return;
+    }
 
     const QByteArray csv = MemoryCsvCompat::serialize(records);
     const MemoryCsvParseResult validation = MemoryCsvCompat::parse(csv);
     if (!validation.ok()) {
-        QMessageBox::warning(this, "Export Memories",
+        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
                              QString("The generated SmartSDR CSV failed validation:\n%1")
                                  .arg(validation.errors.join('\n')));
         return;
@@ -1044,27 +1060,27 @@ void MemoryDialog::onExport()
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(this, "Export Memories",
+        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
                              QString("Couldn't open %1 for writing.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
     }
 
     if (file.write(csv) != csv.size()) {
-        QMessageBox::warning(this, "Export Memories",
+        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
                              QString("Couldn't write the SmartSDR CSV to %1.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
     }
 
     if (!file.commit()) {
-        QMessageBox::warning(this, "Export Memories",
+        showMemoryMessage(this, QMessageBox::Warning, "Export Memories",
                              QString("Couldn't save %1.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
     }
 
-    QMessageBox::information(this, "Export Memories",
+    showMemoryMessage(this, QMessageBox::Information, "Export Memories",
                              QString("Exported %1 memories to %2.")
                                  .arg(records.size())
                                  .arg(QDir::toNativeSeparators(QFileInfo(path).fileName())));
@@ -1074,17 +1090,20 @@ void MemoryDialog::onImport()
 {
     if (!m_model->memoriesWritable())
         return;
+    const QPointer<MemoryDialog> self(this);
+    const QPointer<RadioModel> modelGuard(m_model);
     const QString path = QFileDialog::getOpenFileName(
         this,
         "Import Memories",
         QDir::home().filePath("Documents"),
         "CSV Files (*.csv)");
-    if (path.isEmpty())
+    if (!self || !modelGuard || self->m_model != modelGuard.data() || path.isEmpty()) {
         return;
+    }
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, "Import Memories",
+        showMemoryMessage(this, QMessageBox::Warning, "Import Memories",
                              QString("Couldn't open %1 for reading.")
                                  .arg(QDir::toNativeSeparators(path)));
         return;
@@ -1110,12 +1129,14 @@ void MemoryDialog::onImport()
 
     const QPointer<MemoryDialog> dialogGuard(this);
     auto showSummary = [dialogGuard, state]() {
-        if (!dialogGuard)
+        if (!dialogGuard) {
             return;
+        }
 
         dialogGuard->populateTable();
 
-        QMessageBox summary(dialogGuard);
+        ScopedChildWidget<QMessageBox> summaryOwner(dialogGuard.data());
+        QMessageBox& summary = *summaryOwner.get();
         summary.setWindowTitle("Import Memories");
         summary.setIcon(state->issues.isEmpty() ? QMessageBox::Information : QMessageBox::Warning);
         summary.setText(QString("Imported %1 %2 from %3 (%4 format).")
@@ -1131,7 +1152,7 @@ void MemoryDialog::onImport()
             summary.setDetailedText(state->issues.join('\n'));
         }
         summary.exec();
-        if (dialogGuard)
+        if (dialogGuard && summaryOwner)
             dialogGuard->focusTableOnCurrentRow();
     };
 
@@ -1166,8 +1187,9 @@ void MemoryDialog::onImport()
     };
     const auto runNext = QSharedPointer<std::function<void()>>::create();
     *runNext = [model, dialogGuard, state, runNext, showSummary, progressGuard, advanceProgress]() {
-        if (!dialogGuard)
+        if (!dialogGuard) {
             return;
+        }
 
         if (state->nextRecord >= state->records.size()) {
             if (progressGuard) {
@@ -1197,8 +1219,9 @@ void MemoryDialog::onImport()
 
         model->sendCmdPublic("memory create",
             [model, dialogGuard, state, runNext, rowLabel, update, advanceProgress](int code, const QString& body) {
-            if (!dialogGuard)
+            if (!dialogGuard) {
                 return;
+            }
 
             if (code != 0) {
                 state->issues << formatImportIssue(
@@ -1225,8 +1248,9 @@ void MemoryDialog::onImport()
             model->sendCmdPublic(
                 QString("memory set %1 %2").arg(idx).arg(update.commandSuffix),
                 [model, dialogGuard, state, runNext, rowLabel, update, idx, advanceProgress](int setCode, const QString& setBody) {
-                if (!dialogGuard)
+                if (!dialogGuard) {
                     return;
+                }
 
                 if (setCode == 0) {
                     model->handleMemoryStatus(idx, update.kvs);
@@ -1243,8 +1267,9 @@ void MemoryDialog::onImport()
 
                 model->sendCmdPublic(QString("memory remove %1").arg(idx),
                     [model, dialogGuard, state, runNext, rowLabel, idx, advanceProgress](int removeCode, const QString& removeBody) {
-                    if (!dialogGuard)
+                    if (!dialogGuard) {
                         return;
+                    }
 
                     if (removeCode == 0) {
                         QMap<QString, QString> kvs;
@@ -1322,7 +1347,10 @@ void MemoryDialog::onRemove()
             : QString("Memory %1").arg(idx));
     }
 
-    QMessageBox confirm(this);
+    const QPointer<MemoryDialog> dialogGuard(this);
+    const QPointer<RadioModel> modelGuard(m_model);
+    ScopedChildWidget<QMessageBox> confirmOwner(this);
+    QMessageBox& confirm = *confirmOwner.get();
     confirm.setIcon(QMessageBox::Warning);
     confirm.setWindowTitle(indices.size() == 1 ? "Delete Memory" : "Delete Memories");
     confirm.setText(indices.size() == 1
@@ -1333,13 +1361,16 @@ void MemoryDialog::onRemove()
         confirm.setDetailedText(memoryDescriptions.join('\n'));
     confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
     confirm.setDefaultButton(QMessageBox::Cancel);
-    if (confirm.exec() != QMessageBox::Yes) {
-        focusTableOnCurrentRow();
+    const int result = confirm.exec();
+    if (!dialogGuard || !modelGuard || dialogGuard->m_model != modelGuard.data() || !confirmOwner) {
+        return;
+    }
+    if (result != QMessageBox::Yes) {
+        dialogGuard->focusTableOnCurrentRow();
         return;
     }
 
-    RadioModel* const model = m_model;
-    const QPointer<MemoryDialog> dialogGuard(this);
+    RadioModel* const model = modelGuard.data();
     struct RemovalState {
         QList<int> indices;
         QStringList descriptions;
@@ -1378,8 +1409,9 @@ void MemoryDialog::onRemove()
 
     const auto runNext = QSharedPointer<std::function<void()>>::create();
     *runNext = [model, dialogGuard, state, runNext, progressGuard, advanceProgress]() {
-        if (!dialogGuard)
+        if (!dialogGuard) {
             return;
+        }
 
         if (state->nextIndex >= state->indices.size()) {
             if (progressGuard) {
@@ -1388,7 +1420,8 @@ void MemoryDialog::onRemove()
             }
             dialogGuard->populateTable();
             if (state->failed > 0) {
-                QMessageBox failure(dialogGuard);
+                ScopedChildWidget<QMessageBox> failureOwner(dialogGuard.data());
+                QMessageBox& failure = *failureOwner.get();
                 failure.setIcon(QMessageBox::Warning);
                 failure.setWindowTitle(state->failed == 1 ? "Delete Memory" : "Delete Memories");
                 failure.setText(state->failed == 1
@@ -1397,6 +1430,9 @@ void MemoryDialog::onRemove()
                 if (state->failedDescriptions.size() > 1)
                     failure.setDetailedText(state->failedDescriptions.join('\n'));
                 failure.exec();
+                if (!dialogGuard || !failureOwner) {
+                    return;
+                }
             }
             dialogGuard->focusTableOnCurrentRow();
             return;

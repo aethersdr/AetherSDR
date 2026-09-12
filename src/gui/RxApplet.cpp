@@ -1,5 +1,6 @@
 #include "RxApplet.h"
 #include "AgcModeAvailability.h"
+#include "ScopedChildWidget.h"
 #include "gui/CtcssToneLabel.h"
 
 #include "gui/FilterStepMath.h"
@@ -451,7 +452,11 @@ void RxApplet::buildUI()
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
             "QPushButton:hover { color: #ff6666; }");
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
-            QMenu menu(this);
+            const QPointer<RxApplet> self(this);
+            const QPointer<SliceModel> slice(m_slice);
+            const QPointer<QPushButton> button(m_txAntBtn);
+            ScopedChildWidget<QMenu> menuOwner(this);
+            QMenu& menu = *menuOwner.get();
             const QString cur = m_slice ? m_slice->txAntenna() : "";
             const QStringList options = txAntennaOptions();
             for (const QString& ant : options) {
@@ -464,8 +469,11 @@ void RxApplet::buildUI()
             }
             const QAction* sel = menu.exec(
                 m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
-            if (sel && m_slice)
-                m_slice->setTxAntenna(sel->data().toString());
+            if (!self || !menuOwner || !button || !slice
+                || self->m_slice != slice.data() || !sel) {
+                return;
+            }
+            slice->setTxAntenna(sel->data().toString());
         });
         row->addWidget(m_txAntBtn);
 
@@ -3229,10 +3237,15 @@ void RxApplet::rebuildFilterButtons()
         if (customisable) {
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
-                QMenu menu;
-                menu.addAction("Set Custom Edges...", [this, i] {
+                ScopedChildWidget<QMenu> menuOwner(this);
+                QMenu& menu = *menuOwner.get();
+                menu.addAction("Set Custom Edges...", btn, [this, i,
+                                                               button = QPointer<QPushButton>(btn)] {
                     if (!m_slice) return;
-                    QDialog dlg(this);
+                    const QPointer<RxApplet> self(this);
+                    const QPointer<SliceModel> slice(m_slice);
+                    ScopedChildWidget<QDialog> dialogOwner(this);
+                    QDialog& dlg = *dialogOwner.get();
                     dlg.setWindowTitle("Set Custom Filter Edges");
                     auto* form = new QFormLayout(&dlg);
                     auto* loSpin = new QSpinBox(&dlg);
@@ -3256,7 +3269,12 @@ void RxApplet::rebuildFilterButtons()
                     QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
                     QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
                     form->addRow(btns);
-                    if (dlg.exec() != QDialog::Accepted) return;
+                    const int result = dlg.exec();
+                    if (!self || !dialogOwner || !button || !slice
+                        || self->m_slice != slice.data()
+                        || result != QDialog::Accepted) {
+                        return;
+                    }
                     int lo = loSpin->value();
                     int hi = hiSpin->value();
                     if (hi <= lo) return;
@@ -3265,9 +3283,9 @@ void RxApplet::rebuildFilterButtons()
                     m_filterWidths[i] = hi - lo;
                     saveFilterPresets();
                     rebuildFilterButtons();
-                    m_slice->setFilterWidth(lo, hi);
+                    slice->setFilterWidth(lo, hi);
                 });
-                menu.addAction("Reset to Default", [this, i] {
+                menu.addAction("Reset to Default", btn, [this, i] {
                     if (!m_slice) return;
                     const auto& factory = modeSettingsFor(m_slice->mode()).filterWidths;
                     if (i >= factory.size()) return;

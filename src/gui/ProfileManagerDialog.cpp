@@ -15,6 +15,7 @@
 #include <QPointer>
 #include <QSignalBlocker>
 #include <QTimer>
+#include "ScopedChildWidget.h"
 
 namespace AetherSDR {
 
@@ -282,7 +283,9 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             m_model->sendCmdPublic(
                 QString("profile global save \"%1\"").arg(name),
                 [self, type, name, token](int code, const QString& body) {
-                    if (!self) return;
+                    if (!self) {
+                        return;
+                    }
                     // Superseded by a newer save on this tab, or already
                     // resolved by the timeout — either way, stay quiet.
                     if (self->m_pendingSaveToken.value(type) != token) return;
@@ -321,7 +324,9 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             // the save is in flight for the life of the window.
             QTimer::singleShot(kSaveResponseTimeoutMs, this,
                                [self, type, name, token] {
-                if (!self) return;
+                if (!self) {
+                    return;
+                }
                 if (self->m_pendingSaveToken.value(type) != token) return;
                 self->m_pendingSaveToken[type] = 0;
                 self->setTabStatus(
@@ -341,7 +346,10 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                 if (!m_model->autoSave()) {
                     // Offer Auto-Save inline so the user can act on the
                     // remedy without hunting for the Auto-Save tab.
-                    QMessageBox box(this);
+                    const QPointer<ProfileManagerDialog> self(this);
+                    const QPointer<RadioModel> modelGuard(m_model);
+                    ScopedChildWidget<QMessageBox> boxOwner(this);
+                    QMessageBox& box = *boxOwner.get();
                     box.setWindowTitle("Profile already exists");
                     box.setIcon(QMessageBox::Question);
                     box.setText(
@@ -356,22 +364,30 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     box.addButton("Close", QMessageBox::RejectRole);
                     box.setDefaultButton(enableBtn);
                     box.exec();
+                    if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner) {
+                        return;
+                    }
                     if (box.clickedButton() == enableBtn) {
                         // The sibling Auto-Save tab checkbox is wired to
                         // RadioModel::autoSaveChanged below, so the radio's
                         // confirmation of auto_save=1 will sync it.
-                        m_model->sendCommand("profile autosave on");
+                        modelGuard->sendCommand("profile autosave on");
                     }
                     return;
                 }
-                QMessageBox::information(this, "Profile already exists",
-                    QString("A %1 profile named \"%2\" already exists.\n\n"
+                ScopedChildWidget<QMessageBox> infoOwner(this);
+                QMessageBox& info = *infoOwner.get();
+                info.setIcon(QMessageBox::Information);
+                info.setWindowTitle("Profile already exists");
+                info.setText(QString("A %1 profile named \"%2\" already exists.\n\n"
                             "The radio cannot overwrite %1 profiles directly. "
                             "Updates are captured by Auto-Save (currently ON) "
                             "while the profile is active.\n\n"
                             "To replace this profile, delete it first and then "
                             "Create it again.")
                         .arg(kind, name));
+                info.setStandardButtons(QMessageBox::Ok);
+                info.exec();
                 return;
             }
             if (type == "transmit")
@@ -392,9 +408,18 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         if (!item) return;
         const QString name = item->text();
 
-        auto reply = QMessageBox::question(this, "Delete Profile",
-            QString("Delete profile \"%1\"?").arg(name),
-            QMessageBox::Yes | QMessageBox::No);
+        const QPointer<ProfileManagerDialog> self(this);
+        const QPointer<RadioModel> modelGuard(m_model);
+        ScopedChildWidget<QMessageBox> boxOwner(this);
+        QMessageBox& box = *boxOwner.get();
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle("Delete Profile");
+        box.setText(QString("Delete profile \"%1\"?").arg(name));
+        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        const int reply = box.exec();
+        if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner) {
+            return;
+        }
         if (reply != QMessageBox::Yes) return;
 
         // Drop the last Save result: leaving it up would keep reporting
@@ -402,11 +427,11 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         setTabStatus(type, QString(), false);
 
         if (type == "global")
-            m_model->sendCommand(QString("profile global delete \"%1\"").arg(name));
+            modelGuard->sendCommand(QString("profile global delete \"%1\"").arg(name));
         else if (type == "transmit")
-            m_model->sendCommand(QString("profile transmit delete \"%1\"").arg(name));
+            modelGuard->sendCommand(QString("profile transmit delete \"%1\"").arg(name));
         else if (type == "mic")
-            m_model->sendCommand(QString("profile mic delete \"%1\"").arg(name));
+            modelGuard->sendCommand(QString("profile mic delete \"%1\"").arg(name));
     });
 
     return page;

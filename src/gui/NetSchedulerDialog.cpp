@@ -1,4 +1,5 @@
 #include "NetSchedulerDialog.h"
+#include "ScopedChildWidget.h"
 
 #include "core/NetRecurrence.h"
 #include "core/NetScheduleStore.h"
@@ -21,11 +22,13 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSpinBox>
 #include <QStringList>
 #include <QTableWidget>
+#include <QTimer>
 #include <QTimeEdit>
 #include <QTimeZone>
 #include <QVBoxLayout>
@@ -170,7 +173,10 @@ int leadIndexFromMinutes(int minutes)
 bool editNetEntry(QWidget* parent, NetEntry& entry,
                   const NetSchedulerDialog::CaptureFn& capture, bool isNew)
 {
-    QDialog dlg(parent);
+    const NetSchedulerDialog::CaptureFn captureFn = capture;
+    const QPointer<QWidget> parentGuard(parent);
+    ScopedChildWidget<QDialog> dialogOwner(parent);
+    QDialog& dlg = *dialogOwner.get();
     dlg.setWindowTitle(isNew ? QStringLiteral("Add Net") : QStringLiteral("Edit Net"));
     dlg.setModal(true);
     dlg.setMinimumWidth(440);
@@ -382,14 +388,24 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     for (int i = 0; i < 7; ++i)
         QObject::connect(c.weekdayChips[i], &QPushButton::toggled, &dlg, [refresh](bool) { refresh(); });
 
-    QObject::connect(captureBtn, &QPushButton::clicked, &dlg, [&c, &capture, &dlg, refresh]() {
+    const QPointer<QDialog> dialogGuard(&dlg);
+    QObject::connect(captureBtn, &QPushButton::clicked, &dlg,
+                     [&c, capture = captureFn, dialogGuard, refresh]() {
         if (!capture) {
             return;
         }
         const MemoryEntry m = capture();
+        if (!dialogGuard) {
+            return;
+        }
         if (m.freq <= 0.0) {
-            QMessageBox::information(&dlg, QStringLiteral("Capture current VFO"),
-                                     QStringLiteral("Open a slice on a connected radio first."));
+            ScopedChildWidget<QMessageBox> infoOwner(dialogGuard.data());
+            QMessageBox& info = *infoOwner.get();
+            info.setWindowTitle(QStringLiteral("Capture current VFO"));
+            info.setText(QStringLiteral("Open a slice on a connected radio first."));
+            info.setIcon(QMessageBox::Information);
+            info.setStandardButtons(QMessageBox::Ok);
+            info.exec();
             return;
         }
         c.freq->setValue(m.freq);
@@ -440,8 +456,8 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     c.filterHigh->setValue(entry.preset.rxFilterHigh);
 
     // On a brand-new net, prefill the preset from the current VFO if available.
-    if (isNew && capture) {
-        const MemoryEntry m = capture();
+    if (isNew && captureFn) {
+        const MemoryEntry m = captureFn();
         if (m.freq > 0.0) {
             c.freq->setValue(m.freq);
             if (!m.mode.isEmpty())
@@ -453,8 +469,10 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
 
     refresh();
 
-    if (dlg.exec() != QDialog::Accepted)
+    const int resultCode = dlg.exec();
+    if (!parentGuard || !dialogOwner || resultCode != QDialog::Accepted) {
         return false;
+    }
 
     NetEntry result = snapshotEntry();
     // Anchor a recurring rule's INTERVAL phasing to today if unset; a one-time
@@ -528,7 +546,10 @@ NetSchedulerDialog::NetSchedulerDialog(QList<NetEntry> entries, CaptureFn captur
     connect(importBtn, &QPushButton::clicked, this, &NetSchedulerDialog::onImport);
     connect(exportBtn, &QPushButton::clicked, this, &NetSchedulerDialog::onExport);
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &NetSchedulerDialog::updateButtons);
-    connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int, int) { onEdit(); });
+    connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int, int) {
+        // Finish Qt's table event before an editor loop can delete the table.
+        QTimer::singleShot(0, this, &NetSchedulerDialog::onEdit);
+    });
 
     populateTable();
     updateButtons();
@@ -591,12 +612,19 @@ void NetSchedulerDialog::commit()
 void NetSchedulerDialog::onAdd()
 {
     NetEntry e;
-    if (!editNetEntry(this, e, m_capture, /*isNew=*/true))
+    const QPointer<NetSchedulerDialog> self(this);
+    const CaptureFn capture = m_capture;
+    const bool accepted = editNetEntry(this, e, capture, /*isNew=*/true);
+    if (!self || !accepted) {
         return;
+    }
     e.id = NetScheduleStore::newId();
-    m_entries.append(e);
-    commit();
-    m_table->setCurrentCell(m_entries.size() - 1, 1);
+    self->m_entries.append(e);
+    self->commit();
+    if (!self || !self->m_table) {
+        return;
+    }
+    self->m_table->setCurrentCell(self->m_entries.size() - 1, 1);
 }
 
 void NetSchedulerDialog::onEdit()
@@ -605,11 +633,29 @@ void NetSchedulerDialog::onEdit()
     if (row < 0 || row >= m_entries.size())
         return;
     NetEntry e = m_entries.at(row);
-    if (!editNetEntry(this, e, m_capture, /*isNew=*/false))
+    const QString entryId = e.id;
+    const QPointer<NetSchedulerDialog> self(this);
+    const CaptureFn capture = m_capture;
+    const bool accepted = editNetEntry(this, e, capture, /*isNew=*/false);
+    if (!self || !accepted) {
         return;
-    m_entries[row] = e;
-    commit();
-    m_table->setCurrentCell(row, 1);
+    }
+    int updatedRow = -1;
+    for (int i = 0; i < self->m_entries.size(); ++i) {
+        if (self->m_entries.at(i).id == entryId) {
+            self->m_entries[i] = e;
+            updatedRow = i;
+            break;
+        }
+    }
+    if (updatedRow < 0) {
+        return;
+    }
+    self->commit();
+    if (!self || !self->m_table) {
+        return;
+    }
+    self->m_table->setCurrentCell(updatedRow, 1);
 }
 
 void NetSchedulerDialog::onRemove()
@@ -617,13 +663,27 @@ void NetSchedulerDialog::onRemove()
     const int row = selectedRow();
     if (row < 0 || row >= m_entries.size())
         return;
-    const auto answer = QMessageBox::question(
-        this, QStringLiteral("Remove Net"),
-        QStringLiteral("Remove \"%1\" from your schedule?").arg(m_entries.at(row).name));
-    if (answer != QMessageBox::Yes)
+    const QString entryId = m_entries.at(row).id;
+    const QString entryName = m_entries.at(row).name;
+    const QPointer<NetSchedulerDialog> self(this);
+    ScopedChildWidget<QMessageBox> boxOwner(this);
+    QMessageBox& box = *boxOwner.get();
+    box.setWindowTitle(QStringLiteral("Remove Net"));
+    box.setText(QStringLiteral("Remove \"%1\" from your schedule?").arg(entryName));
+    box.setIcon(QMessageBox::Question);
+    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    box.exec();
+    if (!self || !boxOwner
+        || box.standardButton(box.clickedButton()) != QMessageBox::Yes) {
         return;
-    m_entries.removeAt(row);
-    commit();
+    }
+    for (int i = 0; i < self->m_entries.size(); ++i) {
+        if (self->m_entries.at(i).id == entryId) {
+            self->m_entries.removeAt(i);
+            self->commit();
+            return;
+        }
+    }
 }
 
 void NetSchedulerDialog::onToggleEnabled()
@@ -646,33 +706,51 @@ void NetSchedulerDialog::onTuneNow()
 
 void NetSchedulerDialog::onImport()
 {
+    const QPointer<NetSchedulerDialog> self(this);
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("Import Net Schedule"), QString(),
         QStringLiteral("Net schedule (*.json);;All files (*)"));
-    if (path.isEmpty())
+    if (!self || path.isEmpty()) {
         return;
+    }
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, QStringLiteral("Import"),
-                             QStringLiteral("Could not open the file."));
+        ScopedChildWidget<QMessageBox> warningOwner(self.data());
+        QMessageBox& warning = *warningOwner.get();
+        warning.setWindowTitle(QStringLiteral("Import"));
+        warning.setText(QStringLiteral("Could not open the file."));
+        warning.setIcon(QMessageBox::Warning);
+        warning.setStandardButtons(QMessageBox::Ok);
+        warning.exec();
         return;
     }
     const auto result = NetScheduleStore::parse(file.readAll());
     if (!result.ok()) {
-        QMessageBox::warning(this, QStringLiteral("Import"),
-                             QStringLiteral("Could not read this file:\n%1")
-                                 .arg(result.errors.join('\n')));
+        ScopedChildWidget<QMessageBox> warningOwner(self.data());
+        QMessageBox& warning = *warningOwner.get();
+        warning.setWindowTitle(QStringLiteral("Import"));
+        warning.setText(QStringLiteral("Could not read this file:\n%1")
+                            .arg(result.errors.join('\n')));
+        warning.setIcon(QMessageBox::Warning);
+        warning.setStandardButtons(QMessageBox::Ok);
+        warning.exec();
         return;
     }
     if (result.nets.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("Import"),
-                                 QStringLiteral("No nets were found in this file."));
+        ScopedChildWidget<QMessageBox> infoOwner(self.data());
+        QMessageBox& info = *infoOwner.get();
+        info.setWindowTitle(QStringLiteral("Import"));
+        info.setText(QStringLiteral("No nets were found in this file."));
+        info.setIcon(QMessageBox::Information);
+        info.setStandardButtons(QMessageBox::Ok);
+        info.exec();
         return;
     }
 
     NetScheduleStore::MergePolicy policy = NetScheduleStore::MergePolicy::Duplicate;
-    QMessageBox box(this);
+    ScopedChildWidget<QMessageBox> boxOwner(self.data());
+    QMessageBox& box = *boxOwner.get();
     box.setWindowTitle(QStringLiteral("Import Net Schedule"));
     box.setText(QStringLiteral("Importing %1 net(s). How should entries that already "
                                "exist be handled?")
@@ -682,6 +760,9 @@ void NetSchedulerDialog::onImport()
     auto* dupBtn = box.addButton(QStringLiteral("Import as new"), QMessageBox::AcceptRole);
     box.addButton(QMessageBox::Cancel);
     box.exec();
+    if (!self || !boxOwner) {
+        return;
+    }
     if (box.clickedButton() == skipBtn)
         policy = NetScheduleStore::MergePolicy::Skip;
     else if (box.clickedButton() == overwriteBtn)
@@ -691,24 +772,31 @@ void NetSchedulerDialog::onImport()
     else
         return;
 
-    m_entries = NetScheduleStore::merge(m_entries, result.nets, policy);
-    commit();
+    self->m_entries = NetScheduleStore::merge(self->m_entries, result.nets, policy);
+    self->commit();
 }
 
 void NetSchedulerDialog::onExport()
 {
+    const QPointer<NetSchedulerDialog> self(this);
     const QString path = QFileDialog::getSaveFileName(
         this, QStringLiteral("Export Net Schedule"), QStringLiteral("net-schedule.json"),
         QStringLiteral("Net schedule (*.json)"));
-    if (path.isEmpty())
+    if (!self || path.isEmpty()) {
         return;
+    }
 
     const QByteArray json = NetScheduleStore::serialize(
-        m_entries, QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+        self->m_entries, QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(json) != json.size() || !file.commit()) {
-        QMessageBox::warning(this, QStringLiteral("Export"),
-                             QStringLiteral("Could not write the file."));
+        ScopedChildWidget<QMessageBox> warningOwner(self.data());
+        QMessageBox& warning = *warningOwner.get();
+        warning.setWindowTitle(QStringLiteral("Export"));
+        warning.setText(QStringLiteral("Could not write the file."));
+        warning.setIcon(QMessageBox::Warning);
+        warning.setStandardButtons(QMessageBox::Ok);
+        warning.exec();
         return;
     }
 }
