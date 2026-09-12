@@ -498,8 +498,8 @@ backends (§5.5) are reachable either way; only the UI boundary differs.
 
 **Repo layout: monorepo, for the whole migration and beyond.** `aetherd` is
 another CMake target (`libaethercore` + a headless executable) alongside the
-existing app target, in the pattern the repo already uses for `hal-plugin/`
-and `plugins/`. The reasons are structural, not preference:
+existing app target, in the pattern the repo already uses for `hal-plugin/`.
+The reasons are structural, not preference:
 
 - Steps 1–6 carve the boundary out of 140 shared touchpoints; nearly every PR
   in that window touches engine and desktop client together. One repo keeps

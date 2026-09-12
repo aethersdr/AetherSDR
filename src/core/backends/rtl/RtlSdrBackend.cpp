@@ -91,6 +91,19 @@ RtlSdrBackend::~RtlSdrBackend()
 
 RadioCapabilities RtlSdrBackend::capabilities() const
 {
+    // #5594 (M1) item 4: this backend deliberately never emits
+    // capabilitiesChanged, and that is the honest answer rather than a gap.
+    //
+    // Every field below is either a compile-time constant for the R820T/RTL2832U
+    // pair or comes from the USB descriptor strings (m_vendor, m_product /
+    // m_modelName, and m_serial), read during connectRadio() before connected()
+    // and cleared on disconnect or a configuration failure before connection.
+    // The declaration is fixed for the whole session: no mid-session revision, and
+    // a synthetic emission would be noise dressed up as a contract.
+    //
+    // If a future tuner-dependent field is added here (a per-tuner gain table,
+    // a direct-sampling range that depends on the IC), it becomes revisable and
+    // this comment stops being true.
     RadioCapabilities c;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;

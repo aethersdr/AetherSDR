@@ -416,6 +416,62 @@ void pressureFailureAndValidation()
     check(until(registry, [](const auto& status) { return status.residentReceivers == 0; }), "pressure session drains");
 }
 
+void dspGeometryValidation()
+{
+    const auto stats = std::make_shared<Stats>();
+    Registry registry({1, 1, 2}, factory(stats));
+    const std::uint64_t session = registry.beginSession(capture());
+    const auto handle = registry.reserveSlot();
+    if (!handle) { check(false, "DSP geometry handle"); return; }
+    Registry::ReceiverSpec desired = spec(*handle);
+    auto reader = registry.attachReader();
+    Probe probe;
+    probe.session = session;
+    check(registry.submit(capture(), std::span(&desired, 1)) == Registry::Result::Accepted,
+        "geometry baseline admitted");
+    check(ready(registry, 1) && deliver(reader, probe), "geometry baseline active");
+    struct Rates { int input; int dsp; int output; };
+    // 64 / 96 becomes zero; 64 / 24 truncates. Test both DSP directions.
+    // The final case has exact DSP-side sizes but a fractional exchange ratio.
+    const std::array invalidRates {
+        Rates {8000, 768000, 8000}, Rates {16384, 1048576, 8192},
+        Rates {8000, 192000, 48000},
+        Rates {64000, 32000, 96000}
+    };
+    for (const Rates& rates : invalidRates) {
+        Registry::ReceiverSpec invalid = desired;
+        invalid.dsp.inputBlockSize = 64;
+        invalid.dsp.dspBlockSize = 64;
+        invalid.dsp.inputSampleRate = rates.input;
+        invalid.dsp.dspSampleRate = rates.dsp;
+        invalid.dsp.outputSampleRate = rates.output;
+        check(registry.submit(capture(), std::span(&invalid, 1)) == Registry::Result::Invalid,
+            "unsafe derived DSP geometry refused before preparation");
+        check(registry.service().requested == 1 && stats->calls == 1,
+            "geometry refusal preserves revision and does not invoke factory");
+        check(deliver(reader, probe) && probe.handles[0] == *handle,
+            "geometry refusal preserves active receiver and handle");
+    }
+    // Power-of-two conversions retain exact positive DSP input/output sizes.
+    for (const Rates& rates : {Rates {8000, 512000, 8000}, Rates {48000, 192000, 48000},
+                              Rates {192000, 192000, 48000}}) {
+        desired.dsp.inputBlockSize = 64;
+        desired.dsp.dspBlockSize = 64;
+        desired.dsp.inputSampleRate = rates.input;
+        desired.dsp.dspSampleRate = rates.dsp;
+        desired.dsp.outputSampleRate = rates.output;
+        const std::uint64_t revision = registry.service().requested + 1;
+        check(registry.submit(capture(), std::span(&desired, 1)) == Registry::Result::Accepted,
+            "exact positive DSP geometry admitted");
+        check(ready(registry, revision) && deliver(reader, probe), "valid geometry publishes");
+        check(until(registry, [](const auto& status) { return status.residentReceivers == 1; }),
+            "valid geometry replacement drains");
+    }
+    reader.stop();
+    check(until(registry, [](const auto& status) { return status.residentReceivers == 0; }),
+        "geometry session drains");
+}
+
 void preparationExceptions()
 {
     const auto stats = std::make_shared<Stats>();
@@ -633,6 +689,7 @@ int main(int argc, char** argv)
     publicationAndSlots(); drain();
     coalescingAndOwnerLifetime(); drain();
     pressureFailureAndValidation(); drain();
+    dspGeometryValidation(); drain();
     preparationExceptions(); drain();
     capacityAndStoppedPreparation(); drain();
     reconnectAndRegistryBound(); drain();

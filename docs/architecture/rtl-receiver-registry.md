@@ -52,6 +52,10 @@ parameters, and whole-set passband containment within the fixed capture using
 the production `SharedCapturePolicy` helper. Its center domain is deliberately
 the singleton supplied center; this does not validate tuner range or grid
 legality. It never recenters a capture or adjusts a sibling.
+Derived DSP input/output block sizes must be positive and integral, and the
+exchange input/output rates must have an integral ratio. This prevents WDSP
+integer truncation from creating zero-sized internal buffers or incorrect
+exchange lengths.
 WDSP blocking-output mode is refused because these receivers run in the
 acquisition context.
 

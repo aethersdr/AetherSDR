@@ -161,6 +161,14 @@ target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
 
+# #5594 (M1): backends announce capability revisions. Socket-free — FlexBackend's
+# radio-status decode is driven directly, and the RTL case asserts the opposite
+# claim (a declaration that is fixed per session emits nothing).
+add_executable(backend_capability_revision_test tests/backend_capability_revision_test.cpp)
+target_include_directories(backend_capability_revision_test PRIVATE src tests)
+target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -4066,6 +4074,21 @@ target_compile_definitions(memory_csv_compat_test PRIVATE
 target_link_libraries(memory_csv_compat_test PRIVATE Qt6::Core)
 add_test(NAME memory_csv_compat_test COMMAND memory_csv_compat_test)
 
+# Socket-free engine ownership/cancellation policy; no radio or peer process.
+add_executable(tx_coordinator_test
+    tests/tx_coordinator_test.cpp
+    src/core/TxCoordinator.cpp
+)
+target_include_directories(tx_coordinator_test PRIVATE src)
+target_link_libraries(tx_coordinator_test PRIVATE Qt6::Core)
+add_test(NAME tx_coordinator_test COMMAND tx_coordinator_test)
+
+# Socket-free: production models with injected backend command recorders.
+add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
+target_include_directories(tx_operation_integration_test PRIVATE src tests)
+target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
+
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
     src/models/TransmitModel.cpp
@@ -4864,6 +4887,8 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     atu_seam_gate_test
+    backend_capability_revision_test
+    tx_operation_integration_test
     backend_slice_lifecycle_test
     client_display_settings_test
     rx_applet_squelch_reconciliation_test

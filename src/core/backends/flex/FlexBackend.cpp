@@ -466,6 +466,25 @@ void FlexBackend::setKeying(bool key)
     send(QStringLiteral("xmit %1").arg(key ? 1 : 0));
 }
 
+void FlexBackend::setTune(bool on, int tunePowerPercent)
+{
+    // FlexLib 4.2.18 Radio.TXTune. Power is a separate radio setting; do not
+    // re-send it here. Host-modulating backends need it on this same verb.
+    Q_UNUSED(tunePowerPercent);
+    send(QStringLiteral("transmit tune %1").arg(on ? 1 : 0));
+}
+
+void FlexBackend::setAtu(bool start)
+{
+    // FlexLib 4.2.18 Radio.ATUTuneStart / ATUTuneBypass.
+    send(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"));
+}
+
+void FlexBackend::abortCwText()
+{
+    send(QStringLiteral("cwx clear"));
+}
+
 void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
@@ -1074,6 +1093,10 @@ void FlexBackend::clearExtensionHandles()
     // handle can't survive into a reconnect (possibly a different radio).
     m_ampHandle.clear();
     m_tunerHandle.clear();
+    // #5594 (M1): a reconnect must be able to announce its model again, even if
+    // it is the same radio — capabilities were republished from scratch at the
+    // connect edge, so the previous session's announcement describes nothing.
+    m_announcedModel.clear();
 }
 
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
@@ -1149,6 +1172,32 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "daxiq_capacity", d.daxiqCapacity);
     carry(kvs, "daxiq_available", d.daxiqAvailable);
     emit radioChanged(d);
+
+    // #5594 (M1): announce the capability revision this status just caused.
+    //
+    // The Flex capability table is DERIVED FROM THE MODEL NAME — capabilities()
+    // runs capabilitiesFor(caps.model) to seed maxSlices, the DSP tier and the
+    // rest — and the model name is not known at the connect edge. It arrives
+    // here, in a `radio ...` status, some time after. Until now nothing said so,
+    // so every consumer that bound to capabilitiesChanged saw the pre-model
+    // table forever; RadioModel's own comment at the meterDefined handler
+    // records the symptom this produced (a mic gauge hidden at connect and
+    // un-hidden only if an unrelated status happened to land afterwards).
+    //
+    // Deliberately AFTER emit radioChanged(d): a consumer woken by
+    // capabilitiesChanged calls capabilities(), which reads the model back
+    // through m_modelProvider, and that provider only returns the new name once
+    // RadioModel has applied this delta. Same thread, direct delivery, so the
+    // apply above has already happened by the time this line runs.
+    //
+    // Change-guarded against the LAST ANNOUNCED name, not merely against the
+    // key being present: a Flex repeats `radio ...` status on unrelated edits
+    // (callsign, nickname, the audio gains above), and re-announcing on each
+    // would make a republish storm out of typing in a text field.
+    if (d.model && *d.model != m_announcedModel) {
+        m_announcedModel = *d.model;
+        emit capabilitiesChanged();
+    }
 }
 
 void FlexBackend::decodeGpsStatus(const QString& rawBody)

@@ -50,6 +50,15 @@ bool boundedDsp(const WdspChannel::Config& config)
          config.dspSampleRate % config.inputSampleRate == 0) &&
         (config.outputSampleRate % config.dspSampleRate == 0 ||
          config.dspSampleRate % config.outputSampleRate == 0) &&
+        // WDSP channel.c derives DSP-side input/output sizes with integer
+        // division. Require exact, nonzero sizes before iobuffs.c uses them
+        // as divisors. Its exchange size also requires an integral rate ratio.
+        config.dspBlockSize * static_cast<std::size_t>(config.inputSampleRate) %
+            static_cast<std::size_t>(config.dspSampleRate) == 0 &&
+        config.dspBlockSize * static_cast<std::size_t>(config.outputSampleRate) %
+            static_cast<std::size_t>(config.dspSampleRate) == 0 &&
+        (config.inputSampleRate % config.outputSampleRate == 0 ||
+         config.outputSampleRate % config.inputSampleRate == 0) &&
         (config.inputBlockSize * static_cast<std::size_t>(config.outputSampleRate)) %
             static_cast<std::size_t>(config.inputSampleRate) == 0 &&
         config.inputBlockSize * static_cast<std::size_t>(config.outputSampleRate) /
