@@ -1684,11 +1684,13 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         // colour — colour alone never states it (docs/a11y.md).
                         m_fwStatusLabel->setText(msg);
                         m_fwStatusLabel->setAccessibleDescription(msg);
+                        // One setStyleSheet site for all three outcomes: the
+                        // colour ratchet counts call sites, not just literals.
+                        QString colour;
                         switch (outcome) {
                         case FirmwareUploader::Outcome::Succeeded:
                             m_fwProgress->setValue(100);
-                            m_fwStatusLabel->setStyleSheet(
-                                "QLabel { color: #80e080; font-size: 10px; }");
+                            colour = QStringLiteral("#80e080");
                             m_fwUploadBtn->setEnabled(false);
                             break;
                         case FirmwareUploader::Outcome::Unconfirmed:
@@ -1697,24 +1699,29 @@ QWidget* RadioSetupDialog::buildRadioTab()
                             // reads as "nothing happened" — and do not offer a
                             // retry: the uploader refuses one until reconnect.
                             m_fwProgress->setValue(100);
-                            m_fwStatusLabel->setStyleSheet(
-                                "QLabel { color: #e0c080; font-size: 10px; }");
+                            colour = QStringLiteral("{{color.accent.warning}}");
                             m_fwUploadBtn->setEnabled(false);
                             break;
                         case FirmwareUploader::Outcome::Failed:
                             m_fwProgress->hide();
-                            m_fwStatusLabel->setStyleSheet(
-                                "QLabel { color: #e08080; font-size: 10px; }");
+                            colour = QStringLiteral("#e08080");
                             m_fwUploadBtn->setEnabled(true);
                             break;
                         }
+                        // applyStyleSheet, not setStyleSheet: the latter does
+                        // not expand {{tokens}} (ThemeManager.h:174), and it
+                        // keeps the label repainting on themeChanged.
+                        AetherSDR::ThemeManager::instance().applyStyleSheet(
+                            m_fwStatusLabel,
+                            QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(colour));
                     });
             }
 
             m_fwProgress->show();
             m_fwProgress->setValue(0);
             m_fwUploadBtn->setEnabled(false);
-            m_fwStatusLabel->setStyleSheet("QLabel { color: #6888a0; font-size: 10px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_fwStatusLabel, QStringLiteral("QLabel { color: #6888a0; font-size: 10px; }"));
 
             m_uploader->upload(m_fwFilePath);
         });
