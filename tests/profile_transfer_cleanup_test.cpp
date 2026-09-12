@@ -177,6 +177,9 @@ int main(int argc, char* argv[])
 
         IncompleteSocket* oldSocket =
             prepareIncompleteUpload(transfer, abortDisconnects, detachedFirst);
+        // No event loop is pumped in this file, deliberately: connectUploadSocket()
+        // arms a 200 ms singleShot that would dereference the null m_model and open
+        // a real connection. The timer dies with `transfer` at scope exit.
         AetherSDR::ProfileTransferTestAccess::connectUploadSocket(transfer, 42607);
 
         ok &= expect(abortDisconnects == 1,
