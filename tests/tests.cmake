@@ -1428,6 +1428,10 @@ add_executable(weather_radar_loading_test
     src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
+    src/gui/map/OperaRadarImage.cpp
+    src/gui/map/OperaRadarNetwork.cpp
+    src/gui/map/LibreRadarNetwork.cpp
+    src/gui/map/RegionalRadarComposite.cpp
     src/gui/map/MapDisplayWidget.cpp src/gui/map/MapView.cpp src/gui/map/GlobeMapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp src/gui/map/MapTerminatorItem.cpp
@@ -5766,3 +5770,42 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
+
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(weather_radar_loading_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(weather_radar_loading_test PRIVATE zlibstatic)
+endif()
+
+# Public metadata and geodesic math only; no sockets.
+add_executable(radar_coverage_test tests/radar_coverage_test.cpp)
+target_include_directories(radar_coverage_test PRIVATE src)
+target_link_libraries(radar_coverage_test PRIVATE Qt6::Core)
+add_test(NAME radar_coverage_test COMMAND radar_coverage_test)
+
+# Bounded native COG reader; optional positional local TIFF enables live-sample proof.
+add_executable(opera_radar_image_test tests/opera_radar_image_test.cpp src/gui/map/OperaRadarImage.cpp)
+target_include_directories(opera_radar_image_test PRIVATE src)
+target_link_libraries(opera_radar_image_test PRIVATE Qt6::Core Qt6::Gui)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(opera_radar_image_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(opera_radar_image_test PRIVATE zlibstatic)
+endif()
+add_test(NAME opera_radar_image_test COMMAND opera_radar_image_test)
+
+add_executable(regional_radar_source_test tests/regional_radar_source_test.cpp src/gui/map/WeatherRadarSource.cpp)
+target_include_directories(regional_radar_source_test PRIVATE src)
+target_link_libraries(regional_radar_source_test PRIVATE Qt6::Core)
+add_test(NAME regional_radar_source_test COMMAND regional_radar_source_test)
+
+set_tests_properties(radar_coverage_test opera_radar_image_test regional_radar_source_test PROPERTIES TIMEOUT 30)
+
+# Production tile adapter and primary/fallback controller; injected replies, no sockets.
+add_executable(libre_radar_test tests/libre_radar_test.cpp
+    src/gui/map/LibreRadarNetwork.cpp src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarSource.cpp src/gui/map/MapProviderNetworkAccessManager.cpp)
+target_include_directories(libre_radar_test PRIVATE src)
+target_link_libraries(libre_radar_test PRIVATE Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
+add_test(NAME libre_radar_test COMMAND libre_radar_test)
+set_tests_properties(libre_radar_test PROPERTIES TIMEOUT 30)

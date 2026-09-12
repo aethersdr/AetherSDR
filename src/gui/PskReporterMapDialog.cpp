@@ -393,19 +393,44 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_cityLightsCheck->setToolTip(m_cityLightsCheck->accessibleDescription());
     m_cityLightsCheck->setChecked(pskSettings().value("showCityLights").toBool(false));
 
-    m_weatherRadarCheck = new QCheckBox(tr("Weather radar"), reportsBox);
+    m_weatherRadarCheck = new QCheckBox(tr("Weather overlay"), reportsBox);
     m_weatherRadarCheck->setObjectName(
         QStringLiteral("pskReporterWeatherRadar"));
     m_weatherRadarCheck->setAccessibleName(
-        tr("Show NOAA weather radar overlay"));
+        tr("Show weather precipitation overlay"));
     m_weatherRadarCheck->setAccessibleDescription(tr(
-        "Shows near-real-time NOAA radar over the map. Coverage is primarily "
-        "the United States and nearby regions."));
+        "Shows LibreWXR radar and satellite/model precipitation estimates, "
+        "with enabled regional radar backups when unavailable."));
     m_weatherRadarCheck->setToolTip(tr(
-        "Overlay near-real-time NOAA/NWS composite reflectivity; disabled "
+        "Overlay near-real-time weather radar; disabled "
         "when this checkbox is off"));
     m_weatherRadarCheck->setChecked(
         pskSettings().value("showWeatherRadar").toBool(false));
+
+    const QStringList regionNames{tr("US backup · NOAA"), tr("Canada backup · ECCC"), tr("Europe backup · OPERA"), tr("Global primary · LibreWXR")};
+    const QStringList regionIds{QStringLiteral("pskReporterRadarUS"), QStringLiteral("pskReporterRadarCanada"), QStringLiteral("pskReporterRadarEurope"), QStringLiteral("pskReporterRadarGlobal")};
+    const int savedRegions = pskSettings().value("weatherRadarRegions").toInt(7) & 7;
+    for (int i = 0; i < 4; ++i) {
+        m_radarRegionChecks[i] = new QCheckBox(regionNames[i], reportsBox);
+        m_radarRegionChecks[i]->setObjectName(regionIds[i]);
+        m_radarRegionChecks[i]->setAccessibleName(regionNames[i]);
+        m_radarRegionChecks[i]->setChecked(i == 3 ? pskSettings().value("useLibreWxr").toBool(true) : (savedRegions & (1 << i)) != 0);
+        m_radarRegionChecks[i]->setToolTip(i == 3
+            ? tr("Free global precipitation from LibreWXR. Includes radar, satellite estimates and model data. Disable to use the regional radar feeds directly.")
+            : tr("Use this regional radar feed when LibreWXR is disabled or unavailable."));
+    }
+    m_radarProductLabel = new QLabel(reportsBox);
+    m_radarProductLabel->setObjectName(QStringLiteral("pskReporterRadarProduct"));
+    m_radarProductLabel->setAccessibleName(tr("Radar product and units"));
+    m_radarProductLabel->setWordWrap(true);
+    m_radarCoverageCheck = new QCheckBox(tr("Radar coverage"), reportsBox);
+    m_radarCoverageCheck->setObjectName(QStringLiteral("pskReporterRadarCoverage"));
+    m_radarCoverageCheck->setAccessibleName(tr("Show radar sites and nominal coverage"));
+    m_radarCoverageCheck->setAccessibleDescription(tr(
+        "Faint nominal coverage shading for sites with published ranges. "
+        "Terrain, outages and scanning conditions reduce actual coverage."));
+    m_radarCoverageCheck->setToolTip(m_radarCoverageCheck->accessibleDescription());
+    m_radarCoverageCheck->setChecked(pskSettings().value("showRadarCoverage").toBool(false));
 
     m_weatherRadarPlayButton = new QToolButton(reportsBox);
     m_weatherRadarPlayButton->setObjectName(
@@ -415,7 +440,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_weatherRadarPlayButton->setAccessibleName(
         tr("Play historical weather radar"));
     m_weatherRadarPlayButton->setToolTip(
-        tr("Loop through original NOAA radar images; no generated transitions"));
+        tr("Loop through published radar images; no generated transitions"));
     m_weatherRadarPlayButton->setEnabled(
         m_weatherRadarCheck->isChecked());
 
@@ -442,7 +467,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_weatherRadarSpeedSlider->setAccessibleName(tr("Weather radar playback speed"));
     m_weatherRadarSpeedSlider->setAccessibleDescription(tr(
         "25 to 500 percent of normal speed (0.25 to 5 times). "
-        "Changes how quickly original NOAA images loop without reloading them. "
+        "Changes how quickly original radar images loop without reloading them. "
         "The final image always holds for one second."));
     m_weatherRadarSpeedSlider->setToolTip(m_weatherRadarSpeedSlider->accessibleDescription());
     m_weatherRadarSpeedSlider->setRange(25, 500);
@@ -756,9 +781,85 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     lightsForm->addRow(warmthLabel, sliderRow(m_cityLightsWarmth, warmthValue));
     sections->addWidget(lightsBox);
 
-    auto* radarBox = new QGroupBox(tr("Weather radar"), controls);
+    auto* radarBox = new QGroupBox(tr("Weather precipitation"), controls);
     QFormLayout* radarForm = formFor(radarBox);
     radarForm->addRow(m_weatherRadarCheck);
+    radarForm->addRow(m_radarRegionChecks[3]);
+    for (int i = 0; i < 3; ++i) { radarForm->addRow(m_radarRegionChecks[i]); }
+    auto* radarInfoButton = new QToolButton(radarBox);
+    radarInfoButton->setObjectName(QStringLiteral("pskReporterRadarInfo"));
+    radarInfoButton->setText(tr("Sources && licenses"));
+    radarInfoButton->setAccessibleName(tr("Weather sources, licenses and product details"));
+    radarInfoButton->setCheckable(true);
+    radarInfoButton->setAutoRaise(true);
+    radarInfoButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    radarInfoButton->setArrowType(Qt::RightArrow);
+    auto* radarInfo = new QWidget(radarBox);
+    radarInfo->setObjectName(QStringLiteral("pskReporterRadarInfoPanel"));
+    auto* radarInfoLayout = new QVBoxLayout(radarInfo);
+    radarInfoLayout->setContentsMargins(0, 0, 0, 0);
+    radarInfoLayout->setSpacing(4);
+    auto* radarCredits = new QLabel(tr("Weather data: <a href=\"https://librewxr.net/\">LibreWXR</a> · "
+        "<a href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY 4.0</a>. "
+        "Italian Radar-DPC imagery: <a href=\"https://creativecommons.org/licenses/by-sa/4.0/\">CC BY-SA 4.0</a>. "
+        "Images are reprojected, resized and composited for this map."), radarInfo);
+    radarCredits->setObjectName(QStringLiteral("pskReporterRadarCredits"));
+    radarCredits->setAccessibleName(tr("LibreWXR sources and licenses"));
+    radarCredits->setOpenExternalLinks(true);
+    radarCredits->setWordWrap(true);
+    radarCredits->setToolTip(tr("Weather data via LibreWXR (librewxr.net). Sources: NOAA/NCEP/NESDIS, IEM, "
+        "ECCC, EUMETNET OPERA, Radar-DPC, MARN/SNET, CWA, JMA, MET Malaysia and PAGASA. "
+        "Models: NOAA, ECCC, DMI, DWD, Météo-France, SMN, JMA and ECMWF via Open-Meteo. "
+        "CC BY 4.0; tiles containing Radar-DPC data are CC BY-SA 4.0. See the linked source list."));
+    radarInfoLayout->addWidget(radarCredits);
+    auto* globalCredits = new QLabel(tr(
+        "LibreWXR contributors: NOAA/NCEP/NESDIS; Iowa Environmental Mesonet; ECCC/MSC; "
+        "EUMETNET OPERA; Radar-DPC; MARN/SNET; Central Weather Administration, Taiwan; "
+        "Japan Meteorological Agency; © Jabatan Meteorologi Malaysia / METMalaysia; PAGASA / DOST. "
+        "Precipitation data from NOAA Enterprise Rain Rate (RRQPE). "
+        "Models: NOAA, ECCC, DMI, DWD, Météo-France, SMN Argentina, JMA and ECMWF via Open-Meteo. "
+        "<a href=\"https://librewxr.net/#data-sources\">Full source list and provider licenses</a>."), radarInfo);
+    globalCredits->setObjectName(QStringLiteral("pskReporterGlobalCredits"));
+    globalCredits->setOpenExternalLinks(true);
+    globalCredits->setWordWrap(true);
+    radarInfoLayout->addWidget(globalCredits);
+    auto* regionalCredits = new QLabel(tr(
+        "Regional backups: NOAA/NWS (public domain); "
+        "<a href=\"https://open.canada.ca/en/open-government-licence-canada\">ECCC/MSC (Open Government Licence – Canada)</a>; "
+        "EUMETNET OPERA (<a href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY 4.0</a>)."), radarInfo);
+    regionalCredits->setObjectName(QStringLiteral("pskReporterRegionalCredits"));
+    regionalCredits->setOpenExternalLinks(true);
+    regionalCredits->setWordWrap(true);
+    radarInfoLayout->addWidget(regionalCredits);
+    auto* mapCredits = new QLabel(tr(
+        "Map: © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors (ODbL)</a>. "
+        "City lights: NASA/GSFC, 2016. Radar sites: NOAA/NWS and EUMETNET OPERA; "
+        "shading shows nominal range, not current availability."), radarInfo);
+    mapCredits->setObjectName(QStringLiteral("pskReporterMapCredits"));
+    mapCredits->setOpenExternalLinks(true);
+    mapCredits->setWordWrap(true);
+    radarInfoLayout->addWidget(mapCredits);
+    radarInfoLayout->addWidget(m_radarProductLabel);
+    radarInfo->hide();
+    connect(radarInfoButton, &QToolButton::toggled, radarInfo,
+        [radarInfoButton, radarInfo](bool expanded) {
+            radarInfoButton->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+            radarInfo->setVisible(expanded);
+        });
+    radarForm->addRow(radarInfoButton);
+    radarForm->addRow(radarInfo);
+    auto* radarStatus = new QLabel(radarBox);
+    radarStatus->setObjectName(QStringLiteral("pskReporterRadarProviderStatus"));
+    radarStatus->setAccessibleName(tr("Weather provider availability"));
+    radarStatus->setWordWrap(true);
+    radarStatus->hide();
+    radarForm->addRow(radarStatus);
+    radarForm->addRow(m_radarCoverageCheck);
+    auto* coverageStatus = new QLabel(radarBox);
+    coverageStatus->setObjectName(QStringLiteral("pskReporterRadarCoverageStatus"));
+    coverageStatus->setAccessibleName(tr("Radar coverage status"));
+    coverageStatus->setWordWrap(true);
+    radarForm->addRow(coverageStatus);
     auto* playbackRow = new QHBoxLayout();
     playbackRow->setSpacing(4);
     playbackRow->addWidget(m_weatherRadarPlayButton);
@@ -790,7 +891,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         m_bandCombo, m_modeCombo, m_lookbackCombo, m_allCallsignsCheck,
         m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck, basemapDarkTint, basemapBrightness,
         m_cityLightsCheck, m_cityLightsBrightness, m_cityLightsFaintLights,
-        m_cityLightsWarmth, m_weatherRadarCheck, m_weatherRadarPlayButton,
+        m_cityLightsWarmth, m_weatherRadarCheck, m_radarRegionChecks[3], m_radarRegionChecks[0], m_radarRegionChecks[1], m_radarRegionChecks[2], m_radarCoverageCheck, m_weatherRadarPlayButton,
         m_weatherRadarHistoryCombo, m_weatherRadarSpeedSlider};
     for (int i = 1; i < tabOrder.size(); ++i) {
         QWidget::setTabOrder(tabOrder[i - 1], tabOrder[i]);
@@ -809,6 +910,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     root->addWidget(splitter, 1);
 
     m_mapView = new MapDisplayWidget(bodyWidget());
+    m_mapView->setDetailedAttributionVisible(false);
+    connect(m_mapView, &MapDisplayWidget::radarCoverageStatusChanged, coverageStatus, &QLabel::setText);
     m_mapView->setBasemapDarkEnabled(basemapDarkTint->isChecked());
     connect(basemapDarkTint, &QCheckBox::toggled, this, [this](bool enabled) {
         m_mapView->setBasemapDarkEnabled(enabled);
@@ -866,10 +969,32 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         writePskSetting("showPaths", on);
         m_mapView->setPathsVisible(on);
     });
+    auto updateRadarRegions = [this] {
+        int mask = 0;
+        for (int i = 0; i < 4; ++i) { if (m_radarRegionChecks[i]->isChecked()) { mask |= 1 << i; } }
+        m_mapView->setWeatherRadarRegions(mask);
+        m_radarProductLabel->setText(WeatherRadarSource::composite(mask).productDescription());
+        m_weatherRadarPlayButton->setEnabled(mask != 0 && m_weatherRadarCheck->isChecked());
+        writePskSetting("weatherRadarRegions", mask & 7);
+        writePskSetting("useLibreWxr", (mask & 8) != 0);
+    };
+    for (QCheckBox* region : m_radarRegionChecks) {
+        connect(region, &QCheckBox::toggled, this, updateRadarRegions);
+    }
+    updateRadarRegions();
+    connect(m_mapView, &MapDisplayWidget::radarProviderStatusChanged, radarStatus, [radarStatus](const QString& status) {
+        radarStatus->setText(status);
+        radarStatus->setVisible(!status.isEmpty());
+    });
+    connect(m_radarCoverageCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showRadarCoverage", on);
+        m_mapView->setRadarCoverageVisible(on && isVisible());
+    });
     connect(m_weatherRadarCheck, &QCheckBox::toggled, this,
             [this](bool on) {
                 writePskSetting("showWeatherRadar", on);
-                m_weatherRadarPlayButton->setEnabled(on);
+                m_weatherRadarPlayButton->setEnabled(on && (m_radarRegionChecks[0]->isChecked()
+                    || m_radarRegionChecks[1]->isChecked() || m_radarRegionChecks[2]->isChecked() || m_radarRegionChecks[3]->isChecked()));
                 m_weatherRadarHistoryCombo->setEnabled(on);
                 m_weatherRadarSpeedSlider->setEnabled(on);
                 m_weatherRadarFrameLabel->setEnabled(on);
@@ -996,7 +1121,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                 const WeatherRadarFramePresentation presentation =
                     weatherRadarFramePresentation(frameTime, live);
                 m_weatherRadarFrameLabel->setText(presentation.text);
-                m_weatherRadarFrameLabel->setToolTip(presentation.tooltip);
+                m_weatherRadarFrameLabel->setToolTip(presentation.tooltip + (live ? QString{} : tr(
+                    "\nRegional playback uses original observations at or before this clock, up to 10 minutes earlier; missing regions stay transparent.")));
             });
     connect(m_mapView, &MapDisplayWidget::weatherRadarAnimationError,
             this, [this](const QString& message) {
@@ -2386,6 +2512,7 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
     m_mapView->setWeatherRadarVisible(m_weatherRadarCheck->isChecked());
+    m_mapView->setRadarCoverageVisible(m_radarCoverageCheck->isChecked());
     m_mapView->setWeatherRadarPlaybackSpeed(
         m_weatherRadarSpeedSlider->value());
     updateHomeFromRadio();
@@ -2410,6 +2537,7 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
     m_client->stop();
     m_globalClient->stop();
     m_mapView->setWeatherRadarVisible(false);
+    m_mapView->setRadarCoverageVisible(false);
     m_started = false;
     PersistentDialog::closeEvent(event);
 }

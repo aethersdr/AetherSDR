@@ -111,8 +111,8 @@ int main()
                      == QStringLiteral("3857"),
                  "tile image must request Web Mercator");
     ok &= expect(query.queryItemValue(QStringLiteral("size"))
-                     == QStringLiteral("256,256"),
-                 "radar tiles must be exactly 256 pixels square");
+                     == QStringLiteral("512,512"),
+                 "radar tiles must retain 512 pixels for Retina overviews");
     ok &= expect(query.queryItemValue(QStringLiteral("transparent"))
                      == QStringLiteral("true"),
                  "radar export must preserve transparent no-echo areas");

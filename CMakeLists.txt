@@ -1051,6 +1051,10 @@ set(GUI_SOURCES
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
+    src/gui/map/OperaRadarImage.cpp
+    src/gui/map/OperaRadarNetwork.cpp
+    src/gui/map/LibreRadarNetwork.cpp
+    src/gui/map/RegionalRadarComposite.cpp
     src/gui/map/MapDisplayWidget.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
@@ -3231,3 +3235,10 @@ set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 
 include(CPack)
+
+# OPERA COG decoding uses the already bundled, bounded zlib inflater.
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(AetherSDR PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(AetherSDR PRIVATE zlibstatic)
+endif()
