@@ -8,11 +8,15 @@
 // what passes here is what the radio runs
 // (core/backends/hl2/Hl2AdcPairing.h).
 //
-// ONE case is different and it is case 7: a stale slice reading against a live
-// overload flag is what every transmission looks like from inside this
-// function, it needs no saturated converter to construct, and before the
-// freshness input existed the verdict asserted the opposite of what was
-// happening. That case is the argument for the seam paying for itself.
+// TWO cases are different — 7 and 8, the two liveness gates. Each is a way the
+// slice side stops being a reading of now while the pre-DDC flag keeps moving,
+// each needs no saturated converter to construct, and each asserted the
+// opposite of what was happening before its input existed: case 7 for the tail
+// of a transmission, case 8 for its head. Case 8 is here because case 7 alone
+// let the head through — the first kSliceStaleMs of a key-down arrives with
+// sliceReadingIsCurrent still TRUE, and until the mute became an input to this
+// function no argument to it could say so. That is the seam paying for itself,
+// twice, and the second time because the first cover was incomplete.
 //
 // What is NOT asserted here: any absolute level. Neither side of the pairing
 // is calibrated and they do not share a scale, so there is no dBFS figure this
@@ -44,21 +48,37 @@ void check(bool ok, const char* what)
 }
 
 // Shorthands for the two sides, so each case below reads as the physical
-// situation rather than as five positional booleans. `paired` is the receiving
-// radio: both sides reporting and the slice side still moving.
+// situation rather than as six positional booleans. `paired` is the receiving
+// radio: both sides reporting, the slice side still being sampled, and its last
+// reading still recent.
 AdcPairing paired(double slicePeakDbfs, bool hardwareOverload)
 {
     return adcPairing(/*haveSlicePeak=*/true, slicePeakDbfs,
                       /*sliceReadingIsCurrent=*/true,
+                      /*sliceSideSampling=*/true,
                       /*haveHardwareFlag=*/true, hardwareOverload);
 }
 
-// The same radio with the DSP thread no longer producing output blocks — which
-// is what every transmission looks like from here.
+// THE TAIL OF A TRANSMISSION, or any other stall: the slice side stopped long
+// enough ago that its age has grown past kSliceStaleMs.
 AdcPairing pairedStale(double slicePeakDbfs, bool hardwareOverload)
 {
     return adcPairing(/*haveSlicePeak=*/true, slicePeakDbfs,
                       /*sliceReadingIsCurrent=*/false,
+                      /*sliceSideSampling=*/true,
+                      /*haveHardwareFlag=*/true, hardwareOverload);
+}
+
+// THE HEAD OF A TRANSMISSION — the case pairedStale() cannot express and the
+// one that got through the first fix. Sampling has just stopped, so the held
+// reading is still CURRENT by every age test: `sliceReadingIsCurrent` is true
+// here on purpose, exactly as Hl2Backend computes it in the first ~140 ms after
+// key-down. Only the synchronous mute tells the truth this early.
+AdcPairing pairedKeyDown(double slicePeakDbfs, bool hardwareOverload)
+{
+    return adcPairing(/*haveSlicePeak=*/true, slicePeakDbfs,
+                      /*sliceReadingIsCurrent=*/true,
+                      /*sliceSideSampling=*/false,
                       /*haveHardwareFlag=*/true, hardwareOverload);
 }
 
@@ -118,13 +138,15 @@ int main()
     // has no value until a block has been processed. Either missing makes the
     // pairing unanswerable — and an unanswerable pairing must say so, not
     // report the reading it does have as though it were the whole story.
-    check(adcPairing(/*haveSlicePeak=*/false, 0.0, /*current=*/true, true, true)
+    check(adcPairing(/*haveSlicePeak=*/false, 0.0, /*current=*/true, /*sampling=*/true,
+                     true, true)
               == AdcPairing::Unknown,
           "no slice reading yet is Unknown, not a level");
-    check(adcPairing(true, -40.0, /*current=*/true, /*haveHardwareFlag=*/false, false)
+    check(adcPairing(true, -40.0, /*current=*/true, /*sampling=*/true,
+                     /*haveHardwareFlag=*/false, false)
               == AdcPairing::Unknown,
           "overload bit never seen is Unknown, not 'clear'");
-    check(adcPairing(false, 0.0, true, false, false) == AdcPairing::Unknown,
+    check(adcPairing(false, 0.0, true, true, false, false) == AdcPairing::Unknown,
           "neither side reported is Unknown");
 
     // ---- 6. WDSP's OWN SENTINELS are not measurements ----------------------
@@ -144,7 +166,7 @@ int main()
     check(paired(-400.0, true) == AdcPairing::Unknown,
           "a sentinel slice reading cannot make a pairing, even with the flag set");
 
-    // ---- 7. A STALE SLICE READING CANNOT BE PAIRED ------------------------
+    // ---- 7. A STALE SLICE READING CANNOT BE PAIRED — THE TAIL -------------
     //
     // The two sides stop at different times. Hl2RxDsp holds the slice peak at
     // its last receive value for the whole of a transmission — it must, the
@@ -157,8 +179,12 @@ int main()
     // it is the operator's own carrier, squarely inside the slice. Paired
     // against a frozen quiet slice it would come out as "the signal doing it is
     // elsewhere in 0-38.4 MHz" — the exact opposite, and it would send the
-    // operator to the attenuator to fix their own PTT. This is THE case the
-    // seam was built to make reachable: no saturated converter required.
+    // operator to the attenuator to fix their own PTT.
+    //
+    // This covers a transmission from kSliceStaleMs onward, and every other way
+    // the DSP thread can stop producing while EP6 keeps arriving. It does NOT
+    // cover the first kSliceStaleMs — that is case 8, and it is the gap this
+    // case was wrongly believed to close.
     check(pairedStale(-40.0, /*overload=*/true) == AdcPairing::Unknown,
           "frozen quiet slice + live overload is Unknown, NOT 'the signal is elsewhere'");
     check(pairedStale(-1.0, true) == AdcPairing::Unknown,
@@ -172,7 +198,50 @@ int main()
     check(paired(-40.0, true) == AdcPairing::ConverterOnly,
           "the identical reading, current, still pairs");
 
-    // ---- 8. The staleness threshold is CHOSEN, and it is a duration --------
+    // ---- 8. THE HEAD OF A TRANSMISSION, WHERE THE AGE IS STILL HONEST -----
+    //
+    // The case that case 7 could not express, and the reason the first fix
+    // shipped with the fault still in it. At key-down the last receive block is
+    // at most
+    // one block period old — 21.3 ms at 48 kHz — so `ago <= kSliceStaleMs` is
+    // TRUE and stays true while the age climbs, for 129-150 ms depending on
+    // where key-down fell inside a block. For that whole window the pre-transmit
+    // peak, which is genuinely fresh, is paired against a live flag that is now
+    // reading the operator's own carrier. K5PTB measured ConverterOnly to
+    // t=137 ms against a real Hl2RxDsp, and RadioHealthDialog refreshes every
+    // 500 ms, so it is on screen for roughly three key-downs in ten.
+    //
+    // So the freshness of the reading is NOT the whole question. Whether the
+    // side is still being sampled is the other half, the backend knows it
+    // synchronously because it queues the mute itself, and these assertions are
+    // what makes that half of the gate a property of this function rather than
+    // of one call site nothing tests.
+    check(pairedKeyDown(-40.0, /*overload=*/true) == AdcPairing::Unknown,
+          "key-down: a FRESH quiet slice + live overload is Unknown, not 'elsewhere'");
+    check(pairedKeyDown(-1.0, true) == AdcPairing::Unknown,
+          "key-down: not BothHot either — the slice reading predates the carrier");
+    check(pairedKeyDown(-40.0, false) == AdcPairing::Unknown,
+          "key-down: BothClear is a claim about now, and this is not now");
+    check(pairedKeyDown(-0.5, false) == AdcPairing::Unknown,
+          "key-down: and it is not SliceOnly");
+    // The distinguishing assertion, and the one that fails if the new input is
+    // folded into the age: the reading here is CURRENT by every age test. Only
+    // the sampling side of the gate can refuse it.
+    check(paired(-40.0, true) == AdcPairing::ConverterOnly
+              && pairedKeyDown(-40.0, true) == AdcPairing::Unknown,
+          "identical reading, identically current — only 'still sampling' differs");
+    // TX MONITOR. setKeying mutes on `key && !m_txMonitor`, so with the monitor
+    // on the chain keeps being clocked with real IQ, the meter keeps moving,
+    // and the pairing must keep pairing THROUGH a transmission. A gate written
+    // against `m_keyed` alone would blank this, and the monitor is the one mode
+    // where the row has something to say about our own carrier.
+    check(adcPairing(/*haveSlicePeak=*/true, -1.0, /*current=*/true,
+                     /*sliceSideSampling=*/true, /*haveHardwareFlag=*/true,
+                     /*hardwareOverload=*/true)
+              == AdcPairing::BothHot,
+          "keyed with the TX monitor on still samples, so it still pairs");
+
+    // ---- 9. The staleness threshold is CHOSEN, and it is a duration --------
     //
     // Not a measurement and not a round number: it sits in the gap between one
     // output block (21.3 ms at the HL2's slowest rate, so a threshold near
@@ -186,7 +255,7 @@ int main()
     check(kSliceStaleMs > 21, "longer than one output block, or receive goes stale");
     check(kSliceStaleMs < 200, "shorter than a PTT tap, or a transmission still lies");
 
-    // ---- 9. Headroom is the number the readout states ----------------------
+    // ---- 10. Headroom is the number the readout states ---------------------
     //
     // Positive below full scale, and it is measured against WIRE full scale —
     // the sign convention is the one the sentence in healthSnapshot() reads

@@ -54,9 +54,11 @@
 // A seam rather than an inline condition, for Hl2OverloadPolicy.h's reason:
 // most branches below are otherwise reachable only by driving a real converter
 // into a real overload, which is not a thing a test suite can arrange. The
-// exception is the staleness gate at kSliceStaleMs, which needs no overload at
-// all — and that is the branch that was WRONG before the gate existed, so the
-// seam has now paid for itself once.
+// exceptions are the two liveness gates — kSliceStaleMs and sliceSideSampling
+// — which need no overload at all, and both of them were WRONG before they
+// existed: the first inverted the verdict for the whole of a transmission, the
+// second for its leading 129-150 ms. The seam has now paid for itself twice, and
+// each time the case that caught it was a case this file could express.
 
 #include <cmath>
 #include <cstdint>
@@ -113,10 +115,30 @@ inline constexpr double kSliceHotHeadroomDb = 3.0;
 //     single character is ONE keyed span rather than one element.
 //
 // 150 ms sits in that gap: about seven blocks of margin under it, and under a
-// tap over it, so every transmission blanks the pairing row rather than
-// inverting it. Nobody has measured either edge on hardware and anything from
+// tap over it. Nobody has measured either edge on hardware and anything from
 // roughly 100 to 200 ms would behave the same. The number is not the point;
 // going quiet instead of asserting the opposite is.
+//
+// THIS GATE COVERS THE TAIL OF A TRANSMISSION AND NOT THE HEAD, and an earlier
+// version of this comment claimed it covered the whole of one. At key-down
+// `ago` is the age of the last RECEIVE block — under one block period, 21.3 ms
+// at 48 kHz — and it must still CLIMB to this threshold before the gate shuts.
+// For that climb the held pre-transmit peak is fresh by age while the flag is
+// live, which is the inverted sentence this gate exists to prevent, arriving
+// for 129-150 ms of every key-down depending on where key-down falls inside a
+// block (and longer still, because setKeying delivers the mute to the DSP
+// thread over a QUEUED connection, so a block or two more may be sampled and
+// re-stamped after the key goes down). K5PTB measured it against a real
+// Hl2RxDsp in wall-clock: ConverterOnly to t=137 ms, Unknown from t=139 ms.
+// RadioHealthDialog polls every 500 ms (kRefreshIntervalMs), so roughly three
+// key-downs in ten land a refresh inside that window.
+//
+// The head is therefore closed by a SECOND, synchronous input rather than by
+// this threshold — `sliceSideSampling` below, which the backend knows the
+// instant it queues the mute. This gate stays because it catches every OTHER
+// way the DSP thread can stop producing while EP6 keeps arriving: a stalled IQ
+// stream, a chain between rebuilds, a starved DSP thread. Transmit was only
+// the common way in, and it is now the one way in that is known in advance.
 inline constexpr std::int64_t kSliceStaleMs = 150;
 
 // Is this WDSP meter value a measurement, or a sentinel?
@@ -137,11 +159,14 @@ inline double sliceHeadroomDb(double slicePeakDbfs) noexcept
 
 enum class AdcPairing {
     // The pairing cannot be made: one side has not reported, or the slice side
-    // is too old to stand against a live flag (kSliceStaleMs). Not a level and
-    // not a verdict — a missing reading, and it must render as "not reported"
-    // rather than as any number or any sentence. A side that last reported
-    // four seconds ago against one that reported twenty milliseconds ago is
-    // the same epistemic situation as a side that never reported at all.
+    // is too old to stand against a live flag (kSliceStaleMs), or it is no
+    // longer being sampled at all and its freshness is about to become a lie
+    // (sliceSideSampling). Not a level and not a verdict — a missing reading,
+    // and it must render as "not reported" rather than as any number or any
+    // sentence. A side that last reported four seconds ago against one that
+    // reported twenty milliseconds ago is the same epistemic situation as a
+    // side that never reported at all — and so is one that reported twenty
+    // milliseconds ago and will not report again.
     Unknown,
     // Neither side is near its limit. The uninteresting, and normal, case —
     // but NOT "the converter is comfortable". The pre-DDC bit is a saturated
@@ -167,14 +192,35 @@ enum class AdcPairing {
 // is a different state from "seen, and clear" — Hl2Telemetry keeps them apart
 // with std::optional for exactly this reason and so does this.
 //
-// `sliceReadingIsCurrent` is the caller's answer to "is the post-DDC side still
-// moving?" — Hl2Backend passes `ago && *ago <= kSliceStaleMs`. It is an INPUT
-// rather than a mute-flag special case on purpose: the frozen-against-live
-// split appears whenever the DSP thread stops producing output blocks while
-// EP6 responses keep arriving, and transmit is only the common way in.
+// THE SLICE SIDE HAS TWO WAYS OF NOT BEING LIVE, and they are separate inputs
+// because they are known at different times. Both must hold for the pairing to
+// be a sentence about now.
+//
+// `sliceReadingIsCurrent` — OBSERVED, AFTER THE FACT. The caller's answer to
+// "has the post-DDC side reported recently?"; Hl2Backend passes
+// `ago && *ago <= kSliceStaleMs`. It is an input rather than a mute-flag
+// special case on purpose: the frozen-against-live split appears whenever the
+// DSP thread stops producing output blocks while EP6 responses keep arriving,
+// and there is no flag for a stalled IQ stream or a starved thread. Its cost
+// is that it can only notice the freeze once the age has had time to grow.
+//
+// `sliceSideSampling` — KNOWN IN ADVANCE, for the one case where that is
+// possible. Hl2RxDsp does not sample RXA_ADC_PK while muted, and Hl2Backend is
+// the code that queues that mute, so it knows synchronously that the readings
+// are about to stop: it passes `!(m_keyed && !m_txMonitor)`, mirroring
+// `muteWhileKeyed` in setKeying. That mirroring is load-bearing rather than
+// tidy — with the TX audio monitor on, the chain keeps sampling through the
+// transmission, the reading keeps moving, and the pairing must keep pairing.
+//
+// This input is what covers the HEAD of a transmission, which the age alone
+// cannot: see kSliceStaleMs. `m_keyed` is set synchronously in setKeying while
+// the mute rides a queued connection to the DSP thread, so the gate shuts at
+// or before the instant sampling actually stops — early is the safe direction
+// here, because the failure it prevents is an assertion, not an omission.
 inline AdcPairing adcPairing(bool haveSlicePeak,
                              double slicePeakDbfs,
                              bool sliceReadingIsCurrent,
+                             bool sliceSideSampling,
                              bool haveHardwareFlag,
                              bool hardwareOverload) noexcept
 {
@@ -186,6 +232,13 @@ inline AdcPairing adcPairing(bool haveSlicePeak,
     // there is no relationship between a number from four seconds ago and a
     // flag from twenty milliseconds ago.
     if (!sliceReadingIsCurrent) {
+        return AdcPairing::Unknown;
+    }
+    // ...and a peak that is still FRESH but whose source has just stopped is
+    // the same thing arriving a fraction of a second earlier. At key-down the
+    // held reading has an honest age of a few milliseconds and describes a band
+    // the operator is no longer listening to.
+    if (!sliceSideSampling) {
         return AdcPairing::Unknown;
     }
     const bool sliceHot = sliceHeadroomDb(slicePeakDbfs) <= kSliceHotHeadroomDb;

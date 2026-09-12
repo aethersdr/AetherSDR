@@ -4369,13 +4369,28 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         // THE PAIRING. One sentence naming both sides and the gap between
         // them, so the operator reads the relationship instead of deriving it
         // from a dB figure and a boolean two rows apart.
-        // The freshness gate is the whole reason this is not just two rows read
+        // The liveness gates are the whole reason this is not just two rows read
         // together. `peak` is HELD through every transmission while
         // m_telemetry.adcOverload keeps moving — EP6 responses ride the same
-        // datagrams as the IQ — so without the age the sentence would pair a
+        // datagrams as the IQ — so without them the sentence would pair a
         // frozen side against a live one and, on a radio whose transmitter
         // shares the receiver's port, assert that the operator's own carrier is
-        // "elsewhere in 0-38.4 MHz". kSliceStaleMs carries the reasoning.
+        // "elsewhere in 0-38.4 MHz".
+        //
+        // TWO OF THEM, because the age alone cannot see the START of a
+        // transmission. At key-down `ago` is the age of the last RECEIVE block,
+        // under one block period, and it has to climb to kSliceStaleMs before
+        // the age gate shuts — 129-150 ms of inverted verdict on every
+        // key-down, and this dialog refreshes every 500 ms. But THIS function's
+        // own object queued that mute (setKeying, `muteWhileKeyed`), so it
+        // knows synchronously that Hl2RxDsp has stopped sampling. The condition
+        // below mirrors `muteWhileKeyed` exactly rather than merely reading
+        // `m_keyed`: with the TX audio monitor on the chain is not muted, the
+        // slice reading keeps moving, and the pairing must keep pairing.
+        //
+        // The age gate STAYS. It is the general one — a stalled IQ stream, a
+        // starved DSP thread, a chain between rebuilds — and none of those
+        // announce themselves to this function. Hl2AdcPairing.h carries both.
         //
         // NaN rather than 0.0 for the don't-care: 0.0 dBFS is a REAL reading
         // (full scale), so a don't-care spelled 0.0 is only safe while
@@ -4384,6 +4399,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
             hl2::adcPairing(realPeak,
                             realPeak ? *peak : std::numeric_limits<double>::quiet_NaN(),
                             ago && *ago <= hl2::kSliceStaleMs,
+                            !(m_keyed && !m_txMonitor),
                             m_telemetry.adcOverload.has_value(),
                             m_telemetry.adcOverload.value_or(false));
         const QString headroom =
