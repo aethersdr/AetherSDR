@@ -3519,6 +3519,34 @@ mailbox, and the terminal, so a headless soak box never has to open it.
   checkbox actually took and returns `ok:false` if the modem refused (no audio
   engine, no attached slice) rather than reporting success for work that did not
   happen.
+- **`modem digi`** / **`modem digi status`** — WIDE1-1 fill-in digipeater
+  snapshot (`enabled`, call, alias, dupe window, beacon fields, heard/repeated
+  counters, and the **current air rate** `baud` / `profileId`). The fill-in
+  engine is baud-agnostic; 300 Hz HF and 1200 Hz VHF share one modem profile
+  (`modem profile hf300|vhf1200`). Read-only.
+- **`modem digi on` / `modem digi off`** — arm/disarm the fill-in. `on` ⚠️
+  keys the transmitter whenever a matching UI frame is heard, so it is refused
+  unless `AETHER_AUTOMATION_ALLOW_TX=1`. Verifies the checkbox actually took
+  (a missing digi callsign or a profile other than 1200 baud fails closed).
+  Fill-in starts disarmed on every launch; configuration and beacon preference
+  persist, but TX authorization does not. Disabling fill-in cancels its pending
+  repeats/beacons and active TX without discarding other producers' packets.
+  Disabling the modem, changing the attached slice, disconnecting the radio,
+  or switching to 300 baud also disarms fill-in. Both Digi enable checkboxes
+  are TX-keying controls for generic automation invocations.
+- **`modem digi beacon`** ⚠️ — fire one fill-in-style position beacon now
+  (same `AETHER_AUTOMATION_ALLOW_TX=1` rail). Fails if there is no callsign or
+  no GPS/manual position.
+
+```json
+→ {"cmd":"modem","action":"digi","value":"status"}
+← {"ok":true,"baud":1200,"profileId":"Vhf1200",
+   "digi":{"enabled":true,"call":"KI6BCJ-7","alias":"WIDE1-1",
+           "alsoMyCall":true,"alsoRelay":false,"dupeWindowSecs":30,
+           "beaconEnabled":false,"beaconIntervalMin":15,
+           "heard":12,"repeated":3,"droppedDupe":1,"droppedNoMatch":8,
+           "droppedOwn":0,"baud":1200,"profileId":"Vhf1200"}}
+```
 
 The `demod` block is what separates "no frames because the band is dead" from
 "no frames because the audio tap never started": `receiveGateOpen` plus a
@@ -3840,7 +3868,8 @@ the airtime model predicts for the current profile and paclen; comparing it with
 `rtt.avgMs` is how you tell whether the model matches the air. See
 [`HFMODEM.md`](HFMODEM.md).
 
-Bare-line forms: `modem profile hf300`, `modem on`, `link status`,
+Bare-line forms: `modem profile hf300`, `modem on`, `modem digi status`,
+`modem digi on`, `modem digi beacon`, `link status`,
 `link mycall KI6BCJ-7`, `link connect N0BBS-1 via WIDE1-1`, `link pms on`.
 
 ---
@@ -4209,7 +4238,7 @@ still a separate radiocert task.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
-| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health |
+| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod, TXDELAY, RX tap, WIDE1-1 fill-in, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
