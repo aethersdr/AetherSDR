@@ -8,14 +8,31 @@
 // the first place, and a mis-tag is silent: a beacon would simply go out
 // 18.58 dB down again, unattended, with every unit test still green.
 //
-// WHY THIS IS A SOURCE-TEXT TEST AND NOT A BEHAVIOURAL ONE. AudioEngine.cpp is
-// compiled into NO test target in this repository -- checked, zero occurrences
-// in tests/tests.cmake -- and it is not a unit that can be stood up cheaply.
-// The alternative instrument was a live WSPR frame against the simulator, but
-// a frame keys for 111.6 s and the bench's loopback approval class permits a
-// 35 s transmit ceiling; raising a rail to fit a convenience is exactly what
-// that ceiling's own comment forbids ("raise the class ceiling deliberately,
-// not the run").
+// WHY THIS IS A SOURCE-TEXT TEST. An earlier draft of this comment said
+// AudioEngine.cpp is compiled into no test target. THAT WAS WRONG, and the
+// correction matters because it was the whole justification. The filename does
+// not appear in tests/tests.cmake, but src/core/AudioEngine.cpp is in
+// CORE_SOURCES and therefore inside the aethercore library, which several
+// registered tests link. icom_identity_test is one: it stands up a real
+// AudioEngine with hostModulation() true and already asserts
+// source == TxAudioSource::ClientLeveled on a live txFinalMonitorPcmReady.
+// One of the three tags has behavioural coverage today.
+//
+// The EngineGenerated tag is reachable there too, in principle --
+// sendModemTxAudio(const QByteArray&) is public and takes the m_hostModulation
+// branch into feedDaxTxAudioInternal with markExternalSource false -- so the
+// 111.6 s WSPR frame is not what stands between this repository and a
+// behavioural check of that branch. The frame argument is real, but it belongs
+// to the END-TO-END BEACON leg: a frame keys for 111.6 s and the bench's
+// loopback approval class permits a 35 s transmit ceiling, and raising a rail
+// to fit a convenience is exactly what that ceiling's own comment forbids
+// ("raise the class ceiling deliberately, not the run"). That leg stays open,
+// and this test does not close it.
+//
+// So the claim this file makes for itself is the narrower one: it pins all
+// three tags, the metatype, and each of the three call sites in ONE cheap
+// place, where the behavioural coverage that exists reaches one tag in one
+// backend. It is a reversal tripwire, not the instrument.
 //
 // SO BE HONEST ABOUT WHAT THIS PROVES. It proves the wiring is WRITTEN as
 // claimed, and it fails loudly if someone reverses it. It does NOT prove the
@@ -78,7 +95,7 @@ int main()
     // A queued signal carries it across AudioEngine's thread. Without the
     // metatype the connection fails at RUNTIME with a warning and a dropped
     // signal -- no transmit audio and no compile error to catch it.
-    check(iface.contains(QLatin1String("Q_DECLARE_METATYPE(TxAudioSource)")),
+    check(iface.contains(QLatin1String("Q_DECLARE_METATYPE(AetherSDR::TxAudioSource)")),
           "TxAudioSource is declared as a metatype");
     check(engine.contains(QLatin1String("qRegisterMetaType<TxAudioSource>")),
           "AudioEngine registers the TxAudioSource metatype");
