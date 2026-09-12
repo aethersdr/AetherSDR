@@ -76,7 +76,7 @@ struct MeterSurface {
 // Verified against the wiring, not assumed. Each `surfaces` entry corresponds
 // to a connect() found in the GUI; a meter listed here with rendered=false has
 // no such connection anywhere.
-inline constexpr std::array<MeterSurface, 9> kMeterSurfaces{{
+inline constexpr std::array<MeterSurface, 10> kMeterSurfaces{{
     {"SLC:LEVEL", "dBm", "MeterModel::sLevelChanged / sLevel()",
      "S-meter applet; VFO slice signal flag; AGC calibration dialog", true},
 
@@ -94,6 +94,25 @@ inline constexpr std::array<MeterSurface, 9> kMeterSurfaces{{
     // nothing in the inventory said so. A suppressed meter must name its gate.
     {"TX:ALC", "dBFS,Percent", "MeterModel::swAlcChanged",
      "Phone/CW applet ALC gauge (both Phone and CW panels)", true},
+
+    // THE GAIN, not the level — the other half of the same stage, and a
+    // separate quantity rather than a second view of TX:ALC. TX:ALC is the
+    // post-ALC peak, which `Hl2TxDsp::processAudioBlock` describes as a meter
+    // that "sits pinned near the target by definition and tells the operator
+    // nothing — it reports the ALC's success, not their input level." This is
+    // the number that answers "is the ALC holding, and by how much", and it
+    // reached healthSnapshot() and the bridge for a release while no gauge
+    // anywhere could show it.
+    //
+    // dB ONLY, deliberately, where TX:ALC accepts dBFS or Percent. That set has
+    // two members because an Icom reports its ALC level as a percentage of its
+    // own full scale; nothing in the tree reports a GAIN as anything but dB, so
+    // a second accepted unit here would be a conversion nobody can perform
+    // correctly rather than a radio this consumer can handle. WDSP draws the
+    // same line — `TXA_ALC_PK` and `TXA_ALC_GAIN` are separate entries in
+    // `txaMeterType` in `third_party/wdsp/upstream/TXA.h`.
+    {"TX:ALCGAIN", "dB", "MeterModel::alcGainChanged / alcGainDb()",
+     "Phone/CW applet ALC Gain gauge (Phone panel, beside Compression)", true},
 
     {"TX:COMPPEAK", "dB", "MeterModel::compressionChanged",
      "Phone/CW applet Compression gauge", true},
