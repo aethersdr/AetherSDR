@@ -21,7 +21,37 @@ Hl2RxDsp::Hl2RxDsp(QObject* parent) : QObject(parent)
     qRegisterMetaType<WdspChannel::Mode>("WdspChannel::Mode");
 }
 
-Hl2RxDsp::~Hl2RxDsp() = default;
+Hl2RxDsp::~Hl2RxDsp()
+{
+    // STOP THE CHANNEL BEFORE WE LET IT GO. WdspChannel::close() asks WDSP to
+    // stop-and-flush in the BLOCKING form, and that wait can only be satisfied
+    // by a host still calling fexchange* — which, at teardown, nothing is. So a
+    // channel destroyed while WDSP still thinks it is running burns WDSP's full
+    // 100 ms timeout, per channel, on whichever thread is doing the tearing
+    // down. Stopping here makes close()'s SetChannelState a no-op and the wait
+    // is skipped entirely. docs/HERMES.md §13 item 9b.
+    //
+    // WHAT THIS DOES NOT BUY: a clean down-slew. Every path that destroys an
+    // Hl2RxDsp has already withdrawn it from the sample fan-out (or the wire
+    // was never started), so no block reaches processIq() after this line and
+    // WDSP's mute ramp never actually runs. The saving is the skipped wait, not
+    // a smoother exit. The one place a stop CAN be taken with samples still
+    // flowing is the T/R mute, which is item 9a and is a bench decision.
+    //
+    // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
+    // which REFUSES rather than waits when a processIq() callback is in flight.
+    // That cannot happen here today — Hl2Backend destroys these through
+    // deleteLater() posted to the I/O thread, which is the thread that drives
+    // processIqBlock() — so a false is not a hazard, it is a statement that the
+    // ownership assumption above has stopped being true. Say so instead of just
+    // getting slow again.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcHl2RxDsp)
+            << "could not stop the WDSP channel before destroying it: a "
+               "processIq callback was in flight. Teardown will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
+}
 
 bool Hl2RxDsp::configure(const Config& config, std::string* error)
 {
@@ -85,6 +115,28 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     auto channel = WdspChannel::create(wc, error);
     if (!channel)
         return false;
+    // Stop the OUTGOING channel before the assignment below destroys it — same
+    // reason as the destructor's, and this is the path that actually shows: a
+    // rate change reconfigures EVERY receiver from the GUI thread through a
+    // BlockingQueuedConnection, so each un-stopped close added WDSP's 100 ms
+    // timeout to a freeze that is already 0.6-1.1 s with four panadapters open
+    // (Hl2Backend::setSampleRate's own note, docs/HERMES.md §22.4).
+    //
+    // AFTER the create(), not before: create() can fail, and on failure this
+    // function leaves the existing chain in place. Stopping first would leave a
+    // live receiver permanently silent as the price of a failed rebuild.
+    //
+    // No drain here either. configure() runs ON the DSP thread, which is the
+    // same thread that calls processIq(), so nothing can feed the old channel
+    // between this line and its destruction.
+    //
+    // Checked for the same reason as the destructor's — see there.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcHl2RxDsp)
+            << "could not stop the outgoing WDSP channel before the swap: a "
+               "processIq callback was in flight. The rebuild will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
     m_channel = std::move(channel);
     m_spectrum = std::make_unique<Hl2Spectrum>(config.fftSize);
 
