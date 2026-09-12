@@ -3782,6 +3782,22 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# HL2 RQST/ACK state machine (docs/HERMES.md §13 item 13, oracle §5) — pure
+# policy, standalone (no Qt, no socket, no radio). The clock is EP6 frames.
+add_executable(hl2_rqst_ack_test
+    tests/hl2_rqst_ack_test.cpp
+    src/core/backends/hl2/Hl2ControlRequest.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_rqst_ack_test PRIVATE src)
+add_test(NAME hl2_rqst_ack_test COMMAND hl2_rqst_ack_test)
+
+# RQST/ACK where it meets the wire — socket-free, on MetisClient's own packet
+# builder and its EP6 response path.
+add_executable(hl2_rqst_ack_client_test tests/hl2_rqst_ack_client_test.cpp)
+target_include_directories(hl2_rqst_ack_client_test PRIVATE src)
+target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
+
 # HL2 band filter / EP2 frame composition — socket-free, on MetisClient's own
 # packet builder. A band change must not leave two disagreeing config banks in
 # one frame (#4579).
