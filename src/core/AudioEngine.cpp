@@ -1865,6 +1865,12 @@ AudioEngine::AudioEngine(QObject* parent)
     m_clientTubeRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientPuduRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientDeEssRx->prepare(DEFAULT_SAMPLE_RATE);
+    // txFinalMonitorPcmReady carries a TxAudioSource and this object lives on
+    // its own thread, so every connection to it is queued. A queued connection
+    // cannot marshal a type Qt has not been told about, and the failure is a
+    // runtime warning and a silently dropped signal — no transmit audio, no
+    // compile error to catch it.
+    qRegisterMetaType<TxAudioSource>("TxAudioSource");
     m_wsprBeacon->prepare(DEFAULT_SAMPLE_RATE);
 
     TxVoiceProcessor::Processors txProcessors;
@@ -9166,9 +9172,11 @@ void AudioEngine::onTxAudioReady()
     // Expose the post-limiter int16 stream so the QSO recorder captures voice TX
     // for Client-Side recording (#3556). Emitted unconditionally; the recorder
     // slot fast-returns when not recording / not transmitting, so this is cheap.
-    // Mic-chain audio: the level is ours to manage, so the backend's ALC stays
-    // in play.
-    emit txFinalMonitorPcmReady(data, /*clientLeveled=*/false);
+    // Mic-chain audio: the OPERATOR's level, set with the mic slider, with the
+    // operator present to hear the result. The backend's ALC stays in play as
+    // protection, and the slider applies — which is exactly what does NOT
+    // happen for the engine's own generators; see feedDaxTxAudioInternal.
+    emit txFinalMonitorPcmReady(data, TxAudioSource::Microphone);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
     // Sampled here, AFTER everything the strip can do to the audio
@@ -9731,14 +9739,28 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
             dst[i] = static_cast<qint16>(
                 std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
-        // markExternalSource is the source split this tap needs (#4796): true
-        // for TCI/DAX client audio, whose sender owns its level and must not
-        // get ALC makeup gain; false for the engine's own pre-shaped audio
-        // (WSPR pump, AX.25 modem, RADE modem waveform — all reaching here
-        // via sendModemTxAudio or the WSPR pump with markExternalSource
-        // false), which the engine generates at a known level and which keeps
-        // the ALC so its on-air level does not change.
-        emit txFinalMonitorPcmReady(out, /*clientLeveled=*/markExternalSource);
+        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, NOT TWO (#4796, and the WSPR
+        // level regression that followed the ALC change).
+        //
+        // markExternalSource distinguishes TCI/DAX client audio — whose sender
+        // owns its level — from the engine's own pre-shaped audio: the WSPR
+        // pump, the AX.25 modem and the RADE modem waveform, all of which
+        // reach here with it false. The comment that used to sit here said
+        // that engine audio "keeps the ALC so its on-air level does not
+        // change". THAT IS NO LONGER TRUE and its being true was never a
+        // property of this file: it depended on the ALC's 40 dB of makeup,
+        // which normalised any generated level to the modulator's target. With
+        // the makeup gone, a beacon generated at -20 dBFS transmits at
+        // -20 dBFS. Measured: 18.58 dB down, a factor of 72 in power.
+        //
+        // So the flag becomes a source rather than a boolean, and engine audio
+        // says so in its own right instead of being "whatever is left". What
+        // the HL2 backend does with it is bypass the mic slider — a microphone
+        // control has no business moving an unattended beacon — and the level
+        // the generator chose is the level that goes out.
+        emit txFinalMonitorPcmReady(out, markExternalSource
+                                         ? TxAudioSource::ClientLeveled
+                                         : TxAudioSource::EngineGenerated);
         return;
     }
 

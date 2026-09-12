@@ -9106,10 +9106,10 @@ void RadioModel::setTxAudioMonitor(bool on)
 }
 
 void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled)
+                               TxAudioSource source)
 {
     if (m_backend)
-        m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled);
+        m_backend->submitTxAudio(int16Stereo, sampleRateHz, source);
 }
 
 void RadioModel::finishTxAudio(quint64 token)

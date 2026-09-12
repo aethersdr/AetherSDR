@@ -25,44 +25,72 @@ namespace AetherSDR::hl2 {
 //
 // 50 is unity, because TransmitModel constructs m_micLevel at 50 and nothing
 // restores it at startup: a session where the operator never touches the slider
-// must leave the modulator exactly at its own 1.0 default. +/-20 dB across the
-// travel, linear in dB.
+// must leave the modulator exactly at its own 1.0 default.
+//
+// THE TWO LEGS HAVE DIFFERENT SLOPES, and that asymmetry is the whole reason
+// this is not a single multiply. Below 50: -20 dB at 0.4 dB per step, exactly
+// as it always was. Above 50: +40 dB at 0.8 dB per step. The upward half was
+// widened when Hl2TxDsp's ALC lost its 40 dB of makeup gain — speech sits near
+// -32 dBFS and the ALC targets 0.85 (-1.41 dBFS), a ~30 dB shortfall that the
+// operator's slider is now the only thing closing, and the old +20 dB left the
+// chain 10.6 dB short at maximum travel.
+//
+// Widening it SYMMETRICALLY would have been tidier and is wrong: it moves unity
+// off 50, and the paragraph above is exactly the reason it may not move. So the
+// legs meet at 50 with no discontinuity in value (49 = -0.4 dB, 51 = +0.8 dB)
+// and a deliberate one in slope. hl2_tx_level_policy_test pins the join, so
+// tidying this back to a symmetric mapping fails there rather than on the air.
 //
 // Level 0 is NOT -20 dB — see micSliderToLinear, which handles it as a mute.
 // This function is the continuous part of the mapping only.
 [[nodiscard]] constexpr double micSliderToGainDb(int level) noexcept
 {
     const int clamped = level < 0 ? 0 : (level > 100 ? 100 : level);
-    return (static_cast<double>(clamped) - 50.0) * 0.4;
+    const double fromUnity = static_cast<double>(clamped) - 50.0;
+    return fromUnity <= 0.0 ? fromUnity * 0.4 : fromUnity * 0.8;
 }
 
 // The same slider as the linear multiplier the modulator takes.
 //
 // Level 0 mutes outright rather than resolving to the -20 dB the line above
-// would give it. A slider at the bottom of its travel means off — and a mic
-// merely 20 dB down would be hauled back up by the ALC's 40 dB of makeup
-// anyway, so without the special case "0" would sound barely different from
-// "50", which is the sort of control that teaches an operator to distrust every
-// other one on the panel.
+// would give it. A slider at the bottom of its travel means off, and 0.0x is
+// the only reading of that which is not "very quiet".
 //
-// SCOPE, because "mic" undersells it: this multiplier is applied to everything
-// entering Hl2TxDsp::processAudioBlock, and on a host-modulating backend that
-// includes digital-mode and WSPR-beacon audio arriving through submitTxAudio,
-// not only voice. For MIC-path audio, above the ALC's hold threshold it is
-// very nearly a no-op — the ALC normalizes each block's peak to alcTargetPeak
-// and hands the gain straight back. For CLIENT-LEVELED audio (TCI/DAX) the ALC
-// may only reduce, never lift (#4796), so below its target there is no handing
-// back: this slider is a straight proportional attenuator on that path, and
-// TX gain 5 (-18 dB) is a real -18 dB on the air. It stops being straight only
-// where it has to — drive a full-scale client through the top of this slider's
-// +20 dB and the ALC limits, rather than letting the modulator's hard clamp
-// flat-top it, so the last stretch of travel buys reduced headroom rather than
-// more power. At 0 neither path transmits: the mic path because silence
-// sits below the hold threshold so the ALC declines to lift it, the
-// client-leveled path as a plain 0.0x multiply. That is the honest reading of
-// a slider at the bottom of its travel on a host modulator — there is one
-// modulator and it is off — but it is worth knowing before parking the control
-// at 0 between voice sessions.
+// THE ARGUMENT FOR THE SPECIAL CASE HAS CHANGED, though the behaviour has not.
+// It used to be that -20 dB would be hauled straight back up by the ALC's 40 dB
+// of makeup, so "0" would have sounded barely different from "50" — a control
+// that teaches an operator to distrust every other one on the panel. That
+// makeup gain is gone: -20 dB is now a real -20 dB on the air, and "0" would be
+// audibly quieter than "50" without the mute. The case survives on the plainer
+// ground that the bottom of a travel labelled as a level means off.
+//
+// SCOPE, and it is narrower than it used to be. This multiplier is applied to
+// audio entering Hl2TxDsp::processAudioBlock tagged TxAudioSource::Microphone
+// or ClientLeveled — the operator's voice, and TCI/DAX client audio, where it
+// is the proportional attenuator #4796 left it. On those two paths it is a
+// straight proportional control on the air, the same on each, all the way up to
+// the ALC's target — the ALC behind it only reduces and has no makeup half left
+// to hand the gain back with, so TX gain 5 (-18 dB) is a real -18 dB. It stops
+// being straight only where it has to: drive a full-scale source through the
+// top of this slider's +40 dB and the ALC limits, rather than letting the
+// modulator's hard clamp flat-top it, so the last stretch of travel buys
+// reduced headroom rather than more power.
+//
+// IT DOES NOT REACH ENGINE-GENERATED AUDIO, SO 0 DOES NOT SILENCE A BEACON.
+// Hl2TxDsp::processAudioBlock substitutes 1.0 for this multiplier when the
+// source is TxAudioSource::EngineGenerated, so the WSPR beacon, the AX.25 modem
+// and the RADE waveform go out at the level their generator chose and this
+// slider does not move them — at 0 or anywhere else.
+//
+// That is deliberate: a microphone control has no business moving, or muting,
+// an unattended transmission, and yoking a beacon to the level an operator
+// picked for their voice was the defect. But it retires a claim this comment
+// used to make — "at 0 nothing transmits, as a plain 0.0x multiply on every
+// path" — and that claim was a safety property an operator could have leaned
+// on. IT IS NO LONGER TRUE. Parking this control at 0 between voice sessions
+// silences the microphone and the TCI/DAX path; it does not silence the
+// transmitter. Whatever is generating an unattended transmission is what stops
+// it — the beacon's own control, not this one.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
 {
     if (level <= 0)

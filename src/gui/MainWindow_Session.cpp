@@ -1080,8 +1080,9 @@ void MainWindow::wireRadioModel()
     // operator's gain TWICE, in series, which is not what a slider labelled once
     // can mean. The modulator's is the one to keep: setPcMicGain only ever
     // attenuates (0..100 maps to 0.0..1.0, and AudioEngine skips it entirely at
-    // unity), while the ALC behind the modulator needs the mic pushed UP past
-    // its hold threshold — see Hl2Backend::setMicGain.
+    // unity), while the modulator's slider reaches +40 dB and is now the only
+    // thing that lifts a quiet mic at all — the ALC behind it only reduces.
+    // See Hl2Backend::setMicGain.
     //
     // This gate is also why the control was dead rather than doubled before now:
     // micSelection() is "MIC" until a radio reports otherwise, and an HL2 has no
