@@ -26,6 +26,10 @@ using AetherSDR::hl2::autoGainStep;
 using AetherSDR::hl2::binaryHighLowConfig;
 using AetherSDR::hl2::probingReleaseConfig;
 using AetherSDR::hl2::classifyWindow;
+using AetherSDR::hl2::bandscopeReleaseConfig;
+using AetherSDR::hl2::BandscopeHeadroom;
+using AetherSDR::hl2::HeadroomObservation;
+using AetherSDR::hl2::gatedPeakBiasDbForPeriod;
 
 namespace {
 
@@ -935,6 +939,198 @@ int main()
         check(!everOut,
               "over 31 plants x 300 s of probing the offset never leaves "
               "[0, ceiling]");
+    }
+
+    // ---- PROPERTY 8 · THE MEASURED-HEADROOM RELEASE -----------------------
+    //
+    // The bandscope turns a release from a probe into a decision. What must be
+    // true of that, and every one of these is otherwise reachable only by
+    // pointing a real antenna at a real broadcast station:
+    //
+    //   * the loop behaves EXACTLY as it did before when the sensor is not
+    //     required -- the feature costs nothing when it is off;
+    //   * no reading holds the loop, and holds it DIFFERENTLY from a reading
+    //     that says "not enough";
+    //   * the licence is checked against the step actually being taken;
+    //   * a refusal is not a failed probe and must not earn a backoff.
+    {
+        auto measured = [](double db) {
+            HeadroomObservation h;
+            h.state = BandscopeHeadroom::Measured;
+            h.headroomDb = db;
+            return h;
+        };
+        auto railed = [] {
+            HeadroomObservation h;
+            h.state = BandscopeHeadroom::AtRail;
+            return h;
+        };
+
+        const double bias = gatedPeakBiasDbForPeriod(1000);   // 3.77 dB
+        const AutoGainConfig kBandscope = bandscopeReleaseConfig(bias);
+
+        check(kBandscope.requireHeadroomToRelease,
+              "8.0 bandscopeReleaseConfig requires a measured headroom");
+        check(kBandscope.headroomBiasDb > 3.7 && kBandscope.headroomBiasDb < 3.8,
+              "8.0 it budgets the gate's 3.77 dB sampling bias");
+        check(kBandscope.headroomRailAttacks,
+              "8.0 a railed block may escalate a clean window");
+
+        // A loop holding 12 dB, clean for far longer than the dwell, and past
+        // its release interval. Everything the clip flag can say about a
+        // release has already been said; only the measurement is left.
+        auto readyToRelease = [](int offsetDb) {
+            AutoGainState st;
+            st.offsetDb = offsetDb;
+            st.cleanMs = 600000;
+            st.sinceReleaseMs = 600000;
+            st.sinceAttackMs = 600000;
+            return st;
+        };
+        AutoGainObservation clean;
+        clean.samples = 19;
+        clean.overloadSamples = 0;
+        clean.elapsedMs = 100;
+
+        // -- the requirement is real, in both directions --
+        {
+            AutoGainObservation o = clean;
+            o.headroom = measured(12.0);        // 12 >= 6 + 3.77 + 2 = 11.77
+            const AutoGainAction a =
+                autoGainStep(readyToRelease(12), o, kBandscope);
+            check(a.reason == AutoGainReason::Release && a.deltaDb == -6,
+                  "8.1 twelve dB of measured room releases the full 6 dB step");
+
+            o.headroom = measured(11.0);        // one dB short of the same sum
+            const AutoGainAction b =
+                autoGainStep(readyToRelease(12), o, kBandscope);
+            check(b.reason == AutoGainReason::HeadroomHold && b.deltaDb == 0,
+                  "8.2 one dB short of the requirement holds, and says WHY");
+            check(b.next.offsetDb == 12,
+                  "8.2 a refused release does not move the offset");
+        }
+
+        // -- absent is not zero and is not infinity --
+        {
+            AutoGainObservation o = clean;      // o.headroom defaults to Absent
+            const AutoGainAction a =
+                autoGainStep(readyToRelease(12), o, kBandscope);
+            check(a.reason == AutoGainReason::HeadroomAbsent && a.deltaDb == 0,
+                  "8.3 no reading at all holds the loop, with its own reason");
+            check(a.reason != AutoGainReason::HeadroomHold,
+                  "8.3 'no reading' is reported differently from 'not enough'");
+            // And it does NOT silently degrade into blind probing: a loop that
+            // fell back to releasing on the clip flag alone would have taken
+            // the step here, which is exactly what an operator who chose a
+            // measured mode did not ask for.
+            check(a.next.offsetDb == 12,
+                  "8.3 an absent reading never licenses a blind release");
+        }
+
+        // -- the licence is about the step ACTUALLY being taken --
+        //
+        // Holding 2 dB, the step truncates from 6 to 2. A reading that could
+        // not license 6 dB can license 2, and a law that compared against
+        // cfg.releaseStepDb would refuse a release that fits.
+        {
+            AutoGainObservation o = clean;
+            o.headroom = measured(8.0);         // 8 >= 2 + 3.77 + 2 = 7.77
+            const AutoGainAction a =
+                autoGainStep(readyToRelease(2), o, kBandscope);
+            check(a.reason == AutoGainReason::Release && a.deltaDb == -2,
+                  "8.4 the truncated final step is what the reading must cover");
+            // The same reading against a full-width step is refused, which is
+            // what makes the check above about delta rather than a constant.
+            const AutoGainAction b =
+                autoGainStep(readyToRelease(12), o, kBandscope);
+            check(b.reason == AutoGainReason::HeadroomHold,
+                  "8.4 the same 8 dB does not license a full 6 dB step");
+        }
+
+        // -- a refusal is not a failed probe --
+        //
+        // A failed probe doubles the interval that paces the next one. A
+        // refusal is the loop declining to move at all, so there is nothing for
+        // the band to have punished and the backoff must not advance.
+        {
+            AutoGainObservation o = clean;
+            o.headroom = measured(1.0);
+            AutoGainState st = readyToRelease(12);
+            const AutoGainAction a = autoGainStep(st, o, kBandscope);
+            check(a.reason == AutoGainReason::HeadroomHold,
+                  "8.5 the fixture really is a refusal");
+            check(!a.next.releasedSinceTrip,
+                  "8.5 a refused release does not count as having released");
+            check(a.next.dwellRequiredMs == st.dwellRequiredMs,
+                  "8.5 a refusal does not widen the probe interval");
+        }
+
+        // -- a railed block is a clip, and only ever escalates --
+        {
+            AutoGainObservation o = clean;      // the clip bit says Clean
+            o.headroom = railed();
+            AutoGainState st;
+            st.sinceAttackMs = 600000;          // past the quiet period
+            const AutoGainAction a = autoGainStep(st, o, kBandscope);
+            check(a.reason == AutoGainReason::AttackMarginal && a.deltaDb > 0,
+                  "8.6 a railed bandscope block attacks even when the clip bit "
+                  "window read clean");
+
+            // It does not rescue a Void window: too few observations still
+            // means the loop is not being fed, and holding is the safe rule.
+            AutoGainObservation v = o;
+            v.samples = 0;
+            v.overloadSamples = 0;
+            const AutoGainAction b = autoGainStep(st, v, kBandscope);
+            check(b.reason == AutoGainReason::Void || b.reason == AutoGainReason::Stale,
+                  "8.6 a railed block does not make a Void window actionable");
+
+            // And it cannot soften a Hot one.
+            AutoGainObservation h = o;
+            h.overloadSamples = 19;
+            const AutoGainAction c = autoGainStep(st, h, kBandscope);
+            check(c.reason == AutoGainReason::AttackHot,
+                  "8.6 a railed block never downgrades a Hot window");
+        }
+
+        // -- THE EQUIVALENCE, and it is what makes this safe to ship off --
+        //
+        // With the requirement off, the headroom field is inert: the same
+        // inputs give the same action whatever the bandscope says, including
+        // when it says the converter is at the rail. A loop running "ramp",
+        // "probe" or "binary" is therefore exactly the loop that existed before
+        // this sensor did.
+        {
+            const AutoGainConfig kProbeOnly = probingReleaseConfig();
+            check(!kProbeOnly.requireHeadroomToRelease && !kProbeOnly.headroomRailAttacks,
+                  "8.7 the pre-existing laws do not use the sensor");
+            bool allSame = true;
+            for (int offset = 0; offset <= 24; offset += 6) {
+                for (int over = 0; over <= 19; over += 19) {
+                    AutoGainObservation bare;
+                    bare.samples = 19;
+                    bare.overloadSamples = over;
+                    bare.elapsedMs = 100;
+                    AutoGainObservation withRail = bare;
+                    withRail.headroom = railed();
+                    AutoGainObservation withRoom = bare;
+                    withRoom.headroom = measured(40.0);
+                    const AutoGainState st = readyToRelease(offset);
+                    const AutoGainAction x = autoGainStep(st, bare, kProbeOnly);
+                    const AutoGainAction y = autoGainStep(st, withRail, kProbeOnly);
+                    const AutoGainAction z = autoGainStep(st, withRoom, kProbeOnly);
+                    if (x.deltaDb != y.deltaDb || x.reason != y.reason
+                        || x.deltaDb != z.deltaDb || x.reason != z.reason
+                        || x.next.offsetDb != y.next.offsetDb
+                        || x.next.offsetDb != z.next.offsetDb) {
+                        allSame = false;
+                    }
+                }
+            }
+            check(allSame,
+                  "8.7 with the requirement off the headroom reading changes "
+                  "nothing, at any offset and either window verdict");
+        }
     }
 
     // WHAT NO TEST HERE SUPPLIES: the plant. Property 7 tests the controller
