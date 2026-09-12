@@ -975,6 +975,19 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("split_toggle", "Split Toggle", "Slice",
         QKeySequence(), [this]() {
             if (!m_splitActive) {
+                // Same gate, same reasons, as the VfoWidget::splitToggled
+                // lambda in MainWindow_Wiring.cpp — see the comment there for
+                // why this returns ahead of the m_splitActive write rather
+                // than only skipping the send (issue 5277) — and for why it
+                // is deliberately not permissive on disconnect, and which
+                // families the predicate refuses.
+                if (!m_radioModel.hasCommandPlane()) {
+                    qCWarning(lcDevices)
+                        << "split_toggle ignored: this backend takes no Flex"
+                        << "slice-create command";
+                    showUnsupportedControlNotice();
+                    return;
+                }
                 if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
                 auto* s = activeSlice();
                 if (!s) return;

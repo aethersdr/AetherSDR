@@ -734,15 +734,7 @@ void MainWindow::wireRadioModel()
         }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
-            this, [this](const QString&) {
-        if (m_commandDroppedNoticeShown)
-            return;
-        m_commandDroppedNoticeShown = true;
-        statusBar()->showMessage(
-            tr("This radio doesn't support that control — nothing was sent to "
-               "the radio. Further unsupported controls are logged."),
-            8000);
-    });
+            this, [this](const QString&) { showUnsupportedControlNotice(); });
     // Slice Link: disconnect teardown never emits sliceRemoved (stale slices
     // are staged for reconnect reclaim), so dissolve the link explicitly.
     // Both transitions dissolve — a link never crosses a session boundary
@@ -2923,6 +2915,36 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
         // Observation only: never restore a client setting into DATA OFF MOD.
         m_radioModel.notePcAudioEnabled(pcAudioEnabled);
     }
+}
+
+// One notice per connect session, latch reset on the connect edge (M0, #5263).
+//
+// Held here rather than inline in the commandDropped lambda because a
+// capability gate REFUSES BEFORE THE SEND: `sendCmd` is never reached, so
+// `commandDropped` never fires, and a control converted from "drops silently"
+// to "refuses" would otherwise have taken the operator's only feedback away
+// with it. #5266 landed its four gates on 2026-08-26 and #5265 made the drop
+// loud on 2026-08-27, so that trade was invisible at the time; it is not
+// invisible now. A gate calls this so a refused control says exactly what a
+// dropped one says.
+//
+// The latch is now SHARED between two producers: this helper's gate callers and
+// the commandDropped path. One refusal per connect session therefore consumes
+// the notice for both, so an operator who trips a capability gate first sees
+// nothing for a genuinely dropped command later in the same session. That is
+// the pre-existing one-shot semantics extended to a second producer rather than
+// a new rule, and the message is deliberately generic enough to stand for
+// either cause — but it is a real consequence and is recorded here rather than
+// left to be rediscovered.
+void MainWindow::showUnsupportedControlNotice()
+{
+    if (m_commandDroppedNoticeShown)
+        return;
+    m_commandDroppedNoticeShown = true;
+    statusBar()->showMessage(
+        tr("This radio doesn't support that control — nothing was sent to "
+           "the radio. Further unsupported controls are logged."),
+        8000);
 }
 
 } // namespace AetherSDR
