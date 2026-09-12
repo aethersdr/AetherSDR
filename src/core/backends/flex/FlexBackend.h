@@ -54,6 +54,19 @@ public:
     // caller exists yet; this documents the assumption).
     void setModelProvider(std::function<QString()> provider);
 
+    // The capacity THIS radio declared, as opposed to what the model table
+    // estimates for radios of its kind (#5594 item 3).
+    //
+    // Pushed down rather than read here because it arrives in the discovery
+    // packet, which RadioModel owns; #5554 §2.7 moves desktop discovery onto the
+    // unified source, and this becomes a backend-side read at that point.
+    //
+    // Either value may be <= 0, meaning "the radio did not say", which leaves
+    // capabilities() on the model-table estimate. Announces a revision when a
+    // value actually changes — the descriptor is what the control protocol
+    // serializes, so a silent change is a client holding a stale limit.
+    void setRadioReportedCapacity(int maxSlices, int maxPanadapters);
+
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
     void connectRadio(const RadioConnectRequest& request) override;
@@ -191,6 +204,12 @@ private:
     // and the encode intent lambdas run there — so a plain QString needs no sync.
     QString m_ampHandle;
     QString m_tunerHandle;
+
+    // Radio-declared capacity (#5594 item 3), 0 until the radio says. Cleared by
+    // clearExtensionHandles() on disconnect so a different radio cannot inherit
+    // the previous one's limits.
+    int m_reportedMaxSlices{0};
+    int m_reportedMaxPanadapters{0};
 
     // The model name the last capabilitiesChanged() announcement described
     // (#5594, M1). Flex's whole capability table is derived from the model name

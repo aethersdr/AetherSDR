@@ -2689,6 +2689,25 @@ RadioModel::RadioModel(QObject* parent)
             // so the flag has to be set here as well or an armed reconnect
             // reads as "nothing is happening".
             m_connectAttemptActive = true;
+            // Restore the capacity THIS radio declared (#5603 review, @NF0T).
+            // onDisconnected() cleared it — deliberately, because two of the
+            // three connect paths never re-seed and a second radio must not
+            // inherit the first one's limits. But this path is the exception:
+            // it reconnects to m_lastInfo.address, so it is by construction the
+            // same radio that just dropped, and m_lastInfo still carries what it
+            // declared. Without this a reduced-licence radio that rides out a
+            // network blip silently reverts to the model table's higher number
+            // until the next discovery-based connect — which is precisely the
+            // case this field exists to get right.
+            //
+            // Deliberately NOT done in onConnected(): connectViaWan() never sets
+            // m_lastInfo, so re-seeding from it on the shared edge would hand a
+            // WAN session the previous radio's limits — the cross-radio
+            // inheritance bug the disconnect-side clear exists to prevent.
+            m_declaredMaxSlices = m_lastInfo.maxSlices > 0 ? m_lastInfo.maxSlices : 0;
+            m_maxPanadapters = m_lastInfo.maxPanadapters > 0 ? m_lastInfo.maxPanadapters : 0;
+            if (m_declaredMaxSlices > 0)
+                m_maxSlices = m_declaredMaxSlices;
             clearAutomationSliceFixtures();
             if (m_connection) {
                 QMetaObject::invokeMethod(m_connection, [this] {
@@ -3753,7 +3772,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_nickname = info.nickname;
     m_callsign = info.callsign;
     m_declaredBands = parseDeclaredBands(info.bands);   // empty for real Flex
-    m_maxSlices = maxSlicesForModel(m_model);
+    // #5594 item 3: the radio's own declaration wins over the model table.
+    // Both are captured here, at the connect edge, because a capacity is a fact
+    // about the hardware and licence rather than something that moves during a
+    // session. 0 means this radio did not say — older firmware, or a connect by
+    // IP where no discovery packet is ever seen — and the table still answers.
+    m_declaredMaxSlices = info.maxSlices > 0 ? info.maxSlices : 0;
+    m_maxPanadapters = info.maxPanadapters > 0 ? info.maxPanadapters : 0;
+    m_maxSlices = m_declaredMaxSlices > 0 ? m_declaredMaxSlices
+                                          : maxSlicesForModel(m_model);
+    publishRadioReportedCapacity();
     if (reloadAntennaAliases())
         emit antennaAliasesChanged();
     setKnownGuiClients(info.guiClientHandles,
@@ -6575,6 +6603,14 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
+    // Republish the declared capacity on the edge EVERY connect path reaches
+    // (#5603 review). connectToRadio() seeds it, but connectViaWan() and the
+    // LAN auto-reconnect timer never call that, and clearExtensionHandles() has
+    // already zeroed the backend's copy on the way down — so without this the
+    // control-protocol descriptor silently reverts to the model-table guess
+    // after any drop-and-reconnect while the GUI and bridge keep enforcing the
+    // declared number. That divergence is the thing this field exists to close.
+    publishRadioReportedCapacity();
     m_rebootInProgress = false;
     // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
     // but isConnected() stays false for the whole Connecting phase, so a
@@ -7326,7 +7362,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             else if (key == "options")     m_radioOptions = val;
                             else if (key == "model") {
                                 m_model = val;
-                                m_maxSlices = maxSlicesForModel(m_model);
+                                // #5594 item 3: only when the radio declared nothing. A model-string
+                                // change must not overwrite a capacity the radio stated for itself —
+                                // the table is the fallback, not an override.
+                                if (m_declaredMaxSlices <= 0)
+                                    m_maxSlices = maxSlicesForModel(m_model);
                             }
                             else if (key == "chassis_serial") m_chassisSerial = val;
                             else if (key == "software_ver")   m_version = val;
@@ -7725,6 +7765,16 @@ void RadioModel::onDisconnected()
     // three paths at once, so a reconnect can never show the previous radio's
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
+    // Same three-path reasoning as the nickname above, and for the same class of
+    // bug: connectToRadio() is the ONLY place the declared capacity is seeded,
+    // so on the two paths that bypass it a second radio would inherit the first
+    // one's limits. Worse than stale — the precedence guards added for #5594
+    // item 3 then REFUSE the model-table correction that used to repair this
+    // when the new radio's model= status landed, so a leftover 8 would offer
+    // pan and slice creates a FLEX-6400 must refuse. Clearing here closes all
+    // three connect paths at once. (#5603 review)
+    m_declaredMaxSlices = 0;
+    m_maxPanadapters = 0;
     m_region.clear();
     m_ip.clear();
     m_netmask.clear();
@@ -11280,15 +11330,42 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
     if (m_flexBackend) m_flexBackend->decodeRadioStatus(kvs);
 }
 
+void RadioModel::publishRadioReportedCapacity()
+{
+    if (!m_flexBackend)
+        return;
+    // Only what the radio actually spoke on. m_maxSlices carries the model-table
+    // estimate when nothing was declared, and pushing that down would pin the
+    // backend to a number no radio ever reported — the descriptor would then
+    // look authoritative while being a guess.
+    m_flexBackend->setRadioReportedCapacity(
+        m_declaredMaxSlices > 0 ? m_maxSlices : 0,
+        m_maxPanadapters);
+}
+
 void RadioModel::applyRadioChanges(const RadioDelta& d)
 {
     bool changed = false;
-    if (d.model) { m_model = *d.model; m_maxSlices = maxSlicesForModel(m_model); changed = true; }
+    if (d.model) {
+        m_model = *d.model;
+        // #5594 item 3: the table is the fallback, never an override. A radio
+        // that declared its capacity in discovery keeps it when its model name
+        // lands on the status plane a moment later.
+        if (m_declaredMaxSlices <= 0)
+            m_maxSlices = maxSlicesForModel(m_model);
+        changed = true;
+    }
     if (d.slicesAvailable) {
         // slices=N reports available (unused) slots; total capacity = open + available
         const int available = *d.slicesAvailable;
         const int currentSliceCount = static_cast<int>(m_slices.size());
-        const int modelLimit = m_model.isEmpty() ? 0 : maxSlicesForModel(m_model);
+        // Ceiling: what the radio DECLARED if it did, else the per-model
+        // estimate. Without this the ratchet below could raise the capacity back
+        // above a declared limit — a radio that says it runs 2 would be offered
+        // 4 the moment two slices were open. (#5594 item 3)
+        const int modelLimit = m_declaredMaxSlices > 0
+            ? m_declaredMaxSlices
+            : (m_model.isEmpty() ? 0 : maxSlicesForModel(m_model));
         const int reportedTotal = currentSliceCount + available;
         if (modelLimit > 0 && reportedTotal > modelLimit) {
             qCWarning(lcProtocol) << "RadioModel: ignoring impossible slice capacity"
@@ -11304,6 +11381,7 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
             available);
         if (updatedMax != m_maxSlices) {
             m_maxSlices = updatedMax;
+            publishRadioReportedCapacity();
         }
         changed = true;
     }

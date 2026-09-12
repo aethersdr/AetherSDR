@@ -128,6 +128,23 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
     m_modelProvider = std::move(provider);
 }
 
+void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
+{
+    const bool slicesMoved = maxSlices > 0 && maxSlices != m_reportedMaxSlices;
+    const bool pansMoved = maxPanadapters > 0 && maxPanadapters != m_reportedMaxPanadapters;
+    if (!slicesMoved && !pansMoved)
+        return;
+    if (slicesMoved)
+        m_reportedMaxSlices = maxSlices;
+    if (pansMoved)
+        m_reportedMaxPanadapters = maxPanadapters;
+    // A real revision of the descriptor the control protocol serializes, so it
+    // is announced like any other (#5594 item 1). Guarded above: the caller
+    // republishes on every capacity-bearing edge, and an announcement per call
+    // would be the storm the model guard already avoids.
+    emit capabilitiesChanged();
+}
+
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
@@ -164,10 +181,20 @@ RadioCapabilities FlexBackend::capabilities() const
     // FlexBackend refines these from live radio status as touchpoints convert.
     const ModelCapabilities mc = capabilitiesFor(caps.model);
     caps.canCreateSlices = true;
-    caps.maxSlices = mc.maxSlices;
-    // approx: pan capacity is not strictly slice count on real Flex hardware;
-    // refined from live radio status in a later touchpoint conversion.
-    caps.maxPanadapters = mc.maxSlices;
+    // What the radio declared wins over the model table when it said anything
+    // (#5594 item 3). The table is a per-model estimate keyed off the model
+    // string; these are what THIS radio reports for its own hardware and
+    // licence. Both fall back to the table at 0, so firmware that never sends
+    // the discovery keys behaves exactly as before.
+    caps.maxSlices = m_reportedMaxSlices > 0 ? m_reportedMaxSlices : mc.maxSlices;
+    // Pan capacity is no longer assumed equal to slice capacity. That was a
+    // documented approximation ("pan capacity tracks the radio's SCU/slice
+    // capacity, which is identical across every current model",
+    // ModelCapabilities.h) — true of the current line-up, but an assumption the
+    // radio settles for itself: a FLEX-8600 broadcasts max_panadapters=4 and
+    // max_slices=4 as separate keys, and nothing guarantees they stay equal.
+    caps.maxPanadapters =
+        m_reportedMaxPanadapters > 0 ? m_reportedMaxPanadapters : mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
@@ -1097,6 +1124,15 @@ void FlexBackend::clearExtensionHandles()
     // it is the same radio — capabilities were republished from scratch at the
     // connect edge, so the previous session's announcement describes nothing.
     m_announcedModel.clear();
+    // #5594 item 3: and it must not inherit the previous radio's capacity — a
+    // FLEX-6700 followed by a FLEX-6400 would otherwise keep reporting 8.
+    //
+    // Deliberately silent. Every other capacity change announces, but this one
+    // runs on the disconnect edge, where RadioModel republishes capabilities
+    // through connectionStateChanged anyway; announcing here as well would be a
+    // duplicate on a path where no client can act on it.
+    m_reportedMaxSlices = 0;
+    m_reportedMaxPanadapters = 0;
 }
 
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)

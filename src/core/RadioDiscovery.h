@@ -79,6 +79,19 @@ struct RadioInfo {
     quint16 port{4992};
     QString status;         // "Available" | "In_Use" | etc.
     int maxLicensedVersion{0};
+    // What the radio says it can run, from the discovery keys `max_slices` and
+    // `max_panadapters` (#5594 item 3). 0 means the radio did not say — older
+    // firmware, or a connect by IP where no discovery packet is ever seen — and
+    // the FlexLib model table remains the fallback.
+    //
+    // CAPACITY, not availability. The same packet also carries
+    // `available_slices` / `available_panadapters`, which are the currently FREE
+    // counts and fall as clients open objects; FlexLib keeps all four apart
+    // (Discovery.cs:141/154/247/260, copied separately at API.cs:186-189) and so
+    // do we. Observed on a FLEX-8600 running 4.2.20.41343: max_panadapters=4,
+    // available_panadapters=4, max_slices=4, available_slices=4.
+    int maxSlices{0};
+    int maxPanadapters{0};
     bool inUse{false};
     bool multiFlexEnabled{true}; // mf_enable from discovery; true = multi-client allowed
     bool isRouted{false};
