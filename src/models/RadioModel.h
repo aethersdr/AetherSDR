@@ -1695,6 +1695,14 @@ public:
     {
         onStatusReceived(object, kvs);
     }
+    // Fire the LAN auto-reconnect timer's handler now instead of waiting for it.
+    // Drives the REAL handler, not a copy of its body, so a test can pin what the
+    // reconnect restores — see the licensed-capacity case in
+    // radio_capacity_declaration_test (#5603 review).
+    void triggerAutoReconnectForTest()
+    {
+        QMetaObject::invokeMethod(&m_reconnectTimer, "timeout", Qt::DirectConnection);
+    }
     // Drive the reconnect/reclaim portion of the normalized backend seam
     // without a synthetic radio peer. The socket-free resource test uses these
     // to prove that a reclaimed non-Flex slice is republished.

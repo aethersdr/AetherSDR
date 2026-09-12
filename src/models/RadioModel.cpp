@@ -2689,6 +2689,25 @@ RadioModel::RadioModel(QObject* parent)
             // so the flag has to be set here as well or an armed reconnect
             // reads as "nothing is happening".
             m_connectAttemptActive = true;
+            // Restore the capacity THIS radio declared (#5603 review, @NF0T).
+            // onDisconnected() cleared it — deliberately, because two of the
+            // three connect paths never re-seed and a second radio must not
+            // inherit the first one's limits. But this path is the exception:
+            // it reconnects to m_lastInfo.address, so it is by construction the
+            // same radio that just dropped, and m_lastInfo still carries what it
+            // declared. Without this a reduced-licence radio that rides out a
+            // network blip silently reverts to the model table's higher number
+            // until the next discovery-based connect — which is precisely the
+            // case this field exists to get right.
+            //
+            // Deliberately NOT done in onConnected(): connectViaWan() never sets
+            // m_lastInfo, so re-seeding from it on the shared edge would hand a
+            // WAN session the previous radio's limits — the cross-radio
+            // inheritance bug the disconnect-side clear exists to prevent.
+            m_declaredMaxSlices = m_lastInfo.maxSlices > 0 ? m_lastInfo.maxSlices : 0;
+            m_maxPanadapters = m_lastInfo.maxPanadapters > 0 ? m_lastInfo.maxPanadapters : 0;
+            if (m_declaredMaxSlices > 0)
+                m_maxSlices = m_declaredMaxSlices;
             clearAutomationSliceFixtures();
             if (m_connection) {
                 QMetaObject::invokeMethod(m_connection, [this] {

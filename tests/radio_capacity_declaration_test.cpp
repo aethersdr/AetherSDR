@@ -174,6 +174,41 @@ int main(int argc, char** argv)
               "and the slice capacity follows the same rule");
     }
 
+    // ---- a LAN auto-reconnect keeps the licence ceiling ----
+    //
+    // #5603 review (@NF0T): a reduced-licence radio that rides out a network
+    // blip must not silently revert to the model table's higher number. The
+    // disconnect-side clear is right — two of the three connect paths never
+    // re-seed — but the auto-reconnect timer reconnects to m_lastInfo.address,
+    // so it is the same radio and m_lastInfo still carries its declaration.
+    //
+    // Driven through the timer's own restore rather than a synthetic setter, so
+    // the case fails if that restore is removed.
+    {
+        RadioModel m;
+        RadioInfo licensed;
+        licensed.model = QStringLiteral("FLEX-6700");          // table says 8
+        licensed.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
+        licensed.maxSlices = 3;                                 // reduced licence
+        licensed.maxPanadapters = 3;
+        m.connectToRadio(licensed);
+        check(m.maxPanadapters() == 3 && m.maxSlices() == 3,
+              "the licensed capacity is in effect");
+
+        // The link drops. The declaration is cleared, as it must be.
+        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        check(m.maxPanadapters() != 3,
+              "the declaration is cleared on the way down");
+
+        // The auto-reconnect timer fires for the same radio.
+        m.triggerAutoReconnectForTest();
+        check(m.maxPanadapters() == 3,
+              "an auto-reconnect to the same radio restores its licensed "
+              "panadapter capacity rather than the model table's 8");
+        check(m.maxSlices() == 3,
+              "and its licensed slice capacity");
+    }
+
     if (g_failures == 0)
         std::printf("radio_capacity_declaration_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
