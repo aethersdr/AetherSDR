@@ -233,6 +233,7 @@ private:
     void finish(QString path);
     void cleanup();
     void destroySocket(bool abortConnection);
+    void destroyServer();
 
     ExportSelection expandSelection(ExportSelection selection) const;
     bool validateCommonPreconditions(Operation operation, QString* error) const;

@@ -227,11 +227,7 @@ void ProfileTransfer::cleanup()
     m_overallTimer->stop();
 
     destroySocket(true);
-    if (m_server) {
-        m_server->close();
-        m_server->deleteLater();
-        m_server = nullptr;
-    }
+    destroyServer();
     if (m_saveFile) {
         m_saveFile->cancelWriting();
         m_saveFile->deleteLater();
@@ -265,6 +261,24 @@ void ProfileTransfer::destroySocket(bool abortConnection)
         socket->disconnectFromHost();
     }
     socket->deleteLater();
+}
+
+void ProfileTransfer::destroyServer()
+{
+    if (!m_server) {
+        return;
+    }
+
+    // Same detach-then-act ordering as destroySocket(). close() does not emit
+    // synchronously, but a newConnection already queued before cleanup would
+    // otherwise reach onDownloadConnection() with m_server null; today only the
+    // !m_busy guard stops it dereferencing that. Severing the handler makes the
+    // teardown safe by construction rather than by guard ordering.
+    QTcpServer* server = m_server;
+    m_server = nullptr;
+    QObject::disconnect(server, nullptr, this, nullptr);
+    server->close();
+    server->deleteLater();
 }
 
 ExportSelection ProfileTransfer::expandSelection(ExportSelection selection) const
