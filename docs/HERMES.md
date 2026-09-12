@@ -936,8 +936,12 @@ receiver, and **backend teardown**, which waits out an in-flight DSP build.
 - **LNA ↔ dB reference** (addendum 2 §A3): every LNA change shifts the absolute
   reference, so the panadapter trace jumps and the waterfall shows a band users
   read as a real event. Keep LNA value, calibration offset and AGC threshold in
-  ONE per-slice object. Worth doing before an RF AGC exists — manual gain
-  changes have the same problem.
+  ONE object. Worth doing before an RF AGC exists — manual gain
+  changes have the same problem. **DONE — `Hl2DbReference`. One object per
+  RADIO, not per slice:** the addendum says per-slice and on the HL2 that is
+  wrong, because the LNA is one AD9866 field ahead of every DDC and
+  `fullScaleDbm` is a board property. Only the AGC-T is genuinely per receiver,
+  and it is passed in rather than stored twice. See §13 item 12.
 
 ### 11.6 What the oracles did not cover — now addendum 3 (see §12)
 
@@ -1133,7 +1137,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
 | ~~10~~ | ~~RADE null-deref at `MainWindow_DigitalModes.cpp:461`~~ **DONE** | ours, gap 9 | Fixed, and §18.3 already records it. `activateRADE()` guards `panStream()` at its top and declines with a message; the bare `connect` further down is inside that guarded region | — |
 | 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
-| 12 | One dB-reference object per slice (LNA + calibration + AGC threshold) | A2 §A3 | Every LNA change shifts the absolute reference; the trace jumps and users read it as a real event | S |
+| ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. Calibration is still an honest hole — `isCalibrated()` is false and no constant was invented. **One caveat the row could not know:** the reference subtracts the COMMANDED gain, and the AD9866 folds `code & 0x1F` above code 31 (upstream #177, design intent), so above +19 dB commanded the correction over-shoots by up to 32 dB. Named in the class header; the fix belongs at the clamp (`kLnaGainMaxDb` still publishes +48), not in the reference | — |
 | ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
 | 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
 
@@ -2227,6 +2231,14 @@ gain unreachable.
 `Hl2DbReference` is moved in the same call, so the trace and the S-meter do not
 slide when gain changes — an operator backing off 10 dB on a strong band would
 otherwise watch the noise floor drop 10 dB and read it as the band going quiet.
+
+**The AGC-T moves with it too** (§13 item 12). WDSP's maximum gain is a setpoint
+about the antenna signal applied to a post-LNA one, so a gain change that left it
+alone would change how far into the noise the AGC chases — the display holds
+still and the band floor in the headphones does not. `applyLnaGainDb` re-pushes
+`Hl2DbReference::agcCeilingDb()` to every live receiver. The operator's own
+0..100 is untouched: compensating by rewriting THAT would make their slider walk
+every time the gain moved, which item 14's regulator does several times a day.
 
 **The persisted key is now family-scoped** (`DisplayRfGain_hl2`). It was shared,
 which was harmless while the HL2 ignored the value and stopped being harmless

@@ -966,11 +966,15 @@ private:
     // cannot drift silently.
     double m_alcHoldBelowDbfs = -45.0;
 
+    // The slice AGC threshold -> WDSP gain ceiling map used to live here as
+    // kAgcCeilingDbPerUnit. It is now Hl2DbReference::kAgcCeilingDbPerUnit,
+    // reached only through m_dbRef.agcCeilingDb(), because the ceiling has to
+    // be REFERRED to the LNA gain the same way the displayed dBm is: derive it
+    // anywhere else and an RF gain change moves the heard level even though it
+    // provably cannot move the displayed one. See that header.
+
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
-    // Slice AGC threshold (0..100) -> WDSP gain ceiling in dB. 0.6 spans
-    // 0..60 dB; see the measurement in setSliceAgc().
-    static constexpr double kAgcCeilingDbPerUnit = 0.6;
     static constexpr double kUsablePassbandFraction = 0.8;
     // Ceiling on host-mixed slice audio. N demodulated receivers are summed
     // here, so N loud slices can sum past full scale where one never could.
