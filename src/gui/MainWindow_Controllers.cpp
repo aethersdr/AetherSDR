@@ -2847,7 +2847,7 @@ void MainWindow::wireExternalControllers()
     connect(m_audio, &AudioEngine::mutedChanged,
             this, [this](bool) { updateRC28Leds(); });
 
-    // StreamDeck native integration removed — use TCI StreamController plugin instead.
+    // StreamDeck native integration removed — drive it over TCI instead.
 #endif
 
     // Ulanzi Dial backend.  One concrete implementation per platform —
