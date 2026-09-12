@@ -2798,7 +2798,7 @@ same fact is how the two-callers-one-widget bug gets built.
 ### 19.7 Radio-side DSP, and why it is not one flag
 
 The second round covered five more surfaces: NR/NB/ANF/NRL/ANFL/ANFT in the
-slice VFO, the APD row, the WNB row in the ANT panel, `File ▸ Waveforms`, and
+slice VFO, the APD row, the WNB row in the ANT panel, `Tools ▸ Waveforms`, and
 `Settings ▸ multiFLEX`. The obvious move is one flag called `hasFlexDsp`. Two
 reasons it is three flags instead:
 

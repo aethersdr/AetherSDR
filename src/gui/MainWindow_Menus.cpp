@@ -15,6 +15,7 @@
 #include "CopyAssistController.h"
 #include "CopyAssistPanel.h"
 #endif
+#include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
 #include "DaxApplet.h"
 #include "PanadapterApplet.h"
@@ -23,6 +24,7 @@
 #include "TciApplet.h"
 #include "ClientChainApplet.h"
 #include "Contribute.h"
+#include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
 #include "MainWindowHelpers.h"
@@ -41,13 +43,16 @@
 #include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
 #include "TxBandDialog.h"
+#include "TxApplet.h"
 #include "UlanziDialMapperDialog.h"
+#include "VfoWidget.h"
 #include "WaveformsDialog.h"
 #include "WhatsNewDialog.h"
 #include "core/UpdateChecker.h"
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -75,6 +80,7 @@
 #include <QWidgetAction>
 
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -87,7 +93,25 @@ void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
 
-    auto* waveformsAct = fileMenu->addAction("Waveforms...");
+    auto* chooseRadio = fileMenu->addAction("Connect to Radio...");
+    chooseRadio->setMenuRole(QAction::NoRole);
+    connect(chooseRadio, &QAction::triggered, this, [this] {
+        toggleConnectionDialog();
+    });
+
+    auto* disconnectRadio = fileMenu->addAction("Disconnect");
+    disconnectRadio->setMenuRole(QAction::NoRole);
+    connect(disconnectRadio, &QAction::triggered,
+            this, &MainWindow::disconnectFromRadioByUser);
+
+    connect(fileMenu, &QMenu::aboutToShow, this,
+            [this, chooseRadio, disconnectRadio] {
+        const bool connected = m_radioModel.isConnected();
+        chooseRadio->setEnabled(!connected);
+        disconnectRadio->setEnabled(connected);
+    });
+
+    auto* waveformsAct = new QAction("Waveforms...", this);
     m_waveformsAction = waveformsAct;   // hidden by applyCapabilitiesToUi()
                                        // on a radio with no installable waveforms
     waveformsAct->setMenuRole(QAction::NoRole);
@@ -113,12 +137,6 @@ void MainWindow::buildMenuBar()
     radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
     connect(radioSetup, &QAction::triggered, this, [this] {
         openRadioSetupPage();
-    });
-
-    auto* chooseRadio = settingsMenu->addAction("Connect to Radio...");
-    chooseRadio->setMenuRole(QAction::NoRole);      // prevent macOS auto-reparenting (#883)
-    connect(chooseRadio, &QAction::triggered, this, [this] {
-        toggleConnectionDialog();
     });
 
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
@@ -150,7 +168,8 @@ void MainWindow::buildMenuBar()
     });
 #endif
 
-    auto* networkAction = settingsMenu->addAction("Network...");
+    auto* networkAction = new QAction("Network Diagnostics...", this);
+    networkAction->setMenuRole(QAction::NoRole);
     connect(networkAction, &QAction::triggered, this, [this] {
         showNetworkDiagnosticsDialog();
     });
@@ -317,17 +336,13 @@ void MainWindow::buildMenuBar()
     connect(mqttAction, &QAction::triggered,
             this, &MainWindow::showMqttSettingsDialog);
 #endif
-    auto* memoryAction = settingsMenu->addAction("Memory...");
+    auto* memoryAction = new QAction("Memory...", this);
     connect(memoryAction, &QAction::triggered, this, [this] {
         showMemoryDialog();
     });
-    auto* netSchedulerAction = settingsMenu->addAction("Net Scheduler...");
+    auto* netSchedulerAction = new QAction("Net Scheduler...", this);
     connect(netSchedulerAction, &QAction::triggered, this, [this] {
         showNetSchedulerDialog();
-    });
-    auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
-    connect(usbCablesAction, &QAction::triggered, this, [this] {
-        openRadioSetupPage(QStringLiteral("USB Cables"));
     });
 #ifdef HAVE_MIDI
     auto* midiAction = settingsMenu->addAction("MIDI Mapping...");
@@ -763,30 +778,6 @@ void MainWindow::buildMenuBar()
     // RADE was the only consumer that ever actually wanted that route.
     // See AudioEngine::setRadeMode().
 
-    // Connect placeholder items to show "not implemented" message
-    for (auto* action : settingsMenu->actions()) {
-        if (!action->isSeparator() && action != radioSetup && action != chooseRadio
-            && action != networkAction && action != memoryAction && action != spotsAction
-            && action != usbCablesAction
-#ifdef HAVE_SERIALPORT
-            && action != flexControlAction
-#endif
-#ifdef HAVE_MIDI
-            && action != midiAction
-#endif
-            && action != multiFlexAction
-            && action != autoCatAction
-            && action != autoTciAction
-#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
-            && action != autoDaxAction
-#endif
-            ) {
-            connect(action, &QAction::triggered, this, [this, action] {
-                statusBar()->showMessage(action->text().remove("...") + " — not yet implemented", 3000);
-            });
-        }
-    }
-
     // ── Profiles menu ──────────────────────────────────────────────────────
     m_profilesMenu = menuBar()->addMenu("&Profiles");
     auto* profileMgrAct = m_profilesMenu->addAction("Profile Manager...");
@@ -826,6 +817,11 @@ void MainWindow::buildMenuBar()
             });
         }
     });
+
+    // Tools contains the operator's frequently used actions, so keep it ahead
+    // of the less frequently changed display options in View.
+    auto* toolsMenu = menuBar()->addMenu("&Tools");
+    toolsMenu->setToolTipsVisible(true);
 
     auto* viewMenu = menuBar()->addMenu("&View");
 
@@ -980,6 +976,46 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_themeEditorDialog);
     });
 
+    // Global defaults for new slices. Existing VFO flag controls remain
+    // per-slice overrides; choosing here also applies to every live slice.
+    auto* markerWidthMenu = viewMenu->addMenu("VFO Marker Size");
+    auto* markerWidthGroup = new QActionGroup(markerWidthMenu);
+    markerWidthGroup->setExclusive(true);
+    for (const auto& option : {
+             std::pair<const char*, int>{"Off", 0},
+             {"1 px", 1},
+             {"3 px", 3}}) {
+        auto* action = markerWidthMenu->addAction(option.first);
+        action->setCheckable(true);
+        action->setChecked(option.second == VfoWidget::defaultMarkerWidth());
+        markerWidthGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, width = option.second] {
+            VfoWidget::setDefaultMarkerWidth(width);
+            for (auto* vfo : findChildren<VfoWidget*>()) {
+                vfo->setMarkerWidth(width);
+            }
+        });
+    }
+
+    auto* filterEdgesMenu = viewMenu->addMenu("VFO Filter Edge");
+    auto* filterEdgesGroup = new QActionGroup(filterEdgesMenu);
+    filterEdgesGroup->setExclusive(true);
+    const bool filterEdgesHidden = VfoWidget::defaultFilterEdgesHidden();
+    for (const auto& option : {
+             std::pair<const char*, bool>{"Show", false},
+             {"Hide", true}}) {
+        auto* action = filterEdgesMenu->addAction(option.first);
+        action->setCheckable(true);
+        action->setChecked(option.second == filterEdgesHidden);
+        filterEdgesGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, hide = option.second] {
+            VfoWidget::setDefaultFilterEdgesHidden(hide);
+            for (auto* vfo : findChildren<VfoWidget*>()) {
+                vfo->setFilterEdgesHidden(hide);
+            }
+        });
+    }
+
     auto* singleClickTuneAct = viewMenu->addAction("Single-Click to Tune");
     singleClickTuneAct->setCheckable(true);
     singleClickTuneAct->setChecked(
@@ -1051,10 +1087,8 @@ void MainWindow::buildMenuBar()
             this, [this] { showCallsignLookupDialog(); });
 
 #ifdef HAVE_WEBSOCKETS
-    {
-        auto* fdvReporterAct = viewMenu->addAction(tr("FreeDV Reporter..."));
-        connect(fdvReporterAct, &QAction::triggered, this, &MainWindow::showFreeDvReporter);
-    }
+    auto* fdvReporterAct = viewMenu->addAction(tr("FreeDV Reporter..."));
+    connect(fdvReporterAct, &QAction::triggered, this, &MainWindow::showFreeDvReporter);
 #endif
 
     viewMenu->addSeparator();
@@ -1178,6 +1212,154 @@ void MainWindow::buildMenuBar()
                 heartbeatBlinkAct, &QAction::setChecked);
     }
 
+    // Keyboard behavior is configuration, not presentation.
+    viewMenu->removeAction(kbAct);
+    viewMenu->removeAction(configShortcutsAct);
+    settingsMenu->addSeparator();
+    settingsMenu->addAction(kbAct);
+    settingsMenu->addAction(configShortcutsAct);
+    auto* resetSettingsAction = settingsMenu->addAction("Reset Settings...", this, [this] {
+        SupportDialog::resetSettings(this);
+    });
+    resetSettingsAction->setMenuRole(QAction::NoRole);
+
+    // ── Tools menu ─────────────────────────────────────────────────────────
+    // Operational windows and verbs live here. Reusing the existing QActions
+    // preserves their shortcuts and signal paths while changing only IA.
+    auto* addPanAction = toolsMenu->addAction("Add Panadapter");
+    connect(addPanAction, &QAction::triggered, this, [this] {
+        if (!m_radioModel.isConnected()) {
+            return;
+        }
+        if (!m_panStack || m_panStack->count() >= m_radioModel.maxPanadapters()) {
+            showPanadapterSliceCapacityMessage();
+            return;
+        }
+        m_radioModel.createPanadapter();
+    });
+
+    auto* aetherialAction = toolsMenu->addAction("Aetherial Audio");
+    aetherialAction->setCheckable(true);
+    connect(aetherialAction, &QAction::triggered,
+            this, &MainWindow::toggleAetherialStrip);
+
+    auto* cwKeyerAction = toolsMenu->addAction("CW Keyer");
+    cwKeyerAction->setCheckable(true);
+    connect(cwKeyerAction, &QAction::triggered,
+            this, &MainWindow::toggleCwKeyerPanel);
+
+#ifdef AETHER_ASR_ENABLED
+    auto* copyAssistAction = toolsMenu->addAction("Copy Assist");
+    copyAssistAction->setCheckable(true);
+    connect(copyAssistAction, &QAction::triggered,
+            this, &MainWindow::showCopyAssist);
+#endif
+
+    viewMenu->removeAction(packetDecoderAction);
+    toolsMenu->addAction(packetDecoderAction);
+    auto* kiwiAction = toolsMenu->addAction("Configure KiwiSDR...");
+    kiwiAction->setMenuRole(QAction::NoRole);
+    connect(kiwiAction, &QAction::triggered, this, [this] {
+        openRadioSetupPage(QStringLiteral("Antennas"));
+    });
+
+    toolsMenu->addSeparator();
+    auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
+    swrScanAction->setProperty(kTxKeyingProperty, true);
+    connect(swrScanAction, &QAction::triggered, this, [this] {
+        startSwrSweep();
+    });
+    auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
+    preTuneAction->setProperty(kTxKeyingProperty, true);
+    connect(preTuneAction, &QAction::triggered, this, [this] {
+        if (m_appletPanel && m_appletPanel->txApplet()) {
+            m_appletPanel->txApplet()->openPreTuneDialog();
+        }
+    });
+    auto* clearAtuAction = toolsMenu->addAction("Clear ATU Memories...");
+    connect(clearAtuAction, &QAction::triggered, this, [this] {
+        if (m_appletPanel && m_appletPanel->txApplet()) {
+            m_appletPanel->txApplet()->confirmAndClearAtuMemories();
+        }
+    });
+
+    toolsMenu->addSeparator();
+    viewMenu->removeAction(callsignLookupAct);
+    viewMenu->removeAction(pskMapAction);
+    toolsMenu->addAction(callsignLookupAct);
+    toolsMenu->addAction(pskMapAction);
+#ifdef HAVE_WEBSOCKETS
+    viewMenu->removeAction(fdvReporterAct);
+    toolsMenu->addAction(fdvReporterAct);
+#endif
+
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(netSchedulerAction);
+    toolsMenu->addAction(memoryAction);
+    toolsMenu->addAction(waveformsAct);
+
+    toolsMenu->addSeparator();
+    auto* radioHealthAction = toolsMenu->addAction("Radio Health...", this, [this] {
+        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        trackPersistentDialog(dlg);
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+    });
+    auto* gpsDashboardAction = toolsMenu->addAction("GPS Dashboard...", this, [this] {
+        showGpsLocationDialog();
+    });
+    toolsMenu->addAction(networkAction);
+    auto* runtimeMonitorAction = toolsMenu->addAction("Runtime Monitor...", this, [this] {
+        showSystemInfoDialog();
+    });
+
+    connect(toolsMenu, &QMenu::aboutToShow, this,
+            [this, addPanAction, aetherialAction, cwKeyerAction,
+#ifdef AETHER_ASR_ENABLED
+             copyAssistAction,
+#endif
+             swrScanAction, preTuneAction, clearAtuAction,
+             radioHealthAction, gpsDashboardAction, runtimeMonitorAction] {
+        const bool connected = m_radioModel.isConnected();
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const auto& tx = m_radioModel.transmitModel();
+        const bool idle = !tx.isTuning() && !tx.isMox() && !tx.isTransmitting();
+        const bool txReady = connected && caps.canTransmit
+            && m_radioModel.txOwnedByUs() && idle;
+
+        addPanAction->setEnabled(connected && m_panStack
+            && m_panStack->count() < m_radioModel.maxPanadapters());
+        aetherialAction->setChecked(m_aetherialStrip && m_aetherialStrip->isVisible());
+        cwKeyerAction->setVisible(!connected || caps.hasRadioSideCwKeyer);
+        cwKeyerAction->setEnabled(m_cwxIndicator && m_cwxIndicator->isEnabled());
+        cwKeyerAction->setChecked(m_cwxPanel && m_cwxPanel->isVisible());
+#ifdef AETHER_ASR_ENABLED
+        const bool copyVisible = m_copyAssistApplet
+            && m_copyAssistApplet->isCopyAssistVisible();
+        copyAssistAction->setEnabled(
+            m_asrIndicator && (m_asrIndicator->isEnabled() || copyVisible));
+        copyAssistAction->setChecked(copyVisible);
+#endif
+        swrScanAction->setEnabled(txReady);
+        swrScanAction->setToolTip(txReady ? QString()
+            : tr("Requires an idle, TX-capable radio with this client holding the interlock"));
+        const bool memories = caps.hasTunerMemories;
+        preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled());
+        preTuneAction->setToolTip(!memories
+            ? tr("ATU memory controls are unavailable for this radio")
+            : (!tx.memoriesEnabled()
+                   ? tr("Enable MEM before running the pre-tune sweep")
+                   : QString()));
+        clearAtuAction->setEnabled(connected && memories);
+        radioHealthAction->setEnabled(connected);
+        runtimeMonitorAction->setEnabled(true);
+        const bool gps = !connected
+            || (caps.hasGpsLocation && m_radioModel.hasGpsHardware());
+        gpsDashboardAction->setVisible(gps);
+    });
+
     auto* helpMenu = menuBar()->addMenu("&Help");
 
     // ── Learn & news ──────────────────────────────────────────────────────
@@ -1281,33 +1463,6 @@ void MainWindow::buildMenuBar()
         dlg->show();
         dlg->raise();
     });
-    // Before Slice Troubleshooting: this one is about the RADIO's own health
-    // registers, which is the first thing to check when the slice-level
-    // symptoms in that dialog turn out to have a hardware cause.
-    helpMenu->addAction("Radio Health...", this, [this]() {
-        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
-    });
-    // Beside the other two diagnostic surfaces: Radio Health is the radio's
-    // own state, Slice Troubleshooting is one slice's path, System Info is this
-    // application's runtime (#2554).
-    // Not "System Info…", which acceptance criterion 1 in #2554 asks for:
-    // aether.sysinfo already carries the display label "System Info" in the
-    // category list next door in Help → Support (#4986), and two unrelated
-    // surfaces sharing one name is confusing in exactly the place an operator
-    // goes when they are already confused. The category shipped first, so the
-    // new arrival is the one that moves.
-    //
-    // "Runtime Monitor" rather than anything with "Diagnostics" in it: this
-    // menu already has Support & Diagnostics… one entry away, and trading one
-    // collision for a closer one is not a fix. It also stays accurate as the
-    // remaining tabs land — Overview, Memory, Painters all measure this app's
-    // own runtime, which is the scope the name claims.
-    helpMenu->addAction("Runtime Monitor...", this, [this]() { showSystemInfoDialog(); });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
             &m_radioModel, m_audio, this,
@@ -1327,13 +1482,6 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
-    // "Reset Settings" was previously buried inside the Support dialog too.
-    // NoRole is required: macOS would otherwise treat the word "Settings" as a
-    // Preferences action and reparent it into the application menu.
-    auto* resetSettingsAction = helpMenu->addAction("Reset Settings...", this, [this]() {
-        SupportDialog::resetSettings(this);
-    });
-    resetSettingsAction->setMenuRole(QAction::NoRole);
     helpMenu->addAction("Check for Updates...", this, [this]() {
         m_updateChecker->checkNow();
     });

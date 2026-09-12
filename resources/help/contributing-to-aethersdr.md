@@ -87,7 +87,7 @@ State clearly whether RF was actually transmitted or whether the bug was caught 
 
 Before filing a report, check the built-in tools:
 
-- `Help -> Support...` gathers logs, settings, and support-bundle information.
+- `Help -> Support & Diagnostics...` gathers logs, settings, and support-bundle information.
 - `Help -> Slice Troubleshooting...` exposes detailed slice and state information that can explain many operating mismatches.
 - The lightbulb button in the title bar opens the feature-request and AI-assisted reporting workflow.
 
