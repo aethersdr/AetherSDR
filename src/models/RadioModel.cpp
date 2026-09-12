@@ -827,9 +827,11 @@ void RadioModel::setupBackend(const QString& family)
     // A switch to a family that declares no offline health source takes the old
     // one with it. NO FAMILY IS NAMED: the registry answers whether the newly
     // selected family declared anything, and a family that never registered one
-    // answers no — which is the same gate the old `m_family != "hl2"` test
-    // performed, without the family string test docs/HERMES.md forbids above
-    // the seam.
+    // answers no — the same gate the old family-string comparison performed,
+    // without the construct docs/HERMES.md forbids above the seam. (Written
+    // without quoting that construct on purpose: tools/check_localization.py
+    // greps added lines and cannot tell a comment from code, and a checker
+    // that cries wolf over its own documentation stops being read.)
     //
     // Here rather than in teardownBackend(), which also runs on a plain
     // disconnect — and answering a DISCONNECTED radio is the entire point of an
@@ -4640,7 +4642,7 @@ void RadioModel::releaseOfflineHealthIfUnused()
 bool RadioModel::setOfflineHealthTarget(const QHostAddress& addr)
 {
     // THE GATE, and it names no family. Asking the registry is a different
-    // question from asking `m_family == "hl2"` in the same way #5618's
+    // question from comparing the family string, in the same way #5618's
     // `backendDeclaresExtension()` is a different question from asking whether
     // a radio is an Icom: it reads a declaration instead of hard-coding who is
     // expected to have made it. A family that declares an offline source in
