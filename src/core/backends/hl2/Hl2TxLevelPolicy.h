@@ -23,10 +23,13 @@ namespace AetherSDR::hl2 {
 
 // The Phone applet's MIC slider (0..100) as dB of gain.
 //
-// 50 is unity, because TransmitModel constructs m_micLevel at 50 and nothing
-// restores it at startup: a session where the operator never touches the slider
-// must leave the modulator exactly at its own 1.0 default. +/-20 dB across the
-// travel, linear in dB.
+// 50 is unity, and stays unity now that Hl2Backend remembers its own radio's
+// level across sessions (the txSetpoints extension document, applied in
+// pushInitialState): 50 is what a radio with nothing stored comes up on, so
+// that session must leave the modulator exactly at its own 1.0 default. The
+// persistence changed which sessions arrive here at 50; it did not retire the
+// pin, and moving unity would still re-level every install that never asked for
+// it. +/-20 dB across the travel, linear in dB.
 //
 // Level 0 is NOT -20 dB — see micSliderToLinear, which handles it as a mute.
 // This function is the continuous part of the mapping only.
