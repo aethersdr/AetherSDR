@@ -44,7 +44,10 @@ display/preflight metadata, never the owner or a permission grant.
 MOX, TUNE and ATU no longer emit parallel raw keying commands from
 `TransmitModel`. Flex encodes the same FlexLib 4.2.18 commands behind its typed
 backend methods. The receive-only backend, receive-only mode, pan inhibit and
-existing operator preflight checks remain in force. Key-up, bypass and abort
+existing operator preflight checks remain in force. Admission refusals carry a
+distinct operator message and notification key per `Refusal` reason; only
+`Recovering` is reachable while a single desktop actor exists, but the per-client
+actors of the next increment make the rest reachable. Key-up, bypass and abort
 are not subject to key-on permission checks.
 
 Admission precedes optimistic model state. The resulting fence is checked
@@ -112,8 +115,15 @@ reuse. Session admission closes before any cancellation, pending-command reply
 or model-removal notification, even when no operation was active. It stays
 closed through the disconnect gap and reopens only on the new connection edge.
 Stop cleanup remains in recovery until transport loss/teardown is
-acknowledged. Destruction does not call presentation observers while the
-aggregate is partially destroyed.
+acknowledged. Every stop source therefore needs a matching acknowledgment: an
+unacknowledged stop keeps admission closed for the rest of the session. `reset()`
+is the only production stop source in this increment and the disconnect/teardown
+paths acknowledge it; `cancel()`, `revoke()`, `expire()` and `emergencyStop()`
+have no production callers yet, so the increment that gives one of them a caller
+must land its acknowledgment path in the same change. A refusal that reaches the
+coordinator outside a disconnect gap is logged, because the session latch
+short-circuits the normal case before admission is attempted. Destruction does
+not call presentation observers while the aggregate is partially destroyed.
 
 ## Deliberate limits and next increment
 

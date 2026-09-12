@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/LogManager.h"
 
 #include <chrono>
 
@@ -36,8 +37,43 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
     }
     const TxCoordinator::Admission admission = m_txCoordinator.acquire(m_desktopTxActor, txMonotonicMs());
     if (!admission.accepted()) {
-        emitInterlockNotification(tr("Transmit cleanup is still in progress."),
-                                  QStringLiteral("tx-coordinator-recovering"));
+        // One message per reason. Only Recovering is reachable while a single
+        // desktop actor exists, but the others become reachable as soon as a
+        // per-client actor does, and "cleanup is in progress" would then be a
+        // wrong explanation rather than a vague one.
+        QString message;
+        QString key;
+        switch (admission.refusal) {
+        case TxCoordinator::Refusal::Recovering:
+            message = tr("Transmit cleanup is still in progress.");
+            key = QStringLiteral("tx-coordinator-recovering");
+            break;
+        case TxCoordinator::Refusal::Busy:
+            message = tr("Another client is transmitting.");
+            key = QStringLiteral("tx-coordinator-busy");
+            break;
+        case TxCoordinator::Refusal::Denied:
+            message = tr("This client is not permitted to transmit.");
+            key = QStringLiteral("tx-coordinator-denied");
+            break;
+        case TxCoordinator::Refusal::InvalidActor:
+        case TxCoordinator::Refusal::WrongThread:
+        case TxCoordinator::Refusal::None:
+            message = tr("Transmit is unavailable.");
+            key = QStringLiteral("tx-coordinator-unavailable");
+            break;
+        }
+        // m_txSessionClosing short-circuits above, so a Recovering refusal here
+        // is a stop that was never acknowledged rather than a normal disconnect
+        // gap. That is a permanent admission latch, so say so instead of
+        // leaving it to be diagnosed from a silent refusal. See
+        // TxCoordinator::acknowledgeStopped().
+        if (admission.refusal == TxCoordinator::Refusal::Recovering) {
+            qCWarning(lcProtocol)
+                << "RadioModel: TX refused — coordinator stop is unacknowledged;"
+                << "admission stays closed until the session ends";
+        }
+        emitInterlockNotification(message, key);
         return false;
     }
     m_txOperation = admission.operation;

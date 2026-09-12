@@ -24,6 +24,7 @@ public:
         radio.applyBackendTransmitDelta(delta);
     }
     static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
+    static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
     {
         connection.m_commandSinkForTest = [&commands](quint32, const QString& command) { commands << command; };
@@ -596,6 +597,33 @@ void queuedCwSessionAndTcpFences()
               "reset fences queued TCP fallback/backstop and UDP before their final writers");
     }
 }
+// Both test-injection entry points tear the old backend down, which closes
+// admission for the dying session. Neither is followed by an onConnected()
+// edge, so each has to drain the latch itself or every later TX intent in that
+// test is silently refused and reads as a product bug.
+void testInjectionReopensAdmission()
+{
+    {
+        Fixture f;
+        check(!TxOperationIntegrationTestAccess::txSessionClosing(f.radio),
+              "setBackendForTest reopens admission after tearing the old backend down");
+        f.radio.disconnectFromRadio();
+        check(TxOperationIntegrationTestAccess::txSessionClosing(f.radio),
+              "disconnect closes admission for the dying session");
+        auto replacement = std::make_unique<RecordingBackend>(f.commands);
+        replacement->connected = true;
+        f.radio.setBackendForTest(std::move(replacement), QStringLiteral("replacement"));
+        check(!TxOperationIntegrationTestAccess::txSessionClosing(f.radio),
+              "a replacement injected after disconnect reopens admission");
+    }
+    {
+        Fixture f;
+        f.radio.disconnectFromRadio();
+        check(f.radio.rebuildBackendForTest(QStringLiteral("flex"))
+                  && !TxOperationIntegrationTestAccess::txSessionClosing(f.radio),
+              "rebuildBackendForTest reopens admission like setBackendForTest");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -617,5 +645,6 @@ int main(int argc, char** argv)
     flexCwxLifecycle();
     queuedNetCwEdges();
     queuedCwSessionAndTcpFences();
+    testInjectionReopensAdmission();
     return failures ? 1 : 0;
 }

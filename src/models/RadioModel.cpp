@@ -9531,6 +9531,11 @@ void RadioModel::rebuildBackendForFamily(const QString& family)
 bool RadioModel::rebuildBackendForTest(const QString& family)
 {
     rebuildBackendForFamily(family);
+    // Same reason as setBackendForTest(): the rebuild tears the old backend
+    // down, which closes admission for the dying session, and no onConnected()
+    // edge follows a test-injected backend to reopen it. Without this a test
+    // taking this path sees every TX intent silently refused.
+    m_txSessionClosing = false;
     return m_backend != nullptr;
 }
 

@@ -79,6 +79,16 @@ public:
     void emergencyStop();
     // The stop handler must arrange qualified readback or transport completion
     // before acknowledging recovery. Merely requesting unkey is not proof.
+    //
+    // INVARIANT: every stop source needs a matching acknowledgment, because an
+    // unacknowledged stop keeps admission closed forever — recovering() stays
+    // true and every later acquire() is refused Recovering. Today the only
+    // production stop source is reset(), and teardownBackend()/onDisconnected()
+    // acknowledge it, so the barrier always clears with the session. cancel(),
+    // revoke(), expire() and emergencyStop() have no production callers yet;
+    // whichever increment gives one of them a caller has to land its
+    // acknowledgment path in the same change, not after it. RadioModel logs a
+    // warning when it hits this refusal outside a disconnect gap.
     [[nodiscard]] bool acknowledgeStopped(const Operation& operation);
     [[nodiscard]] bool owns(const Actor& actor, const Operation& operation) const;
     [[nodiscard]] bool recovering() const;
