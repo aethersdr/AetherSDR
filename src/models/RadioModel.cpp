@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "models/AprsDigipeaterModel.h"
 #include <QPointer>
 #include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
@@ -2712,6 +2713,21 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
 
+}
+
+AprsDigipeaterModel* RadioModel::aprsDigipeater()
+{
+    if (!m_aprsDigipeater) {
+        m_aprsDigipeater = std::make_unique<AprsDigipeaterModel>();
+        connect(this, &RadioModel::connectionStateChanged, m_aprsDigipeater.get(),
+                [this](bool connected) {
+            if (!connected) {
+                m_aprsDigipeater->setEnabled(false);
+                m_aprsDigipeater->clear();
+            }
+        });
+    }
+    return m_aprsDigipeater.get();
 }
 
 RadioModel::~RadioModel()

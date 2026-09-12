@@ -2712,7 +2712,8 @@ namespace {
 // (#4188 area 6). Some diagnostic verbs mix read and write actions, so the
 // action must be checked as well as the canonical verb name. Everything else
 // (drive/connect/capture/keying) is refused when m_readOnly is set.
-bool isReadOnlyRequest(const QString& name, const QString& action)
+bool isReadOnlyRequest(const QString& name, const QString& action,
+                       const QString& value = {})
 {
     static const QSet<QString> kSafe = {
         QStringLiteral("ping"),     QStringLiteral("verbs"),
@@ -2751,7 +2752,16 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
     // `modem`/`link` mix introspection with actions that key the radio
     // (link connect transmits a SABM), so only the status reads are safe here.
     if (name == QLatin1String("modem") || name == QLatin1String("link")) {
-        return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status");
+        if (normalizedAction.isEmpty() || normalizedAction == QLatin1String("status"))
+            return true;
+        // `modem digi` / `modem digi status` is introspection; `modem digi on`
+        // and `modem digi beacon` key the radio and stay gated.
+        if (name == QLatin1String("modem")
+            && normalizedAction == QLatin1String("digi")) {
+            const QString v = value.trimmed().toLower();
+            return v.isEmpty() || v == QLatin1String("status");
+        }
+        return false;
     }
     if (name == QLatin1String("tci")) {
         return normalizedAction == QLatin1String("status")
@@ -3452,7 +3462,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("modem", {"aethermodem"},
-            "modem <status|profile hf300|profile vhf1200|on|off|preamble <flags|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health",
+            "modem <status|profile hf300|profile vhf1200|on|off|preamble <flags|auto>|digi [status|on|off|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doModemAutomation(QStringLiteral("modem"), a.action, a.value);
@@ -3873,7 +3883,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     // keying. Enforced HERE in the bridge (not the MCP client) so it can't be
     // bypassed by talking to the socket directly. Uses the resolved canonical
     // name so aliases are covered.
-    if (m_readOnly && !isReadOnlyRequest(spec->name, a.action)) {
+    if (m_readOnly && !isReadOnlyRequest(spec->name, a.action, a.value)) {
         qCWarning(lcAutomation) << "read-only mode: refused" << spec->name;
         return err(QStringLiteral("read-only mode: '") + spec->name
                    + QStringLiteral("' is blocked. This bridge is observe-only "
@@ -11574,15 +11584,26 @@ QJsonObject AutomationServer::doModemAutomation(const QString& verb,
     // mailbox OFF never keys, so it stays ungated.
     const QString normalizedAction = action.trimmed().toLower();
     const QString normalizedValue = value.trimmed();
-    const bool keysTransmitter = verb == QLatin1String("link")
-        && (normalizedAction == QLatin1String("connect")
-            || normalizedAction == QLatin1String("disconnect")
-            || (normalizedAction == QLatin1String("pms")
-                && normalizedValue.toLower() == QLatin1String("on")));
+    const QString valueLower = normalizedValue.toLower();
+    const bool keysTransmitter =
+        (verb == QLatin1String("link")
+         && (normalizedAction == QLatin1String("connect")
+             || normalizedAction == QLatin1String("disconnect")
+             || (normalizedAction == QLatin1String("pms")
+                 && valueLower == QLatin1String("on"))))
+        || (verb == QLatin1String("modem")
+            && normalizedAction == QLatin1String("digi")
+            && (valueLower == QLatin1String("on")
+                || valueLower == QLatin1String("enable")
+                || valueLower == QLatin1String("beacon")));
     if (keysTransmitter && !m_txAllowed) {
-        return err(QStringLiteral("'link %1' keys the transmitter — set "
+        const QString what = (verb == QLatin1String("modem")
+                              && normalizedAction == QLatin1String("digi"))
+            ? QStringLiteral("modem digi %1").arg(valueLower)
+            : QStringLiteral("link %1").arg(normalizedAction);
+        return err(QStringLiteral("'%1' keys the transmitter — set "
                                   "AETHER_AUTOMATION_ALLOW_TX=1 to allow")
-                       .arg(normalizedAction));
+                       .arg(what));
     }
     return m_modemAutomationHandler(verb, normalizedAction, normalizedValue);
 }

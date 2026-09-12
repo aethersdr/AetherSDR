@@ -63,6 +63,7 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
         && capabilities.takesTxAudioOverSeam;
 }
 
+class AprsDigipeaterModel;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -87,6 +88,7 @@ class RadioModel : public QObject {
 
 public:
     explicit RadioModel(QObject* parent = nullptr);
+    AprsDigipeaterModel* aprsDigipeater();
     ~RadioModel() override;
 
     // Access the underlying connection and panadapter stream
@@ -1608,6 +1610,7 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;
