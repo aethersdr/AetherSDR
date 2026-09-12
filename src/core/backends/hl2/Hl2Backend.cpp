@@ -96,22 +96,6 @@ SampleRate sampleRateEnum(int hz) noexcept
 // drift apart, which is exactly the failure being fixed here.
 constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 
-// Minimum forward-power reading, in raw converter counts, below which an SWR
-// ratio is noise rather than a measurement.
-//
-// With no carrier, forward and reverse are both near zero and dominated by
-// noise; reverse frequently exceeds forward and the ratio saturates. An
-// operator glancing at that sees a catastrophic mismatch on an antenna that is
-// fine. Raw counts because that is what we have — this is a noise floor, not a
-// calibrated power level.
-//
-// File-scope so EVERY consumer shares one threshold. It was previously local to
-// the meter path, so the Radio Health snapshot computed an unguarded ratio and
-// bounced at its 500 ms refresh while the meter beside it stayed silent — two
-// surfaces disagreeing about the same radio because only one of them had the
-// guard.
-constexpr int kMinForwardCountsForSwr = 16;
-
 // The radio's rated output, in watts, as the gauges' full-scale reference.
 //
 // The HL2 wiki's own FAQ: "The Hermes-Lite 2.0 is a QRP transceiver and
@@ -4482,9 +4466,10 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
         m_telemetry.reversePowerRaw
             ? QVariant(directionalWatts(*m_telemetry.reversePowerRaw)) : QVariant());
-    // Meaningful without calibration — it is a ratio of two readings from the
-    // same converter, so the unknown scale cancels. Absent below the noise
-    // floor, where a ratio of two noise samples is not a mismatch reading.
+    // Meaningful without calibration — it is a ratio, so the unknown SCALE
+    // cancels. The detector's CURVE does not cancel, which is why swrFromRaw()
+    // linearizes both counts first (#4578). Absent below the noise floor, where
+    // a ratio of two noise samples is not a mismatch reading.
     //
     // That last sentence described the intent but not the code: this site had no
     // floor, so with no carrier it recomputed a noise ratio at the dialog's
@@ -5246,8 +5231,11 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // build one, and that raw counts must not be presented as watts), only the
     // quantities that are actually meaningful get published.
     //
-    // SWR is meaningful WITHOUT calibration because it is a ratio of two
-    // readings from the same converter, so the unknown scale cancels.
+    // SWR is meaningful WITHOUT calibration because it is a RATIO — but of two
+    // linearized readings, not of two raw counts. The unknown SCALE cancels in
+    // a raw ratio; the detector's CURVE does not, and taking the raw ratio read
+    // optimistically low at low drive (#4578). swrFromRaw() maps both counts
+    // through detectorVolts() first; see its comment for the whole argument.
     // SWR only means something with real forward power behind it.
     //
     // Measured on the live radio: with no carrier the forward and reverse counts
@@ -5257,8 +5245,9 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // catastrophic mismatch on an antenna that is fine.
     //
     // The threshold is in raw counts because that is what we have; it is a
-    // noise floor, not a calibrated power level. It lives at file scope so the
-    // Radio Health snapshot applies the SAME floor — see kMinForwardCountsForSwr.
+    // noise floor, not a calibrated power level. It lives in MetisProtocol.h,
+    // beside the calibration curve its value is derived from, so the Radio
+    // Health snapshot applies the SAME floor — see kMinForwardCountsForSwr.
     if (t.forwardPowerRaw && t.reversePowerRaw
         && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
         if (const auto swr = swrFromRaw(*t.forwardPowerRaw, *t.reversePowerRaw))
@@ -5377,66 +5366,6 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
         }
         m_adcOverloadAssertions = 0;
     }
-}
-
-double Hl2Backend::directionalWatts(int raw)
-{
-    // Quisk's `power_meter_std_calibrations['HL2FilterE3']` verbatim
-    // (quisk_conf_defaults.py): measured [ADC count, watts] pairs for a
-    // Hermes-Lite 2 with an N2ADR companion filter board, rev E3. Quisk is the
-    // reference client and tier 3 on the source-precedence ladder, and this is
-    // the only published curve for this coupler.
-    //
-    // WHAT THIS IS NOT: a calibration of THIS radio. The oracle (§6) is explicit
-    // that these counts need a per-unit calibration against a dummy load to mean
-    // watts, because the coupler, the toroid winding and the detector diode all
-    // vary between boards. A reading from this curve is the right ORDER OF
-    // MAGNITUDE and roughly the right shape; it is not a measurement.
-    //
-    // It is still much better than the alternative, which was publishing
-    // nothing: an operator had no way to tell 100 mW from 5 W, and on a radio
-    // where a mis-set drive level is silent that is the difference between
-    // "working" and "not transmitting". The meters are labelled uncalibrated
-    // (defineMeters) so nobody reads them as a power measurement.
-    //
-    // A future per-unit calibration replaces this table and nothing else.
-    struct Point { double counts; double watts; };
-    static constexpr Point kCurve[] = {
-        {    0.000000, 0.000000 }, {   25.865385, 0.002550 },
-        {  101.024540, 0.012752 }, {  265.290123, 0.050601 },
-        {  647.915584, 0.216458 }, { 1196.593548, 0.665480 },
-        { 1603.703226, 1.155723 }, { 2012.327160, 1.811892 },
-        { 2616.772727, 3.008585 }, { 3173.818182, 4.392743 },
-        { 3382.792208, 4.979133 }, { 3721.071429, 6.024751 },
-        { 4093.178571, 7.289948 }, { 4502.496429, 8.820838 },
-        { 4952.746071, 10.673214 },
-    };
-    constexpr std::size_t kN = std::size(kCurve);
-
-    const double counts = static_cast<double>(raw);
-    if (counts <= kCurve[0].counts)
-        return 0.0;
-    // Above the top of the table, extrapolate along the last segment rather
-    // than clamping. Clamping would pin the meter at 10.7 W and hide the one
-    // reading an operator most needs to see — that they are past where the
-    // curve was ever measured.
-    if (counts >= kCurve[kN - 1].counts) {
-        const Point& a = kCurve[kN - 2];
-        const Point& b = kCurve[kN - 1];
-        const double slope = (b.watts - a.watts) / (b.counts - a.counts);
-        return b.watts + (counts - b.counts) * slope;
-    }
-    for (std::size_t i = 1; i < kN; ++i) {
-        if (counts <= kCurve[i].counts) {
-            const Point& a = kCurve[i - 1];
-            const Point& b = kCurve[i];
-            const double span = b.counts - a.counts;
-            if (span <= 0.0)
-                return b.watts;
-            return a.watts + (counts - a.counts) * (b.watts - a.watts) / span;
-        }
-    }
-    return kCurve[kN - 1].watts;
 }
 
 double Hl2Backend::wattsToDbm(double watts)

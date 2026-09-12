@@ -305,6 +305,85 @@ void Hl2Telemetry::apply(const Ep6Response& r) noexcept
     }
 }
 
+double directionalWatts(int raw) noexcept
+{
+    // MOVED here from Hl2Backend with #4578: swrFromRaw() below needs this same
+    // curve to linearize the detector, and MetisProtocol is the layer Hl2Backend
+    // already includes. One copy, at the lower layer, no new dependency edge.
+    //
+    // Quisk's `power_meter_std_calibrations['HL2FilterE3']` verbatim
+    // (quisk_conf_defaults.py): measured [ADC count, watts] pairs for a
+    // Hermes-Lite 2 with an N2ADR companion filter board, rev E3. Quisk is the
+    // reference client and tier 3 on the source-precedence ladder, and this is
+    // the only published curve for this coupler.
+    //
+    // WHAT THIS IS NOT: a calibration of THIS radio. The oracle (§6) is explicit
+    // that these counts need a per-unit calibration against a dummy load to mean
+    // watts, because the coupler, the toroid winding and the detector diode all
+    // vary between boards. A reading from this curve is the right ORDER OF
+    // MAGNITUDE and roughly the right shape; it is not a measurement.
+    //
+    // It is still much better than the alternative, which was publishing
+    // nothing: an operator had no way to tell 100 mW from 5 W, and on a radio
+    // where a mis-set drive level is silent that is the difference between
+    // "working" and "not transmitting". The meters are labelled uncalibrated
+    // (defineMeters) so nobody reads them as a power measurement.
+    //
+    // A future per-unit calibration replaces this table and nothing else.
+    struct Point { double counts; double watts; };
+    static constexpr Point kCurve[] = {
+        {    0.000000, 0.000000 }, {   25.865385, 0.002550 },
+        {  101.024540, 0.012752 }, {  265.290123, 0.050601 },
+        {  647.915584, 0.216458 }, { 1196.593548, 0.665480 },
+        { 1603.703226, 1.155723 }, { 2012.327160, 1.811892 },
+        { 2616.772727, 3.008585 }, { 3173.818182, 4.392743 },
+        { 3382.792208, 4.979133 }, { 3721.071429, 6.024751 },
+        { 4093.178571, 7.289948 }, { 4502.496429, 8.820838 },
+        { 4952.746071, 10.673214 },
+    };
+    constexpr std::size_t kN = std::size(kCurve);
+
+    const double counts = static_cast<double>(raw);
+    if (counts <= kCurve[0].counts)
+        return 0.0;
+    // Above the top of the table, extrapolate along the last segment rather
+    // than clamping. Clamping would pin the meter at 10.7 W and hide the one
+    // reading an operator most needs to see — that they are past where the
+    // curve was ever measured.
+    if (counts >= kCurve[kN - 1].counts) {
+        const Point& a = kCurve[kN - 2];
+        const Point& b = kCurve[kN - 1];
+        const double slope = (b.watts - a.watts) / (b.counts - a.counts);
+        return b.watts + (counts - b.counts) * slope;
+    }
+    for (std::size_t i = 1; i < kN; ++i) {
+        if (counts <= kCurve[i].counts) {
+            const Point& a = kCurve[i - 1];
+            const Point& b = kCurve[i];
+            const double span = b.counts - a.counts;
+            if (span <= 0.0)
+                return b.watts;
+            return a.watts + (counts - a.counts) * (b.watts - a.watts) / span;
+        }
+    }
+    return kCurve[kN - 1].watts;
+}
+
+
+
+double detectorVolts(int raw) noexcept
+{
+    // The inverse of the count->power curve, taken back to VOLTAGE, in
+    // arbitrary units — only ratios of two of these are ever used.
+    //
+    // sqrt() of directionalWatts() rather than a second table, deliberately:
+    // the interpolation scheme is then the SAME scheme by construction, and the
+    // two functions cannot drift apart when a per-unit calibration replaces the
+    // points. A separate voltage table would be a second thing to keep in step.
+    const double w = directionalWatts(raw);
+    return w > 0.0 ? std::sqrt(w) : 0.0;
+}
+
 std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
 {
     // No carrier, no SWR. Returning 1.0 here would render as a perfect match
@@ -322,13 +401,57 @@ std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
     // (one branch uses the voltage form (Vf+Vr)/(Vf-Vr), another a sqrt form
     // whose arguments are the wrong way round and would return a NEGATIVE SWR),
     // so it is not usable as the tie-breaker.
-    const double fwd = static_cast<double>(forwardRaw);
-    double rev = static_cast<double>(reverseRaw < 0 ? 0 : reverseRaw);
+    //
+    // ---- and the caveat that reasoning does not cover (#4578) ----
+    //
+    // All of the above is about the FORM of the expression and it is correct.
+    // What it does not establish is that the counts may be used RAW. This
+    // function used to compute (fwd + rev) / (fwd - rev) directly on counts,
+    // defended by "a ratio of two readings from the same converter, so the
+    // unknown scale cancels". A ratio of raw counts is scale-invariant; it is
+    // not CURVE-invariant, and a diode detector's curve is not a straight line.
+    //
+    // Write a count as c = k(c)·V. Then
+    //
+    //     rho_shown / rho_true = k(c_rev) / k(c_fwd)
+    //
+    // and k, from directionalWatts()'s own table (k = counts / sqrt(watts)),
+    // rises from 512 at 26 counts to a flat ~1516 above ~1200:
+    //
+    //     counts   26   101   265   648  1197  2012  4953
+    //     k       512   895  1179  1393  1467  1495  1516
+    //
+    // c_rev is below c_fwd always, so k(c_rev) <= k(c_fwd) always, so the shown
+    // reflection coefficient is always LOW and the shown SWR always optimistic
+    // — never conservative. That is the unsafe direction on a meter whose whole
+    // job is to warn about a mismatch. Reported by ten9876 (#4578): at 265
+    // forward counts a true 2.0:1 displayed 1.44.
+    //
+    // The repair is to undo the curve before taking the ratio: detectorVolts()
+    // is sqrt(directionalWatts()), the inverse curve in arbitrary voltage units,
+    // and rho is the ratio of two of those. Everything else here is unchanged —
+    // the nullopt on no carrier, the clamp, and the voltage form with no square
+    // root. Above the knee this converges to what the raw ratio already gave
+    // (at 4953 counts a true 2.0 read 1.975 before and 2.000 after), so it is a
+    // low-end correction and not a rescaling of every reading in the log.
+    //
+    // What this does NOT fix, and must not be read as fixing: two counts one LSB
+    // apart are two nearly-equal numbers on either side of the curve, so the
+    // ratio still runs away down at the noise floor — harder, if anything, since
+    // the knee's slope amplifies the reverse channel relative to the forward one
+    // there. At 20/19 counts the raw ratio gave 39.0 and this gives 78.0. That
+    // case is refused by kMinForwardCountsForSwr, which is why that constant had
+    // to be re-derived at the same time; it is not repaired here.
+    const double fwd = detectorVolts(forwardRaw);
+    if (!(fwd > 0.0))
+        return std::nullopt;          // below the bottom of the curve entirely
+    double rev = detectorVolts(reverseRaw < 0 ? 0 : reverseRaw);
     // Reverse above forward is physically impossible; it means noise on a tiny
     // reading. Clamp rather than emit a negative or infinite SWR.
     if (rev >= fwd)
         rev = fwd * 0.999;
-    return (fwd + rev) / (fwd - rev);
+    const double rho = rev / fwd;
+    return (1.0 + rho) / (1.0 - rho);
 }
 
 std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept
