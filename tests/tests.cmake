@@ -3263,6 +3263,19 @@ target_include_directories(aprs_fill_in_digipeater_test PRIVATE src)
 target_link_libraries(aprs_fill_in_digipeater_test PRIVATE Qt6::Core)
 add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
 
+# Socket-free injected APRS frames, producer cancellation and queue admission.
+add_executable(aprs_digipeater_model_test
+    tests/aprs_digipeater_model_test.cpp
+    src/models/AprsDigipeaterModel.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/aprs/AprsBeacon.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_digipeater_model_test PRIVATE src)
+target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
+add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)
+
 add_executable(tnc_terminal_test
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp
@@ -5230,16 +5243,3 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
-
-# Socket-free injected APRS frames, producer cancellation and queue admission.
-add_executable(aprs_digipeater_model_test
-    tests/aprs_digipeater_model_test.cpp
-    src/models/AprsDigipeaterModel.cpp
-    src/core/aprs/AprsFillInDigipeater.cpp
-    src/core/aprs/AprsBeacon.cpp
-    src/core/aprs/AprsPacket.cpp
-    src/core/tnc/Ax25.cpp
-)
-target_include_directories(aprs_digipeater_model_test PRIVATE src)
-target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
-add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)

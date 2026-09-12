@@ -303,14 +303,20 @@ client** (live station map, GPS beacon, two-way messaging on the AetherModem
 tab) are now implemented — see the sections above and the PSK Reporter map's
 shared Qt mapping engine, which the APRS map reuses. Out of scope remains
 **APRS-IS** (internet gateway). A **WIDE1-1 fill-in digipeater** now lives on the
-AetherModem **Digipeater** tab (`AprsFillInDigipeater`): it answers the first unused
+AetherModem **Digipeater** tab (`AprsDigipeaterModel`): it answers the first unused
 hop when it is `WIDE1-1` (optionally `MYCALL` or legacy `RELAY`), substitutes
 the station call with the H-bit set, and does not decrement `WIDE2-n`. The tab
 has a heard-message graph, a digipeat graph, a scrolling raw TNC-2 list, and
-configurable fill-in / beacon settings. Fill-in is **baud-agnostic** — the same
-engine runs on the shared AetherModem air profile (300 baud HF or 1200 baud
-VHF); the Digi tab's 300/1200 radios drive that one profile, they are not a
-second modem. Wide-area `UITRACE WIDE` remains out of scope.
+configurable fill-in / beacon settings. Fill-in requires the shared **1200-baud
+VHF profile** and explicit arming each session. Configuration persists, but
+arming never restores from settings. Switching to 300 baud, disabling the modem,
+changing the attached slice, disconnecting, or application teardown disarms fill-in
+and cancels its queued and active TX. Other producers retain their own queued
+traffic when only fill-in is disabled. The shared queue admits at most 64 frames
+across all producers, dropping the oldest on overflow. Duplicate identity includes
+source/SSID, destination, and payload, independent of the received path.
+The counters describe repeat decisions, not proof of RF delivery. Wide-area
+`UITRACE WIDE` remains out of scope.
 
 PMS follow-ups worth tracking:
 
